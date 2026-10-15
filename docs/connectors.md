@@ -21,12 +21,14 @@ knowledge of the registry, the engine, or other connectors. The consumer SDK nev
 
 ```python
 from pathlib import Path
-from timenet.connectors import BaseConnector
+from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
 
 class MyConnector(BaseConnector[MyRawRef]):
     def download(self, cache_dir: Path) -> list[MyRawRef]: ...
-    def convert(self, raw_refs: list[MyRawRef]) -> TimeFDataset: ...
+    def convert(
+        self, raw_refs: list[MyRawRef], *, context: BuildContext
+    ) -> TimeFDataset: ...
 ```
 
 The two stages stay separate. This lets the engine drive
@@ -35,7 +37,7 @@ The two stages stay separate. This lets the engine drive
 | Method | Nature | Contract |
 | --- | --- | --- |
 | `download(cache_dir)` | I/O only | Fetch or find raw files and return lightweight references. The method is idempotent and does not parse data. |
-| `convert(raw_refs)` | local work | Parse the references into a `TimeFDataset`. Do not use the network. |
+| `convert(raw_refs, *, context)` | local work | Parse the references into a `TimeFDataset`. Do not use the network. |
 
 You must implement `convert`. It is the only required method. `download` depends on I/O, so it has
 two forms. You can override `download(cache_dir)` for a synchronous fetch. Alternatively, you can
@@ -282,3 +284,14 @@ spec, and a record preview.
 ---
 
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
+
+## Pinned dataset inputs
+
+Declare exact releases under aliases in `dataset.yaml`'s `inputs` mapping. The engine provides
+ordinary readers in `context.inputs` and keeps them open through writing. Use `copy_from()` to
+import editable metadata and optionally replayable tasks. Missing releases are built only if the
+connector declares the requested pin. Input cycles fail before conversion.
+
+Raw connectors can ignore the context. Their direct-call convenience defaults do not change the
+engine contract. Set `payload_policy = "copy"` on a connector for standalone output. See
+[Dataset composition](composition.md) for examples and migration.

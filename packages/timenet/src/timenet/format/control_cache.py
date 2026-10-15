@@ -37,7 +37,10 @@ def materialize_control(version: DatasetVersion) -> Path:
         raise TimeFFormatError("TimeF manifest does not declare control.duckdb")
     part = parts[0]
     if isinstance(version.filesystem, pafs.LocalFileSystem):
-        return Path(version.path(part.path))
+        path = Path(version.path(part.path))
+        if path.stat().st_size != part.size or file_checksum(path) != part.checksum:
+            raise TimeFFormatError("local control.duckdb does not match its manifest checksum")
+        return path
 
     digest = part.checksum.removeprefix("sha256:")
     cache_dir = settings().cache_dir / "control"

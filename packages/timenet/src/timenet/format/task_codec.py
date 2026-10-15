@@ -1,11 +1,14 @@
 """Canonical codecs between Task fields and the typed columns of the ``tasks`` and ``task_targets`` tables.
 
-Spans, task configuration, and targets are all stored as plain columns rather than JSON, so DuckDB can
-filter on them and the reader builds objects straight from row values. Object references travel as
+Spans and literal targets use typed columns. Classification schema identifiers and annotation-content
+references use JSON. The reader builds objects directly from these rows. Object references travel as
 public IDs here; the writer and reader swap them for internal keys at the table boundary.
 """
 
 from collections.abc import Iterable
+from dataclasses import MISSING, fields
+from functools import cache
+import json
 from typing import Any, cast
 
 from timenet.dataset.record import Record
@@ -26,6 +29,9 @@ from timenet.types import (
     TimeInterval,
     TimePoint,
 )
+from timenet.types.payloads import Payload
+from timenet.types.references import AnnotationContentRef
+from timenet.types.units import normalize_unit
 
 
 TARGET_VALUE_COLUMNS = (
@@ -170,7 +176,15 @@ def encode_task_payload(task: Task) -> dict[str, str | None]:
     """
     columns: dict[str, str | None] = dict.fromkeys(PAYLOAD_COLUMNS)
     if isinstance(task, ClassificationTask):
-        columns["target_schema"] = task.target_schema
+        columns["target_schema"] = (
+            None
+            if task.target_schema is None
+            else json.dumps(
+                task.target_schema.model_dump()
+                if isinstance(task.target_schema, AnnotationContentRef)
+                else task.target_schema
+            )
+        )
     elif isinstance(task, ScalarPredictionTask):
         columns["unit"] = None if task.unit is None else str(task.unit)
         columns["target_name"] = task.target_name
@@ -186,7 +200,9 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
         Keyword arguments for the concrete Task constructor.
     """
     if task_type is TaskType.CLASSIFICATION:
-        return {"target_schema": columns.get("target_schema")}
+        value = columns.get("target_schema")
+        decoded = None if value is None else json.loads(value)
+        return {"target_schema": AnnotationContentRef.model_validate(decoded) if isinstance(decoded, dict) else decoded}
     if task_type is TaskType.SCALAR_PREDICTION:
         return {"unit": columns.get("unit"), "target_name": columns.get("target_name")}
     if task_type is TaskType.TEMPORAL_LOCALIZATION:
@@ -203,6 +219,8 @@ def encode_target(target: object) -> dict[str, object | None]:
     Raises:
         TimeFFormatError: If the target type is unsupported.
     """
+    if isinstance(target, Payload):
+        target = target.read()
     row: dict[str, object | None] = dict.fromkeys(TARGET_VALUE_COLUMNS)
     if isinstance(target, bool):
         row.update(target_kind="boolean", boolean_value=target)
@@ -306,3 +324,37 @@ def _tuple_or_none(value: object) -> tuple[str, ...] | None:
         The immutable sequence, or ``None``.
     """
     return None if value is None else tuple(cast("Iterable[str]", value))
+
+
+@cache
+def _catalog_task_defaults(cls: type[Task]) -> tuple[dict[str, Any], dict[str, Any]]:
+    defaults = {item.name: item.default for item in fields(cls) if item.default is not MISSING}
+    factories = {item.name: item.default_factory for item in fields(cls) if item.default_factory is not MISSING}
+    return defaults, factories
+
+
+def hydrate_validated_task(cls: type[Task], values: dict[str, Any]) -> Task:
+    """Restore a task from an audited catalog whose exact bytes passed checksum verification.
+
+    Public constructors still validate caller input. This internal path only wraps decoded
+    native content and restores defaults. It retains the same mutable and lazy public objects.
+
+    Returns:
+        The restored concrete task.
+    """
+    defaults, factories = _catalog_task_defaults(cls)
+    data = {**defaults, **{name: factory() for name, factory in factories.items()}, **values}
+    for field in ("prompt", "rationale"):
+        value = data.pop(field)
+        data[f"_{field}"] = value if value is None or isinstance(value, Payload) else Payload.from_value(value)
+    targets = data.pop("targets")
+    data["_targets"] = (
+        None
+        if targets is None
+        else tuple(Payload.from_value(item) if isinstance(item, str) else item for item in targets)
+    )
+    if issubclass(cls, ScalarPredictionTask):
+        data["unit"] = normalize_unit(data["unit"])
+    task = cls.__new__(cls)
+    task.__dict__.update(data)
+    return task
