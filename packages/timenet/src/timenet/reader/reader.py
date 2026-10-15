@@ -16,6 +16,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
+from timenet.format.external import ExternalReader
 from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
@@ -44,6 +45,7 @@ class TimeFReader:
             version: Opened dataset version containing a parsed manifest and filesystem handle.
         """
         self._version = version
+        self._external_reader = ExternalReader(version)
         self._fs = version.filesystem
         self._root = version.root
         self._manifest = version.manifest
@@ -318,6 +320,7 @@ class TimeFReader:
                 value_loader_factory=self._make_signal_loader,
                 offsets_loader=self._load_offsets,
             )
+            self._control.external = self._external_reader.locators(self._control.connection)
         return self._control
 
     def _all_records(self) -> tuple[Record, ...]:
