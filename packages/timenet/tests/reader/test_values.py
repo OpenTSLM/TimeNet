@@ -1,11 +1,14 @@
 """Tests for reader-side values backends."""
 
+import threading
 from types import SimpleNamespace
 from typing import cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
+from timenet.errors import TimeFFormatError
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import make_dataset
@@ -31,16 +34,16 @@ class _ProjectionSpy:
     def __getattr__(self, name):
         return getattr(self._handle, name)
 
-    def read_row_group(self, row_group: int, *, columns: list[str]) -> pa.Table:
+    def read_row_group(self, row_group: int, *, columns: list[str], use_threads: bool = True) -> pa.Table:
         self._projections.append(columns)
-        return self._handle.read_row_group(row_group, columns=columns)
+        return self._handle.read_row_group(row_group, columns=columns, use_threads=use_threads)
 
 
 class _Shard:
     def __init__(self, value: float) -> None:
         self._value = value
 
-    def read_row_group(self, row_group: int, *, columns: list[str]) -> pa.Table:
+    def read_row_group(self, row_group: int, *, columns: list[str], use_threads: bool = True) -> pa.Table:
         assert row_group == 0
         # Projected, never the whole row group: a shard also carries ids, spec_type and signal, and
         # decoding those on every value read is what the projection exists to avoid.
@@ -105,3 +108,18 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
     values_reader.close()
 
     assert projections == [["values"]]
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_eager_scan_releases_workers_on_success_and_failure(tmp_path, corrupt):
+    path = _write(tmp_path, shard_target_bytes=64, row_group_target_bytes=32, chunk_max_bytes=32)
+    if corrupt:
+        shards = sorted((path / "time_series").glob("*.parquet"))
+        shards[1].unlink()
+    with TimeFReader(DatasetVersion.open_local(path)) as reader:
+        if corrupt:
+            with pytest.raises(TimeFFormatError):
+                reader.read()
+        else:
+            assert reader.read().records
+        assert not [thread for thread in threading.enumerate() if thread.name.startswith("timef-scan")]
