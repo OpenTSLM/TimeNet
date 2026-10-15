@@ -247,11 +247,31 @@ def test_tasks_are_cached_after_first_access(tmp_path):
         assert reader.tasks is first
 
 
-def test_pickling_drops_connections_and_decoded_caches(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
+def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
+    dataset = make_dataset()
+    text = "A detailed clinical report. " * 300
+    dataset.tasks[0].prompt = text
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+        original = pq.ParquetFile.read
+        read_calls = 0
+
+        def count_reads(*args, **kwargs):
+            nonlocal read_calls
+            read_calls += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(pq.ParquetFile, "read", count_reads)
         _ = reader.tasks
         reader.read().records[0].signals[0].to_arrow()
+        assert text in reader.task_table()["prompt"].to_pylist()
+        assert read_calls == 1
         state = reader.__getstate__()
+        with pickle.loads(pickle.dumps(reader)) as restored:
+            assert text in restored.task_table()["prompt"].to_pylist()
+        assert read_calls == 2
+    with reader:
+        assert text in reader.task_table()["prompt"].to_pylist()
+    assert read_calls == 3
     assert state["_tasks"] is None
     assert state["_control"] is None
     assert state["_records"] is None
