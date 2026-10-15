@@ -20,6 +20,7 @@ from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
+from timenet.format.external import ExternalWriter
 from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
 from timenet.json import validate_json_value
 from timenet.types import (
@@ -253,7 +254,7 @@ class _HierarchyBatches:
 class DuckDBControlWriter:
     """Serialize the relational part of one immutable TimeF version."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, external: ExternalWriter | None = None) -> None:
         """Configure a new local control database.
 
         Args:
@@ -263,6 +264,7 @@ class DuckDBControlWriter:
             FileExistsError: If ``path`` already exists.
         """
         self.path = Path(path)
+        self.external = external
         if self.path.exists():
             raise FileExistsError(f"control database already exists at {self.path}")
 
@@ -301,6 +303,8 @@ class DuckDBControlWriter:
                     )
                     self._write_chunks(connection, placements)
                     self._check_source_tree(connection)
+                    if self.external is not None:
+                        self.external.finish(connection)
                 connection.execute("CHECKPOINT")
         except duckdb.Error as exc:
             self.path.unlink(missing_ok=True)
@@ -309,6 +313,10 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
         return task_counts
+
+    def _pack(self, kind: str, identity: str, field: str, value: Any, position: int = 0) -> Any:
+        """Return the inline representation, recording external locations when configured."""
+        return value if self.external is None else self.external.pack(kind, identity, field, value, position)
 
     def _write_objects(  # noqa: PLR0914 - clock keys are part of the hierarchy state
         self,
@@ -472,13 +480,13 @@ class DuckDBControlWriter:
                         "task_key": task_key,
                         "task_id": task.id,
                         "task_type": task_type,
-                        "prompt": task.prompt,
+                        "prompt": self._pack("Task", task.id, "prompt", task.prompt),
                         "input_modalities": sorted(item.value for item in task.resolved_input_modalities),
                         "split": None if task.split is None else parse_split(task.split).value,
                         **self._scope_columns(task, signal_keys),
                         "has_inline_targets": task.targets is not None,
                         **encode_task_payload(task),
-                        "rationale": task.rationale,
+                        "rationale": self._pack("Task", task.id, "rationale", task.rationale),
                         "metadata": _json(task.metadata),
                     }
                 )
@@ -487,7 +495,7 @@ class DuckDBControlWriter:
                         task_key=task_key,
                         position=position,
                         target_label=f"task {task.id!r} target {position}",
-                        target=target,
+                        target=self._pack("Task", task.id, "targets", target, position),
                         record_keys=record_keys,
                         signal_keys=signal_keys,
                     )
@@ -745,8 +753,7 @@ class DuckDBControlWriter:
             if stored_offsets is None:
                 raise TimeFValidationError(f"irregular axis {axis.axis_id!r} stores no time offsets")
             if signal.time_offsets_loader is not existing.offsets_loader:
-                candidate = _validated_irregular_offsets(signal)
-                candidate_signature = _offset_signature(candidate)
+                candidate_signature = _offset_signature(_validated_irregular_offsets(signal))
                 if candidate_signature != stored_offsets:
                     raise TimeFValidationError(
                         f"axis id {axis.axis_id!r} is shared by signals with different time offsets"
@@ -781,8 +788,7 @@ class DuckDBControlWriter:
         )
         return signal_key
 
-    @staticmethod
-    def _write_axis(signal: Signal, axis_key: int, batches: _HierarchyBatches) -> _OffsetSignature | None:
+    def _write_axis(self, signal: Signal, axis_key: int, batches: _HierarchyBatches) -> _OffsetSignature | None:
         """Buffer an axis and any irregular offsets.
 
         Returns:
@@ -824,6 +830,9 @@ class DuckDBControlWriter:
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
             offsets = _validated_irregular_offsets(signal)
+            if self.external is not None:
+                self._pack("Axis", axis.axis_id, "offsets", pa.array(offsets, type=pa.int64()))
+                return _offset_signature(offsets)
             for position, offset in enumerate(offsets):
                 batches.axis_offsets.add({"axis_key": axis_key, "position": position, "offset_us": int(offset)})
             return _offset_signature(offsets)
@@ -844,8 +853,8 @@ class DuckDBControlWriter:
             return None
         assert_never(axis)
 
-    @staticmethod
     def _write_annotations(
+        self,
         connection: duckdb.DuckDBPyConnection,
         annotations: Iterable[tuple[str, int, Annotation]],
     ) -> dict[str, int]:
@@ -891,7 +900,10 @@ class DuckDBControlWriter:
                         "content_key": content_key,
                         "content_id": annotation.content_id,
                         "name": annotation.name,
-                        **encode_annotation_value(annotation.value, label=f"annotation {annotation.content_id!r}"),
+                        **encode_annotation_value(
+                            self._pack("Annotation", annotation.content_id, "value", annotation.value),
+                            label=f"annotation {annotation.content_id!r}",
+                        ),
                         "unit": annotation.unit,
                         "description": annotation.description,
                         "metadata": _json(annotation.metadata),
