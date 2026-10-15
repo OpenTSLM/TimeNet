@@ -724,6 +724,39 @@ class DuckDBControlReader:
             for row in rows
         ]
 
+    def read_task(self, identity: str) -> Task:
+        """Hydrate one task and its dependencies without constructing unrelated records.
+
+        Returns:
+            The requested task.
+
+        Raises:
+            TimeFValidationError: If the requested task is absent.
+        """
+        row = self.connection.execute("SELECT task_key FROM tasks WHERE task_id = ?", [identity]).fetchone()
+        if row is None:
+            raise TimeFValidationError(f"no Task {identity!r}")
+        return _TaskHydration(self, None)._hydrate([row[0]])[0]
+
+    def read_annotation(self, identity: str) -> Annotation:
+        """Hydrate one annotation occurrence without constructing its owning object.
+
+        Returns:
+            The requested annotation.
+
+        Raises:
+            TimeFValidationError: If the requested occurrence is absent.
+        """
+        row = self.connection.execute(
+            "SELECT occurrence_key, object_key, object_type FROM annotation_occurrences WHERE occurrence_id = ?",
+            [identity],
+        ).fetchone()
+        if row is None:
+            raise TimeFValidationError(f"no Annotation {identity!r}")
+        occurrences: dict[int, Annotation] = {}
+        self._read_annotations([row[1]], object_type=row[2], annotations_by_occurrence=occurrences)
+        return occurrences[row[0]]
+
     def read_tasks(
         self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = ()
     ) -> tuple[Task, ...]:
