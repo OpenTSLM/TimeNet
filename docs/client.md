@@ -79,8 +79,8 @@ dataset IDs, and tags. See [Registry search](registry.md#search) for their match
 
 ## Load or download
 
-`load()` returns a `TimeFDataset`. The hierarchy is in memory, but each Signal keeps a lazy values
-loader.
+`load()` returns a `TimeFDataset` with all signal values, timestamps, and external text in memory.
+`get_handle()` defers catalog and payload reads until you request an object or field.
 
 ```python
 dataset = client.load("timenet/hello-world")
@@ -98,14 +98,36 @@ dataset = TimeNet(".timenet-registry").load(
 )
 ```
 
-Set `auto_build=False` to report a missing local version without starting a build. Remote registries
-never run connector code.
+Set `auto_build=False` to report a missing local version without starting a build.
+The separate `build_parents` option permits parent builds during preparation, including for remote reads.
 
-For an HTTP registry, `load()` downloads the complete version into `TIMENET_STORAGE` first. A later
-load reuses that committed copy. An S3 registry reads in place unless the storage directory already
-contains a complete copy.
+HTTP and S3 registries prepare complete local releases before returning a handle.
+Preparation includes all parent dependencies and verifies downloaded files.
+The reader then uses local files without registry calls or downloads.
+A child reads its own catalog and the shared payload files. It does not open parent catalogs.
 
-`download()` always copies the complete version into local storage:
+A local registry requires complete parent releases by default. To fetch missing parents, supply a
+registry URI through `fetch_parents`. To build parents that fetching cannot find, set `build_parents=True`.
+
+```python
+with TimeNet(".timenet-registry").get_handle(
+    "physionet/ecg-qa-cot@1.0.0",
+    fetch_parents="timenet://",
+    build_parents=True,
+) as dataset:
+    records = dataset.read().records
+```
+
+These options also apply to `load()` and `load_torch()`. Parent builds require an installed connector
+that declares the requested version.
+
+```python
+with client.get_handle("physionet/ecg-qa-cot@1.0.0") as dataset:
+    signal = dataset.get_handle("Signal", "ecg-1-I", namespace="ptbxl")
+    window = signal.read_steps(0, 100)
+```
+
+`download()` copies the complete child release and its complete dependency releases for offline use:
 
 ```python
 path = client.download("chengsenwang/tsqa@1.0.0")

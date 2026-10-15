@@ -1,0 +1,141 @@
+{
+  "environment": {
+    "python": "3.13.15",
+    "pyarrow": "24.0.0",
+    "duckdb": "1.5.5",
+    "cpu": "Apple M5 Max",
+    "cpu_cores": 18,
+    "memory_bytes": 68719476736,
+    "cache": "warm filesystem cache; fresh Python processes",
+    "date": "2026-10-15"
+  },
+  "baseline_commit": "00656c9f51b2e173bdd8c42cc75452e48b04f052",
+  "runs": {
+    "main": {
+      "full_read": [
+        {
+          "read_seconds": 4.717739832998632,
+          "materialization_seconds": 5.254506125002081,
+          "full_read_seconds": 9.972245958000713,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5963579392
+        },
+        {
+          "read_seconds": 4.820785583000543,
+          "materialization_seconds": 5.3062039999967965,
+          "full_read_seconds": 10.12698958299734,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5963382784
+        },
+        {
+          "read_seconds": 4.728822291999677,
+          "materialization_seconds": 5.311903124998935,
+          "full_read_seconds": 10.040725416998612,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5960908800
+        }
+      ],
+      "selected_access": [
+        {
+          "records": 64,
+          "window_seconds": 0.9489245410004514,
+          "training_seconds": 0.5307128339991323,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        },
+        {
+          "records": 64,
+          "window_seconds": 0.8822655420008232,
+          "training_seconds": 0.5136384999968868,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        },
+        {
+          "records": 64,
+          "window_seconds": 0.8726207920008164,
+          "training_seconds": 0.5079222499989555,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        }
+      ]
+    },
+    "new": {
+      "full_read": [
+        {
+          "read_seconds": 7.967118417000165,
+          "materialization_seconds": 0.05386612499933108,
+          "full_read_seconds": 8.020984541999496,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5998329856
+        },
+        {
+          "read_seconds": 8.104595374999917,
+          "materialization_seconds": 0.053826082999876235,
+          "full_read_seconds": 8.158421457999793,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5977440256
+        },
+        {
+          "read_seconds": 7.946366874999512,
+          "materialization_seconds": 0.0546552919986425,
+          "full_read_seconds": 8.001022166998155,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5975080960
+        }
+      ],
+      "selected_access": [
+        {
+          "records": 64,
+          "window_seconds": 0.8963682499997958,
+          "training_seconds": 0.5470495000008668,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        },
+        {
+          "records": 64,
+          "window_seconds": 0.8838083749978978,
+          "training_seconds": 0.546526875001291,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        },
+        {
+          "records": 64,
+          "window_seconds": 0.8869432080027764,
+          "training_seconds": 0.5462528339994606,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        }
+      ]
+    }
+  }
+}
