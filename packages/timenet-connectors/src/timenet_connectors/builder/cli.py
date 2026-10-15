@@ -27,12 +27,14 @@ from timenet.cli.runner import run_cli
 from timenet.cli.ui import console
 from timenet.config import settings
 from timenet.engine import publish_pipeline, run_pipeline
-from timenet.errors import TimeNetRegistryError
+from timenet.errors import TimeFValidationError, TimeNetRegistryError
 from timenet.registry import WritableRegistry, local_registry_path, open_writable_registry
+from timenet.types import DatasetMetadata
+from timenet.types.references import DatasetRef
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.builder.env import run_isolated
-from timenet_connectors.discovery import resolve
+from timenet_connectors.discovery import connector_dir, resolve
 from timenet_connectors.download import DownloadProgress, ProgressCallback, progress_sink
 
 
@@ -78,6 +80,12 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
         "(default: $TIMENET_REGISTRY, else the local registry).",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the version is already built."),
+    fetch_parents: str | None = typer.Option(
+        None,
+        "--fetch-parents",
+        help="Fetch missing parent releases from this registry URI before building.",
+    ),
+    build_parents: bool = typer.Option(False, "--build-parents", help="Build missing exact parent releases."),
     keep_cache: bool = typer.Option(
         False, "--keep-cache", help="Keep the raw download cache after building (default: remove it)."
     ),
@@ -138,6 +146,8 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
                 keep_cache=keep_cache,
                 values_backend=values_backend,
                 quiet=console.quiet,
+                build_parents=build_parents,
+                fetch_parents=fetch_parents,
             )
         except LookupError as exc:
             raise typer.BadParameter(str(exc)) from exc
@@ -154,6 +164,22 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
     connector = connector_cls()
     resolved_backend = values_backend if values_backend is not None else connector.values_backend
     target = _resolve_target(out)
+
+    def build_parent(ref: DatasetRef) -> None:
+        card = DatasetMetadata.from_yaml(connector_dir(ref.dataset_id) / "dataset.yaml")
+        if card.dataset_version != ref.version:
+            raise TimeFValidationError(f"installed connector cannot build exact input {ref}")
+        destination = out if out is not None else settings().registry or str(settings().registry_path)
+        run_isolated(
+            ref.dataset_id,
+            destination,
+            build_parents=True,
+            force=True,
+            fetch_parents=fetch_parents,
+            keep_cache=keep_cache,
+            quiet=console.quiet,
+        )
+
     # A connector's downloads report through the ambient progress sink. _download_progress renders them.
     with _download_progress():
         if isinstance(target, Path):
@@ -164,6 +190,9 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
                 progress_cb=_report_progress,
                 force=force,
                 keep_cache=keep_cache,
+                build_parents=build_parents,
+                fetch_parents=fetch_parents,
+                parent_builder=build_parent,
             )
             console.success(f"Built '{dataset_id}' → {version_dir.name}")
             typer.echo(str(version_dir))
@@ -175,6 +204,9 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
                 progress_cb=_report_progress,
                 force=force,
                 keep_cache=keep_cache,
+                build_parents=build_parents,
+                fetch_parents=fetch_parents,
+                parent_builder=build_parent,
             )
             console.success(f"Published '{dataset_id}' → {version}")
             typer.echo(version)
