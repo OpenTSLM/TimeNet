@@ -10,6 +10,9 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Protocol
 
+from timenet.errors import TimeFValidationError
+from timenet.types.references import DatasetRef
+
 
 ENTRY_POINT_GROUP = "timenet.builders"
 
@@ -46,7 +49,15 @@ class BuilderBackend(Protocol):
         """
         ...
 
-    def build(self, dataset_id: str, root: Path, *, force: bool = False) -> Path:
+    def build(
+        self,
+        dataset_id: str,
+        root: Path,
+        *,
+        force: bool = False,
+        build_parents: bool = False,
+        fetch_parents: str | None = None,
+    ) -> Path:
         """Build the dataset into a registry directory.
 
         Args:
@@ -74,3 +85,20 @@ def find_builder(dataset_id: str) -> BuilderBackend | None:
         if backend.knows(dataset_id):
             return backend
     return None
+
+
+def build_exact(reference: DatasetRef, root: Path, *, fetch_parents: str | None = None) -> None:
+    """Build a missing exact release, including its own missing dependencies.
+
+    Args:
+        reference: The required dataset ID and version.
+        root: The local registry directory to build into.
+        fetch_parents: Registry URI to try before building dependencies.
+
+    Raises:
+        TimeFValidationError: If no installed connector declares the required version.
+    """
+    builder = find_builder(reference.dataset_id)
+    if builder is None or builder.declared_version(reference.dataset_id) != str(reference.version):
+        raise TimeFValidationError(f"no installed connector builds exact input {reference}")
+    builder.build(reference.dataset_id, root, force=True, build_parents=True, fetch_parents=fetch_parents)
