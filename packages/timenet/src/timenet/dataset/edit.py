@@ -328,4 +328,13 @@ def edit_version(
 
         with TimeFWriter(out_root, edited, **writer_kwargs) as writer:  # ty: ignore[invalid-argument-type]
             writer.write()
+        # A new registry root needs only the referenced physical files, not parent catalogs.
+        from timenet.manifest import Manifest  # noqa: PLC0415
+        from timenet.registry.local import LocalRegistry  # noqa: PLC0415
+        from timenet.registry.shared import download_owners  # noqa: PLC0415
+
+        manifest = Manifest.model_validate_json(
+            (out_root / edited.metadata.dataset_id / str(dataset_version) / "manifest.json").read_text()
+        )
+        download_owners(LocalRegistry(base_dir.parents[2]), manifest, out_root)
     return out_root / edited.metadata.dataset_id / str(dataset_version)

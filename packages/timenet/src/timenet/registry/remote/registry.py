@@ -6,17 +6,18 @@ Artifact bytes never pass through the API. The service hands back presigned URLs
 """
 
 from collections.abc import Callable
+from dataclasses import replace
 from pathlib import Path
 import shutil
 import tempfile
 from typing import BinaryIO, cast
 
 import httpx
+import pyarrow.fs as pafs
 
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetRegistryError
-from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
 from timenet.registry.remote._download import ProgressCallback, download_version_files
 from timenet.registry.remote._http import RegistryHttpClient
@@ -125,10 +126,9 @@ class RemoteRegistry(WritableRegistry):
         manifest = self.get_manifest(dataset_id, version)
         resolved = str(manifest.metadata.dataset_version)
         dest = self._cache_dir / dataset_id / resolved
-        if not (dest / MANIFEST_FILE).exists():
-            # download_version owns the one materialize path, so TimeNet.download() and open share it.
-            self.download_version(dataset_id, resolved, dest, manifest=manifest)
-        return DatasetVersion.open_local(dest)
+        dest.mkdir(parents=True, exist_ok=True)
+        # Opening a handle does not download either the catalog or the payloads.
+        return replace(DatasetVersion(manifest, pafs.LocalFileSystem(), str(dest)), registry=self)
 
     def download_version(  # noqa: PLR0913
         self,
