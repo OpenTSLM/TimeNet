@@ -27,7 +27,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
-from timenet.registry.shared import validate_owners
+from timenet.registry.shared import complete_copy, validate_owners
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata, Version
@@ -151,7 +151,7 @@ class S3Registry(WritableRegistry):
         manifest = self.get_manifest(dataset_id, version)
         resolved = str(manifest.metadata.dataset_version)
         cached = self._cache_dir / dataset_id / resolved
-        if (cached / MANIFEST_FILE).exists():
+        if complete_copy(cached, manifest):
             return DatasetVersion.open_local(cached)
         root = self._key(dataset_id, resolved)
         return DatasetVersion(
