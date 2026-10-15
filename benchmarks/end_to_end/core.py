@@ -50,6 +50,8 @@ def _canonical(value: Any) -> Any:  # noqa: PLR0911, RUF100 - explicit type case
     Returns:
         A recursively canonicalized value.
     """
+    if type(value).__module__ == "timenet.types.payloads" and hasattr(value, "read"):
+        return _canonical(value.read())
     if value is None or isinstance(value, str | int | bool):
         return value
     if isinstance(value, float):

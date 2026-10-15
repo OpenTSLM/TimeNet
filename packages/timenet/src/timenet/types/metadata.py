@@ -13,12 +13,14 @@ from pydantic import (
     model_validator,
 )
 
+from timenet.errors import TimeFValidationError
 from timenet.types._model import TimeFModel
 from timenet.types.access import Access
 from timenet.types.annotations import AnnotationDescriptor
 from timenet.types.domains import Domain
 from timenet.types.licenses import License
-from timenet.types.metadata_fields import DatasetId, NonEmptyText, SemanticVersion
+from timenet.types.metadata_fields import DatasetId, InputAlias, NonEmptyText, SemanticVersion
+from timenet.types.references import DatasetRef
 from timenet.types.specs import TimeSeriesSpec
 from timenet.types.tasks import TASKS, Task, TaskType
 
@@ -26,8 +28,8 @@ from timenet.types.tasks import TASKS, Task, TaskType
 class DatasetMetadata(TimeFModel):
     """A dataset's descriptive identity: who it is, not what it emits.
 
-    The dataset card holds these fields. ``dataset_version`` is the semantic version of the upstream
-    source. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an
+    The dataset card holds these fields. ``dataset_version`` identifies the immutable TimeNet release.
+    ``source_revision`` identifies the upstream release independently. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an
     ``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid
     casing-only differences on case-insensitive filesystems.
     """
@@ -35,7 +37,11 @@ class DatasetMetadata(TimeFModel):
     dataset_id: DatasetId
     """HuggingFace-style ``org/name`` pair, case-sensitive, exactly one slash."""
     dataset_version: SemanticVersion
-    """Semantic version of the upstream source data."""
+    """Semantic version of the TimeNet release."""
+    source_revision: StrictStr | None = None
+    """Upstream tag, version, or revision, when known."""
+    inputs: dict[InputAlias, DatasetRef] = Field(default_factory=dict)
+    """Aliased exact releases used to build this dataset. These are provenance, not storage dependencies."""
     name: NonEmptyText
     """Human-readable display name."""
     description: NonEmptyText
@@ -102,8 +108,23 @@ class DatasetMetadata(TimeFModel):
                 "reading a dataset card needs PyYAML; install the 'timenet[build]' extra"
             ) from exc
 
+        class UniqueKeyLoader(yaml.SafeLoader):
+            def construct_mapping(self, node: Any, deep: bool = False) -> dict:
+                """Reject duplicate keys before the YAML parser discards them.
+
+                Returns:
+                    The decoded mapping.
+
+                Raises:
+                    TimeFValidationError: If the mapping repeats a key.
+                """
+                keys = [self.construct_object(key, deep=deep) for key, _ in node.value]
+                if len(set(keys)) != len(keys):
+                    raise TimeFValidationError(f"duplicate mapping key in dataset card {card_path}")
+                return super().construct_mapping(node, deep=deep)
+
         try:
-            raw = yaml.safe_load(card_path.read_text(encoding="utf-8"))
+            raw = yaml.load(card_path.read_text(encoding="utf-8"), Loader=UniqueKeyLoader)  # noqa: S506 - SafeLoader subclass
         except (OSError, yaml.YAMLError) as exc:
             raise TimeNetInvalidCardError(f"could not read dataset card {card_path}: {exc}") from exc
         if not isinstance(raw, dict):
