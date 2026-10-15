@@ -11,7 +11,7 @@ def store(root, dataset):
     return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
 
 
-def test_selected_signal_then_task_preserves_edits_and_remaps_dependencies(tmp_path):
+def test_selected_signal_then_task_preserves_edits_and_remaps_dependencies(tmp_path, monkeypatch):
     parent = make_dataset()
     path = store(tmp_path, parent)
     handle = TimeFReader(DatasetVersion.open_local(path)).get_handle()
@@ -29,7 +29,14 @@ def test_selected_signal_then_task_preserves_edits_and_remaps_dependencies(tmp_p
     assert "edited" not in original.metadata
     child_path = store(tmp_path, child)
     stored = TimeFReader(DatasetVersion.open_local(child_path)).get_handle()
-    assert stored.get_handle("Record", original.id, namespace="base").read().metadata["edited"] is True
+    with monkeypatch.context() as scoped:
+
+        def unexpected_catalog():
+            raise AssertionError("a single-object handle must not hydrate the full catalog")
+
+        scoped.setattr(stored.reader, "_read_catalog", unexpected_catalog)
+        assert stored.get_handle("Record", original.id, namespace="base").read().metadata["edited"] is True
+        assert stored.get_handle("Task", chosen.id, namespace="base").read().inputs[0].metadata["edited"] is True
     grandchild = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "test/grandchild"}))
     grandchild.import_from(stored, records=[imported.records[original.id].id])
     grandchild_path = store(tmp_path, grandchild)

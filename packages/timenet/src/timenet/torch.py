@@ -122,13 +122,16 @@ class TimeFTorchDataset(Dataset):
 
     @staticmethod
     def _item(record: Record, tasks: tuple[Task, ...]) -> dict[str, Any]:
+        seen: set[int] = set()
+        materialize(record, seen)
+        materialize(tasks, seen)
         pairs = tuple(_series_tensor_and_mask(signal) for signal in record.signals)
         return {
             "record_id": record.record_id,
             "series": tuple(values for values, _ in pairs),
             "series_masks": tuple(mask for _, mask in pairs),
-            "tasks": materialize(tasks),
-            "annotations": materialize(record.annotations),
+            "tasks": tasks,
+            "annotations": record.annotations,
         }
 
 
