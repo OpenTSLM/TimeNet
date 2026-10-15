@@ -19,6 +19,7 @@ import pint
 from pydantic import BeforeValidator, StrictStr
 
 from timenet.errors import TimeFValidationError
+from timenet.format.external import ValueHandle
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._model import TimeFModel
 from timenet.types.ids import new_id
@@ -199,6 +200,8 @@ def value_type_of(value: Any) -> ValueType | None:
     Raises:
         TimeFValidationError: If ``value`` is a non-null value of an unsupported type.
     """
+    if isinstance(value, ValueHandle):
+        return "str" if value.kind == "text" else "list"
     if value is None:
         return None
     # bool before int, since bool is an int subclass.
