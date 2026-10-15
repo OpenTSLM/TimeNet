@@ -9,6 +9,7 @@ from collections.abc import Sequence
 from typing import Any
 
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.types.payloads import Payload
 
 
 VALUE_COLUMNS = ("value_kind", "text_value", "integer_value", "float_value", "boolean_value", "text_list_value")
@@ -31,6 +32,8 @@ def encode_annotation_value(value: object, *, label: str) -> dict[str, Any]:
     Raises:
         TimeFValidationError: If the value is not one of the supported shapes.
     """
+    if isinstance(value, Payload):
+        value = value.read()
     columns: dict[str, Any] = dict.fromkeys(VALUE_COLUMNS)
     if value is None:
         return columns

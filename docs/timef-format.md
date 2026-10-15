@@ -158,3 +158,16 @@ SQL scans, for tests and tooling.
 
 `TimeFReader.verify()` hashes every listed artifact. Normal reads stay lazy and verify the cached
 remote `control.duckdb` before opening it read-only.
+
+## Format version 2
+
+Format 2 records physical payload descriptors and locators in `control.duckdb`. Array payloads
+select their own codec, independent of logical signal IDs. Readers create explicit handles from
+these rows and read the physical chunks directly. Existing format 1 artifacts require a rebuild.
+
+Local locators omit a manifest checksum. A reader binds them to the exact checksum of the opened
+release before another dataset can reuse them. This avoids a manifest referring to its own checksum.
+
+Irregular timestamp arrays live in packed payload files. The control catalog stores only their
+axis bounds, length, and physical reference. Signals that share an axis reuse one timestamp payload.
+Timestamp payloads use int64 storage independently from the supported logical signal dtypes.

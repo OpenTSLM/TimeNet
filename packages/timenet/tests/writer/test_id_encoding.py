@@ -118,7 +118,7 @@ def test_forecasting_target_span_round_trips(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, ForecastingTask)
-    assert task.targets == (span,)
+    assert task.targets() == (span,)
     assert task.scope == scope
 
 
@@ -144,7 +144,7 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, ForecastingTask)
-    assert task.targets == (span,)
+    assert task.targets() == (span,)
     assert task.scope == scope
 
 
@@ -198,8 +198,9 @@ def test_correspondence_record_targets_round_trip(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, TSCorrespondenceTask)
-    assert task.targets is not None and isinstance(task.targets[0], Record)
-    assert task.targets[0].id == match.id
+    targets = task.targets()
+    assert targets is not None and isinstance(targets[0], Record)
+    assert targets[0].id == match.id
     assert tuple(record.id for record in task.candidate_records) == (match.id, other.id)
 
 
@@ -230,13 +231,15 @@ def test_editing_and_generation_record_targets_round_trip(tmp_path):
     edit = tasks[TSEditingTask]
     assert isinstance(edit, TSEditingTask)
     assert tuple(record.id for record in edit.inputs) == (source.id,)
-    assert edit.targets is not None and isinstance(edit.targets[0], Record)
-    assert edit.targets[0].id == edited.id
-    assert edit.prompt == "Remove the baseline wander."
+    targets = edit.targets()
+    assert targets is not None and isinstance(targets[0], Record)
+    assert targets[0].id == edited.id
+    assert edit.prompt() == "Remove the baseline wander."
     generation = tasks[TSGenerationTask]
     assert isinstance(generation, TSGenerationTask)
-    assert generation.targets is not None and isinstance(generation.targets[0], Record)
-    assert generation.targets[0].id == edited.id
+    targets = generation.targets()
+    assert targets is not None and isinstance(targets[0], Record)
+    assert targets[0].id == edited.id
 
 
 def test_time_span_round_trips(tmp_path):
