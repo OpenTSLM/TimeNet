@@ -23,6 +23,7 @@ from timenet.format.constants import (
 )
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import CONTROL_FILE, connect_control
+from timenet.format.external import ExternalWriter
 from timenet.format.schemas import (
     LOGICAL_IDS,
     UUID16,
@@ -129,6 +130,7 @@ class TimeFWriter:
         self._storage_sources = StorageSources(
             DatasetRef(dataset_id=dataset.metadata.dataset_id, version=dataset.metadata.dataset_version)
         )
+        self._external = ExternalWriter(self._staging_dir, self._storage_sources)
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -193,7 +195,9 @@ class TimeFWriter:
             if self._dataset.has_task_stream
             else self._dataset.iter_tasks()
         )
-        self._task_type_counts = DuckDBControlWriter(self._staging_dir / CONTROL_FILE).write_hierarchy(
+        self._task_type_counts = DuckDBControlWriter(
+            self._staging_dir / CONTROL_FILE, external=self._external
+        ).write_hierarchy(
             self._dataset,
             placements,
             tasks=tasks,
@@ -439,6 +443,7 @@ class TimeFWriter:
             files=ManifestFiles(
                 control=(self._file_part(self._control_file),),
                 time_series=self._file_parts(self._value_files),
+                payloads=self._file_parts(self._external.files),
             ),
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
