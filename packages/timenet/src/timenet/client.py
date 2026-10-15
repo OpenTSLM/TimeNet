@@ -179,14 +179,13 @@ class TimeNet:
 
     def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
         """Return the dataset with all values materialized in memory."""
-        return self.get_handle(dataset_id, version, auto_build=auto_build).read()
+        with self.get_handle(dataset_id, version, auto_build=auto_build) as handle:
+            return handle.read()
 
     def get_handle(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> DatasetHandle:
-        """Read the dataset into memory through the registry's storage handle.
+        """Return a lazy dataset handle without opening its catalog or payload files.
 
-        Series values stay lazy per-series once the handle is open. A local or S3 registry reads them in
-        place; a remote registry materializes the version to local storage first (see
-        :meth:`~timenet.registry.BaseRegistry.open_version`), so a remote load fetches the whole version.
+        An HTTP registry fetches and caches each file when it is first accessed.
 
         Against a local registry, a dataset the registry does not have is built first, if some
         installed package registers a connector for its id. Set ``auto_build`` false to fail fast
@@ -198,7 +197,7 @@ class TimeNet:
             auto_build: Build a missing local dataset from its connector. Set false to raise instead.
 
         Returns:
-            The dataset with lazy, per-series loaders that use the registry handle.
+            A handle for explicit dataset, entity, and field reads.
 
         Raises:
             TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
