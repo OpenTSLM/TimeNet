@@ -2,7 +2,7 @@
 
 TimeF has three axis shapes, closed under :data:`TimeAxis`. :class:`RegularAxis` computes every time
 offset from a period and an origin. It stores nothing per value. :class:`IrregularAxis` covers the
-placements that no formula produces. Its shared control-plane object stores every time offset once.
+placements that no formula produces. Its axis descriptor references an immutable external timestamp payload.
 :class:`OrdinalAxis` records order only. It gives no route to a time offset, so a time question about
 one does not type-check.
 
@@ -41,6 +41,7 @@ import numpy as np
 from timenet.errors import TimeFValidationError
 from timenet.types.clock import INT64_MAX, US_PER_S, check_int64, offset_us
 from timenet.types.ids import new_id
+from timenet.types.references import ObjectRef
 
 
 @unique
@@ -80,6 +81,8 @@ class RegularAxis:
     recording, which keeps a span written against the recording meaningful on the window."""
     offset_us: int = 0
     """Whole microseconds from the record origin to the cadence's zero."""
+    origin: ObjectRef | None = field(default=None, compare=False)
+    """Source lineage, independent of physical payload ownership."""
     axis_id: str = field(default_factory=new_id, compare=False)
     """Stable identity used when several signals reference this axis."""
 
@@ -291,6 +294,8 @@ class IrregularAxis:
     last_us: int
     """Time offset of the last value. The writer checks it against the stream at write time, so it is
     verified metadata, not an unbacked claim."""
+    origin: ObjectRef | None = field(default=None, compare=False)
+    """Source lineage, independent of physical payload ownership."""
     axis_id: str = field(default_factory=new_id, compare=False)
     """Stable identity used when several signals reference this axis."""
 
@@ -336,6 +341,8 @@ class OrdinalAxis:
 
     axis_type: ClassVar[AxisType] = AxisType.ORDINAL
     """The stored discriminator."""
+    origin: ObjectRef | None = field(default=None, compare=False)
+    """Source lineage, independent of physical payload ownership."""
     axis_id: str = field(default_factory=new_id, compare=False)
     """Stable identity used when several signals reference this axis."""
 

@@ -39,13 +39,13 @@ Manifest(
     counts=counts,              # ManifestCounts (default: empty)
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
-    build_env=None,             # environment provenance (see below)
-    timef_format_version=1,     # required; validated against the supported set {1}
+    build_env={},             # environment provenance (see below)
+    timef_format_version=3,     # required; formats 1 and 2 need a rebuild
 )
 ```
 
 `values_backend` names the [values backend](timef-writer.md#values-settings) that wrote
-`files.time_series`. The reader uses this value to select the backend. If the key is absent, the
+`files.time_series`. New signal shards use this backend. Stored payload references select their own codecs. If the key is absent, the
 reader uses `"parquet"`.
 
 `value_encoding` gives the [values encoding](timef-writer.md#values-settings) that wrote the shards
@@ -64,15 +64,16 @@ separate format version.
 A spec records its `nullable` flag. Parquet stores nullability in Arrow validity bitmaps. Zarr stores
 it in validity arrays next to the values.
 
-Direct construction and parsing with an unsupported `timef_format_version` raise Pydantic's
-`ValidationError`.
+Direct model construction reports Pydantic validation errors. Artifact readers use
+`Manifest.from_artifact()` and raise `TimeFFormatError` for unsupported or corrupt artifacts.
 
 ### Codec
 
 | Method | Purpose |
 | --- | --- |
 | `to_dict()` / `to_json()` | Canonical serialization (all keys present, explicit nulls). |
-| `model_validate(data)` / `model_validate_json(text)` | Parse, tolerating missing optional blocks. |
+| `from_artifact(data)` | Parse an artifact with explicit format and corruption errors. |
+| `model_validate(data)` / `model_validate_json(text)` | Validate model data. |
 
 `model_validate` requires `timef_format_version`, `dataset_id`, `metadata`, and `files`. `schema`
 and `counts` default to empty. Unknown fields are rejected. A malformed block raises Pydantic's
@@ -98,7 +99,7 @@ The fields count `records`, `sources`, `signals`, `axes`, reusable `annotation_c
 ## `ManifestFiles`
 
 `ManifestFiles` lists the single `control.duckdb` artifact and the `time_series` values-plane
-artifacts. A reader uses this list and never uses a directory glob.
+artifacts, plus owned bulk content under `payloads`. A reader uses this list and never uses a directory glob.
 
 Each entry is a `FilePart`. A `FilePart` carries the file's `path` (version-relative), its
 `checksum` (with the `sha256:` prefix), and its `size` in bytes. So the path and the digest never
@@ -109,3 +110,25 @@ live in separate structures.
 ---
 
 See the [API reference for `timenet.manifest`](api/manifest.md) for the full symbol listing.
+
+## Release identity and build inputs
+
+`dataset_version` identifies an immutable TimeNet release. `source_revision` records the upstream
+tag or revision independently. A card can declare exact input releases under local aliases:
+
+```yaml
+dataset_version: 1.0.0
+source_revision: upstream-v7
+inputs:
+  ecg: physionet/ptb-xl@1.2.3
+```
+
+Input declarations describe construction and provenance. They do not require the consumer to load
+those datasets. Storage references determine which external artifacts a consumer needs.
+
+## Physical payload owners
+
+`payload_sources` is a flat list of exact release identities and raw manifest SHA-256 pins. It
+contains only owners referenced by this catalog. Readers do not follow their provenance inputs or
+unused payload dependencies. Each physical reference includes its codec, so a release can combine
+Parquet, Zarr, and packed text. See [Dataset composition](composition.md).
