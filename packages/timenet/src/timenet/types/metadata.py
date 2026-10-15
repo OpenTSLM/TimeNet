@@ -13,6 +13,7 @@ from pydantic import (
     model_validator,
 )
 
+from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._model import TimeFModel
 from timenet.types.access import Access
 from timenet.types.annotations import AnnotationDescriptor
@@ -52,6 +53,12 @@ class DatasetMetadata(TimeFModel):
     """Where to read the full license text. Required when ``license`` is :attr:`License.OTHER`."""
     citation: StrictStr | None = None
     """How to cite the dataset, when the source asks for attribution."""
+    build_options: JsonMapping = Field(default_factory=dict)
+    """Connector-specific build choices, preserved in the manifest for reproducibility.
+
+    Each connector validates the options it supports. Changing a choice for a published dataset
+    requires a new ``dataset_version``; the engine identifies builds by dataset id and version.
+    """
     access: Access = Access.OPEN
     """How a user obtains the data (see :class:`Access`). ``OPEN`` needs nothing."""
     access_url: StrictStr | None = None
@@ -65,6 +72,16 @@ class DatasetMetadata(TimeFModel):
         if not value.strip():
             raise ValueError("must not be blank")
         return value
+
+    @field_validator("build_options", mode="before")
+    @classmethod
+    def _build_options_json(cls, value: object) -> JsonMapping:
+        """Validate and copy the connector's JSON-compatible configuration.
+
+        Returns:
+            A detached JSON object.
+        """
+        return validate_json_mapping(value)
 
     @model_validator(mode="after")
     def _dependent_urls(self) -> Self:

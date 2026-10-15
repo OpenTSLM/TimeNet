@@ -181,6 +181,9 @@
           "default": null,
           "title": "Citation"
         },
+        "build_options": {
+          "$ref": "#/$defs/JsonMapping"
+        },
         "access": {
           "$ref": "#/$defs/Access",
           "default": "open"
@@ -327,6 +330,13 @@
       "title": "InputModality",
       "type": "string"
     },
+    "JsonMapping": {
+      "additionalProperties": {
+        "$ref": "#/$defs/JsonValue"
+      },
+      "type": "object"
+    },
+    "JsonValue": {},
     "License": {
       "description": "The legal license of the source data. Values are SPDX-style identifiers.",
       "enum": [

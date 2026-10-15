@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: bash-lab/sensorcaps
+dataset_version: 1.0.0
+name: SensorCaps
+build_options:
+  caption_version: v2
+description: >-
+  Wearable IMU captioning with generated Features and Narration responses from
+  LLaSA. Supports v2 captioning (35,960 pairs across five source datasets) or
+  v1 captioning (26,288 pairs across four source datasets), selected by build_options,
+  preserving six scalar float32 accelerometer/gyroscope channels per row. Values have
+  unknown units and ordinal axes; the upstream nominal rate is 10 Hz. No
+  train/validation/test assignments are inferred. Source revision:
+  4242e07feaacb0ee3aff86182a62914fa7abacef.
+  Signal units are not explicitly documented by SensorCaps. Acceleration may be
+  in g or m/s² and angular velocity in rad/s or °/s depending on the original
+  source (HHAR, Motion, PAMAP2, Shoaib, UCI HAR). UCI HAR documents g and rad/s,
+  but SensorCaps uses LIMU-BERT-preprocessed data, so those units cannot be
+  assumed to carry over unchanged. The documented sampling frequency is 10 Hz;
+  final signal units must be verified per source before assigning them.
+license: other
+license_url: https://firstdonoharm.dev/version/3/0/cl-eco-extr-ffd-law-media-mil-my-soc-sv-tal-usta.html
+source_url: https://huggingface.co/datasets/BASH-Lab/SensorCaps
+citation: >-
+  Imran et al. LLaSA: A Sensor-Aware LLM for Natural Language Reasoning of
+  Human Activity from IMU Data. https://arxiv.org/abs/2406.14498
+domains:
+  - activity
+  - motion
+tags:
+  - captioning
+  - imu
+  - accelerometer
+  - gyroscope
+  - generated-supervision
+  - huggingface

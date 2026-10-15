@@ -56,6 +56,33 @@ A connector takes no constructor arguments. Configuration comes from environment
 dataclass, or an S3 key. The connector is generic through PEP 695:
 `class MyConnector(BaseConnector[MyRawRef])`.
 
+Reproducible dataset selections can also live in the card's optional `build_options` JSON mapping.
+The connector validates the options it supports; they are preserved in the manifest metadata.
+For example, SensorCaps selects one caption version:
+
+```yaml
+build_options:
+  caption_version: v2
+```
+
+Changing a selection for a published dataset requires a new `dataset_version`. The engine reuses an
+existing version by dataset id and version, so editing an option alone does not rebuild it. Credentials
+remain environment configuration.
+
+For example, change both fields to give a SensorCaps v1 selection its own version:
+
+```yaml
+dataset_version: 1.1.0
+build_options:
+  caption_version: v1
+```
+
+Explicitly build it with `uv run timenet-build build bash-lab/sensorcaps --out ./registry`, then load
+`bash-lab/sensorcaps@1.1.0` from that registry. Options are not part of the registry lookup or
+build-cache key. Loading an existing artifact reads its stored manifest and does not consult the
+edited local card. An unversioned load can return an older available version without rebuilding;
+pin the version for a reproducible selection.
+
 ---
 
 ## Reusing descriptors
