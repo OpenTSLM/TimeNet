@@ -124,7 +124,14 @@ class DatasetVersion:
         Returns:
             The store location for ``relpath``.
         """
-        return self.path(relpath)
+        check_relative_path("relpath", relpath)
+        if isinstance(self.filesystem, pafs.S3FileSystem):
+            return f"s3://{self.root}/{relpath}"
+        if self.registry is not None:
+            for part in self.manifest.files.all_files():
+                if part.path.startswith(relpath + "/"):
+                    self.path(part.path)
+        return f"{self.root}/{relpath}"
 
     @classmethod
     def open_local(cls, root: str | Path) -> "DatasetVersion":

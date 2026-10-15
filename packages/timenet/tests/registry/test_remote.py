@@ -278,11 +278,12 @@ def test_store_without_write_token_is_rejected(tmp_path):
         registry.store(make_dataset())
 
 
-def test_child_downloads_only_physical_dependencies_and_reads_offline(tmp_path):
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_child_downloads_only_physical_dependencies_and_reads_offline(tmp_path, backend):
     origin = tmp_path / "origin"
     local = LocalRegistry(origin)
     parent = make_dataset()
-    local.store(parent)
+    local.store(parent, values_backend=backend)
     parent_id = parent.metadata.dataset_id
     with TimeFReader(local.open_version(parent_id, "1.0.0")) as reader:
         child = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}))
