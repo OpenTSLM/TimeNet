@@ -7,21 +7,24 @@ ticker symbol. A :class:`~timenet.types.spans.TimePoint` marks one time offset. 
 :class:`Annotation` is a flat frozen dataclass. It carries ``key``, ``unit``, and ``description`` as
 instance fields. A connector can author it directly, or subclass it with field defaults for reuse.
 :class:`~timenet.reader.TimeFReader` can rebuild identical instances from the manifest without runtime
-class synthesis. :class:`AnnotationDescriptor` is the type-level projection stored in the schema and
+class synthesis. Subclasses with dataclass field defaults use ``init=False`` to inherit the native
+constructor. :class:`AnnotationDescriptor` is the type-level projection stored in the schema and
 manifest.
 """
 
-from dataclasses import dataclass, field, replace
+from dataclasses import MISSING, dataclass, field, fields, replace
 from enum import StrEnum, unique
 from typing import Annotated, Any, Protocol
 
 import pint
 from pydantic import BeforeValidator, StrictStr
+from typing_extensions import TypedDict, Unpack
 
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._model import TimeFModel
 from timenet.types.ids import new_id
+from timenet.types.payloads import Payload
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
 from timenet.types.units import normalize_unit
 from timenet.types.wire import ValueType
@@ -36,7 +39,23 @@ class AnnotationType(StrEnum):
     INTERVAL = "interval"
 
 
-@dataclass(frozen=True, kw_only=True)
+class AnnotationArguments(TypedDict, total=False):
+    """Native constructor arguments for annotation content and its occurrence."""
+
+    key: str
+    value: Any
+    span: TimePoint | TimeInterval | None
+    unit: str | pint.Unit | None
+    description: str | None
+    source: str | None
+    id: str | None
+    occurrence_id: str | None
+    metadata: JsonMapping | None
+    confidence: float | None
+    occurrence_metadata: JsonMapping | None
+
+
+@dataclass(frozen=True, kw_only=True, init=False)
 class Annotation:
     """Contextual metadata attached to a record, optionally anchored to a region of its timeline.
 
@@ -52,9 +71,8 @@ class Annotation:
 
     key: str
     """Name identifying the annotation."""
-    value: Any = None
-    """The annotation's payload value. ``None`` makes it a pure marker, which needs a ``span`` to
-    mark something."""
+    _value: Payload[Any] | None = field(default=None, repr=False)
+    """Shared content, or None for a pure marker with a span."""
     span: TimePoint | TimeInterval | None = None
     """Where on the Record timeline this annotation applies. Its owner determines its scope.
     ``None`` means it is record-scoped context with no place in time."""
@@ -79,11 +97,33 @@ class Annotation:
     occurrence_metadata: JsonMapping = field(default_factory=dict, compare=False)
     """Optional metadata for this particular application."""
 
+    def __init__(self, **kwargs: Unpack[AnnotationArguments]) -> None:
+        values = dict(kwargs)
+        if "value" in values:
+            values["_value"] = values.pop("value")
+        for name in ("id", "metadata", "occurrence_metadata"):
+            if values.get(name) is None:
+                values.pop(name, None)
+        unknown = values.keys() - {item.name for item in fields(self)}
+        if unknown:
+            raise TimeFValidationError(f"unknown annotation arguments: {sorted(unknown)}")
+        for item in fields(self):
+            if item.name in values:
+                content = values[item.name]
+            elif item.default_factory is not MISSING:
+                content = item.default_factory()
+            elif item.default is not MISSING:
+                content = item.default
+            else:
+                raise TimeFValidationError(f"annotation requires {item.name!r}")
+            object.__setattr__(self, item.name, content)
+        self.__post_init__()
+
     def __post_init__(self) -> None:
-        """Canonicalize a sequence ``value`` to a list and normalize ``unit`` against the registry.
+        """Wrap native values in immutable payloads and normalize the unit.
 
         ``value_type`` is ``"list"`` for any sequence, and the manifest stores it as a JSON array that
-        decodes back to a list. This method converts a tuple to a list and the unit to a string. That
+        decodes back to a list. Payload reads return a list, and construction normalizes the unit to a string. That
         keeps an in-memory annotation equal to its read-back form, the reader's field-for-field
         guarantee.
 
@@ -91,8 +131,8 @@ class Annotation:
             TimeFValidationError: If the caller sets ``span`` to something that is not a span, or
                 the annotation has neither a value nor a span.
         """
-        if isinstance(self.value, tuple):
-            object.__setattr__(self, "value", list(self.value))
+        if self._value is not None and not isinstance(self._value, Payload):
+            object.__setattr__(self, "_value", Payload.from_value(self._value))
         object.__setattr__(self, "unit", normalize_unit(self.unit))
         object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
         object.__setattr__(
@@ -109,11 +149,30 @@ class Annotation:
                 "annotation scope comes from its owner; attach it to each selected Signal "
                 "instead of setting time_series_ids"
             )
-        if self.value is None and self.span is None:
+        if self._value is None and self.span is None:
             raise TimeFValidationError(
                 f"annotation {self.key!r} has neither a value nor a span, so it says nothing. Give it "
                 f"a value, or a span to mark a region of the timeline"
             )
+
+    def value(self) -> Any:
+        """Materialize the content, or return None for a pure marker.
+
+        This call may read storage or invoke a producer. Use ``handle()`` to
+        inspect or share the payload without reading its body.
+
+        Returns:
+            The annotation value.
+        """
+        return None if self._value is None else self._value.read()
+
+    def handle(self) -> Payload[Any] | None:
+        """Return the immutable content handle without reading its body.
+
+        Returns:
+            The shared payload, or None for a pure marker.
+        """
+        return self._value
 
     @property
     def content_id(self) -> str:
@@ -123,7 +182,7 @@ class Annotation:
     @property
     def _content_fields(self) -> tuple[object, ...]:
         """Return the reusable payload, without occurrence-specific fields."""
-        return (self.key, self.value, self.unit, self.description, self.metadata)
+        return (self.key, self._value, self.unit, self.description, self.metadata)
 
     @property
     def name(self) -> str:
@@ -201,6 +260,10 @@ def value_type_of(value: Any) -> ValueType | None:
     """
     if value is None:
         return None
+    if isinstance(value, Payload):
+        if value.descriptor.kind == "array":
+            raise TimeFValidationError("annotation values cannot contain array payloads")
+        return value.descriptor.kind
     # bool before int, since bool is an int subclass.
     tags: tuple[tuple[type | object, str], ...] = (
         (bool, "bool"),
