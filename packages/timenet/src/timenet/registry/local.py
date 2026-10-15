@@ -182,7 +182,9 @@ class LocalRegistry(WritableRegistry):
         manifest = self.get_manifest(dataset_id, version)
         resolved = str(manifest.metadata.dataset_version)
         root = self._dataset_dir(dataset_id) / resolved
-        return DatasetVersion(manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root))
+        return DatasetVersion(
+            manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root), payload_root=str(self._root)
+        )
 
     def _dataset_dir(self, dataset_id: str) -> Path:
         """Return the directory holding a dataset's versions.

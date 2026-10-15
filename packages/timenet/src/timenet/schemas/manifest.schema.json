@@ -105,7 +105,7 @@
     },
     "DatasetMetadata": {
       "additionalProperties": false,
-      "description": "A dataset's descriptive identity: who it is, not what it emits.\n\nThe dataset card holds these fields. ``dataset_version`` is the semantic version of the upstream\nsource. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an\n``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid\ncasing-only differences on case-insensitive filesystems.",
+      "description": "A dataset's descriptive identity: who it is, not what it emits.\n\nThe dataset card holds these fields. ``dataset_version`` identifies the immutable TimeNet release.\n``source_revision`` identifies the upstream release independently. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an\n``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid\ncasing-only differences on case-insensitive filesystems.",
       "properties": {
         "dataset_id": {
           "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
@@ -115,6 +115,27 @@
         "dataset_version": {
           "pattern": "^\\d+\\.\\d+\\.\\d+$",
           "type": "string"
+        },
+        "source_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Revision"
+        },
+        "inputs": {
+          "patternProperties": {
+            "^[A-Za-z][A-Za-z0-9_-]*$": {
+              "$ref": "#/$defs/DatasetRef"
+            }
+          },
+          "title": "Inputs",
+          "type": "object"
         },
         "name": {
           "minLength": 1,
@@ -214,6 +235,10 @@
       ],
       "title": "DatasetMetadata",
       "type": "object"
+    },
+    "DatasetRef": {
+      "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*@\\d+\\.\\d+\\.\\d+$",
+      "type": "string"
     },
     "DatasetSchema": {
       "additionalProperties": false,
@@ -434,12 +459,40 @@
           },
           "title": "Time Series",
           "type": "array"
+        },
+        "payloads": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FilePart"
+          },
+          "title": "Payloads",
+          "type": "array"
         }
       },
       "required": [
         "control"
       ],
       "title": "ManifestFiles",
+      "type": "object"
+    },
+    "PayloadSource": {
+      "additionalProperties": false,
+      "description": "An immutable physical owner pinned by its manifest digest.",
+      "properties": {
+        "dataset": {
+          "$ref": "#/$defs/DatasetRef"
+        },
+        "manifest_checksum": {
+          "pattern": "^sha256:[0-9a-f]{64}$",
+          "title": "Manifest Checksum",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset",
+        "manifest_checksum"
+      ],
+      "title": "PayloadSource",
       "type": "object"
     },
     "TimeSeriesSpec": {
@@ -557,6 +610,14 @@
     "schema": {
       "$ref": "#/$defs/DatasetSchema"
     },
+    "payload_sources": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/PayloadSource"
+      },
+      "title": "Payload Sources",
+      "type": "array"
+    },
     "counts": {
       "$ref": "#/$defs/ManifestCounts"
     },
@@ -580,8 +641,8 @@
       "$ref": "#/$defs/BuildEnvironment"
     },
     "timef_format_version": {
-      "maximum": 1,
-      "minimum": 1,
+      "maximum": 2,
+      "minimum": 2,
       "title": "Timef Format Version",
       "type": "integer"
     }

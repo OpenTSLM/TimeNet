@@ -1,6 +1,6 @@
 """Audit a finished ``control.duckdb`` for relational integrity.
 
-The control database carries no persisted constraints: ART indexes on the large ``axis_offsets`` and
+The control database carries no persisted constraints: ART indexes on the large
 ``signal_chunks`` tables would slow every write and bloat the file. The writer instead keeps the
 invariants while it streams rows, from key sequences it owns and from ID sets it checks in Python.
 This module holds the SQL form of the same invariants. It scans every table, so it is not part of
@@ -74,8 +74,9 @@ _AXIS_LENGTH = """
     FROM signals
     JOIN axes USING (axis_key)
     LEFT JOIN (
-        SELECT axis_key, count(*) AS offset_count FROM axis_offsets GROUP BY axis_key
-    ) offsets USING (axis_key)
+        SELECT object_id AS axis_id, CAST(json_extract_string(descriptor, '$.length') AS BIGINT) AS offset_count
+        FROM payloads WHERE object_type='Axis' AND field='offsets'
+    ) offsets USING (axis_id)
     WHERE (axes.axis_type = 'irregular' AND coalesce(offset_count, 0) <> signals.n_values)
        OR (axes.axis_type <> 'irregular' AND coalesce(offset_count, 0) <> 0)
     LIMIT 1
@@ -88,7 +89,10 @@ _CHUNK_COVERAGE = """
         SELECT signal_key, sum(n_values) AS stored_values
         FROM signal_chunks GROUP BY signal_key
     ) chunks USING (signal_key)
-    WHERE coalesce(stored_values, 0) <> signals.n_values
+    LEFT JOIN payloads p ON p.object_type='Signal' AND p.object_id=signals.signal_id AND p.field='values' AND p.position=0
+    WHERE CASE WHEN json_extract_string(p.reference, '$.source.dataset') IS NOT NULL
+        THEN CAST(json_extract_string(p.descriptor, '$.length') AS BIGINT) <> signals.n_values
+        ELSE coalesce(stored_values, 0) <> signals.n_values END
     LIMIT 1
 """
 

@@ -49,7 +49,7 @@ def test_add_record_registers_and_returns(make_series):
     ds.add_record(record=record)
     assert isinstance(record, Record)
     assert ds.records == (record,)
-    assert record.annotations[0].value == ["p1"]
+    assert record.annotations[0].value() == ["p1"]
 
 
 def test_add_record_accepts_a_complete_hierarchy(make_series):
@@ -151,7 +151,7 @@ def test_from_tasks_on_constructor_registers(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     base = ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
     derived = ds.add_task(task=AnswerTask(inputs=(record,), prompt="q", targets=("a",), from_tasks=(base,)))
-    assert derived.from_tasks == (base,)
+    assert derived.from_tasks == (base.ref,)
 
 
 def test_add_task_rejects_a_from_tasks_parent_that_is_not_registered(make_series):
@@ -389,7 +389,7 @@ def test_add_task_accepts_an_answer_stored_by_reference(make_series):
     task = dataset.add_task(
         task=TemporalLocalizationTask(inputs=(record,), prompt="Segment it.", target_annotations=(annotation,))
     )
-    assert task.targets is None and task.target_annotations == (annotation,)
+    assert task.targets_handle() is None and task.target_annotations == (annotation,)
 
 
 def test_add_task_rejects_an_annotation_ref_the_records_do_not_carry(make_series):
@@ -400,20 +400,18 @@ def test_add_task_rejects_an_annotation_ref_the_records_do_not_carry(make_series
         dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), input_annotations=(detached,)))
 
 
-def test_set_task_stream_rejects_after_add_task(make_series):
+def test_replayable_task_sources_compose_with_local_tasks(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
-    with pytest.raises(TimeFValidationError, match="either streams its tasks or"):
-        dataset.set_task_stream([ClassificationTask], lambda: iter(()))
-
-
-def test_add_task_rejects_on_a_streamed_dataset(make_series):
-    dataset = _dataset()
-    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    dataset.set_task_stream([AnswerTask], lambda: iter(()))
-    with pytest.raises(TimeFValidationError, match="streamed dataset"):
-        dataset.add_task(task=AnswerTask(inputs=(record,), prompt="q", targets=("a",)))
+    base = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), id="base"))
+    derived = AnswerTask(inputs=(record,), targets=("answer",), from_tasks=(base.ref,), id="derived")
+    dataset.add_task_stream([AnswerTask], lambda: iter((derived,)))
+    other = ClassificationTask(inputs=(record,), targets=("b",), id="other")
+    dataset.add_task_stream([ClassificationTask], lambda: iter((other,)))
+    local = dataset.add_task(task=AnswerTask(inputs=(record,), targets=("local",), id="local"))
+    for _ in range(2):
+        assert list(dataset.iter_streamed_tasks_validated()) == [base, local, derived, other]
+    assert dataset.derive_schema().tasks == (AnswerTask, ClassificationTask)
 
 
 def test_streamed_task_validation_rejects_an_unknown_record(make_series):
@@ -471,7 +469,7 @@ def test_add_task_accepts_a_series_answer_without_a_target(make_series):
     task = dataset.add_task(
         task=ForecastingTask(inputs=(context,), targets=(target,)),
     )
-    assert task.targets == (target,)
+    assert task.targets() == (target,)
 
 
 def test_tasks_of_filters_by_type(make_series):
@@ -695,7 +693,7 @@ def test_add_tasks_registers_all_in_order_and_links(make_series):
             ClassificationTask(inputs=(record,), targets=("b",)),
         ]
     )
-    assert tuple(t.targets for t in tasks) == (("a",), ("b",))
+    assert tuple(t.targets() for t in tasks) == (("a",), ("b",))
     assert ds.tasks == tasks
     assert record.task_ids == tuple(t.id for t in tasks)
 
@@ -726,7 +724,7 @@ def test_add_tasks_allows_deriving_from_another_task_in_the_same_batch(make_seri
     derived = AnswerTask(inputs=(record,), prompt="q", targets=("a",), from_tasks=(base,))
     registered = ds.add_tasks(tasks=[derived, base])
     assert registered == (derived, base)
-    assert derived.from_tasks == (base,)
+    assert derived.from_tasks == (base.ref,)
 
 
 def test_add_tasks_rejects_duplicate_ids_within_the_batch(make_series):
@@ -754,7 +752,7 @@ def test_add_tasks_rejects_a_self_dependency(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     task = AnswerTask(inputs=(record,), prompt="q", targets=("a",))
-    task.from_tasks = (task,)  # derives from itself
+    task.from_tasks = (task.ref,)  # derives from itself
     with pytest.raises(TimeFValidationError, match="lists itself"):
         ds.add_tasks(tasks=[task])
 
@@ -764,7 +762,7 @@ def test_add_tasks_rejects_a_derivation_cycle(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     first = AnswerTask(inputs=(record,), prompt="q", targets=("a",))
     second = AnswerTask(inputs=(record,), prompt="q", targets=("b",), from_tasks=(first,))
-    first.from_tasks = (second,)  # first <- second <- first
+    first.from_tasks = (second.ref,)  # first <- second <- first
     with pytest.raises(TimeFValidationError, match="cyclic"):
         ds.add_tasks(tasks=[first, second])
 
@@ -796,7 +794,7 @@ def test_add_task_accepts_a_time_series_ref_on_the_record(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     signal = record.signals[0]
     task = ds.add_task(task=TSCorrespondenceTask(inputs=(record,), targets=(signal,)))
-    assert task.targets == (signal,)
+    assert task.targets() == (signal,)
 
 
 def test_add_task_accepts_mixed_targets(make_series):
@@ -804,7 +802,7 @@ def test_add_task_accepts_mixed_targets(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     signal = record.signals[0]
     task = ds.add_task(task=TSCorrespondenceTask(inputs=(record,), targets=(record, signal, "match")))
-    assert task.targets == (record, signal, "match")
+    assert task.targets() == (record, signal, "match")
 
 
 def _record(dataset, make_series, record_id=None):
