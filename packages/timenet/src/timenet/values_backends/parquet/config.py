@@ -1,6 +1,6 @@
 """Configuration for the Parquet values writer."""
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 from timenet.format.schemas import IdCodec, IdTypes
@@ -37,3 +37,5 @@ class ParquetValuesConfig:
     """Target uncompressed bytes per data page, or ``None`` for pyarrow's default."""
     value_encoding: ValueEncoding | None = None
     """Forced values-column encoding for every modality, or ``None`` to select one per modality."""
+    series_groups: dict[str, str] = field(default_factory=dict)
+    """Record group for each selected Signal. Unlisted Signals share packed row groups."""

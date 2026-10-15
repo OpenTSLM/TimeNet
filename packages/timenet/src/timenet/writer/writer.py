@@ -1,10 +1,11 @@
 """Write a TimeF DuckDB control plane and a sharded Parquet or Zarr values plane."""
 
+from collections import defaultdict
 from collections.abc import Callable, Iterable
 from pathlib import Path
 import shutil
 import types as _types
-from typing import Any, cast
+from typing import TYPE_CHECKING, Any, Literal, cast
 import uuid
 
 import numpy as np
@@ -12,7 +13,7 @@ import pyarrow as pa
 
 from timenet.dataset import Signal, TimeFDataset
 from timenet.dataset.time_series import _validate_enum_values
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
     DEFAULT_CHUNK_MAX_BYTES,
@@ -20,9 +21,11 @@ from timenet.format.constants import (
     DEFAULT_ROW_GROUP_TARGET_BYTES,
     DEFAULT_SHARD_TARGET_BYTES,
     MANIFEST_FILE,
+    TIMEF_FORMAT_VERSION,
 )
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import CONTROL_FILE, connect_control
+from timenet.format.reference_catalog import ReferenceCatalogReader
 from timenet.format.schemas import (
     LOGICAL_IDS,
     UUID16,
@@ -30,8 +33,12 @@ from timenet.format.schemas import (
     IdTypes,
 )
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.payloads.copy import PayloadCopier
 from timenet.provenance import build_env
 from timenet.types.ids import is_canonical_uuid
+from timenet.types.payload_references import PayloadChunk, PayloadReference, PayloadSource
+from timenet.types.payloads import Payload
+from timenet.types.references import DatasetRef
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -44,6 +51,10 @@ from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet.writer.value_encoding import AUTO, SUPPORTED_VALUE_ENCODINGS, ValueEncoding
 
 
+if TYPE_CHECKING:
+    from timenet.payloads.reader import PayloadResolver
+
+
 class TimeFWriter:
     """Context manager that serializes a dataset into the TimeF format and commits it atomically."""
 
@@ -52,8 +63,11 @@ class TimeFWriter:
         root: Path,
         dataset: TimeFDataset,
         *,
+        payload_policy: Literal["reuse", "copy"] = "reuse",
+        inline_bytes: int = 4096,
         shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
         row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
+        row_group_layout: Literal["packed", "record", "auto"] = "packed",
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
         compression: str = DEFAULT_COMPRESSION,
         compression_level: int | None = None,
@@ -69,6 +83,9 @@ class TimeFWriter:
             dataset: The populated dataset. The writer derives the schema automatically if needed.
             shard_target_bytes: Rotate to a new shard once a shard's buffered values exceed this.
             row_group_target_bytes: Flush a row group once buffered values exceed this.
+            row_group_layout: Parquet grouping. ``packed`` combines recordings, ``record``
+                separates recordings, and ``auto`` separates recordings with at least 128 KiB
+                of numeric signal values. The byte cap still bounds each group. Zarr ignores it.
             chunk_max_bytes: Split a series into chunks no larger than this.
             compression: Values codec (Parquet codec or Zarr Blosc inner codec).
             compression_level: Pinned compression level, or ``None`` for the backend default.
@@ -86,6 +103,12 @@ class TimeFWriter:
                 ``value_encoding`` is unsupported, or a forced ``value_encoding`` targets a backend
                 that cannot apply it.
         """
+        if payload_policy not in {"reuse", "copy"}:
+            raise TimeFValidationError(f"unknown payload_policy {payload_policy!r}")
+        self.payload_policy = payload_policy
+        if inline_bytes < 0:
+            raise TimeFValidationError("inline_bytes must be non-negative")
+        self.inline_bytes = inline_bytes
         if not dataset.metadata.dataset_id:
             raise TimeFValidationError("dataset_id must be non-empty")
         if values_backend not in SUPPORTED_VALUES_BACKENDS:
@@ -107,6 +130,9 @@ class TimeFWriter:
         self._root = Path(root)
         self._dataset = dataset
         self._shard_target_bytes = shard_target_bytes
+        if row_group_layout not in {"packed", "record", "auto"}:
+            raise TimeFValidationError(f"unsupported row-group layout {row_group_layout!r}")
+        self._row_group_layout = row_group_layout
         self._row_group_target_bytes = row_group_target_bytes
         self._chunk_max_bytes = chunk_max_bytes
         self._compression = compression
@@ -179,21 +205,110 @@ class TimeFWriter:
         self._validate_shared_annotations()
         self._resolve_id_types()
 
-        unique_series, _series_to_records = self._dedupe_series()
-        placements = self._write_values(unique_series)
+        self._payload_copier = PayloadCopier(self._staging_dir)
+        self._preflight_resolvers: dict[int, PayloadResolver] = {}
+        unique_series, series_to_records = self._dedupe_series()
+        owned = [signal for signal in unique_series if signal.values.reference is None]
+        groups = self._record_groups(owned, series_to_records)
+        if groups:
+            owned.sort(
+                key=lambda signal: (
+                    signal.spec.spec_type,
+                    signal.id in groups,
+                    series_to_records[signal.id][0],
+                    signal.name,
+                    signal.id,
+                )
+            )
+        placements = self._write_values(owned, groups)
         tasks = (
             self._dataset.iter_streamed_tasks_validated()
             if self._dataset.has_task_stream
             else self._dataset.iter_tasks()
         )
-        self._task_type_counts = DuckDBControlWriter(self._staging_dir / CONTROL_FILE).write_hierarchy(
+        control_writer = DuckDBControlWriter(self._staging_dir / CONTROL_FILE, inline_bytes=self.inline_bytes)
+        self._task_type_counts = control_writer.write_hierarchy(
             self._dataset,
             placements,
             tasks=tasks,
+            payloads=self._array_references(unique_series, placements),
+            reference_transform=self._stored_reference,
         )
+        self._payload_files = control_writer.payload_files
         self._control_file = CONTROL_FILE
         self._counts = self._build_counts()
         self._written = True
+
+    def _stored_reference(self, payload: Payload) -> PayloadReference:
+        from timenet.payloads.reader import PayloadResolver  # noqa: PLC0415 - registry/writer import cycle
+
+        if payload.reference is None or payload.reference.source is None:
+            raise TimeFValidationError("stored references require a pinned physical owner")
+        if payload._storage is None:
+            raise TimeFValidationError("stored references require bound physical storage")
+        # Validate the owner pin and file placement, without reading inherited content.
+        try:
+            storage = payload._storage
+            if isinstance(storage, PayloadResolver):
+                # Start a fresh validation session for this write, even when the consumer
+                # previously cached an owner before its files changed.
+                resolver = self._preflight_resolvers.get(id(storage))
+                if resolver is None:
+                    resolver = PayloadResolver(storage.version)
+                    self._preflight_resolvers[id(storage)] = resolver
+                resolver.resolve(payload.reference)
+            else:
+                storage.resolve(payload.reference)
+        except TimeFFormatError as exc:
+            raise TimeFValidationError(f"invalid shared payload placement: {exc}") from exc
+        return self._payload_copier.reference(payload) if self.payload_policy == "copy" else payload.reference
+
+    def _array_references(self, signals: list[Signal], placements: dict[tuple[str, int], ChunkPlacement]) -> dict:
+        chunks: dict[str, list[PayloadChunk]] = defaultdict(list)
+        for (identity, _), value in sorted(placements.items()):
+            chunks[identity].append(
+                PayloadChunk(
+                    path=value.chunk_file,
+                    major=value.data_index.major_idx,
+                    minor=value.data_index.minor_idx,
+                    n_values=value.n_values,
+                )
+            )
+        for signal in signals:
+            descriptor = signal.values.descriptor
+            spec = signal.spec
+            expected = (
+                "array",
+                signal.n_values,
+                spec.dtype,
+                spec.value_shape,
+                spec.nullable,
+                spec.categories,
+                spec.dimension_names,
+            )
+            actual = (
+                descriptor.kind,
+                descriptor.length,
+                descriptor.dtype,
+                descriptor.shape,
+                descriptor.nullable,
+                descriptor.categories,
+                descriptor.dimension_names,
+            )
+            if actual != expected:
+                raise TimeFValidationError(f"signal {signal.id!r} has an incompatible payload descriptor")
+            if signal.values.reference is not None and signal.values.reference.source is None:
+                raise TimeFValidationError("reused array references must name a pinned owner")
+        codec = "parquet" if self._values_backend_name == ValuesBackend.PARQUET else "zarr"
+        return {
+            ("Signal", signal.id, "values", 0): (
+                signal.values.descriptor,
+                self._stored_reference(signal.values)
+                if signal.values.reference is not None
+                else PayloadReference(codec=codec, chunks=tuple(chunks[signal.id])),
+            )
+            for signal in signals
+        }
 
     def close(self) -> None:
         """Write the manifest and atomically publish the staging directory.
@@ -286,7 +401,23 @@ class TimeFWriter:
         )
         return ordered, series_to_records
 
-    def _write_values(self, unique_series: list[Signal]) -> dict[tuple[str, int], ChunkPlacement]:
+    def _record_groups(self, signals: list[Signal], records: dict[str, list[str]]) -> dict[str, str]:
+        if self._values_backend_name != ValuesBackend.PARQUET or self._row_group_layout == "packed":
+            return {}
+        sizes: dict[str, int] = defaultdict(int)
+        for signal in signals:
+            if signal.spec.dtype not in {"str", "enum"}:
+                sizes[records[signal.id][0]] += signal.n_values * np.dtype(signal.spec.dtype).itemsize
+        minimum_bytes = 128 * 2**10
+        return {
+            signal.id: records[signal.id][0]
+            for signal in signals
+            if self._row_group_layout == "record" or sizes[records[signal.id][0]] >= minimum_bytes
+        }
+
+    def _write_values(
+        self, unique_series: list[Signal], groups: dict[str, str]
+    ) -> dict[tuple[str, int], ChunkPlacement]:
         """Write all series' values through the configured backend.
 
         Args:
@@ -306,6 +437,7 @@ class TimeFWriter:
                 "compression": self._compression,
                 "data_page_size": self._data_page_size,
                 "value_encoding": self._forced_value_encoding,
+                "series_groups": groups,
             }
             if self._compression_level is not None:
                 parquet_kwargs["compression_level"] = self._compression_level
@@ -384,6 +516,30 @@ class TimeFWriter:
             )
         return values
 
+    def _foreign_sources(self) -> tuple[PayloadSource, ...]:
+        with connect_control(self._staging_dir / CONTROL_FILE, read_only=True) as connection:
+            stores = ReferenceCatalogReader(connection).stores
+        sources: dict[DatasetRef, PayloadSource] = {}
+        for source, _, _ in stores.values():
+            if source is not None:
+                if source.dataset in sources and sources[source.dataset] != source:
+                    raise TimeFValidationError(f"conflicting owner pins for {source.dataset}")
+                sources[source.dataset] = source
+        return tuple(
+            sorted(sources.values(), key=lambda source: (source.dataset.dataset_id, str(source.dataset.version)))
+        )
+
+    @property
+    def payload_sources(self) -> tuple[PayloadSource, ...]:
+        """The exact physical owners used by the completed output catalog.
+
+        Raises:
+            TimeFValidationError: If the output has not been written.
+        """
+        if not self._written:
+            raise TimeFValidationError("write the output before inspecting its payload sources")
+        return self._foreign_sources()
+
     def _write_manifest(self) -> None:
         schema = self._dataset.schema
         if schema is None:  # unreachable: write() already checked, but keeps the type non-optional
@@ -393,14 +549,16 @@ class TimeFWriter:
             metadata=self._dataset.metadata,
             dataset_schema=schema,
             counts=self._counts,
+            payload_sources=self._foreign_sources(),
             files=ManifestFiles(
                 control=(self._file_part(self._control_file),),
                 time_series=self._file_parts(self._value_files),
+                payloads=(*self._file_parts(self._payload_files), *self._payload_copier.parts),
             ),
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             build_env=build_env(),
-            timef_format_version=1,
+            timef_format_version=TIMEF_FORMAT_VERSION,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 

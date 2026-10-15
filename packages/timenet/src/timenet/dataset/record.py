@@ -14,6 +14,7 @@ from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint, new_id
 from timenet.types.clock import check_int64, offset_us, unix_us
+from timenet.types.references import ObjectRef
 
 
 @dataclass(kw_only=True)
@@ -38,6 +39,8 @@ class Record(SupportsAnnotate):
     """Ids of the tasks attached to this record."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the record."""
+    origin: ObjectRef | None = field(default=None, compare=False)
+    """Source lineage, independent of physical payload ownership."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible recording metadata."""
     time_span: TimeInterval | None = None

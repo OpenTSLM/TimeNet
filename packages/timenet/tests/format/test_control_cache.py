@@ -1,5 +1,7 @@
 import pyarrow.fs as pafs
+import pytest
 
+from timenet.errors import TimeFFormatError
 from timenet.format.checksums import file_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_writer import DuckDBControlWriter
@@ -19,7 +21,7 @@ def test_local_control_database_uses_its_existing_path(tmp_path):
         files=ManifestFiles(
             control=(FilePart(path=path.name, checksum=file_checksum(path), size=path.stat().st_size),),
         ),
-        timef_format_version=1,
+        timef_format_version=3,
     )
     version = DatasetVersion(
         manifest=manifest,
@@ -28,3 +30,7 @@ def test_local_control_database_uses_its_existing_path(tmp_path):
     )
 
     assert materialize_control(version) == path
+    with path.open("ab") as handle:
+        handle.write(b"corrupt")
+    with pytest.raises(TimeFFormatError, match="manifest checksum"):
+        materialize_control(version)

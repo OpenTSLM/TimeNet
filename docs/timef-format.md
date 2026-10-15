@@ -1,6 +1,6 @@
 ---
 icon: lucide/database
-description: "The TimeF DuckDB control plane and lazy values plane."
+description: "TimeF format 3: independent catalogs and immutable payloads."
 tags:
   - reference
   - format
@@ -8,153 +8,101 @@ tags:
 
 # TimeF format
 
-TimeF separates relational structure from large signal arrays. One immutable DuckDB database
-stores the hierarchy, relationships, annotations, axes, and chunk locations. Parquet or Zarr stores
-the signal values.
+Format 3 separates a complete DuckDB catalog from immutable payload files. The catalog contains
+object definitions and relationships. Signal values, irregular timestamps, and large text live
+outside DuckDB. See [Dataset composition](composition.md) for import and storage policies.
 
-## Directory layout
-
-A Parquet-backed version looks like this:
+## Files and ownership
 
 ```
 org/name/version/
 ├── manifest.json
 ├── control.duckdb
-└── time_series/
-    ├── part-00000000.parquet
-    └── ...
+├── time_series/           # new Parquet signal shards
+├── time_series.zarr/      # new Zarr signal arrays
+└── payloads/              # packed text, timestamps, copied artifacts
 ```
 
-A Zarr-backed version uses `time_series.zarr/` instead of Parquet value shards. The manifest lists
-every artifact with its byte size and SHA-256 checksum. Readers do not discover files with a glob.
+A version can use multiple codecs. Its manifest lists every owned artifact with its size and
+SHA-256 checksum. `payload_sources` lists exact foreign physical owners and their manifest pins.
+Build inputs are separate provenance and do not determine runtime dependencies.
 
-## Object hierarchy
+Local references omit a source pin on disk. The reader binds them to the opened release's manifest
+checksum. This avoids a manifest referring to its own checksum. Foreign references name their
+physical owner directly; they do not name a parent Signal or require a parent catalog lookup.
 
-The in-memory hierarchy is:
-
-```
-Task ──N:M── Record ──1:N── Source ──1:N── Signal ──N:1── TimeAxis
-                                  └──1:N── Source
-```
-
-`Source` is recursive. A `Record` can therefore represent a simple sensor or a machine containing
-subsystems and sensor packages. A `Signal` is a leaf and has exactly one owning `Source`. Several
-Signals can reference the same immutable `TimeAxis`.
-
-## DuckDB control tables
-
-`control.duckdb` contains these authoritative tables:
+## Catalog tables
 
 | Table | Purpose |
 | --- | --- |
-| `records` | Recording sessions and session-level timing metadata. |
-| `sources` | Recursive sources, linked to their record and parent source by internal keys. |
-| `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
+| `datasets`, `records`, `clocks` | Dataset identity, recordings, and shared clock origins. |
+| `sources` | Recursive Sources and their owning Record. |
+| `signals` | Signal identity, axis, length, and inline specification fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
-| `axis_offsets` | Shared offsets for irregular axes. |
-| `tasks` | Concrete task type, typed scope columns, and subclass configuration columns. |
-| `task_targets` | Ordered inline targets, one typed row each. |
-| `task_record_refs` | Ordered task-to-record object relationships. |
-| `task_annotation_refs` | Ordered task-to-annotation occurrence relationships. |
-| `task_dependencies` | Ordered task derivation relationships. |
-| `annotation_contents` | Reusable annotation content with one typed value column per value shape. |
-| `annotation_occurrences` | One attachment of content to an object, with its span. |
-| `signal_chunks` | Locations of Signal values in Parquet or Zarr. |
+| `tasks`, `task_targets` | Task definitions and ordered typed literal targets. |
+| `task_record_refs`, `task_annotation_refs` | Ordered object and annotation relationships. |
+| `task_dependencies` | Task derivations by identity. |
+| `annotation_contents` | Reusable content descriptors and inline typed values. |
+| `annotation_occurrences` | Attachments, spans, confidence, and occurrence metadata. |
+| `dataset_refs` | Exact release identities shared by payload stores and lineage. |
+| `payload_stores`, `payload_files` | Shared owner pins, codecs, prefixes, and file paths. |
+| `payload_descriptors` | Shared content contracts. |
+| `payloads`, `payload_chunks` | Object fields and ordered typed chunk coordinates. |
+| `origins` | Typed source-object provenance, independent of payload ownership. |
+| `signal_chunks` | Placements generated for newly written signal arrays. |
 
-Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
-in either direction, so TimeF does not store duplicate reverse-index tables.
+Object and relationship tables use internal integer keys and public IDs. Small fixed fields stay
+queryable. Free-form metadata, shared physical descriptors, and classification schema references use JSON.
+Release identities, file references, chunk coordinates, and lineage use typed columns. An external body leaves its native value column null and has an explicit `payloads` row.
 
-Every table carries a `BIGINT` internal key drawn from a sequence, and relationships refer to those
-keys. Public IDs (`record_id`, `signal_id`, `task_id`, and so on) are stored once on the row that
-owns them. Fixed-shape fields are typed columns, so spans, task configuration, target values, and
-annotation values can be filtered in SQL. Only the free-form `metadata` dictionaries are JSON.
+The payload key is `(object_type, object_id, field, position)`. Signal values use the Signal ID;
+timestamps use the axis ID; annotation values use the content ID. Prompts, rationales, and text
+targets use task IDs and target positions. The payload descriptor records kind, shape, length, and
+known encoded size. Each reference records its codec and physical chunk coordinates.
 
-## Signals and axes
+## Bodies
 
-Each `signals` row identifies its owning Source and axis. The fixed `TimeSeriesSpec` attributes are
-stored inline:
+Regular axes compute offsets from a rational microsecond period and origin. Ordinal axes provide
+order only. Irregular axes keep endpoints in the catalog and packed int64 offsets in Parquet.
+Signals that share an axis share its timestamp payload. There is no `axis_offsets` bulk table.
 
-```text
-signal_key, signal_id, source_key, name, axis_key, spec_type, spec_name, unit,
-dtype, categories, value_shape, dimension_names, nullable, n_values, metadata
-```
+Small annotation values stay in typed columns. Large text and text lists use packed Parquet cells.
+One content ID can have many distinct occurrences without repeating its body. Prompts, rationales,
+and text targets use the same policy. Numeric and boolean values remain inline.
 
-There is no separate specification table. The fields are small, typed, directly queryable, and
-compress well in DuckDB. `categories` and `dimension_names` are `VARCHAR[]` and `value_shape` is
-`BIGINT[]`. The reader reconstructs one `TimeSeriesSpec` object per distinct combination and shares
-it between the Signals that use it.
+Parquet array references identify files, row groups, and rows. Zarr references identify arrays and
+ranges. Stored handles read these locations directly, including after their catalog reader closes.
+Range reads select intersecting chunks. Each payload selects its own codec.
 
-Regular axes store a rational microsecond period and origin. Ordinal axes need only their type.
-Irregular axes store their endpoints in `axes` and their ordered microsecond offsets in
-`axis_offsets`. Signals that share an axis reference the same `axis_id`, so the offsets are stored
-once regardless of how many Signals use that timeline.
+## Parquet recording groups
 
-## Annotations
+`TimeFWriter(..., row_group_layout="record")` finishes each recording's row group before the
+next recording. A selected child then reads its recording without decoding its neighbors. Large
+recordings still split at the configured byte cap. `row_group_layout="auto"` separates numeric
+recordings of at least 128 KiB and packs smaller recordings together. The default, `packed`,
+preserves the prior layout.
 
-Subject IDs use a list-valued record annotation with the key `subject_ids`. DuckDB can filter
-records by subject through the annotation tables:
+Grouped writes collect the same bounded encoding sample across recordings and reuse those decoded
+arrays during writing. A short first recording does not force a different values encoding. Each
+producer runs once. Recording groups can increase file sizes and storage request counts, so choose
+a layout from measured consumer reads. The reader uses ordinary Parquet row-group metadata.
 
-```sql
-SELECT DISTINCT r.record_id
-FROM records r
-JOIN annotation_occurrences o
-  ON o.object_type = 'Record' AND o.object_key = r.record_key
-JOIN annotation_contents c USING (content_key)
-WHERE c.name = 'subject_ids'
-  AND list_contains(c.text_list_value, 'patient-1');
-```
+## Integrity and migration
 
-An annotation has reusable content and one or more occurrences. `annotation_contents` stores the
-content once: its key (`name`), unit, description, metadata, and value. The dedicated `description`
-column is separate from metadata, which can contain its own `description` key. The value sits in
-one typed column selected by `value_kind`: `text_value`, `integer_value`, `float_value`,
-`boolean_value`, or `text_list_value`
-for a list of strings such as a target vocabulary. A marker annotation, which only places a span,
-has `NULL` in all of them. `annotation_occurrences` says where the content applies and carries the
-span as `span_type`, `start_us`, `end_us`, and `signal_keys`, plus provenance, confidence, and
-occurrence metadata.
+The writer stages a release, writes catalog rows in a transaction, and audits the completed catalog.
+The audit checks relationships, task scopes, typed chunk coverage, and store ownership. A successful
+full write records its audit revision in `control_metadata`. The writer then flushes payload files,
+records checksums, and publishes the directory atomically.
 
-An occurrence can annotate a Dataset, Task, Record, Source, or Signal. One content row can therefore
-apply to many objects without copying a long value. Each attachment still has its own
-`occurrence_id` and temporal placement.
+The reader verifies the control checksum for local and downloaded catalogs. For verified catalogs
+with the supported audit revision, it restores task objects without repeating public constructor
+validation. Unverified catalogs retain constructor checks. Public constructors still validate new
+caller input. Shared owners and file placements pass a fresh preflight at each write, without reads
+of inherited payload bodies. Runtime owner pins and decoded payload lengths remain checked.
 
-## Tasks
+`audit_control_database()` also checks external catalogs. `TimeFReader.verify()` checks owned files and required foreign payload artifacts.
+Foreign catalogs are not needed for payload reads or verification.
 
-`Task` is abstract. Each concrete task gets one row in `tasks`; `task_type` selects the Python
-subclass. The scope is stored as four typed columns (`scope_type`, `scope_start`, `scope_end`,
-`scope_signal_keys`), and subclass configuration as one nullable column per field
-(`target_schema`, `unit`, `target_name`, `mode`), so tasks can be filtered in SQL without parsing
-JSON. Inline targets are one row each in `task_targets`, with `target_kind` naming which typed value
-column is set. References to Records, Signals, annotation occurrences, and parent Tasks live in the
-relationship tables.
-
-The `field` column distinguishes relationships such as `inputs` and `candidate_records`.
-`position` preserves tuple order. On read, TimeNet hydrates each object once and restores ordinary
-Python object references, or hands the same rows back as Arrow tables with public IDs in place of
-keys. See [TimeFReader](timef-reader.md).
-
-## Values plane
-
-Signal arrays remain outside DuckDB. A `signal_chunks` row contains:
-
-```text
-signal_id, chunk_index, value_path, chunk_major_index,
-chunk_minor_index, n_values
-```
-
-For Parquet, the locator identifies a shard row group and row. For Zarr, it identifies an array and
-element range. The reader resolves only the requested Signal's rows and keeps its values lazy. Range
-reads load only intersecting chunks. The values plane does not duplicate irregular offsets; the
-reader obtains them from the shared axis in `control.duckdb` and caches each loaded axis once.
-
-## Integrity
-
-The writer builds the complete version in a temporary directory. DuckDB relationships are written
-inside a transaction and validated as they stream, and the database carries no persisted
-constraints. The writer then checkpoints and closes the database, records final checksums in
-`manifest.json`, and atomically publishes the directory. `audit_control_database()` in
-`timenet.format.control_audit` re-checks every relational invariant of a finished database with
-SQL scans, for tests and tooling.
-
-`TimeFReader.verify()` hashes every listed artifact. Normal reads stay lazy and verify the cached
-remote `control.duckdb` before opening it read-only.
+Format 1 and 2 artifacts must be rebuilt. Artifact parsers raise `TimeFFormatError` for unsupported
+formats
+or corrupt manifests. There is no legacy artifact reader or automatic converter.
