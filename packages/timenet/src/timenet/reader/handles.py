@@ -6,7 +6,7 @@ from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
-from timenet.dataset import Record, Signal, TimeFDataset
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.external import ValueHandle
 from timenet.types import Annotation, Task
@@ -33,32 +33,84 @@ def _set_field(instance: Any, name: str, value: Any) -> None:
     _object.__setattr__(instance, name, value)  # noqa: PLC2801
 
 
-def materialize(value: Any, seen: set[int] | None = None) -> Any:  # noqa: PLR0912 - graph node kinds
+def _materialize_annotations(annotations: tuple[Annotation, ...]) -> None:
+    """Resolve only the annotations whose values are stored externally."""
+    for annotation in annotations:
+        if isinstance(annotation.value, ValueHandle):
+            _set_field(annotation, "value", annotation.value.read())
+
+
+def _materialize_signal(signal: Signal) -> None:
+    """Retain signal arrays without revisiting their native metadata."""
+    if not isinstance(signal.loader, MemoryArray):
+        _set_field(signal, "loader", MemoryArray(signal.to_arrow(), signal.loader))
+    loader = signal.time_offsets_loader
+    if loader is not None and not isinstance(loader, MemoryArray):
+        _set_field(signal, "time_offsets_loader", MemoryArray(loader(), loader))
+    _materialize_annotations(signal.annotations)
+
+
+def _materialize_dataset(dataset: TimeFDataset) -> TimeFDataset:
+    """Materialize the complete catalog with one pass over each entity collection.
+
+    Returns:
+        The dataset with native values retained in memory.
+    """
+    for record in dataset.records:
+        for source in record.walk_sources():
+            for signal in source.signals:
+                _materialize_signal(signal)
+            _materialize_annotations(source.annotations)
+        _materialize_annotations(record.annotations)
+    for task in dataset.tasks:
+        for field in ("prompt", "rationale"):
+            value = getattr(task, field)
+            if isinstance(value, ValueHandle):
+                setattr(task, field, value.read())
+        if task.targets and any(isinstance(target, ValueHandle) for target in task.targets):
+            task.targets = tuple(
+                target.read() if isinstance(target, ValueHandle) else target for target in task.targets
+            )
+        _materialize_annotations(task.annotations)
+        _materialize_annotations(task.input_annotations)
+        _materialize_annotations(task.target_annotations)
+    _materialize_annotations(dataset.annotations)
+    return dataset
+
+
+def materialize(value: Any, seen: set[int] | None = None) -> Any:  # noqa: PLR0911, PLR0912 - graph node kinds
     """Materialize a selected object graph without repeatedly loading shared objects.
 
     Returns:
         The native value or populated object graph.
     """
+    if type(value) is TimeFDataset:
+        return _materialize_dataset(value)
+    if value is None or isinstance(value, (str, int, float, bool)):
+        return value
     if isinstance(value, ValueHandle):
         return value.read()
     if seen is None:
         seen = set()
     if isinstance(value, tuple):
-        return tuple(materialize(item, seen) for item in value)
+        if any(isinstance(item, ValueHandle) for item in value):
+            return tuple(materialize(item, seen) for item in value)
+        for item in value:
+            materialize(item, seen)
+        return value
     if id(value) in seen:
         return value
     seen.add(id(value))
-    if isinstance(value, Annotation):
-        _set_field(value, "value", materialize(value.value, seen))
-    elif isinstance(value, Signal):
-        if not isinstance(value.loader, MemoryArray):
-            _set_field(value, "loader", MemoryArray(value.to_arrow(), value.loader))
-        if value.time_offsets_loader is not None and not isinstance(value.time_offsets_loader, MemoryArray):
-            _set_field(
-                value, "time_offsets_loader", MemoryArray(value.time_offsets_loader(), value.time_offsets_loader)
-            )
-        materialize(value.annotations, seen)
-    elif isinstance(value, Record):
+    if type(value) is Annotation:
+        if isinstance(value.value, ValueHandle):
+            _set_field(value, "value", value.value.read())
+    elif type(value) is Signal:
+        _materialize_signal(value)
+    elif type(value) is Source:
+        materialize(value.signals, seen)
+        materialize(value.sources, seen)
+        _materialize_annotations(value.annotations)
+    elif type(value) is Record:
         for source in value.walk_sources():
             materialize(source.annotations, seen)
             materialize(source.signals, seen)
@@ -74,7 +126,10 @@ def materialize(value: Any, seen: set[int] | None = None) -> Any:  # noqa: PLR09
             "target_annotations",
             "from_tasks",
         ):
-            _set_field(value, field, materialize(getattr(value, field), seen))
+            original = getattr(value, field)
+            resolved = materialize(original, seen)
+            if resolved is not original:
+                _set_field(value, field, resolved)
         if hasattr(value, "candidate_records"):
             materialize(value.candidate_records, seen)
     elif isinstance(value, TimeFDataset):
