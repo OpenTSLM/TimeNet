@@ -28,7 +28,7 @@ def test_external_values_and_offsets_round_trip_without_decoding_on_copy(tmp_pat
         writer.write()
     root = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
     reader = TimeFReader(DatasetVersion.open_local(root))
-    restored = reader.read()
+    restored = reader.get_handle().reader._read_catalog()
     value = restored.records[0].annotations[0].value
     assert isinstance(value, ValueHandle)
     assert value.read() == long_text
@@ -49,3 +49,18 @@ def test_external_values_and_offsets_round_trip_without_decoding_on_copy(tmp_pat
         writer.write()
     assert not (tmp_path / "test/external-child/1.0.0/payloads").exists()
     reader.close()
+
+
+def test_eager_read_retains_values_after_storage_is_unavailable(tmp_path):
+    dataset = make_dataset()
+    long_text = "stored clinical context " * 300
+    dataset.records[0].annotate(Annotation(key="report", value=long_text))
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    root = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+    with TimeFReader(DatasetVersion.open_local(root)) as reader:
+        restored = reader.read()
+    (root / "time_series").rename(root / "unavailable-values")
+    (root / "payloads").rename(root / "unavailable-text")
+    assert next(ann.value for ann in restored.records[0].annotations if ann.key == "report") == long_text
+    assert restored.records[0].signals[0].to_arrow().equals(dataset.records[0].signals[0].to_arrow())

@@ -24,7 +24,7 @@ def test_shared_waveforms_need_no_parent_catalog(tmp_path, backend):
     expected = original.records[0].signals[0].to_arrow()
     parent_dir = store(tmp_path, original, values_backend=backend)
     reader = TimeFReader(DatasetVersion.open_local(parent_dir))
-    parent = reader.read()
+    parent = reader.get_handle().reader._read_catalog()
     child = TimeFDataset(metadata=original.metadata.model_copy(update={"dataset_id": "test/child"}))
     child.add_record(record=deepcopy(parent.records[0]))
     child_dir = store(tmp_path, child)

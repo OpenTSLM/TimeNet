@@ -20,6 +20,7 @@ from torch.utils.data import Dataset
 
 from timenet.dataset import Record, Signal, TimeFDataset
 from timenet.errors import TimeFValidationError
+from timenet.reader.handles import materialize
 from timenet.types import Task
 
 
@@ -126,8 +127,8 @@ class TimeFTorchDataset(Dataset):
             "record_id": record.record_id,
             "series": tuple(values for values, _ in pairs),
             "series_masks": tuple(mask for _, mask in pairs),
-            "tasks": tasks,
-            "annotations": record.annotations,
+            "tasks": materialize(tasks),
+            "annotations": materialize(record.annotations),
         }
 
 
