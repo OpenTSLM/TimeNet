@@ -4,7 +4,6 @@ from pathlib import Path
 import pickle
 
 import pyarrow.parquet as pq
-from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -64,7 +63,7 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
         (selected,) = reader.iter_records((record.id,))
 
     for back in (restored.records[0], selected):
-        values = [annotation.value for annotation in back.annotations if annotation.key == "subject_ids"]
+        values = [annotation.value() for annotation in back.annotations if annotation.key == "subject_ids"]
         assert values == ([list(subjects)] if subjects else [])
     with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
         matches = connection.execute(
@@ -153,8 +152,8 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
 def test_streamed_tasks_round_trip_and_back_populate_records(tmp_path):
     restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)))
     task = next(task for task in restored.tasks if task.id == "qa-3")
-    assert task.prompt == "Question 3?"
-    assert task.rationale == "reason 3"
+    assert task.prompt() == "Question 3?"
+    assert task.rationale() == "reason 3"
     assert task.inputs == (restored.records[0],)
     assert {task.id for task in restored.tasks_for(restored.records[0])} == {task.id for task in restored.tasks}
 
@@ -211,7 +210,7 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         assert opens >= 1
 
 
-def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
+def test_signal_values_use_direct_payload_locators(tmp_path, monkeypatch):
     version_dir = _write(tmp_path)
     original = DuckDBControlReader.chunk_rows_by_keys
     calls = []
@@ -229,8 +228,7 @@ def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
         for signal in signals:
             signal.to_arrow()
 
-    assert len(calls) == 1
-    assert len(calls[0]) == len(signals)
+    assert calls == []
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -290,14 +288,14 @@ def test_missing_root_or_manifest_raises(tmp_path):
         DatasetVersion.open_local(empty)
 
 
-@pytest.mark.parametrize("format_version", [2, 3, 99])
+@pytest.mark.parametrize("format_version", [1, 3, 99])
 def test_unsupported_format_version_raises(tmp_path, format_version):
     version_dir = _write(tmp_path)
     manifest_path = version_dir / "manifest.json"
     manifest = json.loads(manifest_path.read_text())
     manifest["timef_format_version"] = format_version
     manifest_path.write_text(json.dumps(manifest))
-    with pytest.raises(ValidationError, match="timef_format_version"):
+    with pytest.raises(TimeFFormatError, match="unsupported TimeF format version"):
         DatasetVersion.open_local(version_dir)
 
 

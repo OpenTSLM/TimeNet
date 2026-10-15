@@ -14,6 +14,7 @@ from timenet.dataset.span_validation import check_span_within_window
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import Annotation, Span, StepInterval, SupportsAnnotate, TimeInterval, TimeSeriesSpec, new_id
+from timenet.types.payloads import ArrayPayload, PayloadDescriptor
 
 
 def _validate_enum_values(
@@ -90,6 +91,10 @@ class Signal(SupportsAnnotate):
     """Where this series' values sit in time. A :class:`~timenet.dataset.axis.RegularAxis` gives a
     cadence, an :class:`~timenet.dataset.axis.IrregularAxis` stores per-value time offsets, and an
     :class:`~timenet.dataset.axis.OrdinalAxis` marks a sequence with no time at all."""
+    values: ArrayPayload
+    """The immutable values handle. Reading content is explicit."""
+    time_offsets: ArrayPayload | None = None
+    """The irregular timestamp payload, when present."""
     loader: Callable[[], pa.Array]
     """Lazy callable returning the series' values as an Arrow array."""
     time_offsets_loader: Callable[[], pa.Array] | None = None
@@ -181,13 +186,64 @@ class Signal(SupportsAnnotate):
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
     ) -> None:
-        """Set and validate fields shared by eager and lazy construction."""
+        """Set and validate fields shared by eager and lazy construction.
+
+        Raises:
+            TimeFValidationError: If a reused payload has a different array contract.
+        """
         set_field = object.__setattr__
         set_field(self, "spec", spec)
         set_field(self, "name", name)
         set_field(self, "time_axis", time_axis)
-        set_field(self, "loader", loader)
-        set_field(self, "time_offsets_loader", time_offsets_loader)
+        descriptor = PayloadDescriptor(
+            "array",
+            length=n_values,
+            dtype=spec.dtype,
+            shape=spec.value_shape,
+            nullable=spec.nullable,
+            categories=spec.categories,
+            dimension_names=spec.dimension_names,
+        )
+        values = (
+            loader
+            if isinstance(loader, ArrayPayload)
+            else ArrayPayload.from_loader(loader, descriptor=descriptor, read_range=getattr(loader, "read_steps", None))
+        )
+        offsets = (
+            None
+            if time_offsets_loader is None
+            else (
+                time_offsets_loader
+                if isinstance(time_offsets_loader, ArrayPayload)
+                else ArrayPayload.from_loader(
+                    time_offsets_loader, descriptor=PayloadDescriptor("array", length=n_values, dtype="int64")
+                )
+            )
+        )
+        expected = (
+            descriptor.kind,
+            descriptor.dtype,
+            descriptor.shape,
+            descriptor.length,
+            descriptor.nullable,
+            descriptor.categories,
+            descriptor.dimension_names,
+        )
+        actual = values.descriptor
+        if (
+            actual.kind,
+            actual.dtype,
+            actual.shape,
+            actual.length,
+            actual.nullable,
+            actual.categories,
+            actual.dimension_names,
+        ) != expected:
+            raise TimeFValidationError(f"signal {id!r} cannot reuse a payload with a different array contract")
+        set_field(self, "values", values)
+        set_field(self, "time_offsets", offsets)
+        set_field(self, "loader", values.read)
+        set_field(self, "time_offsets_loader", None if offsets is None else offsets.read)
         set_field(self, "id", id)
         set_field(self, "n_values", n_values)
         set_field(self, "annotations", tuple(annotations))
@@ -382,7 +438,7 @@ class Signal(SupportsAnnotate):
         Returns:
             A primitive array for scalar values or a fixed-shape tensor array for N-D values.
         """
-        return self.loader()
+        return self.values.read()
 
     def to_numpy(self) -> Shaped[np.ndarray, " time *value"]:
         """Read the series' values as a NumPy array.
@@ -454,10 +510,7 @@ class Signal(SupportsAnnotate):
         """
         if start < 0 or stop < start:
             raise TimeFValidationError(f"expected 0 <= start <= stop, got start={start}, stop={stop}")
-        read_steps = getattr(self.loader, "read_steps", None)
-        if read_steps is not None:
-            return read_steps(start, stop)
-        return self.to_arrow().slice(start, stop - start)
+        return self.values.read_steps(start, stop)
 
     def step_range(self, span: Span) -> tuple[int, int]:
         """Return the half-open step range ``(start, stop)`` of this series that ``span`` covers.

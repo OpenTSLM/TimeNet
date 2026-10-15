@@ -21,6 +21,7 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     InputModality,
+    Payload,
     StepSpan,
     SupportsAnnotate,
     Task,
@@ -548,7 +549,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             AnnotationDescriptor(
                 key=annotation.key,
                 annotation_type=annotation_type_of(annotation),
-                value_type=value_type_of(annotation.value),
+                value_type=value_type_of(annotation.handle()),
                 # The __post_init__ method normalizes unit to a plain string or None, so this
                 # value is always str | None.
                 unit=cast("str | None", annotation.unit),
@@ -621,11 +622,11 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 neither representation is present.
         """
         name = type(task).__name__
-        if task.targets is not None and task.target_annotations:
+        if task.targets_handle() is not None and task.target_annotations:
             raise TimeFValidationError(
                 f"{name} sets inline targets and target_annotations; use one answer representation"
             )
-        if task.targets is None and not task.target_annotations:
+        if task.targets_handle() is None and not task.target_annotations:
             raise TimeFValidationError(f"{name} needs an answer: set targets= or target_annotations=")
 
     @staticmethod
@@ -695,7 +696,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     def _task_records(task: Task) -> tuple[Record, ...]:
         """Return all Records referenced by a task, without duplicate objects."""
         candidates = cast("tuple[Record, ...]", getattr(task, "candidate_records", ()))
-        target_records = tuple(target for target in task.targets or () if isinstance(target, Record))
+        target_records = tuple(target for target in task.targets_handle() or () if isinstance(target, Record))
         found: list[Record] = []
         seen: set[int] = set()
         for record in (*task.inputs, *candidates, *target_records):
@@ -708,7 +709,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     @staticmethod
     def _task_signals(task: Task) -> tuple[Signal, ...]:
         """Return all Signals referenced directly as target items."""
-        return tuple(target for target in task.targets or () if isinstance(target, Signal))
+        return tuple(target for target in task.targets_handle() or () if isinstance(target, Signal))
 
     @staticmethod
     def _ordered_unique(items: Iterable[T]) -> list[T]:
@@ -1000,7 +1001,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                     f"record {record.record_id!r} carries {len(matched)} {resolved.__name__} tasks; "
                     "to_features_and_targets needs exactly one per record"
                 )
-            inline = matched[0].targets
+            inline = matched[0].targets()
             if inline is None or len(inline) != 1 or not isinstance(inline[0], (str, int, float, bool)):
                 raise TimeFValidationError(
                     f"{resolved.__name__} {matched[0].id!r} needs exactly one scalar target to use as y"
@@ -1029,9 +1030,12 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         kinds = {
             type(task)
             for task in self._tasks
-            if task.targets is not None
-            and len(task.targets) == 1
-            and isinstance(task.targets[0], (str, int, float, bool))
+            if (targets := task.targets_handle()) is not None
+            and len(targets) == 1
+            and (
+                isinstance(target := targets[0], (str, int, float, bool))
+                or (isinstance(target, Payload) and target.descriptor.kind == "str")
+            )
         }
         if len(kinds) == 1:
             return kinds.pop()

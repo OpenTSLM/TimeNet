@@ -16,6 +16,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
+from timenet.payloads.reader import PayloadResolver
 from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
@@ -47,6 +48,7 @@ class TimeFReader:
         self._fs = version.filesystem
         self._root = version.root
         self._manifest = version.manifest
+        self._payload_resolver = PayloadResolver(version)
         self._tasks: tuple[Task, ...] | None = None
         self._control: DuckDBControlReader | None = None
         self._records: tuple[Record, ...] | None = None
@@ -84,6 +86,7 @@ class TimeFReader:
 
     def close(self) -> None:
         """Close cached handles while keeping the reader reusable."""
+        self._payload_resolver.close()
         if self._values is not None:
             self._values.close()
             self._values = None
@@ -312,6 +315,7 @@ class TimeFReader:
                 materialize_control(self._version),
                 value_loader_factory=self._make_signal_loader,
                 offsets_loader=self._load_offsets,
+                payload_loader=self._payload_resolver.payload,
             )
         return self._control
 
