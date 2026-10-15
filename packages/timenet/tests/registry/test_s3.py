@@ -37,12 +37,12 @@ def s3_root(monkeypatch):
     server.stop()
 
 
-def test_store_and_lazy_load_round_trip(s3_root, tmp_path):
+def test_store_and_prepared_load_round_trip(s3_root, tmp_path):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
     version = registry.store(make_dataset())
     assert version == str(make_dataset().metadata.dataset_version)
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
-    loaded = client.load(make_dataset().metadata.dataset_id)  # lazy S3 range reads
+    loaded = client.load(make_dataset().metadata.dataset_id)  # prepared local reads
     assert_datasets_equal(make_dataset(), loaded)
 
 

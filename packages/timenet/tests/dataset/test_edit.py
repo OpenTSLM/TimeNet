@@ -7,7 +7,7 @@ from timenet.dataset.edit import edit_version, remove_records
 from timenet.errors import TimeFEditError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.testing import make_dataset
 from timenet.types import Annotation, TSCorrespondenceTask, TSEditingTask, Version
 from timenet.writer import TimeFWriter
@@ -149,7 +149,7 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
     # task-answer-0, which previously wrote the dangling reference straight into the new version.
     base = _base(tmp_path, _answer_reads_context_via_record1())
     out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=["record-1"])
-    with TimeFReader(DatasetVersion.open_local(out)) as reader:
+    with TimeFReader(open_local_version(out)) as reader:
         restored = reader.read()
 
     by_record = {
@@ -195,7 +195,7 @@ def test_edit_version_round_trip(tmp_path):
     base = _base(tmp_path)
     out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=["record-1"])
 
-    with TimeFReader(DatasetVersion.open_local(out)) as reader:
+    with TimeFReader(open_local_version(out)) as reader:
         restored = reader.read()
     assert {s.record_id for s in restored.records} == {"record-0", "record-2"}
 
