@@ -1,0 +1,390 @@
+{
+  "platform": "macOS-26.6.2-arm64-arm-64bit-Mach-O",
+  "python": "3.13.15",
+  "records": 512,
+  "irregular_steps_per_record": 4096,
+  "warmups": 1,
+  "repeats": 5,
+  "method": "Alternating fresh processes, warm filesystem cache; full reads materialize and hash every value.",
+  "results": {
+    "small-text": {
+      "medians": {
+        "main": {
+          "write_s": 0.11744575000193436,
+          "catalog_read_s": 0.021493917003681418,
+          "full_read_s": 0.024931790998380166,
+          "tables_s": 0.010145250002096873,
+          "catalog_bytes": 3944448,
+          "total_bytes": 4041981
+        },
+        "packed": {
+          "write_s": 0.11684204100311035,
+          "catalog_read_s": 0.02232295799331041,
+          "full_read_s": 0.025673957999970298,
+          "tables_s": 0.010030541998276021,
+          "catalog_bytes": 3944448,
+          "total_bytes": 4042001
+        }
+      },
+      "samples": {
+        "main": [
+          {
+            "write_s": 0.11693137499969453,
+            "catalog_read_s": 0.021173207998799626,
+            "full_read_s": 0.02460508299554931,
+            "tables_s": 0.010161540994886309,
+            "catalog_bytes": 3944448,
+            "total_bytes": 4041981,
+            "digest": "71085c26ff401f7b83b23d102593f4af488a5505ff6fb01ab716cac608796f17",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.11773595900012879,
+            "catalog_read_s": 0.021504124997591134,
+            "full_read_s": 0.024931790998380166,
+            "tables_s": 0.009995167005399708,
+            "catalog_bytes": 3944448,
+            "total_bytes": 4041981,
+            "digest": "71085c26ff401f7b83b23d102593f4af488a5505ff6fb01ab716cac608796f17",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.11702795799646992,
+            "catalog_read_s": 0.02133716700336663,
+            "full_read_s": 0.024706792006327305,
+            "tables_s": 0.010177583004406188,
+            "catalog_bytes": 3944448,
+            "total_bytes": 4041981,
+            "digest": "71085c26ff401f7b83b23d102593f4af488a5505ff6fb01ab716cac608796f17",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.11970745800499571,
+            "catalog_read_s": 0.02161645799787948,
+            "full_read_s": 0.02499112499936018,
+            "tables_s": 0.010145250002096873,
+            "catalog_bytes": 3944448,
+            "total_bytes": 4041981,
+            "digest": "71085c26ff401f7b83b23d102593f4af488a5505ff6fb01ab716cac608796f17",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.11744575000193436,
+            "catalog_read_s": 0.021493917003681418,
+            "full_read_s": 0.024983917006466072,
+            "tables_s": 0.009901999997964595,
+            "catalog_bytes": 3944448,
+            "total_bytes": 4041981,
+            "digest": "71085c26ff401f7b83b23d102593f4af488a5505ff6fb01ab716cac608796f17",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          }
+        ],
+        "packed": [
+          {
+            "write_s": 0.11684204100311035,
+            "catalog_read_s": 0.022410791003494523,
+            "full_read_s": 0.025780957999813836,
+            "tables_s": 0.009911500004818663,
+            "catalog_bytes": 3944448,
+            "total_bytes": 4042001,
+            "digest": "71085c26ff401f7b83b23d102593f4af488a5505ff6fb01ab716cac608796f17",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.11600166700372938,
+            "catalog_read_s": 0.02229641700250795,
+            "full_read_s": 0.025645167006587144,
+            "tables_s": 0.009695707994978875,
+            "catalog_bytes": 3944448,
+            "total_bytes": 4042001,
+            "digest": "71085c26ff401f7b83b23d102593f4af488a5505ff6fb01ab716cac608796f17",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.11695612499897834,
+            "catalog_read_s": 0.022188499999174383,
+            "full_read_s": 0.025568459001078736,
+            "tables_s": 0.010030541998276021,
+            "catalog_bytes": 3944448,
+            "total_bytes": 4042001,
+            "digest": "71085c26ff401f7b83b23d102593f4af488a5505ff6fb01ab716cac608796f17",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.11960291700233938,
+            "catalog_read_s": 0.02232295799331041,
+            "full_read_s": 0.025673957999970298,
+            "tables_s": 0.01003458299965132,
+            "catalog_bytes": 3944448,
+            "total_bytes": 4042001,
+            "digest": "71085c26ff401f7b83b23d102593f4af488a5505ff6fb01ab716cac608796f17",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.11630745799629949,
+            "catalog_read_s": 0.022450832999311388,
+            "full_read_s": 0.02588850000029197,
+            "tables_s": 0.010181833000387996,
+            "catalog_bytes": 3944448,
+            "total_bytes": 4042001,
+            "digest": "71085c26ff401f7b83b23d102593f4af488a5505ff6fb01ab716cac608796f17",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          }
+        ]
+      }
+    },
+    "large-text": {
+      "medians": {
+        "main": {
+          "write_s": 0.15610212499450427,
+          "catalog_read_s": 0.03131520799797727,
+          "full_read_s": 0.04586137499427423,
+          "tables_s": 0.03102658400166547,
+          "catalog_bytes": 39596032,
+          "total_bytes": 39693566
+        },
+        "packed": {
+          "write_s": 0.22172062499885214,
+          "catalog_read_s": 0.02498599999671569,
+          "full_read_s": 0.05927687499934109,
+          "tables_s": 0.05020291700202506,
+          "catalog_bytes": 4206592,
+          "total_bytes": 7049497
+        }
+      },
+      "samples": {
+        "main": [
+          {
+            "write_s": 0.1565398750026361,
+            "catalog_read_s": 0.03137970800162293,
+            "full_read_s": 0.045910374996310566,
+            "tables_s": 0.03102658400166547,
+            "catalog_bytes": 39596032,
+            "total_bytes": 39693566,
+            "digest": "22b28a7c27ba8958776bfb83f4f0b63f6a85458feee409b7d0e761459724c3d5",
+            "tables_digest": "072969b7100ae3bfe9376ec242985681ca341a7d41a193a928067377c0c4cd81"
+          },
+          {
+            "write_s": 0.15475037500436883,
+            "catalog_read_s": 0.03129233399522491,
+            "full_read_s": 0.04586137499427423,
+            "tables_s": 0.03121958400151925,
+            "catalog_bytes": 39596032,
+            "total_bytes": 39693566,
+            "digest": "22b28a7c27ba8958776bfb83f4f0b63f6a85458feee409b7d0e761459724c3d5",
+            "tables_digest": "072969b7100ae3bfe9376ec242985681ca341a7d41a193a928067377c0c4cd81"
+          },
+          {
+            "write_s": 0.15610212499450427,
+            "catalog_read_s": 0.03131520799797727,
+            "full_read_s": 0.04579441700479947,
+            "tables_s": 0.03127941700222436,
+            "catalog_bytes": 39596032,
+            "total_bytes": 39693566,
+            "digest": "22b28a7c27ba8958776bfb83f4f0b63f6a85458feee409b7d0e761459724c3d5",
+            "tables_digest": "072969b7100ae3bfe9376ec242985681ca341a7d41a193a928067377c0c4cd81"
+          },
+          {
+            "write_s": 0.1536142920012935,
+            "catalog_read_s": 0.03107179200014798,
+            "full_read_s": 0.045373708999250084,
+            "tables_s": 0.030507166004099417,
+            "catalog_bytes": 39596032,
+            "total_bytes": 39693566,
+            "digest": "22b28a7c27ba8958776bfb83f4f0b63f6a85458feee409b7d0e761459724c3d5",
+            "tables_digest": "072969b7100ae3bfe9376ec242985681ca341a7d41a193a928067377c0c4cd81"
+          },
+          {
+            "write_s": 0.15757187499548309,
+            "catalog_read_s": 0.031531207998341415,
+            "full_read_s": 0.04618566599674523,
+            "tables_s": 0.030843791995721404,
+            "catalog_bytes": 39596032,
+            "total_bytes": 39693566,
+            "digest": "22b28a7c27ba8958776bfb83f4f0b63f6a85458feee409b7d0e761459724c3d5",
+            "tables_digest": "072969b7100ae3bfe9376ec242985681ca341a7d41a193a928067377c0c4cd81"
+          }
+        ],
+        "packed": [
+          {
+            "write_s": 0.22099016699939966,
+            "catalog_read_s": 0.024984957999549806,
+            "full_read_s": 0.058994083003199194,
+            "tables_s": 0.04994845899636857,
+            "catalog_bytes": 4206592,
+            "total_bytes": 7049497,
+            "digest": "22b28a7c27ba8958776bfb83f4f0b63f6a85458feee409b7d0e761459724c3d5",
+            "tables_digest": "072969b7100ae3bfe9376ec242985681ca341a7d41a193a928067377c0c4cd81"
+          },
+          {
+            "write_s": 0.2237786670011701,
+            "catalog_read_s": 0.025027124996995553,
+            "full_read_s": 0.05910408299678238,
+            "tables_s": 0.04944337499910034,
+            "catalog_bytes": 4206592,
+            "total_bytes": 7049497,
+            "digest": "22b28a7c27ba8958776bfb83f4f0b63f6a85458feee409b7d0e761459724c3d5",
+            "tables_digest": "072969b7100ae3bfe9376ec242985681ca341a7d41a193a928067377c0c4cd81"
+          },
+          {
+            "write_s": 0.22172062499885214,
+            "catalog_read_s": 0.02498599999671569,
+            "full_read_s": 0.05927687499934109,
+            "tables_s": 0.05020291700202506,
+            "catalog_bytes": 4206592,
+            "total_bytes": 7049497,
+            "digest": "22b28a7c27ba8958776bfb83f4f0b63f6a85458feee409b7d0e761459724c3d5",
+            "tables_digest": "072969b7100ae3bfe9376ec242985681ca341a7d41a193a928067377c0c4cd81"
+          },
+          {
+            "write_s": 0.2182073330041021,
+            "catalog_read_s": 0.025070584000786766,
+            "full_read_s": 0.06286795899359277,
+            "tables_s": 0.05027683400112437,
+            "catalog_bytes": 4206592,
+            "total_bytes": 7049497,
+            "digest": "22b28a7c27ba8958776bfb83f4f0b63f6a85458feee409b7d0e761459724c3d5",
+            "tables_digest": "072969b7100ae3bfe9376ec242985681ca341a7d41a193a928067377c0c4cd81"
+          },
+          {
+            "write_s": 0.22451312500197673,
+            "catalog_read_s": 0.02493645899812691,
+            "full_read_s": 0.060098499998275656,
+            "tables_s": 0.053422707998834085,
+            "catalog_bytes": 4206592,
+            "total_bytes": 7049497,
+            "digest": "22b28a7c27ba8958776bfb83f4f0b63f6a85458feee409b7d0e761459724c3d5",
+            "tables_digest": "072969b7100ae3bfe9376ec242985681ca341a7d41a193a928067377c0c4cd81"
+          }
+        ]
+      }
+    },
+    "irregular": {
+      "medians": {
+        "main": {
+          "write_s": 0.7511266660003457,
+          "catalog_read_s": 0.021287166004185565,
+          "full_read_s": 0.18320133299857844,
+          "tables_s": 0.010354958001698833,
+          "catalog_bytes": 5517312,
+          "total_bytes": 7609744
+        },
+        "packed": {
+          "write_s": 0.5393646250013262,
+          "catalog_read_s": 0.023572916004923172,
+          "full_read_s": 0.0542676660043071,
+          "tables_s": 0.012233625006047077,
+          "catalog_bytes": 4206592,
+          "total_bytes": 8706103
+        }
+      },
+      "samples": {
+        "main": [
+          {
+            "write_s": 0.7448958329987363,
+            "catalog_read_s": 0.02140437500202097,
+            "full_read_s": 0.18320133299857844,
+            "tables_s": 0.01022716700390447,
+            "catalog_bytes": 5517312,
+            "total_bytes": 7609744,
+            "digest": "adf8494e0a28b4f634705ab130c39540edcd0b5f02e9449fe10904e596e28852",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.7467800419981359,
+            "catalog_read_s": 0.021115458002896048,
+            "full_read_s": 0.18281179200130282,
+            "tables_s": 0.010354958001698833,
+            "catalog_bytes": 5517312,
+            "total_bytes": 7609744,
+            "digest": "adf8494e0a28b4f634705ab130c39540edcd0b5f02e9449fe10904e596e28852",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.7511266660003457,
+            "catalog_read_s": 0.02128041700052563,
+            "full_read_s": 0.1847004579976783,
+            "tables_s": 0.010204334001173265,
+            "catalog_bytes": 5517312,
+            "total_bytes": 7609744,
+            "digest": "adf8494e0a28b4f634705ab130c39540edcd0b5f02e9449fe10904e596e28852",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.7603539170013391,
+            "catalog_read_s": 0.021287166004185565,
+            "full_read_s": 0.1852805000016815,
+            "tables_s": 0.010534624998399522,
+            "catalog_bytes": 5517312,
+            "total_bytes": 7609744,
+            "digest": "adf8494e0a28b4f634705ab130c39540edcd0b5f02e9449fe10904e596e28852",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.7678387079940876,
+            "catalog_read_s": 0.02145412500249222,
+            "full_read_s": 0.18300779099809006,
+            "tables_s": 0.010668458002328407,
+            "catalog_bytes": 5517312,
+            "total_bytes": 7609744,
+            "digest": "adf8494e0a28b4f634705ab130c39540edcd0b5f02e9449fe10904e596e28852",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          }
+        ],
+        "packed": [
+          {
+            "write_s": 0.5391928339959122,
+            "catalog_read_s": 0.023572916004923172,
+            "full_read_s": 0.0542676660043071,
+            "tables_s": 0.012036457999784034,
+            "catalog_bytes": 4206592,
+            "total_bytes": 8706103,
+            "digest": "adf8494e0a28b4f634705ab130c39540edcd0b5f02e9449fe10904e596e28852",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.5393646250013262,
+            "catalog_read_s": 0.023565666997455992,
+            "full_read_s": 0.05412683299800847,
+            "tables_s": 0.012233625006047077,
+            "catalog_bytes": 4206592,
+            "total_bytes": 8706103,
+            "digest": "adf8494e0a28b4f634705ab130c39540edcd0b5f02e9449fe10904e596e28852",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.5398901670050691,
+            "catalog_read_s": 0.023391167000227142,
+            "full_read_s": 0.05447695800103247,
+            "tables_s": 0.01258679199963808,
+            "catalog_bytes": 4206592,
+            "total_bytes": 8706103,
+            "digest": "adf8494e0a28b4f634705ab130c39540edcd0b5f02e9449fe10904e596e28852",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.5477684159995988,
+            "catalog_read_s": 0.023821875001885928,
+            "full_read_s": 0.05424008300178684,
+            "tables_s": 0.012203917001897935,
+            "catalog_bytes": 4206592,
+            "total_bytes": 8706103,
+            "digest": "adf8494e0a28b4f634705ab130c39540edcd0b5f02e9449fe10904e596e28852",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          },
+          {
+            "write_s": 0.5388495829975,
+            "catalog_read_s": 0.0239082080006483,
+            "full_read_s": 0.05493770800239872,
+            "tables_s": 0.012314708001213148,
+            "catalog_bytes": 4206592,
+            "total_bytes": 8706103,
+            "digest": "adf8494e0a28b4f634705ab130c39540edcd0b5f02e9449fe10904e596e28852",
+            "tables_digest": "99cecc393e806f073522f18deef2573af63de6f4be5168ce3bb5a9ac8fbe4a10"
+          }
+        ]
+      }
+    }
+  },
+  "baseline_revision": "191bbe15d28ad3845244ef70ca5f4a75ddadf606"
+}
