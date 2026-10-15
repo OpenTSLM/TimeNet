@@ -285,7 +285,45 @@ class TimeFReader:
 
     def read(self) -> TimeFDataset:
         """Return a dataset with every value materialized in memory."""
-        return materialize(self._read_catalog())
+        with self._as_format_error():
+            dataset = self._read_catalog()
+            try:
+                self._prepare_scan()
+                return materialize(dataset)
+            finally:
+                from timenet.values_backends.parquet.reader import ParquetValuesReader  # noqa: PLC0415
+
+                for backend in (self._values, *self._owner_readers.values()):
+                    if isinstance(backend, ParquetValuesReader):
+                        backend.finish_scan()
+
+    def _prepare_scan(self) -> None:
+        """Use the write-time group plan for bounded parallel Parquet decoding."""
+        from concurrent.futures import ThreadPoolExecutor  # noqa: PLC0415
+
+        from timenet.values_backends.parquet.reader import ParquetValuesReader  # noqa: PLC0415
+
+        groups: dict[str | None, list[tuple[str, int]]] = {}
+        for owner, path, group in (
+            self._control_reader()
+            .connection.execute("SELECT * FROM payload_scan_groups ORDER BY owner_key, value_path, chunk_major_index")
+            .fetchall()
+        ):
+            groups.setdefault(owner, []).append((path, group))
+        executor = None
+        for owner, locations in groups.items():
+            version = self._version.resolve_payload_source(owner)
+            if owner is None:
+                backend = self._values_reader()
+            else:
+                backend = self._owner_readers.get(owner)
+                if backend is None:
+                    backend = make_values_reader(version.manifest.values_backend)
+                    self._owner_readers[owner] = backend
+            if isinstance(backend, ParquetValuesReader):
+                if executor is None:
+                    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="timef-scan")
+                backend.prepare_scan(version, locations, executor)
 
     def _read_catalog(self) -> TimeFDataset:
         """Hydrate the dataset while keeping every Signal's values lazy.
