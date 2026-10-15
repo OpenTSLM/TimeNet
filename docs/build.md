@@ -49,8 +49,8 @@ versions used for the build.
 The engine runs these stages:
 
 1. Read and validate the connector's `dataset.yaml` card.
-2. Download raw artifacts into the build cache.
-3. Convert local artifacts into a `TimeFDataset`.
+2. Resolve exact parent inputs and download raw artifacts into the build cache.
+3. Compose the inputs and local artifacts into a `TimeFDataset`.
 4. Derive the dataset schema.
 5. Write or publish the complete TimeF version.
 6. Remove the raw cache after success, unless `--keep-cache` is set.
@@ -116,3 +116,29 @@ dataset.describe()
 
 See [Connectors](connectors.md) for the `download()` and `convert()` contract. See the
 [`timenet.engine` API](api/engine.md) for the programmatic interface.
+
+## Prepare parent inputs
+
+The build prepares complete parent releases before downloading raw child data or running conversion.
+Existing local releases are reused. Missing parents stop the build unless fetching or building is enabled.
+
+To fetch missing parents from a registry, use `--fetch-parents` with its URI:
+
+```bash
+timenet-build build physionet/ecg-qa-cot \
+    --out .timenet-registry --fetch-parents timenet://
+```
+
+To build releases that the registry does not contain, also use `--build-parents`:
+
+```bash
+timenet-build build physionet/ecg-qa-cot \
+    --out .timenet-registry --fetch-parents timenet:// \
+    --build-parents --keep-cache
+```
+
+Each parent build uses its own connector environment. The parent build receives the same fetch policy.
+Dependency cycles and unavailable exact releases stop preparation. A matching ID/version identifies
+the release. Manifest fingerprints are not required.
+
+Programmatic builds accept `fetch_parents="timenet://"` and `build_parents=True`.
