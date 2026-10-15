@@ -129,8 +129,8 @@ def test_open_and_build_records_reads_no_value_shard(tmp_path, monkeypatch):
     original = pq.ParquetFile
     monkeypatch.setattr(pq, "ParquetFile", lambda p, *a, **k: opened.append(str(p)) or original(p, *a, **k))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        dataset = reader.read()
-        _ = [s.signals for s in dataset.records]  # touch every record's series metadata
+        records = tuple(reader.iter_records())
+        _ = [s.signals for s in records]  # touch every record's series metadata
     # values are lazy; building records may open control-plane tables but no value shard (under time_series/)
     assert not [p for p in opened if "/time_series/" in p]
 
@@ -147,9 +147,8 @@ def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, ser
     original = pq.ParquetFile
     monkeypatch.setattr(pq, "ParquetFile", lambda p, *a, **k: opened.append(str(p)) or original(p, *a, **k))
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        dataset = reader.read()
-        assert not [p for p in opened if "/time_series/" in p]  # read touches control tables, not value shards
-        series = next(ts for s in dataset.records for ts in s.signals if ts.id == series_id)
+        series = reader.get_handle().get_handle("Signal", series_id)
+        assert not [p for p in opened if "/time_series/" in p]
         series.to_arrow()
     opened_rel = {p.removeprefix(f"{version_dir}/") for p in opened if "/time_series/" in p}
     assert opened_rel == expected_shards  # exactly the series' value shards, nothing else
@@ -168,6 +167,6 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
 
     monkeypatch.setattr(values_reader.ParquetValuesReader, "_row_group", spy)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = next(ts for s in reader.read().records for ts in s.signals if ts.id == "ts-006")
+        series = reader.get_handle().get_handle("Signal", "ts-006")
         series.to_arrow()
     assert set(read) == expected  # only ts-006's chunks' row groups were decoded, not whole shards
