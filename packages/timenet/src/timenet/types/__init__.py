@@ -15,6 +15,8 @@ from timenet.types.ids import new_id, uuid7
 from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema
 from timenet.types.modalities import InputModality
+from timenet.types.payloads import ArrayPayload, Payload, PayloadDescriptor
+from timenet.types.references import DatasetRef, ObjectRef
 from timenet.types.spans import (
     Span,
     StepInterval,
@@ -53,14 +55,19 @@ __all__ = [
     "AnnotationDescriptor",
     "AnnotationType",
     "AnswerTask",
+    "ArrayPayload",
     "ClassificationTask",
     "DatasetMetadata",
+    "DatasetRef",
     "DatasetSchema",
     "Domain",
     "ForecastingTask",
     "InputModality",
     "License",
     "LocalizationMode",
+    "ObjectRef",
+    "Payload",
+    "PayloadDescriptor",
     "ScalarPredictionTask",
     "Span",
     "Split",

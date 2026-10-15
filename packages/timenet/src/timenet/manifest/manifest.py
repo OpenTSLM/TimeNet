@@ -1,10 +1,13 @@
 """The :class:`Manifest`: the compiled ``manifest.json`` file and its JSON codec."""
 
+import json
 from typing import Annotated, Any, Self
 
-from pydantic import Field, StrictStr, model_validator
+from pydantic import Field, StrictStr, ValidationError, model_validator
 from typing_extensions import TypedDict
 
+from timenet.errors import TimeFFormatError
+from timenet.format.constants import TIMEF_FORMAT_VERSION
 from timenet.manifest.counts import ManifestCounts
 from timenet.manifest.files import ManifestFiles
 from timenet.types import DatasetMetadata, DatasetSchema
@@ -40,7 +43,7 @@ class Manifest(TimeFModel):
     """``spec_type`` to the values-column encoding used by its shards."""
     build_env: BuildEnvironment = Field(default_factory=dict)
     """The Python version and package set that produced this version."""
-    timef_format_version: Annotated[int, Field(strict=True, ge=1, le=1)]
+    timef_format_version: Annotated[int, Field(strict=True, ge=2, le=2)]
     """The TimeF manifest format version."""
 
     @model_validator(mode="after")
@@ -51,6 +54,34 @@ class Manifest(TimeFModel):
                 f"metadata.dataset_id {self.metadata.dataset_id!r}"
             )
         return self
+
+    @classmethod
+    def from_artifact(cls, value: str | bytes | dict[str, Any]) -> "Manifest":
+        """Read an on-disk manifest with explicit format and corruption errors.
+
+        Returns:
+            The validated manifest.
+
+        Raises:
+            TimeFFormatError: If the format is unsupported or the artifact is corrupt.
+        """
+        try:
+            data = json.loads(value) if isinstance(value, str | bytes) else value
+        except ValueError as exc:
+            raise TimeFFormatError(f"invalid TimeF manifest JSON: {exc}") from exc
+        if (
+            not isinstance(data, dict)
+            or type(data.get("timef_format_version")) is not int
+            or data["timef_format_version"] != TIMEF_FORMAT_VERSION
+        ):
+            found = data.get("timef_format_version") if isinstance(data, dict) else None
+            raise TimeFFormatError(
+                f"unsupported TimeF format version {found!r}; rebuild the artifact with format {TIMEF_FORMAT_VERSION}"
+            )
+        try:
+            return cls.model_validate(data)
+        except ValidationError as exc:
+            raise TimeFFormatError(f"invalid TimeF manifest: {exc}") from exc
 
     def to_dict(self) -> dict[str, Any]:
         """Serialize the manifest to a validated JSON-compatible dict with all keys present.

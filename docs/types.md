@@ -203,3 +203,23 @@ without losing the TimeNet-specific error type.
 behavior. It derives from `TimeNetWarning` and `UserWarning`.
 
 See the [API reference for `timenet.types`](api/types.md) for all symbols.
+
+## Explicit content reads
+
+Annotation values and task text use immutable `Payload` handles. Constructors still accept native
+Python values. `annotation.value()` materializes its content; `annotation.handle()` returns its
+lazy payload without reading the body. A pure marker returns `None` from both methods.
+
+```python
+annotation = Annotation(key="manual", value="Check the pump.")
+annotation.handle()  # Obtain the shared payload without reading it.
+annotation.value()   # Read the native string.
+```
+
+Tasks provide `prompt()`, `rationale()`, and `targets()` for content reads. The corresponding
+`prompt_handle()`, `rationale_handle()`, and `targets_handle()` methods return stored handles and
+references without materializing them. Use `set_prompt()`, `set_rationale()`, and `set_targets()`
+to replace task content. Constructors still accept `prompt=`, `rationale=`, and `targets=`.
+
+Signal methods `to_arrow()`, `to_numpy()`, and `read_steps()` retain their existing behavior.
+Descriptors, schema derivation, and modality selection do not read payload bodies.

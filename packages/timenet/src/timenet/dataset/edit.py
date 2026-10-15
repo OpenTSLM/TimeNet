@@ -210,7 +210,7 @@ def _task_invalidated(
     from timenet.dataset.record import Record  # noqa: PLC0415
     from timenet.dataset.time_series import Signal  # noqa: PLC0415
 
-    targets = task.targets or ()
+    targets = task.targets_handle() or ()
     target_record_ids = {target.id for target in targets if isinstance(target, Record)}
     target_signal_ids = {target.id for target in targets if isinstance(target, Signal)}
     candidate_record_ids = {record.id for record in getattr(task, "candidate_records", ())}
@@ -255,9 +255,9 @@ def _rebuild_tasks(
             "inputs": inputs,
             "targets": tuple(
                 records_by_id.get(target.id, target) if isinstance(target, Record) else target
-                for target in task.targets or ()
+                for target in task.targets_handle() or ()
             )
-            if task.targets is not None
+            if task.targets_handle() is not None
             else None,
             "input_annotations": input_annotations,
             "from_tasks": (),
