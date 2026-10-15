@@ -176,7 +176,7 @@ ClassificationTask(
 )
 ```
 
-`target_schema` can name a registered Annotation that holds the label vocabulary.
+`target_schema` can name a dataset-level Annotation that holds the label vocabulary.
 
 ### Answer and rationale
 

@@ -145,7 +145,6 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                         {
                             "spec": _canonical(series.spec),
                             "signal": series.name,
-                            "source_id": series.source_id,
                             "time_series_id": series.id,
                             "time_axis": _canonical(series.time_axis),
                             "n_values": series.n_values,

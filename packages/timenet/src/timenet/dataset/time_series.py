@@ -98,8 +98,6 @@ class Signal(SupportsAnnotate):
     An :class:`~timenet.dataset.axis.IrregularAxis` requires this callable, and any other axis
     rejects it. A regular axis computes its time offsets and an ordinal one has none. A stream attached to
     either gives a second, conflicting answer to the same question."""
-    source_id: str | None = None
-    """Optional identifier of the raw source recording."""
     id: str = field(default_factory=new_id)
     """Stable Signal identity. Defaults to a UUIDv7."""
     n_values: int
@@ -121,7 +119,6 @@ class Signal(SupportsAnnotate):
         id: str | None = None,
         name: str,
         data: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array,
-        source_id: str | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
     ) -> None:
@@ -134,7 +131,6 @@ class Signal(SupportsAnnotate):
             name=name,
             loader=lambda: array,
             n_values=len(array),
-            source_id=source_id,
             annotations=annotations,
             metadata=metadata,
         )
@@ -150,7 +146,6 @@ class Signal(SupportsAnnotate):
         n_values: int,
         id: str | None = None,
         time_offsets_loader: Callable[[], pa.Array] | None = None,
-        source_id: str | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
     ) -> "Signal":
@@ -168,7 +163,6 @@ class Signal(SupportsAnnotate):
             loader=loader,
             n_values=n_values,
             time_offsets_loader=time_offsets_loader,
-            source_id=source_id,
             annotations=annotations,
             metadata=metadata,
         )
@@ -184,7 +178,6 @@ class Signal(SupportsAnnotate):
         loader: Callable[[], pa.Array],
         n_values: int,
         time_offsets_loader: Callable[[], pa.Array] | None = None,
-        source_id: str | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
     ) -> None:
@@ -195,7 +188,6 @@ class Signal(SupportsAnnotate):
         set_field(self, "time_axis", time_axis)
         set_field(self, "loader", loader)
         set_field(self, "time_offsets_loader", time_offsets_loader)
-        set_field(self, "source_id", source_id)
         set_field(self, "id", id)
         set_field(self, "n_values", n_values)
         set_field(self, "annotations", tuple(annotations))
@@ -279,14 +271,13 @@ class Signal(SupportsAnnotate):
         assert_never(axis)
 
     @classmethod
-    def from_values(  # noqa: PLR0913
+    def from_values(
         cls,
         values: np.ndarray | Sequence[bool | int | float | str | None],
         *,
         spec: TimeSeriesSpec,
         name: str,
         time_axis: TimeAxis,
-        source_id: str | None = None,
         id: str | None = None,
     ) -> "Signal":
         """Build a series from already-materialized values and wrap them in a loader for the spec's dtype.
@@ -304,7 +295,6 @@ class Signal(SupportsAnnotate):
             spec: The series' measurement-modality spec.
             name: The signal name.
             time_axis: Where the values sit in time.
-            source_id: Optional id of the raw source recording.
             id: Explicit id, or ``None`` for an auto-generated UUIDv7.
 
         Returns:
@@ -315,19 +305,17 @@ class Signal(SupportsAnnotate):
             name=name,
             data=values,
             time_axis=time_axis,
-            source_id=source_id,
             id=id,
         )
 
     @classmethod
-    def from_irregular(  # noqa: PLR0913
+    def from_irregular(
         cls,
         values: np.ndarray | Sequence[bool | int | float | str | None],
         *,
         time_offsets_us: np.ndarray | Sequence[int],
         spec: TimeSeriesSpec,
         name: str,
-        source_id: str | None = None,
         id: str | None = None,
     ) -> "Signal":
         """Build an irregular series from materialized values and their time offsets.
@@ -343,7 +331,6 @@ class Signal(SupportsAnnotate):
             time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
             spec: The series' measurement-modality spec.
             name: The signal name.
-            source_id: Optional id of the raw source recording.
             id: Explicit id, or ``None`` for an auto-generated UUIDv7.
 
         Returns:
@@ -366,7 +353,6 @@ class Signal(SupportsAnnotate):
             time_axis=IrregularAxis.spanning(time_offsets),
             loader=lambda: array,
             time_offsets_loader=lambda: time_offset_array,
-            source_id=source_id,
             id=id,
             n_values=len(array),
         )

@@ -94,7 +94,7 @@ through boto3, so it names `boto3` too.
 
 Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries`):
 
-- `TimeSeries.from_values(values, *, spec, signal, time_axis, source_id=None, time_series_id=None)`
+- `TimeSeries.from_values(values, *, spec, signal, time_axis, time_series_id=None)`
   is the shortcut when you already hold the values in memory: it wraps them in a **float32** loader and
   takes `n_values` from the array's own length. When the source has one arbitrary time offset per point,
   use `TimeSeries.from_irregular(values, *, time_offsets_us, spec, signal, ...)` instead, which derives
