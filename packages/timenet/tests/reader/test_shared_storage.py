@@ -4,7 +4,7 @@ import json
 import pytest
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import make_dataset
@@ -43,3 +43,15 @@ def test_shared_waveforms_need_no_parent_catalog(tmp_path, backend):
         pytest.raises(TimeFFormatError, match="manifest changed"),
     ):
         child_reader.read().records[0].signals[0].to_arrow()
+
+
+def test_shared_payloads_cannot_reference_the_output_release(tmp_path):
+    path = store(tmp_path, make_dataset())
+    original_manifest = (path / "manifest.json").read_bytes()
+    with TimeFReader(DatasetVersion.open_local(path)) as reader:
+        loaded = reader._read_catalog()
+        with pytest.raises(TimeFValidationError, match="also the output release"):
+            store(tmp_path / "copy", loaded)
+    assert (path / "manifest.json").read_bytes() == original_manifest
+    with TimeFReader(DatasetVersion.open_local(path)) as reader:
+        assert reader.read().records
