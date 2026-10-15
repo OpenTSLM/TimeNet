@@ -12,7 +12,7 @@ from timenet.dataset.source import Source
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.reader.handles import DatasetHandle
-from timenet.types import Annotation, StepSpan, Task, TimeSpan
+from timenet.types import Access, Annotation, StepSpan, Task, TimeSpan
 from timenet.types.references import DatasetRef, InputLock, manifest_digest
 
 
@@ -43,7 +43,6 @@ class ImportedDataset:
     tasks: dict[str, Task] = field(default_factory=dict)
     included: dict[str, tuple[str, ...]] = field(default_factory=dict)
     _axes: dict[str, Any] = field(default_factory=dict, repr=False)
-    _full: set[tuple[str, str]] = field(default_factory=set, repr=False)
 
     def identity(self, kind: str, original: str) -> str:
         """Return a compact deterministic ID without nested namespace prefixes."""
@@ -82,8 +81,6 @@ class _Import:
         }
         self.owners: dict[tuple[str, str], tuple[str, str]] = {}
         self.selected: dict[str, set[str]] = {kind: set() for kind in self.objects}
-        self.full_records: set[str] = set()
-        self.full_sources: set[str] = set()
         for record in self.parent.records:
             self._annotations("Record", record)
             for source in record.walk_sources():
@@ -122,11 +119,9 @@ class _Import:
             return
         self.selected[kind].add(identity)
         if kind == "Record":
-            self.full_records.add(identity)
             for source in obj.sources:
                 self.select("Source", source.id)
         elif kind == "Source":
-            self.full_sources.add(identity)
             for source in obj.sources:
                 self.select("Source", source.id)
             for signal in obj.signals:
@@ -277,7 +272,16 @@ class _Import:
         if pending:
             self.child.add_tasks(tasks=[task for _, task in pending])
         self.child._schema = None
-        self.result.included = {kind: tuple(sorted(ids)) for kind, ids in self.selected.items()}
+        self.result.included = {
+            kind: tuple(sorted(objects))
+            for kind, objects in (
+                ("Record", self.result.records),
+                ("Source", self.result.sources),
+                ("Signal", self.result.signals),
+                ("Task", self.result.tasks),
+                ("Annotation", self.result.annotations),
+            )
+        }
         return self.result
 
 
@@ -302,7 +306,18 @@ def import_from(  # noqa: PLR0913
     """
     ref = DatasetRef(dataset_id=parent.metadata.dataset_id, version=parent.metadata.dataset_version)
     namespace = str(ref) if namespace is None else namespace
+    if not namespace.strip():
+        raise TimeFValidationError("an import namespace must not be blank")
+    for alias, imported in child._imports.items():
+        if imported.source == ref and alias != namespace:
+            raise TimeFValidationError(f"parent {ref} already uses namespace {alias!r}")
     digest = manifest_digest(parent.reader._version.manifest.to_dict())
+    lock = InputLock(source=ref, manifest_checksum=digest, metadata=parent.metadata.model_dump(mode="json"))
+    ancestors = (*parent.reader._version.manifest.lineage, lock)
+    for ancestor in ancestors:
+        existing = child.lineage.get(str(ancestor.source))
+        if existing is not None and existing.manifest_checksum != ancestor.manifest_checksum:
+            raise TimeFValidationError(f"conflicting input snapshots for {ancestor.source}")
     previous = child.input_locks.get(namespace)
     if previous is not None and (previous.source != ref or previous.manifest_checksum != digest):
         raise TimeFValidationError(f"namespace {namespace!r} already names a different parent snapshot")
@@ -321,8 +336,12 @@ def import_from(  # noqa: PLR0913
             operation.select(kind, identity)
     result = operation.apply()
     child._imports[namespace] = result
-    lock = InputLock(source=ref, manifest_checksum=digest, metadata=parent.metadata.model_dump(mode="json"))
     child.input_locks[namespace] = lock
-    for ancestor in (*parent.reader._version.manifest.lineage, lock):
+    for ancestor in ancestors:
         child.lineage[str(ancestor.source)] = ancestor
+    ranks = {Access.OPEN: 0, Access.CREDENTIALED: 1, Access.RESTRICTED: 2}
+    if ranks[parent.metadata.access] > ranks[child.metadata.access]:
+        child._metadata = child.metadata.model_copy(
+            update={"access": parent.metadata.access, "access_url": parent.metadata.access_url}
+        )
     return result
