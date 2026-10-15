@@ -109,7 +109,7 @@ class S3Registry(WritableRegistry):
             raise TimeNetDatasetNotFoundError(
                 f"no manifest for {dataset_id!r} version {resolved!r} under {self._display_root()}"
             )
-        return Manifest.model_validate_json(body.decode())
+        return Manifest.from_artifact(body.decode())
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.
@@ -153,7 +153,12 @@ class S3Registry(WritableRegistry):
         if (cached / MANIFEST_FILE).exists():
             return DatasetVersion.open_local(cached)
         root = self._key(dataset_id, resolved)
-        return DatasetVersion(manifest=manifest, filesystem=self._s3_filesystem(), root=f"{self._bucket}/{root}")
+        return DatasetVersion(
+            manifest=manifest,
+            filesystem=self._s3_filesystem(),
+            root=f"{self._bucket}/{root}",
+            payload_root=f"{self._bucket}/{self._key(_DATASETS_PREFIX)}",
+        )
 
     def store(
         self,

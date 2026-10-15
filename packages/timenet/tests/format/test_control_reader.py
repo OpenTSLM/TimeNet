@@ -113,8 +113,8 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert record.annotations[0].content_id == "sex-male"
     assert record.annotations[0].occurrence_id is not None
     assert task.inputs[0] is record
-    assert task.prompt == "Alive?"
-    assert task.targets == ("Yes",)
+    assert task.prompt() == "Alive?"
+    assert task.targets() == ("Yes",)
     assert task.annotations[0].name == "task_kind"
 
 
@@ -239,15 +239,17 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
     record = dataset.records[0]
     signal = record.signals[0]
     point = TimePoint.seconds(0.001, time_series_ids=(signal.id,))
-    dataset.tasks[0].targets = ("Yes", 7, 0.5, True, record, signal, point)
+    dataset.tasks[0].set_targets(("Yes", 7, 0.5, True, record, signal, point))
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
         (task,) = reader.read_tasks(records)
 
-    assert task.targets is not None
-    text, integer, floating, boolean, target_record, target_signal, target_point = task.targets
+    assert task.targets_handle() is not None
+    resolved = task.targets()
+    assert resolved is not None
+    text, integer, floating, boolean, target_record, target_signal, target_point = resolved
     assert (text, integer, floating, boolean) == ("Yes", 7, 0.5, True)
     assert target_record is records[0]
     assert target_signal is records[0].signals[0]
@@ -283,7 +285,7 @@ def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
         )
         (task,) = reader.read_tasks(records)
 
-    assert task.targets == ("Yes",)
+    assert task.targets() == ("Yes",)
 
 
 def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path):
@@ -358,8 +360,8 @@ def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tm
     assert [task.id for task in tasks] == ["task-answer-0", "task-cls-0", "task-localize-0", "task-scalar-0"]
     assert all(task.inputs[0] is record0 for task in tasks)
     answer = tasks[0]
-    assert answer.from_tasks == (tasks[1],)
-    assert answer.from_tasks[0] is tasks[1]
+    assert answer.from_tasks == (tasks[1].ref,)
+    assert answer.from_tasks[0].id == tasks[1].id
 
 
 @pytest.mark.parametrize("materialize", [False, True])
@@ -374,7 +376,7 @@ def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, m
 
     by_id = {task.id: task for task in tasks}
     assert set(by_id) == {"task-answer-0", "task-cls-0", "task-localize-0", "task-scalar-0"}
-    assert by_id["task-answer-0"].from_tasks[0] is by_id["task-cls-0"]
+    assert by_id["task-answer-0"].from_tasks[0].id == by_id["task-cls-0"].id
     assert tuple(sorted(by_id)) == tuple(task.id for task in tasks)
 
 
@@ -426,8 +428,8 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
         .fetchone()
     )
 
-    assert back.value == value
-    assert type(back.value) is type(value)
+    assert back.value() == value
+    assert type(back.value()) is type(value)
     assert stored == (kind,)
 
 
@@ -450,7 +452,9 @@ def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
     assert answer["from_task_ids"] == ["task-cls-0"]
     assert answer["scope_type"] is None
     assert {row["task_id"] for row in subset} == {task.id for task in tasks.values() if task.inputs[0].id == "record-0"}
-    assert sum(1 for row in targets if row["task_id"] == "task-cls-0") == len(tasks["task-cls-0"].targets or ())
+    assert sum(1 for row in targets if row["task_id"] == "task-cls-0") == len(
+        tasks["task-cls-0"].targets_handle() or ()
+    )
     text_targets = {row["task_id"]: row["text_value"] for row in targets if row["target_kind"] == "text"}
     assert text_targets["task-cls-0"] == "normal"
     age = next(row for row in annotations if row["key"] == "age" and row["object_id"] == "record-0")

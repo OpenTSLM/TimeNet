@@ -94,7 +94,7 @@ class LocalRegistry(WritableRegistry):
         cached = self._manifest_cache.get((dataset_id, resolved))
         if cached is not None and cached[0] == mtime:
             return cached[1]
-        manifest = Manifest.model_validate_json(path.read_text())
+        manifest = Manifest.from_artifact(path.read_text())
         if manifest.metadata.dataset_id != dataset_id:
             raise TimeFFormatError(
                 f"manifest under {dataset_id!r}/{resolved} declares dataset id "
@@ -182,7 +182,9 @@ class LocalRegistry(WritableRegistry):
         manifest = self.get_manifest(dataset_id, version)
         resolved = str(manifest.metadata.dataset_version)
         root = self._dataset_dir(dataset_id) / resolved
-        return DatasetVersion(manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root))
+        return DatasetVersion(
+            manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root), payload_root=str(self._root)
+        )
 
     def _dataset_dir(self, dataset_id: str) -> Path:
         """Return the directory holding a dataset's versions.

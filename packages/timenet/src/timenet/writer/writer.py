@@ -1,5 +1,6 @@
 """Write a TimeF DuckDB control plane and a sharded Parquet or Zarr values plane."""
 
+from collections import defaultdict
 from collections.abc import Callable, Iterable
 from pathlib import Path
 import shutil
@@ -32,6 +33,8 @@ from timenet.format.schemas import (
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
 from timenet.types.ids import is_canonical_uuid
+from timenet.types.payload_references import PayloadChunk, PayloadReference, PayloadSource
+from timenet.types.references import DatasetRef
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -52,6 +55,7 @@ class TimeFWriter:
         root: Path,
         dataset: TimeFDataset,
         *,
+        inline_bytes: int = 4096,
         shard_target_bytes: int = DEFAULT_SHARD_TARGET_BYTES,
         row_group_target_bytes: int = DEFAULT_ROW_GROUP_TARGET_BYTES,
         chunk_max_bytes: int = DEFAULT_CHUNK_MAX_BYTES,
@@ -86,6 +90,9 @@ class TimeFWriter:
                 ``value_encoding`` is unsupported, or a forced ``value_encoding`` targets a backend
                 that cannot apply it.
         """
+        if inline_bytes < 0:
+            raise TimeFValidationError("inline_bytes must be non-negative")
+        self.inline_bytes = inline_bytes
         if not dataset.metadata.dataset_id:
             raise TimeFValidationError("dataset_id must be non-empty")
         if values_backend not in SUPPORTED_VALUES_BACKENDS:
@@ -180,20 +187,68 @@ class TimeFWriter:
         self._resolve_id_types()
 
         unique_series, _series_to_records = self._dedupe_series()
-        placements = self._write_values(unique_series)
+        placements = self._write_values([signal for signal in unique_series if signal.values.reference is None])
         tasks = (
             self._dataset.iter_streamed_tasks_validated()
             if self._dataset.has_task_stream
             else self._dataset.iter_tasks()
         )
-        self._task_type_counts = DuckDBControlWriter(self._staging_dir / CONTROL_FILE).write_hierarchy(
+        control_writer = DuckDBControlWriter(self._staging_dir / CONTROL_FILE, inline_bytes=self.inline_bytes)
+        self._task_type_counts = control_writer.write_hierarchy(
             self._dataset,
             placements,
             tasks=tasks,
+            payloads=self._array_references(unique_series, placements),
         )
+        self._payload_files = control_writer.payload_files
         self._control_file = CONTROL_FILE
         self._counts = self._build_counts()
         self._written = True
+
+    def _array_references(self, signals: list[Signal], placements: dict[tuple[str, int], ChunkPlacement]) -> dict:
+        chunks: dict[str, list[PayloadChunk]] = defaultdict(list)
+        for (identity, _), value in sorted(placements.items()):
+            chunks[identity].append(
+                PayloadChunk(
+                    path=value.chunk_file,
+                    major=value.data_index.major_idx,
+                    minor=value.data_index.minor_idx,
+                    n_values=value.n_values,
+                )
+            )
+        for signal in signals:
+            descriptor = signal.values.descriptor
+            spec = signal.spec
+            expected = (
+                "array",
+                signal.n_values,
+                spec.dtype,
+                spec.value_shape,
+                spec.nullable,
+                spec.categories,
+                spec.dimension_names,
+            )
+            actual = (
+                descriptor.kind,
+                descriptor.length,
+                descriptor.dtype,
+                descriptor.shape,
+                descriptor.nullable,
+                descriptor.categories,
+                descriptor.dimension_names,
+            )
+            if actual != expected:
+                raise TimeFValidationError(f"signal {signal.id!r} has an incompatible payload descriptor")
+            if signal.values.reference is not None and signal.values.reference.source is None:
+                raise TimeFValidationError("reused array references must name a pinned owner")
+        codec = "parquet" if self._values_backend_name == ValuesBackend.PARQUET else "zarr"
+        return {
+            ("Signal", signal.id, "values", 0): (
+                signal.values.descriptor,
+                signal.values.reference or PayloadReference(codec=codec, chunks=tuple(chunks[signal.id])),
+            )
+            for signal in signals
+        }
 
     def close(self) -> None:
         """Write the manifest and atomically publish the staging directory.
@@ -384,6 +439,20 @@ class TimeFWriter:
             )
         return values
 
+    def _foreign_sources(self) -> tuple[PayloadSource, ...]:
+        with connect_control(self._staging_dir / CONTROL_FILE, read_only=True) as connection:
+            rows = connection.execute("SELECT DISTINCT reference FROM payloads").fetchall()
+        sources: dict[DatasetRef, PayloadSource] = {}
+        for (encoded,) in rows:
+            source = PayloadReference.model_validate_json(encoded).source
+            if source is not None:
+                if source.dataset in sources and sources[source.dataset] != source:
+                    raise TimeFValidationError(f"conflicting owner pins for {source.dataset}")
+                sources[source.dataset] = source
+        return tuple(
+            sorted(sources.values(), key=lambda source: (source.dataset.dataset_id, str(source.dataset.version)))
+        )
+
     def _write_manifest(self) -> None:
         schema = self._dataset.schema
         if schema is None:  # unreachable: write() already checked, but keeps the type non-optional
@@ -393,14 +462,16 @@ class TimeFWriter:
             metadata=self._dataset.metadata,
             dataset_schema=schema,
             counts=self._counts,
+            payload_sources=self._foreign_sources(),
             files=ManifestFiles(
                 control=(self._file_part(self._control_file),),
                 time_series=self._file_parts(self._value_files),
+                payloads=self._file_parts(self._payload_files),
             ),
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             build_env=build_env(),
-            timef_format_version=1,
+            timef_format_version=2,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 
