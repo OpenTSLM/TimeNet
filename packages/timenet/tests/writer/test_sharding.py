@@ -170,3 +170,24 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
         series = reader.get_handle().get_handle("Signal", "ts-006")
         series.to_arrow()
     assert set(read) == expected  # only ts-006's chunks' row groups were decoded, not whole shards
+
+
+def test_imported_ids_preserve_physical_scan_order(tmp_path, monkeypatch):
+    parent = _sharded_dataset(12, 128)
+    version = _write(tmp_path, parent, **_SMALL_TARGETS)
+    child = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "test/scan-order"}))
+    with TimeFReader(open_local_version(version)) as reader:
+        child.import_from(reader.get_handle(), records=[record.id for record in parent.records])
+        child_path = _write(tmp_path, child)
+    read = []
+    original = ParquetReadCache.read_column
+
+    def track(self, version, relpath, group, column):
+        read.append((relpath, group))
+        return original(self, version, relpath, group, column)
+
+    monkeypatch.setattr(ParquetReadCache, "read_column", track)
+    with TimeFReader(open_local_version(child_path)) as reader:
+        restored = reader.read()
+    assert len(restored.records) == len(parent.records)
+    assert read == sorted(read)
