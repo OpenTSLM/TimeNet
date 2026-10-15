@@ -47,3 +47,38 @@ def test_selected_signal_then_task_preserves_edits_and_remaps_dependencies(tmp_p
     with TimeFReader(DatasetVersion.open_local(grandchild_path)) as reader:
         restored = reader.read()
         assert restored.records[0].signals[0].to_arrow().equals(original.signals[0].to_arrow())
+
+
+def test_diamond_keeps_parent_namespaces_distinct_and_shares_ultimate_storage(tmp_path):
+    original = make_dataset()
+    original_id = original.records[0].id
+    base_path = store(tmp_path, original)
+    with TimeFReader(DatasetVersion.open_local(base_path)) as reader:
+        children = []
+        for name in ("left", "right"):
+            child = TimeFDataset(metadata=original.metadata.model_copy(update={"dataset_id": f"test/{name}"}))
+            imported = child.import_from(reader.get_handle(), namespace="base", records=[original_id])
+            imported.records[original_id].metadata["branch"] = name
+            children.append((store(tmp_path, child), imported.records[original_id].id))
+    merged = TimeFDataset(metadata=original.metadata.model_copy(update={"dataset_id": "test/merged"}))
+    readers = [TimeFReader(DatasetVersion.open_local(path)) for path, _ in children]
+    try:
+        for name, reader, (_, identity) in zip(("left", "right"), readers, children, strict=True):
+            merged.import_from(reader.get_handle(), namespace=name, records=[identity])
+        assert len({record.id for record in merged.records}) == 2
+        merged.records[0].metadata["branch"] = "edited"
+        assert merged.records[1].metadata["branch"] == "right"
+        merged_path = store(tmp_path, merged)
+    finally:
+        for reader in readers:
+            reader.close()
+    version = DatasetVersion.open_local(merged_path)
+    assert not version.manifest.files.time_series
+    assert {source.source.dataset_id for source in version.manifest.payload_sources.values()} == {
+        original.metadata.dataset_id
+    }
+    for path in [base_path, *(path for path, _ in children)]:
+        (path / "control.duckdb").rename(path / "unavailable.duckdb")
+    with TimeFReader(version) as reader:
+        for record in reader.read().records:
+            assert record.signals[0].to_arrow().equals(original.records[0].signals[0].to_arrow())
