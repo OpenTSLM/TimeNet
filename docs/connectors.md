@@ -68,6 +68,98 @@ reused. Each call to `annotate()` creates a separate occurrence for the selected
 
 ---
 
+## Assigning dataset splits
+
+Use `timenet_connectors.splitting` during conversion to assign source samples to partitions.
+Every implementation inherits from `Splitter[T]` and returns `DatasetSplits[T]`. Access partitions
+by `Split` name; iteration over the result yields partition names, not positional train/test values.
+The splitter keeps the source objects unchanged and preserves their order within each partition.
+
+Preserve official partitions when the source provides them by setting `split` on each task
+directly. No splitter is needed:
+
+```python
+from timenet.types.splits import Split
+
+task = make_task(sample, split=Split.TRAIN)
+dataset.add_task(task=task)
+```
+
+Translate source-specific partition names into `Split` values in the connector.
+
+For a dataset without official partitions, explicitly choose a category to balance and a grouping
+key that prevents related samples from crossing partitions:
+
+```python
+from timenet.types.splits import Split
+from timenet_connectors.splitting import StratifiedSplitter
+
+def get_category(sample):
+    return sample.category
+
+def get_signal_id(sample):
+    return sample.signal_id
+
+splitter = StratifiedSplitter(
+    train=0.8,
+    test=0.2,
+    stratify_by=get_category,
+    group_by=get_signal_id,
+    seed=42,
+)
+splits = splitter.split(samples)
+train_samples = splits[Split.TRAIN]
+test_samples = splits[Split.TEST]
+print(splits.counts)
+```
+
+For three partitions, use `train=0.8, validation=0.1, test=0.1`. Omitted validation is absent,
+not an empty placeholder. Configured fractions must be positive, finite, and sum to one.
+
+`StratifiedSplitter` wraps scikit-learn's
+[`StratifiedGroupKFold`](https://scikit-learn.org/stable/modules/generated/sklearn.model_selection.StratifiedGroupKFold.html).
+It converts fractions to rational fold counts: 80/20 combines four of five folds for training;
+80/10/10 combines eight of ten for training, one for test, and one for validation. Fold assignment
+uses that fixed train/test/validation order. For example, 70/30 requires ten folds, while equal
+thirds require three. Finer ratios can require more folds and therefore more groups. Fractions
+are represented with `Fraction.limit_denominator()` (maximum denominator 1,000,000); inputs
+that round to zero or differ by more than 1e-9 are rejected.
+
+Stratification targets the same category proportions in each partition. A group can contain several
+categories; all its samples stay together. Without `group_by`, each sample occurrence is independent.
+Use the actual leakage boundary for grouping, such as a patient or source recording, rather than a
+unique question or window ID. For temporal prediction, choose a time-based strategy instead.
+
+Scikit-learn assigns groups to folds, with `shuffle=True` and the configured seed. The wrapper
+encodes category and group keys as scalar labels and maps the returned indices back to the original
+samples. It contains no custom allocation or imbalance-scoring algorithm.
+
+Nonempty input needs at least as many distinct groups as folds. Scikit-learn rejects inputs where
+every category has fewer samples than folds; a rare category can produce a warning when other
+categories have enough samples. Invalid inputs raise `TimeFValidationError`. Empty input returns
+empty configured partitions. Sample counts and category proportions remain approximate when groups
+have unequal sizes; inspect `splits.counts` and category distributions before publishing.
+
+The same ordered input, callbacks, seed, and scikit-learn version reproduce the assignment; changing
+input order or adding samples can change it. No global random state is modified. The connectors
+package pins scikit-learn 1.9.1 because its allocation affects persisted dataset contents. Review
+generated assignments and version affected datasets when upgrading the splitter implementation.
+
+When constructing TimeNet tasks, copy the partition name onto each task:
+
+```python
+for split_name, samples_in_split in splits.items():
+    for sample in samples_in_split:
+        task = make_task(sample, split=split_name)
+        dataset.add_task(task=task)
+```
+
+Here `make_task` is the connector's own task-construction function. Consumers then select stored
+assignments through `dataset.get_train()`, `dataset.get_test()`, or `dataset.iter_tasks(split=...)`;
+they do not rerun the splitter.
+
+---
+
 ## Discovery and layout
 
 The system finds connectors lazily, by dataset id. There is no central registry to maintain. A
