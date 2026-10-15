@@ -9,6 +9,7 @@ row group (``major_idx``) and the row offset (``minor_idx``).
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from itertools import chain, groupby
 import logging
 
 import numpy as np
@@ -126,6 +127,7 @@ class ParquetValuesBackend(BaseValuesBackend):
         else:
             self._data_page_size = None
         self._forced_encoding = config.value_encoding
+        self._series_groups = config.series_groups
 
     def write_series(
         self,
@@ -160,11 +162,40 @@ class ParquetValuesBackend(BaseValuesBackend):
             )
         stream = _ShardStream(self, self._row_group_target_bytes, self._shard_target_bytes, on_file_done)
         total = len(unique_series)
-        for completed, ts in enumerate(unique_series, start=1):
-            values = read_and_validate(ts)
-            for chunk in _plan_chunks(ts, values, self._chunk_max_bytes):
-                stream.add(chunk)
-            on_series_done(completed, total)
+        completed = 0
+        for spec_type, series in groupby(unique_series, key=lambda signal: signal.spec.spec_type):
+            remaining = iter(series)
+            prepared = []
+            if self._series_groups:
+                # Keep the encoding sample independent of record boundaries. Reuse the
+                # decoded arrays during writing, so producer callbacks still run once.
+                sample_bytes = 0
+                for signal in remaining:
+                    values = read_and_validate(signal)
+                    prepared.append((signal, values))
+                    sample_bytes += values.nbytes
+                    if sample_bytes >= ENCODING_SAMPLE_SOURCE_BYTES:
+                        break
+                stream.encodings[spec_type] = self.encoding_for(
+                    spec_type,
+                    prepared[0][0].spec.dtype,
+                    [
+                        chunk.values
+                        for signal, values in prepared
+                        for chunk in _plan_chunks(signal, values, self._chunk_max_bytes)
+                    ],
+                )
+            previous_group = None
+            pending = ((signal, read_and_validate(signal)) for signal in remaining)
+            for signal, values in chain(prepared, pending):
+                group = self._series_groups.get(signal.id)
+                if group != previous_group:
+                    stream.finish_group()
+                previous_group = group
+                for chunk in _plan_chunks(signal, values, self._chunk_max_bytes):
+                    stream.add(chunk)
+                completed += 1
+                on_series_done(completed, total)
         stream.finish()
         return ValuesWriteResult(
             placements=stream.placements,
@@ -333,6 +364,10 @@ class _ShardStream:
         self._buffer_bytes += chunk.n_bytes
         if self._buffer_bytes >= self._row_group_target_bytes:
             self._flush()
+
+    def finish_group(self) -> None:
+        """Finish a selected recording without closing its modality's shard."""
+        self._flush()
 
     def finish(self) -> None:
         """Flush any remaining buffered chunks and close the final shard."""

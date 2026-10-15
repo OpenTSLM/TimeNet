@@ -38,3 +38,5 @@ back to the exact TimeF bytes of one version, not a moving target.
 A [registry](../registry.md) serves committed TimeF versions to the [SDK](../client.md). It can be a
 local directory, an S3 prefix, or a remote service. A registry never runs connector code. A local
 [build](../build.md) output is also a registry, so the SDK can read it directly.
+
+See [Dataset composition](../composition.md) for editable child catalogs, shared payloads, and format 3 migration.

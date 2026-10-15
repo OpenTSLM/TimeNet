@@ -19,6 +19,7 @@ from timenet.errors import TimeFFormatError
 from timenet.types import (
     US_PER_S,
     Annotation,
+    AnnotationContentRef,
     ClassificationTask,
     LocalizationMode,
     ScalarPredictionTask,
@@ -135,9 +136,9 @@ def build_epoch_tasks(
         if stage.span is None:
             raise TimeFFormatError(f"{record_id}: the scored entry {stage.id!r} states no span, so it holds no epoch")
 
-        if stage.value not in STAGE_LABELS:
+        if stage.value() not in STAGE_LABELS:
             raise TimeFFormatError(
-                f"{record_id}: the scored entry {stage.id!r} states {stage.value!r}, "
+                f"{record_id}: the scored entry {stage.id!r} states {stage.value()!r}, "
                 f"which is not a label this release writes"
             )
 
@@ -161,8 +162,8 @@ def build_epoch_tasks(
             yield ClassificationTask(
                 # The label the technician wrote. Merging stage 3 with stage 4 is a decision
                 # for whoever trains.
-                targets=(stage.value,),
-                target_schema=schema,
+                targets=(stage.value(),),
+                target_schema=AnnotationContentRef(id=schema),
                 scope=TimeInterval.micros(onset, onset + EPOCH_MICROSECONDS),
             )
 
@@ -200,7 +201,7 @@ def build_record_tasks(
         if one.key in stated:
             raise TimeFFormatError(f"{record_id}: states {one.key!r} twice, so it has no one answer for it")
 
-        stated[one.key] = one.value
+        stated[one.key] = one.value()
 
     yield ScalarPredictionTask(
         # A float with a unit keeps the type a regression metric needs. As a string, a
@@ -214,14 +215,14 @@ def build_record_tasks(
         # The decoded letter, never the sheet's code. The two sheets code the column with
         # opposite meanings, so one code means two opposite things.
         targets=(_one_of(record_id, stated, AnnotationKey.SEX, SEX_LABELS),),
-        target_schema=name_vocabulary(id_prefix, AnnotationKey.SEX),
+        target_schema=AnnotationContentRef(id=name_vocabulary(id_prefix, AnnotationKey.SEX)),
     )
 
     # Only the telemetry sheet states a condition, so this one is optional.
     if AnnotationKey.CONDITION in stated:
         yield ClassificationTask(
             targets=(_one_of(record_id, stated, AnnotationKey.CONDITION, CONDITION_LABELS),),
-            target_schema=name_vocabulary(id_prefix, AnnotationKey.CONDITION),
+            target_schema=AnnotationContentRef(id=name_vocabulary(id_prefix, AnnotationKey.CONDITION)),
         )
 
     night = find_sleep_period(span_annotations)
@@ -247,7 +248,7 @@ def find_sleep_period(span_annotations: Sequence[Annotation]) -> TimeInterval | 
         The interval, or ``None`` where the scoring holds no sleep. TimeF refuses an interval of
         zero length, so a recording with no sleep carries no question about its night.
     """
-    spans = [one.span for one in span_annotations if one.value in ASLEEP_LABELS and one.span is not None]
+    spans = [one.span for one in span_annotations if one.value() in ASLEEP_LABELS and one.span is not None]
     if not spans:
         return None
 

@@ -13,7 +13,10 @@ from timenet.format.control_schema import schema_ddl
 CONTROL_FILE = "control.duckdb"
 """Name of the relational control-plane database in a TimeF version."""
 
-CONTROL_SCHEMA_VERSION = 1
+CATALOG_VALIDATION_VERSION = "1"
+"""Publication audit revision understood by the verified reader."""
+
+CONTROL_SCHEMA_VERSION = 3
 """Schema version written into :data:`CONTROL_FILE`."""
 
 

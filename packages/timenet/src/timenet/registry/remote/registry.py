@@ -9,7 +9,7 @@ from collections.abc import Callable
 from pathlib import Path
 import shutil
 import tempfile
-from typing import BinaryIO, cast
+from typing import BinaryIO, Literal, cast
 
 import httpx
 
@@ -52,6 +52,7 @@ class RemoteRegistry(WritableRegistry):
             transport: An httpx transport for testing; ``None`` uses the network.
         """
         cfg = settings()
+        self._manifest_artifacts: dict[tuple[str, str], bytes] = {}
         self._base_url = base_url
         self._http = RegistryHttpClient(base_url, token=token if token is not None else cfg.token, transport=transport)
         self._cache_dir = Path(cache_dir) if cache_dir is not None else cfg.storage_dir
@@ -84,7 +85,8 @@ class RemoteRegistry(WritableRegistry):
         """  # noqa: DOC502 (raised by the HTTP client on 404, not directly here)
         resolved = self._resolve_latest(dataset_id) if version in {None, "", "latest"} else version
         text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
-        return Manifest.model_validate_json(text)
+        self._manifest_artifacts[dataset_id, resolved] = text.encode("utf-8")
+        return Manifest.from_artifact(text)
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.
@@ -128,17 +130,23 @@ class RemoteRegistry(WritableRegistry):
         if not (dest / MANIFEST_FILE).exists():
             # download_version owns the one materialize path, so TimeNet.download() and open share it.
             self.download_version(dataset_id, resolved, dest, manifest=manifest)
+        elif any(
+            not (self._cache_dir / source.dataset.dataset_id / str(source.dataset.version) / MANIFEST_FILE).exists()
+            for source in manifest.payload_sources
+        ):
+            self._download_payload_sources(manifest, dest, force=False, progress_cb=None)
         return DatasetVersion.open_local(dest)
 
-    def download_version(  # noqa: PLR0913
+    def _download_owned(  # noqa: PLR0913
         self,
         dataset_id: str,
         version: str,
         dest_dir: str | Path,
         *,
         force: bool = False,
-        manifest: Manifest | None = None,
+        manifest: Manifest,
         progress_cb: ProgressCallback | None = None,
+        expected_manifest_checksum: str | None = None,
     ) -> None:
         """Download a version's files into ``dest_dir`` (used by ``TimeNet.download`` for remotes).
 
@@ -150,10 +158,19 @@ class RemoteRegistry(WritableRegistry):
             manifest: The already-parsed manifest, passed to avoid re-fetching it; fetched if ``None``.
             progress_cb: Called with each chunk's byte count as it is written, for a progress display.
         """
-        if manifest is None:
-            manifest = self.get_manifest(dataset_id, version)
+        content = self._manifest_artifacts.get((dataset_id, version))
+        if content is None:
+            content = self._http.get_text(f"/datasets/{dataset_id}/{version}/manifest").encode("utf-8")
         download_version_files(
-            self._http, manifest, dataset_id, version, Path(dest_dir), force=force, progress_cb=progress_cb
+            self._http,
+            manifest,
+            dataset_id,
+            version,
+            Path(dest_dir),
+            force=force,
+            progress_cb=progress_cb,
+            manifest_content=content,
+            expected_manifest_checksum=expected_manifest_checksum,
         )
 
     def store(
@@ -162,6 +179,7 @@ class RemoteRegistry(WritableRegistry):
         *,
         force: bool = False,
         values_backend: str = "parquet",
+        payload_policy: Literal["reuse", "copy"] = "reuse",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     ) -> str:
         """Compile a dataset locally and publish it to the remote registry.
@@ -190,8 +208,15 @@ class RemoteRegistry(WritableRegistry):
             return version
         staging_root = Path(tempfile.mkdtemp(prefix="timenet-publish-"))
         try:
-            with TimeFWriter(staging_root, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
+            with TimeFWriter(
+                staging_root,
+                dataset,
+                values_backend=values_backend,
+                payload_policy=payload_policy,
+                progress_cb=progress_cb,
+            ) as writer:
                 writer.write()
+                self.validate_payload_sources(writer.payload_sources)
             version_dir = staging_root / dataset_id / version
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
             declared = {part.path for part in Manifest.model_validate_json(manifest_bytes.decode()).files.all_files()}
