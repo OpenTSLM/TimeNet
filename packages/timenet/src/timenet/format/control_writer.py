@@ -302,6 +302,7 @@ class DuckDBControlWriter:
                         dataset.iter_tasks() if tasks is None else tasks,
                     )
                     self._write_chunks(connection, placements)
+                    self._write_namespaces(connection, dataset)
                     self._check_source_tree(connection)
                     if self.external is not None:
                         self.external.finish(connection)
@@ -313,6 +314,16 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
         return task_counts
+
+    @staticmethod
+    def _write_namespaces(connection: duckdb.DuckDBPyConnection, dataset: TimeFDataset) -> None:
+        """Store import lookup information outside the ordinary read path."""
+        for key, (alias, imported) in enumerate(dataset._imports.items(), 1):
+            _insert_rows(connection, TABLES["namespaces"], [{"namespace_key": key, "namespace": str(imported.source), "alias": alias}])
+            _insert_rows(connection, TABLES["imported_objects"], [
+                {"namespace_key": key, "object_kind": kind, "source_id": original, "object_id": identity}
+                for kind, original, identity in imported.rows()
+            ])
 
     def _pack(self, kind: str, identity: str, field: str, value: Any, position: int = 0) -> Any:
         """Return the inline representation, recording external locations when configured."""
