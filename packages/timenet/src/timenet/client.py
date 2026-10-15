@@ -3,8 +3,7 @@
 This class wraps a :class:`~timenet.registry.BaseRegistry` (the catalog) and a local storage path
 (the download cache). It exposes these methods: ``list``, ``get``, ``search``, ``download``, and
 ``load``. Against a local registry, ``load`` builds a dataset the registry does not have when an
-installed package registers a connector for its id; against a remote registry it never runs connector
-code.
+installed package registers a connector for its id; missing parents are built only when ``build_parents`` is enabled.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -14,7 +13,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
-from timenet.builders import find_builder
+from timenet.builders import build_exact, find_builder
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
@@ -24,7 +23,9 @@ from timenet.reader.handles import DatasetHandle
 from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry.base import ProgressCallback
+from timenet.registry.dataset_graph_dependency_tools import prepare_dependency_graph
 from timenet.types import Access, DatasetMetadata, Domain, License, Task
+from timenet.types.references import DatasetRef
 
 
 if TYPE_CHECKING:
@@ -177,15 +178,34 @@ class TimeNet:
         )
         return target
 
-    def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
+    def load(
+        self,
+        dataset_id: str,
+        version: str | None = None,
+        *,
+        auto_build: bool = True,
+        fetch_parents: str | None = None,
+        build_parents: bool = False,
+    ) -> TimeFDataset:
         """Return the dataset with all values materialized in memory."""
-        with self.get_handle(dataset_id, version, auto_build=auto_build) as handle:
+        with self.get_handle(
+            dataset_id, version, auto_build=auto_build, fetch_parents=fetch_parents, build_parents=build_parents
+        ) as handle:
             return handle.read()
 
-    def get_handle(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> DatasetHandle:
-        """Return a lazy dataset handle without opening its catalog or payload files.
+    def get_handle(
+        self,
+        dataset_id: str,
+        version: str | None = None,
+        *,
+        auto_build: bool = True,
+        fetch_parents: str | None = None,
+        build_parents: bool = False,
+    ) -> DatasetHandle:
+        """Prepare complete local releases, then return a handle for lazy value reads.
 
-        An HTTP registry fetches and caches each file when it is first accessed.
+        Remote registries download missing complete releases before returning.
+        Local registries require all dependencies to be present unless fetching or building is enabled.
 
         Against a local registry, a dataset the registry does not have is built first, if some
         installed package registers a connector for its id. Set ``auto_build`` false to fail fast
@@ -195,6 +215,8 @@ class TimeNet:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
             auto_build: Build a missing local dataset from its connector. Set false to raise instead.
+            fetch_parents: Registry URI to fetch missing local dependencies from.
+            build_parents: Build missing dependencies if fetching cannot find them.
 
         Returns:
             A handle for explicit dataset, entity, and field reads.
@@ -203,11 +225,12 @@ class TimeNet:
             TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
                 declares a different version than the one asked for.
             TimeNetBuildError: If the build runs but fails.
+            TimeFValidationError: If a remote read supplies a second registry through ``fetch_parents``.
         """  # noqa: DOC502 (TimeNetBuildError comes from the builder, not from here)
         dataset_id, version = _resolve_ref(dataset_id, version)
         self._reject_unhosted_access(dataset_id, version)
         try:
-            handle = self._registry.open_version(dataset_id, version)
+            manifest = self._registry.get_manifest(dataset_id, version)
         except TimeNetDatasetNotFoundError as miss:
             if not auto_build or not isinstance(self._registry, LocalRegistry):
                 raise
@@ -223,8 +246,29 @@ class TimeNet:
                     raise TimeNetDatasetNotFoundError(
                         f"the connector for {dataset_id!r} builds version {declared}, not the requested {version}"
                     ) from miss
-            builder.build(dataset_id, self._registry.root)
-            handle = self._registry.open_version(dataset_id, version)
+            builder.build(
+                dataset_id,
+                self._registry.root,
+                build_parents=build_parents,
+                fetch_parents=fetch_parents,
+            )
+            manifest = self._registry.get_manifest(dataset_id, version)
+        root = self._registry.local_root
+        reference = DatasetRef(dataset_id=dataset_id, version=manifest.metadata.dataset_version)
+        fetch_from = None if isinstance(self._registry, LocalRegistry) else self._registry
+        if fetch_parents is not None:
+            if not isinstance(self._registry, LocalRegistry):
+                raise TimeFValidationError(
+                    "fetch_parents selects a source for a local registry; remote reads use their configured registry"
+                )
+            fetch_from = open_registry(fetch_parents)
+        handle = prepare_dependency_graph(
+            root,
+            reference,
+            manifest=manifest,
+            fetch_from=fetch_from,
+            build=(lambda ref: build_exact(ref, root, fetch_parents=fetch_parents)) if build_parents else None,
+        )
         return TimeFReader(handle).get_handle()
 
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
@@ -251,7 +295,14 @@ class TimeNet:
             f"{metadata.access_url}, then build it locally with `timenet-build build {dataset_id}`."
         )
 
-    def load_torch(self, dataset_id: str, version: str | None = None) -> TimeFTorchDataset:
+    def load_torch(
+        self,
+        dataset_id: str,
+        version: str | None = None,
+        *,
+        fetch_parents: str | None = None,
+        build_parents: bool = False,
+    ) -> TimeFTorchDataset:
         """Download the dataset if needed, then return it as a read-only PyTorch ``Dataset``.
 
         This method needs the ``torch`` extra (``pip install 'timenet[torch]'``). The code
@@ -266,4 +317,6 @@ class TimeNet:
         """
         from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
-        return TimeFTorchDataset.from_reader(self.get_handle(dataset_id, version).reader)
+        return TimeFTorchDataset.from_reader(
+            self.get_handle(dataset_id, version, fetch_parents=fetch_parents, build_parents=build_parents).reader
+        )
