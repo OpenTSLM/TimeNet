@@ -36,7 +36,7 @@ def benchmark(root: Path) -> dict[str, object]:
     text_digest = hashlib.sha256()
     for task in dataset.tasks:
         text_digest.update(json.dumps([task.prompt, task.targets, task.rationale], default=str).encode())
-    result = {
+    result: dict[str, object] = {
         "read_seconds": catalog_done - start,
         "materialization_seconds": materialized - catalog_done,
         "full_read_seconds": materialized - start,

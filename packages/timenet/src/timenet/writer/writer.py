@@ -24,7 +24,6 @@ from timenet.format.constants import (
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import CONTROL_FILE, connect_control
 from timenet.format.external import ExternalWriter
-from timenet.reader.handles import MemoryArray
 from timenet.format.schemas import (
     LOGICAL_IDS,
     UUID16,
@@ -34,6 +33,7 @@ from timenet.format.schemas import (
 from timenet.format.storage import StorageSources
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
+from timenet.reader.handles import MemoryArray
 from timenet.types.ids import is_canonical_uuid
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
@@ -436,7 +436,8 @@ class TimeFWriter:
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             payload_sources=self._storage_sources.sources,
-            input_locks=getattr(self._dataset, "input_locks", {}),
+            input_locks=self._dataset.input_locks,
+            lineage=tuple(self._dataset.lineage.values()),
             build_env=build_env(),
             timef_format_version=1,
         )

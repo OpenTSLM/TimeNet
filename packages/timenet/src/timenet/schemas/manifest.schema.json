@@ -373,6 +373,11 @@
           "pattern": "^sha256:[0-9a-f]{64}$",
           "title": "Manifest Checksum",
           "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
         }
       },
       "required": [
@@ -528,6 +533,11 @@
           "pattern": "^sha256:[0-9a-f]{64}$",
           "title": "Manifest Checksum",
           "type": "string"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
         },
         "files": {
           "default": [],
@@ -689,6 +699,14 @@
       },
       "title": "Input Locks",
       "type": "object"
+    },
+    "lineage": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/InputLock"
+      },
+      "title": "Lineage",
+      "type": "array"
     },
     "payload_sources": {
       "additionalProperties": {

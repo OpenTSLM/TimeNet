@@ -5,11 +5,13 @@ from pathlib import Path
 import shutil
 
 from timenet.config import settings
-from timenet.connectors import BaseConnector
+from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.registry.local import LocalRegistry
 from timenet.registry.writable import WritableRegistry
+from timenet.types.references import DatasetRef
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
@@ -23,6 +25,8 @@ def run_pipeline(  # noqa: PLR0913
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
     values_backend: str | None = None,
+    build_parents: bool = False,
+    parent_builder: Callable[[DatasetRef], None] | None = None,
 ) -> Path:
     """Run one connector through the full build pipeline and return the version directory.
 
@@ -61,15 +65,19 @@ def run_pipeline(  # noqa: PLR0913
     cache = cache_dir if cache_dir is not None else settings().cache_dir / metadata.dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
-    raw_refs = connector.download(cache)
-    dataset = connector.convert(raw_refs)
-    # Derive the schema here, before the force-rebuild rmtree below. A schema failure then aborts while
-    # the old committed version is still on disk. store_dataset() re-derives only if a caller reaches it
-    # directly with an underived dataset. This call is not redundant with that guard.
-    dataset.derive_schema()
-    if committed:  # force rebuild: drop the old committed version so the writer can republish it
-        shutil.rmtree(version_dir)
-    store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb)
+    with BuildContext.open(
+        metadata, LocalRegistry(root), build_parents=build_parents, parent_builder=parent_builder
+    ) as context:
+        raw_refs = connector.download(cache)
+        dataset = connector.compose(raw_refs, context)
+        context.apply(dataset)
+        # Derive the schema here, before the force-rebuild rmtree below. A schema failure then aborts while
+        # the old committed version is still on disk. store_dataset() re-derives only if a caller reaches it
+        # directly with an underived dataset. This call is not redundant with that guard.
+        dataset.derive_schema()
+        if committed:  # force rebuild: drop the old committed version so the writer can republish it
+            shutil.rmtree(version_dir)
+        store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb)
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
     if not keep_cache and cache_dir is None and cache.is_dir():
@@ -86,6 +94,8 @@ def publish_pipeline(  # noqa: PLR0913
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
     values_backend: str | None = None,
+    build_parents: bool = False,
+    parent_builder: Callable[[DatasetRef], None] | None = None,
 ) -> str:
     """Run one connector and publish the result through a writable registry.
 
@@ -116,9 +126,11 @@ def publish_pipeline(  # noqa: PLR0913
     cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
-    dataset = connector.convert(connector.download(cache))
-    dataset.derive_schema()
-    registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
+    with BuildContext.open(metadata, registry, build_parents=build_parents, parent_builder=parent_builder) as context:
+        dataset = connector.compose(connector.download(cache), context)
+        context.apply(dataset)
+        dataset.derive_schema()
+        registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version

@@ -53,7 +53,9 @@ def materialize(value: Any, seen: set[int] | None = None) -> Any:  # noqa: PLR09
     elif isinstance(value, Signal):
         _set_field(value, "loader", MemoryArray(value.to_arrow(), value.loader))
         if value.time_offsets_loader is not None:
-            _set_field(value, "time_offsets_loader", MemoryArray(value.time_offsets_loader(), value.time_offsets_loader))
+            _set_field(
+                value, "time_offsets_loader", MemoryArray(value.time_offsets_loader(), value.time_offsets_loader)
+            )
         materialize(value.annotations, seen)
     elif isinstance(value, Record):
         for source in value.walk_sources():

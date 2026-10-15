@@ -77,6 +77,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._metadata = metadata
         self._imports: dict[str, ImportedDataset] = {}
         self.input_locks: dict[str, InputLock] = {}
+        self.lineage: dict[str, InputLock] = {}
         self._records: list[Record] = []
         self._records_by_id: dict[str, Record] = {}
         self._sources_by_id: dict[str, Source] = {}
