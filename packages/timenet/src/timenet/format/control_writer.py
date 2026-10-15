@@ -302,6 +302,7 @@ class DuckDBControlWriter:
                         dataset.iter_tasks() if tasks is None else tasks,
                     )
                     self._write_chunks(connection, placements)
+                    self._write_scan_order(connection)
                     self._write_namespaces(connection, dataset)
                     self._check_source_tree(connection)
                     if self.external is not None:
@@ -316,8 +317,42 @@ class DuckDBControlWriter:
         return task_counts
 
     @staticmethod
+    def _write_scan_order(connection: duckdb.DuckDBPyConnection) -> None:
+        """Precompute physical scan order so inherited IDs do not scatter payload reads."""
+        if not connection.execute("SELECT 1 FROM signal_chunks WHERE owner_key IS NOT NULL LIMIT 1").fetchone():
+            return
+        connection.execute(
+            """UPDATE records SET read_order = ordered.position FROM (
+                SELECT record_key, row_number() OVER (ORDER BY location, record_key) AS position
+                FROM (
+                    SELECT record_key, min(struct_pack(
+                        owner := coalesce(owner_key, ''), path := value_path,
+                        major := chunk_major_index, minor := chunk_minor_index
+                    )) AS location
+                    FROM sources JOIN signals USING (source_key)
+                    JOIN signal_chunks USING (signal_key)
+                    GROUP BY record_key
+                )
+            ) ordered WHERE records.record_key = ordered.record_key"""
+        )
+
+    @staticmethod
     def _write_namespaces(connection: duckdb.DuckDBPyConnection, dataset: TimeFDataset) -> None:
         """Store import lookup information outside the ordinary read path."""
+        present = (
+            {
+                kind: {row[0] for row in connection.execute(query).fetchall()}
+                for kind, query in (
+                    ("Record", "SELECT record_id FROM records"),
+                    ("Source", "SELECT source_id FROM sources"),
+                    ("Signal", "SELECT signal_id FROM signals"),
+                    ("Task", "SELECT task_id FROM tasks"),
+                    ("Annotation", "SELECT occurrence_id FROM annotation_occurrences"),
+                )
+            }
+            if dataset._imports
+            else {}
+        )
         for key, (alias, imported) in enumerate(dataset._imports.items(), 1):
             _insert_rows(
                 connection,
@@ -330,6 +365,7 @@ class DuckDBControlWriter:
                 [
                     {"namespace_key": key, "object_kind": kind, "source_id": original, "object_id": identity}
                     for kind, original, identity in imported.rows()
+                    if identity in present[kind]
                 ],
             )
 
@@ -352,6 +388,7 @@ class DuckDBControlWriter:
             TimeFValidationError: If two records share an ID.
         """
         records = dataset.records
+        read_order = {identity: index for index, identity in enumerate(sorted(record.id for record in records))}
         object_keys, axis_keys = _reserve_hierarchy_keys(connection, records)
         batches = _HierarchyBatches(connection)
         axes: dict[str, _StoredAxis] = {}
@@ -381,6 +418,7 @@ class DuckDBControlWriter:
                 {
                     "record_key": record_key,
                     "record_id": record.record_id,
+                    "read_order": read_order[record.id],
                     "clock_id": clock_keys[identity],
                     "time_span_start_us": None if span is None else span.start_us,
                     "time_span_end_us": None if span is None else span.end_us,
