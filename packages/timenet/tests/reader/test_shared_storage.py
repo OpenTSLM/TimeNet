@@ -38,6 +38,8 @@ def test_shared_waveforms_need_no_parent_catalog(tmp_path, backend):
     source = json.loads((parent_dir / "manifest.json").read_text())
     source["metadata"]["description"] = "Changed release"
     (parent_dir / "manifest.json").write_text(json.dumps(source))
-    with TimeFReader(DatasetVersion.open_local(child_dir)) as child_reader:
-        with pytest.raises(TimeFFormatError, match="manifest changed"):
-            child_reader.read().records[0].signals[0].to_arrow()
+    with (
+        TimeFReader(DatasetVersion.open_local(child_dir)) as child_reader,
+        pytest.raises(TimeFFormatError, match="manifest changed"),
+    ):
+        child_reader.read().records[0].signals[0].to_arrow()
