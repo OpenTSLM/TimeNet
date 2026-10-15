@@ -32,7 +32,8 @@ def test_build_runs_in_an_isolated_environment_by_default(tmp_path, monkeypatch,
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     calls = []
 
-    def fake_isolated(dataset_id, root, *, force=False, values_backend=None):
+    def fake_isolated(dataset_id, root, *, force=False, values_backend=None, build_parents=False):
+        assert build_parents is False
         calls.append((dataset_id, root, force, values_backend))
         return Path(root) / "1.0.0"
 
@@ -76,7 +77,8 @@ def test_build_in_process_uses_the_connector_default_values_backend(tmp_path, mo
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
     monkeypatch.setattr(backend_module, "resolve", lambda dataset_id: Connector)
 
-    def pipeline(connector, root, *, force, values_backend):
+    def pipeline(connector, root, *, force, values_backend, build_parents):
+        assert build_parents is False
         captured["backend"] = values_backend
         return Path(root) / "1.0.0"
 
