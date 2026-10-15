@@ -7,6 +7,8 @@ in the same row group.
 from __future__ import annotations
 
 from collections import OrderedDict
+from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -22,6 +24,7 @@ if TYPE_CHECKING:
     from timenet.types import TimeSeriesSpec
 
 
+_SCAN_WORKERS = 4
 _ROW_GROUP_CACHE_SIZE = 64
 """Decoded row groups kept, so one shared by many series decodes once.
 
@@ -71,6 +74,46 @@ class ParquetValuesReader(BaseValuesReader):
         self._shard_cache: dict[str, pq.ParquetFile] = {}
         self._row_group_cache: OrderedDict[tuple[str, str, int], _DecodedGroup] = OrderedDict()
         self._target_types: dict[str, pa.DataType] = {}
+        self._scan_executor: ThreadPoolExecutor | None = None
+        self._scan_pending: dict[tuple[str, str, int], Future[_DecodedGroup]] = {}
+        self._scan_groups: Iterator[tuple[DatasetVersion, str, int]] = iter(())
+
+    def prepare_scan(
+        self, version: DatasetVersion, groups: list[tuple[str, int]], executor: ThreadPoolExecutor
+    ) -> None:
+        """Decode a bounded window of required groups during an eager full scan.
+
+        The writer supplies the group order. Lazy and range reads do not prefetch.
+        """
+        if not groups or self._scan_executor is not None:
+            return
+        self._scan_executor = executor
+        self._scan_groups = ((version, path, group) for path, group in groups)
+        self._fill_scan()
+
+    def _fill_scan(self) -> None:
+        """Keep at most four required groups decoding ahead of the consumer."""
+        if self._scan_executor is None:
+            return
+        while len(self._scan_pending) < _SCAN_WORKERS:
+            item = next(self._scan_groups, None)
+            if item is None:
+                break
+            version, path, group = item
+            key = (version.root, path, group)
+            if key not in self._row_group_cache:
+                shard = self._shard(version, path)
+                self._scan_pending[key] = self._scan_executor.submit(self._decode_group, shard, group)
+
+    @staticmethod
+    def _decode_group(shard: pq.ParquetFile, row_group: int) -> _DecodedGroup:
+        """Decode the sole values column without an extra column worker.
+
+        Returns:
+            The decoded values for one group.
+        """
+        table = shard.read_row_group(row_group, columns=["values"], use_threads=False)
+        return _DecodedGroup(values=table.column("values").combine_chunks())
 
     def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
         """Read a series' chunks (``chunk_major_idx`` = row group, ``chunk_minor_idx`` = row offset).
@@ -135,8 +178,17 @@ class ParquetValuesReader(BaseValuesReader):
             cursor = row_stop
         return pa.concat_arrays(parts)
 
+    def finish_scan(self) -> None:
+        """Release scan workers and pending groups after an eager read, including errors."""
+        if self._scan_executor is not None:
+            self._scan_executor.shutdown(wait=True, cancel_futures=True)
+            self._scan_executor = None
+        self._scan_pending.clear()
+        self._scan_groups = iter(())
+
     def close(self) -> None:
         """Close every cached shard file handle and drop cached row groups."""
+        self.finish_scan()
         for handle in self._shard_cache.values():
             handle.close()
         self._shard_cache.clear()
@@ -161,9 +213,11 @@ class ParquetValuesReader(BaseValuesReader):
         if cached is not None:
             self._row_group_cache.move_to_end(key)
             return cached
-        table = self._shard(version, rel_path).read_row_group(row_group, columns=["values"])
-        values = table.column("values").combine_chunks()
-        group = _DecodedGroup(values=values)
+        pending = self._scan_pending.pop(key, None)
+        group = (
+            pending.result() if pending is not None else self._decode_group(self._shard(version, rel_path), row_group)
+        )
+        self._fill_scan()
         self._row_group_cache[key] = group
         while len(self._row_group_cache) > _ROW_GROUP_CACHE_SIZE:
             self._row_group_cache.popitem(last=False)
@@ -172,7 +226,7 @@ class ParquetValuesReader(BaseValuesReader):
     def _shard(self, version: DatasetVersion, rel_path: str) -> pq.ParquetFile:
         path = version.path(rel_path)
         if path not in self._shard_cache:
-            # pre_buffer coalesces a row group's column chunks into one read, which is one request
-            # instead of one per column on a remote filesystem.
-            self._shard_cache[path] = pq.ParquetFile(path, filesystem=version.filesystem, pre_buffer=True)
+            # Every read selects one contiguous column chunk. Disable the shared range cache,
+            # which concurrent read_row_group calls can replace while another worker uses it.
+            self._shard_cache[path] = pq.ParquetFile(path, filesystem=version.filesystem, pre_buffer=False)
         return self._shard_cache[path]
