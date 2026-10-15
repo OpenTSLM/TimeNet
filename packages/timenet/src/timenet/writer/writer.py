@@ -24,6 +24,7 @@ from timenet.format.constants import (
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import CONTROL_FILE, connect_control
 from timenet.format.external import ExternalWriter
+from timenet.reader.handles import MemoryArray
 from timenet.format.schemas import (
     LOGICAL_IDS,
     UUID16,
@@ -335,11 +336,14 @@ class TimeFWriter:
         shared: dict[tuple[str, int], ChunkPlacement] = {}
         owned: list[Signal] = []
         for signal in unique_series:
-            if not isinstance(signal.loader, _SignalLoader):
+            loader = signal.loader
+            while isinstance(loader, MemoryArray) and loader.source is not None:
+                loader = loader.source
+            if not isinstance(loader, _SignalLoader):
                 owned.append(signal)
                 continue
-            version, rows = signal.loader.stored_chunks()
-            if signal.spec != signal.loader.spec or signal.n_values != sum(row["n_values"] for row in rows):
+            version, rows = loader.stored_chunks()
+            if signal.spec != loader.spec or signal.n_values != sum(row["n_values"] for row in rows):
                 raise TimeFValidationError(f"shared signal {signal.id!r} changed its storage shape")
             owner = self._storage_sources.add(version, {row["chunk_file"] for row in rows})
             for row in rows:
