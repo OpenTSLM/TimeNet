@@ -111,9 +111,13 @@ class TimeFReader:
         Raises:
             TimeFFormatError: If a listed artifact is missing or does not match its manifest entry.
         """
-        for part in sorted(self._manifest.files.all_files(), key=lambda item: item.path):
+        artifacts = [(self._version, part) for part in self._manifest.files.all_files()]
+        for key, source in self._manifest.payload_sources.items():
+            owner = self._version.owner(key)
+            artifacts.extend((owner, part) for part in source.files)
+        for version, part in artifacts:
             try:
-                handle = self._fs.open_input_file(self._version.path(part.path))
+                handle = version.filesystem.open_input_file(version.path(part.path))
             except FileNotFoundError as exc:
                 raise TimeFFormatError(f"manifest lists a missing file: {part.path}") from exc
             with handle:

@@ -7,9 +7,11 @@ from pydantic import ValidationError
 import pytest
 
 from timenet.client import TimeNet
+from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetRegistryError
 from timenet.manifest import Manifest
-from timenet.registry import RemoteRegistry
+from timenet.reader import TimeFReader
+from timenet.registry import DatasetVersion, LocalRegistry, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, Domain, License
 from timenet.writer import TimeFWriter
@@ -274,3 +276,49 @@ def test_store_without_write_token_is_rejected(tmp_path):
     registry = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path)  # anonymous
     with pytest.raises(TimeNetRegistryError):
         registry.store(make_dataset())
+
+
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_child_downloads_only_physical_dependencies_and_reads_offline(tmp_path, backend):
+    origin = tmp_path / "origin"
+    local = LocalRegistry(origin)
+    parent = make_dataset()
+    local.store(parent, values_backend=backend)
+    parent_id = parent.metadata.dataset_id
+    with TimeFReader(local.open_version(parent_id, "1.0.0")) as reader:
+        child = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}))
+        imported = child.import_from(reader.get_handle(), records=[parent.records[0].id])
+        expected = parent.records[0].signals[0].to_arrow()
+        signal_id = next(iter(imported.signals.values())).id
+        local.store(child)
+    requests = []
+
+    def handler(request):
+        path = request.url.path
+        requests.append(path)
+        if request.url.host == "blob.local":
+            return httpx.Response(200, content=(origin / path.lstrip("/")).read_bytes())
+        relative = path.removeprefix("/api/v1/datasets/")
+        if relative.endswith("/manifest"):
+            return httpx.Response(
+                200, content=(origin / relative.removesuffix("manifest") / "manifest.json").read_bytes()
+            )
+        if "/download/" in relative:
+            return httpx.Response(307, headers={"location": "http://blob.local/" + relative.replace("/download/", "/")})
+        return httpx.Response(404)
+
+    cache = tmp_path / "cache"
+    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=cache)
+    with TimeFReader(remote.open_version("test/child", "1.0.0")) as reader:
+        handle = reader.get_handle().get_handle("Signal", signal_id)
+        assert all("download" not in path for path in requests)
+        assert handle.to_arrow().equals(expected)
+    assert not any(parent_id + "/1.0.0/download/control.duckdb" in path for path in requests)
+    remote.download_version("test/child", "1.0.0", cache / "test/child/1.0.0")
+    assert not (cache / parent_id / "1.0.0/control.duckdb").exists()
+    with TimeFReader(DatasetVersion.open_local(cache / "test/child/1.0.0")) as reader:
+        reader.verify()
+        assert reader.get_handle().get_handle("Signal", signal_id).to_arrow().equals(expected)
+    # A partial owner cache must not prevent a subsequent explicit full download.
+    remote.download_version(parent_id, "1.0.0", cache / parent_id / "1.0.0")
+    assert (cache / parent_id / "1.0.0/control.duckdb").is_file()

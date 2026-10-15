@@ -27,6 +27,7 @@ from timenet.registry.remote.models import (
     PublishResponseModel,
     UploadGrantModel,
 )
+from timenet.registry.shared import download_owners, validate_owners
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
@@ -113,8 +114,8 @@ class RemoteRegistry(WritableRegistry):
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
         """Open a committed version as a local handle, materializing it on first use.
 
-        A remote version is downloaded in full and then read from local disk, like the local and S3
-        backends. On-demand range reads are a separate follow-up.
+        The manifest is fetched immediately. Catalog and payload files are fetched, verified,
+        and cached when first accessed.
 
         Args:
             dataset_id: The ``org/name`` id.
@@ -152,6 +153,7 @@ class RemoteRegistry(WritableRegistry):
         """
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
+        download_owners(self, manifest, Path(dest_dir).parents[2], progress_cb=progress_cb)
         download_version_files(
             self._http, manifest, dataset_id, version, Path(dest_dir), force=force, progress_cb=progress_cb
         )
@@ -194,7 +196,9 @@ class RemoteRegistry(WritableRegistry):
                 writer.write()
             version_dir = staging_root / dataset_id / version
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
-            declared = {part.path for part in Manifest.model_validate_json(manifest_bytes.decode()).files.all_files()}
+            manifest = Manifest.model_validate_json(manifest_bytes.decode())
+            validate_owners(self, manifest)
+            declared = {part.path for part in manifest.files.all_files()}
             publish_endpoint = f"/datasets/{dataset_id}/{version}/publish"
             publish = PublishResponseModel.model_validate_json(
                 self._http.post(publish_endpoint, content=manifest_bytes).content
