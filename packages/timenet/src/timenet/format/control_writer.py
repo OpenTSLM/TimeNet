@@ -427,6 +427,7 @@ class DuckDBControlWriter:
                     "signal_key": signals[signal_id][0],
                     "chunk_index": chunk_index,
                     "value_path": placement.chunk_file,
+                    "owner_key": placement.owner_key,
                     "chunk_major_index": placement.data_index.major_idx,
                     "chunk_minor_index": placement.data_index.minor_idx,
                     "n_values": placement.n_values,
