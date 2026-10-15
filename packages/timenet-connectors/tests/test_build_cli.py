@@ -21,7 +21,7 @@ def test_build_runs_isolated_by_default(monkeypatch, tmp_path):
     captured = {}
 
     def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
-        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None, build_parents=False
     ):
         captured["dataset_id"] = dataset_id
         captured["root"] = root
@@ -117,7 +117,7 @@ def test_build_forwards_an_explicit_values_backend_to_an_isolated_child(monkeypa
     captured = {}
 
     def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
-        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None, build_parents=False
     ):
         captured["values_backend"] = values_backend
         return Path(root) / "timenet/hello-world/1.0.0"
@@ -147,7 +147,7 @@ def test_build_isolates_when_the_flag_overrides_the_setting(monkeypatch, tmp_pat
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
 
     def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
-        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None, build_parents=False
     ):
         called["isolated"] = True
         return Path(root) / "timenet/hello-world/1.0.0"
@@ -186,7 +186,7 @@ def test_build_forwards_quiet_to_the_isolated_child(monkeypatch, tmp_path):
     monkeypatch.setattr(cli_module.console, "quiet", False)
 
     def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
-        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None, build_parents=False
     ):
         captured["quiet"] = quiet
         return Path(root) / "timenet/hello-world/1.0.0"
