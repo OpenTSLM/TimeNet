@@ -76,8 +76,10 @@ _AXIS_LENGTH = """
     LEFT JOIN (
         SELECT axis_key, count(*) AS offset_count FROM axis_offsets GROUP BY axis_key
     ) offsets USING (axis_key)
-    WHERE (axes.axis_type = 'irregular' AND coalesce(offset_count, 0) <> signals.n_values)
-       OR (axes.axis_type <> 'irregular' AND coalesce(offset_count, 0) <> 0)
+    LEFT JOIN external_values external
+      ON external.object_kind = 'Axis' AND external.object_id = axes.axis_id AND external.field = 'offsets'
+    WHERE (axes.axis_type = 'irregular' AND coalesce(offset_count, external.n_values, 0) <> signals.n_values)
+       OR (axes.axis_type <> 'irregular' AND coalesce(offset_count, external.n_values, 0) <> 0)
     LIMIT 1
 """
 

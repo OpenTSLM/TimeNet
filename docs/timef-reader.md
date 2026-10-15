@@ -41,6 +41,12 @@ annotations opens `control.duckdb` in read-only mode.
 Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy. A call to
 `to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from Parquet or Zarr.
 
+Large text fields and annotation string lists return `ValueHandle` objects. Call `read()` on a
+handle to obtain the native value. Small fields remain ordinary Python values. The Arrow
+`task_table()`, `target_table()`, and `annotation_table()` APIs resolve external text automatically.
+Irregular timestamp loaders read and validate their packed arrays on first access. The reader
+caches up to eight payload files.
+
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
 `TimeFDataset`.
 

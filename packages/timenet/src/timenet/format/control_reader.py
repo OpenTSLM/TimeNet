@@ -17,6 +17,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
+from timenet.format.external import ExternalObjectFieldKey, OffsetHandle, ValueHandle
 from timenet.format.task_codec import (
     decode_input_modalities,
     decode_span,
@@ -384,6 +385,7 @@ class DuckDBControlReader:
         value_loader: ValueLoader | None = None,
         value_loader_factory: ValueLoaderFactory | None = None,
         offsets_loader: OffsetsLoader | None = None,
+        external: dict[ExternalObjectFieldKey, ValueHandle] | None = None,
     ) -> None:
         """Open and validate an immutable control database.
 
@@ -392,6 +394,7 @@ class DuckDBControlReader:
             value_loader: Lazy values-plane resolver keyed by signal ID.
             value_loader_factory: Factory for range-aware per-Signal loaders.
             offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
+            external: Prepared external values indexed by object, field, and position.
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
@@ -402,6 +405,7 @@ class DuckDBControlReader:
             check_control_schema(self.connection)
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
+        self.external = external or {}
         self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
         self._offsets_loader = offsets_loader
@@ -508,6 +512,11 @@ class DuckDBControlReader:
                     if self._offsets_loader is not None
                     else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
                 )
+            offset_key = ExternalObjectFieldKey(object_kind="Axis", object_id=axis.axis_id, field="offsets")
+            if (stored_offsets := self.external.get(offset_key)) is not None:
+                if not isinstance(axis, IrregularAxis) or stored_offsets.length != signal_row.n_values:
+                    raise TimeFFormatError(f"external offsets disagree with signal {signal_row.signal_id!r}")
+                offsets_loader = OffsetHandle(**vars(stored_offsets), first=axis.first_us, last=axis.last_us)
             signals_by_source[signal_row.source_key].append(
                 Signal.from_loader(
                     id=signal_row.signal_id,
@@ -1394,7 +1403,10 @@ class DuckDBControlReader:
                 occurrence_id=row.occurrence_id,
                 id=content_id,
                 key=name,
-                value=decode_annotation_value(
+                value=self.external.get(
+                    ExternalObjectFieldKey(object_kind="Annotation", object_id=content_id, field="value")
+                )
+                or decode_annotation_value(
                     row.value_kind,
                     row.text_value,
                     row.integer_value,
@@ -1592,6 +1604,7 @@ class _TaskHydration:
             {key for refs in annotation_refs.values() for keys in refs.values() for key in keys}
         )
 
+        ids_by_key = {row.task_key: row.task_id for row in task_rows}
         targets_by_task: dict[int, list[object]] = defaultdict(list)
         for target in target_rows:
             span_signal_ids = (
@@ -1613,7 +1626,15 @@ class _TaskHydration:
                 "span_signal_ids": span_signal_ids,
             }
             targets_by_task[target.task_key].append(
-                decode_target(target_values, records=self.records_by_id, signals=self.signals_by_id)
+                reader.external.get(
+                    ExternalObjectFieldKey(
+                        object_kind="Task",
+                        object_id=ids_by_key[target.task_key],
+                        field="targets",
+                        position=len(targets_by_task[target.task_key]),
+                    )
+                )
+                or decode_target(target_values, records=self.records_by_id, signals=self.signals_by_id)
             )
 
         tasks: dict[int, Task] = {}
@@ -1628,7 +1649,9 @@ class _TaskHydration:
                 "id": row.task_id,
                 "inputs": reader._resolve(row.task_id, "inputs", refs, self.records_by_key, "record"),
                 "targets": tuple(targets_by_task.get(row.task_key, ())) if row.has_inline_targets else None,
-                "prompt": row.prompt,
+                "prompt": reader.external.get(
+                    ExternalObjectFieldKey(object_kind="Task", object_id=row.task_id, field="prompt"), row.prompt
+                ),
                 "input_modalities": decode_input_modalities(row.input_modalities),
                 "split": decode_split(row.split),
                 "scope": decode_span(
@@ -1637,7 +1660,9 @@ class _TaskHydration:
                     row.scope_end,
                     None if row.scope_signal_keys is None else [signal_ids_by_key[k] for k in row.scope_signal_keys],
                 ),
-                "rationale": row.rationale,
+                "rationale": reader.external.get(
+                    ExternalObjectFieldKey(object_kind="Task", object_id=row.task_id, field="rationale"), row.rationale
+                ),
                 "annotations": task_annotations.get(("Task", row.task_id), ()),
                 "metadata": _decode_json(row.metadata, default={}),
                 **decode_task_payload(task_type, row.payload_columns),
