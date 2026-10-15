@@ -49,8 +49,8 @@ versions used for the build.
 The engine runs these stages:
 
 1. Read and validate the connector's `dataset.yaml` card.
-2. Download raw artifacts into the build cache.
-3. Convert local artifacts into a `TimeFDataset`.
+2. Resolve exact parent inputs and download raw artifacts into the build cache.
+3. Compose the inputs and local artifacts into a `TimeFDataset`.
 4. Derive the dataset schema.
 5. Write or publish the complete TimeF version.
 6. Remove the raw cache after success, unless `--keep-cache` is set.
@@ -116,3 +116,16 @@ dataset.describe()
 
 See [Connectors](connectors.md) for the `download()` and `convert()` contract. See the
 [`timenet.engine` API](api/engine.md) for the programmatic interface.
+
+## Build parent inputs
+
+Parent building is off by default. A missing input reports its exact release and stops the build.
+Use `--build-parents` to build missing inputs through their own isolated connector environments:
+
+```bash
+timenet-build build physionet/ecg-qa-cot \
+    --out .timenet-registry --build-parents --keep-cache
+```
+
+Existing inputs are reused. Dependency cycles and unavailable exact releases fail before the child
+is published. Programmatic builds accept `build_parents=True`.
