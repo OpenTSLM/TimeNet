@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, ClassVar, TypeAlias, TypeGuard, cast
 import pint
 
 from timenet.errors import TimeFValidationError
+from timenet.format.external import ValueHandle
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import new_id
@@ -324,7 +325,7 @@ def _is_target_item(value: object) -> bool:
     from timenet.dataset.record import Record  # noqa: PLC0415
     from timenet.dataset.time_series import Signal  # noqa: PLC0415
 
-    return isinstance(value, (str, int, float, bool, Record, Signal, Span))
+    return isinstance(value, (str, int, float, bool, Record, Signal, Span, ValueHandle))
 
 
 def _concrete_task_classes() -> list[type[Task]]:
