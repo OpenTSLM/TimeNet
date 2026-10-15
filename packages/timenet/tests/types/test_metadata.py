@@ -83,6 +83,22 @@ def test_license_other_requires_a_license_url():
     assert _metadata(license=License.OTHER, license_url="https://l.example").license is License.OTHER
 
 
+def test_build_options_are_optional_copied_json():
+    assert _metadata().build_options == {}
+    sources = ["hhar", "uci"]
+    options = {"caption_version": "v2", "selection": {"sources": sources}}
+    metadata = _metadata(build_options=options)
+    sources.append("motion")
+    assert metadata.build_options["selection"] == {"sources": ["hhar", "uci"]}
+    assert DatasetMetadata.model_validate_json(metadata.model_dump_json()) == metadata
+
+
+@pytest.mark.parametrize("options", [["v2"], {"rate": float("nan")}])
+def test_build_options_reject_non_json_objects(options):
+    with pytest.raises(ValidationError):
+        _metadata(build_options=options)
+
+
 def test_non_open_access_requires_an_access_url():
     with pytest.raises(ValidationError, match="access_url is required"):
         _metadata(access=Access.CREDENTIALED)
