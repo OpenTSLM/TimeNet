@@ -69,7 +69,8 @@ import pandas as pd
 from timenet.client import TimeNet
 
 client = TimeNet(".timenet-registry")
-dataset = client.load("timenet/hello-world")
+with client.load("timenet/hello-world") as handle:
+    dataset = handle.read()
 dataset.describe()
 
 signal = dataset.records[0].signals[0]
@@ -77,8 +78,8 @@ frame = pd.DataFrame({signal.name: signal.to_numpy()})
 print(frame.head())
 ```
 
-The hierarchy loads immediately. Signal values remain lazy until `to_arrow()`, `to_numpy()`, or
-`read_steps()` reads them.
+`load()` returns a lazy handle. The explicit `handle.read()` call loads the complete dataset into
+memory. The returned dataset remains usable after the handle closes.
 
 !!! tip "pandas is optional"
     The DataFrame step needs pandas (`uv add pandas`). Remove that step for an Arrow or NumPy
