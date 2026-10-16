@@ -172,10 +172,20 @@ def test_run_isolated_forwards_the_build_flags(monkeypatch, tmp_path):
         return f"{tmp_path}/x\n", "", 0
 
     monkeypatch.setattr(env_module, "_run_build", _fake)
-    run_isolated("timenet/hello-world", tmp_path, force=True, keep_cache=True)
+    run_isolated(
+        "timenet/hello-world",
+        tmp_path,
+        force=True,
+        keep_cache=True,
+        fetch_parents="https://parents.example",
+        build_parents=True,
+    )
 
     assert "--force" in captured["command"]
     assert "--keep-cache" in captured["command"]
+    assert "--build-parents" in captured["command"]
+    command = captured["command"]
+    assert command[command.index("--fetch-parents") + 1] == "https://parents.example"
 
 
 def test_run_isolated_forwards_an_explicit_values_backend(monkeypatch, tmp_path):
