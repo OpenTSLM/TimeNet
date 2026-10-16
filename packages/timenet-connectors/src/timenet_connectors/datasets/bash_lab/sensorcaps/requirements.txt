@@ -1,0 +1,2 @@
+# Fetch the immutable upstream JSONL files without the datasets runtime.
+huggingface_hub>=0.24
