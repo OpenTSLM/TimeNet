@@ -38,7 +38,8 @@ def test_build_then_load_round_trips(tmp_path):
     assert (registry / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
 
     # CONSUME: load it back through the SDK and compare to a fresh conversion.
-    restored = TimeNet(registry, storage_path=tmp_path / "store").load("timenet/hello-world")
+    with TimeNet(registry, storage_path=tmp_path / "store").load("timenet/hello-world") as dataset:
+        restored = dataset.read()
     connector = HelloWorldConnector()
     original = connector.convert(connector.download(Path("cache")))
     assert_datasets_equal(original, restored)
@@ -116,7 +117,8 @@ def test_publish_pipeline_stores_through_writable_registry(clean_env, tmp_path):
     registry = LocalRegistry(tmp_path / "registry")
     assert publish_pipeline(HelloWorldConnector(), registry) == "1.0.0"
 
-    restored = TimeNet(tmp_path / "registry", storage_path=tmp_path / "store").load("timenet/hello-world")
+    with TimeNet(tmp_path / "registry", storage_path=tmp_path / "store").load("timenet/hello-world") as dataset:
+        restored = dataset.read()
     connector = HelloWorldConnector()
     original = connector.convert(connector.download(Path("cache")))
     assert_datasets_equal(original, restored)
