@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Any
 
 import pyarrow as pa
 
@@ -47,3 +47,15 @@ class StoredSignalLoader:
             The requested canonical Arrow values.
         """
         return self.reader._load_signal_range(self.signal_key, self.signal_id, self.spec, start, stop)
+
+
+@dataclass(frozen=True)
+class MemoryArray:
+    """Retain an eagerly materialized Arrow array."""
+
+    array: pa.Array
+    source: Any = None
+
+    def __call__(self) -> pa.Array:
+        """Return the retained array without storage access."""
+        return self.array

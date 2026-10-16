@@ -27,6 +27,7 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.types.object_kind import ObjectKind
 from timenet.writer import TimeFWriter
 
 
@@ -203,15 +204,17 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         return original_open(*args, **kwargs)
 
     with TimeFReader(open_local_version(version_dir)) as reader:
-        dataset = reader.read()
         monkeypatch.setattr(pq, "ParquetFile", counting_open)
-        signal = dataset.records[0].signals[0]
+        handle = reader.get_handle()
+        signal_id = next(reader.iter_records()).signals[0].id
+        signal = handle.get_handle(ObjectKind.SIGNAL, signal_id)
         assert opens == 0
         signal.to_arrow()
         assert opens >= 1
 
 
-def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
+@pytest.mark.parametrize("eager", [False, True])
+def test_signal_values_batch_chunk_locator_queries(tmp_path, monkeypatch, eager):
     version_dir = _write(tmp_path)
     original = DuckDBControlReader.chunk_rows_by_keys
     calls = []
@@ -222,9 +225,12 @@ def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
 
     monkeypatch.setattr(DuckDBControlReader, "chunk_rows_by_keys", counting_batch)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        records = tuple(reader.iter_records())
+        records = reader.read().records if eager else tuple(reader.iter_records())
+        if eager:
+            assert reader.read().records[0] is records[0]
         signals = tuple(signal for record in records for signal in record.signals)
-        assert calls == []
+        if not eager:
+            assert calls == []
 
         for signal in signals:
             signal.to_arrow()
@@ -275,6 +281,7 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
     assert state["_tasks"] is None
     assert state["_control"] is None
     assert state["_records"] is None
+    assert state["_dataset"] is None
     assert state["_values"] is None
 
 
