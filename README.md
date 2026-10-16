@@ -30,7 +30,8 @@ Load the local build with Python:
 ```python
 from timenet.client import TimeNet
 
-dataset = TimeNet(".timenet-registry").load("timenet/hello-world")
+with TimeNet(".timenet-registry").load("timenet/hello-world") as handle:
+    dataset = handle.read()
 dataset.describe()
 
 signal = dataset.records[0].signals[0]

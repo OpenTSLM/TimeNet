@@ -229,7 +229,7 @@ def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path, backe
     )
     if backend != "zarr" or find_spec("zarr") is not None:
         with TimeFReader(open_local_version(version_dir)) as reader:
-            dataset = reader.read()
+            dataset = reader.read().read()
             assert len(dataset.records[0].signals[0].to_numpy()) == 16
 
     # The isolated child is the sole narrator: each status line appears exactly once.
