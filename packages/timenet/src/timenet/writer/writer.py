@@ -29,7 +29,7 @@ from timenet.format.schemas import (
     IdCodec,
     IdTypes,
 )
-from timenet.format.signal_loader import StoredSignalLoader
+from timenet.format.signal_loader import MemoryArray, StoredSignalLoader
 from timenet.format.storage import StorageSources
 from timenet.format.stored_values import PackedValueWriter
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
@@ -360,11 +360,14 @@ class TimeFWriter:
         shared: dict[tuple[str, int], ChunkPlacement] = {}
         owned: list[Signal] = []
         for signal in unique_series:
-            if not isinstance(signal.loader, StoredSignalLoader):
+            loader = signal.loader
+            while isinstance(loader, MemoryArray) and loader.source is not None:
+                loader = loader.source
+            if not isinstance(loader, StoredSignalLoader):
                 owned.append(signal)
                 continue
-            version, rows = signal.loader.stored_chunks()
-            if signal.spec != signal.loader.spec or signal.n_values != sum(row["n_values"] for row in rows):
+            version, rows = loader.stored_chunks()
+            if signal.spec != loader.spec or signal.n_values != sum(row["n_values"] for row in rows):
                 raise TimeFValidationError(f"shared signal {signal.id!r} changed its storage shape")
             owner = self._storage_sources.add(version, {row["chunk_file"] for row in rows})
             for row in rows:
@@ -448,7 +451,8 @@ class TimeFWriter:
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             payload_sources=self._storage_sources.sources,
-            input_locks=getattr(self._dataset, "input_locks", {}),
+            input_locks=self._dataset.input_locks,
+            lineage=tuple(self._dataset.lineage.values()),
             build_env=build_env(),
             timef_format_version=1,
         )
