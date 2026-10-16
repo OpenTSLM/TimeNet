@@ -9,6 +9,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
+from timenet.storage.parquet import ParquetReadCache
 from timenet.testing import assert_datasets_equal
 from timenet.types import (
     Annotation,
@@ -19,7 +20,6 @@ from timenet.types import (
     Version,
     ureg,
 )
-import timenet.values_backends.parquet.reader as values_reader
 from timenet.writer import TimeFWriter
 
 
@@ -160,13 +160,13 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
     expected = {(r["chunk_file"], r["chunk_major_idx"]) for r in _index_rows(version_dir) if r["signal_id"] == "ts-006"}
 
     read: list[tuple[str, int]] = []
-    original = values_reader.ParquetValuesReader._row_group
+    original = ParquetReadCache.read_column
 
-    def spy(self, root, rel_path, row_group):
+    def spy(self, version, rel_path, row_group, column):
         read.append((rel_path, row_group))
-        return original(self, root, rel_path, row_group)
+        return original(self, version, rel_path, row_group, column)
 
-    monkeypatch.setattr(values_reader.ParquetValuesReader, "_row_group", spy)
+    monkeypatch.setattr(ParquetReadCache, "read_column", spy)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         series = next(ts for s in reader.read().records for ts in s.signals if ts.id == "ts-006")
         series.to_arrow()
