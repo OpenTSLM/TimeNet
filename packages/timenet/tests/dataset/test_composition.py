@@ -1,11 +1,9 @@
-import pytest
-
-from timenet.dataset import Record, Signal, Source, TimeFDataset
+from timenet.dataset import TimeFDataset
 from timenet.dataset.edit import edit_version
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
-from timenet.types import Annotation, TSCorrespondenceTask, Version
+from timenet.types import Version
 from timenet.types.object_kind import ObjectKind
 from timenet.writer import TimeFWriter
 
