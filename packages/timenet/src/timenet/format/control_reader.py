@@ -699,7 +699,7 @@ class DuckDBControlReader:
         if not keys:
             return {}
         rows = self.connection.execute(
-            """SELECT signal_key, chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values
+            """SELECT signal_key, chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values, owner_key
                FROM signal_chunks
                WHERE signal_key IN (SELECT unnest(?))
                ORDER BY signal_key, chunk_index""",
@@ -724,6 +724,7 @@ class DuckDBControlReader:
                 "chunk_major_idx": row[2],
                 "chunk_minor_idx": row[3],
                 "n_values": row[4],
+                "owner_key": row[5],
             }
             for row in rows
         ]
