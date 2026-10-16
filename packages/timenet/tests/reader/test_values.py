@@ -1,20 +1,21 @@
 """Tests for reader-side values backends."""
 
-from types import SimpleNamespace
-from typing import cast
-
 import pyarrow as pa
 import pyarrow.parquet as pq
+import pytest
 
+from timenet.dataset import Record, Signal, Source, TimeFDataset
+from timenet.errors import TimeFFormatError
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
+from timenet.storage.parquet import ParquetReadCache
 from timenet.testing import make_dataset
 from timenet.values_backends.parquet.reader import ParquetValuesReader
 from timenet.writer import TimeFWriter
 
 
-def _write(tmp_path, **kwargs):
-    dataset = make_dataset()
+def _write(tmp_path, dataset=None, **kwargs):
+    dataset = make_dataset() if dataset is None else dataset
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, **kwargs) as writer:
         writer.write()
@@ -36,30 +37,22 @@ class _ProjectionSpy:
         return self._handle.read_row_group(row_group, columns=columns)
 
 
-class _Shard:
-    def __init__(self, value: float) -> None:
-        self._value = value
-
-    def read_row_group(self, row_group: int, *, columns: list[str]) -> pa.Table:
-        assert row_group == 0
-        # Projected, never the whole row group: a shard also carries ids, spec_type and signal, and
-        # decoding those on every value read is what the projection exists to avoid.
-        assert columns == ["values"]
-        return pa.table({"values": pa.array([[self._value]], type=pa.list_(pa.float32()))})
-
-
-def test_row_group_cache_includes_dataset_root(monkeypatch):
+def test_row_group_cache_includes_dataset_root(tmp_path):
+    sample = make_dataset()
+    spec = sample.records[0].signals[0].spec
+    rows = [{"chunk_file": "time_series/part-00000000.parquet", "chunk_major_idx": 0, "chunk_minor_idx": 0}]
     reader = ParquetValuesReader()
-    monkeypatch.setattr(reader, "_shard", lambda version, rel_path: _Shard(1.0 if version.root == "a" else 2.0))
-    rows = [{"chunk_file": "time_series/part-00000.parquet", "chunk_major_idx": 0, "chunk_minor_idx": 0}]
-    spec = next(signal for record in make_dataset().records for signal in record.signals).spec
-
-    # The reader keys its row-group cache on the handle's root, so the same relative path under two
-    # different roots must not collide; only version.root is touched here (_shard is stubbed).
-    version_a = cast("DatasetVersion", SimpleNamespace(root="a"))
-    version_b = cast("DatasetVersion", SimpleNamespace(root="b"))
-    assert reader.load(version_a, rows, spec).to_pylist() == [1.0]
-    assert reader.load(version_b, rows, spec).to_pylist() == [2.0]
+    try:
+        for name, value in (("a", 1.0), ("b", 2.0)):
+            dataset = TimeFDataset(metadata=sample.metadata)
+            signal = Signal.from_values(
+                [value], spec=spec, name="sensor", time_axis=sample.records[0].signals[0].time_axis
+            )
+            dataset.add_record(record=Record(sources=(Source(name="sensor", signals=(signal,)),)))
+            version = DatasetVersion.open_local(_write(tmp_path / name, dataset))
+            assert reader.load(version, rows, spec).to_pylist() == [value]
+    finally:
+        reader.close()
 
 
 def test_a_loaded_series_does_not_pin_its_row_group(tmp_path):
@@ -97,11 +90,43 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
 
     projections: list[list[str]] = []
     values_reader = ParquetValuesReader()
-    opener = values_reader._shard
+    opener = values_reader._parquet._open_file
     monkeypatch.setattr(
-        values_reader, "_shard", lambda version, rel_path: _ProjectionSpy(opener(version, rel_path), projections)
+        values_reader._parquet,
+        "_open_file",
+        lambda version, rel_path: _ProjectionSpy(opener(version, rel_path), projections),
     )
-    values_reader.load(DatasetVersion.open_local(version_dir), rows, series.spec)
+    version = DatasetVersion.open_local(version_dir)
+    expected = values_reader.load(version, rows, series.spec)
+    assert values_reader.load(version, rows, series.spec).equals(expected)
     values_reader.close()
 
     assert projections == [["values"]]
+
+
+def test_parquet_cache_separates_files_groups_and_projections(tmp_path):
+    version = DatasetVersion.open_local(_write(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64))
+    path = max(version.manifest.files.time_series, key=lambda part: part.size).path
+    cache = ParquetReadCache(8)
+    try:
+        values = cache.read_table(version, path, row_group=0, columns=("values",))
+        ids = cache.read_table(version, path, row_group=0, columns=("time_series_id",))
+        group = cache.read_table(version, path, row_group=0)
+        complete = cache.read_table(version, path)
+        assert values.column_names == ["values"]
+        assert ids.column_names == ["time_series_id"]
+        assert group.select(["values"]).equals(values)
+        assert group.select(["time_series_id"]).equals(ids)
+        assert cache.read_column(version, path, 0, "values").equals(values.column("values").chunk(0))
+        assert len(complete) > len(group)
+    finally:
+        cache.close()
+
+
+@pytest.mark.parametrize("row_group", [None, 0])
+def test_parquet_cache_reports_missing_files(tmp_path, row_group):
+    version = DatasetVersion.open_local(_write(tmp_path))
+    cache = ParquetReadCache(8)
+    with pytest.raises(TimeFFormatError, match=r"cannot read Parquet file .*missing\.parquet"):
+        cache.read_table(version, "missing.parquet", row_group=row_group)
+    cache.close()
