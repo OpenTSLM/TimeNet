@@ -26,6 +26,7 @@ from timenet.types import (
     TimeInterval,
     TimePoint,
 )
+from timenet.types.object_kind import ObjectKind
 
 
 TARGET_VALUE_COLUMNS = (
@@ -267,9 +268,9 @@ def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding b
     if kind == "boolean":
         return _required(row, "boolean_value")
     if kind == "record":
-        return _resolve(records, row, "record_id", "Record")
+        return _resolve(records, row, "record_id", ObjectKind.RECORD)
     if kind == "signal":
-        return _resolve(signals, row, "signal_id", "Signal")
+        return _resolve(signals, row, "signal_id", ObjectKind.SIGNAL)
     start = _required(row, "span_start")
     signal_ids = _tuple_or_none(row["span_signal_ids"])
     if kind == "time_point":
@@ -291,7 +292,7 @@ def _required(row: dict[str, object], name: str) -> Any:
     return value
 
 
-def _resolve(objects: dict[str, Any], row: dict[str, object], name: str, label: str) -> Any:
+def _resolve(objects: dict[str, Any], row: dict[str, object], name: str, label: ObjectKind) -> Any:
     public_id = _required(row, name)
     try:
         return objects[public_id]
