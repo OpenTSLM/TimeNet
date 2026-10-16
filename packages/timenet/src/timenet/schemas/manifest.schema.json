@@ -116,6 +116,32 @@
           "pattern": "^\\d+\\.\\d+\\.\\d+$",
           "type": "string"
         },
+        "inputs": {
+          "additionalProperties": {
+            "anyOf": [
+              {
+                "$ref": "#/$defs/DatasetRef"
+              },
+              {
+                "type": "string"
+              }
+            ]
+          },
+          "title": "Inputs",
+          "type": "object"
+        },
+        "source_revision": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Source Revision"
+        },
         "name": {
           "minLength": 1,
           "title": "Name",
@@ -213,6 +239,27 @@
         "license"
       ],
       "title": "DatasetMetadata",
+      "type": "object"
+    },
+    "DatasetRef": {
+      "additionalProperties": false,
+      "description": "An exact release, independent of its registry location.",
+      "properties": {
+        "dataset_id": {
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "version": {
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "version"
+      ],
+      "title": "DatasetRef",
       "type": "object"
     },
     "DatasetSchema": {
@@ -313,6 +360,25 @@
         "size"
       ],
       "title": "FilePart",
+      "type": "object"
+    },
+    "InputLock": {
+      "additionalProperties": false,
+      "description": "A build input identified by its dataset ID and exact version.",
+      "properties": {
+        "source": {
+          "$ref": "#/$defs/DatasetRef"
+        },
+        "metadata": {
+          "additionalProperties": true,
+          "title": "Metadata",
+          "type": "object"
+        }
+      },
+      "required": [
+        "source"
+      ],
+      "title": "InputLock",
       "type": "object"
     },
     "InputModality": {
@@ -582,6 +648,28 @@
         "type": "string"
       },
       "title": "Value Encoding",
+      "type": "object"
+    },
+    "input_locks": {
+      "additionalProperties": {
+        "$ref": "#/$defs/InputLock"
+      },
+      "title": "Input Locks",
+      "type": "object"
+    },
+    "lineage": {
+      "default": [],
+      "items": {
+        "$ref": "#/$defs/InputLock"
+      },
+      "title": "Lineage",
+      "type": "array"
+    },
+    "payload_sources": {
+      "additionalProperties": {
+        "$ref": "#/$defs/DatasetRef"
+      },
+      "title": "Payload Sources",
       "type": "object"
     },
     "build_env": {
