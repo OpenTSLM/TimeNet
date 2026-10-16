@@ -289,6 +289,7 @@ def test_control_writer_rejects_chunks_that_do_not_cover_each_signal(tmp_path, p
 def test_control_writer_stores_value_chunk_locations(tmp_path):
     path = tmp_path / "control.duckdb"
     placement = SimpleNamespace(
+        owner_key=None,
         chunk_file="values/part-00000000.parquet",
         data_index=SimpleNamespace(major_idx=2, minor_idx=3),
         spec_type="voltage",
@@ -298,6 +299,7 @@ def test_control_writer_stores_value_chunk_locations(tmp_path):
     placements = {
         ("lead-i", 0): placement,
         ("lead-ii", 0): SimpleNamespace(
+            owner_key=None,
             chunk_file=placement.chunk_file,
             data_index=SimpleNamespace(major_idx=2, minor_idx=4),
             spec_type="voltage",
