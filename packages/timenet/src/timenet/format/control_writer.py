@@ -20,7 +20,7 @@ from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
-from timenet.format.stored_values import PackedValueWriter
+from timenet.format.stored_values import PackedValueWriter, ValueHandle
 from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
 from timenet.json import validate_json_value
 from timenet.types import (
@@ -436,6 +436,7 @@ class DuckDBControlWriter:
                     "signal_key": signals[signal_id][0],
                     "chunk_index": chunk_index,
                     "value_path": placement.chunk_file,
+                    "owner_key": placement.owner_key,
                     "chunk_major_index": placement.data_index.major_idx,
                     "chunk_minor_index": placement.data_index.minor_idx,
                     "n_values": placement.n_values,
@@ -754,7 +755,12 @@ class DuckDBControlWriter:
             if stored_offsets is None:
                 raise TimeFValidationError(f"irregular axis {axis.axis_id!r} stores no time offsets")
             if signal.time_offsets_loader is not existing.offsets_loader:
-                candidate_signature = _offset_signature(_validated_irregular_offsets(signal))
+                if isinstance(signal.time_offsets_loader, ValueHandle):
+                    candidate_signature = _OffsetSignature(
+                        signal.time_offsets_loader.length, signal.time_offsets_loader.digest
+                    )
+                else:
+                    candidate_signature = _offset_signature(_validated_irregular_offsets(signal))
                 if candidate_signature != stored_offsets:
                     raise TimeFValidationError(
                         f"axis id {axis.axis_id!r} is shared by signals with different time offsets"
@@ -830,6 +836,10 @@ class DuckDBControlWriter:
             )
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
+            loader = signal.time_offsets_loader
+            if self.external is not None and isinstance(loader, ValueHandle):
+                self._pack(ObjectKind.AXIS, axis.axis_id, "offsets", loader)
+                return _OffsetSignature(loader.length, loader.digest)
             offsets = _validated_irregular_offsets(signal)
             if self.external is not None:
                 self._pack(ObjectKind.AXIS, axis.axis_id, "offsets", pa.array(offsets, type=pa.int64()))

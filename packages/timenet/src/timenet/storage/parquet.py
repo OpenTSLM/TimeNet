@@ -87,16 +87,16 @@ class ParquetReadCache:
         try:
             projection = None if columns is None else list(columns)
             if row_group is None:
-                with version.filesystem.open_input_file(version.path(path)) as source:
+                with version.filesystem.open_input_file(version.resolve_file_path(path)) as source:
                     table = pq.ParquetFile(source).read(columns=projection, use_threads=False)
             else:
                 table = self._open_file(version, path).read_row_group(row_group, columns=projection)
             if columns is not None and any(column not in table.column_names for column in columns):
-                raise TimeFFormatError(f"missing Parquet columns {columns} in {version.path(path)}")
+                raise TimeFFormatError(f"missing Parquet columns {columns} in {version.resolve_file_path(path)}")
             table = table.combine_chunks()
         except (OSError, pa.ArrowException) as exc:
             raise TimeFFormatError(
-                f"cannot read Parquet file {version.path(path)}, row group {row_group}: {exc}"
+                f"cannot read Parquet file {version.resolve_file_path(path)}, row group {row_group}: {exc}"
             ) from exc
         arrays = {
             name: values.chunk(0) if values.num_chunks else pa.array([], type=values.type)
@@ -117,7 +117,9 @@ class ParquetReadCache:
         key = (version.root, path)
         if key not in self._files:
             # Coalesce each row group's column chunks into one filesystem read.
-            self._files[key] = pq.ParquetFile(version.path(path), filesystem=version.filesystem, pre_buffer=True)
+            self._files[key] = pq.ParquetFile(
+                version.resolve_file_path(path), filesystem=version.filesystem, pre_buffer=True
+            )
         return self._files[key]
 
     def close(self) -> None:
