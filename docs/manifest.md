@@ -110,3 +110,18 @@ live in separate structures.
 ---
 
 See the [API reference for `timenet.manifest`](api/manifest.md) for the full symbol listing.
+
+## Input and storage pins
+
+`metadata.inputs` names exact parent releases by alias. `input_locks` records their dataset IDs,
+versions, and metadata. `lineage` records transitive provenance.
+
+`payload_sources` maps compact keys directly to dataset IDs and versions. These releases store the
+shared bytes and can differ from the immediate parents. The registry treats each ID/version pair
+as immutable. References do not contain manifest fingerprints or copies of the parent file list.
+`files.payloads` lists the packed text and timestamp files owned by this release.
+
+Read preparation follows only `payload_sources`. Inputs in `input_locks` are needed when building
+the release; they remain provenance after its values have been copied or transformed.
+The reader uses the child catalog and prepared local or remote payload sources without opening
+parent catalogs. Explicit downloads copy the release and its physical sources for offline use.
