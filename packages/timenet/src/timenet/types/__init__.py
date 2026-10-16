@@ -15,6 +15,7 @@ from timenet.types.ids import new_id, uuid7
 from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema
 from timenet.types.modalities import InputModality
+from timenet.types.object_kind import ObjectKind
 from timenet.types.spans import (
     Span,
     StepInterval,
@@ -61,6 +62,7 @@ __all__ = [
     "InputModality",
     "License",
     "LocalizationMode",
+    "ObjectKind",
     "ScalarPredictionTask",
     "Span",
     "Split",
