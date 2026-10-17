@@ -1,0 +1,49 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the leochen085/slip connector: the single source for this dataset's metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
+# derived from the data into manifest.json.
+#
+# Scope: the pretraining corpus, the `data/` shards of the release. The same repository ships 11
+# evaluation folders that cut other publishers' datasets into fixed windows; this connector does
+# not convert them.
+#
+# Licence: MIT covers what SLIP added, the packaging and the captions. The corpora it was
+# assembled from keep their own terms. The README says so.
+#
+# Domains: `meta.csv` names Energy, Environment, Health, IoT, Nature, Synthetic, Transport and Web
+# for its 37 corpora. Those map onto this card's values as energy, environment, health, transport,
+# activity (Capture24 and dalia) and general (IoT, Nature, Synthetic and Web have no closer value).
+#
+# Training convention: a caption is free text about a whole series. Each record carries its four
+# captions as annotations, and four unprompted AnswerTasks that each answer with one of them. The
+# captions were written by a language model, not by a rater, so they are what SLIP's generator said
+# and not ground truth. The release's own page describes three levels of granularity; the values are
+# one caption and three paraphrases, and the README records the disagreement.
+yaml_schema_version: 1
+dataset_id: leochen085/slip
+dataset_version: 1.0.0
+name: SLIP Pretraining Corpus
+description: >-
+  Sensor time-series paired with captions a language model wrote: one caption of each series and
+  three rewrites of it. The captions state the shape of the series and its summary statistics.
+license: MIT
+license_url: https://huggingface.co/datasets/LeoChen085/SlipDataset
+source_url: https://huggingface.co/datasets/LeoChen085/SlipDataset
+citation: >-
+  Chen, Y., Pillai, A., Wu, Y. Y., Griffin, T. Z., Marsch, L., Heinz, M. V., Jacobson, N. C., and
+  Campbell, A. (2026). Learning Transferable Sensor Models via Language-Informed Pretraining.
+  arXiv:2603.11950. https://arxiv.org/abs/2603.11950
+access: open
+domains:
+  - general
+  - health
+  - activity
+  - environment
+  - energy
+  - transport
+tags:
+  - captioning
+  - contrastive-learning
+  - multimodal
+  - sensor
+  - huggingface
