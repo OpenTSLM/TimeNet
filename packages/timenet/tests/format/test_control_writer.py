@@ -19,12 +19,19 @@ SPEC = TimeSeriesSpec(
     unit_value=ureg.millivolt,
     dtype="float32",
 )
+RECORD_ID = 10
+MONITOR_ID = 20
+ECG_ID = 21
+LEAD_I_ID = 101
+LEAD_II_ID = 102
+SEX_MALE_ID = 201
+TASK_ID = 301
 
 
 def _dataset() -> TimeFDataset:
-    axis = RegularAxis(axis_id="axis-1", period_us=Fraction(2_000))
+    axis = RegularAxis(axis_id=1, period_us=Fraction(2_000))
     lead_i = Signal.from_loader(
-        id="lead-i",
+        id=LEAD_I_ID,
         name="I",
         spec=SPEC,
         time_axis=axis,
@@ -32,17 +39,17 @@ def _dataset() -> TimeFDataset:
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
     )
     lead_ii = Signal.from_loader(
-        id="lead-ii",
+        id=LEAD_II_ID,
         name="II",
         spec=SPEC,
         time_axis=axis,
         n_values=2,
         loader=lambda: pa.array([3.0, 4.0], type=pa.float32()),
     )
-    ecg = Source(id="ecg", name="ECG", signals=(lead_i, lead_ii))
-    monitor = Source(id="monitor", name="Monitor", sources=(ecg,))
-    record = Record(record_id="record-1", sources=(monitor,))
-    record.annotate(Annotation(id="sex-male", key="patient_sex", value="male"))
+    ecg = Source(id=ECG_ID, name="ECG", signals=(lead_i, lead_ii))
+    monitor = Source(id=MONITOR_ID, name="Monitor", sources=(ecg,))
+    record = Record(record_id=RECORD_ID, sources=(monitor,))
+    record.annotate(Annotation(id=SEX_MALE_ID, key="patient_sex", value="male"))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="org/control-writer",
@@ -54,13 +61,13 @@ def _dataset() -> TimeFDataset:
     )
     dataset.add_record(record=record)
     task = AnswerTask(
-        id="task-1",
+        id=TASK_ID,
         inputs=(record,),
         prompt="Alive?",
         targets=("Yes",),
         input_annotations=(record.annotations[0],),
     )
-    task.annotate(Annotation(id="task-kind", key="task_kind", value="diagnosis"))
+    task.annotate(Annotation(id=202, key="task_kind", value="diagnosis"))
     dataset.add_task(task=task)
     return dataset
 
@@ -86,22 +93,24 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
                FROM task_record_refs refs JOIN records USING (record_key)"""
         ).fetchone() == (
             "inputs",
-            "record-1",
+            RECORD_ID,
         )
         assert connection.execute("SELECT typeof(record_key) FROM task_record_refs").fetchone() == ("BIGINT",)
         assert connection.execute(
             """SELECT parent.source_id
                FROM sources child
                JOIN sources parent ON parent.source_key = child.parent_source_key
-               WHERE child.source_id = 'ecg'"""
-        ).fetchone() == ("monitor",)
+               WHERE child.source_id = ?""",
+            [ECG_ID],
+        ).fetchone() == (MONITOR_ID,)
         assert connection.execute(
             """SELECT contents.content_id, occurrences.object_type, records.record_id
                FROM annotation_occurrences occurrences
                JOIN annotation_contents contents USING (content_key)
                JOIN records ON records.record_key = occurrences.object_key
-               WHERE contents.content_id = 'sex-male' AND occurrences.object_type = 'Record'"""
-        ).fetchone() == ("sex-male", "Record", "record-1")
+               WHERE contents.content_id = ? AND occurrences.object_type = 'Record'""",
+            [SEX_MALE_ID],
+        ).fetchone() == (SEX_MALE_ID, "Record", RECORD_ID)
 
 
 def test_control_relationships_use_integer_keys(tmp_path):
@@ -141,7 +150,7 @@ def test_control_writer_preserves_relationships_across_task_batches(tmp_path, mo
     parent = dataset.tasks[0]
     for index in range(2, 7):
         task = AnswerTask(
-            id=f"task-{index}",
+            id=300 + index,
             inputs=(record,),
             prompt=f"Question {index}?",
             targets=(f"Answer {index}",),
@@ -166,8 +175,8 @@ def test_control_writer_preserves_relationships_across_task_batches(tmp_path, mo
                FROM task_dependencies dependencies
                JOIN tasks child ON child.task_key = dependencies.task_key
                JOIN tasks parent ON parent.task_key = dependencies.parent_task_key
-               WHERE child.task_id = 'task-3'"""
-        ).fetchone() == ("task-2", "task-3")
+               WHERE child.task_id = 303"""
+        ).fetchone() == (302, 303)
 
 
 def test_control_writer_removes_database_after_validation_failure(tmp_path):
@@ -201,10 +210,8 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
 
     def write_corrupt_relationship(writer, connection, dataset, tasks):
         task_counts = original(writer, connection, dataset, tasks)
-        connection.execute(
-            "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 'ghost', 1, '{}')"
-        )
-        connection.execute("UPDATE sources SET record_key = -1 WHERE source_id = 'monitor'")
+        connection.execute("INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 99, 1, '{}')")
+        connection.execute("UPDATE sources SET record_key = -1 WHERE source_id = ?", [MONITOR_ID])
         return task_counts
 
     monkeypatch.setattr(DuckDBControlWriter, "_write_objects", write_corrupt_relationship)
@@ -217,9 +224,9 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
 
 
 def test_control_writer_rejects_ids_reused_across_records(tmp_path):
-    axis = RegularAxis(axis_id="axis-1", period_us=Fraction(2_000))
+    axis = RegularAxis(axis_id=1, period_us=Fraction(2_000))
 
-    def signal(signal_id: str) -> Signal:
+    def signal(signal_id: int) -> Signal:
         return Signal.from_loader(
             id=signal_id,
             name="I",
@@ -233,20 +240,20 @@ def test_control_writer_rejects_ids_reused_across_records(tmp_path):
         metadata=SimpleNamespace(dataset_id="org/dupes"),
         annotations=(),
         records=(
-            Record(record_id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-i"),)),)),
-            Record(record_id="record-2", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-ii"),)),)),
+            Record(record_id=10, sources=(Source(id=ECG_ID, name="ECG", signals=(signal(LEAD_I_ID),)),)),
+            Record(record_id=11, sources=(Source(id=ECG_ID, name="ECG", signals=(signal(LEAD_II_ID),)),)),
         ),
         iter_tasks=lambda: iter(()),
     )
 
-    with pytest.raises(TimeFValidationError, match="source id 'ecg' is not unique"):
+    with pytest.raises(TimeFValidationError, match=f"source id {ECG_ID} is not unique"):
         DuckDBControlWriter(tmp_path / "control.duckdb").write_hierarchy(dataset)  # ty: ignore[invalid-argument-type]
 
 
 def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path):
-    axis = IrregularAxis(axis_id="axis-irregular", first_us=0, last_us=2_000)
+    axis = IrregularAxis(axis_id=2, first_us=0, last_us=2_000)
     signal = Signal.from_loader(
-        id="lead-i",
+        id=LEAD_I_ID,
         name="I",
         spec=SPEC,
         time_axis=axis,
@@ -257,7 +264,7 @@ def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path
     dataset = SimpleNamespace(
         metadata=SimpleNamespace(dataset_id="org/irregular"),
         annotations=(),
-        records=(Record(record_id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal,)),)),),
+        records=(Record(record_id=RECORD_ID, sources=(Source(id=ECG_ID, name="ECG", signals=(signal,)),)),),
         iter_tasks=lambda: iter(()),
     )
 
@@ -268,13 +275,13 @@ def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path
 @pytest.mark.parametrize(
     ("placements", "message"),
     [
-        ({}, "signal 'lead-i' declares 2 values but its chunks store 0"),
+        ({}, f"signal {LEAD_I_ID} declares 2 values but its chunks store 0"),
         (
-            {("lead-i", 0): SimpleNamespace(n_values=1), ("lead-ii", 0): SimpleNamespace(n_values=2)},
-            "signal 'lead-i' declares 2 values but its chunks store 1",
+            {(LEAD_I_ID, 0): SimpleNamespace(n_values=1), (LEAD_II_ID, 0): SimpleNamespace(n_values=2)},
+            f"signal {LEAD_I_ID} declares 2 values but its chunks store 1",
         ),
-        ({("lead-iii", 0): SimpleNamespace(n_values=2)}, "refers to unknown signal 'lead-iii'"),
-        ({("lead-i", 0): SimpleNamespace(n_values=0)}, "chunk 0 of signal 'lead-i' is empty"),
+        ({(103, 0): SimpleNamespace(n_values=2)}, "refers to unknown signal 103"),
+        ({(LEAD_I_ID, 0): SimpleNamespace(n_values=0)}, f"chunk 0 of signal {LEAD_I_ID} is empty"),
     ],
 )
 def test_control_writer_rejects_chunks_that_do_not_cover_each_signal(tmp_path, placements, message):
@@ -296,8 +303,8 @@ def test_control_writer_stores_value_chunk_locations(tmp_path):
         n_values=2,
     )
     placements = {
-        ("lead-i", 0): placement,
-        ("lead-ii", 0): SimpleNamespace(
+        (LEAD_I_ID, 0): placement,
+        (LEAD_II_ID, 0): SimpleNamespace(
             chunk_file=placement.chunk_file,
             data_index=SimpleNamespace(major_idx=2, minor_idx=4),
             spec_type="voltage",
@@ -312,5 +319,6 @@ def test_control_writer_stores_value_chunk_locations(tmp_path):
         assert connection.execute(
             """SELECT value_path, chunk_major_index, chunk_minor_index, signal_chunks.n_values
                FROM signal_chunks JOIN signals USING (signal_key)
-               WHERE signal_id = 'lead-i'"""
+               WHERE signal_id = ?""",
+            [LEAD_I_ID],
         ).fetchone() == ("values/part-00000000.parquet", 2, 3, 2)

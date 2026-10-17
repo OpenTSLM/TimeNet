@@ -46,9 +46,9 @@ class _TaskValidationIndex:
         self.dataset_annotation_ids = {
             annotation.occurrence_id for annotation in dataset._annotations if annotation.occurrence_id is not None
         }
-        self._record_annotation_ids: dict[str, set[str]] = {}
+        self._record_annotation_ids: dict[int, set[int]] = {}
 
-    def annotation_ids_for(self, record: Record) -> set[str]:
+    def annotation_ids_for(self, record: Record) -> set[int]:
         """Return occurrence IDs attached anywhere in one Record hierarchy."""
         known = self._record_annotation_ids.get(record.id)
         if known is not None:
@@ -70,12 +70,12 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """
         self._metadata = metadata
         self._records: list[Record] = []
-        self._records_by_id: dict[str, Record] = {}
-        self._sources_by_id: dict[str, Source] = {}
-        self._signals_by_id: dict[str, Signal] = {}
-        self._signals_by_record_id: dict[str, tuple[Signal, ...]] = {}
+        self._records_by_id: dict[int, Record] = {}
+        self._sources_by_id: dict[int, Source] = {}
+        self._signals_by_id: dict[int, Signal] = {}
+        self._signals_by_record_id: dict[int, tuple[Signal, ...]] = {}
         self._tasks: list[Task] = []
-        self._task_ids: set[str] = set()
+        self._task_ids: set[int] = set()
         self._annotations: list[Annotation] = []
         # An optional re-iterable task source. When set, tasks stream past the dataset instead of
         # accumulating in _tasks, so a dataset with millions of tasks over few records still fits.
@@ -116,10 +116,10 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return record
 
     @staticmethod
-    def _duplicate_ids(ids: Iterable[str]) -> list[str]:
+    def _duplicate_ids(ids: Iterable[int]) -> list[int]:
         """Return repeated IDs in sorted order without repeatedly scanning the input."""
-        seen: set[str] = set()
-        duplicates: set[str] = set()
+        seen: set[int] = set()
+        duplicates: set[int] = set()
         for item_id in ids:
             if item_id in seen:
                 duplicates.add(item_id)
@@ -128,7 +128,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return sorted(duplicates)
 
     @classmethod
-    def _index_record_hierarchy(cls, record: Record) -> tuple[dict[str, Source], dict[str, Signal]]:
+    def _index_record_hierarchy(cls, record: Record) -> tuple[dict[int, Source], dict[int, Signal]]:
         """Collect one record's hierarchy and reject IDs repeated inside it.
 
         Returns:
@@ -391,8 +391,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._validate_task_batch(batch)
         # Extend each record's task_ids once per batch rather than once per task, so a record with
         # thousands of tasks does not copy its tuple thousands of times.
-        new_task_ids: dict[str, list[str]] = {}
-        records_by_id: dict[str, Record] = {}
+        new_task_ids: dict[int, list[int]] = {}
+        records_by_id: dict[int, Record] = {}
         for task in batch:
             for record in task.inputs:
                 records_by_id[record.id] = record
@@ -509,7 +509,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         parents = {task.id: {parent.id for parent in task.from_tasks if parent.id in batch_ids} for task in batch}
         # Kahn's algorithm: the loop peels off tasks whose parents in the batch are all resolved.
         # A task that remains when the loop can peel off no more tasks sits on a cycle.
-        resolved: set[str] = set()
+        resolved: set[int] = set()
         progressed = True
         while progressed:
             progressed = False
@@ -983,7 +983,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 also occurs if no record is matched, or if any record does not carry exactly one
                 task of ``resolved``, in ``split`` when one is given.
         """
-        matched_by_record: dict[str, list[Task]] = {}
+        matched_by_record: dict[int, list[Task]] = {}
         for candidate in self.tasks_of(resolved):
             if split is not None and candidate.split is not split:
                 continue

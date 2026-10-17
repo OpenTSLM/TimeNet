@@ -56,7 +56,7 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
     dataset = _referenced_annotation_dataset()
     record = dataset.records[0]
     if subjects:
-        record.annotate(Annotation(key="subject_ids", value=list(subjects), id="record-subjects"))
+        record.annotate(Annotation(key="subject_ids", value=list(subjects), id=250))
     version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -96,22 +96,22 @@ def _referenced_annotation_dataset() -> TimeFDataset:
         name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         data=[0.0, 1.0, 2.0],
-        id="ecg-rec-0-I",
+        id=101,
     )
     record = dataset.add_record(
         record=Record(
-            sources=(Source(id="rec-0-source", name="Source", signals=(signal,)),),
-            record_id="rec-0",
+            sources=(Source(id=20, name="Source", signals=(signal,)),),
+            record_id=10,
         )
     )
-    options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno"))
+    options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id=201))
     dataset.add_task(
         task=AnswerTask(
             prompt="Rhythm?",
             targets=("yes",),
             inputs=(record,),
             input_annotations=(options,),
-            id="qa-0",
+            id=300,
         )
     )
     return dataset
@@ -139,7 +139,7 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
             rationale=f"reason {index}",
             inputs=(record,),
             input_annotations=(options,),
-            id=f"qa-{index}",
+            id=300 + index,
         )
         for index in range(5)
     ]
@@ -152,7 +152,7 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
 
 def test_streamed_tasks_round_trip_and_back_populate_records(tmp_path):
     restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)))
-    task = next(task for task in restored.tasks if task.id == "qa-3")
+    task = next(task for task in restored.tasks if task.id == 303)
     assert task.prompt == "Question 3?"
     assert task.rationale == "reason 3"
     assert task.inputs == (restored.records[0],)
@@ -260,8 +260,8 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path):
 
 def test_iter_records_preserves_requested_order(tmp_path):
     with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
-        selected = tuple(reader.iter_records(record_ids=("record-2", "record-0")))
-    assert [record.record_id for record in selected] == ["record-2", "record-0"]
+        selected = tuple(reader.iter_records(record_ids=(12, 10)))
+    assert [record.record_id for record in selected] == [12, 10]
 
 
 def test_iter_records_rejects_an_unknown_id_before_yielding(tmp_path):
@@ -269,7 +269,7 @@ def test_iter_records_rejects_an_unknown_id_before_yielding(tmp_path):
         TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader,
         pytest.raises(TimeFValidationError, match="no such record"),
     ):
-        next(reader.iter_records(record_ids=("record-0", "record-nope")))
+        next(reader.iter_records(record_ids=(10, 99)))
 
 
 def test_iter_records_can_skip_annotations_without_losing_values(tmp_path):
@@ -319,31 +319,39 @@ def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_pat
 
 def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_path):
     with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
-        record0 = next(reader.iter_records(("record-0",)))
+        record0 = next(reader.iter_records((10,)))
         tasks = list(reader.iter_tasks((record0,)))
         every = reader.tasks
 
-    assert {task.id for task in tasks} == {task.id for task in every if task.inputs[0].record_id == "record-0"}
+    assert {task.id for task in tasks} == {task.id for task in every if task.inputs[0].record_id == 10}
     assert all(task.inputs[0] is record0 for task in tasks)
-    answer = next(task for task in tasks if task.id == "task-answer-0")
-    cohort = next(annotation for annotation in record0.annotations if annotation.id == "cohort-shared")
+    answer = next(task for task in tasks if task.id == 302)
+    cohort = next(annotation for annotation in record0.annotations if annotation.id == 201)
     assert answer.input_annotations[0] is cohort
 
 
 def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
     dataset = make_dataset()
     tasks = {task.id: task for task in dataset.tasks}
-    tasks["task-cls-0"].split = Split.TRAIN
-    tasks["task-scalar-0"].split = Split.TEST
+    tasks[301].split = Split.TRAIN
+    tasks[303].split = Split.TEST
     version_dir = _write(tmp_path, dataset)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        assert [task.id for task in reader.iter_tasks(split="train")] == ["task-cls-0"]
-        assert reader.task_table(split=Split.TEST)["task_id"].to_pylist() == ["task-scalar-0"]
-        assert reader.target_table(split=Split.TEST)["task_id"].to_pylist() == ["task-scalar-0"]
+        assert [task.id for task in reader.iter_tasks(split="train")] == [301]
+        assert reader.task_table(split=Split.TEST)["task_id"].to_pylist() == [303]
+        assert reader.target_table(split=Split.TEST)["task_id"].to_pylist() == [303]
         loaded = reader.read()
 
     assert {task.id: task.split for task in loaded.tasks if task.split is not None} == {
-        "task-cls-0": Split.TRAIN,
-        "task-scalar-0": Split.TEST,
+        301: Split.TRAIN,
+        303: Split.TEST,
     }
+
+
+def test_task_views_reject_a_non_int_record_id(tmp_path):
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
+        assert set(reader.task_table(record_ids=(10,))["task_id"].to_pylist()) == {301, 302, 303, 304}
+        for view in (reader.task_table, reader.target_table):
+            with pytest.raises(TimeFValidationError, match="positive int64 id"):
+                view(record_ids=("10",))  # ty: ignore[invalid-argument-type]

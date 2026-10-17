@@ -1,11 +1,12 @@
 from collections import Counter
+import itertools
 from pathlib import Path
 from typing import cast
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.testing import assert_datasets_equal
-from timenet.types import ClassificationTask
+from timenet.types import ClassificationTask, ids
 from timenet_connectors.datasets.timenet.test_mean import TestMeanConnector
 
 
@@ -13,7 +14,7 @@ def _convert() -> TimeFDataset:
     return TestMeanConnector().convert([])
 
 
-def _labels_by_record(dataset: TimeFDataset) -> dict[str, str | None]:
+def _labels_by_record(dataset: TimeFDataset) -> dict[int, str | None]:
     return {
         record.id: cast(str, task.targets[0])
         for task in dataset.tasks
@@ -35,8 +36,14 @@ def test_download_defaults_to_no_op():
     assert TestMeanConnector().download(Path("cache")) == []
 
 
-def test_convert_is_deterministic():
-    assert_datasets_equal(_convert(), _convert())
+def test_convert_is_deterministic(monkeypatch):
+    def convert() -> TimeFDataset:
+        # Restart id generation so both builds draw the same ids.
+        monkeypatch.setattr(ids._state, "tag", 1 << 29)
+        monkeypatch.setattr(ids._state, "counter", itertools.count())
+        return _convert()
+
+    assert_datasets_equal(convert(), convert())
 
 
 def test_has_balanced_binary_labels():

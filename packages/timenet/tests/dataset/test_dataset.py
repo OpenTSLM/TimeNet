@@ -53,9 +53,9 @@ def test_add_record_registers_and_returns(make_series):
 
 
 def test_add_record_accepts_a_complete_hierarchy(make_series):
-    signal = make_series(id="signal")
-    source = Source(id="source", name="Device", signals=(signal,))
-    record = Record(record_id="record", sources=(source,))
+    signal = make_series(id=101)
+    source = Source(id=20, name="Device", signals=(signal,))
+    record = Record(record_id=10, sources=(source,))
     dataset = _dataset()
 
     assert dataset.add_record(record=record) is record
@@ -63,9 +63,9 @@ def test_add_record_accepts_a_complete_hierarchy(make_series):
 
 
 def test_add_record_rejects_duplicate_source_ids_inside_one_hierarchy(make_series):
-    left = Source(id="sensor", name="Left", signals=(make_series(time_series_id="left"),))
-    right = Source(id="sensor", name="Right", signals=(make_series(time_series_id="right"),))
-    record = Record(record_id="record", sources=(left, right))
+    left = Source(id=20, name="Left", signals=(make_series(),))
+    right = Source(id=20, name="Right", signals=(make_series(),))
+    record = Record(sources=(left, right))
 
     with pytest.raises(TimeFValidationError, match="duplicate source IDs"):
         _dataset().add_record(record=record)
@@ -141,7 +141,7 @@ def test_scope_series_id_resolution(make_series):
             task=ClassificationTask(
                 inputs=(record,),
                 targets=("beat",),
-                scope=TimePoint.seconds(0.0, time_series_ids=("nope",)),
+                scope=TimePoint.seconds(0.0, time_series_ids=(999,)),
             )
         )
 
@@ -250,7 +250,7 @@ def test_no_loader_calls_during_build():
 
 
 def test_add_record_rejects_duplicate_time_series_ids(make_series):
-    # Signal uses identity equality with an auto-uuid id, so the same instance twice would
+    # Signal uses identity equality with an auto-generated id, so the same instance twice would
     # silently collapse to one series on write.
     ts = make_series()
     with pytest.raises(TimeFValidationError, match="duplicate signal IDs"):
@@ -259,30 +259,29 @@ def test_add_record_rejects_duplicate_time_series_ids(make_series):
 
 def test_add_record_rejects_a_signal_owned_by_two_records(make_series):
     dataset = _dataset()
-    signal = make_series(time_series_id="shared-signal")
+    signal = make_series()
     dataset.add_record(
         record=Record(
-            record_id="record-a",
-            sources=(Source(id="source-a", name="A", signals=(signal,)),),
+            sources=(Source(name="A", signals=(signal,)),),
         )
     )
 
     with pytest.raises(TimeFValidationError, match="each Signal has one owner"):
         dataset.add_record(
             record=Record(
-                record_id="record-b",
-                sources=(Source(id="unused-source", name="B", signals=(signal,)),),
+                record_id=11,
+                sources=(Source(id=21, name="B", signals=(signal,)),),
             )
         )
 
     dataset.add_record(
         record=Record(
-            record_id="record-c",
+            record_id=11,
             sources=(
                 Source(
-                    id="unused-source",
+                    id=21,
                     name="C",
-                    signals=(make_series(time_series_id="new-signal"),),
+                    signals=(make_series(),),
                 ),
             ),
         )
@@ -291,11 +290,11 @@ def test_add_record_rejects_a_signal_owned_by_two_records(make_series):
 
 def test_add_record_rejects_a_source_owned_by_two_records(make_series):
     dataset = _dataset()
-    source = Source(id="shared-source", name="Device", signals=(make_series(),))
-    dataset.add_record(record=Record(record_id="record-a", sources=(source,)))
+    source = Source(name="Device", signals=(make_series(),))
+    dataset.add_record(record=Record(sources=(source,)))
 
     with pytest.raises(TimeFValidationError, match="each Source has one owner"):
-        dataset.add_record(record=Record(record_id="record-b", sources=(source,)))
+        dataset.add_record(record=Record(sources=(source,)))
 
 
 def test_add_task_warns_for_a_scope_outside_record_span(make_series):
@@ -418,11 +417,8 @@ def test_add_task_rejects_on_a_streamed_dataset(make_series):
 
 def test_streamed_task_validation_rejects_an_unknown_record(make_series):
     dataset = _dataset()
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),), record_id="s-0"))
-    unknown = Record(
-        record_id="missing",
-        sources=(Source(id="missing-source", name="Missing", signals=(make_series(time_series_id="missing"),)),),
-    )
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    unknown = Record(sources=(Source(name="Missing", signals=(make_series(),)),))
     task = AnswerTask(prompt="q", targets=("a",), inputs=(unknown,))
     dataset.set_task_stream([AnswerTask], lambda: iter((task,)))
     with pytest.raises(TimeFValidationError, match="not registered"):
@@ -431,9 +427,7 @@ def test_streamed_task_validation_rejects_an_unknown_record(make_series):
 
 def test_streamed_task_validation_rejects_an_undeclared_type(make_series):
     dataset = _dataset()
-    record = dataset.add_record(
-        record=Record(sources=(Source(name="Source", signals=(make_series(),)),), record_id="s-0")
-    )
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     task = ClassificationTask(targets=("a",), inputs=(record,))
     dataset.set_task_stream([AnswerTask], lambda: iter((task,)))  # declared AnswerTask, streamed a different type
     with pytest.raises(TimeFValidationError, match="not one of the declared"):
@@ -442,12 +436,8 @@ def test_streamed_task_validation_rejects_an_undeclared_type(make_series):
 
 def test_streamed_task_validation_does_not_rewalk_registered_signals(make_series, monkeypatch):
     dataset = _dataset()
-    record = dataset.add_record(
-        record=Record(sources=(Source(name="Source", signals=(make_series(),)),), record_id="record-0")
-    )
-    dataset.add_record(
-        record=Record(sources=(Source(name="Source", signals=(make_series(),)),), record_id="unrelated-record")
-    )
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     task = AnswerTask(prompt="q", targets=("a",), inputs=(record,))
     calls = 0
     original = Record.signals
@@ -709,7 +699,7 @@ def test_add_tasks_rejects_the_whole_batch_when_one_is_invalid(make_series):
     bad = ClassificationTask(
         inputs=(record,),
         targets=("b",),
-        scope=TimePoint.seconds(1.0, time_series_ids=("nope",)),
+        scope=TimePoint.seconds(1.0, time_series_ids=(999,)),
     )
     with pytest.raises(TimeFValidationError):
         ds.add_tasks(tasks=[good, bad])
@@ -735,8 +725,8 @@ def test_add_tasks_rejects_duplicate_ids_within_the_batch(make_series):
     with pytest.raises(TimeFValidationError, match="share an id"):
         ds.add_tasks(
             tasks=[
-                ClassificationTask(inputs=(record,), targets=("a",), id="dup"),
-                ClassificationTask(inputs=(record,), targets=("b",), id="dup"),
+                ClassificationTask(inputs=(record,), targets=("a",), id=301),
+                ClassificationTask(inputs=(record,), targets=("b",), id=301),
             ]
         )
     assert ds.tasks == ()
@@ -745,9 +735,9 @@ def test_add_tasks_rejects_duplicate_ids_within_the_batch(make_series):
 def test_add_tasks_rejects_an_id_already_registered(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), id="task-0"))
+    ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), id=301))
     with pytest.raises(TimeFValidationError, match="already registered"):
-        ds.add_tasks(tasks=[ClassificationTask(inputs=(record,), targets=("b",), id="task-0")])
+        ds.add_tasks(tasks=[ClassificationTask(inputs=(record,), targets=("b",), id=301)])
 
 
 def test_add_tasks_rejects_a_self_dependency(make_series):
@@ -786,7 +776,7 @@ def test_add_tasks_drains_the_batch_before_checking_refs(make_series):
 def test_add_task_rejects_a_time_series_ref_not_on_the_record(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    unknown = make_series(time_series_id="no-such-series")
+    unknown = make_series()
     with pytest.raises(TimeFValidationError, match="not registered"):
         ds.add_task(task=TSCorrespondenceTask(inputs=(record,), targets=(unknown,)))
 
@@ -940,7 +930,7 @@ def test_get_splits_handles_missing_partitions_and_unpartitioned_datasets(make_s
 
 def test_to_features_and_targets_can_take_one_split(make_series):
     dataset = _dataset()
-    records = [_record(dataset, make_series, f"record-{index}") for index in range(3)]
+    records = [_record(dataset, make_series, 10 + index) for index in range(3)]
     dataset.add_tasks(
         tasks=(
             ClassificationTask(inputs=(records[0],), targets=("a",), split=Split.TRAIN),

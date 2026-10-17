@@ -130,7 +130,7 @@ def decode_span(
     span_type: str | None,
     span_start: int | None,
     span_end: int | None,
-    signal_ids: Iterable[str] | None,
+    signal_ids: Iterable[int] | None,
 ) -> Span | None:
     """Decode the four span columns.
 
@@ -246,8 +246,8 @@ def encode_target(target: object) -> dict[str, object | None]:
 def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding branch
     row: dict[str, object],
     *,
-    records: dict[str, Record],
-    signals: dict[str, Signal],
+    records: dict[int, Record],
+    signals: dict[int, Signal],
 ) -> object:
     """Decode one typed target row and resolve stored object references.
 
@@ -291,7 +291,7 @@ def _required(row: dict[str, object], name: str) -> Any:
     return value
 
 
-def _resolve(objects: dict[str, Any], row: dict[str, object], name: str, label: str) -> Any:
+def _resolve(objects: dict[int, Any], row: dict[str, object], name: str, label: str) -> Any:
     public_id = _required(row, name)
     try:
         return objects[public_id]
@@ -299,10 +299,10 @@ def _resolve(objects: dict[str, Any], row: dict[str, object], name: str, label: 
         raise TimeFFormatError(f"task target refers to missing {label} {public_id!r}") from exc
 
 
-def _tuple_or_none(value: object) -> tuple[str, ...] | None:
+def _tuple_or_none(value: object) -> tuple[int, ...] | None:
     """Normalize a stored signal-ID sequence.
 
     Returns:
         The immutable sequence, or ``None``.
     """
-    return None if value is None else tuple(cast("Iterable[str]", value))
+    return None if value is None else tuple(cast("Iterable[int]", value))
