@@ -96,7 +96,7 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
         assert connection.execute(
             """SELECT parent.source_id
                FROM sources child
-               JOIN sources parent ON parent.source_key = child.parent_source_key
+               JOIN sources parent ON parent.source_id = child.parent_source_id
                WHERE child.source_id = ?""",
             [ECG_ID],
         ).fetchone() == (MONITOR_ID,)
@@ -110,15 +110,17 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
         ).fetchone() == (SEX_MALE_ID, "Record", RECORD_ID)
 
 
-def test_control_relationships_use_integer_keys(tmp_path):
+def test_control_relationships_store_bigint_ids(tmp_path):
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(_dataset())
 
     relationship_columns = (
-        ("sources", "record_key"),
-        ("sources", "parent_source_key"),
-        ("signals", "source_key"),
-        ("signals", "axis_key"),
+        ("sources", "record_id"),
+        ("sources", "parent_source_id"),
+        ("axis_offsets", "axis_id"),
+        ("signals", "source_id"),
+        ("signals", "axis_id"),
+        ("signal_chunks", "signal_id"),
         ("annotation_occurrences", "content_id"),
         ("annotation_occurrences", "object_id"),
         ("task_targets", "task_id"),
@@ -259,14 +261,34 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
 
     def write_corrupt_relationship(writer, connection, dataset, tasks):
         task_counts = original(writer, connection, dataset, tasks)
-        connection.execute("INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 99, 1, '{}')")
-        connection.execute("UPDATE sources SET record_key = -1 WHERE source_id = ?", [MONITOR_ID])
+        connection.execute("INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}')")
+        connection.execute("UPDATE sources SET record_id = 99 WHERE source_id = ?", [MONITOR_ID])
         return task_counts
 
     monkeypatch.setattr(DuckDBControlWriter, "_write_objects", write_corrupt_relationship)
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match="belong to different records"):
+        DuckDBControlWriter(path).write_hierarchy(_dataset())
+
+    assert not path.exists()
+
+
+def test_control_writer_rejects_a_source_cycle_before_publication(tmp_path, monkeypatch):
+    original = DuckDBControlWriter._write_objects
+
+    def write_cycle(writer, connection, dataset, tasks):
+        task_counts = original(writer, connection, dataset, tasks)
+        connection.execute(
+            "UPDATE sources SET parent_source_id = ? WHERE source_id = ?",
+            [ECG_ID, MONITOR_ID],
+        )
+        return task_counts
+
+    monkeypatch.setattr(DuckDBControlWriter, "_write_objects", write_cycle)
+    path = tmp_path / "control.duckdb"
+
+    with pytest.raises(TimeFValidationError, match="source hierarchy contains a cycle"):
         DuckDBControlWriter(path).write_hierarchy(_dataset())
 
     assert not path.exists()
@@ -367,7 +389,7 @@ def test_control_writer_stores_value_chunk_locations(tmp_path):
     with connect_control(path, read_only=True) as connection:
         assert connection.execute(
             """SELECT value_path, chunk_major_index, chunk_minor_index, signal_chunks.n_values
-               FROM signal_chunks JOIN signals USING (signal_key)
+               FROM signal_chunks
                WHERE signal_id = ?""",
             [LEAD_I_ID],
         ).fetchone() == ("values/part-00000000.parquet", 2, 3, 2)

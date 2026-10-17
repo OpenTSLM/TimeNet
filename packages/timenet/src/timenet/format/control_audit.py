@@ -2,7 +2,7 @@
 
 The control database carries no persisted constraints: ART indexes on the large ``axis_offsets`` and
 ``signal_chunks`` tables would slow every write and bloat the file. The writer instead keeps the
-invariants while it streams rows, from key sequences it owns and from ID sets it checks in Python.
+invariants while it streams rows, from the ID sets it checks in Python.
 This module holds the SQL form of the same invariants. It scans every table, so it is not part of
 the write path. Tests run it after each round trip, and tooling can run it over a published version.
 """
@@ -17,8 +17,8 @@ from timenet.format.duckdb import check_control_schema
 _OBJECT_TYPES_SQL = ", ".join(f"'{name}'" for name in sorted(ANNOTATED_OBJECT_TYPES))
 
 _DOMAIN_CHECKS = f"""
-    SELECT 'sources.parent_source_key' AS field
-    FROM sources WHERE parent_source_key = source_key
+    SELECT 'sources.parent_source_id' AS field
+    FROM sources WHERE parent_source_id = source_id
     UNION ALL
     SELECT 'datasets' FROM (SELECT count(*) AS n FROM datasets) WHERE n <> 1
     UNION ALL
@@ -83,32 +83,32 @@ _OCCURRENCE_OWNER = """
 _CROSS_RECORD_PARENT = """
     SELECT child.source_id
     FROM sources child
-    JOIN sources parent ON parent.source_key = child.parent_source_key
-    WHERE child.record_key <> parent.record_key
+    JOIN sources parent ON parent.source_id = child.parent_source_id
+    WHERE child.record_id <> parent.record_id
     LIMIT 1
 """
 
 _SOURCE_CYCLE = """
-    WITH RECURSIVE ancestors(source_key, parent_source_key, path, cyclic) AS (
-        SELECT source_key, parent_source_key, [source_key], false FROM sources
+    WITH RECURSIVE ancestors(source_id, parent_source_id, path, cyclic) AS (
+        SELECT source_id, parent_source_id, [source_id], false FROM sources
         UNION ALL
-        SELECT parent.source_key, parent.parent_source_key,
-               list_append(ancestors.path, parent.source_key),
-               list_contains(ancestors.path, parent.source_key)
+        SELECT parent.source_id, parent.parent_source_id,
+               list_append(ancestors.path, parent.source_id),
+               list_contains(ancestors.path, parent.source_id)
         FROM ancestors
-        JOIN sources parent ON parent.source_key = ancestors.parent_source_key
+        JOIN sources parent ON parent.source_id = ancestors.parent_source_id
         WHERE NOT ancestors.cyclic
     )
-    SELECT source_key FROM ancestors WHERE cyclic LIMIT 1
+    SELECT source_id FROM ancestors WHERE cyclic LIMIT 1
 """
 
 _AXIS_LENGTH = """
     SELECT signals.signal_id
     FROM signals
-    JOIN axes USING (axis_key)
+    JOIN axes USING (axis_id)
     LEFT JOIN (
-        SELECT axis_key, count(*) AS offset_count FROM axis_offsets GROUP BY axis_key
-    ) offsets USING (axis_key)
+        SELECT axis_id, count(*) AS offset_count FROM axis_offsets GROUP BY axis_id
+    ) offsets USING (axis_id)
     WHERE (axes.axis_type = 'irregular' AND coalesce(offset_count, 0) <> signals.n_values)
        OR (axes.axis_type <> 'irregular' AND coalesce(offset_count, 0) <> 0)
     LIMIT 1
@@ -118,9 +118,9 @@ _CHUNK_COVERAGE = """
     SELECT signals.signal_id
     FROM signals
     LEFT JOIN (
-        SELECT signal_key, sum(n_values) AS stored_values
-        FROM signal_chunks GROUP BY signal_key
-    ) chunks USING (signal_key)
+        SELECT signal_id, sum(n_values) AS stored_values
+        FROM signal_chunks GROUP BY signal_id
+    ) chunks USING (signal_id)
     WHERE coalesce(stored_values, 0) <> signals.n_values
     LIMIT 1
 """
@@ -151,9 +151,8 @@ _TASK_RECORD_SCOPE = """
     SELECT spans.task_id
     FROM spans
     LEFT JOIN task_record_refs refs ON refs.task_id = spans.task_id AND refs.field = 'inputs'
-    LEFT JOIN records ON records.record_id = refs.record_id
-    LEFT JOIN sources ON sources.record_key = records.record_key
-    LEFT JOIN signals USING (source_key)
+    LEFT JOIN sources ON sources.record_id = refs.record_id
+    LEFT JOIN signals USING (source_id)
     GROUP BY spans.span_number, spans.task_id, spans.signal_ids
     HAVING count(DISTINCT CASE
         WHEN spans.signal_ids IS NULL OR list_contains(spans.signal_ids, signals.signal_id)

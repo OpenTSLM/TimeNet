@@ -3,10 +3,9 @@
 The DDL, the writer's Arrow batch schemas, and the audit's key and relationship checks are all
 derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
 
-Version 1 of the control schema. Hierarchy tables carry a ``BIGINT`` key drawn from a sequence
-and store public ids once, on the row that owns them. Annotation and task tables are keyed by their
-public ids. Fixed-shape fields are typed columns so they can be filtered in SQL; only the
-free-form ``metadata`` dictionaries are JSON. The database carries no persisted constraints:
+Version 2 of the control schema. Every table is keyed by the public ids the caller sees, and every
+foreign key stores the referenced public id. Fixed-shape fields are typed columns so they can be
+filtered in SQL; only the free-form ``metadata`` dictionaries are JSON. The database carries no persisted constraints:
 :data:`Table.unique` and :data:`Table.foreign_keys` are what the writer keeps while streaming
 and what :func:`timenet.format.control_audit.audit_control_database` re-checks.
 """
@@ -47,11 +46,8 @@ class Column:
     type: ColumnType
     nullable: bool = True
 
-    def ddl(self, key_sequence: str | None = None) -> str:
+    def ddl(self) -> str:
         """Return the column's ``CREATE TABLE`` fragment.
-
-        Args:
-            key_sequence: The sequence whose ``nextval`` is this column's default, for a key column.
 
         Returns:
             The column definition without a trailing comma.
@@ -59,8 +55,6 @@ class Column:
         parts = [self.name, self.type.sql]
         if not self.nullable:
             parts.append("NOT NULL")
-        if key_sequence is not None:
-            parts.append(f"DEFAULT nextval('{key_sequence}')")
         return " ".join(parts)
 
 
@@ -82,8 +76,6 @@ class Table:
     unique: tuple[tuple[str, ...], ...] = ()
     """Column sets that identify one row."""
     foreign_keys: tuple[ForeignKey, ...] = ()
-    key_sequence: str | None = None
-    """The sequence that fills the first column when it is a generated key."""
 
     @property
     def column_names(self) -> tuple[str, ...]:
@@ -101,11 +93,7 @@ class Table:
         Returns:
             The statement, with a trailing semicolon.
         """
-        lines = [
-            column.ddl(self.key_sequence if index == 0 and self.key_sequence is not None else None)
-            for index, column in enumerate(self.columns)
-        ]
-        body = ",\n    ".join(lines)
+        body = ",\n    ".join(column.ddl() for column in self.columns)
         return f"CREATE TABLE {self.name} (\n    {body}\n);"
 
 
@@ -116,12 +104,6 @@ def _key(name: str) -> Column:
 def _required(name: str, column_type: ColumnType = ColumnType.VARCHAR) -> Column:
     return Column(name, column_type, nullable=False)
 
-
-OBJECT_KEYS = "object_key_sequence"
-"""Datasets, records, sources, and signals draw their keys from one sequence."""
-AXIS_KEYS = "axis_key_sequence"
-
-SEQUENCES: tuple[str, ...] = (OBJECT_KEYS, AXIS_KEYS)
 
 ANNOTATED_OBJECT_TYPES: frozenset[str] = frozenset({"Dataset", "Record", "Source", "Signal", "Task"})
 """The values ``annotation_occurrences.object_type`` may hold."""
@@ -134,25 +116,22 @@ CONTROL_METADATA = Table(
 
 DATASETS = Table(
     "datasets",
-    (_key("dataset_key"), _required("dataset_id")),
-    unique=(("dataset_key",), ("dataset_id",)),
-    key_sequence=OBJECT_KEYS,
+    (_required("dataset_id"),),
+    unique=(("dataset_id",),),
 )
 """Exactly one row, the dataset the file describes."""
 
 RECORDS = Table(
     "records",
     (
-        _key("record_key"),
         _required("record_id", ColumnType.BIGINT),
         _key("clock_id"),
         Column("time_span_start_us", ColumnType.BIGINT),
         Column("time_span_end_us", ColumnType.BIGINT),
         _required("metadata", ColumnType.JSON),
     ),
-    unique=(("record_key",), ("record_id",)),
+    unique=(("record_id",),),
     foreign_keys=(ForeignKey("clock_id", "clocks", "clock_id"),),
-    key_sequence=OBJECT_KEYS,
 )
 
 CLOCKS = Table(
@@ -164,25 +143,22 @@ CLOCKS = Table(
 SOURCES = Table(
     "sources",
     (
-        _key("source_key"),
         _required("source_id", ColumnType.BIGINT),
-        _key("record_key"),
-        Column("parent_source_key", ColumnType.BIGINT),
+        _key("record_id"),
+        Column("parent_source_id", ColumnType.BIGINT),
         _required("name"),
         _required("metadata", ColumnType.JSON),
     ),
-    unique=(("source_key",), ("source_id",)),
+    unique=(("source_id",),),
     foreign_keys=(
-        ForeignKey("record_key", "records", "record_key"),
-        ForeignKey("parent_source_key", "sources", "source_key"),
+        ForeignKey("record_id", "records", "record_id"),
+        ForeignKey("parent_source_id", "sources", "source_id"),
     ),
-    key_sequence=OBJECT_KEYS,
 )
 
 AXES = Table(
     "axes",
     (
-        _key("axis_key"),
         _required("axis_id", ColumnType.BIGINT),
         _required("axis_type"),
         Column("period_numerator_us", ColumnType.BIGINT),
@@ -192,25 +168,23 @@ AXES = Table(
         Column("first_us", ColumnType.BIGINT),
         Column("last_us", ColumnType.BIGINT),
     ),
-    unique=(("axis_key",), ("axis_id",)),
-    key_sequence=AXIS_KEYS,
+    unique=(("axis_id",),),
 )
 
 AXIS_OFFSETS = Table(
     "axis_offsets",
-    (_key("axis_key"), _key("position"), _key("offset_us")),
-    unique=(("axis_key", "position"),),
-    foreign_keys=(ForeignKey("axis_key", "axes", "axis_key"),),
+    (_key("axis_id"), _key("position"), _key("offset_us")),
+    unique=(("axis_id", "position"),),
+    foreign_keys=(ForeignKey("axis_id", "axes", "axis_id"),),
 )
 
 SIGNALS = Table(
     "signals",
     (
-        _key("signal_key"),
         _required("signal_id", ColumnType.BIGINT),
-        _key("source_key"),
+        _key("source_id"),
         _required("name"),
-        _key("axis_key"),
+        _key("axis_id"),
         _required("spec_type"),
         _required("spec_name"),
         Column("unit", ColumnType.VARCHAR),
@@ -223,26 +197,25 @@ SIGNALS = Table(
         _required("metadata", ColumnType.JSON),
         _required("modality"),
     ),
-    unique=(("signal_key",), ("signal_id",)),
+    unique=(("signal_id",),),
     foreign_keys=(
-        ForeignKey("source_key", "sources", "source_key"),
-        ForeignKey("axis_key", "axes", "axis_key"),
+        ForeignKey("source_id", "sources", "source_id"),
+        ForeignKey("axis_id", "axes", "axis_id"),
     ),
-    key_sequence=OBJECT_KEYS,
 )
 
 SIGNAL_CHUNKS = Table(
     "signal_chunks",
     (
-        _key("signal_key"),
+        _key("signal_id"),
         _key("chunk_index"),
         _required("value_path"),
         _key("chunk_major_index"),
         Column("chunk_minor_index", ColumnType.BIGINT),
         _key("n_values"),
     ),
-    unique=(("signal_key", "chunk_index"),),
-    foreign_keys=(ForeignKey("signal_key", "signals", "signal_key"),),
+    unique=(("signal_id", "chunk_index"),),
+    foreign_keys=(ForeignKey("signal_id", "signals", "signal_id"),),
 )
 
 ANNOTATION_CONTENTS = Table(
@@ -387,10 +360,9 @@ TABLES: dict[str, Table] = {table.name: table for table in CONTROL_TABLES}
 
 
 def schema_ddl() -> str:
-    """Return the statements that create every sequence and table of the control schema.
+    """Return the statements that create every table of the control schema.
 
     Returns:
         DDL for :func:`timenet.format.duckdb.create_control_schema`.
     """
-    sequences = [f"CREATE SEQUENCE {name} START 1;" for name in SEQUENCES]
-    return "\n\n".join([*sequences, *(table.ddl() for table in CONTROL_TABLES)]) + "\n"
+    return "\n\n".join(table.ddl() for table in CONTROL_TABLES) + "\n"
