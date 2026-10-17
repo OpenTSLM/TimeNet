@@ -229,13 +229,13 @@ AXIS_BUILDERS = [
 
 @pytest.mark.parametrize("build", AXIS_BUILDERS)
 def test_axis_id_defaults_to_a_unique_int_and_keeps_an_explicit_one(build):
-    assert isinstance(build().axis_id, int)
-    assert build().axis_id != build().axis_id
-    assert build(axis_id=42).axis_id == 42
+    assert isinstance(build().id, int)
+    assert build().id != build().id
+    assert build(id=42).id == 42
 
 
 @pytest.mark.parametrize("build", AXIS_BUILDERS)
 @pytest.mark.parametrize("bad", ["axis-0", 0, -1, True])
 def test_axis_rejects_an_invalid_axis_id(build, bad):
     with pytest.raises(TimeFValidationError, match="positive int64 id"):
-        build(axis_id=bad)
+        build(id=bad)

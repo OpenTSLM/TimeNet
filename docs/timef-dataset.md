@@ -125,7 +125,7 @@ record = Record(
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `record_id` | `int` | Stable identity. The default is a generated int64. `record.id` is an alias. |
+| `id` | `int` | Stable identity. The default is a generated int64. |
 | `sources` | `tuple[Source, ...]` | Root Sources in the recording hierarchy. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
 | `metadata` | `dict[str, object]` | Optional session metadata. |

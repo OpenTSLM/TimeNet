@@ -54,7 +54,7 @@ def _sharded_dataset(n_records: int, series_len: int) -> TimeFDataset:
         record = dataset.add_record(
             record=Record(
                 sources=(Source(id=2000 + i, name="Source", signals=(ts,)),),
-                record_id=1000 + i,
+                id=1000 + i,
             )
         )
         record.annotate(Annotation(key="subject_ids", value=[f"subj-{i}"], id=3000 + i))
@@ -76,7 +76,7 @@ def _index_rows(version_dir):
             """SELECT signals.signal_id, chunks.chunk_index, chunks.value_path,
                           chunks.chunk_major_index, chunks.chunk_minor_index, chunks.n_values
                    FROM signal_chunks chunks
-                   JOIN signals USING (signal_key)
+                   JOIN signals USING (signal_id)
                    ORDER BY signals.signal_id, chunks.chunk_index"""
         ).fetchall()
     return [

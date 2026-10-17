@@ -1,7 +1,9 @@
+from fractions import Fraction
+
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source
+from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.control_audit import audit_control_database
 import timenet.format.control_reader as control_reader_module
@@ -12,15 +14,30 @@ from timenet.testing import make_dataset
 from timenet.types import (
     Annotation,
     AnswerTask,
+    ClassificationTask,
     InputModality,
+    ScalarPredictionTask,
     Split,
+    StepPoint,
+    TemporalLocalizationTask,
+    TimeInterval,
     TimePoint,
     TimeSeriesSpec,
     TSGenerationTask,
     ureg,
 )
 
-from .test_control_writer import ECG_ID, LEAD_I_ID, LEAD_II_ID, MONITOR_ID, RECORD_ID, SEX_MALE_ID, TASK_ID, _dataset
+from .test_control_writer import (
+    ECG_ID,
+    LEAD_I_ID,
+    LEAD_II_ID,
+    MONITOR_ID,
+    RECORD_ID,
+    SEX_MALE_ID,
+    SPEC,
+    TASK_ID,
+    _dataset,
+)
 
 
 def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
@@ -38,7 +55,7 @@ def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
         time_axis=OrdinalAxis(),
         data=pa.FixedSizeListArray.from_arrays(pa.array(range(12), type=pa.uint8()), 12),
     )
-    image_record = Record(record_id=11, sources=(Source(name="image", signals=(signal,)),))
+    image_record = Record(id=11, sources=(Source(name="image", signals=(signal,)),))
     dataset.add_record(record=image_record)
     dataset.add_task(
         task=AnswerTask(id=310, inputs=(image_record,), prompt="Describe this image.", targets=("A chart.",))
@@ -110,7 +127,7 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert lead_i.metadata == lead_ii.metadata == {}
     assert lead_i.metadata is not lead_ii.metadata
     assert lead_i.to_arrow().to_pylist() == [1.0, 2.0]
-    assert record.annotations[0].content_id == SEX_MALE_ID
+    assert record.annotations[0].id == SEX_MALE_ID
     assert type(record.annotations[0].occurrence_id) is int
     assert task.inputs[0] is record
     assert task.prompt == "Alive?"
@@ -121,7 +138,7 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
 def test_reader_and_audit_reject_ambiguous_stored_task_time_span(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
-    second = dataset.add_record(record=Record(record_id=11, sources=(Source(name="other"),)))
+    second = dataset.add_record(record=Record(id=11, sources=(Source(name="other"),)))
     dataset.tasks[0].inputs = (*dataset.tasks[0].inputs, second)
     DuckDBControlWriter(path).write_hierarchy(dataset)
     with connect_control(path) as connection:
@@ -255,6 +272,26 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
     assert target_point == point
 
 
+def test_target_table_names_a_step_series_in_signal_id(tmp_path):
+    path = tmp_path / "control.duckdb"
+    dataset = _dataset()
+    step = StepPoint(start=1, time_series_id=LEAD_II_ID)
+    interval = TimeInterval(start_us=0, end_us=2_000, time_series_ids=(LEAD_I_ID,))
+    dataset.tasks[0].targets = (step, interval)
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        rows = reader.target_table().to_pylist()
+        (task,) = reader.read_tasks(reader.read_records())
+
+    columns = ("target_kind", "signal_id", "span_start", "span_end", "span_signal_ids")
+    assert [tuple(row[column] for column in columns) for row in rows] == [
+        ("step_point", LEAD_II_ID, 1, None, None),
+        ("time_interval", None, 0, 2_000, [LEAD_I_ID]),
+    ]
+    assert task.targets == (step, interval)
+
+
 def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
@@ -268,7 +305,7 @@ def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
         (task,) = reader.read_tasks(records)
 
     assert task.inputs == records
-    assert tuple(annotation.content_id for annotation in task.input_annotations) == (203, SEX_MALE_ID)
+    assert tuple(annotation.id for annotation in task.input_annotations) == (203, SEX_MALE_ID)
 
 
 def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
@@ -289,23 +326,25 @@ def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
 
 def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    dataset = make_dataset()
+    record0, record1, _ = dataset.records
+    DuckDBControlWriter(path).write_hierarchy(dataset)
     with connect_control(path) as connection:
         connection.execute(
             """UPDATE axes SET axis_type = 'corrupt'
-               WHERE axis_key IN (
-                   SELECT signals.axis_key
+               WHERE axis_id IN (
+                   SELECT signals.axis_id
                    FROM signals
-                   JOIN sources USING (source_key)
-                   JOIN records USING (record_key)
-                   WHERE records.record_id = 11
-               )"""
+                   JOIN sources USING (source_id)
+                   WHERE sources.record_id = ?
+               )""",
+            [record1.id],
         )
     with DuckDBControlReader(path) as reader:
-        (selected,) = reader.read_records((10,))
-        assert selected.id == 10
+        (selected,) = reader.read_records((record0.id,))
+        assert selected.id == record0.id
         with pytest.raises(TimeFFormatError, match="unknown type"):
-            reader.read_records((11,))
+            reader.read_records((record1.id,))
 
 
 @pytest.mark.parametrize(
@@ -316,24 +355,12 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
             "missing content",
         ),
         (
-            "UPDATE sources SET parent_source_key = 999 WHERE source_id = 21",
+            "UPDATE sources SET parent_source_id = 999 WHERE source_id = 21",
             "missing parent",
         ),
         (
-            "UPDATE signals SET source_key = 999 WHERE signal_id = 101",
+            "UPDATE signals SET source_id = 999 WHERE signal_id = 101",
             "missing source",
-        ),
-        (
-            "UPDATE annotation_occurrences SET object_key = 999 "
-            "WHERE content_key IN ("
-            "SELECT content_key FROM annotation_contents WHERE content_id = 201)",
-            "missing Record",
-        ),
-        (
-            "UPDATE annotation_occurrences SET object_type = 'Unknown' "
-            "WHERE content_key IN ("
-            "SELECT content_key FROM annotation_contents WHERE content_id = 201)",
-            "unknown object type",
         ),
     ],
 )
@@ -347,20 +374,104 @@ def test_control_reader_rejects_corrupt_relationships(tmp_path, statement, messa
         reader.read_records()
 
 
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("UPDATE annotation_occurrences SET object_id = 999 WHERE content_id = 201", "missing Record 999"),
+        (
+            "UPDATE annotation_occurrences SET object_type = 'Signal' WHERE content_id = 201",
+            "missing Signal",
+        ),
+        (
+            "UPDATE annotation_occurrences SET object_type = 'Unknown' WHERE content_id = 201",
+            "unknown object type",
+        ),
+        (
+            "UPDATE annotation_occurrences SET object_type = 'Dataset' WHERE content_id = 201",
+            "on Dataset has object id",
+        ),
+        (
+            "UPDATE annotation_occurrences SET object_id = NULL WHERE content_id = 201",
+            "on Record has object id None",
+        ),
+        ("UPDATE annotation_occurrences SET object_id = 999 WHERE object_type = 'Task'", "missing Task 999"),
+    ],
+)
+def test_full_reads_reject_occurrences_whose_owner_was_not_hydrated(tmp_path, statement, message):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    with connect_control(path) as connection:
+        connection.execute(statement)
+
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match=message):
+        reader.read_tasks(cached_records=reader.read_records())
+
+
+def test_annotations_stay_with_their_owner_when_explicit_ids_collide_across_kinds(tmp_path):
+    shared_id = 5
+    signal = Signal.from_loader(
+        id=shared_id,
+        name="I",
+        spec=SPEC,
+        time_axis=RegularAxis(id=shared_id, period_us=Fraction(2_000)),
+        n_values=2,
+        loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
+    )
+    source = Source(id=shared_id, name="ECG", signals=(signal,))
+    record = Record(id=shared_id, sources=(source,))
+    record.annotate(Annotation(id=1, key="owner", value="record"))
+    source.annotate(Annotation(id=2, key="owner", value="source"))
+    signal.annotate(Annotation(id=3, key="owner", value="signal"))
+    task = AnswerTask(id=shared_id, inputs=(record,), prompt="Alive?", targets=("Yes",))
+    task.annotate(Annotation(id=4, key="owner", value="task"))
+    dataset = TimeFDataset(metadata=_dataset().metadata)
+    dataset.annotate(Annotation(id=6, key="owner", value="dataset"))
+    dataset.add_record(record=record)
+    dataset.add_task(task=task)
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with connect_control(path, read_only=True) as connection:
+        audit_control_database(connection, require_chunks=False)
+    with DuckDBControlReader(path) as reader:
+        for records in (reader.read_records(), reader.read_records((shared_id,))):
+            (back,) = records
+            (back_source,) = back.sources
+            (back_signal,) = back_source.signals
+            assert [item.value for item in back.annotations] == ["record"]
+            assert [item.value for item in back_source.annotations] == ["source"]
+            assert [item.value for item in back_signal.annotations] == ["signal"]
+            for tasks in (reader.read_tasks(cached_records=records), reader.read_tasks(records)):
+                assert [item.value for item in tasks[0].annotations] == ["task"]
+        assert [item.value for item in reader.read_dataset_annotations(dataset.metadata.dataset_id)] == ["dataset"]
+        assert reader.read_dataset_annotations("org/other") == ()
+
+
 def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    dataset = make_dataset()
+    record0_id = dataset.records[0].id
+    expected = sorted(task.id for task in dataset.tasks if task.inputs[0].id == record0_id)
+    assert len(expected) == 4
+    DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
-        record0 = next(record for record in records if record.record_id == 10)
+        record0 = next(record for record in records if record.id == record0_id)
         tasks = list(reader.iter_tasks((record0,)))
 
-    assert [task.id for task in tasks] == [301, 302, 303, 304]
+    assert [task.id for task in tasks] == expected
+    assert [type(task) for task in tasks] == [
+        ClassificationTask,
+        AnswerTask,
+        ScalarPredictionTask,
+        TemporalLocalizationTask,
+    ]
     assert all(task.inputs[0] is record0 for task in tasks)
-    answer = tasks[1]
-    assert answer.from_tasks == (tasks[0],)
-    assert answer.from_tasks[0] is tasks[0]
+    answer = next(task for task in tasks if isinstance(task, AnswerTask))
+    classification = next(task for task in tasks if isinstance(task, ClassificationTask))
+    assert answer.from_tasks == (classification,)
+    assert answer.from_tasks[0] is classification
 
 
 @pytest.mark.parametrize("materialize", [False, True])
@@ -383,12 +494,50 @@ def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, m
     assert tuple(sorted(by_id)) == tuple(task.id for task in tasks)
 
 
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("UPDATE task_targets SET signal_id = 999 WHERE target_kind = 'step_point'", "missing signal 999"),
+        ("UPDATE tasks SET scope_signal_ids = [999] WHERE task_id = 397", "missing signal 999"),
+        ("UPDATE task_record_refs SET record_id = 999", "missing record"),
+        ("UPDATE task_targets SET record_id = 999 WHERE target_kind = 'record'", "missing record"),
+        ("UPDATE task_targets SET signal_id = 999 WHERE target_kind = 'signal'", "outside the hydrated set"),
+        ("UPDATE task_dependencies SET parent_task_id = 999", "missing task 999"),
+    ],
+)
+def test_read_tasks_rejects_corrupt_task_references(tmp_path, statement, message):
+    dataset = _dataset()
+    record = dataset.records[0]
+    step = StepPoint(start=1, time_series_id=LEAD_II_ID)
+    dataset.tasks[0].targets = (step, record, record.signals[0])
+    steps = Signal(id=555, name="steps", spec=SPEC, time_axis=OrdinalAxis(), data=pa.array([1.0, 2.0], pa.float32()))
+    step_record = Record(id=11, sources=(Source(name="steps", signals=(steps,)),))
+    dataset.add_record(record=step_record)
+    parent = AnswerTask(id=399, inputs=(record,), targets=("parent",))
+    dataset.add_tasks(
+        tasks=(
+            parent,
+            AnswerTask(id=398, inputs=(record,), targets=("child",), from_tasks=(parent,)),
+            AnswerTask(
+                id=397, inputs=(step_record,), targets=("scoped",), scope=StepPoint(start=1, time_series_id=555)
+            ),
+        )
+    )
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+    with connect_control(path) as connection:
+        connection.execute(statement)
+
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match=message):
+        reader.read_tasks(cached_records=reader.read_records())
+
+
 def test_read_tasks_rejects_records_the_database_does_not_store(tmp_path):
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(_dataset())
 
     with DuckDBControlReader(path) as reader, pytest.raises(TimeFValidationError, match="no such record"):
-        reader.read_tasks((Record(record_id=99),))
+        reader.read_tasks((Record(id=99),))
 
 
 def test_typed_scope_and_payload_columns_round_trip(tmp_path):
@@ -421,7 +570,7 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
-        (restored,) = reader.read_records((record.record_id,))
+        (restored,) = reader.read_records((record.id,))
     back = next(item for item in restored.annotations if item.id == 299)
     stored = (
         connect_control(path, read_only=True)
@@ -436,6 +585,9 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
 
 def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
     dataset = make_dataset()
+    record0_id = dataset.records[0].id
+    answer_id = next(task.id for task in dataset.tasks if isinstance(task, AnswerTask))
+    normal_id = next(task.id for task in dataset.tasks if task.targets == ("normal",))
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
@@ -443,20 +595,20 @@ def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
         tasks = {task.id: task for task in reader.read_tasks(reader.read_records())}
         table = reader.task_table().to_pylist()
         targets = reader.target_table().to_pylist()
-        subset = reader.task_table(record_ids=(10,)).to_pylist()
+        subset = reader.task_table(record_ids=(record0_id,)).to_pylist()
         annotations = reader.annotation_table(object_type="Record").to_pylist()
 
     assert [row["task_id"] for row in table] == sorted(tasks)
-    answer = next(row for row in table if row["task_id"] == 302)
+    answer = next(row for row in table if row["task_id"] == answer_id)
     assert answer["task_type"] == "answer"
-    assert answer["input_record_ids"] == [record.id for record in tasks[302].inputs] == [10]
-    assert answer["from_task_ids"] == [301]
+    assert answer["input_record_ids"] == [record.id for record in tasks[answer_id].inputs] == [record0_id]
+    assert answer["from_task_ids"] == [normal_id]
     assert answer["scope_type"] is None
-    assert {row["task_id"] for row in subset} == {task.id for task in tasks.values() if task.inputs[0].id == 10}
-    assert sum(1 for row in targets if row["task_id"] == 301) == len(tasks[301].targets or ())
+    assert {row["task_id"] for row in subset} == {task.id for task in tasks.values() if task.inputs[0].id == record0_id}
+    assert sum(1 for row in targets if row["task_id"] == normal_id) == len(tasks[normal_id].targets or ())
     text_targets = {row["task_id"]: row["text_value"] for row in targets if row["target_kind"] == "text"}
-    assert text_targets[301] == "normal"
-    age = next(row for row in annotations if row["key"] == "age" and row["object_id"] == 10)
+    assert text_targets[normal_id] == "normal"
+    age = next(row for row in annotations if row["key"] == "age" and row["object_id"] == record0_id)
     assert (age["value_kind"], age["integer_value"], age["unit"]) == ("integer", 64, "years")
 
 
@@ -501,7 +653,7 @@ def test_full_range_int_ids_round_trip_as_python_ints(tmp_path):
     dataset = _dataset()
     largest = 2**63 - 1
     generated = Record(sources=(Source(name="generated"),))
-    dataset.add_record(record=Record(record_id=largest, sources=(Source(name="largest"),)))
+    dataset.add_record(record=Record(id=largest, sources=(Source(name="largest"),)))
     dataset.add_record(record=generated)
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(dataset)

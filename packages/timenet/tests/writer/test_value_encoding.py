@@ -75,7 +75,7 @@ def _dataset(signals, dataset_id="timenet/encoding", **metadata_kwargs):
         )
         for (spec_type, signal), values in signals.items()
     ]
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=tuple(series)),), record_id=1))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=tuple(series)),), id=1))
     dataset.derive_schema()
     return dataset
 

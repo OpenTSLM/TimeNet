@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -22,8 +23,13 @@ def _clean_env(monkeypatch):
 
 
 @pytest.fixture
-def registry_root(tmp_path):
-    dataset = make_dataset()
+def hello_world():
+    return make_dataset()
+
+
+@pytest.fixture
+def registry_root(tmp_path, hello_world):
+    dataset = copy.deepcopy(hello_world)
     dataset.derive_schema()
     with TimeFWriter(tmp_path / "reg", dataset) as writer:
         writer.write()
@@ -121,11 +127,11 @@ def test_download_leaves_sibling_staging_dirs_untouched(registry_root, tmp_path)
     assert (version_dir / "manifest.json").exists()  # the download still completed
 
 
-def test_load_round_trips(registry_root, tmp_path):
+def test_load_round_trips(registry_root, hello_world, tmp_path):
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
     restored = client.load("timenet/hello-world")
     assert isinstance(restored, TimeFDataset)
-    assert_datasets_equal(make_dataset(), restored)
+    assert_datasets_equal(hello_world, restored)
 
 
 def test_load_reads_in_place_without_downloading(registry_root, tmp_path):

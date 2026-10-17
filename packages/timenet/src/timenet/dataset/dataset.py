@@ -95,8 +95,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Raises:
             TimeFValidationError: If the record repeats an object ID or an ID is already registered.
         """
-        if record.record_id in self._records_by_id:
-            raise TimeFValidationError(f"record id {record.record_id!r} is already registered")
+        if record.id in self._records_by_id:
+            raise TimeFValidationError(f"record id {record.id!r} is already registered")
         record_sources, record_signals = self._index_record_hierarchy(record)
         repeated_sources = sorted(self._sources_by_id.keys() & record_sources.keys())
         if repeated_sources:
@@ -109,10 +109,10 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 f"signal id(s) {repeated_signals} already belong to another Source; each Signal has one owner"
             )
         self._records.append(record)
-        self._records_by_id[record.record_id] = record
+        self._records_by_id[record.id] = record
         self._sources_by_id.update(record_sources)
         self._signals_by_id.update(record_signals)
-        self._signals_by_record_id[record.record_id] = tuple(record_signals.values())
+        self._signals_by_record_id[record.id] = tuple(record_signals.values())
         return record
 
     @staticmethod
@@ -140,13 +140,13 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         sources = tuple(record.walk_sources())
         source_duplicates = cls._duplicate_ids(source.id for source in sources)
         if source_duplicates:
-            raise TimeFValidationError(f"record {record.record_id!r} contains duplicate source IDs {source_duplicates}")
+            raise TimeFValidationError(f"record {record.id!r} contains duplicate source IDs {source_duplicates}")
         signals = tuple(
             signal for source in sources for signal in sorted(source.signals, key=lambda item: (item.name, item.id))
         )
         signal_duplicates = cls._duplicate_ids(signal.id for signal in signals)
         if signal_duplicates:
-            raise TimeFValidationError(f"record {record.record_id!r} contains duplicate signal IDs {signal_duplicates}")
+            raise TimeFValidationError(f"record {record.id!r} contains duplicate signal IDs {signal_duplicates}")
         return (
             {source.id: source for source in sources},
             {signal.id: signal for signal in signals},
@@ -463,7 +463,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                         label,
                         span,
                         index.signals_by_record_id[record.id],
-                        record.record_id,
+                        record.id,
                         record.time_span,
                     )
 
@@ -847,16 +847,16 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 dataset. It also occurs if one of the record's ``task_ids`` does not resolve to a
                 registered task that links back to the record.
         """
-        registered_ids = {registered.record_id for registered in self._records}
-        if record.record_id not in registered_ids:
-            raise TimeFValidationError(f"record {record.record_id!r} is not registered in this dataset")
+        registered_ids = {registered.id for registered in self._records}
+        if record.id not in registered_ids:
+            raise TimeFValidationError(f"record {record.id!r} is not registered in this dataset")
         by_id = {task.id: task for task in self._tasks}
         resolved: list[Task] = []
         for task_id in record.task_ids:
             task = by_id.get(task_id)
             if task is None or all(linked is not record for linked in task.inputs):
                 raise TimeFValidationError(
-                    f"record {record.record_id!r} links task {task_id!r}, but the task is missing or does "
+                    f"record {record.id!r} links task {task_id!r}, but the task is missing or does "
                     f"not link back to the record"
                 )
             resolved.append(task)
@@ -992,12 +992,12 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         rows: list[pa.Array] = []
         targets: list[object] = []
         for record in self._records:
-            matched = matched_by_record.get(record.record_id) or []
+            matched = matched_by_record.get(record.id) or []
             if not matched and split is not None:
                 continue
             if len(matched) != 1:
                 raise TimeFValidationError(
-                    f"record {record.record_id!r} carries {len(matched)} {resolved.__name__} tasks; "
+                    f"record {record.id!r} carries {len(matched)} {resolved.__name__} tasks; "
                     "to_features_and_targets needs exactly one per record"
                 )
             inline = matched[0].targets

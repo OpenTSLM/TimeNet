@@ -327,7 +327,7 @@ def iter_tasks(records: Sequence[Record]) -> Iterator[Task]:
         non_span_annotations = [one for one in record.annotations if one.span is None]
         stages = list(
             {
-                one.content_id: one
+                one.id: one
                 for signal in record.signals
                 for one in signal.annotations
                 if one.key == AnnotationKey.SLEEP_STAGE

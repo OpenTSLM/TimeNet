@@ -220,7 +220,7 @@ def test_subject_ids_are_record_annotations(release, monkeypatch):
 def test_every_record_carries_the_same_study_annotation(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     study = [next(one for one in record.annotations if one.key == "study") for record in dataset.records]
-    assert study[0].content_id == study[1].content_id
+    assert study[0].id == study[1].id
     assert study[0].occurrence_id != study[1].occurrence_id
     assert study[0].value == _STUDY
 
@@ -235,7 +235,7 @@ def test_the_sex_of_two_records_is_one_annotation(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     first = _annotations(dataset, "SC4901E0", "sex")[0]
     second = _annotations(dataset, "SC4902E0", "sex")[0]
-    assert first.content_id == second.content_id
+    assert first.id == second.id
     assert first.occurrence_id != second.occurrence_id
     assert first.value == "F"
 
@@ -299,7 +299,7 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
     version_dir = store_dataset(dataset, tmp_path / "out")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
-    assert {record.record_id for record in restored.records} == {record.record_id for record in dataset.records}
+    assert {record.id for record in restored.records} == {record.id for record in dataset.records}
     assert _recording_ids(restored.records) == {"SC4901E0", "SC4902E0"}
     record = _record(restored.records, "SC4901E0")
     assert len(record.signals) == len(_SIGNALS)
@@ -307,7 +307,7 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
     assert lights_off.value == "22:30:00"
     assert lights_off.span is not None
     assert lights_off.span.start_us == 1800 * US_PER_S
-    assert len({one.content_id for one in record.walk_annotations() if one.key == "sleep_stage"}) == len(_SCORING)
+    assert len({one.id for one in record.walk_annotations() if one.key == "sleep_stage"}) == len(_SCORING)
     # The tasks stream, so the writer reads them one time as it writes. No other test proves
     # that they survive the round trip. The writer wrote the ids of the pass it consumed, and a
     # fresh pass generates new ones, so compare what each task asks rather than its id.
@@ -343,7 +343,7 @@ def test_the_schema_names_every_task_type(release, monkeypatch):
 
 def test_every_streamed_task_carries_its_own_input_records(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
-    known = {record.record_id for record in dataset.records}
+    known = {record.id for record in dataset.records}
     for task in _streamed(dataset):
         assert task.inputs
         assert {record.id for record in task.inputs} <= known
@@ -369,7 +369,7 @@ def test_an_epoch_task_covers_each_scored_epoch(release, monkeypatch):
     scored = sum(
         (one.span.exclusive_end - one.span.start_us) // (30 * US_PER_S)
         for record in dataset.records
-        for one in {a.content_id: a for a in record.walk_annotations()}.values()
+        for one in {a.id: a for a in record.walk_annotations()}.values()
         if one.key == "sleep_stage" and one.span is not None
     )
     assert len(epochs) == scored

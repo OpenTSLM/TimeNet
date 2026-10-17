@@ -109,7 +109,7 @@ def _preview(dataset: TimeFDataset, rows: int) -> str:
         length = point_count(record.signals[0]) if record.signals else None
         table_rows.append(
             (
-                str(record.record_id),
+                str(record.id),
                 str(len(record.signals)),
                 "?" if length is None else str(length),
                 str(len(record.task_ids)),

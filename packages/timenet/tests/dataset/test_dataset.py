@@ -55,7 +55,7 @@ def test_add_record_registers_and_returns(make_series):
 def test_add_record_accepts_a_complete_hierarchy(make_series):
     signal = make_series(id=101)
     source = Source(id=20, name="Device", signals=(signal,))
-    record = Record(record_id=10, sources=(source,))
+    record = Record(id=10, sources=(source,))
     dataset = _dataset()
 
     assert dataset.add_record(record=record) is record
@@ -269,14 +269,14 @@ def test_add_record_rejects_a_signal_owned_by_two_records(make_series):
     with pytest.raises(TimeFValidationError, match="each Signal has one owner"):
         dataset.add_record(
             record=Record(
-                record_id=11,
+                id=11,
                 sources=(Source(id=21, name="B", signals=(signal,)),),
             )
         )
 
     dataset.add_record(
         record=Record(
-            record_id=11,
+            id=11,
             sources=(
                 Source(
                     id=21,
@@ -799,7 +799,7 @@ def test_add_task_accepts_mixed_targets(make_series):
 
 def _record(dataset, make_series, record_id=None):
     sources = (Source(name="Source", signals=(make_series(),)),)
-    record = Record(sources=sources) if record_id is None else Record(record_id=record_id, sources=sources)
+    record = Record(sources=sources) if record_id is None else Record(id=record_id, sources=sources)
     return dataset.add_record(record=record)
 
 

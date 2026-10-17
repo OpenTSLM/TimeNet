@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 
 import duckdb
@@ -21,8 +22,8 @@ from timenet.values_backends.zarr.writer import _array_name
 from timenet.writer import TimeFWriter
 
 
-def _write(tmp_path, **kwargs) -> Path:
-    dataset = make_dataset()
+def _write(tmp_path, dataset=None, **kwargs) -> Path:
+    dataset = make_dataset() if dataset is None else dataset
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr", **kwargs) as writer:
         writer.write()
@@ -65,7 +66,7 @@ def test_index_locator_resolves_to_values(tmp_path):
         row = connection.execute(
             """SELECT chunks.value_path, chunks.chunk_major_index, chunks.chunk_minor_index,
                       chunks.n_values
-               FROM signal_chunks chunks JOIN signals USING (signal_key)
+               FROM signal_chunks chunks JOIN signals USING (signal_id)
                ORDER BY signals.signal_id LIMIT 1"""
         ).fetchone()
     assert row is not None
@@ -80,23 +81,25 @@ def test_index_locator_resolves_to_values(tmp_path):
 def test_one_index_row_per_series(tmp_path):
     # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply index rows:
     # each (record, series) pair gets exactly one placement spanning the series' full length.
-    version_dir = _write(tmp_path, chunk_max_bytes=64)
+    dataset = make_dataset()
+    version_dir = _write(tmp_path, dataset, chunk_max_bytes=64)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         index = connection.execute(
             """SELECT signals.signal_id, chunks.n_values
-               FROM signal_chunks chunks JOIN signals USING (signal_key)"""
+               FROM signal_chunks chunks JOIN signals USING (signal_id)"""
         ).fetchall()
     signal_ids = [row[0] for row in index]
     assert len(signal_ids) == len(set(signal_ids))
-    long_series = next(row for row in index if row[0] == 112)
+    long_series = next(row for row in index if row[0] == dataset.records[1].signals[1].id)
     assert long_series[1] == 512  # the fixture's long series, unsplit
 
 
 def test_shard_aligned_appends_round_trip(tmp_path):
     # Tiny chunks and shards force many mid-stream shard flushes plus trailing partial shards.
-    version_dir = _write(tmp_path, chunk_max_bytes=64, shard_target_bytes=128)
+    dataset = make_dataset()
+    version_dir = _write(tmp_path, copy.deepcopy(dataset), chunk_max_bytes=64, shard_target_bytes=128)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        assert_datasets_equal(make_dataset(), reader.read())
+        assert_datasets_equal(dataset, reader.read())
 
 
 def test_high_compression_level_is_rejected_for_blosc(tmp_path):
@@ -105,8 +108,11 @@ def test_high_compression_level_is_rejected_for_blosc(tmp_path):
 
 
 def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
-    version_dir = _write(tmp_path)
-    out = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=(11,))
+    dataset = make_dataset()
+    version_dir = _write(tmp_path, dataset)
+    out = edit_version(
+        version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=(dataset.records[1].id,)
+    )
     manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
@@ -189,7 +195,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
                     ),
                 ),
             ),
-            record_id=1,
+            id=1,
         )
     )
     dataset.derive_schema()
@@ -260,7 +266,7 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
                     ),
                 ),
             ),
-            record_id=1,
+            id=1,
         )
     )
     dataset.derive_schema()
@@ -307,7 +313,7 @@ def test_str_round_trip(tmp_path):
                     ),
                 ),
             ),
-            record_id=1,
+            id=1,
         )
     )
     dataset.derive_schema()
@@ -348,7 +354,7 @@ def test_str_empty_range_read(tmp_path):
                     ),
                 ),
             ),
-            record_id=1,
+            id=1,
         )
     )
     dataset.derive_schema()

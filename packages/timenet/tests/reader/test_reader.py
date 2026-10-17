@@ -1,3 +1,4 @@
+import copy
 from fractions import Fraction
 import json
 from pathlib import Path
@@ -22,6 +23,7 @@ from timenet.types import (
     DatasetMetadata,
     Domain,
     License,
+    ScalarPredictionTask,
     Split,
     TimeSeriesSpec,
     Version,
@@ -46,7 +48,7 @@ def _read(version_dir: Path) -> TimeFDataset:
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_full_round_trip(tmp_path, backend):
     original = make_dataset()
-    restored = _read(_write(tmp_path, dataset=make_dataset(), values_backend=backend))
+    restored = _read(_write(tmp_path, dataset=copy.deepcopy(original), values_backend=backend))
     assert_datasets_equal(original, restored)
 
 
@@ -71,8 +73,8 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
             """SELECT DISTINCT r.record_id
                FROM records r
                JOIN annotation_occurrences o
-                 ON o.object_type = 'Record' AND o.object_key = r.record_key
-               JOIN annotation_contents c USING (content_key)
+                 ON o.object_type = 'Record' AND o.object_id = r.record_id
+               JOIN annotation_contents c USING (content_id)
                WHERE c.name = 'subject_ids'
                  AND list_contains(c.text_list_value, ?)""",
             ["patient-1"],
@@ -101,7 +103,7 @@ def _referenced_annotation_dataset() -> TimeFDataset:
     record = dataset.add_record(
         record=Record(
             sources=(Source(id=20, name="Source", signals=(signal,)),),
-            record_id=10,
+            id=10,
         )
     )
     options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id=201))
@@ -186,9 +188,9 @@ def test_metadata_and_schema_come_from_the_manifest_without_opening_control(tmp_
 def test_iter_records_matches_full_read(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        streamed = {record.record_id for record in reader.iter_records()}
+        streamed = {record.id for record in reader.iter_records()}
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        materialized = {record.record_id for record in reader.read().records}
+        materialized = {record.id for record in reader.read().records}
     assert streamed == materialized
 
 
@@ -213,14 +215,14 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
 
 def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
     version_dir = _write(tmp_path)
-    original = DuckDBControlReader.chunk_rows_by_keys
+    original = DuckDBControlReader.chunk_rows_by_ids
     calls = []
 
     def counting_batch(reader, signals):
         calls.append(tuple(signals))
         return original(reader, signals)
 
-    monkeypatch.setattr(DuckDBControlReader, "chunk_rows_by_keys", counting_batch)
+    monkeypatch.setattr(DuckDBControlReader, "chunk_rows_by_ids", counting_batch)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         records = tuple(reader.iter_records())
         signals = tuple(signal for record in records for signal in record.signals)
@@ -259,17 +261,20 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path):
 
 
 def test_iter_records_preserves_requested_order(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
-        selected = tuple(reader.iter_records(record_ids=(12, 10)))
-    assert [record.record_id for record in selected] == [12, 10]
+    dataset = make_dataset()
+    requested = (dataset.records[2].id, dataset.records[0].id)
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+        selected = tuple(reader.iter_records(record_ids=requested))
+    assert tuple(record.id for record in selected) == requested
 
 
 def test_iter_records_rejects_an_unknown_id_before_yielding(tmp_path):
+    dataset = make_dataset()
     with (
-        TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader,
+        TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader,
         pytest.raises(TimeFValidationError, match="no such record"),
     ):
-        next(reader.iter_records(record_ids=(10, 99)))
+        next(reader.iter_records(record_ids=(dataset.records[0].id, 99)))
 
 
 def test_iter_records_can_skip_annotations_without_losing_values(tmp_path):
@@ -318,40 +323,46 @@ def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_pat
 
 
 def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
-        record0 = next(reader.iter_records((10,)))
+    dataset = make_dataset()
+    record0_id = dataset.records[0].id
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+        record0 = next(reader.iter_records((record0_id,)))
         tasks = list(reader.iter_tasks((record0,)))
         every = reader.tasks
 
-    assert {task.id for task in tasks} == {task.id for task in every if task.inputs[0].record_id == 10}
+    assert {task.id for task in tasks} == {task.id for task in every if task.inputs[0].id == record0_id}
     assert all(task.inputs[0] is record0 for task in tasks)
-    answer = next(task for task in tasks if task.id == 302)
-    cohort = next(annotation for annotation in record0.annotations if annotation.id == 201)
+    answer = next(task for task in tasks if isinstance(task, AnswerTask))
+    cohort = next(annotation for annotation in record0.annotations if annotation.key == "cohort")
     assert answer.input_annotations[0] is cohort
 
 
 def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
     dataset = make_dataset()
-    tasks = {task.id: task for task in dataset.tasks}
-    tasks[301].split = Split.TRAIN
-    tasks[303].split = Split.TEST
+    train = next(task for task in dataset.tasks if task.targets == ("normal",))
+    test = next(task for task in dataset.tasks if isinstance(task, ScalarPredictionTask))
+    train.split = Split.TRAIN
+    test.split = Split.TEST
     version_dir = _write(tmp_path, dataset)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        assert [task.id for task in reader.iter_tasks(split="train")] == [301]
-        assert reader.task_table(split=Split.TEST)["task_id"].to_pylist() == [303]
-        assert reader.target_table(split=Split.TEST)["task_id"].to_pylist() == [303]
+        assert [task.id for task in reader.iter_tasks(split="train")] == [train.id]
+        assert reader.task_table(split=Split.TEST)["task_id"].to_pylist() == [test.id]
+        assert reader.target_table(split=Split.TEST)["task_id"].to_pylist() == [test.id]
         loaded = reader.read()
 
     assert {task.id: task.split for task in loaded.tasks if task.split is not None} == {
-        301: Split.TRAIN,
-        303: Split.TEST,
+        train.id: Split.TRAIN,
+        test.id: Split.TEST,
     }
 
 
 def test_task_views_reject_a_non_int_record_id(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
-        assert set(reader.task_table(record_ids=(10,))["task_id"].to_pylist()) == {301, 302, 303, 304}
+    dataset = make_dataset()
+    record0 = dataset.records[0]
+    assert len(record0.task_ids) == 4
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+        assert set(reader.task_table(record_ids=(record0.id,))["task_id"].to_pylist()) == set(record0.task_ids)
         for view in (reader.task_table, reader.target_table):
             with pytest.raises(TimeFValidationError, match="positive int64 id"):
-                view(record_ids=("10",))  # ty: ignore[invalid-argument-type]
+                view(record_ids=(str(record0.id),))  # ty: ignore[invalid-argument-type]

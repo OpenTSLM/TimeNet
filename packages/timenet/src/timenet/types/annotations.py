@@ -120,11 +120,6 @@ class Annotation:
             )
 
     @property
-    def content_id(self) -> int:
-        """Return the identity of the reusable annotation content."""
-        return self.id
-
-    @property
     def _content_fields(self) -> tuple[object, ...]:
         """Return the reusable payload, without occurrence-specific fields."""
         return (self.key, self.value, self.unit, self.description, self.metadata)

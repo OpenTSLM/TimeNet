@@ -80,7 +80,7 @@ class RegularAxis:
     recording, which keeps a span written against the recording meaningful on the window."""
     offset_us: int = 0
     """Whole microseconds from the record origin to the cadence's zero."""
-    axis_id: int = field(default_factory=new_id, compare=False)
+    id: int = field(default_factory=new_id, compare=False)
     """Stable identity used when several signals reference this axis."""
 
     def __post_init__(self) -> None:
@@ -89,9 +89,9 @@ class RegularAxis:
         Raises:
             TimeFValidationError: If ``period_us`` is not a :class:`~fractions.Fraction`, is under one
                 microsecond, or has a term past int64. Also if ``start_index`` is not a non-negative
-                integer that fits int64, or if ``axis_id`` is not a valid id.
+                integer that fits int64, or if ``id`` is not a valid id.
         """
-        object.__setattr__(self, "axis_id", check_id(self.axis_id, "RegularAxis.axis_id"))
+        object.__setattr__(self, "id", check_id(self.id, "RegularAxis.id"))
         if not isinstance(self.period_us, Fraction):
             raise TimeFValidationError(
                 f"RegularAxis.period_us must be a Fraction, got {type(self.period_us).__name__}. A "
@@ -159,7 +159,7 @@ class RegularAxis:
         Returns:
             The window's axis, which shares this period.
         """
-        return replace(self, axis_id=new_id(), start_index=self.start_index + index)
+        return replace(self, id=new_id(), start_index=self.start_index + index)
 
     def time_offset_us(self, index: int) -> int:
         """Return the time offset of one value, floored to whole microseconds.
@@ -292,7 +292,7 @@ class IrregularAxis:
     last_us: int
     """Time offset of the last value. The writer checks it against the stream at write time, so it is
     verified metadata, not an unbacked claim."""
-    axis_id: int = field(default_factory=new_id, compare=False)
+    id: int = field(default_factory=new_id, compare=False)
     """Stable identity used when several signals reference this axis."""
 
     def __post_init__(self) -> None:
@@ -300,10 +300,10 @@ class IrregularAxis:
 
         Raises:
             TimeFValidationError: If either endpoint is not whole microseconds or does not fit int64,
-                if ``first_us`` is negative, if ``last_us`` precedes ``first_us``, or if ``axis_id`` is
+                if ``first_us`` is negative, if ``last_us`` precedes ``first_us``, or if ``id`` is
                 not a valid id.
         """
-        object.__setattr__(self, "axis_id", check_id(self.axis_id, "IrregularAxis.axis_id"))
+        object.__setattr__(self, "id", check_id(self.id, "IrregularAxis.id"))
         for name in ("first_us", "last_us"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
@@ -339,16 +339,16 @@ class OrdinalAxis:
 
     axis_type: ClassVar[AxisType] = AxisType.ORDINAL
     """The stored discriminator."""
-    axis_id: int = field(default_factory=new_id, compare=False)
+    id: int = field(default_factory=new_id, compare=False)
     """Stable identity used when several signals reference this axis."""
 
     def __post_init__(self) -> None:
-        """Reject an invalid ``axis_id``.
+        """Reject an invalid ``id``.
 
         Raises:
-            TimeFValidationError: If ``axis_id`` is not a valid id.
+            TimeFValidationError: If ``id`` is not a valid id.
         """  # noqa: DOC502 (raised by check_id)
-        object.__setattr__(self, "axis_id", check_id(self.axis_id, "OrdinalAxis.axis_id"))
+        object.__setattr__(self, "id", check_id(self.id, "OrdinalAxis.id"))
 
 
 TimeAxis = RegularAxis | IrregularAxis | OrdinalAxis
