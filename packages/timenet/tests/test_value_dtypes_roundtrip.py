@@ -73,7 +73,7 @@ def _dataset(spec: TimeSeriesSpec, values, signal: str = "c", record_id: int = 1
         name=signal,
         time_axis=RegularAxis.from_rate_hz(1),
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id=record_id))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), id=record_id))
     dataset.derive_schema()
     return dataset
 
@@ -158,8 +158,8 @@ def test_copy_on_write_edit_keeps_bool_and_str(tmp_path):
         name="stage",
         time_axis=RegularAxis.from_rate_hz(1),
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(bool0, str0)),), record_id=1))
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(bool1, str1)),), record_id=2))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(bool0, str0)),), id=1))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(bool1, str1)),), id=2))
     dataset.derive_schema()
     version_dir = _write(tmp_path / "base", dataset)
     edited = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 1, 0), remove_record_ids=[2])
@@ -224,7 +224,7 @@ def test_mixed_dtypes_byte_identical_across_backends(tmp_path, values_backend):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=series),), record_id=1))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=series),), id=1))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset, values_backend=values_backend)
 

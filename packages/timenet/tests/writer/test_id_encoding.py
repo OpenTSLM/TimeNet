@@ -46,7 +46,7 @@ def _series():
 
 
 def _id_dataset(*, record_id=None):
-    """Build a dataset whose ids default to new_id() (unless an explicit record_id is passed)."""
+    """Build a dataset whose ids default to new_id() (unless an explicit record id is passed)."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/id-test",
@@ -58,7 +58,7 @@ def _id_dataset(*, record_id=None):
     )
     series = (_series(),)
     sources = (Source(name="Source", signals=series),)
-    record = Record(sources=sources) if record_id is None else Record(sources=sources, record_id=record_id)
+    record = Record(sources=sources) if record_id is None else Record(sources=sources, id=record_id)
     dataset.add_record(record=record)
     record.annotate(Annotation(key="k", value=1))
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",)))
@@ -74,7 +74,7 @@ def _write(tmp_path, dataset):
 
 def test_default_ids_are_positive_int64():
     dataset = _id_dataset()
-    record_id = dataset.records[0].record_id
+    record_id = dataset.records[0].id
     assert type(record_id) is int
     assert 0 < record_id < 2**63
 
@@ -91,9 +91,9 @@ def test_default_ids_round_trip_as_ints(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
     assert_datasets_equal(dataset, restored)
-    restored_id = restored.records[0].record_id
+    restored_id = restored.records[0].id
     assert type(restored_id) is int
-    assert restored_id == dataset.records[0].record_id
+    assert restored_id == dataset.records[0].id
 
 
 def test_explicit_small_int_ids_round_trip(tmp_path):
@@ -114,7 +114,7 @@ def test_explicit_small_int_ids_round_trip(tmp_path):
         loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
         id=3,
     )
-    record = dataset.add_record(record=Record(sources=(Source(id=2, name="Source", signals=(signal,)),), record_id=1))
+    record = dataset.add_record(record=Record(sources=(Source(id=2, name="Source", signals=(signal,)),), id=1))
     record.annotate(Annotation(key="k", value=1, id=4))
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), id=5))
     dataset.derive_schema()
@@ -124,12 +124,12 @@ def test_explicit_small_int_ids_round_trip(tmp_path):
         restored = reader.read()
     assert_datasets_equal(dataset, restored)
     (restored_record,) = restored.records
-    assert restored_record.record_id == 1
+    assert restored_record.id == 1
     assert restored_record.sources[0].id == 2
     assert restored_record.signals[0].id == 3
     assert restored_record.annotations[0].id == 4
     assert restored.tasks[0].id == 5
-    assert restored.tasks[0].inputs[0].record_id == 1
+    assert restored.tasks[0].inputs[0].id == 1
 
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         assert connection.execute("SELECT record_id FROM records").fetchall() == [(1,)]

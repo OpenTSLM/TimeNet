@@ -83,7 +83,7 @@ def _typed_dataset(dtype, values):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id=1))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), id=1))
     return dataset
 
 

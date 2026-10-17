@@ -505,7 +505,7 @@ class DuckDBControlReader:
             offsets_loader = None
             if isinstance(axis, IrregularAxis):
                 if loaded_axis.n_values is None:
-                    raise TimeFFormatError(f"irregular axis {axis.axis_id!r} has no Signal length")
+                    raise TimeFFormatError(f"irregular axis {axis.id!r} has no Signal length")
                 offsets_loader = (
                     partial(self._offsets_loader, signal_row.axis_key, axis, loaded_axis.n_values)
                     if self._offsets_loader is not None
@@ -572,7 +572,7 @@ class DuckDBControlReader:
                 for source_key in roots_by_record[record_row.record_key]
             )
             record = Record(
-                record_id=record_id,
+                id=record_id,
                 sources=root_sources,
                 start_time=self._clock_cache[record_row.clock_id],
                 annotations=annotations.get(("Record", record_row.record_key), ()),
@@ -1253,7 +1253,7 @@ class DuckDBControlReader:
             if axis_type == "regular":
                 axes[axis_key] = _LoadedAxis(
                     RegularAxis(
-                        axis_id=axis_id,
+                        id=axis_id,
                         period_us=Fraction(numerator, denominator),
                         start_index=start_index,
                         offset_us=offset,
@@ -1269,11 +1269,11 @@ class DuckDBControlReader:
                         f"{sorted((min_n_values, max_n_values))}"
                     )
                 axes[axis_key] = _LoadedAxis(
-                    IrregularAxis(axis_id=axis_id, first_us=first, last_us=last),
+                    IrregularAxis(id=axis_id, first_us=first, last_us=last),
                     int(min_n_values),
                 )
             elif axis_type == "ordinal":
-                axes[axis_key] = _LoadedAxis(OrdinalAxis(axis_id=axis_id), None)
+                axes[axis_key] = _LoadedAxis(OrdinalAxis(id=axis_id), None)
             else:
                 raise TimeFFormatError(f"axis {axis_id!r} has unknown type {axis_type!r}")
         return axes
@@ -1300,19 +1300,19 @@ class DuckDBControlReader:
         offsets = column.chunk(0) if column.num_chunks == 1 else column.combine_chunks()
         if len(offsets) != n_values:
             raise TimeFFormatError(
-                f"axis {axis.axis_id!r} stores {len(offsets)} offsets but its Signals declare length {n_values}"
+                f"axis {axis.id!r} stores {len(offsets)} offsets but its Signals declare length {n_values}"
             )
         if offsets.null_count:
-            raise TimeFFormatError(f"axis {axis.axis_id!r} stores null offsets")
+            raise TimeFFormatError(f"axis {axis.id!r} stores null offsets")
         endpoints = (axis.first_us, axis.last_us)
         if len(offsets) == 0 or (offsets[0].as_py(), offsets[-1].as_py()) != endpoints:
-            raise TimeFFormatError(f"axis {axis.axis_id!r} has offsets disagreeing with its axis endpoints {endpoints}")
+            raise TimeFFormatError(f"axis {axis.id!r} has offsets disagreeing with its axis endpoints {endpoints}")
         if len(offsets) > 1:
             decreasing = pc.less(  # ty: ignore[unresolved-attribute]
                 offsets.slice(1), offsets.slice(0, len(offsets) - 1)
             )
             if pc.any(decreasing).as_py():  # ty: ignore[unresolved-attribute]
-                raise TimeFFormatError(f"axis {axis.axis_id!r} has decreasing offsets")
+                raise TimeFFormatError(f"axis {axis.id!r} has decreasing offsets")
         return offsets
 
     @staticmethod

@@ -32,7 +32,7 @@ class Record(SupportsAnnotate):
     """The root sources that belong to this recording."""
     start_time: TimeOrigin = field(default_factory=TimeOrigin)
     """The common relative zero, with an optional absolute timestamp."""
-    record_id: int = field(default_factory=new_id)
+    id: int = field(default_factory=new_id)
     """Unique id for the record, a fresh int64 id by default."""
     task_ids: tuple[int, ...] = ()
     """Ids of the tasks attached to this record."""
@@ -47,11 +47,6 @@ class Record(SupportsAnnotate):
     against it, rather than against the union of the series' windows. Its ``time_series_ids`` must be
     ``None``, and it must contain every series' window."""
 
-    @property
-    def id(self) -> int:
-        """Return the record's stable public identifier."""
-        return self.record_id
-
     def __post_init__(self) -> None:  # noqa: PLR0912 - hierarchy, timing, and annotation invariants
         """Validate the record hierarchy and its optional single-clock session span.
 
@@ -59,7 +54,7 @@ class Record(SupportsAnnotate):
             TimeFValidationError: If ``record_id`` or a task id is invalid, or ``time_span`` is not a
                 whole-record ``TimeInterval`` or does not contain some series' window.
         """
-        self.record_id = check_id(self.record_id, "Record.record_id")
+        self.id = check_id(self.id, "Record.id")
         self.task_ids = tuple(check_id(task_id, "Record.task_ids entry") for task_id in self.task_ids)
         if not isinstance(self.start_time, TimeOrigin):
             raise TimeFValidationError("Record.start_time must be a TimeOrigin")
@@ -68,7 +63,7 @@ class Record(SupportsAnnotate):
             tuple(self.walk_sources())
             signal_ids = [signal.id for signal in self.walk_signals()]
             if len(signal_ids) != len(set(signal_ids)):
-                raise TimeFValidationError(f"record {self.record_id!r} contains duplicate signal IDs")
+                raise TimeFValidationError(f"record {self.id!r} contains duplicate signal IDs")
         for signal in self.signals:
             if (window := signal.span_us) is not None:
                 for endpoint in window:
@@ -248,7 +243,7 @@ class Record(SupportsAnnotate):
                 f"annotation {annotation.key!r}",
                 annotation.span,
                 self.signals,
-                self.record_id,
+                self.id,
                 self.time_span,
                 warn_when_outside=warn_when_outside,
             )

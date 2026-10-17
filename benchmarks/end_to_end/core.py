@@ -43,7 +43,7 @@ MATRIX = (
 )
 """Default matrix covering both backends, two chunking regimes, and rich Zarr values."""
 
-_GENERATED_IDS = frozenset({"id", "record_id", "task_ids", "axis_id", "occurrence_id", "time_series_ids"})
+_GENERATED_IDS = frozenset({"id", "task_ids", "occurrence_id", "time_series_ids"})
 """Fields that hold ids generated on every build, so two builds of one corpus never share them."""
 
 

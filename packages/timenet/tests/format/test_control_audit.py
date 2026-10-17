@@ -18,7 +18,7 @@ ECG_ID = 21
 
 
 def _dataset() -> TimeFDataset:
-    axis = RegularAxis(axis_id=1, period_us=Fraction(2_000))
+    axis = RegularAxis(id=1, period_us=Fraction(2_000))
     lead_i = Signal.from_loader(
         id=101,
         name="I",
@@ -29,7 +29,7 @@ def _dataset() -> TimeFDataset:
     )
     ecg = Source(id=ECG_ID, name="ECG", signals=(lead_i,))
     monitor = Source(id=MONITOR_ID, name="Monitor", sources=(ecg,))
-    record = Record(record_id=RECORD_ID, sources=(monitor,))
+    record = Record(id=RECORD_ID, sources=(monitor,))
     record.annotate(Annotation(id=201, key="patient_sex", value="male"))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(

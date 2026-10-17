@@ -19,21 +19,21 @@ def _record(signals, **kwargs):
 
 def test_record_ids_default_to_unique_ints():
     first, second = Record(), Record()
-    assert isinstance(first.record_id, int)
-    assert first.record_id != second.record_id
-    assert first.id == first.record_id
+    assert isinstance(first.id, int)
+    assert first.id != second.id
+    assert first.id == first.id
 
 
 def test_record_keeps_explicit_ids():
-    record = Record(record_id=10, task_ids=(301, 302))
-    assert record.record_id == 10
+    record = Record(id=10, task_ids=(301, 302))
+    assert record.id == 10
     assert record.task_ids == (301, 302)
 
 
 @pytest.mark.parametrize("bad", ["record-0", 0, -1, True, 2**63])
 def test_record_rejects_an_invalid_record_id(bad):
     with pytest.raises(TimeFValidationError, match="positive int64 id"):
-        Record(record_id=bad)
+        Record(id=bad)
 
 
 @pytest.mark.parametrize("bad", ["task-0", 0, False])
@@ -55,7 +55,7 @@ def test_annotate_binds_a_declarative_annotation(make_series):
 
     occurrence = record.annotate(content)
 
-    assert occurrence.content_id == content.content_id
+    assert occurrence.id == content.id
     assert occurrence.occurrence_id is not None
     assert record.annotations == (occurrence,)
 

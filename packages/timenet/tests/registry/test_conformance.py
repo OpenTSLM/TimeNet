@@ -50,7 +50,7 @@ def _second_dataset() -> TimeFDataset:
         id=101,
         n_values=16,
     )
-    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), record_id=10))
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), id=10))
     record.annotate(Annotation(key="age", value=70, unit="years", id=201))
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",), id=301))
     return dataset
