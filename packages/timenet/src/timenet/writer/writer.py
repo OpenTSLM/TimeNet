@@ -211,7 +211,7 @@ class TimeFWriter:
 
     # ---- values --------------------------------------------------------------------------------
 
-    def _dedupe_series(self) -> tuple[list[Signal], dict[str, list[str]]]:
+    def _dedupe_series(self) -> tuple[list[Signal], dict[int, list[int]]]:
         """Return unique series (sorted for stable output) and the series-id -> record-ids map.
 
         Sharing one series across records is the supported dedupe path. Two different series that
@@ -227,9 +227,9 @@ class TimeFWriter:
             TimeFValidationError: If two series share a ``time_series_id`` but describe different
                 signals.
         """
-        unique: dict[str, Signal] = {}
-        series_to_records: dict[str, list[str]] = {}
-        seen_pairs: set[tuple[str, str]] = set()
+        unique: dict[int, Signal] = {}
+        series_to_records: dict[int, list[int]] = {}
+        seen_pairs: set[tuple[int, int]] = set()
         for record in self._dataset.records:
             for ts in record.signals:
                 existing = unique.get(ts.id)
@@ -254,7 +254,7 @@ class TimeFWriter:
         )
         return ordered, series_to_records
 
-    def _write_values(self, unique_series: list[Signal]) -> dict[tuple[str, int], ChunkPlacement]:
+    def _write_values(self, unique_series: list[Signal]) -> dict[tuple[int, int], ChunkPlacement]:
         """Write all series' values through the configured backend.
 
         Args:
@@ -378,7 +378,7 @@ class TimeFWriter:
         Raises:
             TimeFValidationError: If one content ID has different payloads.
         """
-        seen: dict[str, tuple[object, ...]] = {}
+        seen: dict[int, tuple[object, ...]] = {}
         record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
         for ann in record_annotations:
             content = ann._content_fields

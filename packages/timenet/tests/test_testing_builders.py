@@ -39,7 +39,7 @@ def test_assert_datasets_equal_compares_resolved_modalities():
     assert_datasets_equal(expected, actual)
 
     actual.tasks[0].input_modalities = frozenset({InputModality.IMAGE})
-    with pytest.raises(AssertionError, match="task task-cls-0 differs"):
+    with pytest.raises(AssertionError, match=f"task {actual.tasks[0].id} differs"):
         assert_datasets_equal(expected, actual)
 
 

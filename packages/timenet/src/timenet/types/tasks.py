@@ -11,7 +11,7 @@ import pint
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
-from timenet.types.ids import new_id
+from timenet.types.ids import check_id, new_id
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
@@ -45,7 +45,7 @@ class TaskType(StrEnum):
 def validate_input_modalities(
     modalities: Iterable[InputModality] | None,
     *,
-    task_id: str,
+    task_id: int,
     prompt: str | None,
     has_record_inputs: bool,
 ) -> frozenset[InputModality]:
@@ -104,8 +104,8 @@ class Task(SupportsAnnotate, ABC):
     def task_type(self) -> TaskType:
         """Return the concrete task's stable storage tag."""
 
-    id: str = field(default_factory=new_id)
-    """Unique public task identifier."""
+    id: int = field(default_factory=new_id)
+    """Unique public task identifier, a fresh int64 id by default."""
     inputs: tuple["Record", ...] = field(default=(), compare=False)
     """Records supplied to the model, in semantic order."""
     targets: tuple[TargetItem, ...] | None = field(default=None, compare=False)
@@ -133,11 +133,13 @@ class Task(SupportsAnnotate, ABC):
     """Optional JSON-compatible task metadata."""
 
     def __post_init__(self) -> None:
-        """Normalize caller-provided sequences and validate target item types and the split.
+        """Normalize caller-provided sequences and validate the id, target item types, and the split.
 
         Raises:
-            TimeFValidationError: If one target item has an unsupported type, or the split is unknown.
+            TimeFValidationError: If the id is invalid, one target item has an unsupported type, or the
+                split is unknown.
         """
+        self.id = check_id(self.id, "task id")
         self.inputs = tuple(self.inputs)
         self.targets = None if self.targets is None else tuple(self.targets)
         self.input_annotations = tuple(self.input_annotations)

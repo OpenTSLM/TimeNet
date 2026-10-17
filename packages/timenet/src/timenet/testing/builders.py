@@ -115,31 +115,31 @@ def make_dataset() -> TimeFDataset:
             domains=(Domain.GENERAL,),
         )
     )
-    shared = _series(_SINE, "a", 16, "ts-shared")
-    cohort = Annotation(key="cohort", value="A", id="cohort-shared")
+    shared = _series(_SINE, "a", 16, 101)
+    cohort = Annotation(key="cohort", value="A", id=201)
 
     record0 = dataset.add_record(
         record=Record(
-            record_id="record-0",
+            record_id=10,
             start_time=TimeOrigin(9_007_199_254_740_993),
             sources=(
                 Source(
-                    id="source-record-0",
+                    id=20,
                     name="Synthetic monitor",
-                    signals=(shared, _series(_COSINE, "b", 16, "ts-cos-0")),
+                    signals=(shared, _series(_COSINE, "b", 16, 102)),
                 ),
             ),
         )
     )
     _, record0_cohort, _ = record0.add_annotations(
         [
-            Annotation(key="age", value=64, unit="years", id="age-0"),
+            Annotation(key="age", value=64, unit="years", id=202),
             cohort,
-            Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0"),
+            Annotation(key="stimulus", span=TimePoint.seconds(0.5), id=203),
         ]
     )
-    shared.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25), id="art-0"))
-    classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
+    shared.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25), id=204))
+    classification = ClassificationTask(inputs=(record0,), targets=("normal",), id=301)
     dataset.add_tasks(
         tasks=[
             classification,
@@ -150,14 +150,14 @@ def make_dataset() -> TimeFDataset:
                 rationale="Regular intervals with one peak per cycle.",
                 input_annotations=(record0_cohort,),
                 from_tasks=(classification,),
-                id="task-answer-0",
+                id=302,
             ),
             ScalarPredictionTask(
                 inputs=(record0,),
                 targets=(62.0,),
                 unit="bpm",
                 target_name="mean_rate",
-                id="task-scalar-0",
+                id=303,
             ),
             TemporalLocalizationTask(
                 inputs=(record0,),
@@ -167,21 +167,21 @@ def make_dataset() -> TimeFDataset:
                     TimePoint.seconds(0.5),
                     TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.id,)),
                 ),
-                id="task-localize-0",
+                id=304,
             ),
         ],
     )
 
     record1 = dataset.add_record(
         record=Record(
-            record_id="record-1",
+            record_id=11,
             sources=(
                 Source(
-                    id="source-record-1",
+                    id=21,
                     name="Synthetic monitor",
                     signals=(
-                        _series(_SINE, "a", 16, "ts-short-1"),
-                        _series(_SINE, "a", 512, "ts-long-1", phase=1.0),
+                        _series(_SINE, "a", 16, 111),
+                        _series(_SINE, "a", 512, 112, phase=1.0),
                     ),
                 ),
             ),
@@ -189,18 +189,18 @@ def make_dataset() -> TimeFDataset:
     )
     record1.annotate(cohort)  # A new occurrence shares the cohort content across both records.
 
-    window = _series(_SINE, "a", 8, "ts-window-2")
+    window = _series(_SINE, "a", 8, 121)
     record2 = dataset.add_record(
         record=Record(
-            record_id="record-2",
-            sources=(Source(id="source-record-2", name="Synthetic monitor", signals=(window,)),),
+            record_id=12,
+            sources=(Source(id=22, name="Synthetic monitor", signals=(window,)),),
         )
     )
     dataset.add_task(
         task=ClassificationTask(
             inputs=(record2,),
             targets=("onset",),
-            id="task-cls-2",
+            id=305,
             scope=TimeInterval.seconds(0.0, 0.25, time_series_ids=(window.id,)),
         ),
     )
@@ -244,7 +244,7 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
         ), f"task {task_id} differs"
 
 
-def _assert_sources_equal(record_id: str, expected: tuple[Source, ...], actual: tuple[Source, ...]) -> None:
+def _assert_sources_equal(record_id: int, expected: tuple[Source, ...], actual: tuple[Source, ...]) -> None:
     """Assert two recursive source hierarchies are logically equal."""
     exp = {source.id: source for root in expected for source in root.walk_sources()}
     act = {source.id: source for root in actual for source in root.walk_sources()}
@@ -262,7 +262,7 @@ def _assert_sources_equal(record_id: str, expected: tuple[Source, ...], actual: 
         )
 
 
-def _assert_series_equal(record_id: str, expected: tuple[Signal, ...], actual: tuple[Signal, ...]) -> None:
+def _assert_series_equal(record_id: int, expected: tuple[Signal, ...], actual: tuple[Signal, ...]) -> None:
     """Assert two tuples of series (matched by ``time_series_id``) are equal, values included."""
     exp = {ts.id: ts for ts in expected}
     act = {ts.id: ts for ts in actual}

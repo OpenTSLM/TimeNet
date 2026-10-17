@@ -218,3 +218,24 @@ def test_regular_axis_rejects_a_period_past_int64():
 def test_regular_axis_rejects_a_start_index_past_int64():
     with pytest.raises(TimeFValidationError, match="fit int64"):
         RegularAxis(period_us=Fraction(2000), start_index=2**63)
+
+
+AXIS_BUILDERS = [
+    lambda **kw: RegularAxis(period_us=Fraction(1000), **kw),
+    lambda **kw: IrregularAxis(first_us=0, last_us=10, **kw),
+    OrdinalAxis,
+]
+
+
+@pytest.mark.parametrize("build", AXIS_BUILDERS)
+def test_axis_id_defaults_to_a_unique_int_and_keeps_an_explicit_one(build):
+    assert isinstance(build().axis_id, int)
+    assert build().axis_id != build().axis_id
+    assert build(axis_id=42).axis_id == 42
+
+
+@pytest.mark.parametrize("build", AXIS_BUILDERS)
+@pytest.mark.parametrize("bad", ["axis-0", 0, -1, True])
+def test_axis_rejects_an_invalid_axis_id(build, bad):
+    with pytest.raises(TimeFValidationError, match="positive int64 id"):
+        build(axis_id=bad)

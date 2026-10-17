@@ -15,7 +15,7 @@ def check_span_within_window(  # noqa: PLR0913 (span rules have several branches
     label: str,
     span: Span,
     time_series: tuple["Signal", ...],
-    record_id: str,
+    record_id: int,
     time_span: TimeInterval | None = None,
     *,
     warn_when_outside: bool = True,
@@ -113,7 +113,7 @@ def check_span_within_window(  # noqa: PLR0913 (span rules have several branches
 
 
 def _reject_outside(  # noqa: PLR0913 (the sixth is the keyword-only guard)
-    label: str, span: TimeSpan, start: int, end: int, record_id: str, *, warn_when_outside: bool = True
+    label: str, span: TimeSpan, start: int, end: int, record_id: int, *, warn_when_outside: bool = True
 ) -> None:
     """Reject a time span that runs past the half-open window ``[start, end)``.
 
@@ -145,7 +145,7 @@ def _reject_outside_union(
     label: str,
     span: TimeSpan,
     windows: list[tuple[int, int]],
-    record_id: str,
+    record_id: int,
     *,
     warn_when_outside: bool = True,
 ) -> None:
