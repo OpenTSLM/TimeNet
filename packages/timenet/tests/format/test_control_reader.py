@@ -118,6 +118,29 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert task.annotations[0].name == "task_kind"
 
 
+def test_control_reader_reads_one_signal_by_record_id(tmp_path):
+    path = tmp_path / "control.duckdb"
+    dataset = _dataset()
+    dataset.add_record(record=Record(record_id="other", sources=(Source(name="other"),)))
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+    with connect_control(path) as connection:
+        connection.execute("UPDATE signals SET metadata = ? WHERE signal_id = 'lead-i'", ['{"ignored": true}'])
+    values = {
+        "lead-i": pa.array([1.0, 2.0], type=pa.float32()),
+        "lead-ii": pa.array([3.0, 4.0], type=pa.float32()),
+    }
+
+    with DuckDBControlReader(path, value_loader=lambda signal_id, _spec: values[signal_id]) as reader:
+        signal = reader.read_signal("record-1", "lead-i")
+        with pytest.raises(TimeFValidationError, match="record 'other' has no signal 'lead-i'"):
+            reader.read_signal("other", "lead-i")
+
+    assert signal.id == "lead-i"
+    assert signal.annotations == ()
+    assert signal.metadata == {}
+    assert signal.to_arrow().to_pylist() == [1.0, 2.0]
+
+
 def test_reader_and_audit_reject_ambiguous_stored_task_time_span(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
