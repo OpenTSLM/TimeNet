@@ -105,11 +105,11 @@ def test_manifest_data_files_are_lists_of_parts(tmp_path):
 # ---- shard schema & encodings -----------------------------------------------------------------
 
 
-def test_shard_has_time_series_id_column(tmp_path):
+def test_shard_holds_no_public_ids(tmp_path):
     version_dir = _written(tmp_path)
     shard = next(version_dir.glob("time_series/part-*.parquet"))
     names = set(pq.ParquetFile(shard).schema_arrow.names)
-    assert "time_series_id" in names  # self-describing shards (re-indexable)
+    assert "time_series_id" not in names
     assert "values" in names
 
 
