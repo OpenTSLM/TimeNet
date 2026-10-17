@@ -98,7 +98,7 @@ def test_run_pipeline_writes_the_requested_values_backend(tmp_path):
     )
 
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
-    assert manifest.values_backend == "zarr"
+    assert manifest.files.time_series.backend == "zarr"
 
 
 def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tmp_path):

@@ -1,4 +1,4 @@
-from typing import Any, TypeVar, cast
+from typing import Any, TypeVar
 
 from hypothesis import given, strategies as st
 import jsonschema
@@ -6,7 +6,7 @@ import pint
 from pydantic import BaseModel, ValidationError
 import pytest
 
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import ControlFiles, FilePart, Manifest, ManifestCounts, ManifestFiles, TimeSeriesFiles
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
     AnnotationDescriptor,
@@ -25,7 +25,11 @@ from timenet.types import (
 from timenet.values_backends import ValuesBackend
 
 
-_CONTROL = (FilePart(path="control.duckdb", checksum="sha256:" + "0" * 64, size=5),)
+_CONTROL = ControlFiles(
+    backend="duckdb",
+    parts=(FilePart(path="control.duckdb", checksum="sha256:" + "0" * 64, size=5),),
+)
+_NO_VALUES = TimeSeriesFiles(backend=ValuesBackend.PARQUET, encoding={}, parts=())
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
@@ -35,7 +39,7 @@ def _replace(model: _ModelT, **changes: Any) -> _ModelT:
     return type(model).model_validate({**model.__dict__, **changes})
 
 
-def _manifest(*, values_backend: str = ValuesBackend.PARQUET) -> Manifest:
+def _manifest() -> Manifest:
     ecg = TimeSeriesSpec(
         spec_type="ecg_lead",
         name="ECG Lead",
@@ -75,15 +79,18 @@ def _manifest(*, values_backend: str = ValuesBackend.PARQUET) -> Manifest:
         ),
         files=ManifestFiles(
             control=_CONTROL,
-            time_series=(
-                FilePart(
-                    path="time_series/part-00000.parquet",
-                    checksum="sha256:" + "e" * 64,
-                    size=50,
+            time_series=TimeSeriesFiles(
+                backend=ValuesBackend.PARQUET,
+                encoding={"ecg_lead": "dictionary"},
+                parts=(
+                    FilePart(
+                        path="time_series/part-00000.parquet",
+                        checksum="sha256:" + "e" * 64,
+                        size=50,
+                    ),
                 ),
             ),
         ),
-        values_backend=cast("ValuesBackend", values_backend),
         timef_format_version=1,
     )
 
@@ -91,8 +98,8 @@ def _manifest(*, values_backend: str = ValuesBackend.PARQUET) -> Manifest:
 def test_files_all_parts_concatenates_in_order():
     files = _manifest().files
     assert files.all_parts() == (
-        *(p.path for p in files.control),
-        *(p.path for p in files.time_series),
+        *(p.path for p in files.control.parts),
+        *(p.path for p in files.time_series.parts),
     )
 
 
@@ -106,7 +113,7 @@ def test_unknown_spec_unit_is_null_in_manifest():
     manifest = _replace(
         base,
         dataset_schema=_replace(base.dataset_schema, time_series_specs=(unknown,)),
-        files=ManifestFiles(control=_CONTROL),
+        files=ManifestFiles(control=_CONTROL, time_series=_NO_VALUES),
     )
     data = manifest.to_dict()
 
@@ -146,7 +153,7 @@ def test_nullable_schema_roundtrips_at_format_version_1():
     # that supports nullability, including the parallel validity arrays in Zarr.
     base = _replace(
         _manifest(),
-        files=ManifestFiles(control=_CONTROL),
+        files=ManifestFiles(control=_CONTROL, time_series=_NO_VALUES),
     )
     spec = _replace(base.dataset_schema.time_series_specs[0], nullable=True)
     manifest = Manifest(
@@ -165,7 +172,7 @@ def test_nullable_schema_roundtrips_at_format_version_1():
 def test_missing_nullable_defaults_to_false():
     data = _replace(
         _manifest(),
-        files=ManifestFiles(control=_CONTROL),
+        files=ManifestFiles(control=_CONTROL, time_series=_NO_VALUES),
     ).to_dict()
     data["schema"]["time_series_specs"][0].pop("nullable", None)
     restored = Manifest.model_validate(data)
@@ -178,7 +185,7 @@ def test_missing_nullable_defaults_to_false():
 def test_manifest_rejects_nonboolean_nullable(nullable):
     data = _replace(
         _manifest(),
-        files=ManifestFiles(control=_CONTROL),
+        files=ManifestFiles(control=_CONTROL, time_series=_NO_VALUES),
     ).to_dict()
     data["schema"]["time_series_specs"][0]["nullable"] = nullable
     with pytest.raises(ValidationError, match="nullable"):
@@ -304,10 +311,8 @@ def test_model_validate_requires_core_blocks(missing):
     ],
 )
 def test_model_validate_rejects_a_malformed_file_entry(entry):
-    # A file group is a list of {path, checksum, size} descriptors. Pydantic reports a malformed
-    # entry with its exact nested field location.
     d = _manifest().to_dict()
-    d["files"]["time_series"] = [entry]
+    d["files"]["time_series"]["parts"] = [entry]
     with pytest.raises(ValidationError):
         Manifest.model_validate(d)
 
@@ -342,32 +347,69 @@ def test_optional_schema_and_counts_default_empty():
     assert m.counts == ManifestCounts()
 
 
-def test_values_backend_defaults_to_parquet():
-    assert _manifest().values_backend == "parquet"
-    assert _manifest().to_dict()["values_backend"] == "parquet"
+def test_to_dict_keys_files_by_kind():
+    files = _manifest().to_dict()["files"]
+    assert files["control"]["backend"] == "duckdb"
+    assert files["time_series"]["backend"] == "parquet"
+    assert files["time_series"]["encoding"] == {"ecg_lead": "dictionary"}
 
 
-def test_values_backend_absent_reads_as_parquet():
+def test_to_dict_always_emits_time_series_encoding():
+    files = ManifestFiles(
+        control=_CONTROL, time_series=TimeSeriesFiles(backend=ValuesBackend.ZARR, encoding={}, parts=())
+    )
+    data = _replace(_manifest(), files=files).to_dict()
+    assert data["files"]["time_series"]["encoding"] == {}
+    jsonschema.validate(data, MANIFEST_SCHEMA)
+
+
+@pytest.mark.parametrize("count", [0, 2])
+def test_control_needs_exactly_one_part(count):
+    with pytest.raises(ValidationError, match="parts"):
+        ControlFiles(backend="duckdb", parts=_CONTROL.parts * count)
+
+
+def test_control_rejects_encoding():
     d = _manifest().to_dict()
-    del d["values_backend"]  # a pre-backend manifest
-    assert Manifest.model_validate(d).values_backend == "parquet"
+    d["files"]["control"]["encoding"] = {"ecg_lead": "dictionary"}
+    with pytest.raises(ValidationError, match="encoding"):
+        Manifest.model_validate(d)
 
 
-def test_values_backend_round_trips():
-    m = _manifest(values_backend="parquet")
-    assert Manifest.model_validate_json(m.to_json()).values_backend == "parquet"
+def test_zarr_time_series_rejects_encoding():
+    with pytest.raises(ValidationError, match="zarr"):
+        TimeSeriesFiles(backend=ValuesBackend.ZARR, encoding={"ecg_lead": "dictionary"}, parts=())
 
 
-def test_unknown_values_backend_rejected_when_parsing():
-    with pytest.raises(ValidationError, match="values_backend"):
-        _manifest(values_backend="feather")
+def test_unknown_encoding_rejected():
+    d = _manifest().to_dict()
+    d["files"]["time_series"]["encoding"] = {"ecg_lead": "zip"}
+    with pytest.raises(ValidationError, match="encoding"):
+        Manifest.model_validate(d)
 
 
-def test_unknown_values_backend_rejected():
-    data = _manifest().to_dict()
-    data["values_backend"] = "hdf5"
-    with pytest.raises(ValidationError, match="values_backend"):
-        Manifest.model_validate(data)
+@pytest.mark.parametrize("group", ["control", "time_series"])
+def test_unknown_files_backend_rejected(group):
+    d = _manifest().to_dict()
+    d["files"][group]["backend"] = "hdf5"
+    with pytest.raises(ValidationError, match="backend"):
+        Manifest.model_validate(d)
+
+
+@pytest.mark.parametrize("group", ["control", "time_series"])
+def test_missing_files_group_rejected(group):
+    d = _manifest().to_dict()
+    del d["files"][group]
+    with pytest.raises(ValidationError, match=group):
+        Manifest.model_validate(d)
+
+
+@pytest.mark.parametrize("key", ["values_backend", "value_encoding"])
+def test_top_level_backend_keys_rejected(key):
+    d = _manifest().to_dict()
+    d[key] = "parquet"
+    with pytest.raises(ValidationError, match=key):
+        Manifest.model_validate(d)
 
 
 def test_unmodeled_metadata_keys_rejected():
@@ -422,7 +464,7 @@ def test_codec_roundtrip_property(version, records, task_counts):
             license=License.MIT,
         ),
         counts=ManifestCounts(records=records, tasks=task_counts),
-        files=ManifestFiles(control=_CONTROL),
+        files=ManifestFiles(control=_CONTROL, time_series=_NO_VALUES),
         timef_format_version=1,
     )
     assert Manifest.model_validate_json(manifest.to_json()) == manifest
@@ -430,7 +472,7 @@ def test_codec_roundtrip_property(version, records, task_counts):
 
 @pytest.mark.parametrize(
     ("block", "key"),
-    [("metadata", "tags"), ("metadata", "domains"), ("files", "control"), ("files", "time_series")],
+    [("metadata", "tags"), ("metadata", "domains")],
 )
 def test_string_for_list_field_rejected(block, key):
     # a bare string where a list is expected must not be silently split into characters
@@ -440,7 +482,15 @@ def test_string_for_list_field_rejected(block, key):
         Manifest.model_validate(d)
 
 
-@pytest.mark.parametrize("block", ["value_encoding", "build_env"])
+@pytest.mark.parametrize("group", ["control", "time_series"])
+def test_string_for_files_parts_rejected(group):
+    d = _manifest().to_dict()
+    d["files"][group]["parts"] = "oops"
+    with pytest.raises(ValidationError):
+        Manifest.model_validate(d)
+
+
+@pytest.mark.parametrize("block", ["build_env"])
 def test_bad_dict_block_names_itself(block):
     # Pydantic includes the block name in its native error location.
     d = _manifest().to_dict()
@@ -462,7 +512,6 @@ def test_build_env_round_trips():
     "change",
     [
         {"build_env": {"python": 313}},
-        {"value_encoding": {"ecg_lead": "zip"}},
     ],
 )
 def test_direct_manifest_rejects_invalid_provenance_blocks(change):

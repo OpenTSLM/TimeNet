@@ -256,7 +256,7 @@ class TimeFReader:
     @property
     def values_backend(self) -> str:
         """Return the values-plane backend named by the manifest."""
-        return self._manifest.values_backend
+        return self._manifest.files.time_series.backend
 
     def read(self) -> TimeFDataset:
         """Hydrate the dataset while keeping every Signal's values lazy.
@@ -324,7 +324,7 @@ class TimeFReader:
     def _values_reader(self) -> BaseValuesReader:
         """Return the lazily opened values-plane reader."""
         if self._values is None:
-            self._values = make_values_reader(self._manifest.values_backend)
+            self._values = make_values_reader(self._manifest.files.time_series.backend)
         return self._values
 
     def _load_signal(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> pa.Array:
