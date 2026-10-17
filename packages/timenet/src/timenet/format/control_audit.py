@@ -10,11 +10,13 @@ the write path. Tests run it after each round trip, and tooling can run it over 
 import duckdb
 
 from timenet.errors import TimeFFormatError
-from timenet.format.control_schema import CONTROL_TABLES, Table
+from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, CONTROL_TABLES, Table
 from timenet.format.duckdb import check_control_schema
 
 
-_DOMAIN_CHECKS = """
+_OBJECT_TYPES_SQL = ", ".join(f"'{name}'" for name in sorted(ANNOTATED_OBJECT_TYPES))
+
+_DOMAIN_CHECKS = f"""
     SELECT 'sources.parent_source_key' AS field
     FROM sources WHERE parent_source_key = source_key
     UNION ALL
@@ -25,7 +27,7 @@ _DOMAIN_CHECKS = """
     SELECT 'signal_chunks.n_values' FROM signal_chunks WHERE n_values <= 0
     UNION ALL
     SELECT 'annotation_occurrences.object_type' FROM annotation_occurrences
-    WHERE object_type NOT IN ('Dataset', 'Task', 'Record', 'Source', 'Signal')
+    WHERE object_type NOT IN ({_OBJECT_TYPES_SQL})
     UNION ALL
     SELECT 'annotation_occurrences.span_type' FROM annotation_occurrences
     WHERE span_type NOT IN ('static', 'point', 'interval')
@@ -58,6 +60,23 @@ _DOMAIN_CHECKS = """
     SELECT 'annotation_occurrences.occurrence_id' FROM annotation_occurrences WHERE occurrence_id <= 0
     UNION ALL
     SELECT 'tasks.task_id' FROM tasks WHERE task_id <= 0
+    LIMIT 1
+"""  # noqa: S608 - fixed type names
+
+_OCCURRENCE_OWNER = """
+    SELECT o.occurrence_id, o.object_type, o.object_id
+    FROM annotation_occurrences o
+    LEFT JOIN records ON o.object_type = 'Record' AND records.record_id = o.object_id
+    LEFT JOIN sources ON o.object_type = 'Source' AND sources.source_id = o.object_id
+    LEFT JOIN signals ON o.object_type = 'Signal' AND signals.signal_id = o.object_id
+    LEFT JOIN tasks ON o.object_type = 'Task' AND tasks.task_id = o.object_id
+    WHERE CASE o.object_type
+        WHEN 'Dataset' THEN o.object_id IS NOT NULL
+        WHEN 'Record' THEN records.record_id IS NULL
+        WHEN 'Source' THEN sources.source_id IS NULL
+        WHEN 'Signal' THEN signals.signal_id IS NULL
+        WHEN 'Task' THEN tasks.task_id IS NULL
+    END
     LIMIT 1
 """
 
@@ -169,6 +188,15 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
     ).fetchone()
     if invalid_modality is not None:
         raise TimeFFormatError(f"task {invalid_modality[0]!r} has invalid input_modalities")
+
+    orphan_occurrence = connection.execute(_OCCURRENCE_OWNER).fetchone()
+    if orphan_occurrence is not None:
+        occurrence_id, object_type, object_id = orphan_occurrence
+        if object_type == "Dataset":
+            raise TimeFFormatError(
+                f"annotation occurrence {occurrence_id!r} on the Dataset has object id {object_id!r}"
+            )
+        raise TimeFFormatError(f"annotation occurrence {occurrence_id!r} refers to missing {object_type} {object_id!r}")
 
     invalid_clock_scope = connection.execute(_TASK_RECORD_SCOPE).fetchone()
     if invalid_clock_scope is not None:
