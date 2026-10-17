@@ -79,6 +79,12 @@ finishes.
 
 In final summaries, state which checks you ran and call out any you could not run.
 
+The optional viewer has a React/TypeScript frontend under `frontend/`. Use Node 22 or newer.
+Run `make viewer-build` to regenerate request/response contracts and packaged assets, and
+`make viewer-test` to build it and run browser tests. `npm --prefix frontend run format` formats
+frontend source; the build checks formatting and TypeScript. Change the backend endpoint types
+and `scripts/viewer/gen_contract.py`, not the generated files under `frontend/src/generated/`.
+
 ## Stacked PRs
 This repository uses GitHub Stacked PRs via the `gh stack` CLI extension. Each branch in a stack
 maps to one PR whose base is the branch below it, so a large change ships as a chain of small,

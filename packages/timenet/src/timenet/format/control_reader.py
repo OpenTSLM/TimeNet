@@ -17,6 +17,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
+from timenet.format.query_helpers import OBJECT_ID_SELECTS
 from timenet.format.task_codec import (
     decode_input_modalities,
     decode_span,
@@ -189,15 +190,6 @@ class _TargetRow(NamedTuple):
 _TASK_BATCH_SIZE = 5_000
 """Tasks hydrated per round of keyed queries."""
 
-_OBJECT_ID_SELECTS = {
-    "Dataset": "SELECT dataset_key AS object_key, 'Dataset' AS object_type, dataset_id AS object_id FROM datasets",
-    "Record": "SELECT record_key AS object_key, 'Record' AS object_type, record_id AS object_id FROM records",
-    "Source": "SELECT source_key AS object_key, 'Source' AS object_type, source_id AS object_id FROM sources",
-    "Signal": "SELECT signal_key AS object_key, 'Signal' AS object_type, signal_id AS object_id FROM signals",
-    "Task": "SELECT task_key AS object_key, 'Task' AS object_type, task_id AS object_id FROM tasks",
-}
-"""Per object type, the query that maps its internal keys to public IDs for annotation lookups."""
-
 
 def _signal_ids_cte(name: str, table: str, keys_column: str, group_by: tuple[str, ...], ids_column: str) -> str:
     """Build a CTE that turns a ``BIGINT[]`` column of Signal keys into a list of Signal IDs.
@@ -238,12 +230,12 @@ def _annotation_query(object_type: str | None, *, keyed: bool) -> str:
     Raises:
         TimeFFormatError: If ``object_type`` is not an annotated object type.
     """
-    if object_type is not None and object_type not in _OBJECT_ID_SELECTS:
+    if object_type is not None and object_type not in OBJECT_ID_SELECTS:
         raise TimeFFormatError(f"unknown annotated object type {object_type!r}")
     key_filter = " WHERE object_key IN (SELECT object_key FROM requested)" if keyed else ""
     object_ids = " UNION ALL ".join(
         f"SELECT * FROM ({select}){key_filter}"  # noqa: S608 - fixed fragments
-        for name, select in _OBJECT_ID_SELECTS.items()
+        for name, select in OBJECT_ID_SELECTS.items()
         if object_type is None or name == object_type
     )
     # Two fixed shapes rather than one ``(? OR key IN ...)`` predicate: a parameter inside an OR keeps
@@ -436,7 +428,7 @@ class DuckDBControlReader:
             row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY record_id").fetchall()
         )
 
-    def read_records(  # noqa: PLR0912, PLR0914, PLR0915 - related row sets stay together
+    def read_records(  # noqa: PLR0914, PLR0915 - related row sets stay together
         self,
         record_ids: Iterable[str] | None = None,
         *,
@@ -494,36 +486,12 @@ class DuckDBControlReader:
                 raise TimeFFormatError(
                     f"signal {signal_row.signal_id!r} refers to missing axis key {signal_row.axis_key!r}"
                 )
-            axis = loaded_axis.axis
             spec = specs.get(signal_row.spec_fields)
             if spec is None:
                 spec = self._spec_from_row(signal_row)
                 specs[signal_row.spec_fields] = spec
-            offsets_loader = None
-            if isinstance(axis, IrregularAxis):
-                if loaded_axis.n_values is None:
-                    raise TimeFFormatError(f"irregular axis {axis.axis_id!r} has no Signal length")
-                offsets_loader = (
-                    partial(self._offsets_loader, signal_row.axis_key, axis, loaded_axis.n_values)
-                    if self._offsets_loader is not None
-                    else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
-                )
             signals_by_source[signal_row.source_key].append(
-                Signal.from_loader(
-                    id=signal_row.signal_id,
-                    name=signal_row.name,
-                    spec=spec,
-                    time_axis=axis,
-                    n_values=signal_row.n_values,
-                    loader=(
-                        self._value_loader_factory(signal_row.signal_key, signal_row.signal_id, spec)
-                        if self._value_loader_factory is not None
-                        else partial(self._value_loader, signal_row.signal_id, spec)
-                    ),
-                    time_offsets_loader=offsets_loader,
-                    annotations=annotations.get(("Signal", signal_row.signal_id), ()),
-                    metadata=_decode_json(signal_row.metadata, default={}),
-                )
+                self._make_signal(signal_row, loaded_axis, spec, annotations.get(("Signal", signal_row.signal_id), ()))
             )
 
         missing_clocks = {row.clock_id for row in rows} - self._clock_cache.keys()
@@ -662,6 +630,65 @@ class DuckDBControlReader:
         if row is None:
             return ()
         return self._read_annotations((row[0],)).get(("Dataset", dataset_id), ())
+
+    def read_signal(self, record_id: str, signal_id: str) -> Signal:
+        """Read one lazy Signal without hydrating siblings, annotations, or metadata.
+
+        Returns:
+            A Signal whose loaders borrow this control reader's lifetime.
+
+        Raises:
+            TimeFValidationError: If the signal is not owned by the selected record.
+        """
+        row = self.connection.execute(
+            """SELECT signals.* REPLACE ('{}' AS metadata) FROM signals JOIN sources USING (source_key)
+               JOIN records USING (record_key) WHERE record_id = ? AND signal_id = ?""",
+            [record_id, signal_id],
+        ).fetchone()
+        if row is None:
+            raise TimeFValidationError(f"record {record_id!r} has no signal {signal_id!r}")
+        stored = _SignalRow(*row)
+        return self._make_signal(
+            stored, self._read_axes([stored.axis_key])[stored.axis_key], self._spec_from_row(stored)
+        )
+
+    def _make_signal(
+        self,
+        signal_row: _SignalRow,
+        loaded_axis: _LoadedAxis,
+        spec: TimeSeriesSpec,
+        annotations: tuple[Annotation, ...] = (),
+    ) -> Signal:
+        """Return a lazy signal through the same path for full and bounded reads.
+
+        Raises:
+            TimeFFormatError: If an irregular axis has no persisted length.
+        """
+        axis = loaded_axis.axis
+        offsets_loader = None
+        if isinstance(axis, IrregularAxis):
+            if loaded_axis.n_values is None:
+                raise TimeFFormatError(f"irregular axis {axis.axis_id!r} has no Signal length")
+            offsets_loader = (
+                partial(self._offsets_loader, signal_row.axis_key, axis, loaded_axis.n_values)
+                if self._offsets_loader is not None
+                else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
+            )
+        return Signal.from_loader(
+            id=signal_row.signal_id,
+            name=signal_row.name,
+            spec=spec,
+            time_axis=axis,
+            n_values=signal_row.n_values,
+            loader=(
+                self._value_loader_factory(signal_row.signal_key, signal_row.signal_id, spec)
+                if self._value_loader_factory is not None
+                else partial(self._value_loader, signal_row.signal_id, spec)
+            ),
+            time_offsets_loader=offsets_loader,
+            annotations=annotations,
+            metadata=_decode_json(signal_row.metadata, default={}),
+        )
 
     def chunk_rows_by_key(self, signal_key: int, signal_id: str) -> list[dict[str, Any]]:
         """Return one Signal's chunk locations in chunk order.
@@ -888,9 +915,9 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If ``object_type`` is not an annotated object type.
         """
-        if object_type is not None and object_type not in _OBJECT_ID_SELECTS:
+        if object_type is not None and object_type not in OBJECT_ID_SELECTS:
             raise TimeFFormatError(f"unknown annotated object type {object_type!r}")
-        object_ids = " UNION ALL ".join(_OBJECT_ID_SELECTS.values())
+        object_ids = " UNION ALL ".join(OBJECT_ID_SELECTS.values())
         where = "" if object_type is None else "WHERE o.object_type = ?"
         return self.connection.execute(
             f"""WITH object_ids AS ({object_ids})

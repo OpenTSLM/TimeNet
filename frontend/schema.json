@@ -1,0 +1,3267 @@
+{
+  "components": {
+    "schemas": {
+      "AnnotationItem": {
+        "description": "A bounded annotation value and its public owner.",
+        "properties": {
+          "content_id": {
+            "title": "Content Id",
+            "type": "string"
+          },
+          "dataset_id": {
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "end_us": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Us"
+          },
+          "field": {
+            "title": "Field",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "object_id": {
+            "title": "Object Id",
+            "type": "string"
+          },
+          "object_type": {
+            "enum": [
+              "Dataset",
+              "Record",
+              "Source",
+              "Signal",
+              "Task"
+            ],
+            "title": "Object Type",
+            "type": "string"
+          },
+          "occurrence_id": {
+            "title": "Occurrence Id",
+            "type": "string"
+          },
+          "span_type": {
+            "enum": [
+              "static",
+              "point",
+              "interval"
+            ],
+            "title": "Span Type",
+            "type": "string"
+          },
+          "start_us": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Us"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "value_kind": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value Kind"
+          },
+          "value_truncated": {
+            "title": "Value Truncated",
+            "type": "boolean"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "occurrence_id",
+          "object_type",
+          "object_id",
+          "name",
+          "value_kind",
+          "value",
+          "value_truncated",
+          "span_type",
+          "start_us",
+          "end_us"
+        ],
+        "title": "AnnotationItem",
+        "type": "object"
+      },
+      "AnnotationPage": {
+        "description": "A bounded annotation page.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "more": {
+            "title": "More",
+            "type": "boolean"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "api_version",
+          "next_cursor",
+          "items"
+        ],
+        "title": "AnnotationPage",
+        "type": "object"
+      },
+      "AnnotationQuery": {
+        "additionalProperties": false,
+        "description": "A bounded annotation-list request body.",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "After"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "object_id": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Object Id"
+          },
+          "object_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "Dataset",
+                  "Record",
+                  "Source",
+                  "Signal",
+                  "Task"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Object Type"
+          },
+          "span_type": {
+            "anyOf": [
+              {
+                "enum": [
+                  "static",
+                  "point",
+                  "interval"
+                ],
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Span Type"
+          },
+          "value_query": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Value Query"
+          }
+        },
+        "title": "AnnotationQuery",
+        "type": "object"
+      },
+      "AnnotationWindowQuery": {
+        "additionalProperties": false,
+        "description": "A selected signal step/time window for annotation overlays.",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "maxLength": 16384,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "After"
+          },
+          "end_us": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^-?[0-9]+$",
+                "type": "string"
+              }
+            ],
+            "default": null,
+            "title": "End Us"
+          },
+          "full": {
+            "default": false,
+            "title": "Full",
+            "type": "boolean"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "record_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Record Id",
+            "type": "string"
+          },
+          "signal_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Signal Id",
+            "type": "string"
+          },
+          "start": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Start"
+          },
+          "start_us": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^-?[0-9]+$",
+                "type": "string"
+              }
+            ],
+            "default": null,
+            "title": "Start Us"
+          },
+          "stop": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stop"
+          }
+        },
+        "required": [
+          "record_id",
+          "signal_id"
+        ],
+        "title": "AnnotationWindowQuery",
+        "type": "object"
+      },
+      "BooleanTarget": {
+        "description": "Required facts for a boolean target.",
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "null"
+          },
+          "kind": {
+            "const": "boolean",
+            "title": "Kind",
+            "type": "string"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "null"
+          },
+          "signal_id": {
+            "title": "Signal Id",
+            "type": "null"
+          },
+          "signal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Signal Ids",
+            "type": "array"
+          },
+          "signal_ids_truncated": {
+            "title": "Signal Ids Truncated",
+            "type": "boolean"
+          },
+          "start": {
+            "title": "Start",
+            "type": "null"
+          },
+          "value": {
+            "title": "Value",
+            "type": "boolean"
+          },
+          "value_truncated": {
+            "title": "Value Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value_truncated",
+          "signal_ids",
+          "signal_ids_truncated",
+          "kind",
+          "value",
+          "record_id",
+          "signal_id",
+          "start",
+          "end"
+        ],
+        "title": "BooleanTarget",
+        "type": "object"
+      },
+      "CatalogFacets": {
+        "description": "Filter choices from every compatible dataset in the registry.",
+        "properties": {
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Domains",
+            "type": "array"
+          },
+          "licenses": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Licenses",
+            "type": "array"
+          },
+          "tasks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tasks",
+            "type": "array"
+          }
+        },
+        "required": [
+          "domains",
+          "tasks",
+          "licenses"
+        ],
+        "title": "CatalogFacets",
+        "type": "object"
+      },
+      "CatalogIssue": {
+        "description": "An incompatible committed dataset.",
+        "properties": {
+          "dataset_id": {
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "message": {
+            "title": "Message",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset_id",
+          "message"
+        ],
+        "title": "CatalogIssue",
+        "type": "object"
+      },
+      "CatalogItem": {
+        "description": "Validated catalog metadata.",
+        "properties": {
+          "access": {
+            "title": "Access",
+            "type": "string"
+          },
+          "dataset_id": {
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "description_truncated": {
+            "title": "Description Truncated",
+            "type": "boolean"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Domains",
+            "type": "array"
+          },
+          "license": {
+            "title": "License",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "tasks": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tasks",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset_id",
+          "version",
+          "name",
+          "description",
+          "description_truncated",
+          "domains",
+          "license",
+          "access",
+          "tasks"
+        ],
+        "title": "CatalogItem",
+        "type": "object"
+      },
+      "CatalogPage": {
+        "description": "A bounded catalog page, including invalid entries.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "facets": {
+            "$ref": "#/components/schemas/CatalogFacets"
+          },
+          "issues": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogIssue"
+            },
+            "title": "Issues",
+            "type": "array"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/CatalogItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          },
+          "total_matches": {
+            "title": "Total Matches",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "api_version",
+          "items",
+          "issues",
+          "next_cursor",
+          "total_matches",
+          "facets"
+        ],
+        "title": "CatalogPage",
+        "type": "object"
+      },
+      "CatalogQuery": {
+        "additionalProperties": false,
+        "description": "Registry-wide filters and an exclusive dataset-ID cursor.",
+        "properties": {
+          "after": {
+            "default": "",
+            "maxLength": 4096,
+            "title": "After",
+            "type": "string"
+          },
+          "domain": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Domain",
+            "type": "string"
+          },
+          "license": {
+            "default": "",
+            "maxLength": 512,
+            "title": "License",
+            "type": "string"
+          },
+          "query": {
+            "default": "",
+            "maxLength": 512,
+            "title": "Query",
+            "type": "string"
+          },
+          "task": {
+            "default": "",
+            "maxLength": 128,
+            "title": "Task",
+            "type": "string"
+          }
+        },
+        "title": "CatalogQuery",
+        "type": "object"
+      },
+      "DatasetSelection": {
+        "additionalProperties": false,
+        "description": "Select one pinned registry dataset.",
+        "properties": {
+          "dataset_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "version": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Version"
+          }
+        },
+        "required": [
+          "dataset_id"
+        ],
+        "title": "DatasetSelection",
+        "type": "object"
+      },
+      "FormatOverview": {
+        "description": "Physical format identifiers.",
+        "properties": {
+          "timef_version": {
+            "title": "Timef Version",
+            "type": "integer"
+          },
+          "values_backend": {
+            "title": "Values Backend",
+            "type": "string"
+          }
+        },
+        "required": [
+          "timef_version",
+          "values_backend"
+        ],
+        "title": "FormatOverview",
+        "type": "object"
+      },
+      "Identity": {
+        "description": "Human-facing dataset identity.",
+        "properties": {
+          "access": {
+            "title": "Access",
+            "type": "string"
+          },
+          "dataset_id": {
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "description": {
+            "title": "Description",
+            "type": "string"
+          },
+          "domains": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Domains",
+            "type": "array"
+          },
+          "license": {
+            "title": "License",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "source_url": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Source Url"
+          },
+          "tags": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Tags",
+            "type": "array"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "dataset_id",
+          "version",
+          "name",
+          "description",
+          "license",
+          "access",
+          "domains",
+          "tags",
+          "source_url"
+        ],
+        "title": "Identity",
+        "type": "object"
+      },
+      "IntervalScope": {
+        "description": "A scope with both exclusive interval bounds.",
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "time_interval",
+              "step_interval"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "more_signal_ids": {
+            "title": "More Signal Ids",
+            "type": "boolean"
+          },
+          "signal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Signal Ids",
+            "type": "array"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signal_ids",
+          "more_signal_ids",
+          "kind",
+          "start",
+          "end"
+        ],
+        "title": "IntervalScope",
+        "type": "object"
+      },
+      "IntervalTarget": {
+        "description": "Required facts for a interval target.",
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "time_interval",
+              "step_interval"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "null"
+          },
+          "signal_id": {
+            "title": "Signal Id",
+            "type": "null"
+          },
+          "signal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Signal Ids",
+            "type": "array"
+          },
+          "signal_ids_truncated": {
+            "title": "Signal Ids Truncated",
+            "type": "boolean"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "null"
+          },
+          "value_truncated": {
+            "title": "Value Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value_truncated",
+          "signal_ids",
+          "signal_ids_truncated",
+          "kind",
+          "value",
+          "record_id",
+          "signal_id",
+          "start",
+          "end"
+        ],
+        "title": "IntervalTarget",
+        "type": "object"
+      },
+      "ModeResult": {
+        "description": "A completed dataset selection transition.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "mode": {
+            "enum": [
+              "registry",
+              "dataset"
+            ],
+            "title": "Mode",
+            "type": "string"
+          }
+        },
+        "required": [
+          "api_version",
+          "mode"
+        ],
+        "title": "ModeResult",
+        "type": "object"
+      },
+      "NoScope": {
+        "description": "A task without an explicit scope.",
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "null"
+          },
+          "kind": {
+            "const": null,
+            "title": "Kind",
+            "type": "null"
+          },
+          "more_signal_ids": {
+            "title": "More Signal Ids",
+            "type": "boolean"
+          },
+          "signal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Signal Ids",
+            "type": "array"
+          },
+          "start": {
+            "title": "Start",
+            "type": "null"
+          }
+        },
+        "required": [
+          "signal_ids",
+          "more_signal_ids",
+          "kind",
+          "start",
+          "end"
+        ],
+        "title": "NoScope",
+        "type": "object"
+      },
+      "Overview": {
+        "description": "Manifest-backed dataset overview.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "counts": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Counts",
+            "type": "object"
+          },
+          "dependencies": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dependencies",
+            "type": "array"
+          },
+          "format": {
+            "$ref": "#/components/schemas/FormatOverview"
+          },
+          "identity": {
+            "$ref": "#/components/schemas/Identity"
+          },
+          "schema": {
+            "$ref": "#/components/schemas/SchemaOverview"
+          }
+        },
+        "required": [
+          "api_version",
+          "identity",
+          "format",
+          "counts",
+          "schema",
+          "dependencies"
+        ],
+        "title": "Overview",
+        "type": "object"
+      },
+      "OwnerRecord": {
+        "description": "The record containing a signal or source.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "dataset_id": {
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "object_type": {
+            "title": "Object Type",
+            "type": "string"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "api_version",
+          "object_type",
+          "record_id",
+          "dataset_id"
+        ],
+        "title": "OwnerRecord",
+        "type": "object"
+      },
+      "OwnerRecordQuery": {
+        "additionalProperties": false,
+        "description": "A Source or Signal owner whose containing Record is needed for navigation.",
+        "properties": {
+          "object_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Object Id",
+            "type": "string"
+          },
+          "object_type": {
+            "enum": [
+              "Source",
+              "Signal"
+            ],
+            "title": "Object Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "object_type",
+          "object_id"
+        ],
+        "title": "OwnerRecordQuery",
+        "type": "object"
+      },
+      "PointScope": {
+        "description": "A scope at one temporal or step coordinate.",
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "null"
+          },
+          "kind": {
+            "enum": [
+              "time_point",
+              "step_point"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "more_signal_ids": {
+            "title": "More Signal Ids",
+            "type": "boolean"
+          },
+          "signal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Signal Ids",
+            "type": "array"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          }
+        },
+        "required": [
+          "signal_ids",
+          "more_signal_ids",
+          "kind",
+          "start",
+          "end"
+        ],
+        "title": "PointScope",
+        "type": "object"
+      },
+      "PointTarget": {
+        "description": "Required facts for a point target.",
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "null"
+          },
+          "kind": {
+            "enum": [
+              "time_point",
+              "step_point"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "null"
+          },
+          "signal_id": {
+            "title": "Signal Id",
+            "type": "null"
+          },
+          "signal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Signal Ids",
+            "type": "array"
+          },
+          "signal_ids_truncated": {
+            "title": "Signal Ids Truncated",
+            "type": "boolean"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "value": {
+            "title": "Value",
+            "type": "null"
+          },
+          "value_truncated": {
+            "title": "Value Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value_truncated",
+          "signal_ids",
+          "signal_ids_truncated",
+          "kind",
+          "value",
+          "record_id",
+          "signal_id",
+          "start",
+          "end"
+        ],
+        "title": "PointTarget",
+        "type": "object"
+      },
+      "RecordDetail": {
+        "description": "Record clock, provenance and metadata preview.",
+        "properties": {
+          "dataset_id": {
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "metadata": {
+            "title": "Metadata",
+            "type": "string"
+          },
+          "metadata_truncated": {
+            "title": "Metadata Truncated",
+            "type": "boolean"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "string"
+          },
+          "signal": {
+            "$ref": "#/components/schemas/SignalDetail"
+          },
+          "source_path": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Source Path",
+            "type": "array"
+          },
+          "span": {
+            "anyOf": [
+              {
+                "$ref": "#/components/schemas/TimeSpan"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "span_provenance": {
+            "title": "Span Provenance",
+            "type": "string"
+          },
+          "start_time_us": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Time Us"
+          },
+          "version": {
+            "title": "Version",
+            "type": "string"
+          }
+        },
+        "required": [
+          "record_id",
+          "dataset_id",
+          "version",
+          "start_time_us",
+          "span",
+          "span_provenance",
+          "metadata",
+          "metadata_truncated"
+        ],
+        "title": "RecordDetail",
+        "type": "object"
+      },
+      "RecordDetailQuery": {
+        "additionalProperties": false,
+        "description": "One record's persisted metadata and optional selected signal metadata.",
+        "properties": {
+          "record_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Record Id",
+            "type": "string"
+          },
+          "signal_id": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Signal Id"
+          },
+          "source_id": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Source Id"
+          }
+        },
+        "required": [
+          "record_id"
+        ],
+        "title": "RecordDetailQuery",
+        "type": "object"
+      },
+      "RecordItem": {
+        "description": "One record's public identity and temporal envelope.",
+        "properties": {
+          "end_us": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "End Us"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "string"
+          },
+          "start_us": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Start Us"
+          }
+        },
+        "required": [
+          "record_id",
+          "start_us",
+          "end_us"
+        ],
+        "title": "RecordItem",
+        "type": "object"
+      },
+      "RecordPage": {
+        "description": "A bounded record page.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/RecordItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "api_version",
+          "next_cursor",
+          "items"
+        ],
+        "title": "RecordPage",
+        "type": "object"
+      },
+      "RecordQuery": {
+        "additionalProperties": false,
+        "description": "The bounded record-list request body.",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "After"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Query"
+          }
+        },
+        "title": "RecordQuery",
+        "type": "object"
+      },
+      "RecordTarget": {
+        "description": "Required facts for a record target.",
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "null"
+          },
+          "kind": {
+            "const": "record",
+            "title": "Kind",
+            "type": "string"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "string"
+          },
+          "signal_id": {
+            "title": "Signal Id",
+            "type": "null"
+          },
+          "signal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Signal Ids",
+            "type": "array"
+          },
+          "signal_ids_truncated": {
+            "title": "Signal Ids Truncated",
+            "type": "boolean"
+          },
+          "start": {
+            "title": "Start",
+            "type": "null"
+          },
+          "value": {
+            "title": "Value",
+            "type": "null"
+          },
+          "value_truncated": {
+            "title": "Value Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value_truncated",
+          "signal_ids",
+          "signal_ids_truncated",
+          "kind",
+          "value",
+          "record_id",
+          "signal_id",
+          "start",
+          "end"
+        ],
+        "title": "RecordTarget",
+        "type": "object"
+      },
+      "ScalarTarget": {
+        "description": "Required facts for a scalar target.",
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "null"
+          },
+          "kind": {
+            "enum": [
+              "text",
+              "integer",
+              "float"
+            ],
+            "title": "Kind",
+            "type": "string"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "null"
+          },
+          "signal_id": {
+            "title": "Signal Id",
+            "type": "null"
+          },
+          "signal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Signal Ids",
+            "type": "array"
+          },
+          "signal_ids_truncated": {
+            "title": "Signal Ids Truncated",
+            "type": "boolean"
+          },
+          "start": {
+            "title": "Start",
+            "type": "null"
+          },
+          "value": {
+            "title": "Value",
+            "type": "string"
+          },
+          "value_truncated": {
+            "title": "Value Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value_truncated",
+          "signal_ids",
+          "signal_ids_truncated",
+          "kind",
+          "value",
+          "record_id",
+          "signal_id",
+          "start",
+          "end"
+        ],
+        "title": "ScalarTarget",
+        "type": "object"
+      },
+      "SchemaOverview": {
+        "description": "Available task and signal families.",
+        "properties": {
+          "spec_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Spec Types",
+            "type": "array"
+          },
+          "task_types": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Task Types",
+            "type": "array"
+          },
+          "tensor_specs": {
+            "items": {
+              "$ref": "#/components/schemas/TensorSpec"
+            },
+            "title": "Tensor Specs",
+            "type": "array"
+          }
+        },
+        "required": [
+          "spec_types",
+          "task_types",
+          "tensor_specs"
+        ],
+        "title": "SchemaOverview",
+        "type": "object"
+      },
+      "Session": {
+        "description": "The active viewer mode and optional dataset identity.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "dataset_id": {
+            "title": "Dataset Id",
+            "type": "string"
+          },
+          "limits": {
+            "additionalProperties": {
+              "type": "integer"
+            },
+            "title": "Limits",
+            "type": "object"
+          },
+          "mode": {
+            "enum": [
+              "registry",
+              "dataset"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "registry": {
+            "title": "Registry",
+            "type": "string"
+          }
+        },
+        "required": [
+          "api_version",
+          "registry"
+        ],
+        "title": "Session",
+        "type": "object"
+      },
+      "SessionQuery": {
+        "additionalProperties": false,
+        "description": "An optional client refresh generation for session discovery.",
+        "properties": {
+          "generation": {
+            "default": "",
+            "maxLength": 32,
+            "title": "Generation",
+            "type": "string"
+          }
+        },
+        "title": "SessionQuery",
+        "type": "object"
+      },
+      "SignalDetail": {
+        "description": "Signal metadata preview.",
+        "properties": {
+          "axis_kind": {
+            "enum": [
+              "regular",
+              "irregular",
+              "ordinal"
+            ],
+            "title": "Axis Kind",
+            "type": "string"
+          },
+          "metadata": {
+            "title": "Metadata",
+            "type": "string"
+          },
+          "metadata_truncated": {
+            "title": "Metadata Truncated",
+            "type": "boolean"
+          },
+          "n_values": {
+            "title": "N Values",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "signal_id": {
+            "title": "Signal Id",
+            "type": "string"
+          },
+          "spec": {
+            "$ref": "#/components/schemas/SignalSpec"
+          }
+        },
+        "required": [
+          "signal_id",
+          "name",
+          "axis_kind",
+          "n_values",
+          "spec",
+          "metadata",
+          "metadata_truncated"
+        ],
+        "title": "SignalDetail",
+        "type": "object"
+      },
+      "SignalItem": {
+        "description": "One signal's inexpensive structural facts.",
+        "properties": {
+          "axis_kind": {
+            "enum": [
+              "regular",
+              "irregular",
+              "ordinal"
+            ],
+            "title": "Axis Kind",
+            "type": "string"
+          },
+          "dtype": {
+            "title": "Dtype",
+            "type": "string"
+          },
+          "n_values": {
+            "title": "N Values",
+            "type": "integer"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "signal_id": {
+            "title": "Signal Id",
+            "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          },
+          "value_shape": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Value Shape",
+            "type": "array"
+          }
+        },
+        "required": [
+          "signal_id",
+          "name",
+          "axis_kind",
+          "n_values",
+          "dtype",
+          "unit",
+          "value_shape"
+        ],
+        "title": "SignalItem",
+        "type": "object"
+      },
+      "SignalPage": {
+        "description": "A bounded signal page.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SignalItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "api_version",
+          "next_cursor",
+          "items"
+        ],
+        "title": "SignalPage",
+        "type": "object"
+      },
+      "SignalQuery": {
+        "additionalProperties": false,
+        "description": "The bounded signal-list request body.",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "After"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "record_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Record Id",
+            "type": "string"
+          },
+          "source_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "record_id",
+          "source_id"
+        ],
+        "title": "SignalQuery",
+        "type": "object"
+      },
+      "SignalSpec": {
+        "description": "Signal fields needed for component selection.",
+        "properties": {
+          "dtype": {
+            "title": "Dtype",
+            "type": "string"
+          },
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "value_shape": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Value Shape",
+            "type": "array"
+          }
+        },
+        "required": [
+          "name",
+          "dtype",
+          "value_shape"
+        ],
+        "title": "SignalSpec",
+        "type": "object"
+      },
+      "SignalTarget": {
+        "description": "Required facts for a signal target.",
+        "properties": {
+          "end": {
+            "title": "End",
+            "type": "null"
+          },
+          "kind": {
+            "const": "signal",
+            "title": "Kind",
+            "type": "string"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "null"
+          },
+          "signal_id": {
+            "title": "Signal Id",
+            "type": "string"
+          },
+          "signal_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Signal Ids",
+            "type": "array"
+          },
+          "signal_ids_truncated": {
+            "title": "Signal Ids Truncated",
+            "type": "boolean"
+          },
+          "start": {
+            "title": "Start",
+            "type": "null"
+          },
+          "value": {
+            "title": "Value",
+            "type": "null"
+          },
+          "value_truncated": {
+            "title": "Value Truncated",
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "value_truncated",
+          "signal_ids",
+          "signal_ids_truncated",
+          "kind",
+          "value",
+          "record_id",
+          "signal_id",
+          "start",
+          "end"
+        ],
+        "title": "SignalTarget",
+        "type": "object"
+      },
+      "SourceItem": {
+        "description": "One source in the record hierarchy.",
+        "properties": {
+          "name": {
+            "title": "Name",
+            "type": "string"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Parent Id"
+          },
+          "source_id": {
+            "title": "Source Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "source_id",
+          "parent_id",
+          "name"
+        ],
+        "title": "SourceItem",
+        "type": "object"
+      },
+      "SourcePage": {
+        "description": "A bounded source page.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/SourceItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "api_version",
+          "next_cursor",
+          "items"
+        ],
+        "title": "SourcePage",
+        "type": "object"
+      },
+      "SourceQuery": {
+        "additionalProperties": false,
+        "description": "The bounded source-tree request body.",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "After"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "parent_id": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Parent Id"
+          },
+          "record_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Record Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "record_id"
+        ],
+        "title": "SourceQuery",
+        "type": "object"
+      },
+      "StepBounds": {
+        "description": "Exact half-open step bounds.",
+        "properties": {
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "stop": {
+            "title": "Stop",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "stop"
+        ],
+        "title": "StepBounds",
+        "type": "object"
+      },
+      "StrictQuery": {
+        "additionalProperties": false,
+        "description": "Reject misspelled and unsupported request fields.",
+        "properties": {},
+        "title": "StrictQuery",
+        "type": "object"
+      },
+      "TargetItem": {
+        "discriminator": {
+          "mapping": {
+            "boolean": "#/components/schemas/BooleanTarget",
+            "float": "#/components/schemas/ScalarTarget",
+            "integer": "#/components/schemas/ScalarTarget",
+            "record": "#/components/schemas/RecordTarget",
+            "signal": "#/components/schemas/SignalTarget",
+            "step_interval": "#/components/schemas/IntervalTarget",
+            "step_point": "#/components/schemas/PointTarget",
+            "text": "#/components/schemas/ScalarTarget",
+            "time_interval": "#/components/schemas/IntervalTarget",
+            "time_point": "#/components/schemas/PointTarget"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/ScalarTarget"
+          },
+          {
+            "$ref": "#/components/schemas/BooleanTarget"
+          },
+          {
+            "$ref": "#/components/schemas/RecordTarget"
+          },
+          {
+            "$ref": "#/components/schemas/SignalTarget"
+          },
+          {
+            "$ref": "#/components/schemas/PointTarget"
+          },
+          {
+            "$ref": "#/components/schemas/IntervalTarget"
+          }
+        ]
+      },
+      "TaskConfiguration": {
+        "description": "Optional configuration fields shared across task kinds.",
+        "properties": {
+          "mode": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Mode"
+          },
+          "target_name": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Name"
+          },
+          "target_schema": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Target Schema"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "target_schema",
+          "unit",
+          "target_name",
+          "mode"
+        ],
+        "title": "TaskConfiguration",
+        "type": "object"
+      },
+      "TaskDetail": {
+        "description": "Bounded task facts and independently truncated relationships.",
+        "properties": {
+          "annotation_refs": {
+            "items": {
+              "$ref": "#/components/schemas/AnnotationItem"
+            },
+            "title": "Annotation Refs",
+            "type": "array"
+          },
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "candidate_record_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Candidate Record Ids",
+            "type": "array"
+          },
+          "configuration": {
+            "$ref": "#/components/schemas/TaskConfiguration"
+          },
+          "has_inline_targets": {
+            "title": "Has Inline Targets",
+            "type": "boolean"
+          },
+          "input_modalities": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Modalities",
+            "type": "array"
+          },
+          "input_record_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Input Record Ids",
+            "type": "array"
+          },
+          "metadata": {
+            "title": "Metadata",
+            "type": "string"
+          },
+          "metadata_truncated": {
+            "title": "Metadata Truncated",
+            "type": "boolean"
+          },
+          "more_annotation_refs": {
+            "title": "More Annotation Refs",
+            "type": "boolean"
+          },
+          "more_targets": {
+            "title": "More Targets",
+            "type": "boolean"
+          },
+          "next_after": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next After"
+          },
+          "parent_task_ids": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Parent Task Ids",
+            "type": "array"
+          },
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "prompt_truncated": {
+            "title": "Prompt Truncated",
+            "type": "boolean"
+          },
+          "rationale": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Rationale"
+          },
+          "rationale_truncated": {
+            "title": "Rationale Truncated",
+            "type": "boolean"
+          },
+          "scope": {
+            "discriminator": {
+              "mapping": {
+                "None": "#/components/schemas/NoScope",
+                "step_interval": "#/components/schemas/IntervalScope",
+                "step_point": "#/components/schemas/PointScope",
+                "time_interval": "#/components/schemas/IntervalScope",
+                "time_point": "#/components/schemas/PointScope"
+              },
+              "propertyName": "kind"
+            },
+            "oneOf": [
+              {
+                "$ref": "#/components/schemas/NoScope"
+              },
+              {
+                "$ref": "#/components/schemas/PointScope"
+              },
+              {
+                "$ref": "#/components/schemas/IntervalScope"
+              }
+            ],
+            "title": "Scope"
+          },
+          "split": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
+          },
+          "targets": {
+            "items": {
+              "discriminator": {
+                "mapping": {
+                  "boolean": "#/components/schemas/BooleanTarget",
+                  "float": "#/components/schemas/ScalarTarget",
+                  "integer": "#/components/schemas/ScalarTarget",
+                  "record": "#/components/schemas/RecordTarget",
+                  "signal": "#/components/schemas/SignalTarget",
+                  "step_interval": "#/components/schemas/IntervalTarget",
+                  "step_point": "#/components/schemas/PointTarget",
+                  "text": "#/components/schemas/ScalarTarget",
+                  "time_interval": "#/components/schemas/IntervalTarget",
+                  "time_point": "#/components/schemas/PointTarget"
+                },
+                "propertyName": "kind"
+              },
+              "oneOf": [
+                {
+                  "$ref": "#/components/schemas/ScalarTarget"
+                },
+                {
+                  "$ref": "#/components/schemas/BooleanTarget"
+                },
+                {
+                  "$ref": "#/components/schemas/RecordTarget"
+                },
+                {
+                  "$ref": "#/components/schemas/SignalTarget"
+                },
+                {
+                  "$ref": "#/components/schemas/PointTarget"
+                },
+                {
+                  "$ref": "#/components/schemas/IntervalTarget"
+                }
+              ]
+            },
+            "title": "Targets",
+            "type": "array"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "task_type": {
+            "title": "Task Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "task_type",
+          "prompt",
+          "split",
+          "api_version",
+          "rationale",
+          "input_modalities",
+          "metadata",
+          "metadata_truncated",
+          "scope",
+          "configuration",
+          "has_inline_targets",
+          "prompt_truncated",
+          "rationale_truncated",
+          "input_record_ids",
+          "targets",
+          "more_targets",
+          "annotation_refs",
+          "more_annotation_refs",
+          "parent_task_ids",
+          "candidate_record_ids",
+          "next_after"
+        ],
+        "title": "TaskDetail",
+        "type": "object"
+      },
+      "TaskDetailQuery": {
+        "additionalProperties": false,
+        "description": "The selected task identifier.",
+        "properties": {
+          "after": {
+            "default": 0,
+            "minimum": 0,
+            "title": "After",
+            "type": "integer"
+          },
+          "limit": {
+            "default": 200,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "task_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Task Id",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id"
+        ],
+        "title": "TaskDetailQuery",
+        "type": "object"
+      },
+      "TaskItem": {
+        "description": "One task's searchable fields.",
+        "properties": {
+          "prompt": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Prompt"
+          },
+          "split": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Split"
+          },
+          "task_id": {
+            "title": "Task Id",
+            "type": "string"
+          },
+          "task_type": {
+            "title": "Task Type",
+            "type": "string"
+          }
+        },
+        "required": [
+          "task_id",
+          "task_type",
+          "prompt",
+          "split"
+        ],
+        "title": "TaskItem",
+        "type": "object"
+      },
+      "TaskPage": {
+        "description": "A bounded task page.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/TaskItem"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "next_cursor": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Cursor"
+          }
+        },
+        "required": [
+          "api_version",
+          "next_cursor",
+          "items"
+        ],
+        "title": "TaskPage",
+        "type": "object"
+      },
+      "TaskQuery": {
+        "additionalProperties": false,
+        "description": "A bounded task-list request body.",
+        "properties": {
+          "after": {
+            "anyOf": [
+              {
+                "maxLength": 4096,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "After"
+          },
+          "limit": {
+            "default": 50,
+            "maximum": 200,
+            "minimum": 1,
+            "title": "Limit",
+            "type": "integer"
+          },
+          "query": {
+            "anyOf": [
+              {
+                "maxLength": 512,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Query"
+          },
+          "split": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Split"
+          },
+          "task_type": {
+            "anyOf": [
+              {
+                "maxLength": 64,
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Task Type"
+          }
+        },
+        "title": "TaskQuery",
+        "type": "object"
+      },
+      "TaskScope": {
+        "discriminator": {
+          "mapping": {
+            "None": "#/components/schemas/NoScope",
+            "step_interval": "#/components/schemas/IntervalScope",
+            "step_point": "#/components/schemas/PointScope",
+            "time_interval": "#/components/schemas/IntervalScope",
+            "time_point": "#/components/schemas/PointScope"
+          },
+          "propertyName": "kind"
+        },
+        "oneOf": [
+          {
+            "$ref": "#/components/schemas/NoScope"
+          },
+          {
+            "$ref": "#/components/schemas/PointScope"
+          },
+          {
+            "$ref": "#/components/schemas/IntervalScope"
+          }
+        ]
+      },
+      "TensorSpec": {
+        "description": "A tensor component shape.",
+        "properties": {
+          "dimension_names": {
+            "items": {
+              "type": "string"
+            },
+            "title": "Dimension Names",
+            "type": "array"
+          },
+          "spec_type": {
+            "title": "Spec Type",
+            "type": "string"
+          },
+          "value_shape": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Value Shape",
+            "type": "array"
+          }
+        },
+        "required": [
+          "spec_type",
+          "value_shape",
+          "dimension_names"
+        ],
+        "title": "TensorSpec",
+        "type": "object"
+      },
+      "TimeSpan": {
+        "description": "Exact half-open temporal bounds in microseconds.",
+        "properties": {
+          "end_us": {
+            "title": "End Us",
+            "type": "string"
+          },
+          "start_us": {
+            "title": "Start Us",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start_us",
+          "end_us"
+        ],
+        "title": "TimeSpan",
+        "type": "object"
+      },
+      "WindowBucket": {
+        "description": "Coverage of one reduction bucket.",
+        "properties": {
+          "coverage": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Coverage",
+            "type": "object"
+          },
+          "start": {
+            "title": "Start",
+            "type": "string"
+          },
+          "stop": {
+            "title": "Stop",
+            "type": "string"
+          }
+        },
+        "required": [
+          "start",
+          "stop",
+          "coverage"
+        ],
+        "title": "WindowBucket",
+        "type": "object"
+      },
+      "WindowQuery": {
+        "additionalProperties": false,
+        "description": "A bounded scalar signal window request.",
+        "properties": {
+          "component": {
+            "default": [],
+            "items": {
+              "type": "integer"
+            },
+            "title": "Component",
+            "type": "array"
+          },
+          "end_us": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^-?[0-9]+$",
+                "type": "string"
+              }
+            ],
+            "default": null,
+            "title": "End Us"
+          },
+          "full": {
+            "default": false,
+            "title": "Full",
+            "type": "boolean"
+          },
+          "mode": {
+            "default": "plot",
+            "enum": [
+              "plot",
+              "raw"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "record_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Record Id",
+            "type": "string"
+          },
+          "signal_id": {
+            "maxLength": 4096,
+            "minLength": 1,
+            "title": "Signal Id",
+            "type": "string"
+          },
+          "start": {
+            "default": 0,
+            "minimum": 0,
+            "title": "Start",
+            "type": "integer"
+          },
+          "start_us": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              },
+              {
+                "pattern": "^-?[0-9]+$",
+                "type": "string"
+              }
+            ],
+            "default": null,
+            "title": "Start Us"
+          },
+          "stop": {
+            "anyOf": [
+              {
+                "minimum": 0,
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "default": null,
+            "title": "Stop"
+          },
+          "width": {
+            "default": 800,
+            "maximum": 2000,
+            "minimum": 256,
+            "title": "Width",
+            "type": "integer"
+          }
+        },
+        "required": [
+          "record_id",
+          "signal_id"
+        ],
+        "title": "WindowQuery",
+        "type": "object"
+      },
+      "WindowResult": {
+        "description": "A bounded raw page or reduced numeric window.",
+        "properties": {
+          "api_version": {
+            "title": "Api Version",
+            "type": "integer"
+          },
+          "axis_kind": {
+            "enum": [
+              "regular",
+              "irregular",
+              "ordinal"
+            ],
+            "title": "Axis Kind",
+            "type": "string"
+          },
+          "buckets": {
+            "items": {
+              "$ref": "#/components/schemas/WindowBucket"
+            },
+            "title": "Buckets",
+            "type": "array"
+          },
+          "component": {
+            "items": {
+              "type": "integer"
+            },
+            "title": "Component",
+            "type": "array"
+          },
+          "coverage": {
+            "additionalProperties": {
+              "type": "string"
+            },
+            "title": "Coverage",
+            "type": "object"
+          },
+          "dtype": {
+            "title": "Dtype",
+            "type": "string"
+          },
+          "items": {
+            "items": {
+              "$ref": "#/components/schemas/WindowSample"
+            },
+            "title": "Items",
+            "type": "array"
+          },
+          "mode": {
+            "enum": [
+              "plot",
+              "raw"
+            ],
+            "title": "Mode",
+            "type": "string"
+          },
+          "next_start": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Next Start"
+          },
+          "record_id": {
+            "title": "Record Id",
+            "type": "string"
+          },
+          "reduced": {
+            "title": "Reduced",
+            "type": "boolean"
+          },
+          "requested": {
+            "$ref": "#/components/schemas/StepBounds"
+          },
+          "scanned_count": {
+            "title": "Scanned Count",
+            "type": "string"
+          },
+          "signal_id": {
+            "title": "Signal Id",
+            "type": "string"
+          },
+          "signal_name": {
+            "title": "Signal Name",
+            "type": "string"
+          },
+          "spec_name": {
+            "title": "Spec Name",
+            "type": "string"
+          },
+          "unit": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Unit"
+          }
+        },
+        "required": [
+          "api_version",
+          "record_id",
+          "signal_id",
+          "signal_name",
+          "spec_name",
+          "unit",
+          "dtype",
+          "component",
+          "axis_kind",
+          "mode",
+          "requested",
+          "scanned_count",
+          "coverage",
+          "reduced",
+          "buckets",
+          "next_start",
+          "items"
+        ],
+        "title": "WindowResult",
+        "type": "object"
+      },
+      "WindowSample": {
+        "description": "One exact scalar display value.",
+        "properties": {
+          "display": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Display"
+          },
+          "index": {
+            "title": "Index",
+            "type": "string"
+          },
+          "kind": {
+            "title": "Kind",
+            "type": "string"
+          },
+          "original_bytes": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Original Bytes"
+          },
+          "value": {
+            "anyOf": [
+              {
+                "type": "string"
+              },
+              {
+                "type": "null"
+              }
+            ],
+            "title": "Value"
+          },
+          "value_truncated": {
+            "title": "Value Truncated",
+            "type": "boolean"
+          },
+          "x": {
+            "title": "X",
+            "type": "string"
+          }
+        },
+        "required": [
+          "index",
+          "x",
+          "value",
+          "kind",
+          "display",
+          "original_bytes",
+          "value_truncated"
+        ],
+        "title": "WindowSample",
+        "type": "object"
+      }
+    }
+  },
+  "info": {
+    "title": "TimeNet viewer",
+    "version": "1"
+  },
+  "openapi": "3.1.0",
+  "paths": {
+    "/api/v1/annotations/query": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnotationQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationPage"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/annotations/window": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/AnnotationWindowQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/AnnotationPage"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/overview": {
+      "get": {
+        "parameters": [],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Overview"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/owners/record": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/OwnerRecordQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/OwnerRecord"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/records/detail": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordDetailQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordDetail"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/records/query": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/RecordQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/RecordPage"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/registry/close": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/StrictQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModeResult"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/registry/datasets": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "after",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 4096,
+              "title": "After",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "query",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 512,
+              "title": "Query",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "domain",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 128,
+              "title": "Domain",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "task",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 128,
+              "title": "Task",
+              "type": "string"
+            }
+          },
+          {
+            "in": "query",
+            "name": "license",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 512,
+              "title": "License",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/CatalogPage"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/registry/open": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/DatasetSelection"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/ModeResult"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/session": {
+      "get": {
+        "parameters": [
+          {
+            "in": "query",
+            "name": "generation",
+            "required": false,
+            "schema": {
+              "default": "",
+              "maxLength": 32,
+              "title": "Generation",
+              "type": "string"
+            }
+          }
+        ],
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/Session"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/signals/query": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SignalQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SignalPage"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/sources/query": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/SourceQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/SourcePage"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/detail": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskDetailQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskDetail"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/tasks/query": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/TaskQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/TaskPage"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    },
+    "/api/v1/windows": {
+      "post": {
+        "parameters": [],
+        "requestBody": {
+          "content": {
+            "application/json": {
+              "schema": {
+                "$ref": "#/components/schemas/WindowQuery"
+              }
+            }
+          },
+          "required": true
+        },
+        "responses": {
+          "200": {
+            "content": {
+              "application/json": {
+                "schema": {
+                  "$ref": "#/components/schemas/WindowResult"
+                }
+              }
+            },
+            "description": "Successful response"
+          }
+        }
+      }
+    }
+  }
+}

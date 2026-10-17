@@ -16,6 +16,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
+from timenet.reader.inspection import ReaderInspection
 from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
@@ -56,6 +57,14 @@ class TimeFReader:
         self._chunk_rows_cache: dict[int, list[dict]] = {}
         self._axis_offsets_cache: OrderedDict[int, pa.Array] = OrderedDict()
         self._axis_offsets_cache_bytes = 0
+
+    def clone(self) -> TimeFReader:
+        """Return a reader over the same pinned version with independent lazy resources."""
+        return TimeFReader(self._version)
+
+    def inspect(self) -> ReaderInspection:
+        """Return bounded queries borrowing this reader's lifetime and owning thread."""
+        return ReaderInspection(self)
 
     def __getstate__(self) -> dict:
         """Return picklable state without open connections or decoded object caches."""

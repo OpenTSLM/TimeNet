@@ -110,6 +110,28 @@ can read it directly.
 
 ---
 
+## Local viewer
+
+The optional local viewer uses `TimeFReader.inspect()` for bounded, transport-independent
+queries. Inspection shares signal construction with the normal reader and borrows the reader's
+lifetime. Dataset requests share one reader and a single-thread worker. Plot requests read at
+most 20,000 steps and 8 MiB of estimated numeric values, accounting for all tensor components.
+Oversized windows are rejected before reading values; users must select a smaller window.
+There are no background scan jobs. Registry operations run on another worker. Readers close on
+the thread that owns them.
+
+The TypeScript client generates method-specific request, response, and parameter types from the
+same operation definitions used to register HTTP routes. Target and scope variants require their
+own identifying fields and temporal bounds. Public inspection methods enforce pagination limits
+independently of HTTP validation. Values and annotation overlays share step-to-time resolution.
+
+Viewer text and metadata are previews. Large values carry explicit truncation flags, and task
+scope relationships and catalog entries use pagination. Raw text cells show at most 1,024 Unicode
+characters, with their original UTF-8 byte count. Text is trimmed in Arrow before Python conversion;
+the storage backend may still need to decode the underlying value or chunk. Catalog search and
+filters apply across the registry before pagination, with registry-wide filter choices. Invalid or
+incompatible local manifests appear as catalog errors; they never become valid dataset metadata.
+
 ## Lifecycle of a dataset
 
 1. **Author** a connector under `timenet_connectors/datasets/<org>/<name>/`. Its `__init__.py`

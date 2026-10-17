@@ -1,11 +1,13 @@
 """A registry backed by a local ``<root>/<dataset_id>/<version>/`` directory tree."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterator
+from dataclasses import dataclass
 from pathlib import Path
 import shutil
 from typing import BinaryIO
 
 import pyarrow.fs as pafs
+from pydantic import ValidationError
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
@@ -16,6 +18,15 @@ from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
 from timenet.writer import TimeFWriter, WriteProgressEvent
+
+
+@dataclass(frozen=True)
+class CatalogEntry:
+    """One committed dataset's validated manifest or actionable compatibility error."""
+
+    dataset_id: str
+    manifest: Manifest | None = None
+    error: str | None = None
 
 
 class LocalRegistry(WritableRegistry):
@@ -46,24 +57,40 @@ class LocalRegistry(WritableRegistry):
         Returns:
             One :class:`~timenet.types.DatasetMetadata` per dataset.
         """
-        if not self._root.is_dir():
-            return []
+        return [
+            self.get_manifest(dataset_id, version).metadata for dataset_id, version in self._latest_versions().items()
+        ]
+
+    def _latest_versions(self) -> dict[str, str]:
         latest_versions: dict[str, str] = {}
+        if not self._root.is_dir():
+            return latest_versions
         for manifest_path in self._root.rglob(MANIFEST_FILE):
-            version_dir = manifest_path.parent
-            parts = version_dir.relative_to(self._root).parts
+            parts = manifest_path.parent.relative_to(self._root).parts
             if any(part.startswith(".") or ".tmp-" in part for part in parts):
                 continue
-            dataset_id = "/".join(parts[:-1])
-            version = parts[-1]
+            dataset_id, version = "/".join(parts[:-1]), parts[-1]
             if not dataset_id or not _is_version(version):
                 continue
             current = latest_versions.get(dataset_id)
             if current is None or Version.parse(version) > Version.parse(current):
                 latest_versions[dataset_id] = version
-        return [
-            self.get_manifest(dataset_id, version).metadata for dataset_id, version in sorted(latest_versions.items())
-        ]
+        return dict(sorted(latest_versions.items()))
+
+    def iter_catalog(self) -> Iterator[CatalogEntry]:
+        """Inspect latest committed manifests without repeatedly walking the registry tree.
+
+        Yields:
+            Validated manifests or compatibility errors in dataset ID order.
+        """
+        for dataset_id, version in self._latest_versions().items():
+            try:
+                yield CatalogEntry(dataset_id, manifest=self.get_manifest(dataset_id, version))
+            except (ValidationError, TimeFFormatError, OSError):
+                yield CatalogEntry(
+                    dataset_id,
+                    error="Invalid or incompatible manifest; rebuild this dataset with the current TimeNet version.",
+                )
 
     def get_manifest(self, dataset_id: str, version: str | None = None) -> Manifest:
         """Return a dataset's manifest (latest version if unspecified).

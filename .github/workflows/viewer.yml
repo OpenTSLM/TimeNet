@@ -1,0 +1,24 @@
+name: Inspector browser and wheel
+on:
+  pull_request:
+  push:
+    branches: [main]
+permissions:
+  contents: read
+jobs:
+  viewer:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: astral-sh/setup-uv@v6
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+          cache: npm
+          cache-dependency-path: frontend/package-lock.json
+      - run: uv sync --all-groups --all-extras
+      - run: make viewer-build
+      - run: git diff --exit-code -- frontend/schema.json frontend/src/generated packages/timenet/src/timenet/viewer/static
+      - run: npm --prefix frontend exec -- playwright install --with-deps chromium
+      - run: npm --prefix frontend test
+      - run: uv run python scripts/viewer/check_wheel.py
