@@ -52,7 +52,7 @@ def test_registry_contains_every_builtin_task_type():
     ),
 )
 def test_every_task_type_accepts_ordered_mixed_targets(task_type):
-    record = Record(record_id="target-record")
+    record = Record()
     point = TimePoint.seconds(5)
 
     task = task_type(targets=["answer", record, 0.98, point])
@@ -99,8 +99,8 @@ def test_localization_mode_is_normalized():
 
 
 def test_correspondence_record_targets_must_come_from_a_bounded_pool():
-    candidate = Record(record_id="candidate")
-    outside = Record(record_id="outside")
+    candidate = Record()
+    outside = Record()
 
     with pytest.raises(TimeFValidationError, match="not in candidate_records"):
         TSCorrespondenceTask(candidate_records=(candidate,), targets=(outside,))
@@ -108,6 +108,16 @@ def test_correspondence_record_targets_must_come_from_a_bounded_pool():
 
 def test_task_ids_are_unique_by_default():
     assert AnswerTask(targets=("a",)).id != AnswerTask(targets=("a",)).id
+
+
+def test_an_explicit_task_id_is_kept():
+    assert AnswerTask(id=301).id == 301
+
+
+@pytest.mark.parametrize("bad", ["task-0", 0, -1, True])
+def test_task_rejects_an_invalid_id(bad):
+    with pytest.raises(TimeFValidationError, match="positive int64 id"):
+        AnswerTask(id=bad)
 
 
 def test_registry_rejects_a_task_type_collision():

@@ -46,9 +46,9 @@ class _TaskValidationIndex:
         self.dataset_annotation_ids = {
             annotation.occurrence_id for annotation in dataset._annotations if annotation.occurrence_id is not None
         }
-        self._record_annotation_ids: dict[str, set[str]] = {}
+        self._record_annotation_ids: dict[int, set[int]] = {}
 
-    def annotation_ids_for(self, record: Record) -> set[str]:
+    def annotation_ids_for(self, record: Record) -> set[int]:
         """Return occurrence IDs attached anywhere in one Record hierarchy."""
         known = self._record_annotation_ids.get(record.id)
         if known is not None:
@@ -70,12 +70,12 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """
         self._metadata = metadata
         self._records: list[Record] = []
-        self._records_by_id: dict[str, Record] = {}
-        self._sources_by_id: dict[str, Source] = {}
-        self._signals_by_id: dict[str, Signal] = {}
-        self._signals_by_record_id: dict[str, tuple[Signal, ...]] = {}
+        self._records_by_id: dict[int, Record] = {}
+        self._sources_by_id: dict[int, Source] = {}
+        self._signals_by_id: dict[int, Signal] = {}
+        self._signals_by_record_id: dict[int, tuple[Signal, ...]] = {}
         self._tasks: list[Task] = []
-        self._task_ids: set[str] = set()
+        self._task_ids: set[int] = set()
         self._annotations: list[Annotation] = []
         # An optional re-iterable task source. When set, tasks stream past the dataset instead of
         # accumulating in _tasks, so a dataset with millions of tasks over few records still fits.
@@ -95,8 +95,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Raises:
             TimeFValidationError: If the record repeats an object ID or an ID is already registered.
         """
-        if record.record_id in self._records_by_id:
-            raise TimeFValidationError(f"record id {record.record_id!r} is already registered")
+        if record.id in self._records_by_id:
+            raise TimeFValidationError(f"record id {record.id!r} is already registered")
         record_sources, record_signals = self._index_record_hierarchy(record)
         repeated_sources = sorted(self._sources_by_id.keys() & record_sources.keys())
         if repeated_sources:
@@ -109,17 +109,17 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 f"signal id(s) {repeated_signals} already belong to another Source; each Signal has one owner"
             )
         self._records.append(record)
-        self._records_by_id[record.record_id] = record
+        self._records_by_id[record.id] = record
         self._sources_by_id.update(record_sources)
         self._signals_by_id.update(record_signals)
-        self._signals_by_record_id[record.record_id] = tuple(record_signals.values())
+        self._signals_by_record_id[record.id] = tuple(record_signals.values())
         return record
 
     @staticmethod
-    def _duplicate_ids(ids: Iterable[str]) -> list[str]:
+    def _duplicate_ids(ids: Iterable[int]) -> list[int]:
         """Return repeated IDs in sorted order without repeatedly scanning the input."""
-        seen: set[str] = set()
-        duplicates: set[str] = set()
+        seen: set[int] = set()
+        duplicates: set[int] = set()
         for item_id in ids:
             if item_id in seen:
                 duplicates.add(item_id)
@@ -128,7 +128,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return sorted(duplicates)
 
     @classmethod
-    def _index_record_hierarchy(cls, record: Record) -> tuple[dict[str, Source], dict[str, Signal]]:
+    def _index_record_hierarchy(cls, record: Record) -> tuple[dict[int, Source], dict[int, Signal]]:
         """Collect one record's hierarchy and reject IDs repeated inside it.
 
         Returns:
@@ -140,13 +140,13 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         sources = tuple(record.walk_sources())
         source_duplicates = cls._duplicate_ids(source.id for source in sources)
         if source_duplicates:
-            raise TimeFValidationError(f"record {record.record_id!r} contains duplicate source IDs {source_duplicates}")
+            raise TimeFValidationError(f"record {record.id!r} contains duplicate source IDs {source_duplicates}")
         signals = tuple(
             signal for source in sources for signal in sorted(source.signals, key=lambda item: (item.name, item.id))
         )
         signal_duplicates = cls._duplicate_ids(signal.id for signal in signals)
         if signal_duplicates:
-            raise TimeFValidationError(f"record {record.record_id!r} contains duplicate signal IDs {signal_duplicates}")
+            raise TimeFValidationError(f"record {record.id!r} contains duplicate signal IDs {signal_duplicates}")
         return (
             {source.id: source for source in sources},
             {signal.id: signal for signal in signals},
@@ -391,8 +391,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._validate_task_batch(batch)
         # Extend each record's task_ids once per batch rather than once per task, so a record with
         # thousands of tasks does not copy its tuple thousands of times.
-        new_task_ids: dict[str, list[str]] = {}
-        records_by_id: dict[str, Record] = {}
+        new_task_ids: dict[int, list[int]] = {}
+        records_by_id: dict[int, Record] = {}
         for task in batch:
             for record in task.inputs:
                 records_by_id[record.id] = record
@@ -463,7 +463,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                         label,
                         span,
                         index.signals_by_record_id[record.id],
-                        record.record_id,
+                        record.id,
                         record.time_span,
                     )
 
@@ -509,7 +509,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         parents = {task.id: {parent.id for parent in task.from_tasks if parent.id in batch_ids} for task in batch}
         # Kahn's algorithm: the loop peels off tasks whose parents in the batch are all resolved.
         # A task that remains when the loop can peel off no more tasks sits on a cycle.
-        resolved: set[str] = set()
+        resolved: set[int] = set()
         progressed = True
         while progressed:
             progressed = False
@@ -847,16 +847,16 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 dataset. It also occurs if one of the record's ``task_ids`` does not resolve to a
                 registered task that links back to the record.
         """
-        registered_ids = {registered.record_id for registered in self._records}
-        if record.record_id not in registered_ids:
-            raise TimeFValidationError(f"record {record.record_id!r} is not registered in this dataset")
+        registered_ids = {registered.id for registered in self._records}
+        if record.id not in registered_ids:
+            raise TimeFValidationError(f"record {record.id!r} is not registered in this dataset")
         by_id = {task.id: task for task in self._tasks}
         resolved: list[Task] = []
         for task_id in record.task_ids:
             task = by_id.get(task_id)
             if task is None or all(linked is not record for linked in task.inputs):
                 raise TimeFValidationError(
-                    f"record {record.record_id!r} links task {task_id!r}, but the task is missing or does "
+                    f"record {record.id!r} links task {task_id!r}, but the task is missing or does "
                     f"not link back to the record"
                 )
             resolved.append(task)
@@ -983,7 +983,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 also occurs if no record is matched, or if any record does not carry exactly one
                 task of ``resolved``, in ``split`` when one is given.
         """
-        matched_by_record: dict[str, list[Task]] = {}
+        matched_by_record: dict[int, list[Task]] = {}
         for candidate in self.tasks_of(resolved):
             if split is not None and candidate.split is not split:
                 continue
@@ -992,12 +992,12 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         rows: list[pa.Array] = []
         targets: list[object] = []
         for record in self._records:
-            matched = matched_by_record.get(record.record_id) or []
+            matched = matched_by_record.get(record.id) or []
             if not matched and split is not None:
                 continue
             if len(matched) != 1:
                 raise TimeFValidationError(
-                    f"record {record.record_id!r} carries {len(matched)} {resolved.__name__} tasks; "
+                    f"record {record.id!r} carries {len(matched)} {resolved.__name__} tasks; "
                     "to_features_and_targets needs exactly one per record"
                 )
             inline = matched[0].targets

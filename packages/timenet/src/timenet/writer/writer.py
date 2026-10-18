@@ -211,7 +211,7 @@ class TimeFWriter:
 
     # ---- values --------------------------------------------------------------------------------
 
-    def _dedupe_series(self) -> tuple[list[Signal], dict[str, list[str]]]:
+    def _dedupe_series(self) -> tuple[list[Signal], dict[int, list[int]]]:
         """Return unique series (sorted for stable output) and the series-id -> record-ids map.
 
         Sharing one series across records is the supported dedupe path. Two different series that
@@ -227,9 +227,9 @@ class TimeFWriter:
             TimeFValidationError: If two series share a ``time_series_id`` but describe different
                 signals.
         """
-        unique: dict[str, Signal] = {}
-        series_to_records: dict[str, list[str]] = {}
-        seen_pairs: set[tuple[str, str]] = set()
+        unique: dict[int, Signal] = {}
+        series_to_records: dict[int, list[int]] = {}
+        seen_pairs: set[tuple[int, int]] = set()
         for record in self._dataset.records:
             for ts in record.signals:
                 existing = unique.get(ts.id)
@@ -241,10 +241,10 @@ class TimeFWriter:
                         f"{_series_identity(existing)} and {_series_identity(ts)}; ids must be unique "
                         f"per signal, or reuse the same series instance to share it across records"
                     )
-                pair = (ts.id, record.record_id)
+                pair = (ts.id, record.id)
                 if pair not in seen_pairs:
                     seen_pairs.add(pair)
-                    series_to_records.setdefault(ts.id, []).append(record.record_id)
+                    series_to_records.setdefault(ts.id, []).append(record.id)
         # Group a record's series together before splitting by signal, so all leads of one record are
         # contiguous: the writer reads the record's source once, and a reader pulls a record's series
         # from one place instead of scattered across signal-ordered shards. A series shared by several
@@ -254,7 +254,7 @@ class TimeFWriter:
         )
         return ordered, series_to_records
 
-    def _write_values(self, unique_series: list[Signal]) -> dict[tuple[str, int], ChunkPlacement]:
+    def _write_values(self, unique_series: list[Signal]) -> dict[tuple[int, int], ChunkPlacement]:
         """Write all series' values through the configured backend.
 
         Args:
@@ -378,13 +378,13 @@ class TimeFWriter:
         Raises:
             TimeFValidationError: If one content ID has different payloads.
         """
-        seen: dict[str, tuple[object, ...]] = {}
+        seen: dict[int, tuple[object, ...]] = {}
         record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
         for ann in record_annotations:
             content = ann._content_fields
-            if ann.content_id in seen and seen[ann.content_id] != content:
-                raise TimeFValidationError(f"annotation content id {ann.content_id!r} is reused with different content")
-            seen[ann.content_id] = content
+            if ann.id in seen and seen[ann.id] != content:
+                raise TimeFValidationError(f"annotation content id {ann.id!r} is reused with different content")
+            seen[ann.id] = content
 
     def _build_counts(self) -> ManifestCounts:
         """Read exact entity counts from the completed control database.

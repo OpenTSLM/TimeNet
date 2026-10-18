@@ -144,7 +144,7 @@ RECORDS = Table(
     "records",
     (
         _key("record_key"),
-        _required("record_id"),
+        _required("record_id", ColumnType.BIGINT),
         _key("clock_id"),
         Column("time_span_start_us", ColumnType.BIGINT),
         Column("time_span_end_us", ColumnType.BIGINT),
@@ -165,7 +165,7 @@ SOURCES = Table(
     "sources",
     (
         _key("source_key"),
-        _required("source_id"),
+        _required("source_id", ColumnType.BIGINT),
         _key("record_key"),
         Column("parent_source_key", ColumnType.BIGINT),
         _required("name"),
@@ -183,7 +183,7 @@ AXES = Table(
     "axes",
     (
         _key("axis_key"),
-        _required("axis_id"),
+        _required("axis_id", ColumnType.BIGINT),
         _required("axis_type"),
         Column("period_numerator_us", ColumnType.BIGINT),
         Column("period_denominator", ColumnType.BIGINT),
@@ -207,7 +207,7 @@ SIGNALS = Table(
     "signals",
     (
         _key("signal_key"),
-        _required("signal_id"),
+        _required("signal_id", ColumnType.BIGINT),
         _key("source_key"),
         _required("name"),
         _key("axis_key"),
@@ -249,7 +249,7 @@ ANNOTATION_CONTENTS = Table(
     "annotation_contents",
     (
         _key("content_key"),
-        _required("content_id"),
+        _required("content_id", ColumnType.BIGINT),
         _required("name"),
         Column("value_kind", ColumnType.VARCHAR),
         Column("text_value", ColumnType.VARCHAR),
@@ -269,7 +269,7 @@ ANNOTATION_OCCURRENCES = Table(
     "annotation_occurrences",
     (
         _key("occurrence_key"),
-        _required("occurrence_id"),
+        _required("occurrence_id", ColumnType.BIGINT),
         _key("content_key"),
         _required("object_type"),
         _key("object_key"),
@@ -289,7 +289,7 @@ TASKS = Table(
     "tasks",
     (
         _key("task_key"),
-        _required("task_id"),
+        _required("task_id", ColumnType.BIGINT),
         _required("task_type"),
         Column("prompt", ColumnType.VARCHAR),
         _required("input_modalities", ColumnType.VARCHAR_LIST),

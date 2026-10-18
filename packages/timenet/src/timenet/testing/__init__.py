@@ -8,8 +8,9 @@ from timenet.testing.builders import (
     CountingLoader,
     assert_datasets_equal,
     make_dataset,
+    reset_ids,
     sine_loader,
 )
 
 
-__all__ = ["CountingLoader", "assert_datasets_equal", "make_dataset", "sine_loader"]
+__all__ = ["CountingLoader", "assert_datasets_equal", "make_dataset", "reset_ids", "sine_loader"]

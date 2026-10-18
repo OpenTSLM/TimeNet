@@ -67,12 +67,12 @@ def test_rejects_an_explicitly_empty_signal_scope():
 
 
 def test_a_multi_id_time_scope_is_kept():
-    span = TimeInterval.seconds(0.0, 1.0, time_series_ids=("I", "II"))
-    assert span.time_series_ids == ("I", "II")
+    span = TimeInterval.seconds(0.0, 1.0, time_series_ids=(1, 2))
+    assert span.time_series_ids == (1, 2)
 
 
 def test_is_frozen_and_hashable():
-    span = TimeInterval.seconds(0.0, 1.0, time_series_ids=("II",))
+    span = TimeInterval.seconds(0.0, 1.0, time_series_ids=(2,))
     with pytest.raises(dataclasses.FrozenInstanceError):
         span.start_us = 2  # ty: ignore[invalid-assignment]
     assert span in {span}
@@ -85,7 +85,7 @@ def test_the_abstract_bases_are_not_constructible():
     with pytest.raises(TimeFValidationError, match="abstract span base"):
         TimeSpan(start_us=5_000_000)
     with pytest.raises(TimeFValidationError, match="abstract span base"):
-        StepSpan(time_series_id="s", start=0)
+        StepSpan(time_series_id=7, start=0)
 
 
 def test_a_span_with_no_start_is_rejected():
@@ -103,59 +103,71 @@ def test_rejects_a_bound_past_int64(bound):
 def test_a_step_bound_past_int64_is_rejected(bound):
     # Step ordinals share the int64 column time bounds use, so the same range applies.
     with pytest.raises(TimeFValidationError, match="fit int64"):
-        StepInterval(time_series_id="s", start=0, stop=bound)
+        StepInterval(time_series_id=7, start=0, stop=bound)
 
 
 def test_step_builders_construct_both_shapes():
-    interval = StepInterval(time_series_id="s", start=0, stop=12)
+    interval = StepInterval(time_series_id=7, start=0, stop=12)
     assert isinstance(interval, StepSpan)
     assert (interval.start, interval.stop) == (0, 12)
     assert not interval.is_point
-    point = StepPoint(time_series_id="s", start=5)
+    point = StepPoint(time_series_id=7, start=5)
     assert isinstance(point, StepSpan)
     assert point.is_point
 
 
 def test_a_step_span_names_one_series():
-    assert StepInterval(time_series_id="s", start=0, stop=12).time_series_id == "s"
-    assert StepPoint(time_series_id="s", start=5).time_series_id == "s"
+    assert StepInterval(time_series_id=7, start=0, stop=12).time_series_id == 7
+    assert StepPoint(time_series_id=7, start=5).time_series_id == 7
 
 
 def test_n_steps_is_the_horizon_of_a_step_interval():
-    assert StepInterval(time_series_id="s", start=132, stop=144).n_steps == 12
+    assert StepInterval(time_series_id=7, start=132, stop=144).n_steps == 12
 
 
 def test_n_steps_lives_only_on_a_step_interval():
     # A seconds interval counts no steps, and a point spans no steps.
     assert not hasattr(TimeInterval.seconds(0.0, 12.0), "n_steps")
-    assert not hasattr(StepPoint(time_series_id="s", start=5), "n_steps")
+    assert not hasattr(StepPoint(time_series_id=7, start=5), "n_steps")
 
 
 def test_a_step_span_must_name_the_series_it_counts_on():
     # Step 5 is a different region on every series with a different rate, offset or length.
-    with pytest.raises(TimeFValidationError, match="must name one series"):
-        StepInterval(time_series_id="", start=0, stop=12)
+    with pytest.raises(TimeFValidationError, match="positive int64 id"):
+        StepInterval(time_series_id=None, start=0, stop=12)  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize("bad", ["s", 0, -1, True, 2**63])
+def test_a_step_span_rejects_an_invalid_series_id(bad):
+    with pytest.raises(TimeFValidationError, match="positive int64 id"):
+        StepPoint(time_series_id=bad, start=0)
+
+
+@pytest.mark.parametrize("bad", ["II", 0, -1, False, 2**63])
+def test_a_time_span_rejects_an_invalid_series_id(bad):
+    with pytest.raises(TimeFValidationError, match="positive int64 id"):
+        TimePoint.seconds(1.0, time_series_ids=(bad,))
 
 
 def test_a_step_span_rejects_a_negative_start():
     with pytest.raises(TimeFValidationError, match="must be >= 0"):
-        StepInterval(time_series_id="s", start=-1, stop=12)
+        StepInterval(time_series_id=7, start=-1, stop=12)
 
 
 def test_a_step_span_rejects_a_fractional_step():
     with pytest.raises(TimeFValidationError, match="whole step"):
-        StepInterval(time_series_id="s", start=0, stop=5.5)  # ty: ignore[invalid-argument-type]
+        StepInterval(time_series_id=7, start=0, stop=5.5)  # ty: ignore[invalid-argument-type]
 
 
 def test_a_step_span_rejects_a_non_positive_interval():
     with pytest.raises(TimeFValidationError, match="must be >"):
-        StepInterval(time_series_id="s", start=12, stop=12)
+        StepInterval(time_series_id=7, start=12, stop=12)
     with pytest.raises(TimeFValidationError, match="must be >"):
-        StepInterval(time_series_id="s", start=12, stop=0)
+        StepInterval(time_series_id=7, start=12, stop=0)
 
 
 def test_a_step_span_and_a_time_span_never_compare_equal():
     # The frame is what keeps 8 steps from colliding with 8 microseconds read back off disk.
-    steps = StepInterval(time_series_id="s", start=0, stop=8)
+    steps = StepInterval(time_series_id=7, start=0, stop=8)
     micros = TimeInterval.micros(0, 8)
     assert steps != micros

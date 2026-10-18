@@ -65,9 +65,11 @@ Object relationships are normalized rather than embedded in JSON. DuckDB can fol
 in either direction, so TimeF does not store duplicate reverse-index tables.
 
 Every table carries a `BIGINT` internal key drawn from a sequence, and relationships refer to those
-keys. Public IDs (`record_id`, `signal_id`, `task_id`, and so on) are stored once on the row that
-owns them. Fixed-shape fields are typed columns, so spans, task configuration, target values, and
-annotation values can be filtered in SQL. Only the free-form `metadata` dictionaries are JSON.
+keys. Public IDs (`record_id`, `source_id`, `signal_id`, `axis_id`, `content_id`, `occurrence_id`,
+and `task_id`) are positive int64 values stored once, as `BIGINT`, on the row that owns them. The
+`dataset_id` is the exception: it is the `org/name` string and is stored as `VARCHAR`. Fixed-shape
+fields are typed columns, so spans, task configuration, target values, and annotation values can be
+filtered in SQL. Only the free-form `metadata` dictionaries are JSON.
 
 ## Signals and axes
 

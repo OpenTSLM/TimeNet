@@ -36,7 +36,7 @@ def test_len_matches_records():
 
 def test_getitem_structure():
     item = _ds()[0]
-    assert isinstance(item["record_id"], str)
+    assert isinstance(item["record_id"], int)
     assert item["series"]
     assert all(isinstance(t, torch.Tensor) and t.dtype == torch.float32 for t in item["series"])
 
@@ -60,7 +60,7 @@ def test_transform_applied():
 
 def test_dangling_task_id_raises():
     dataset = make_dataset()
-    dataset.records[0].task_ids = ("no-such-task",)
+    dataset.records[0].task_ids = (999_999,)
     with pytest.raises(TimeFValidationError, match="unknown task id"):
         TimeFTorchDataset(dataset)[0]
 
@@ -83,7 +83,7 @@ def _typed_dataset(dtype, values):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), id=1))
     return dataset
 
 

@@ -30,6 +30,24 @@ assert str(version) == "1.2.3"
 assert version > Version(1, 2, 0)
 ```
 
+## IDs
+
+Every public entity ID is a positive int64: Records, Sources, Signals, axes, Annotations, annotation
+occurrences, and Tasks. The dataset ID is the exception and stays an `org/name` string.
+
+`new_id()` returns a fresh ID. Model constructors call it when you omit an `id`. `check_id()`
+returns a valid ID unchanged and raises `TimeFValidationError` for anything else, including `bool`,
+zero, negative values, and strings.
+
+```python
+from timenet.types import check_id, new_id
+
+signal_id = new_id()
+assert check_id(signal_id, "Signal id") == signal_id
+```
+
+IDs carry no meaning. Store upstream identifiers in `metadata` or in an annotation.
+
 ## Units
 
 TimeNet uses one [pint](https://pint.readthedocs.io) registry named `ureg`. Use this registry for
@@ -116,7 +134,8 @@ coordinate frame.
 Task time spans can select Signals through `time_series_ids`. Each task span must identify exactly
 one input Record. Annotation spans cannot select Signal IDs. Their owner determines scope.
 
-Step spans always name exactly one Signal through `time_series_id`.
+Step spans always name exactly one Signal through `time_series_id`. Signal IDs are ints, so pass
+the `id` of the Signal object.
 
 ```python
 from timenet.types import StepInterval, TimeInterval, TimePoint
@@ -125,9 +144,9 @@ event = TimePoint.seconds(1.2)
 window = TimeInterval.seconds(
     5.0,
     8.0,
-    time_series_ids=("vibration",),
+    time_series_ids=(vibration.id,),
 )
-tokens = StepInterval(time_series_id="text-series", start=132, stop=144)
+tokens = StepInterval(time_series_id=text_series.id, start=132, stop=144)
 ```
 
 Use `record.time_point()` or `record.time_interval()` to convert wall-clock values through a

@@ -12,7 +12,7 @@ from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
-from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint, new_id
+from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint, check_id, new_id
 from timenet.types.clock import check_int64, offset_us, unix_us
 
 
@@ -32,9 +32,9 @@ class Record(SupportsAnnotate):
     """The root sources that belong to this recording."""
     start_time: TimeOrigin = field(default_factory=TimeOrigin)
     """The common relative zero, with an optional absolute timestamp."""
-    record_id: str = field(default_factory=new_id)
-    """Unique id for the record (default: an auto-generated uuid7)."""
-    task_ids: tuple[str, ...] = ()
+    id: int = field(default_factory=new_id)
+    """Unique id for the record, a fresh int64 id by default."""
+    task_ids: tuple[int, ...] = ()
     """Ids of the tasks attached to this record."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the record."""
@@ -47,18 +47,15 @@ class Record(SupportsAnnotate):
     against it, rather than against the union of the series' windows. Its ``time_series_ids`` must be
     ``None``, and it must contain every series' window."""
 
-    @property
-    def id(self) -> str:
-        """Return the record's stable public identifier."""
-        return self.record_id
-
     def __post_init__(self) -> None:  # noqa: PLR0912 - hierarchy, timing, and annotation invariants
         """Validate the record hierarchy and its optional single-clock session span.
 
         Raises:
-            TimeFValidationError: If ``time_span`` is not a whole-record ``TimeInterval`` or does not
-                contain some series' window.
+            TimeFValidationError: If ``id`` or a task id is invalid, or ``time_span`` is not a
+                whole-record ``TimeInterval`` or does not contain some series' window.
         """
+        self.id = check_id(self.id, "Record.id")
+        self.task_ids = tuple(check_id(task_id, "Record.task_ids entry") for task_id in self.task_ids)
         if not isinstance(self.start_time, TimeOrigin):
             raise TimeFValidationError("Record.start_time must be a TimeOrigin")
         self.metadata = validate_json_mapping(self.metadata)
@@ -66,7 +63,7 @@ class Record(SupportsAnnotate):
             tuple(self.walk_sources())
             signal_ids = [signal.id for signal in self.walk_signals()]
             if len(signal_ids) != len(set(signal_ids)):
-                raise TimeFValidationError(f"record {self.record_id!r} contains duplicate signal IDs")
+                raise TimeFValidationError(f"record {self.id!r} contains duplicate signal IDs")
         for signal in self.signals:
             if (window := signal.span_us) is not None:
                 for endpoint in window:
@@ -146,7 +143,7 @@ class Record(SupportsAnnotate):
         """Whether this record's relative timeline has a Unix-time anchor."""
         return self.start_time.timestamp is not None
 
-    def time_point(self, at: datetime, *, time_series_ids: tuple[str, ...] | None = None) -> TimePoint:
+    def time_point(self, at: datetime, *, time_series_ids: tuple[int, ...] | None = None) -> TimePoint:
         """Build a :class:`~timenet.types.TimePoint` at a wall-clock moment on this record's timeline.
 
         The Record must have a known absolute timestamp.
@@ -161,7 +158,7 @@ class Record(SupportsAnnotate):
         return TimePoint(start_us=offset_us(at, self.start_time.timestamp), time_series_ids=time_series_ids)
 
     def time_interval(
-        self, start: datetime, end: datetime, *, time_series_ids: tuple[str, ...] | None = None
+        self, start: datetime, end: datetime, *, time_series_ids: tuple[int, ...] | None = None
     ) -> TimeInterval:
         """Build a :class:`~timenet.types.TimeInterval` between two wall-clock moments on this timeline.
 
@@ -246,7 +243,7 @@ class Record(SupportsAnnotate):
                 f"annotation {annotation.key!r}",
                 annotation.span,
                 self.signals,
-                self.record_id,
+                self.id,
                 self.time_span,
                 warn_when_outside=warn_when_outside,
             )

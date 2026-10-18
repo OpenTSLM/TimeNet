@@ -1,3 +1,4 @@
+import copy
 import json
 from pathlib import Path
 
@@ -7,6 +8,7 @@ from pydantic import ValidationError
 import pytest
 
 from timenet.client import TimeNet
+from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetRegistryError
 from timenet.manifest import Manifest
 from timenet.registry import RemoteRegistry
@@ -16,8 +18,13 @@ from timenet.writer import TimeFWriter
 
 
 @pytest.fixture
-def version_dir(tmp_path) -> tuple[Path, Manifest]:
-    dataset = make_dataset()
+def hello_world() -> TimeFDataset:
+    return make_dataset()
+
+
+@pytest.fixture
+def version_dir(tmp_path, hello_world) -> tuple[Path, Manifest]:
+    dataset = copy.deepcopy(hello_world)
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
@@ -185,12 +192,12 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
     assert (dest / "manifest.json").exists()
 
 
-def test_load_full_round_trips(version_dir, tmp_path):
+def test_load_full_round_trips(version_dir, hello_world, tmp_path):
     registry, _ = _remote(version_dir, tmp_path)
     _, manifest = version_dir
     client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
     loaded = client.load(manifest.metadata.dataset_id)  # a remote load materializes then reads locally
-    assert_datasets_equal(make_dataset(), loaded)
+    assert_datasets_equal(hello_world, loaded)
 
 
 def test_store_publishes_uploads_and_finalizes(tmp_path):

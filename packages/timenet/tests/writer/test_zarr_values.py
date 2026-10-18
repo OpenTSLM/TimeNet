@@ -1,3 +1,4 @@
+import copy
 from pathlib import Path
 
 import duckdb
@@ -21,8 +22,8 @@ from timenet.values_backends.zarr.writer import _array_name
 from timenet.writer import TimeFWriter
 
 
-def _write(tmp_path, **kwargs) -> Path:
-    dataset = make_dataset()
+def _write(tmp_path, dataset=None, **kwargs) -> Path:
+    dataset = make_dataset() if dataset is None else dataset
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr", **kwargs) as writer:
         writer.write()
@@ -80,7 +81,8 @@ def test_index_locator_resolves_to_values(tmp_path):
 def test_one_index_row_per_series(tmp_path):
     # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply index rows:
     # each (record, series) pair gets exactly one placement spanning the series' full length.
-    version_dir = _write(tmp_path, chunk_max_bytes=64)
+    dataset = make_dataset()
+    version_dir = _write(tmp_path, dataset, chunk_max_bytes=64)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         index = connection.execute(
             """SELECT signals.signal_id, chunks.n_values
@@ -88,15 +90,16 @@ def test_one_index_row_per_series(tmp_path):
         ).fetchall()
     signal_ids = [row[0] for row in index]
     assert len(signal_ids) == len(set(signal_ids))
-    long_series = next(row for row in index if row[0] == "ts-long-1")
+    long_series = next(row for row in index if row[0] == dataset.records[1].signals[1].id)
     assert long_series[1] == 512  # the fixture's long series, unsplit
 
 
 def test_shard_aligned_appends_round_trip(tmp_path):
     # Tiny chunks and shards force many mid-stream shard flushes plus trailing partial shards.
-    version_dir = _write(tmp_path, chunk_max_bytes=64, shard_target_bytes=128)
+    dataset = make_dataset()
+    version_dir = _write(tmp_path, copy.deepcopy(dataset), chunk_max_bytes=64, shard_target_bytes=128)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        assert_datasets_equal(make_dataset(), reader.read())
+        assert_datasets_equal(dataset, reader.read())
 
 
 def test_high_compression_level_is_rejected_for_blosc(tmp_path):
@@ -105,8 +108,11 @@ def test_high_compression_level_is_rejected_for_blosc(tmp_path):
 
 
 def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
-    version_dir = _write(tmp_path)
-    out = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=("record-1",))
+    dataset = make_dataset()
+    version_dir = _write(tmp_path, dataset)
+    out = edit_version(
+        version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=(dataset.records[1].id,)
+    )
     manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
@@ -184,12 +190,12 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
                             loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
                                 frames, dim_names=spec.dimension_names
                             ),
-                            id="camera-1",
+                            id=2,
                         ),
                     ),
                 ),
             ),
-            record_id="record-camera",
+            id=1,
         )
     )
     dataset.derive_schema()
@@ -243,7 +249,7 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
                             spec=nd_spec,
                             name="rgb",
                             time_axis=RegularAxis.from_rate_hz(10),
-                            id="cam-1",
+                            id=2,
                             n_values=len(frames),
                             loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
                                 frames, dim_names=nd_spec.dimension_names
@@ -253,14 +259,14 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
                             spec=scalar_spec,
                             name="i",
                             time_axis=RegularAxis.from_rate_hz(10),
-                            id="sig-1",
+                            id=3,
                             n_values=6,
                             loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
                         ),
                     ),
                 ),
             ),
-            record_id="record-0",
+            id=1,
         )
     )
     dataset.derive_schema()
@@ -307,7 +313,7 @@ def test_str_round_trip(tmp_path):
                     ),
                 ),
             ),
-            record_id="record-0",
+            id=1,
         )
     )
     dataset.derive_schema()
@@ -348,7 +354,7 @@ def test_str_empty_range_read(tmp_path):
                     ),
                 ),
             ),
-            record_id="record-0",
+            id=1,
         )
     )
     dataset.derive_schema()

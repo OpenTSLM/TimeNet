@@ -21,7 +21,7 @@ from pydantic import BeforeValidator, StrictStr
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._model import TimeFModel
-from timenet.types.ids import new_id
+from timenet.types.ids import check_id, new_id
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
 from timenet.types.units import normalize_unit
 from timenet.types.wire import ValueType
@@ -68,9 +68,9 @@ class Annotation:
     """Optional per-instance provenance (the rater, method, or model behind this value). Unlike
     ``description``, which the descriptor holds once per key, ``source`` can differ between
     annotations that share a key."""
-    id: str = field(default_factory=new_id)
-    """Reusable content identifier, a UUIDv7 string by default."""
-    occurrence_id: str | None = field(default=None, compare=False)
+    id: int = field(default_factory=new_id)
+    """Reusable content identifier, a fresh int64 id by default."""
+    occurrence_id: int | None = field(default=None, compare=False)
     """Identity of one attachment. It is assigned by ``annotate()``."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional metadata that is part of the reusable content."""
@@ -88,9 +88,13 @@ class Annotation:
         guarantee.
 
         Raises:
-            TimeFValidationError: If the caller sets ``span`` to something that is not a span, or
-                the annotation has neither a value nor a span.
+            TimeFValidationError: If the caller sets ``span`` to something that is not a span, if
+                ``id`` or ``occurrence_id`` is not a valid id, or if the annotation has neither a
+                value nor a span.
         """
+        object.__setattr__(self, "id", check_id(self.id, "annotation id"))
+        if self.occurrence_id is not None:
+            object.__setattr__(self, "occurrence_id", check_id(self.occurrence_id, "annotation occurrence_id"))
         if isinstance(self.value, tuple):
             object.__setattr__(self, "value", list(self.value))
         object.__setattr__(self, "unit", normalize_unit(self.unit))
@@ -114,11 +118,6 @@ class Annotation:
                 f"annotation {self.key!r} has neither a value nor a span, so it says nothing. Give it "
                 f"a value, or a span to mark a region of the timeline"
             )
-
-    @property
-    def content_id(self) -> str:
-        """Return the identity of the reusable annotation content."""
-        return self.id
 
     @property
     def _content_fields(self) -> tuple[object, ...]:

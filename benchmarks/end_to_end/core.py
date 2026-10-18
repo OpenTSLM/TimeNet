@@ -43,6 +43,9 @@ MATRIX = (
 )
 """Default matrix covering both backends, two chunking regimes, and rich Zarr values."""
 
+_GENERATED_IDS = frozenset({"id", "task_ids", "occurrence_id", "time_series_ids"})
+"""Fields that hold ids generated on every build, so two builds of one corpus never share them."""
+
 
 def _canonical(value: Any) -> Any:  # noqa: PLR0911, RUF100 - explicit type cases keep canonicalization readable
     """Convert TimeF values into stable JSON-compatible structures.
@@ -59,7 +62,7 @@ def _canonical(value: Any) -> Any:  # noqa: PLR0911, RUF100 - explicit type case
     if isinstance(value, type):
         return f"{value.__module__}.{value.__qualname__}"
     if is_dataclass(value):
-        unstable_or_executable = {"axis_id", "occurrence_id", "loader", "time_offsets_loader"}
+        unstable_or_executable = _GENERATED_IDS | {"loader", "time_offsets_loader"}
         return {
             field.name: _canonical(getattr(value, field.name))
             for field in fields(value)
@@ -113,7 +116,9 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                 {
                     "metadata": _canonical(reader.metadata),
                     "schema": _canonical(reader.schema),
-                    "tasks": _canonical(reader.tasks),
+                    "tasks": sorted(
+                        json.dumps(_canonical(task), sort_keys=True, separators=(",", ":")) for task in reader.tasks
+                    ),
                 },
                 sort_keys=True,
                 separators=(",", ":"),
@@ -121,13 +126,17 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
         )
         series_count = 0
         value_bytes = 0
+        # Records come back in id order, and ids are generated per build, so hash each record on its
+        # own and combine the sorted record hashes.
+        record_digests = []
         for record in reader.iter_records():
-            digest.update(
+            record_digest = hashlib.sha256()
+            record_digests.append(record_digest)
+            record_digest.update(
                 json.dumps(
                     {
-                        "record_id": record.record_id,
                         "metadata": record.metadata,
-                        "task_ids": record.task_ids,
+                        "task_count": len(record.task_ids),
                         "annotations": _canonical(record.annotations),
                         "sources": _canonical(record.sources),
                     },
@@ -140,12 +149,11 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                 if is_text_kind:
                     labels = series.to_arrow().cast(pa.string()).to_pylist()
                 values = np.ascontiguousarray(series.to_numpy()) if not is_text_kind else np.array(labels)
-                digest.update(
+                record_digest.update(
                     json.dumps(
                         {
                             "spec": _canonical(series.spec),
                             "signal": series.name,
-                            "time_series_id": series.id,
                             "time_axis": _canonical(series.time_axis),
                             "n_values": series.n_values,
                             "dtype": values.dtype.str,
@@ -156,11 +164,13 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                     ).encode()
                 )
                 if values.dtype == object:
-                    digest.update(json.dumps(values.tolist(), sort_keys=False, separators=(",", ":")).encode())
+                    record_digest.update(json.dumps(values.tolist(), sort_keys=False, separators=(",", ":")).encode())
                 else:
-                    digest.update(values.tobytes())
+                    record_digest.update(values.tobytes())
                 series_count += 1
                 value_bytes += values.nbytes
+        for record_hex in sorted(record_digest.hexdigest() for record_digest in record_digests):
+            digest.update(record_hex.encode())
     read_ns = time.perf_counter_ns() - started
     disk_bytes = sum(path.stat().st_size for path in _dataset_dir(root).rglob("*") if path.is_file())
     return digest.hexdigest(), {

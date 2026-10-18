@@ -8,7 +8,7 @@ from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
-from timenet.types import Annotation, SupportsAnnotate, new_id
+from timenet.types import Annotation, SupportsAnnotate, check_id, new_id
 
 
 if TYPE_CHECKING:
@@ -21,8 +21,8 @@ class Source(SupportsAnnotate):
 
     name: str
     """Human-readable source name."""
-    id: str = field(default_factory=new_id)
-    """Stable source identifier."""
+    id: int = field(default_factory=new_id)
+    """Stable source identifier, a fresh int64 id by default."""
     sources: tuple["Source", ...] = ()
     """Direct child sources. Their order has no semantic meaning."""
     signals: tuple[Signal, ...] = ()
@@ -36,8 +36,9 @@ class Source(SupportsAnnotate):
         """Validate the source's local identity and direct children.
 
         Raises:
-            TimeFValidationError: If the source has no name or repeats a direct child ID.
+            TimeFValidationError: If the source has no name, an invalid id, or repeats a direct child ID.
         """
+        self.id = check_id(self.id, "Source.id")
         if not self.name:
             raise TimeFValidationError("Source.name must be non-empty")
         self.metadata = validate_json_mapping(self.metadata)

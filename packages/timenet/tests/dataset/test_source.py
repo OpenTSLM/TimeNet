@@ -11,44 +11,50 @@ from timenet.types import TimeSeriesSpec, ureg
 SPEC = TimeSeriesSpec(spec_type="acceleration", name="Acceleration", unit_value=ureg.Unit("m/s^2"))
 
 
-def _signal(signal_id: str, name: str) -> Signal:
+def _signal(name: str) -> Signal:
     return Signal.from_loader(
         spec=SPEC,
         name=name,
         time_axis=RegularAxis(period_us=Fraction(1_000)),
         loader=lambda: pa.array([1.0], type=pa.float32()),
-        id=signal_id,
         n_values=1,
     )
 
 
 def test_record_walks_recursive_sources_and_signals():
-    accelerometer = Source(
-        id="accelerometer",
-        name="Accelerometer",
-        signals=(_signal("x", "X"), _signal("y", "Y"), _signal("z", "Z")),
-    )
-    gyroscope = Source(id="gyroscope", name="Gyroscope", signals=(_signal("gx", "GX"),))
-    imu = Source(id="imu", name="IMU", sources=(gyroscope, accelerometer))
-    record = Record(record_id="record", sources=(imu,))
+    x, y, z, gx = _signal("X"), _signal("Y"), _signal("Z"), _signal("GX")
+    accelerometer = Source(name="Accelerometer", signals=(x, y, z))
+    gyroscope = Source(name="Gyroscope", signals=(gx,))
+    imu = Source(name="IMU", sources=(gyroscope, accelerometer))
+    record = Record(sources=(imu,))
 
-    assert [source.id for source in record.walk_sources()] == ["imu", "accelerometer", "gyroscope"]
-    assert [signal.id for signal in record.walk_signals()] == ["x", "y", "z", "gx"]
+    assert [source.id for source in record.walk_sources()] == [imu.id, accelerometer.id, gyroscope.id]
+    assert [signal.id for signal in record.walk_signals()] == [x.id, y.id, z.id, gx.id]
+
+
+def test_source_keeps_an_explicit_id():
+    assert Source(id=20, name="Monitor").id == 20
+
+
+@pytest.mark.parametrize("bad", ["monitor", 0, -1, True, 2**63])
+def test_source_rejects_an_invalid_id(bad):
+    with pytest.raises(TimeFValidationError, match="positive int64 id"):
+        Source(id=bad, name="Monitor")
 
 
 def test_record_rejects_source_reused_under_two_parents():
-    shared = Source(id="shared", name="Shared")
-    left = Source(id="left", name="Left", sources=(shared,))
-    right = Source(id="right", name="Right", sources=(shared,))
+    shared = Source(name="Shared")
+    left = Source(name="Left", sources=(shared,))
+    right = Source(name="Right", sources=(shared,))
 
     with pytest.raises(TimeFValidationError, match="attached more than once"):
-        Record(record_id="record", sources=(Source(id="root", name="Root", sources=(left, right)),))
+        Record(sources=(Source(name="Root", sources=(left, right)),))
 
 
 def test_record_rejects_source_cycle():
-    root = Source(id="root", name="Root")
-    child = Source(id="child", name="Child", sources=(root,))
+    root = Source(name="Root")
+    child = Source(name="Child", sources=(root,))
     root.sources = (child,)
 
     with pytest.raises(TimeFValidationError, match="cycle"):
-        Record(record_id="record", sources=(root,))
+        Record(sources=(root,))
