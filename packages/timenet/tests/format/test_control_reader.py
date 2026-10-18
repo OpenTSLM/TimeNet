@@ -384,7 +384,7 @@ def test_control_reader_rejects_corrupt_relationships(tmp_path, statement, messa
         ),
         (
             "UPDATE annotation_occurrences SET object_type = 'Unknown' WHERE content_id = 201",
-            "unknown object type",
+            "no hydrated object carries",
         ),
         (
             "UPDATE annotation_occurrences SET object_type = 'Dataset' WHERE content_id = 201",
@@ -445,6 +445,12 @@ def test_annotations_stay_with_their_owner_when_explicit_ids_collide_across_kind
                 assert [item.value for item in tasks[0].annotations] == ["task"]
         assert [item.value for item in reader.read_dataset_annotations(dataset.metadata.dataset_id)] == ["dataset"]
         assert reader.read_dataset_annotations("org/other") == ()
+        # A keyed read matches ids within their owner type, so it fetches no other kind's occurrences.
+        assert set(reader._read_annotations({"Record": [shared_id]})) == {("Record", shared_id)}
+        assert set(reader._read_annotations({"Signal": [shared_id], "Task": [shared_id]})) == {
+            ("Signal", shared_id),
+            ("Task", shared_id),
+        }
 
 
 def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tmp_path):
