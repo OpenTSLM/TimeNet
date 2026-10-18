@@ -332,12 +332,11 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
     with connect_control(path) as connection:
         connection.execute(
             """UPDATE axes SET axis_type = 'corrupt'
-               WHERE axis_key IN (
-                   SELECT signals.axis_key
+               WHERE axis_id IN (
+                   SELECT signals.axis_id
                    FROM signals
-                   JOIN sources USING (source_key)
-                   JOIN records USING (record_key)
-                   WHERE records.record_id = ?
+                   JOIN sources USING (source_id)
+                   WHERE sources.record_id = ?
                )""",
             [record1.id],
         )
@@ -356,11 +355,11 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
             "missing content",
         ),
         (
-            "UPDATE sources SET parent_source_key = 999 WHERE source_id = 21",
+            "UPDATE sources SET parent_source_id = 999 WHERE source_id = 21",
             "missing parent",
         ),
         (
-            "UPDATE signals SET source_key = 999 WHERE signal_id = 101",
+            "UPDATE signals SET source_id = 999 WHERE signal_id = 101",
             "missing source",
         ),
     ],

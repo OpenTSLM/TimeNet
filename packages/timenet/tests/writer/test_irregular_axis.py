@@ -98,6 +98,30 @@ def test_a_mixed_record_keeps_each_series_on_its_own_axis(tmp_path):
     assert back["z"].span_us == (0, 1_000_000)
 
 
+def test_axis_offsets_are_stored_in_axis_id_order(tmp_path):
+    dataset = _dataset()
+    offsets_us = [0, 5_000, 9_000]
+    signals = tuple(
+        Signal.from_loader(
+            name=f"series-{axis_id}",
+            spec=_spec(),
+            time_axis=IrregularAxis(id=axis_id, first_us=0, last_us=9_000),
+            loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
+            n_values=3,
+            time_offsets_loader=lambda: pa.array(offsets_us, type=pa.int64()),
+        )
+        for axis_id in (30, 10, 20)
+    )
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=signals),)))
+    dataset.derive_schema()
+
+    version = _written(tmp_path, dataset)
+
+    with duckdb.connect(str(version / "control.duckdb"), read_only=True) as connection:
+        stored = connection.execute("SELECT axis_id, position FROM axis_offsets ORDER BY rowid").fetchall()
+    assert stored == [(axis_id, position) for axis_id in (10, 20, 30) for position in range(3)]
+
+
 def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypatch):
     dataset = _dataset()
     shared_us = [0, 5_000, 9_000]
@@ -130,7 +154,7 @@ def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypat
     with duckdb.connect(str(version / "control.duckdb"), read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM axes").fetchone() == (1,)
         assert connection.execute("SELECT count(*) FROM axis_offsets").fetchone() == (len(shared_us),)
-        assert connection.execute("SELECT count(DISTINCT axis_key) FROM signals").fetchone() == (1,)
+        assert connection.execute("SELECT count(DISTINCT axis_id) FROM signals").fetchone() == (1,)
     for shard in (version / "time_series").glob("*.parquet"):
         column = pq.read_table(shard, columns=["time_offsets_us"]).column(0)
         assert column.null_count == len(column)
@@ -139,15 +163,15 @@ def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypat
     with TimeFReader(DatasetVersion.open_local(version)) as reader:
         back = next(iter(reader.iter_records())).signals
         control = reader._control_reader()
-        original = control.load_axis_offsets_by_key
+        original = control.load_axis_offsets
         read_calls = 0
 
-        def count_reads(axis_key, loaded_axis, n_values):
+        def count_reads(loaded_axis, n_values):
             nonlocal read_calls
             read_calls += 1
-            return original(axis_key, loaded_axis, n_values)
+            return original(loaded_axis, n_values)
 
-        monkeypatch.setattr(control, "load_axis_offsets_by_key", count_reads)
+        monkeypatch.setattr(control, "load_axis_offsets", count_reads)
         assert [signal.time_offsets_us().tolist() for signal in back] == [shared_us, shared_us]
         assert read_calls == 1
         assert len(reader._axis_offsets_cache) == 1
