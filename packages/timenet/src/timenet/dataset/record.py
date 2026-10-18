@@ -118,17 +118,17 @@ class Record(SupportsAnnotate):
             seen.add(identity)
             active.add(identity)
             yield source
-            for child in sorted(source.sources, key=lambda item: (item.name, item.id)):
+            for child in sorted(source.sources, key=lambda item: item.name):
                 yield from walk(child)
             active.remove(identity)
 
-        for root in sorted(self.sources, key=lambda item: (item.name, item.id)):
+        for root in sorted(self.sources, key=lambda item: item.name):
             yield from walk(root)
 
     def walk_signals(self) -> Iterable[Signal]:
         """Yield every signal in deterministic source and signal order."""
         for source in self.walk_sources():
-            yield from sorted(source.signals, key=lambda signal: (signal.name, signal.id))
+            yield from sorted(source.signals, key=lambda signal: signal.name)
 
     def walk_annotations(self) -> Iterable[Annotation]:
         """Yield annotation occurrences from this Record, its Sources, and its Signals."""

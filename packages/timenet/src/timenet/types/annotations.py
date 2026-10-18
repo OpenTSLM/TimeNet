@@ -120,11 +120,6 @@ class Annotation:
             )
 
     @property
-    def _content_fields(self) -> tuple[object, ...]:
-        """Return the reusable payload, without occurrence-specific fields."""
-        return (self.key, self.value, self.unit, self.description, self.metadata)
-
-    @property
     def name(self) -> str:
         """Return the annotation's public name."""
         return self.key

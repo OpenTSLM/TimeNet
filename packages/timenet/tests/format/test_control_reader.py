@@ -1,3 +1,4 @@
+from dataclasses import replace
 from fractions import Fraction
 
 import pyarrow as pa
@@ -10,6 +11,7 @@ import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
+from timenet.format.final_ids import FinalIds, plan_final_ids
 from timenet.testing import make_dataset
 from timenet.types import (
     Annotation,
@@ -38,6 +40,12 @@ from .test_control_writer import (
     TASK_ID,
     _dataset,
 )
+
+
+def _write_ids(path, dataset: TimeFDataset) -> FinalIds:
+    ids = plan_final_ids(dataset)
+    DuckDBControlWriter(path).write_hierarchy(dataset, ids=ids)
+    return ids.freeze()
 
 
 def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
@@ -327,24 +335,15 @@ def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
 def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = make_dataset()
-    record0, record1, _ = dataset.records
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    ids = _write_ids(path, dataset)
+    record0, record1, _ = (ids.records[record.id] for record in dataset.records)
     with connect_control(path) as connection:
-        connection.execute(
-            """UPDATE axes SET axis_type = 'corrupt'
-               WHERE axis_id IN (
-                   SELECT signals.axis_id
-                   FROM signals
-                   JOIN sources USING (source_id)
-                   WHERE sources.record_id = ?
-               )""",
-            [record1.id],
-        )
+        connection.execute("UPDATE sources SET parent_source_id = 999 WHERE record_id = ?", [record1])
     with DuckDBControlReader(path) as reader:
-        (selected,) = reader.read_records((record0.id,))
-        assert selected.id == record0.id
-        with pytest.raises(TimeFFormatError, match="unknown type"):
-            reader.read_records((record1.id,))
+        (selected,) = reader.read_records((record0,))
+        assert selected.id == record0
+        with pytest.raises(TimeFFormatError, match="missing parent"):
+            reader.read_records((record1,))
 
 
 @pytest.mark.parametrize(
@@ -456,10 +455,10 @@ def test_annotations_stay_with_their_owner_when_explicit_ids_collide_across_kind
 def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = make_dataset()
-    record0_id = dataset.records[0].id
-    expected = sorted(task.id for task in dataset.tasks if task.inputs[0].id == record0_id)
+    ids = _write_ids(path, dataset)
+    record0_id = ids.records[dataset.records[0].id]
+    expected = sorted(ids.tasks[task.id] for task in dataset.tasks if task.inputs[0] is dataset.records[0])
     assert len(expected) == 4
-    DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
@@ -549,15 +548,19 @@ def test_read_tasks_rejects_records_the_database_does_not_store(tmp_path):
 def test_typed_scope_and_payload_columns_round_trip(tmp_path):
     dataset = make_dataset()
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    ids = _write_ids(path, dataset)
 
     with DuckDBControlReader(path) as reader:
         restored = {task.id: task for task in reader.read_tasks(reader.read_records())}
 
     for task in dataset.tasks:
-        back = restored[task.id]
+        back = restored[ids.tasks[task.id]]
         assert type(back) is type(task)
-        assert back.scope == task.scope
+        if task.scope is None:
+            assert back.scope is None
+        else:
+            scope_ids = getattr(task.scope, "time_series_ids", None) or ()
+            assert back.scope == replace(task.scope, time_series_ids=tuple(ids.signals[item] for item in scope_ids))
         for field in ("target_schema", "unit", "target_name", "mode"):
             if hasattr(task, field):
                 assert getattr(back, field) == getattr(task, field), field
@@ -591,11 +594,11 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
 
 def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
     dataset = make_dataset()
-    record0_id = dataset.records[0].id
-    answer_id = next(task.id for task in dataset.tasks if isinstance(task, AnswerTask))
-    normal_id = next(task.id for task in dataset.tasks if task.targets == ("normal",))
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    ids = _write_ids(path, dataset)
+    record0_id = ids.records[dataset.records[0].id]
+    answer_id = next(ids.tasks[task.id] for task in dataset.tasks if isinstance(task, AnswerTask))
+    normal_id = next(ids.tasks[task.id] for task in dataset.tasks if task.targets == ("normal",))
 
     with DuckDBControlReader(path) as reader:
         tasks = {task.id: task for task in reader.read_tasks(reader.read_records())}
@@ -669,7 +672,7 @@ def test_full_range_int_ids_round_trip_as_python_ints(tmp_path):
         (task,) = reader.read_tasks(records)
         task_rows = reader.task_table().to_pylist()
 
-    assert [record.id for record in records] == sorted([RECORD_ID, largest, generated.id])
+    assert [record.id for record in records] == [RECORD_ID, RECORD_ID + 1, RECORD_ID + 2]
     annotation = records[0].annotations[0]
     ids = [record.id for record in records] + [source.id for record in records for source in record.sources]
     ids = [*ids, task.id, annotation.id, annotation.occurrence_id]

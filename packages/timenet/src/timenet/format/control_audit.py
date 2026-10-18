@@ -12,6 +12,7 @@ import duckdb
 from timenet.errors import TimeFFormatError
 from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, ANNOTATED_OWNER_TABLES, CONTROL_TABLES, Table
 from timenet.format.duckdb import check_control_schema
+from timenet.types.ids import FINAL_ID_LIMIT
 
 
 _OBJECT_TYPES_SQL = ", ".join(f"'{name}'" for name in sorted(ANNOTATED_OBJECT_TYPES))
@@ -26,6 +27,36 @@ _ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
     ("tasks", "task_id"),
 )
 """The primary id column of each entity table."""
+
+ID_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("records", "record_id"),
+    ("sources", "source_id"),
+    ("sources", "record_id"),
+    ("sources", "parent_source_id"),
+    ("axes", "axis_id"),
+    ("axis_offsets", "axis_id"),
+    ("signals", "signal_id"),
+    ("signals", "source_id"),
+    ("signals", "axis_id"),
+    ("signal_chunks", "signal_id"),
+    ("annotation_contents", "content_id"),
+    ("annotation_occurrences", "occurrence_id"),
+    ("annotation_occurrences", "content_id"),
+    ("annotation_occurrences", "object_id"),
+    ("tasks", "task_id"),
+    ("tasks", "list_max(scope_signal_ids)"),
+    ("task_targets", "task_id"),
+    ("task_targets", "record_id"),
+    ("task_targets", "signal_id"),
+    ("task_targets", "list_max(span_signal_ids)"),
+    ("task_record_refs", "task_id"),
+    ("task_record_refs", "record_id"),
+    ("task_annotation_refs", "task_id"),
+    ("task_annotation_refs", "occurrence_id"),
+    ("task_dependencies", "task_id"),
+    ("task_dependencies", "parent_task_id"),
+)
+"""Every stored id, as ``(table, expression)``. A stored version holds no provisional id."""
 
 _ENTITY_ID_CHECKS = " UNION ALL ".join(
     f"SELECT '{table}.{column}' FROM {table} WHERE {column} <= 0"  # noqa: S608 - fixed table names
@@ -162,8 +193,8 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
 
     Raises:
         TimeFFormatError: If a key is repeated, a relationship dangles, a value is outside its
-            domain, the Source tree is not a forest of per-Record trees, or an axis or chunk length
-            disagrees with its Signal.
+            domain, the Source tree is not a forest of per-Record trees, an axis or chunk length
+            disagrees with its Signal, or a stored id is provisional.
     """
     for table in CONTROL_TABLES:
         _audit_unique_keys(connection, table)
@@ -216,6 +247,8 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
     if bad_axis is not None:
         raise TimeFFormatError(f"signal {bad_axis[0]!r} has an axis length that does not match its values")
 
+    audit_final_ids(connection)
+
     if require_chunks:
         bad_chunks = connection.execute(_CHUNK_COVERAGE).fetchone()
         if bad_chunks is not None:
@@ -260,3 +293,21 @@ def _audit_foreign_keys(connection: duckdb.DuckDBPyConnection, table: Table) -> 
             raise TimeFFormatError(
                 f"{table.name}.{key.column} refers to missing {key.table}.{key.references} value {orphan[0]!r}"
             )
+
+
+def audit_final_ids(connection: duckdb.DuckDBPyConnection) -> None:
+    """Raise if any stored id, key or reference, is provisional.
+
+    Raises:
+        TimeFFormatError: If a column holds an id at or above ``2**52``.
+    """
+    query = " UNION ALL ".join(
+        f"SELECT {position} AS position, '{table}.{column}' AS name, max({column}) AS largest FROM {table}"  # noqa: S608
+        for position, (table, column) in enumerate(ID_COLUMNS)
+    )
+    row = connection.execute(
+        f"SELECT name, largest FROM ({query}) WHERE largest >= ? ORDER BY position LIMIT 1",  # noqa: S608
+        [FINAL_ID_LIMIT],
+    ).fetchone()
+    if row is not None:
+        raise TimeFFormatError(f"{row[0]} stores the provisional id {row[1]!r}")

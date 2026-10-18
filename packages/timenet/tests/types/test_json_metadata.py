@@ -6,8 +6,7 @@ from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import OrdinalAxis, Record, Signal, Source
-from timenet.format.control_writer import _json
-from timenet.json import JsonMapping, validate_json_mapping, validate_json_value
+from timenet.json import JsonMapping, canonical_json, validate_json_mapping, validate_json_value
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec
 
 
@@ -58,7 +57,7 @@ def test_writer_json_validation_catches_post_construction_mutation():
     record = Record(metadata={"valid": True})
     record.metadata["later"] = {1, 2}  # type: ignore - simulate post-construction corruption
     with pytest.raises(ValidationError):
-        _json(record.metadata)
+        canonical_json(record.metadata)
 
 
 @pytest.mark.parametrize("value", [None, True, 1, 1.0, "text", [1, {"value": False}]])

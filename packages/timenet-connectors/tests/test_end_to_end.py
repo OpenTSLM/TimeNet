@@ -55,7 +55,7 @@ def test_build_then_load_round_trips(converted, tmp_path):
     # CONSUME: load it back through the SDK and compare to the dataset the build wrote.
     restored = TimeNet(registry, storage_path=tmp_path / "store").load("timenet/hello-world")
     [original] = converted
-    assert_datasets_equal(original, restored)
+    assert_datasets_equal(original, restored, final_ids=original.final_ids)
 
 
 def test_build_unknown_id_fails(tmp_path):
@@ -132,7 +132,7 @@ def test_publish_pipeline_stores_through_writable_registry(clean_env, converted,
 
     restored = TimeNet(tmp_path / "registry", storage_path=tmp_path / "store").load("timenet/hello-world")
     [original] = converted
-    assert_datasets_equal(original, restored)
+    assert_datasets_equal(original, restored, final_ids=original.final_ids)
 
 
 def test_run_pipeline_cleans_cache_when_requested(tmp_path, monkeypatch):

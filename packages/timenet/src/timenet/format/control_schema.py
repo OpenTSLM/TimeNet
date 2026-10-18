@@ -125,6 +125,10 @@ CONTROL_METADATA = Table(
     unique=(("key",),),
 )
 
+ID_WATERMARK_PREFIX = "max_id."
+"""``control_metadata`` key prefix. ``max_id.<kind>`` holds the largest id of that kind this version,
+or any version it was edited from, ever stored. New objects in an edit get ids above it."""
+
 DATASETS = Table(
     "datasets",
     (_required("dataset_id"),),

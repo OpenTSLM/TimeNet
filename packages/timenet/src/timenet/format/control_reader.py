@@ -16,7 +16,7 @@ import pyarrow.compute as pc
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
-from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES
+from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, ID_WATERMARK_PREFIX
 from timenet.format.duckdb import check_control_schema, connect_control
 from timenet.format.task_codec import (
     decode_input_modalities,
@@ -223,8 +223,7 @@ def _annotation_query(owners: Mapping[str, Collection[int] | None]) -> tuple[str
                c.float_value, c.boolean_value, c.text_list_value, c.unit, c.description, c.metadata
         FROM {occurrences} o
         LEFT JOIN annotation_contents c USING (content_id)
-        ORDER BY o.object_type, o.object_id, o.content_id, o.span_type,
-                 o.start_us NULLS FIRST, o.end_us NULLS FIRST, o.occurrence_id"""  # noqa: S608 - fixed fragments
+        ORDER BY o.object_type, o.object_id, o.occurrence_id"""  # noqa: S608 - fixed fragments
     return query, parameters
 
 
@@ -613,6 +612,17 @@ class DuckDBControlReader:
             else:
                 children[row.parent_source_id].append(row.source_id)
         return children, roots
+
+    def id_watermarks(self) -> dict[str, int]:
+        """Return the largest id of each kind that this version's lineage stored.
+
+        Returns:
+            The watermark by id kind. A kind without one is absent.
+        """
+        rows = self.connection.execute(
+            "SELECT key, value FROM control_metadata WHERE starts_with(key, ?)", [ID_WATERMARK_PREFIX]
+        ).fetchall()
+        return {key.removeprefix(ID_WATERMARK_PREFIX): int(value) for key, value in rows}
 
     def read_dataset_annotations(self, dataset_id: str) -> tuple[Annotation, ...]:
         """Return annotations attached directly to a dataset.

@@ -65,3 +65,21 @@ def test_check_id_accepts_a_positive_int64(value):
 def test_check_id_rejects_anything_else(value):
     with pytest.raises(TimeFValidationError, match="record_id must be a positive int64 id"):
         check_id(value, "record_id")
+
+
+def test_is_provisional_splits_at_two_to_the_52():
+    assert not ids_module.is_provisional(1)
+    assert not ids_module.is_provisional(ids_module.FINAL_ID_LIMIT - 1)
+    assert ids_module.is_provisional(ids_module.FINAL_ID_LIMIT)
+    assert ids_module.is_provisional(new_id())
+
+
+def test_a_redraw_never_reuses_a_tag(monkeypatch):
+    state = ids_module._IdState()
+    draws = iter([5, 5, 5, 9])
+    monkeypatch.setattr(ids_module.secrets, "randbits", lambda _bits: next(draws))
+    state.used_tags.clear()
+    state.redraw()
+    first = state.tag
+    state.redraw()
+    assert state.tag != first

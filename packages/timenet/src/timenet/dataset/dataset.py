@@ -1,10 +1,10 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 import sys
-from typing import Literal, TextIO, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Literal, TextIO, TypeVar, cast, overload
 
 import numpy as np
 import pyarrow as pa
@@ -13,6 +13,7 @@ from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record
 from timenet.dataset.source import Source
 from timenet.dataset.span_validation import check_span_within_window
+from timenet.dataset.storage_order import iter_record_occurrences, iter_record_signals
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.types import (
@@ -30,6 +31,10 @@ from timenet.types import (
 )
 from timenet.types.splits import Split, parse_split, parse_splits
 from timenet.values_backends import ValuesBackend
+
+
+if TYPE_CHECKING:
+    from timenet.format.final_ids import FinalIds, IdAssigner, IdHistory
 
 
 T = TypeVar("T")
@@ -82,6 +87,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._task_stream: Callable[[], Iterator[Task]] | None = None
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
+        self._id_watermarks: dict[str, int] = {}
+        self._id_history: IdHistory | None = None
 
     def add_record(self, *, record: Record) -> Record:
         """Register and return a complete record.
@@ -141,9 +148,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         source_duplicates = cls._duplicate_ids(source.id for source in sources)
         if source_duplicates:
             raise TimeFValidationError(f"record {record.id!r} contains duplicate source IDs {source_duplicates}")
-        signals = tuple(
-            signal for source in sources for signal in sorted(source.signals, key=lambda item: (item.name, item.id))
-        )
+        signals = tuple(signal for source in sources for signal in sorted(source.signals, key=lambda item: item.name))
         signal_duplicates = cls._duplicate_ids(signal.id for signal in signals)
         if signal_duplicates:
             raise TimeFValidationError(f"record {record.id!r} contains duplicate signal IDs {signal_duplicates}")
@@ -159,6 +164,11 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         values_backend: ValuesBackend = ValuesBackend.PARQUET,
     ) -> Path:
         """Write this dataset as one immutable TimeF version.
+
+        The write stores final ids and leaves this dataset's objects unchanged. Use
+        :class:`~timenet.writer.TimeFWriter` to get the mapping from in-memory ids to stored ids.
+        The dataset remembers the ids it assigned, so a later write keeps them for the same objects
+        and gives new objects ids above them (see :mod:`timenet.format.final_ids`).
 
         Args:
             path: Registry root under which the dataset ID and version directories are created.
@@ -258,9 +268,10 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Args:
             task_types: The task classes the stream yields, so :meth:`derive_schema` records them.
                 Every yielded task must be one of these types.
-            source: A callable returning a fresh iterator over the tasks each time it is called. The
-                writer calls it more than once (a peek for id storage, then the write), so it must
-                re-read its source rather than exhaust a one-shot generator.
+            source: A callable returning a fresh iterator over the tasks each time it is called.
+                Every :meth:`iter_tasks` call, and so every write, calls it again, so it must re-read
+                its source rather than exhaust a one-shot generator. The writer stores final ids
+                for the yielded tasks and leaves the tasks unchanged.
 
         Raises:
             TimeFValidationError: If tasks were already added with :meth:`add_task`. A dataset either
@@ -525,7 +536,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """Walk the dataset's instances and build its :class:`DatasetSchema`.
 
         This method collects the distinct spec, annotation, and task types. It stores the result
-        on the dataset, and it returns the result.
+        on the dataset, and it returns the result. The order follows the objects' storage order and
+        does not depend on their ids.
 
         Returns:
             The derived :class:`DatasetSchema`.
@@ -534,7 +546,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: If one spec type or annotation key yields conflicting descriptors
                 across records.
         """
-        specs = self._ordered_unique(signal.spec for record in self._records for signal in record.signals)
+        specs = self._ordered_unique(signal.spec for record in self._records for signal in iter_record_signals(record))
         by_spec_type: dict[str, object] = {}
         for spec in specs:
             existing = by_spec_type.get(spec.spec_type)
@@ -543,7 +555,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                     f"spec_type {spec.spec_type!r} has conflicting TimeSeriesSpec contracts: {existing!r} and {spec!r}"
                 )
             by_spec_type[spec.spec_type] = spec
-        record_annotations = (annotation for record in self._records for annotation in record.walk_annotations())
+        record_annotations = (annotation for record in self._records for annotation in iter_record_occurrences(record))
         annotations = self._ordered_unique(
             AnnotationDescriptor(
                 key=annotation.key,
@@ -577,7 +589,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return self._schema
 
     @classmethod
-    def from_parts(
+    def from_parts(  # noqa: PLR0913 - one argument per stored part
         cls,
         *,
         metadata: DatasetMetadata,
@@ -585,6 +597,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         tasks: Iterable[Task],
         schema: DatasetSchema,
         annotations: Iterable[Annotation] = (),
+        id_watermarks: Mapping[str, int] | None = None,
+        id_history: "IdHistory | None" = None,
     ) -> "TimeFDataset":
         """Build a dataset from parts that are already constructed.
 
@@ -596,6 +610,10 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             tasks: Fully built tasks, with their ``from_tasks`` references resolved.
             schema: The schema reconstructed from the manifest.
             annotations: Annotations attached directly to the dataset.
+            id_watermarks: The largest id of each kind the base version ever stored. New objects
+                get final ids above it, so an edit never reuses the id of a removed object.
+            id_history: The ids the last successful write of the source dataset assigned, so a new
+                write keeps them.
 
         Returns:
             The dataset, built from these parts.
@@ -607,7 +625,14 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         dataset._task_ids = {task.id for task in dataset._tasks}
         dataset._annotations = list(annotations)
         dataset._schema = schema
+        dataset._id_watermarks = dict(id_watermarks or {})
+        dataset._id_history = id_history
         return dataset
+
+    def _remember_write(self, assigner: "IdAssigner") -> None:
+        """Keep the ids a successful write assigned, so the next write reuses them."""
+        self._id_history = assigner.history()
+        self._id_watermarks = assigner.watermarks()
 
     @staticmethod
     def _check_task_answer(task: Task) -> None:
@@ -724,6 +749,11 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     def records(self) -> tuple[Record, ...]:
         """All records in insertion order."""
         return tuple(self._records)
+
+    @property
+    def final_ids(self) -> "FinalIds | None":
+        """The stored id of every in-memory id, from the last successful write, or ``None``."""
+        return None if self._id_history is None else self._id_history.final_ids
 
     @property
     def tasks(self) -> tuple[Task, ...]:

@@ -1,5 +1,6 @@
 """Strict validation for metadata documented as JSON-compatible."""
 
+import json
 from typing import Annotated, cast
 
 from pydantic import (
@@ -66,3 +67,17 @@ def validate_json_mapping(value: object) -> JsonMapping:
         A detached JSON-native dictionary.
     """
     return cast("JsonMapping", _MAPPING_ADAPTER.validate_python(value))
+
+
+def canonical_json(value: object) -> str:
+    """Validate a JSON value and serialize it deterministically.
+
+    Keys are sorted and separators are compact, so equal values give equal text.
+
+    Args:
+        value: Candidate JSON value.
+
+    Returns:
+        The JSON text.
+    """
+    return json.dumps(validate_json_value(value), sort_keys=True, separators=(",", ":"), allow_nan=False)

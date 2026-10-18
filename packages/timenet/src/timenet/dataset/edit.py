@@ -3,9 +3,11 @@
 TimeF versions are immutable. To remove a row, you must write a new version without that row.
 The cheap method is copy-on-write. This method reads the base version into memory. The values
 stay lazy and come from the base shards. The method removes the records, repairs each
-cross-reference, and writes a new version with the normal atomic-commit writer. Ids are stable
-and the system never reuses them, so surviving references stay valid without renumbering. On a
-content-addressed or deduplicating backend, the rewrite stores only the chunks that changed.
+cross-reference, and writes a new version with the normal atomic-commit writer. Hydrated ids are
+final, so the writer keeps them and surviving references stay valid. Removed ids leave gaps. New
+objects get ids above the largest id of their kind that any version in the lineage stored, so an
+edit never reuses the id of a removed object. On a content-addressed or deduplicating backend, the
+rewrite stores only the chunks that changed.
 """
 
 from collections.abc import Iterable, Mapping
@@ -104,6 +106,8 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[int], *, cascade:
         tasks=tasks,
         schema=DatasetSchema(),
         annotations=dataset.annotations,
+        id_watermarks=dataset._id_watermarks,
+        id_history=dataset._id_history,
     )
     edited.derive_schema()
     return edited
@@ -321,6 +325,7 @@ def edit_version(
             tasks=edited.tasks,
             schema=DatasetSchema(),
             annotations=edited.annotations,
+            id_watermarks=edited._id_watermarks,
         )
         edited.derive_schema()
 

@@ -6,9 +6,14 @@ exact Python type that was written: an integer stays an integer and a boolean st
 """
 
 from collections.abc import Sequence
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.json import canonical_json
+
+
+if TYPE_CHECKING:
+    from timenet.types import Annotation
 
 
 VALUE_COLUMNS = ("value_kind", "text_value", "integer_value", "float_value", "boolean_value", "text_list_value")
@@ -50,6 +55,24 @@ def encode_annotation_value(value: object, *, label: str) -> dict[str, Any]:
             f"{label} has an unsupported value {value!r}; use a string, integer, float, boolean, or list of strings"
         )
     return columns
+
+
+def content_row(annotation: "Annotation") -> dict[str, Any]:
+    """Project an annotation's reusable content onto the ``annotation_contents`` columns.
+
+    Args:
+        annotation: Any occurrence of the content.
+
+    Returns:
+        Every column except ``content_id``, in storage order.
+    """
+    return {
+        "name": annotation.name,
+        **encode_annotation_value(annotation.value, label=f"annotation {annotation.id!r}"),
+        "unit": annotation.unit,
+        "description": annotation.description,
+        "metadata": canonical_json(annotation.metadata),
+    }
 
 
 def decode_annotation_value(  # noqa: PLR0913, PLR0917 - one positional argument per stored column
