@@ -3,8 +3,8 @@
 The DDL, the writer's Arrow batch schemas, and the audit's key and relationship checks are all
 derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
 
-Version 1 of the control schema. Hierarchy and task tables carry a ``BIGINT`` key drawn from a
-sequence and store public ids once, on the row that owns them. Annotation tables are keyed by their
+Version 1 of the control schema. Hierarchy tables carry a ``BIGINT`` key drawn from a sequence
+and store public ids once, on the row that owns them. Annotation and task tables are keyed by their
 public ids. Fixed-shape fields are typed columns so they can be filtered in SQL; only the
 free-form ``metadata`` dictionaries are JSON. The database carries no persisted constraints:
 :data:`Table.unique` and :data:`Table.foreign_keys` are what the writer keeps while streaming
@@ -71,6 +71,8 @@ class ForeignKey:
     column: str
     table: str
     references: str
+    many: bool = False
+    """Whether ``column`` is a list column whose every element must exist."""
 
 
 @dataclass(frozen=True)
@@ -118,7 +120,7 @@ def _required(name: str, column_type: ColumnType = ColumnType.VARCHAR) -> Column
 
 
 OBJECT_KEYS = "object_key_sequence"
-"""Datasets, records, sources, signals, and tasks draw their keys from one sequence."""
+"""Datasets, records, sources, and signals draw their keys from one sequence."""
 AXIS_KEYS = "axis_key_sequence"
 
 SEQUENCES: tuple[str, ...] = (OBJECT_KEYS, AXIS_KEYS)
@@ -295,7 +297,6 @@ type is part of the reference. ``object_id`` is NULL exactly when the owner is t
 TASKS = Table(
     "tasks",
     (
-        _key("task_key"),
         _required("task_id", ColumnType.BIGINT),
         _required("task_type"),
         Column("prompt", ColumnType.VARCHAR),
@@ -304,7 +305,7 @@ TASKS = Table(
         Column("scope_type", ColumnType.VARCHAR),
         Column("scope_start", ColumnType.BIGINT),
         Column("scope_end", ColumnType.BIGINT),
-        Column("scope_signal_keys", ColumnType.BIGINT_LIST),
+        Column("scope_signal_ids", ColumnType.BIGINT_LIST),
         _required("has_inline_targets", ColumnType.BOOLEAN),
         Column("target_schema", ColumnType.VARCHAR),
         Column("unit", ColumnType.VARCHAR),
@@ -313,61 +314,64 @@ TASKS = Table(
         Column("rationale", ColumnType.VARCHAR),
         _required("metadata", ColumnType.JSON),
     ),
-    unique=(("task_key",), ("task_id",)),
-    key_sequence=OBJECT_KEYS,
+    unique=(("task_id",),),
+    foreign_keys=(ForeignKey("scope_signal_ids", "signals", "signal_id", many=True),),
 )
 
 TASK_TARGETS = Table(
     "task_targets",
     (
-        _key("task_key"),
+        _key("task_id"),
         _key("position"),
         _required("target_kind"),
         Column("text_value", ColumnType.VARCHAR),
         Column("integer_value", ColumnType.BIGINT),
         Column("float_value", ColumnType.DOUBLE),
         Column("boolean_value", ColumnType.BOOLEAN),
-        Column("record_key", ColumnType.BIGINT),
-        Column("signal_key", ColumnType.BIGINT),
+        Column("record_id", ColumnType.BIGINT),
+        Column("signal_id", ColumnType.BIGINT),
         Column("span_start", ColumnType.BIGINT),
         Column("span_end", ColumnType.BIGINT),
-        Column("signal_keys", ColumnType.BIGINT_LIST),
+        Column("span_signal_ids", ColumnType.BIGINT_LIST),
     ),
-    unique=(("task_key", "position"),),
+    unique=(("task_id", "position"),),
     foreign_keys=(
-        ForeignKey("task_key", "tasks", "task_key"),
-        ForeignKey("record_key", "records", "record_key"),
-        ForeignKey("signal_key", "signals", "signal_key"),
+        ForeignKey("task_id", "tasks", "task_id"),
+        ForeignKey("record_id", "records", "record_id"),
+        ForeignKey("signal_id", "signals", "signal_id"),
+        ForeignKey("span_signal_ids", "signals", "signal_id", many=True),
     ),
 )
+"""The value columns match :data:`timenet.format.task_codec.TARGET_VALUE_COLUMNS`. A step span names
+its one series in ``signal_id``; a time span names its series in ``span_signal_ids``."""
 
 TASK_RECORD_REFS = Table(
     "task_record_refs",
-    (_key("task_key"), _required("field"), _key("position"), _key("record_key")),
-    unique=(("task_key", "field", "position"),),
+    (_key("task_id"), _required("field"), _key("position"), _key("record_id")),
+    unique=(("task_id", "field", "position"),),
     foreign_keys=(
-        ForeignKey("task_key", "tasks", "task_key"),
-        ForeignKey("record_key", "records", "record_key"),
+        ForeignKey("task_id", "tasks", "task_id"),
+        ForeignKey("record_id", "records", "record_id"),
     ),
 )
 
 TASK_ANNOTATION_REFS = Table(
     "task_annotation_refs",
-    (_key("task_key"), _required("field"), _key("position"), _key("occurrence_id")),
-    unique=(("task_key", "field", "position"),),
+    (_key("task_id"), _required("field"), _key("position"), _key("occurrence_id")),
+    unique=(("task_id", "field", "position"),),
     foreign_keys=(
-        ForeignKey("task_key", "tasks", "task_key"),
+        ForeignKey("task_id", "tasks", "task_id"),
         ForeignKey("occurrence_id", "annotation_occurrences", "occurrence_id"),
     ),
 )
 
 TASK_DEPENDENCIES = Table(
     "task_dependencies",
-    (_key("task_key"), _key("position"), _key("parent_task_key")),
-    unique=(("task_key", "position"),),
+    (_key("task_id"), _key("position"), _key("parent_task_id")),
+    unique=(("task_id", "position"),),
     foreign_keys=(
-        ForeignKey("task_key", "tasks", "task_key"),
-        ForeignKey("parent_task_key", "tasks", "task_key"),
+        ForeignKey("task_id", "tasks", "task_id"),
+        ForeignKey("parent_task_id", "tasks", "task_id"),
     ),
 )
 

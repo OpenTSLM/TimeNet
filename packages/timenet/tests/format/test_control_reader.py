@@ -18,7 +18,9 @@ from timenet.types import (
     InputModality,
     ScalarPredictionTask,
     Split,
+    StepPoint,
     TemporalLocalizationTask,
+    TimeInterval,
     TimePoint,
     TimeSeriesSpec,
     TSGenerationTask,
@@ -270,6 +272,26 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
     assert target_point == point
 
 
+def test_target_table_names_a_step_series_in_signal_id(tmp_path):
+    path = tmp_path / "control.duckdb"
+    dataset = _dataset()
+    step = StepPoint(start=1, time_series_id=LEAD_II_ID)
+    interval = TimeInterval(start_us=0, end_us=2_000, time_series_ids=(LEAD_I_ID,))
+    dataset.tasks[0].targets = (step, interval)
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        rows = reader.target_table().to_pylist()
+        (task,) = reader.read_tasks(reader.read_records())
+
+    columns = ("target_kind", "signal_id", "span_start", "span_end", "span_signal_ids")
+    assert [tuple(row[column] for column in columns) for row in rows] == [
+        ("step_point", LEAD_II_ID, 1, None, None),
+        ("time_interval", None, 0, 2_000, [LEAD_I_ID]),
+    ]
+    assert task.targets == (step, interval)
+
+
 def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
@@ -471,6 +493,44 @@ def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, m
     assert set(by_id) == {TASK_ID, 398, 399}
     assert by_id[398].from_tasks[0] is by_id[399]
     assert tuple(sorted(by_id)) == tuple(task.id for task in tasks)
+
+
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("UPDATE task_targets SET signal_id = 999 WHERE target_kind = 'step_point'", "missing signal 999"),
+        ("UPDATE tasks SET scope_signal_ids = [999] WHERE task_id = 397", "missing signal 999"),
+        ("UPDATE task_record_refs SET record_id = 999", "missing record"),
+        ("UPDATE task_targets SET record_id = 999 WHERE target_kind = 'record'", "missing record"),
+        ("UPDATE task_targets SET signal_id = 999 WHERE target_kind = 'signal'", "outside the hydrated set"),
+        ("UPDATE task_dependencies SET parent_task_id = 999", "missing task 999"),
+    ],
+)
+def test_read_tasks_rejects_corrupt_task_references(tmp_path, statement, message):
+    dataset = _dataset()
+    record = dataset.records[0]
+    step = StepPoint(start=1, time_series_id=LEAD_II_ID)
+    dataset.tasks[0].targets = (step, record, record.signals[0])
+    steps = Signal(id=555, name="steps", spec=SPEC, time_axis=OrdinalAxis(), data=pa.array([1.0, 2.0], pa.float32()))
+    step_record = Record(id=11, sources=(Source(name="steps", signals=(steps,)),))
+    dataset.add_record(record=step_record)
+    parent = AnswerTask(id=399, inputs=(record,), targets=("parent",))
+    dataset.add_tasks(
+        tasks=(
+            parent,
+            AnswerTask(id=398, inputs=(record,), targets=("child",), from_tasks=(parent,)),
+            AnswerTask(
+                id=397, inputs=(step_record,), targets=("scoped",), scope=StepPoint(start=1, time_series_id=555)
+            ),
+        )
+    )
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+    with connect_control(path) as connection:
+        connection.execute(statement)
+
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match=message):
+        reader.read_tasks(cached_records=reader.read_records())
 
 
 def test_read_tasks_rejects_records_the_database_does_not_store(tmp_path):
