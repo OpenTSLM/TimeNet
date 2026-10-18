@@ -38,8 +38,8 @@ _DOMAIN_CHECKS = f"""
         'time_point', 'time_interval', 'step_point', 'step_interval'
     )
     UNION ALL
-    SELECT 'task_dependencies.parent_task_key' FROM task_dependencies
-    WHERE task_key = parent_task_key
+    SELECT 'task_dependencies.parent_task_id' FROM task_dependencies
+    WHERE task_id = parent_task_id
     UNION ALL
     SELECT 'annotation_contents.value_kind' FROM annotation_contents
     WHERE value_kind NOT IN ('text', 'integer', 'float', 'boolean', 'text_list')
@@ -125,27 +125,39 @@ _CHUNK_COVERAGE = """
     LIMIT 1
 """
 
+_TASK_SPAN_SIGNALS = """
+    SELECT spans.task_id, spans.signal_id
+    FROM (
+        SELECT task_id, unnest(scope_signal_ids) AS signal_id FROM tasks
+        UNION ALL
+        SELECT task_id, unnest(span_signal_ids) FROM task_targets
+    ) spans
+    LEFT JOIN signals ON signals.signal_id = spans.signal_id
+    WHERE signals.signal_id IS NULL
+    LIMIT 1
+"""
+
 _TASK_RECORD_SCOPE = """
     WITH spans AS (
-        SELECT row_number() OVER () AS span_key, task_key, signal_keys
+        SELECT row_number() OVER () AS span_number, task_id, signal_ids
         FROM (
-            SELECT task_key, scope_signal_keys AS signal_keys FROM tasks
+            SELECT task_id, scope_signal_ids AS signal_ids FROM tasks
             WHERE scope_type IN ('time_point', 'time_interval')
             UNION ALL
-            SELECT task_key, signal_keys FROM task_targets
+            SELECT task_id, span_signal_ids FROM task_targets
             WHERE target_kind IN ('time_point', 'time_interval')
         )
     )
-    SELECT tasks.task_id
+    SELECT spans.task_id
     FROM spans
-    JOIN tasks USING (task_key)
-    LEFT JOIN task_record_refs refs ON refs.task_key = spans.task_key AND refs.field = 'inputs'
-    LEFT JOIN sources ON sources.record_key = refs.record_key
+    LEFT JOIN task_record_refs refs ON refs.task_id = spans.task_id AND refs.field = 'inputs'
+    LEFT JOIN records ON records.record_id = refs.record_id
+    LEFT JOIN sources ON sources.record_key = records.record_key
     LEFT JOIN signals USING (source_key)
-    GROUP BY spans.span_key, tasks.task_id, spans.signal_keys
+    GROUP BY spans.span_number, spans.task_id, spans.signal_ids
     HAVING count(DISTINCT CASE
-        WHEN spans.signal_keys IS NULL OR list_contains(spans.signal_keys, signals.signal_key)
-        THEN refs.record_key END) <> 1
+        WHEN spans.signal_ids IS NULL OR list_contains(spans.signal_ids, signals.signal_id)
+        THEN refs.record_id END) <> 1
     LIMIT 1
 """
 
@@ -160,8 +172,8 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
 
     Raises:
         TimeFFormatError: If a key is repeated, a relationship dangles, a value is outside its
-            domain, the Source tree is not a forest of per-Record trees, or an axis or chunk
-            length disagrees with its Signal.
+            domain, a task span names a missing Signal, the Source tree is not a forest of
+            per-Record trees, or an axis or chunk length disagrees with its Signal.
     """
     for table in CONTROL_TABLES:
         _audit_unique_keys(connection, table)
@@ -183,7 +195,7 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
               OR (list_contains(input_modalities, 'no_input')
                   AND (len(list_filter(input_modalities, x -> x NOT IN ('text', 'no_input'))) > 0
                        OR EXISTS (SELECT 1 FROM task_record_refs r
-                                  WHERE r.task_key = tasks.task_key AND r.field = 'inputs')))
+                                  WHERE r.task_id = tasks.task_id AND r.field = 'inputs')))
            LIMIT 1"""
     ).fetchone()
     if invalid_modality is not None:
@@ -197,6 +209,11 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
                 f"annotation occurrence {occurrence_id!r} on the Dataset has object id {object_id!r}"
             )
         raise TimeFFormatError(f"annotation occurrence {occurrence_id!r} refers to missing {object_type} {object_id!r}")
+
+    missing_span_signal = connection.execute(_TASK_SPAN_SIGNALS).fetchone()
+    if missing_span_signal is not None:
+        task_id, signal_id = missing_span_signal
+        raise TimeFFormatError(f"task {task_id!r} has a span that refers to missing Signal {signal_id!r}")
 
     invalid_clock_scope = connection.execute(_TASK_RECORD_SCOPE).fetchone()
     if invalid_clock_scope is not None:
