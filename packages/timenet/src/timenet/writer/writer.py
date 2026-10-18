@@ -23,6 +23,7 @@ from timenet.format.constants import (
 )
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import CONTROL_FILE, connect_control
+from timenet.format.final_ids import FinalIds, IdAssigner, plan_final_ids
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
@@ -115,6 +116,8 @@ class TimeFWriter:
         self._staging_dir = self._root / dataset.metadata.dataset_id / f"{version}.tmp-{uuid.uuid4().hex}"
 
         self._written = False
+        self._ids: IdAssigner | None = None
+        self._final_ids: FinalIds | None = None
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -165,27 +168,45 @@ class TimeFWriter:
 
     # ---- lifecycle -----------------------------------------------------------------------------
 
-    def write(self) -> None:
-        """Serialize every artifact except the manifest into the staging directory."""
+    def write(self) -> FinalIds:
+        """Serialize every artifact except the manifest into the staging directory.
+
+        The writer stores final ids and leaves the dataset's objects unchanged (see
+        :mod:`timenet.format.final_ids`). It plans every final id before it writes anything.
+
+        Returns:
+            The stored id of every in-memory id, by kind. :attr:`final_ids` returns it too.
+        """
+        ids = plan_final_ids(self._dataset)
         if self._dataset.schema is None:
             self._dataset.derive_schema()
-        self._validate_shared_annotations()
 
-        unique_series, _series_to_records = self._dedupe_series()
+        unique_series, _series_to_records = self._dedupe_series(ids)
         placements = self._write_values(unique_series)
-        tasks = (
-            self._dataset.iter_streamed_tasks_validated()
-            if self._dataset.has_task_stream
-            else self._dataset.iter_tasks()
-        )
+        tasks = self._dataset.iter_streamed_tasks_validated() if self._dataset.has_task_stream else None
         self._task_type_counts = DuckDBControlWriter(self._staging_dir / CONTROL_FILE).write_hierarchy(
             self._dataset,
             placements,
             tasks=tasks,
+            ids=ids,
         )
         self._control_file = CONTROL_FILE
         self._counts = self._build_counts()
+        self._ids = ids
+        self._final_ids = ids.freeze()
         self._written = True
+        return self._final_ids
+
+    @property
+    def final_ids(self) -> FinalIds:
+        """Return the stored id of every in-memory id that :meth:`write` stored, by kind.
+
+        Raises:
+            RuntimeError: If :meth:`write` has not run successfully.
+        """
+        if self._final_ids is None:
+            raise RuntimeError("write() must run successfully before final_ids")
+        return self._final_ids
 
     def close(self) -> None:
         """Write the manifest and atomically publish the staging directory.
@@ -203,6 +224,9 @@ class TimeFWriter:
             shutil.rmtree(self._final_dir)
         self._final_dir.parent.mkdir(parents=True, exist_ok=True)
         self._staging_dir.replace(self._final_dir)
+        if self._ids is not None:
+            self._dataset._id_history = self._ids.history()
+            self._dataset._id_watermarks = self._ids.watermarks()
         self._emit(ProgressStage.COMMIT, 1, 1)
 
     def abort(self) -> None:
@@ -211,13 +235,16 @@ class TimeFWriter:
 
     # ---- values --------------------------------------------------------------------------------
 
-    def _dedupe_series(self) -> tuple[list[Signal], dict[int, list[int]]]:
+    def _dedupe_series(self, ids: IdAssigner) -> tuple[list[Signal], dict[int, list[int]]]:
         """Return unique series (sorted for stable output) and the series-id -> record-ids map.
 
         Sharing one series across records is the supported dedupe path. Two different series that
         claim one ``time_series_id`` is a contradiction. The writer can write only one of them, so
         the other's records read back the wrong data. Two series that share an id must describe the
         same signal. The writer rejects a disagreement instead of keeping the first series.
+
+        Args:
+            ids: The final-id plan. Series are sorted by final signal id within a spec type.
 
         Returns:
             The sorted unique series and a mapping from ``time_series_id`` to the ids of the records
@@ -245,13 +272,9 @@ class TimeFWriter:
                 if pair not in seen_pairs:
                     seen_pairs.add(pair)
                     series_to_records.setdefault(ts.id, []).append(record.id)
-        # Group a record's series together before splitting by signal, so all leads of one record are
-        # contiguous: the writer reads the record's source once, and a reader pulls a record's series
-        # from one place instead of scattered across signal-ordered shards. A series shared by several
-        # records sorts under the first record that references it.
-        ordered = sorted(
-            unique.values(), key=lambda ts: (ts.spec.spec_type, series_to_records[ts.id][0], ts.name, ts.id)
-        )
+        # Final signal ids follow storage order, so sorting by id keeps all leads of one record
+        # contiguous within a spec type, and value shards scan in signal-id order.
+        ordered = sorted(unique.values(), key=lambda ts: (ts.spec.spec_type, ids.final("signal", ts.id)))
         return ordered, series_to_records
 
     def _write_values(self, unique_series: list[Signal]) -> dict[tuple[int, int], ChunkPlacement]:
@@ -371,20 +394,6 @@ class TimeFWriter:
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 
     # ---- helpers -------------------------------------------------------------------------------
-
-    def _validate_shared_annotations(self) -> None:
-        """Check that shared annotation content agrees before writing values.
-
-        Raises:
-            TimeFValidationError: If one content ID has different payloads.
-        """
-        seen: dict[int, tuple[object, ...]] = {}
-        record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
-        for ann in record_annotations:
-            content = ann._content_fields
-            if ann.id in seen and seen[ann.id] != content:
-                raise TimeFValidationError(f"annotation content id {ann.id!r} is reused with different content")
-            seen[ann.id] = content
 
     def _build_counts(self) -> ManifestCounts:
         """Read exact entity counts from the completed control database.

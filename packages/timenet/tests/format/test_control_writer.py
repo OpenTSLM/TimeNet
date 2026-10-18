@@ -259,8 +259,8 @@ def test_control_writer_output_passes_the_relational_audit(tmp_path):
 def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_path, monkeypatch):
     original = DuckDBControlWriter._write_objects
 
-    def write_corrupt_relationship(writer, connection, dataset, tasks):
-        task_counts = original(writer, connection, dataset, tasks)
+    def write_corrupt_relationship(writer, connection, dataset, tasks, ids, **kwargs):
+        task_counts = original(writer, connection, dataset, tasks, ids, **kwargs)
         connection.execute("INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}')")
         connection.execute("UPDATE sources SET record_id = 99 WHERE source_id = ?", [MONITOR_ID])
         return task_counts
@@ -277,8 +277,8 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
 def test_control_writer_rejects_a_source_cycle_before_publication(tmp_path, monkeypatch):
     original = DuckDBControlWriter._write_objects
 
-    def write_cycle(writer, connection, dataset, tasks):
-        task_counts = original(writer, connection, dataset, tasks)
+    def write_cycle(writer, connection, dataset, tasks, ids, **kwargs):
+        task_counts = original(writer, connection, dataset, tasks, ids, **kwargs)
         connection.execute(
             "UPDATE sources SET parent_source_id = ? WHERE source_id = ?",
             [ECG_ID, MONITOR_ID],
@@ -315,6 +315,9 @@ def test_control_writer_rejects_ids_reused_across_records(tmp_path):
             Record(id=11, sources=(Source(id=ECG_ID, name="ECG", signals=(signal(LEAD_II_ID),)),)),
         ),
         iter_tasks=lambda: iter(()),
+        has_task_stream=False,
+        _id_watermarks={},
+        _id_history=None,
     )
 
     with pytest.raises(TimeFValidationError, match=f"source id {ECG_ID} is not unique"):
@@ -337,6 +340,9 @@ def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path
         annotations=(),
         records=(Record(id=RECORD_ID, sources=(Source(id=ECG_ID, name="ECG", signals=(signal,)),)),),
         iter_tasks=lambda: iter(()),
+        has_task_stream=False,
+        _id_watermarks={},
+        _id_history=None,
     )
 
     with pytest.raises(TimeFValidationError, match="returned 3 time offsets but it declares n_values=2"):
