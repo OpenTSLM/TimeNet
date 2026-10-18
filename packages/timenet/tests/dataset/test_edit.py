@@ -150,7 +150,7 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
     base = _base(tmp_path, _answer_reads_context_via_record1())
     out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=["record-1"])
     with TimeFReader(open_local_version(out)) as reader:
-        restored = reader.read()
+        restored = reader.read().read()
 
     by_record = {
         record.record_id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
@@ -196,7 +196,7 @@ def test_edit_version_round_trip(tmp_path):
     out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=["record-1"])
 
     with TimeFReader(open_local_version(out)) as reader:
-        restored = reader.read()
+        restored = reader.read().read()
     assert {s.record_id for s in restored.records} == {"record-0", "record-2"}
 
     manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
