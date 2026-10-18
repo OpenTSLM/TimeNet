@@ -13,7 +13,16 @@ from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAx
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
-from timenet.types import Annotation, Span, StepInterval, SupportsAnnotate, TimeInterval, TimeSeriesSpec, new_id
+from timenet.types import (
+    Annotation,
+    Span,
+    StepInterval,
+    SupportsAnnotate,
+    TimeInterval,
+    TimeSeriesSpec,
+    check_id,
+    new_id,
+)
 
 
 def _validate_enum_values(
@@ -98,8 +107,8 @@ class Signal(SupportsAnnotate):
     An :class:`~timenet.dataset.axis.IrregularAxis` requires this callable, and any other axis
     rejects it. A regular axis computes its time offsets and an ordinal one has none. A stream attached to
     either gives a second, conflicting answer to the same question."""
-    id: str = field(default_factory=new_id)
-    """Stable Signal identity. Defaults to a UUIDv7."""
+    id: int = field(default_factory=new_id)
+    """Stable Signal identity, a fresh int64 id by default."""
     n_values: int
     """The number of values the series holds, one per timestep. If ``spec`` gives each timestep a shape,
     the series counts one value per timestep, not one per scalar. This matches the count a chunk's
@@ -116,7 +125,7 @@ class Signal(SupportsAnnotate):
         *,
         spec: TimeSeriesSpec,
         time_axis: TimeAxis,
-        id: str | None = None,
+        id: int | None = None,
         name: str,
         data: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array,
         annotations: tuple[Annotation, ...] = (),
@@ -127,7 +136,7 @@ class Signal(SupportsAnnotate):
         self._initialize(
             spec=spec,
             time_axis=time_axis,
-            id=id or new_id(),
+            id=new_id() if id is None else id,
             name=name,
             loader=lambda: array,
             n_values=len(array),
@@ -144,7 +153,7 @@ class Signal(SupportsAnnotate):
         name: str,
         loader: Callable[[], pa.Array],
         n_values: int,
-        id: str | None = None,
+        id: int | None = None,
         time_offsets_loader: Callable[[], pa.Array] | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
@@ -158,7 +167,7 @@ class Signal(SupportsAnnotate):
         instance._initialize(
             spec=spec,
             time_axis=time_axis,
-            id=id or new_id(),
+            id=new_id() if id is None else id,
             name=name,
             loader=loader,
             n_values=n_values,
@@ -173,7 +182,7 @@ class Signal(SupportsAnnotate):
         *,
         spec: TimeSeriesSpec,
         time_axis: TimeAxis,
-        id: str,
+        id: int,
         name: str,
         loader: Callable[[], pa.Array],
         n_values: int,
@@ -225,10 +234,12 @@ class Signal(SupportsAnnotate):
         """Validate the intrinsic per-series invariants.
 
         Raises:
-            TimeFValidationError: If ``n_values`` is not a positive integer, or if ``time_offsets_loader``
-                and the axis shape disagree about whether this series stores per-value time offsets.
+            TimeFValidationError: If ``id`` is not a valid id, if ``n_values`` is not a positive
+                integer, or if ``time_offsets_loader`` and the axis shape disagree about whether this
+                series stores per-value time offsets.
             ValueError: If ``signal`` is empty. The axis validates itself.
         """
+        object.__setattr__(self, "id", check_id(self.id, "Signal.id"))
         if not self.name:
             raise ValueError("Signal.name must be non-empty")
         object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
@@ -278,7 +289,7 @@ class Signal(SupportsAnnotate):
         spec: TimeSeriesSpec,
         name: str,
         time_axis: TimeAxis,
-        id: str | None = None,
+        id: int | None = None,
     ) -> "Signal":
         """Build a series from already-materialized values and wrap them in a loader for the spec's dtype.
 
@@ -295,7 +306,7 @@ class Signal(SupportsAnnotate):
             spec: The series' measurement-modality spec.
             name: The signal name.
             time_axis: Where the values sit in time.
-            id: Explicit id, or ``None`` for an auto-generated UUIDv7.
+            id: Explicit id, or ``None`` for a fresh int64 id.
 
         Returns:
             The constructed :class:`Signal`.
@@ -316,7 +327,7 @@ class Signal(SupportsAnnotate):
         time_offsets_us: np.ndarray | Sequence[int],
         spec: TimeSeriesSpec,
         name: str,
-        id: str | None = None,
+        id: int | None = None,
     ) -> "Signal":
         """Build an irregular series from materialized values and their time offsets.
 
@@ -331,7 +342,7 @@ class Signal(SupportsAnnotate):
             time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
             spec: The series' measurement-modality spec.
             name: The signal name.
-            id: Explicit id, or ``None`` for an auto-generated UUIDv7.
+            id: Explicit id, or ``None`` for a fresh int64 id.
 
         Returns:
             The constructed :class:`Signal`.

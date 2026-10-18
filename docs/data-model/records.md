@@ -39,21 +39,21 @@ Build the hierarchy from the leaves upward:
 from timenet.dataset import Record, Source
 
 accelerometer = Source(
-    id="accelerometer",
     name="Accelerometer",
     signals=(acceleration_x, acceleration_y, acceleration_z),
 )
 imu = Source(
-    id="imu",
     name="IMU",
     sources=(accelerometer,),
 )
 record = Record(
-    record_id="run-001",
     sources=(imu,),
-    metadata={"site": "lab-a"},
+    metadata={"site": "lab-a", "run": "run-001"},
 )
 ```
+
+TimeNet gives each Record, Source, and Signal a generated int64 `id`. Keep upstream identifiers,
+such as the run name above, in `metadata` or an annotation.
 
 `record.signals` returns every Signal in deterministic hierarchy order. Use `walk_sources()` or
 `walk_signals()` when you need an iterator.
@@ -89,7 +89,6 @@ from timenet.types import TimeOrigin
 
 origin = TimeOrigin(datetime(2026, 1, 1, tzinfo=timezone.utc))
 record = Record(
-    record_id="run-001",
     start_time=origin,
     sources=(
         Source(name="sensor A", signals=(signal_a,)),

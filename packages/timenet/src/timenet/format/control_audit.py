@@ -44,6 +44,20 @@ _DOMAIN_CHECKS = """
     UNION ALL
     SELECT 'tasks.scope_type' FROM tasks
     WHERE scope_type NOT IN ('time_point', 'time_interval', 'step_point', 'step_interval')
+    UNION ALL
+    SELECT 'records.record_id' FROM records WHERE record_id <= 0
+    UNION ALL
+    SELECT 'sources.source_id' FROM sources WHERE source_id <= 0
+    UNION ALL
+    SELECT 'axes.axis_id' FROM axes WHERE axis_id <= 0
+    UNION ALL
+    SELECT 'signals.signal_id' FROM signals WHERE signal_id <= 0
+    UNION ALL
+    SELECT 'annotation_contents.content_id' FROM annotation_contents WHERE content_id <= 0
+    UNION ALL
+    SELECT 'annotation_occurrences.occurrence_id' FROM annotation_occurrences WHERE occurrence_id <= 0
+    UNION ALL
+    SELECT 'tasks.task_id' FROM tasks WHERE task_id <= 0
     LIMIT 1
 """
 

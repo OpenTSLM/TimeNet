@@ -34,14 +34,15 @@ from timenet.types import (
     TimeOrigin,
     TimePoint,
     TimeSeriesSpec,
+    check_id,
     ureg,
 )
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 
 
-ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
-ValueLoaderFactory = Callable[[int, str, TimeSeriesSpec], Callable[[], pa.Array]]
+ValueLoader = Callable[[int, TimeSeriesSpec], pa.Array]
+ValueLoaderFactory = Callable[[int, int, TimeSeriesSpec], Callable[[], pa.Array]]
 OffsetsLoader = Callable[[int, IrregularAxis, int], pa.Array]
 
 
@@ -56,7 +57,7 @@ class _RecordRow(NamedTuple):
     """One ``records`` row in schema column order."""
 
     record_key: int
-    record_id: str
+    record_id: int
     clock_id: int
     time_span_start_us: int | None
     time_span_end_us: int | None
@@ -67,7 +68,7 @@ class _SourceRow(NamedTuple):
     """One ``sources`` row in schema column order."""
 
     source_key: int
-    source_id: str
+    source_id: int
     record_key: int
     parent_source_key: int | None
     name: str
@@ -78,7 +79,7 @@ class _SignalRow(NamedTuple):
     """One ``signals`` row in schema column order."""
 
     signal_key: int
-    signal_id: str
+    signal_id: int
     source_key: int
     name: str
     axis_key: int
@@ -114,16 +115,16 @@ class _OccurrenceRow(NamedTuple):
     """One annotation occurrence joined with its content and the object it annotates."""
 
     occurrence_key: int
-    occurrence_id: str
+    occurrence_id: int
     object_type: str
-    object_id: str | None
+    object_id: int | None
     span_type: str
     start_us: int | None
     end_us: int | None
     provenance: str | None
     confidence: float | None
     metadata: str
-    content_id: str | None
+    content_id: int | None
     name: str | None
     value_kind: str | None
     text_value: str | None
@@ -142,7 +143,7 @@ class _TaskRow(NamedTuple):
     """One ``tasks`` row in schema column order."""
 
     task_key: int
-    task_id: str
+    task_id: int
     task_type: str
     prompt: str | None
     input_modalities: list[str] | None
@@ -190,13 +191,15 @@ _TASK_BATCH_SIZE = 5_000
 """Tasks hydrated per round of keyed queries."""
 
 _OBJECT_ID_SELECTS = {
-    "Dataset": "SELECT dataset_key AS object_key, 'Dataset' AS object_type, dataset_id AS object_id FROM datasets",
+    "Dataset": "SELECT dataset_key AS object_key, 'Dataset' AS object_type, NULL::BIGINT AS object_id FROM datasets",
     "Record": "SELECT record_key AS object_key, 'Record' AS object_type, record_id AS object_id FROM records",
     "Source": "SELECT source_key AS object_key, 'Source' AS object_type, source_id AS object_id FROM sources",
     "Signal": "SELECT signal_key AS object_key, 'Signal' AS object_type, signal_id AS object_id FROM signals",
     "Task": "SELECT task_key AS object_key, 'Task' AS object_type, task_id AS object_id FROM tasks",
 }
-"""Per object type, the query that maps its internal keys to public IDs for annotation lookups."""
+"""Per object type, the query that maps its internal keys to public IDs for annotation lookups.
+
+The Dataset is named by its ``dataset_id`` string, not an integer ID, so its ``object_id`` is NULL."""
 
 
 def _signal_ids_cte(name: str, table: str, keys_column: str, group_by: tuple[str, ...], ids_column: str) -> str:
@@ -207,7 +210,7 @@ def _signal_ids_cte(name: str, table: str, keys_column: str, group_by: tuple[str
         table: The table holding the key list.
         keys_column: The ``BIGINT[]`` column of Signal keys.
         group_by: The columns that identify one row of ``table``.
-        ids_column: The name of the produced ``VARCHAR[]`` column.
+        ids_column: The name of the produced ``BIGINT[]`` column.
 
     Returns:
         ``name AS (...)``, preserving each list's order.
@@ -365,7 +368,7 @@ def _occurrence_span(row: _OccurrenceRow) -> TimePoint | TimeInterval | None:
     raise TimeFFormatError(f"annotation occurrence {row.occurrence_id!r} has unknown span type {row.span_type!r}")
 
 
-def _missing_values(signal_id: str, _spec: TimeSeriesSpec) -> pa.Array:
+def _missing_values(signal_id: int, _spec: TimeSeriesSpec) -> pa.Array:
     """Fail when metadata-only hydration is asked to load values.
 
     Raises:
@@ -405,7 +408,7 @@ class DuckDBControlReader:
         self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
         self._offsets_loader = offsets_loader
-        self._record_keys: dict[str, int] = {}
+        self._record_keys: dict[int, int] = {}
         self._clock_cache: dict[int, TimeOrigin] = {}
         self._task_facts: _TaskFacts | None = None
 
@@ -426,7 +429,7 @@ class DuckDBControlReader:
         """Close the connection when leaving a context manager."""
         self.close()
 
-    def record_ids(self) -> tuple[str, ...]:
+    def record_ids(self) -> tuple[int, ...]:
         """Return every stored Record ID in the order :meth:`read_records` yields them, without hydrating.
 
         Returns:
@@ -438,7 +441,7 @@ class DuckDBControlReader:
 
     def read_records(  # noqa: PLR0912, PLR0914, PLR0915 - related row sets stay together
         self,
-        record_ids: Iterable[str] | None = None,
+        record_ids: Iterable[int] | None = None,
         *,
         with_annotations: bool = True,
     ) -> tuple[Record, ...]:
@@ -455,7 +458,7 @@ class DuckDBControlReader:
             TimeFValidationError: If a requested record is absent.
             TimeFFormatError: If the stored hierarchy is inconsistent.
         """
-        requested = None if record_ids is None else tuple(record_ids)
+        requested = None if record_ids is None else tuple(check_id(item, "record id") for item in record_ids)
         read_all = requested is None
         rows = self._read_rows(_RecordRow, requested)
         by_id = self._index_rows(rows, "record", key=lambda row: row.record_id, id_of=lambda row: row.record_id)
@@ -502,7 +505,7 @@ class DuckDBControlReader:
             offsets_loader = None
             if isinstance(axis, IrregularAxis):
                 if loaded_axis.n_values is None:
-                    raise TimeFFormatError(f"irregular axis {axis.axis_id!r} has no Signal length")
+                    raise TimeFFormatError(f"irregular axis {axis.id!r} has no Signal length")
                 offsets_loader = (
                     partial(self._offsets_loader, signal_row.axis_key, axis, loaded_axis.n_values)
                     if self._offsets_loader is not None
@@ -521,7 +524,7 @@ class DuckDBControlReader:
                         else partial(self._value_loader, signal_row.signal_id, spec)
                     ),
                     time_offsets_loader=offsets_loader,
-                    annotations=annotations.get(("Signal", signal_row.signal_id), ()),
+                    annotations=annotations.get(("Signal", signal_row.signal_key), ()),
                     metadata=_decode_json(signal_row.metadata, default={}),
                 )
             )
@@ -551,7 +554,7 @@ class DuckDBControlReader:
                 name=source_row.name,
                 sources=tuple(hydrate_source(child, record_key) for child in children[source_key]),
                 signals=tuple(signals_by_source[source_key]),
-                annotations=annotations.get(("Source", source_row.source_id), ()),
+                annotations=annotations.get(("Source", source_key), ()),
                 metadata=_decode_json(source_row.metadata, default={}),
             )
 
@@ -569,10 +572,10 @@ class DuckDBControlReader:
                 for source_key in roots_by_record[record_row.record_key]
             )
             record = Record(
-                record_id=record_id,
+                id=record_id,
                 sources=root_sources,
                 start_time=self._clock_cache[record_row.clock_id],
-                annotations=annotations.get(("Record", record_id), ()),
+                annotations=annotations.get(("Record", record_row.record_key), ()),
                 time_span=span,
                 metadata=_decode_json(record_row.metadata, default={}),
             )
@@ -613,7 +616,7 @@ class DuckDBControlReader:
         kind: str,
         *,
         key: Callable[[_HierarchyRow], Any],
-        id_of: Callable[[_HierarchyRow], str],
+        id_of: Callable[[_HierarchyRow], int],
     ) -> dict[Any, _HierarchyRow]:
         """Return rows by key and reject duplicate keys or public IDs.
 
@@ -661,9 +664,9 @@ class DuckDBControlReader:
         ).fetchone()
         if row is None:
             return ()
-        return self._read_annotations((row[0],)).get(("Dataset", dataset_id), ())
+        return self._read_annotations((row[0],)).get(("Dataset", row[0]), ())
 
-    def chunk_rows_by_key(self, signal_key: int, signal_id: str) -> list[dict[str, Any]]:
+    def chunk_rows_by_key(self, signal_key: int, signal_id: int) -> list[dict[str, Any]]:
         """Return one Signal's chunk locations in chunk order.
 
         Raises:
@@ -793,7 +796,7 @@ class DuckDBControlReader:
 
     def task_table(
         self,
-        record_ids: Iterable[str] | None = None,
+        record_ids: Iterable[int] | None = None,
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
@@ -844,7 +847,7 @@ class DuckDBControlReader:
 
     def target_table(
         self,
-        record_ids: Iterable[str] | None = None,
+        record_ids: Iterable[int] | None = None,
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
@@ -882,7 +885,8 @@ class DuckDBControlReader:
             object_type: Keep only occurrences on this object type, or ``None`` for all.
 
         Returns:
-            One row per occurrence with the annotated object's type and ID, the content's key,
+            One row per occurrence with the annotated object's type and ID (NULL for the Dataset,
+            which has a string ``dataset_id`` instead), the content's ID and key,
             typed value columns, unit, span columns, confidence, and JSON metadata.
 
         Raises:
@@ -908,7 +912,7 @@ class DuckDBControlReader:
         ).to_arrow_table()
 
     @staticmethod
-    def _record_filter(record_ids: Iterable[str] | None) -> tuple[str, list[object]]:
+    def _record_filter(record_ids: Iterable[int] | None) -> tuple[str, list[object]]:
         """Return the WHERE clause that keeps tasks whose inputs include one of ``record_ids``.
 
         Returns:
@@ -923,12 +927,12 @@ class DuckDBControlReader:
                        SELECT record_key FROM records WHERE record_id IN (SELECT unnest(?))
                    )
                )""",
-            [list(record_ids)],
+            [[check_id(item, "record id") for item in record_ids]],
         )
 
     def _selection_filter(
         self,
-        record_ids: Iterable[str] | None,
+        record_ids: Iterable[int] | None,
         required_modalities: Iterable[InputModality] | None,
         supported_modalities: Iterable[InputModality] | None,
         split: Split | str | None = None,
@@ -1087,7 +1091,7 @@ class DuckDBControlReader:
             _TargetRow._make,
         )
 
-    def _signal_ids_by_key(self, signal_keys: Iterable[int]) -> dict[int, str]:
+    def _signal_ids_by_key(self, signal_keys: Iterable[int]) -> dict[int, int]:
         """Map internal Signal keys to public IDs without touching the hydrated hierarchy.
 
         Returns:
@@ -1170,7 +1174,7 @@ class DuckDBControlReader:
 
     @staticmethod
     def _resolve(
-        task_id: str,
+        task_id: int,
         field: str,
         refs: dict[str, tuple[int, ...]],
         objects: dict[int, _Ref],
@@ -1249,7 +1253,7 @@ class DuckDBControlReader:
             if axis_type == "regular":
                 axes[axis_key] = _LoadedAxis(
                     RegularAxis(
-                        axis_id=axis_id,
+                        id=axis_id,
                         period_us=Fraction(numerator, denominator),
                         start_index=start_index,
                         offset_us=offset,
@@ -1265,11 +1269,11 @@ class DuckDBControlReader:
                         f"{sorted((min_n_values, max_n_values))}"
                     )
                 axes[axis_key] = _LoadedAxis(
-                    IrregularAxis(axis_id=axis_id, first_us=first, last_us=last),
+                    IrregularAxis(id=axis_id, first_us=first, last_us=last),
                     int(min_n_values),
                 )
             elif axis_type == "ordinal":
-                axes[axis_key] = _LoadedAxis(OrdinalAxis(axis_id=axis_id), None)
+                axes[axis_key] = _LoadedAxis(OrdinalAxis(id=axis_id), None)
             else:
                 raise TimeFFormatError(f"axis {axis_id!r} has unknown type {axis_type!r}")
         return axes
@@ -1296,19 +1300,19 @@ class DuckDBControlReader:
         offsets = column.chunk(0) if column.num_chunks == 1 else column.combine_chunks()
         if len(offsets) != n_values:
             raise TimeFFormatError(
-                f"axis {axis.axis_id!r} stores {len(offsets)} offsets but its Signals declare length {n_values}"
+                f"axis {axis.id!r} stores {len(offsets)} offsets but its Signals declare length {n_values}"
             )
         if offsets.null_count:
-            raise TimeFFormatError(f"axis {axis.axis_id!r} stores null offsets")
+            raise TimeFFormatError(f"axis {axis.id!r} stores null offsets")
         endpoints = (axis.first_us, axis.last_us)
         if len(offsets) == 0 or (offsets[0].as_py(), offsets[-1].as_py()) != endpoints:
-            raise TimeFFormatError(f"axis {axis.axis_id!r} has offsets disagreeing with its axis endpoints {endpoints}")
+            raise TimeFFormatError(f"axis {axis.id!r} has offsets disagreeing with its axis endpoints {endpoints}")
         if len(offsets) > 1:
             decreasing = pc.less(  # ty: ignore[unresolved-attribute]
                 offsets.slice(1), offsets.slice(0, len(offsets) - 1)
             )
             if pc.any(decreasing).as_py():  # ty: ignore[unresolved-attribute]
-                raise TimeFFormatError(f"axis {axis.axis_id!r} has decreasing offsets")
+                raise TimeFFormatError(f"axis {axis.id!r} has decreasing offsets")
         return offsets
 
     @staticmethod
@@ -1345,7 +1349,7 @@ class DuckDBControlReader:
         *,
         object_type: str | None = None,
         annotations_by_occurrence: dict[int, Annotation] | None = None,
-    ) -> dict[tuple[str, str], tuple[Annotation, ...]]:
+    ) -> dict[tuple[str, int], tuple[Annotation, ...]]:
         """Hydrate annotation content and occurrences for hierarchy objects.
 
         Args:
@@ -1355,7 +1359,7 @@ class DuckDBControlReader:
             annotations_by_occurrence: Filled with every hydrated occurrence by its internal key.
 
         Returns:
-            Attached occurrences keyed by object type and object ID.
+            Attached occurrences keyed by object type and internal object key.
 
         Raises:
             TimeFFormatError: If an occurrence has an unknown span type.
@@ -1363,7 +1367,7 @@ class DuckDBControlReader:
         requested = None if object_keys is None else tuple(object_keys)
         if requested == ():
             return {}
-        grouped: dict[tuple[str, str], list[Annotation]] = defaultdict(list)
+        grouped: dict[tuple[str, int], list[Annotation]] = defaultdict(list)
         parameters: list[object] = [list(requested or ())]
         if object_type is not None:
             parameters.append(object_type)
@@ -1376,7 +1380,7 @@ class DuckDBControlReader:
                 raise TimeFFormatError(
                     f"annotation occurrence {row.occurrence_id!r} refers to missing content key {row.content_key!r}"
                 )
-            if row.object_id is None:
+            if row.object_key is None:
                 if row.object_type not in {"Dataset", "Record", "Source", "Signal", "Task"}:
                     raise TimeFFormatError(
                         f"annotation occurrence {row.occurrence_id!r} has unknown object type {row.object_type!r}"
@@ -1389,7 +1393,7 @@ class DuckDBControlReader:
             # The first pass over ``rows`` already rejected NULL content and object columns.
             content_id = _required(row.content_id, "annotation content")
             name = _required(row.name, "annotation name")
-            object_id = _required(row.object_id, "annotated object")
+            object_key = _required(row.object_key, "annotated object")
             annotation = Annotation(
                 occurrence_id=row.occurrence_id,
                 id=content_id,
@@ -1410,7 +1414,7 @@ class DuckDBControlReader:
                 confidence=row.confidence,
                 occurrence_metadata=_decode_json(row.metadata, default={}),
             )
-            grouped[row.object_type, object_id].append(annotation)
+            grouped[row.object_type, object_key].append(annotation)
             if annotations_by_occurrence is not None:
                 annotations_by_occurrence[row.occurrence_key] = annotation
         return {key: tuple(value) for key, value in grouped.items()}
@@ -1444,12 +1448,12 @@ class _TaskHydration:
         self.supported_modalities = supported_modalities
         self.split = split
         self.connection = reader.connection
-        self.records_by_id: dict[str, Record] = {record.id: record for record in cached_records}
+        self.records_by_id: dict[int, Record] = {record.id: record for record in cached_records}
         self.records_by_id.update((record.id, record) for record in records or ())
         self.records_by_key: dict[int, Record] = {}
-        self.signals_by_id: dict[str, Signal] = {}
+        self.signals_by_id: dict[int, Signal] = {}
         self._records_without_signal_index: list[Record] = []
-        self.annotations_by_id: dict[str, Annotation] = {}
+        self.annotations_by_id: dict[int, Annotation] = {}
         self.retained: dict[int, Task] = {}
         self._hydrating: set[int] = set()
         self._dataset_annotations_indexed = False
@@ -1638,7 +1642,7 @@ class _TaskHydration:
                     None if row.scope_signal_keys is None else [signal_ids_by_key[k] for k in row.scope_signal_keys],
                 ),
                 "rationale": row.rationale,
-                "annotations": task_annotations.get(("Task", row.task_id), ()),
+                "annotations": task_annotations.get(("Task", row.task_key), ()),
                 "metadata": _decode_json(row.metadata, default={}),
                 **decode_task_payload(task_type, row.payload_columns),
             }

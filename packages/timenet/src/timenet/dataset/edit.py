@@ -22,7 +22,7 @@ from timenet.types import DatasetSchema, Task, Version
 from timenet.writer import TimeFWriter
 
 
-def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade: bool = False) -> TimeFDataset:
+def remove_records(dataset: TimeFDataset, record_ids: Iterable[int], *, cascade: bool = False) -> TimeFDataset:
     """Return a new in-memory dataset without the given records.
 
     The dataset does not contain the records in ``record_ids``. If ``cascade`` is set, the
@@ -48,13 +48,13 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
         TimeFEditError: If an id is unknown, or a required reference dangles and ``cascade`` is off.
     """
     remove = set(record_ids)
-    known = {record.record_id for record in dataset.records}
+    known = {record.id for record in dataset.records}
     unknown = remove - known
     if unknown:
         raise TimeFEditError(f"cannot remove unknown record ids: {sorted(unknown)}")
 
     annotations_by_record = {
-        record.record_id: frozenset(
+        record.id: frozenset(
             annotation.occurrence_id
             for annotation in (
                 *record.annotations,
@@ -64,14 +64,12 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
             if annotation.occurrence_id is not None
         )
         for record in dataset.records
-        if record.record_id not in remove
+        if record.id not in remove
     }
     dataset_annotation_ids = frozenset(
         annotation.occurrence_id for annotation in dataset.annotations if annotation.occurrence_id is not None
     )
-    removed_signal_ids = {
-        signal.id for record in dataset.records if record.record_id in remove for signal in record.signals
-    }
+    removed_signal_ids = {signal.id for record in dataset.records if record.id in remove for signal in record.signals}
     removed_task_ids = _tasks_to_remove(
         dataset,
         remove,
@@ -85,7 +83,7 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
     records = [
         replace(record, task_ids=tuple(tid for tid in record.task_ids if tid in surviving_task_ids))
         for record in dataset.records
-        if record.record_id not in remove
+        if record.id not in remove
     ]
     records_by_id = {record.id: record for record in records}
     tasks = _rebuild_tasks(
@@ -113,13 +111,13 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
 
 def _tasks_to_remove(  # noqa: PLR0913 - each collection represents one part of edit reachability
     dataset: TimeFDataset,
-    remove: set[str],
-    removed_signal_ids: set[str],
-    annotations_by_record: Mapping[str, frozenset[str]],
-    dataset_annotation_ids: frozenset[str],
+    remove: set[int],
+    removed_signal_ids: set[int],
+    annotations_by_record: Mapping[int, frozenset[int]],
+    dataset_annotation_ids: frozenset[int],
     *,
     cascade: bool,
-) -> set[str]:
+) -> set[int]:
     """Return the ids of tasks that the removal invalidates.
 
     The method follows the reject-unless-cascade rule.
@@ -170,9 +168,9 @@ def _tasks_to_remove(  # noqa: PLR0913 - each collection represents one part of 
 
 def _reachable_annotation_ids(
     task: Task,
-    annotations_by_record: Mapping[str, frozenset[str]],
-    dataset_annotation_ids: frozenset[str],
-) -> set[str]:
+    annotations_by_record: Mapping[int, frozenset[int]],
+    dataset_annotation_ids: frozenset[int],
+) -> set[int]:
     """Return the annotation ids that ``task`` can still resolve.
 
     These are occurrences attached directly to the dataset or anywhere below the task's surviving
@@ -187,7 +185,7 @@ def _reachable_annotation_ids(
     Returns:
         The annotation ids still reachable from the task's surviving records.
     """
-    reachable: set[str] = set(dataset_annotation_ids)
+    reachable: set[int] = set(dataset_annotation_ids)
     for record in task.inputs:
         reachable |= annotations_by_record.get(record.id, frozenset())
     return reachable
@@ -195,10 +193,10 @@ def _reachable_annotation_ids(
 
 def _task_invalidated(
     task: Task,
-    remove: set[str],
-    removed_signal_ids: set[str],
-    annotations_by_record: Mapping[str, frozenset[str]],
-    dataset_annotation_ids: frozenset[str],
+    remove: set[int],
+    removed_signal_ids: set[int],
+    annotations_by_record: Mapping[int, frozenset[int]],
+    dataset_annotation_ids: frozenset[int],
 ) -> bool:
     """Return whether removing ``remove`` strips a required reference from ``task``.
 
@@ -226,10 +224,10 @@ def _task_invalidated(
 
 def _rebuild_tasks(
     dataset: TimeFDataset,
-    removed_task_ids: set[str],
-    records_by_id: Mapping[str, "Record"],
-    annotations_by_record: Mapping[str, frozenset[str]],
-    dataset_annotation_ids: frozenset[str],
+    removed_task_ids: set[int],
+    records_by_id: Mapping[int, "Record"],
+    annotations_by_record: Mapping[int, frozenset[int]],
+    dataset_annotation_ids: frozenset[int],
 ) -> list[Task]:
     """Rebuild the surviving tasks. Strip out unreachable record, annotation, and from-task references.
 
@@ -242,7 +240,7 @@ def _rebuild_tasks(
     Returns:
         The rebuilt surviving tasks, with ``from_tasks`` rewired to the rebuilt instances.
     """
-    rebuilt: dict[str, Task] = {}
+    rebuilt: dict[int, Task] = {}
     for task in dataset.tasks:
         if task.id in removed_task_ids:
             continue
@@ -282,7 +280,7 @@ def edit_version(
     out_root: Path,
     *,
     dataset_version: Version,
-    remove_record_ids: Iterable[str] = (),
+    remove_record_ids: Iterable[int] = (),
     cascade: bool = False,
     **writer_kwargs: object,
 ) -> Path:

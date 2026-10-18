@@ -14,7 +14,32 @@ def _record(signals, **kwargs):
     """Build a Record whose one Source owns ``signals``."""
     start_time = kwargs.pop("start_time", None)
     origin = TimeOrigin(start_time)
-    return Record(start_time=origin, sources=(Source(id="src", name="src", signals=tuple(signals)),), **kwargs)
+    return Record(start_time=origin, sources=(Source(name="src", signals=tuple(signals)),), **kwargs)
+
+
+def test_record_ids_default_to_unique_ints():
+    first, second = Record(), Record()
+    assert isinstance(first.id, int)
+    assert first.id != second.id
+    assert first.id == first.id
+
+
+def test_record_keeps_explicit_ids():
+    record = Record(id=10, task_ids=(301, 302))
+    assert record.id == 10
+    assert record.task_ids == (301, 302)
+
+
+@pytest.mark.parametrize("bad", ["record-0", 0, -1, True, 2**63])
+def test_record_rejects_an_invalid_record_id(bad):
+    with pytest.raises(TimeFValidationError, match="positive int64 id"):
+        Record(id=bad)
+
+
+@pytest.mark.parametrize("bad", ["task-0", 0, False])
+def test_record_rejects_an_invalid_task_id(bad):
+    with pytest.raises(TimeFValidationError, match="positive int64 id"):
+        Record(task_ids=(301, bad))
 
 
 def test_add_static_annotation(make_series):
@@ -26,11 +51,11 @@ def test_add_static_annotation(make_series):
 
 def test_annotate_binds_a_declarative_annotation(make_series):
     record = _record((make_series(),))
-    content = Annotation(key="patient_sex", value="male", id="sex-male")
+    content = Annotation(key="patient_sex", value="male", id=201)
 
     occurrence = record.annotate(content)
 
-    assert occurrence.content_id == content.content_id
+    assert occurrence.id == content.id
     assert occurrence.occurrence_id is not None
     assert record.annotations == (occurrence,)
 
@@ -53,7 +78,7 @@ def test_signal_level_point_resolves_series_id(make_series):
 def test_signal_level_annotation_unknown_id_rejected(make_series):
     record = _record((make_series(),))
     with pytest.raises(TimeFValidationError, match="scope comes from its owner"):
-        record.annotate(Annotation(key="stimulus", span=TimePoint.seconds(1.0, time_series_ids=("nope",))))
+        record.annotate(Annotation(key="stimulus", span=TimePoint.seconds(1.0, time_series_ids=(999,))))
 
 
 def test_trial_level_interval_over_differing_windows_is_accepted(make_series):
@@ -292,7 +317,7 @@ def test_time_span_must_contain_every_series_window(make_series):
 
 def test_time_span_time_series_ids_must_be_none(make_series):
     with pytest.raises(TimeFValidationError, match="time_series_ids must be None"):
-        _record((make_series(),), time_span=TimeInterval.seconds(0.0, 10.0, time_series_ids=("x",)))
+        _record((make_series(),), time_span=TimeInterval.seconds(0.0, 10.0, time_series_ids=(999,)))
 
 
 def test_time_span_must_be_an_interval(make_series):
@@ -306,31 +331,31 @@ def _ordinal(spec, n, tsid):
 
 def test_a_steps_span_is_accepted_on_an_ordinal_series(make_series):
     # An ordinal series has no timeline, so a steps span is the only way to name a region of it.
-    ts = _ordinal(make_series().spec, 3, "ord")
-    check_span_within_window("scope", StepInterval(time_series_id="ord", start=0, stop=3), (ts,), "s")
+    ts = _ordinal(make_series().spec, 3, 7)
+    check_span_within_window("scope", StepInterval(time_series_id=7, start=0, stop=3), (ts,), 1)
 
 
 def test_a_steps_interval_past_the_series_length_is_rejected(make_series):
-    ts = _ordinal(make_series().spec, 3, "ord")
+    ts = _ordinal(make_series().spec, 3, 7)
     with pytest.raises(TimeFValidationError, match="runs past"):
-        check_span_within_window("scope", StepInterval(time_series_id="ord", start=0, stop=4), (ts,), "s")
+        check_span_within_window("scope", StepInterval(time_series_id=7, start=0, stop=4), (ts,), 1)
 
 
 def test_a_steps_point_on_the_last_step_is_accepted(make_series):
-    ts = _ordinal(make_series().spec, 3, "ord")
-    check_span_within_window("scope", StepPoint(time_series_id="ord", start=2), (ts,), "s")
+    ts = _ordinal(make_series().spec, 3, 7)
+    check_span_within_window("scope", StepPoint(time_series_id=7, start=2), (ts,), 1)
 
 
 def test_a_steps_point_past_the_last_step_is_rejected(make_series):
-    ts = _ordinal(make_series().spec, 3, "ord")
+    ts = _ordinal(make_series().spec, 3, 7)
     with pytest.raises(TimeFValidationError, match="runs past"):
-        check_span_within_window("scope", StepPoint(time_series_id="ord", start=3), (ts,), "s")
+        check_span_within_window("scope", StepPoint(time_series_id=7, start=3), (ts,), 1)
 
 
 def test_a_steps_span_on_an_unknown_series_is_rejected(make_series):
-    ts = _ordinal(make_series().spec, 3, "ord")
+    ts = _ordinal(make_series().spec, 3, 7)
     with pytest.raises(TimeFValidationError, match="unknown"):
-        check_span_within_window("scope", StepInterval(time_series_id="nope", start=0, stop=2), (ts,), "s")
+        check_span_within_window("scope", StepInterval(time_series_id=999, start=0, stop=2), (ts,), 1)
 
 
 def test_a_steps_span_on_a_timeline_series_is_rejected(make_series):
@@ -338,12 +363,12 @@ def test_a_steps_span_on_a_timeline_series_is_rejected(make_series):
     # its steps is refused rather than bounded by length.
     ts = make_series(values=(0.0,) * 5000)
     with pytest.raises(TimeFValidationError, match="has a timeline"):
-        check_span_within_window("scope", StepInterval(time_series_id=ts.id, start=0, stop=5001), (ts,), "s")
+        check_span_within_window("scope", StepInterval(time_series_id=ts.id, start=0, stop=5001), (ts,), 1)
 
 
 def test_a_time_span_on_an_ordinal_series_is_rejected(make_series):
     # The other direction of the axis-fit rule: an ordinal series has no timeline, so a time-valued
     # span means nothing on it.
-    ts = _ordinal(make_series().spec, 3, "ord")
+    ts = _ordinal(make_series().spec, 3, 7)
     with pytest.raises(TimeFValidationError, match="no timeline"):
-        check_span_within_window("scope", TimeInterval.seconds(0.0, 1.0, time_series_ids=("ord",)), (ts,), "s")
+        check_span_within_window("scope", TimeInterval.seconds(0.0, 1.0, time_series_ids=(7,)), (ts,), 1)

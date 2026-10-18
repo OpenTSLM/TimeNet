@@ -71,12 +71,11 @@ def _dataset(signals, dataset_id="timenet/encoding", **metadata_kwargs):
             name=signal,
             time_axis=RegularAxis.from_rate_hz(_RATE_HZ),
             loader=(lambda captured=values: pa.array(captured, type=pa.float32())),
-            id=f"ts-{spec_type}-{signal}",
             n_values=len(values),
         )
         for (spec_type, signal), values in signals.items()
     ]
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=tuple(series)),), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=tuple(series)),), id=1))
     dataset.derive_schema()
     return dataset
 

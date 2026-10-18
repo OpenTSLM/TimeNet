@@ -31,7 +31,7 @@ Every Task supports these fields:
 
 | Field | Purpose |
 | --- | --- |
-| `id` | Stable Task identity. |
+| `id` | Stable int64 Task identity. Generated when omitted. |
 | `inputs` | Ordered input Records. |
 | `targets` | Ordered inline values or stored objects. |
 | `prompt` | Optional instruction or question. |
@@ -139,7 +139,7 @@ task = ClassificationTask(
     scope=TimeInterval.seconds(
         5.0,
         8.0,
-        time_series_ids=("vibration",),
+        time_series_ids=(vibration.id,),
     ),
     targets=("fault_episode",),
 )
@@ -218,8 +218,8 @@ TemporalLocalizationTask(
     prompt="Locate all R-peaks in lead II.",
     mode=LocalizationMode.SPARSE,
     targets=(
-        TimePoint.seconds(1.20, time_series_ids=("II",)),
-        TimePoint.seconds(2.05, time_series_ids=("II",)),
+        TimePoint.seconds(1.20, time_series_ids=(lead_ii.id,)),
+        TimePoint.seconds(2.05, time_series_ids=(lead_ii.id,)),
     ),
 )
 ```
