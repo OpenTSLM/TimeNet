@@ -40,13 +40,15 @@ class ConnectorBuilder:
             return None
         return str(card.dataset_version)
 
-    def build(  # noqa: PLR6301 (protocol)
+    def build(  # noqa: PLR6301, PLR0913 (protocol)
         self,
         dataset_id: str,
         root: Path,
         *,
         force: bool = False,
         values_backend: str | None = None,
+        build_parents: bool = False,
+        fetch_parents: str | None = None,
     ) -> Path:
         """Build the dataset, in an isolated environment unless isolation is turned off.
 
@@ -66,5 +68,21 @@ class ConnectorBuilder:
         if settings().isolation == "off":
             connector = resolve(dataset_id)()
             resolved_backend = connector.values_backend if values_backend is None else values_backend
-            return run_pipeline(connector, root, force=force, values_backend=resolved_backend)
-        return Path(run_isolated(dataset_id, root, force=force, values_backend=values_backend))
+            return run_pipeline(
+                connector,
+                root,
+                force=force,
+                values_backend=resolved_backend,
+                build_parents=build_parents,
+                fetch_parents=fetch_parents,
+            )
+        return Path(
+            run_isolated(
+                dataset_id,
+                root,
+                force=force,
+                values_backend=values_backend,
+                build_parents=build_parents,
+                fetch_parents=fetch_parents,
+            )
+        )
