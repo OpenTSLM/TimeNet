@@ -1,4 +1,3 @@
-import copy
 from pathlib import Path
 
 import duckdb
@@ -19,15 +18,19 @@ from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Vers
 from timenet.values_backends.zarr import reader as zarr_reader_module
 from timenet.values_backends.zarr.reader import ZarrValuesReader
 from timenet.values_backends.zarr.writer import _array_name
-from timenet.writer import TimeFWriter
+from timenet.writer import FinalIds, TimeFWriter
 
 
-def _write(tmp_path, dataset=None, **kwargs) -> Path:
+def _write_ids(tmp_path, dataset=None, **kwargs) -> tuple[Path, FinalIds]:
     dataset = make_dataset() if dataset is None else dataset
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr", **kwargs) as writer:
-        writer.write()
-    return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+        ids = writer.write()
+    return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version), ids
+
+
+def _write(tmp_path, dataset=None, **kwargs) -> Path:
+    return _write_ids(tmp_path, dataset, **kwargs)[0]
 
 
 def test_manifest_records_zarr_backend_and_store_files(tmp_path):
@@ -82,7 +85,7 @@ def test_one_index_row_per_series(tmp_path):
     # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply index rows:
     # each (record, series) pair gets exactly one placement spanning the series' full length.
     dataset = make_dataset()
-    version_dir = _write(tmp_path, dataset, chunk_max_bytes=64)
+    version_dir, ids = _write_ids(tmp_path, dataset, chunk_max_bytes=64)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         index = connection.execute(
             """SELECT signals.signal_id, chunks.n_values
@@ -90,16 +93,16 @@ def test_one_index_row_per_series(tmp_path):
         ).fetchall()
     signal_ids = [row[0] for row in index]
     assert len(signal_ids) == len(set(signal_ids))
-    long_series = next(row for row in index if row[0] == dataset.records[1].signals[1].id)
+    long_series = next(row for row in index if row[0] == ids.signals[dataset.records[1].signals[1].id])
     assert long_series[1] == 512  # the fixture's long series, unsplit
 
 
 def test_shard_aligned_appends_round_trip(tmp_path):
     # Tiny chunks and shards force many mid-stream shard flushes plus trailing partial shards.
     dataset = make_dataset()
-    version_dir = _write(tmp_path, copy.deepcopy(dataset), chunk_max_bytes=64, shard_target_bytes=128)
+    version_dir, ids = _write_ids(tmp_path, dataset, chunk_max_bytes=64, shard_target_bytes=128)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        assert_datasets_equal(dataset, reader.read())
+        assert_datasets_equal(dataset, reader.read(), final_ids=ids)
 
 
 def test_high_compression_level_is_rejected_for_blosc(tmp_path):
@@ -109,9 +112,12 @@ def test_high_compression_level_is_rejected_for_blosc(tmp_path):
 
 def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
     dataset = make_dataset()
-    version_dir = _write(tmp_path, dataset)
+    version_dir, ids = _write_ids(tmp_path, dataset)
     out = edit_version(
-        version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=(dataset.records[1].id,)
+        version_dir,
+        tmp_path / "out",
+        dataset_version=Version(1, 0, 1),
+        remove_record_ids=(ids.records[dataset.records[1].id],),
     )
     manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"

@@ -47,13 +47,17 @@ def _ids(objects):
     return {obj.id for obj in objects}
 
 
-def _base(tmp_path, dataset=None):
+def _base_ids(tmp_path, dataset=None):
     dataset = make_dataset() if dataset is None else dataset
     dataset.derive_schema()
     with TimeFWriter(tmp_path / "base", dataset) as writer:
-        writer.write()
+        ids = writer.write()
     meta = dataset.metadata
-    return tmp_path / "base" / meta.dataset_id / str(meta.dataset_version)
+    return tmp_path / "base" / meta.dataset_id / str(meta.dataset_version), ids
+
+
+def _base(tmp_path, dataset=None):
+    return _base_ids(tmp_path, dataset)[0]
 
 
 def _answer_reads_context_via_record1():
@@ -171,9 +175,9 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
     # resolvable from the records that task is attached to. Removing record1 strands the cohort annotation for
     # the answer task, which previously wrote the dangling reference straight into the new version.
     dataset = _answer_reads_context_via_record1()
-    base = _base(tmp_path, dataset)
+    base, ids = _base_ids(tmp_path, dataset)
     out = edit_version(
-        base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=[dataset.records[1].id]
+        base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=[ids.records[dataset.records[1].id]]
     )
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         restored = reader.read()
@@ -219,19 +223,19 @@ def test_target_and_candidate_records_are_required_whatever_the_task_type():
 
 def test_edit_version_round_trip(tmp_path):
     dataset = make_dataset()
-    record0, record1, record2 = dataset.records
-    base = _base(tmp_path, dataset)
-    out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=[record1.id])
+    base, ids = _base_ids(tmp_path, dataset)
+    record0, record1, record2 = (ids.records[record.id] for record in dataset.records)
+    out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=[record1])
 
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         restored = reader.read()
-    assert _ids(restored.records) == {record0.id, record2.id}
+    assert _ids(restored.records) == {record0, record2}
 
     manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
     assert str(manifest.metadata.dataset_version) == "1.0.1"
 
     with duckdb.connect(str(out / "control.duckdb"), read_only=True) as connection:
-        row = connection.execute("SELECT count(*) FROM records WHERE record_id = ?", [record1.id]).fetchone()
+        row = connection.execute("SELECT count(*) FROM records WHERE record_id = ?", [record1]).fetchone()
         assert row is not None
         assert row[0] == 0
 

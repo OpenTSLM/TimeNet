@@ -35,9 +35,14 @@ assert version > Version(1, 2, 0)
 Every public entity ID is a positive int64: Records, Sources, Signals, axes, Annotations, annotation
 occurrences, and Tasks. The dataset ID is the exception and stays an `org/name` string.
 
-`new_id()` returns a fresh ID. Model constructors call it when you omit an `id`. `check_id()`
-returns a valid ID unchanged and raises `TimeFValidationError` for anything else, including `bool`,
-zero, negative values, and strings.
+`new_id()` returns a fresh provisional ID, at or above `2**52`. Model constructors call it when you
+omit an `id`. Provisional IDs let objects refer to each other before you write them. The writer
+stores a final ID below `2**52` for each one and leaves your objects unchanged. A first write
+numbers each kind `1..N` in the order it stores the objects. An ID below `2**52` is final, so the
+writer keeps an ID you set yourself or one read from a stored version. `TimeFWriter.write()`
+returns the mapping from in-memory IDs to stored IDs. `check_id()` returns a valid ID unchanged and
+raises `TimeFValidationError` for anything else, including `bool`, zero, negative values, and
+strings.
 
 ```python
 from timenet.types import check_id, new_id

@@ -43,11 +43,41 @@ with TimeFWriter(
 The context manager commits only after `write()` succeeds. An exception removes the temporary
 version directory.
 
+## Final IDs
+
+The writer never changes your objects. They keep the IDs they had in memory, which are usually
+provisional IDs from `new_id()`. The writer translates every ID it stores, including every
+reference, to a final ID below `2**52`. `write()` returns a read-only `FinalIds` mapping from each
+in-memory ID to its stored ID, per kind. `writer.final_ids` returns the same mapping.
+
+```python
+with TimeFWriter(root, dataset) as writer:
+    ids = writer.write()
+stored_record_id = ids.records[dataset.records[0].id]
+```
+
+A first write numbers each kind `1..N` in storage order. An ID below `2**52` is kept. The dataset
+remembers the IDs that its last successful write assigned. When you write it again, every object
+from that write keeps its stored ID, and new objects get IDs above the largest ID of their kind.
+A new annotation content or regular axis equal to one that the last write stored takes that ID. A
+removed object leaves a gap, and no other object gets its ID. Writing an unchanged dataset again
+gives an identical catalog. An edit of a stored version follows the same rules.
+
+A task stream keeps its IDs only when it yields the same task objects on each pass. A stream that
+builds new tasks each time gets new task IDs above the last write's.
+
+The writer stores equal annotation contents once. Two annotations with the same key, typed value,
+unit, description, and metadata share one `content_id`, even when you built them separately. The
+writer also stores equal regular axes once, and all ordinal axes once. Irregular axes, Records,
+Sources, Signals, occurrences, and Tasks are never merged. IDs that you copy into `metadata` are
+not translated.
+
 ## Write stages
 
 The writer performs these operations:
 
-1. Derive the dataset schema when the caller has not done so.
+1. Plan the final ID of every in-memory ID, in storage order. Derive the dataset schema when the
+   caller has not done so.
 2. Validate hierarchy ownership and reusable annotation content.
 3. Read and validate each Signal, then write its values to Parquet or Zarr.
 4. Create `control.duckdb`, store each shared axis once, and insert hierarchy, annotation, task, and
@@ -82,7 +112,7 @@ The writer fails before publication when it finds an invalid state, including:
 - a Source attached to more than one parent or a recursive Source cycle;
 - a Signal attached to more than one Source;
 - inconsistent definitions sharing one axis ID;
-- annotation content IDs reused with different payloads;
+- one annotation content ID with two different payloads;
 - an annotation occurrence without an owning object;
 - task relationships pointing outside the dataset;
 - value arrays that disagree with their specification or declared length;
@@ -99,7 +129,10 @@ table of a `control.duckdb` and is what the test suite runs after each round tri
 ## Task streams
 
 A dataset can provide a re-iterable task source with `set_task_stream()`. The writer consumes the
-validated stream once while inserting task rows and object relationships. It retains task IDs,
+validated stream once while inserting task rows and object relationships. It numbers the tasks in
+stream order as they pass. A stream gives every task a provisional ID or every task an explicit ID
+below `2**52`. The writer rejects a stream that mixes the two. A task can derive from a task that
+streams later: the writer stores that dependency when the stream ends. It retains the ID mapping,
 not every Task object, so a large task corpus does not need to be materialized in Python.
 
 ## Progress

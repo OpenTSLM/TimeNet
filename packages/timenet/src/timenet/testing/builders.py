@@ -2,12 +2,15 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import replace
+from typing import TypeVar, cast
 
 import numpy as np
 import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
+from timenet.format.final_ids import FinalIds, IdKind
+from timenet.format.task_codec import encode_target
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -17,14 +20,22 @@ from timenet.types import (
     License,
     LocalizationMode,
     ScalarPredictionTask,
+    Span,
+    StepSpan,
+    Task,
     TemporalLocalizationTask,
     TimeInterval,
     TimeOrigin,
     TimePoint,
     TimeSeriesSpec,
+    TimeSpan,
+    TSCorrespondenceTask,
     Version,
     ureg,
 )
+
+
+_S = TypeVar("_S", bound=Span)
 
 
 class CountingLoader:
@@ -197,64 +208,137 @@ def make_dataset() -> TimeFDataset:
     return dataset
 
 
-def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
+class _Translate:
+    """Translate the ids of an in-memory dataset to the ids one write stored."""
+
+    def __init__(self, final_ids: FinalIds | None) -> None:
+        self.final_ids = final_ids
+
+    def __call__(self, kind: IdKind, value: int) -> int:
+        return value if self.final_ids is None else self.final_ids[kind][value]
+
+    def annotation(self, annotation: Annotation) -> Annotation:
+        occurrence_id = annotation.occurrence_id
+        return replace(
+            annotation,
+            id=self("content", annotation.id),
+            occurrence_id=None if occurrence_id is None else self("occurrence", occurrence_id),
+        )
+
+    def annotations(self, annotations: Sequence[Annotation]) -> list[Annotation]:
+        return [self.annotation(annotation) for annotation in annotations]
+
+    def span(self, span: _S) -> _S:
+        if isinstance(span, TimeSpan) and span.time_series_ids is not None:
+            return replace(span, time_series_ids=tuple(self("signal", item) for item in span.time_series_ids))
+        if isinstance(span, StepSpan):
+            return replace(span, time_series_id=self("signal", span.time_series_id))
+        return span
+
+    def target(self, target: object) -> object:
+        row = encode_target(target)
+        if row["record_id"] is not None:
+            row["record_id"] = self("record", cast("int", row["record_id"]))
+        if row["signal_id"] is not None:
+            row["signal_id"] = self("signal", cast("int", row["signal_id"]))
+        if row["span_signal_ids"] is not None:
+            row["span_signal_ids"] = tuple(
+                self("signal", item) for item in cast("tuple[int, ...]", row["span_signal_ids"])
+            )
+        return row
+
+    def task_references(self, task: Task) -> tuple[object, ...]:
+        """Return the references a task's equality skips, as stored ids."""
+        candidates = task.candidate_records if isinstance(task, TSCorrespondenceTask) else ()
+        return (
+            tuple(self("record", record.id) for record in task.inputs),
+            tuple(self("record", record.id) for record in candidates),
+            None if task.targets is None else tuple(self.target(item) for item in task.targets),
+            tuple(self("task", parent.id) for parent in task.from_tasks),
+            tuple(self.annotation(item).occurrence_id for item in task.input_annotations),
+            tuple(self.annotation(item).occurrence_id for item in task.target_annotations),
+        )
+
+
+def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset, *, final_ids: FinalIds | None = None) -> None:
     """Assert two datasets are logically equal per the round-trip preserved-field contract.
 
     This compares the metadata, every record matched by ``record_id``, and every task matched by
-    ``id``. It compares each series' fields and its materialized values. It raises ``AssertionError``
-    if any compared field differs.
+    ``id``. It compares each series' fields and its materialized values, and each task's references.
+    It raises ``AssertionError`` if any compared field differs.
 
     Args:
         expected: The reference dataset.
         actual: The dataset to check against it.
+        final_ids: The mapping a write of ``expected`` returned, when ``actual`` was read from that
+            write. The ids of ``expected`` are translated through it before they are compared.
     """
+    ids = _Translate(final_ids)
     assert expected.metadata == actual.metadata, "metadata differs"
+    assert ids.annotations(expected.annotations) == list(actual.annotations), "dataset annotations differ"
 
-    exp_records = {s.id: s for s in expected.records}
+    exp_records = {ids("record", s.id): s for s in expected.records}
     act_records = {s.id: s for s in actual.records}
     assert exp_records.keys() == act_records.keys(), "record ids differ"
     for record_id, exp in exp_records.items():
         act = act_records[record_id]
         assert exp.start_time.timestamp == act.start_time.timestamp, f"start_time differs for {record_id}"
-        assert tuple(sorted(exp.task_ids)) == tuple(sorted(act.task_ids)), f"task_ids differ for {record_id}"
+        exp_task_ids = sorted(ids("task", task_id) for task_id in exp.task_ids)
+        assert exp_task_ids == sorted(act.task_ids), f"task_ids differ for {record_id}"
         assert exp.metadata == act.metadata, f"metadata differs for {record_id}"
-        assert sorted(exp.annotations, key=lambda a: a.id) == sorted(act.annotations, key=lambda a: a.id), (
-            f"annotations differ for {record_id}"
-        )
-        _assert_sources_equal(record_id, exp.sources, act.sources)
-        _assert_series_equal(record_id, exp.signals, act.signals)
+        assert sorted(ids.annotations(exp.annotations), key=lambda a: a.id) == sorted(
+            act.annotations, key=lambda a: a.id
+        ), f"annotations differ for {record_id}"
+        _assert_sources_equal(record_id, exp.sources, act.sources, ids)
+        _assert_series_equal(record_id, exp.signals, act.signals, ids)
 
-    exp_tasks = {t.id: t for t in expected.tasks}
+    exp_tasks = {ids("task", t.id): t for t in expected.tasks}
     act_tasks = {t.id: t for t in actual.tasks}
     assert exp_tasks.keys() == act_tasks.keys(), "task ids differ"
     for task_id, exp_task in exp_tasks.items():
         act_task = act_tasks[task_id]
-        assert replace(exp_task, input_modalities=exp_task.resolved_input_modalities) == replace(
-            act_task, input_modalities=act_task.resolved_input_modalities
-        ), f"task {task_id} differs"
+        translated = replace(
+            exp_task,
+            id=task_id,
+            input_modalities=exp_task.resolved_input_modalities,
+            scope=None if exp_task.scope is None else ids.span(exp_task.scope),
+            annotations=tuple(ids.annotations(exp_task.annotations)),
+        )
+        assert translated == replace(act_task, input_modalities=act_task.resolved_input_modalities), (
+            f"task {task_id} differs"
+        )
+        assert ids.task_references(exp_task) == _Translate(None).task_references(act_task), (
+            f"task {task_id} references differ"
+        )
 
 
-def _assert_sources_equal(record_id: int, expected: tuple[Source, ...], actual: tuple[Source, ...]) -> None:
+def _assert_sources_equal(
+    record_id: int, expected: tuple[Source, ...], actual: tuple[Source, ...], ids: _Translate
+) -> None:
     """Assert two recursive source hierarchies are logically equal."""
-    exp = {source.id: source for root in expected for source in root.walk_sources()}
+    exp = {ids("source", source.id): source for root in expected for source in root.walk_sources()}
     act = {source.id: source for root in actual for source in root.walk_sources()}
     assert exp.keys() == act.keys(), f"source ids differ for {record_id}"
     for source_id, exp_source in exp.items():
         act_source = act[source_id]
         assert exp_source.name == act_source.name, f"source name differs for {source_id}"
         assert exp_source.metadata == act_source.metadata, f"source metadata differs for {source_id}"
-        assert exp_source.annotations == act_source.annotations, f"source annotations differ for {source_id}"
-        assert {source.id for source in exp_source.sources} == {source.id for source in act_source.sources}, (
-            f"child sources differ for {source_id}"
+        assert ids.annotations(exp_source.annotations) == list(act_source.annotations), (
+            f"source annotations differ for {source_id}"
         )
-        assert {signal.id for signal in exp_source.signals} == {signal.id for signal in act_source.signals}, (
-            f"source signals differ for {source_id}"
-        )
+        assert {ids("source", source.id) for source in exp_source.sources} == {
+            source.id for source in act_source.sources
+        }, f"child sources differ for {source_id}"
+        assert {ids("signal", signal.id) for signal in exp_source.signals} == {
+            signal.id for signal in act_source.signals
+        }, f"source signals differ for {source_id}"
 
 
-def _assert_series_equal(record_id: int, expected: tuple[Signal, ...], actual: tuple[Signal, ...]) -> None:
+def _assert_series_equal(
+    record_id: int, expected: tuple[Signal, ...], actual: tuple[Signal, ...], ids: _Translate
+) -> None:
     """Assert two tuples of series (matched by ``time_series_id``) are equal, values included."""
-    exp = {ts.id: ts for ts in expected}
+    exp = {ids("signal", ts.id): ts for ts in expected}
     act = {ts.id: ts for ts in actual}
     assert exp.keys() == act.keys(), f"time_series ids differ for {record_id}"
     for series_id, exp_ts in exp.items():
@@ -262,8 +346,10 @@ def _assert_series_equal(record_id: int, expected: tuple[Signal, ...], actual: t
         assert exp_ts.spec == act_ts.spec, f"spec differs for {series_id}"
         assert exp_ts.name == act_ts.name, f"signal differs for {series_id}"
         assert exp_ts.time_axis == act_ts.time_axis, f"time axis differs for {series_id}"
+        if ids.final_ids is not None:
+            assert ids("axis", exp_ts.time_axis.id) == act_ts.time_axis.id, f"time axis id differs for {series_id}"
         assert exp_ts.metadata == act_ts.metadata, f"metadata differs for {series_id}"
-        assert exp_ts.annotations == act_ts.annotations, f"annotations differ for {series_id}"
+        assert ids.annotations(exp_ts.annotations) == list(act_ts.annotations), f"annotations differ for {series_id}"
         assert exp_ts.n_values == act_ts.n_values, f"n_values differs for {series_id}"
         assert exp_ts.to_arrow().equals(act_ts.to_arrow()), f"values differ for {series_id}"
         # An irregular axis carries only its endpoints, so two streams differing in the middle compare

@@ -1,4 +1,3 @@
-import copy
 from fractions import Fraction
 import json
 from pathlib import Path
@@ -29,15 +28,19 @@ from timenet.types import (
     Version,
     ureg,
 )
-from timenet.writer import TimeFWriter
+from timenet.writer import FinalIds, TimeFWriter
 
 
-def _write(tmp_path, dataset=None, **kwargs) -> Path:
+def _write_ids(tmp_path, dataset=None, **kwargs) -> tuple[Path, FinalIds]:
     dataset = dataset if dataset is not None else make_dataset()
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, **kwargs) as writer:
-        writer.write()
-    return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+        ids = writer.write()
+    return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version), ids
+
+
+def _write(tmp_path, dataset=None, **kwargs) -> Path:
+    return _write_ids(tmp_path, dataset, **kwargs)[0]
 
 
 def _read(version_dir: Path) -> TimeFDataset:
@@ -48,8 +51,8 @@ def _read(version_dir: Path) -> TimeFDataset:
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_full_round_trip(tmp_path, backend):
     original = make_dataset()
-    restored = _read(_write(tmp_path, dataset=copy.deepcopy(original), values_backend=backend))
-    assert_datasets_equal(original, restored)
+    version_dir, ids = _write_ids(tmp_path, dataset=original, values_backend=backend)
+    assert_datasets_equal(original, _read(version_dir), final_ids=ids)
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -121,8 +124,9 @@ def _referenced_annotation_dataset() -> TimeFDataset:
 
 def test_annotation_occurrence_and_task_object_references_round_trip(tmp_path):
     original = _referenced_annotation_dataset()
-    restored = _read(_write(tmp_path, dataset=_referenced_annotation_dataset()))
-    assert_datasets_equal(original, restored)
+    version_dir, ids = _write_ids(tmp_path, dataset=original)
+    restored = _read(version_dir)
+    assert_datasets_equal(original, restored, final_ids=ids)
     assert restored.tasks[0].inputs == (restored.records[0],)
     assert restored.tasks[0].input_annotations == restored.records[0].annotations
 
@@ -262,8 +266,9 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path):
 
 def test_iter_records_preserves_requested_order(tmp_path):
     dataset = make_dataset()
-    requested = (dataset.records[2].id, dataset.records[0].id)
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+    version_dir, ids = _write_ids(tmp_path, dataset)
+    requested = (ids.records[dataset.records[2].id], ids.records[dataset.records[0].id])
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         selected = tuple(reader.iter_records(record_ids=requested))
     assert tuple(record.id for record in selected) == requested
 
@@ -324,8 +329,9 @@ def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_pat
 
 def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_path):
     dataset = make_dataset()
-    record0_id = dataset.records[0].id
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+    version_dir, ids = _write_ids(tmp_path, dataset)
+    record0_id = ids.records[dataset.records[0].id]
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         record0 = next(reader.iter_records((record0_id,)))
         tasks = list(reader.iter_tasks((record0,)))
         every = reader.tasks
@@ -343,17 +349,18 @@ def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
     test = next(task for task in dataset.tasks if isinstance(task, ScalarPredictionTask))
     train.split = Split.TRAIN
     test.split = Split.TEST
-    version_dir = _write(tmp_path, dataset)
+    version_dir, ids = _write_ids(tmp_path, dataset)
+    train_id, test_id = ids.tasks[train.id], ids.tasks[test.id]
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        assert [task.id for task in reader.iter_tasks(split="train")] == [train.id]
-        assert reader.task_table(split=Split.TEST)["task_id"].to_pylist() == [test.id]
-        assert reader.target_table(split=Split.TEST)["task_id"].to_pylist() == [test.id]
+        assert [task.id for task in reader.iter_tasks(split="train")] == [train_id]
+        assert reader.task_table(split=Split.TEST)["task_id"].to_pylist() == [test_id]
+        assert reader.target_table(split=Split.TEST)["task_id"].to_pylist() == [test_id]
         loaded = reader.read()
 
     assert {task.id: task.split for task in loaded.tasks if task.split is not None} == {
-        train.id: Split.TRAIN,
-        test.id: Split.TEST,
+        train_id: Split.TRAIN,
+        test_id: Split.TEST,
     }
 
 
@@ -361,8 +368,12 @@ def test_task_views_reject_a_non_int_record_id(tmp_path):
     dataset = make_dataset()
     record0 = dataset.records[0]
     assert len(record0.task_ids) == 4
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
-        assert set(reader.task_table(record_ids=(record0.id,))["task_id"].to_pylist()) == set(record0.task_ids)
+    version_dir, ids = _write_ids(tmp_path, dataset)
+    record0_id = ids.records[record0.id]
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert set(reader.task_table(record_ids=(record0_id,))["task_id"].to_pylist()) == {
+            ids.tasks[task_id] for task_id in record0.task_ids
+        }
         for view in (reader.task_table, reader.target_table):
             with pytest.raises(TimeFValidationError, match="positive int64 id"):
-                view(record_ids=(str(record0.id),))  # ty: ignore[invalid-argument-type]
+                view(record_ids=(str(record0_id),))  # ty: ignore[invalid-argument-type]
