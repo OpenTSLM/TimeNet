@@ -1,7 +1,7 @@
 """Hydrate the TimeF object hierarchy from ``control.duckdb``."""
 
 from collections import defaultdict
-from collections.abc import Callable, Collection, Iterable, Iterator
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from fractions import Fraction
 from functools import partial
@@ -185,41 +185,47 @@ _TASK_BATCH_SIZE = 5_000
 """Tasks hydrated per round of keyed queries."""
 
 
-def _annotation_query(object_type: str | None, *, keyed: bool) -> str:
-    """Build the occurrence query, restricted to one object type and to requested IDs when asked.
+def _annotation_query(owners: Mapping[str, Collection[int] | None]) -> tuple[str, list[object]]:
+    """Build the occurrence query, restricted to the requested owners.
 
     Args:
-        object_type: Keep one object type, or ``None`` for all.
-        keyed: Whether the caller passes owner IDs. The filter sits inside the occurrences
-            subquery so it applies before the join. It matches IDs of every type, and the caller
-            groups the rows by ``(object_type, object_id)``.
+        owners: The owner IDs to read, by object type. ``None`` for the IDs reads every occurrence
+            of that type.
 
     Returns:
-        SQL with a positional parameter for the requested IDs when keyed, then one for the object
-        type when it is given.
+        The SQL and its positional parameters.
 
     Raises:
-        TimeFFormatError: If ``object_type`` is not an annotated object type.
+        TimeFFormatError: If an object type is not an annotated object type.
     """
-    if object_type is not None and object_type not in ANNOTATED_OBJECT_TYPES:
-        raise TimeFFormatError(f"unknown annotated object type {object_type!r}")
+    parameters: list[object] = []
     # A parameter inside an OR keeps DuckDB from pushing the filter below the join, which made a
-    # one-Record read scan every occurrence, so each filter is one plain predicate.
-    occurrences = (
-        "(SELECT * FROM annotation_occurrences WHERE object_id IN (SELECT unnest(?)))"
-        if keyed
-        else "annotation_occurrences"
-    )
-    where = "" if object_type is None else "WHERE o.object_type = ?"
-    return f"""SELECT o.occurrence_id, o.object_type, o.object_id, o.span_type,
+    # one-Record read scan every occurrence, so each owner type is one subquery of plain predicates.
+    selects: list[str] = []
+    every: list[str] = []
+    for object_type, object_ids in owners.items():
+        if object_type not in ANNOTATED_OBJECT_TYPES:
+            raise TimeFFormatError(f"unknown annotated object type {object_type!r}")
+        if object_ids is None:
+            every.append(object_type)
+        else:
+            selects.append(
+                "SELECT * FROM annotation_occurrences WHERE object_type = ? AND object_id IN (SELECT unnest(?))"
+            )
+            parameters.extend((object_type, list(object_ids)))
+    if every:
+        selects.append("SELECT * FROM annotation_occurrences WHERE object_type IN (SELECT unnest(?))")
+        parameters.append(every)
+    occurrences = f"({' UNION ALL '.join(selects)})"
+    query = f"""SELECT o.occurrence_id, o.object_type, o.object_id, o.span_type,
                o.start_us, o.end_us, o.provenance, o.confidence,
                o.metadata, o.content_id, c.name, c.value_kind, c.text_value, c.integer_value,
                c.float_value, c.boolean_value, c.text_list_value, c.unit, c.description, c.metadata
         FROM {occurrences} o
         LEFT JOIN annotation_contents c USING (content_id)
-        {where}
         ORDER BY o.object_type, o.object_id, o.content_id, o.span_type,
                  o.start_us NULLS FIRST, o.end_us NULLS FIRST, o.occurrence_id"""  # noqa: S608 - fixed fragments
+    return query, parameters
 
 
 def _check_owners(
@@ -444,8 +450,12 @@ class DuckDBControlReader:
                 )
         annotations: dict[tuple[str, int | None], tuple[Annotation, ...]] = {}
         if with_annotations:
-            object_ids = [*by_id, *source_data, *signal_data]
-            annotations = self._read_annotations(None if read_all else object_ids)
+            owners: dict[str, Collection[int] | None] = {
+                "Record": None if read_all else by_id.keys(),
+                "Source": None if read_all else source_data.keys(),
+                "Signal": None if read_all else signal_data.keys(),
+            }
+            annotations = self._read_annotations(owners)
             if read_all:
                 _check_owners(
                     annotations.keys(),
@@ -613,7 +623,7 @@ class DuckDBControlReader:
         stored = self.connection.execute("SELECT 1 FROM datasets WHERE dataset_id = ?", [dataset_id]).fetchone()
         if stored is None:
             return ()
-        return self._read_annotations(object_type="Dataset").get(("Dataset", None), ())
+        return self._read_annotations({"Dataset": None}).get(("Dataset", None), ())
 
     def chunk_rows(self, signal_id: int) -> list[dict[str, Any]]:
         """Return one Signal's chunk locations in chunk order.
@@ -1271,44 +1281,33 @@ class DuckDBControlReader:
 
     def _read_annotations(
         self,
-        object_ids: Iterable[int] | None = None,
-        *,
-        object_type: str | None = None,
+        owners: Mapping[str, Collection[int] | None],
     ) -> dict[tuple[str, int | None], tuple[Annotation, ...]]:
         """Hydrate annotation content and occurrences.
 
         Args:
-            object_ids: Public IDs of the annotated objects, of any type, or ``None`` for every
-                occurrence. An ID that two kinds share returns the occurrences of both.
-            object_type: Restrict the read to occurrences on one object type.
+            owners: Public IDs of the annotated objects by object type, or ``None`` for the IDs to
+                read every occurrence of that type. Ids are matched within their type, so a Record
+                and a Signal that share an ID do not mix.
 
         Returns:
             Attached occurrences keyed by object type and public object ID, which is ``None`` for
             the Dataset.
 
         Raises:
-            TimeFFormatError: If an occurrence has unknown content, an unknown object type, an owner
-                ID that does not fit its type, or an unknown span type.
+            TimeFFormatError: If an occurrence has unknown content, an owner ID that does not fit its
+                type, or an unknown span type.
         """
-        requested = None if object_ids is None else list(object_ids)
-        if requested == []:
+        owners = {object_type: ids for object_type, ids in owners.items() if ids is None or len(ids)}
+        if not owners:
             return {}
-        parameters: list[object] = [] if requested is None else [requested]
-        if object_type is not None:
-            parameters.append(object_type)
-        rows = _rows(
-            self.connection.execute(_annotation_query(object_type, keyed=requested is not None), parameters),
-            _OccurrenceRow._make,
-        )
+        query, parameters = _annotation_query(owners)
+        rows = _rows(self.connection.execute(query, parameters), _OccurrenceRow._make)
         grouped: dict[tuple[str, int | None], list[Annotation]] = defaultdict(list)
         for row in rows:
             if row.name is None:
                 raise TimeFFormatError(
                     f"annotation occurrence {row.occurrence_id!r} refers to missing content {row.content_id!r}"
-                )
-            if row.object_type not in ANNOTATED_OBJECT_TYPES:
-                raise TimeFFormatError(
-                    f"annotation occurrence {row.occurrence_id!r} has unknown object type {row.object_type!r}"
                 )
             if (row.object_type == "Dataset") != (row.object_id is None):
                 raise TimeFFormatError(
@@ -1489,7 +1488,7 @@ class _TaskHydration:
         target_rows = reader._target_rows(task_ids)
         task_annotations: dict[tuple[str, int | None], tuple[Annotation, ...]] = {}
         if self.tasks_annotated:
-            task_annotations = reader._read_annotations(task_ids, object_type="Task")
+            task_annotations = reader._read_annotations({"Task": task_ids})
             if task_ids is None:
                 _check_owners(task_annotations.keys(), {"Task": {row.task_id for row in task_rows}})
 
@@ -1638,6 +1637,6 @@ class _TaskHydration:
     def _index_dataset_annotations(self) -> None:
         """Add the Dataset-level annotation occurrences to the lookups, once."""
         self._dataset_annotations_indexed = True
-        for annotation in self.reader._read_annotations(object_type="Dataset").get(("Dataset", None), ()):
+        for annotation in self.reader._read_annotations({"Dataset": None}).get(("Dataset", None), ()):
             if annotation.occurrence_id is not None:
                 self.annotations_by_id[annotation.occurrence_id] = annotation
