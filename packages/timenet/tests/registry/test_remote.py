@@ -1,4 +1,3 @@
-import copy
 import json
 from pathlib import Path
 
@@ -14,7 +13,7 @@ from timenet.manifest import Manifest
 from timenet.registry import RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, Domain, License
-from timenet.writer import TimeFWriter
+from timenet.writer import FinalIds, TimeFWriter
 
 
 @pytest.fixture
@@ -23,13 +22,18 @@ def hello_world() -> TimeFDataset:
 
 
 @pytest.fixture
-def version_dir(tmp_path, hello_world) -> tuple[Path, Manifest]:
-    dataset = copy.deepcopy(hello_world)
-    dataset.derive_schema()
-    with TimeFWriter(tmp_path, dataset) as writer:
-        writer.write()
+def written(tmp_path, hello_world) -> tuple[Path, Manifest, FinalIds]:
+    hello_world.derive_schema()
+    with TimeFWriter(tmp_path, hello_world) as writer:
+        ids = writer.write()
     manifest = Manifest.model_validate_json(next(tmp_path.rglob("manifest.json")).read_text())
-    return next(tmp_path.rglob("manifest.json")).parent, manifest
+    return next(tmp_path.rglob("manifest.json")).parent, manifest, ids
+
+
+@pytest.fixture
+def version_dir(written) -> tuple[Path, Manifest]:
+    directory, manifest, _ = written
+    return directory, manifest
 
 
 def _remote(version_dir, tmp_path, **kw):
@@ -192,12 +196,12 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
     assert (dest / "manifest.json").exists()
 
 
-def test_load_full_round_trips(version_dir, hello_world, tmp_path):
+def test_load_full_round_trips(version_dir, written, hello_world, tmp_path):
     registry, _ = _remote(version_dir, tmp_path)
     _, manifest = version_dir
     client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
     loaded = client.load(manifest.metadata.dataset_id)  # a remote load materializes then reads locally
-    assert_datasets_equal(hello_world, loaded)
+    assert_datasets_equal(hello_world, loaded, final_ids=written[2])
 
 
 def test_store_publishes_uploads_and_finalizes(tmp_path):

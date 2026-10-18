@@ -72,6 +72,14 @@ file and the Python API does not expose it. Public IDs (`record_id`, `source_id`
 `signal_id`, `axis_id`, `content_id`, `occurrence_id`, and `task_id`) are positive int64 values
 stored as `BIGINT`. Each ID is unique within its own kind, so a Record and a Signal can share
 one. The `dataset_id` is the exception: it is the `org/name` string and is stored as `VARCHAR`.
+
+Stored IDs are final: all are below `2**52`. A first write numbers each kind `1..N` in the order
+it stores the rows, so ID order is row order and `id - 1` is the row position. A loader can
+split records by `record_id % workers` or by ID range. Annotation occurrences are stored by owner
+type (Dataset, Record, Signal, Source, Task), then by owner. `control_metadata` keeps the largest
+ID of each kind under `max_id.<kind>`. An edit gives new objects IDs above it, so it never reuses
+the ID of a removed object. An edit keeps every existing ID, so removed rows leave gaps. Equal
+annotation contents and equal regular or ordinal axes are stored once.
 Fixed-shape fields are typed columns, so spans, task configuration, target values, and annotation
 values can be filtered in SQL. Only the free-form `metadata` dictionaries are JSON.
 

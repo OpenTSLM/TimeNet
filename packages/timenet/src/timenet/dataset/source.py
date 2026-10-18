@@ -59,7 +59,7 @@ class Source(SupportsAnnotate):
         """Yield this source and all descendants in deterministic depth-first order.
 
         Yields:
-            This source followed by its descendants, sorted by name and ID at each level.
+            This source followed by its descendants, sorted by name at each level, with ties in tuple order.
 
         Raises:
             TimeFValidationError: If the graph contains a cycle or one source has two parents.
@@ -76,7 +76,7 @@ class Source(SupportsAnnotate):
             seen.add(identity)
             active.add(identity)
             yield source
-            for child in sorted(source.sources, key=lambda item: (item.name, item.id)):
+            for child in sorted(source.sources, key=lambda item: item.name):
                 yield from walk(child)
             active.remove(identity)
 
@@ -89,7 +89,7 @@ class Source(SupportsAnnotate):
             Signals from this source and every descendant source.
         """
         for source in self.walk_sources():
-            yield from sorted(source.signals, key=lambda signal: (signal.name, signal.id))
+            yield from sorted(source.signals, key=lambda signal: signal.name)
 
     def annotate(self, annotation: Annotation) -> Annotation:
         """Attach one annotation and return it.

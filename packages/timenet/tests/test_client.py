@@ -1,4 +1,3 @@
-import copy
 from pathlib import Path
 
 from pydantic import ValidationError
@@ -13,7 +12,7 @@ from timenet.manifest.files import FilePart
 from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, DatasetMetadata, Domain, License, Version
-from timenet.writer import TimeFWriter
+from timenet.writer import FinalIds, TimeFWriter
 
 
 @pytest.fixture(autouse=True)
@@ -28,12 +27,16 @@ def hello_world():
 
 
 @pytest.fixture
-def registry_root(tmp_path, hello_world):
-    dataset = copy.deepcopy(hello_world)
-    dataset.derive_schema()
-    with TimeFWriter(tmp_path / "reg", dataset) as writer:
-        writer.write()
-    return tmp_path / "reg"
+def registry_write(tmp_path, hello_world) -> tuple[Path, FinalIds]:
+    hello_world.derive_schema()
+    with TimeFWriter(tmp_path / "reg", hello_world) as writer:
+        ids = writer.write()
+    return tmp_path / "reg", ids
+
+
+@pytest.fixture
+def registry_root(registry_write) -> Path:
+    return registry_write[0]
 
 
 def test_no_args_defaults_to_the_hosted_registry(monkeypatch):
@@ -127,11 +130,11 @@ def test_download_leaves_sibling_staging_dirs_untouched(registry_root, tmp_path)
     assert (version_dir / "manifest.json").exists()  # the download still completed
 
 
-def test_load_round_trips(registry_root, hello_world, tmp_path):
+def test_load_round_trips(registry_root, registry_write, hello_world, tmp_path):
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
     restored = client.load("timenet/hello-world")
     assert isinstance(restored, TimeFDataset)
-    assert_datasets_equal(hello_world, restored)
+    assert_datasets_equal(hello_world, restored, final_ids=registry_write[1])
 
 
 def test_load_reads_in_place_without_downloading(registry_root, tmp_path):

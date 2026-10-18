@@ -1,10 +1,17 @@
 """Generate and check entity ids.
 
 TimeF entity ids (records, sources, signals, axes, annotations, tasks) are positive int64 values.
-A generated id is ``(tag << 23) | counter``. Each process draws a random 30-bit tag and counts up
-from there, so ids from different processes do not collide in practice. Generated ids stay below
-``2**53``, so they survive a float64 column (for example a nullable pandas column) and JSON readers
-that parse numbers as doubles.
+
+An id at or above :data:`FINAL_ID_LIMIT` (``2**52``) is provisional. :func:`new_id` hands out
+provisional ids so that objects can refer to each other before they are written. The writer stores
+a final id below ``2**52`` for every provisional id and leaves the objects unchanged (see
+:mod:`timenet.format.final_ids`). A first write numbers each kind ``1..N`` in the order it stores
+the objects. An id below ``2**52`` is final and the writer keeps it.
+
+A generated id is ``(tag << 23) | counter``. Each process draws a random 30-bit tag with its top bit
+set and counts up from there, so generated ids from different processes do not collide in practice.
+Generated ids stay below ``2**53``, so they survive a float64 column (for example a nullable pandas
+column) and JSON readers that parse numbers as doubles.
 """
 
 import itertools
@@ -21,6 +28,9 @@ _COUNTER_BITS = 23
 _COUNTER_LIMIT = 1 << _COUNTER_BITS
 _TAG_BITS = 30
 _MAX_ID = 1 << 63
+
+FINAL_ID_LIMIT = 1 << 52
+"""Ids below this are final. Ids at or above it are provisional and the writer replaces them."""
 
 
 class _IdState:
@@ -46,10 +56,10 @@ if hasattr(os, "register_at_fork"):
 
 
 def new_id() -> int:
-    """Return a new entity id, the default id for every TimeF entity.
+    """Return a new provisional entity id, the default id for every TimeF entity.
 
     Returns:
-        A positive int below ``2**53``, unique within this process.
+        An int in ``[2**52, 2**53)``, unique within this process.
     """
     with _state.lock:
         counter = next(_state.counter)
@@ -80,3 +90,15 @@ def check_id(value: object, what: str) -> int:
         if 0 < number < _MAX_ID:
             return number
     raise TimeFValidationError(f"{what} must be a positive int64 id, got {value!r}")
+
+
+def is_provisional(value: int) -> bool:
+    """Return whether an entity id is provisional, so the writer replaces it with a final id.
+
+    Args:
+        value: A valid entity id.
+
+    Returns:
+        ``True`` if ``value`` is at or above :data:`FINAL_ID_LIMIT`.
+    """
+    return value >= FINAL_ID_LIMIT

@@ -50,11 +50,12 @@ def s3_root(monkeypatch):
 def test_store_and_lazy_load_round_trip(s3_root, tmp_path):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
     dataset = make_dataset()
-    version = registry.store(copy.deepcopy(dataset))
+    stored = copy.deepcopy(dataset)
+    version = registry.store(stored)
     assert version == str(dataset.metadata.dataset_version)
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
     loaded = client.load(dataset.metadata.dataset_id)  # lazy S3 range reads
-    assert_datasets_equal(dataset, loaded)
+    assert_datasets_equal(dataset, loaded, final_ids=stored.final_ids)
 
 
 def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
@@ -71,13 +72,14 @@ def test_download_then_load_serves_from_cache(s3_root, tmp_path):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
     dataset = make_dataset()
     dataset_id = dataset.metadata.dataset_id
-    registry.store(copy.deepcopy(dataset))
+    stored = copy.deepcopy(dataset)
+    registry.store(stored)
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
     path = client.download(dataset_id)  # boto3 GetObject per file, into the cache
     assert (path / "manifest.json").exists()
     handle = registry.open_version(dataset_id)
     assert isinstance(handle.filesystem, pafs.LocalFileSystem)  # cache-first: no S3 reads
-    assert_datasets_equal(dataset, client.load(dataset_id))
+    assert_datasets_equal(dataset, client.load(dataset_id), final_ids=stored.final_ids)
 
 
 def test_get_bytes_reraises_non_404_client_errors(tmp_path, monkeypatch):

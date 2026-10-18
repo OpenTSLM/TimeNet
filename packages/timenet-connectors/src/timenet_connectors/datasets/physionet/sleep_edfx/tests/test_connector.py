@@ -299,7 +299,7 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
     version_dir = store_dataset(dataset, tmp_path / "out")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
-    assert {record.id for record in restored.records} == {record.id for record in dataset.records}
+    assert {record.id for record in restored.records} == set(range(1, len(dataset.records) + 1))
     assert _recording_ids(restored.records) == {"SC4901E0", "SC4902E0"}
     record = _record(restored.records, "SC4901E0")
     assert len(record.signals) == len(_SIGNALS)

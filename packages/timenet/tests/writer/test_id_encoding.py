@@ -1,4 +1,6 @@
-"""Entity ids are int64 in DuckDB and round-trip without changing their values."""
+"""Entity ids are int64 in DuckDB and round-trip as the final ids the writer reports."""
+
+from dataclasses import replace
 
 import duckdb
 import pyarrow as pa
@@ -24,7 +26,7 @@ from timenet.types import (
     Version,
     ureg,
 )
-from timenet.writer import TimeFWriter
+from timenet.writer import FinalIds, TimeFWriter
 
 
 def _spec():
@@ -66,10 +68,20 @@ def _id_dataset(*, record_id=None):
     return dataset
 
 
-def _write(tmp_path, dataset):
+def _write_ids(tmp_path, dataset) -> tuple:
     with TimeFWriter(tmp_path, dataset) as writer:
-        writer.write()
-    return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+        ids = writer.write()
+    return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version), ids
+
+
+def _write(tmp_path, dataset):
+    return _write_ids(tmp_path, dataset)[0]
+
+
+def _span(span, ids: FinalIds):
+    if isinstance(span, StepInterval):
+        return replace(span, time_series_id=ids.signals[span.time_series_id])
+    return replace(span, time_series_ids=tuple(ids.signals[item] for item in span.time_series_ids))
 
 
 def test_default_ids_are_positive_int64():
@@ -87,13 +99,13 @@ def test_manifest_has_no_id_encoding(tmp_path):
 
 def test_default_ids_round_trip_as_ints(tmp_path):
     dataset = _id_dataset()
-    version_dir = _write(tmp_path, dataset)
+    version_dir, ids = _write_ids(tmp_path, dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
-    assert_datasets_equal(dataset, restored)
+    assert_datasets_equal(dataset, restored, final_ids=ids)
     restored_id = restored.records[0].id
     assert type(restored_id) is int
-    assert restored_id == dataset.records[0].id
+    assert restored_id == ids.records[dataset.records[0].id] == 1
 
 
 def test_explicit_small_int_ids_round_trip(tmp_path):
@@ -153,12 +165,12 @@ def test_forecasting_target_span_round_trips(tmp_path):
     scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series_id,))
     dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
     dataset.derive_schema()
-    version_dir = _write(tmp_path, dataset)
+    version_dir, ids = _write_ids(tmp_path, dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, ForecastingTask)
-    assert task.targets == (span,)
-    assert task.scope == scope
+    assert task.targets == (_span(span, ids),)
+    assert task.scope == _span(scope, ids)
 
 
 def test_forecasting_step_horizon_round_trips(tmp_path):
@@ -179,12 +191,12 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
     scope = StepInterval(time_series_id=series_id, start=0, stop=4)
     dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
     dataset.derive_schema()
-    version_dir = _write(tmp_path, dataset)
+    version_dir, ids = _write_ids(tmp_path, dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, ForecastingTask)
-    assert task.targets == (span,)
-    assert task.scope == scope
+    assert task.targets == (_span(span, ids),)
+    assert task.scope == _span(scope, ids)
 
 
 def test_span_series_ids_round_trip(tmp_path):
@@ -203,11 +215,11 @@ def test_span_series_ids_round_trip(tmp_path):
     scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series.id,))
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), scope=scope))
     dataset.derive_schema()
-    version_dir = _write(tmp_path, dataset)
+    version_dir, ids = _write_ids(tmp_path, dataset)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         (task,) = reader.tasks
-    assert task.scope == scope
+    assert task.scope == _span(scope, ids)
 
 
 def test_correspondence_record_targets_round_trip(tmp_path):
@@ -233,13 +245,13 @@ def test_correspondence_record_targets_round_trip(tmp_path):
         )
     )
     dataset.derive_schema()
-    version_dir = _write(tmp_path, dataset)
+    version_dir, ids = _write_ids(tmp_path, dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, TSCorrespondenceTask)
     assert task.targets is not None and isinstance(task.targets[0], Record)
-    assert task.targets[0].id == match.id
-    assert tuple(record.id for record in task.candidate_records) == (match.id, other.id)
+    assert task.targets[0].id == ids.records[match.id]
+    assert tuple(record.id for record in task.candidate_records) == (ids.records[match.id], ids.records[other.id])
 
 
 def test_editing_and_generation_record_targets_round_trip(tmp_path):
@@ -263,19 +275,19 @@ def test_editing_and_generation_record_targets_round_trip(tmp_path):
     )
     dataset.add_task(task=TSGenerationTask(prompt="10 s of sinus rhythm.", targets=(edited,)))
     dataset.derive_schema()
-    version_dir = _write(tmp_path, dataset)
+    version_dir, ids = _write_ids(tmp_path, dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         tasks = {type(t): t for t in reader.tasks}
     edit = tasks[TSEditingTask]
     assert isinstance(edit, TSEditingTask)
-    assert tuple(record.id for record in edit.inputs) == (source.id,)
+    assert tuple(record.id for record in edit.inputs) == (ids.records[source.id],)
     assert edit.targets is not None and isinstance(edit.targets[0], Record)
-    assert edit.targets[0].id == edited.id
+    assert edit.targets[0].id == ids.records[edited.id]
     assert edit.prompt == "Remove the baseline wander."
     generation = tasks[TSGenerationTask]
     assert isinstance(generation, TSGenerationTask)
     assert generation.targets is not None and isinstance(generation.targets[0], Record)
-    assert generation.targets[0].id == edited.id
+    assert generation.targets[0].id == ids.records[edited.id]
 
 
 def test_time_span_round_trips(tmp_path):
