@@ -23,6 +23,7 @@ from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
+    from timenet.values_backends.types import StoredChunk
 
 
 _CHUNK_LOCATOR_BATCH_SIZE = 1_024
@@ -53,7 +54,7 @@ class TimeFReader:
         self._values: BaseValuesReader | None = None
         self._chunk_locator_batches: list[list[int]] = []
         self._chunk_locator_batch_by_key: dict[int, int] = {}
-        self._chunk_rows_cache: dict[int, list[dict]] = {}
+        self._chunk_rows_cache: dict[int, list[StoredChunk]] = {}
         self._axis_offsets_cache: OrderedDict[int, pa.Array] = OrderedDict()
         self._axis_offsets_cache_bytes = 0
 
@@ -352,7 +353,7 @@ class TimeFReader:
         rows = self._chunk_rows(signal_key, signal_id)
         return self._values_reader().load_range(self._version, rows, start, stop, spec)
 
-    def _chunk_rows(self, signal_key: int, signal_id: str) -> list[dict]:
+    def _chunk_rows(self, signal_key: int, signal_id: str) -> list[StoredChunk]:
         """Return cached chunk locators after loading the Signal's bounded batch.
 
         Raises:

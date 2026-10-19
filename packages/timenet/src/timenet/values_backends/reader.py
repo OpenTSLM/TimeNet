@@ -22,19 +22,20 @@ from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
     from timenet.types import TimeSeriesSpec
+    from timenet.values_backends.types import StoredChunk
 
 
 class BaseValuesReader(ABC):
     """Reads a series' values from a storage handle given its index rows."""
 
     @abstractmethod
-    def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
+    def load(self, version: DatasetVersion, rows: list[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
         """Read and concatenate one series' chunk values.
 
         Args:
             version: The opened version handle. Reads flow through its filesystem/store.
-            rows: The series' index rows, sorted by ``chunk_idx``. Each holds ``chunk_file``,
-                ``chunk_major_idx``, and ``chunk_minor_idx``.
+            rows: The series' index rows, sorted by ``chunk_idx``. Each holds a file path
+                and backend coordinates in ``data_index``.
             spec: The series' spec, for backends whose decoding depends on shape/dtype.
 
         Returns:
@@ -43,7 +44,7 @@ class BaseValuesReader(ABC):
 
     @abstractmethod
     def load_range(
-        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, rows: list[StoredChunk], start: int, stop: int, spec: TimeSeriesSpec
     ) -> pa.Array:
         """Read only the steps of one series in the half-open step range ``[start, stop)``.
 

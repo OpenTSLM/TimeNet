@@ -10,6 +10,7 @@ from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import make_dataset
 from timenet.types import DatasetMetadata, License, TimeSeriesSpec, Version, ureg
+from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 from timenet.values_backends.zarr.reader import ZarrValuesReader
 from timenet.writer import TimeFWriter
 
@@ -332,8 +333,8 @@ def test_zarr_nullable_range_combines_noncontiguous_runs_in_order(tmp_path, monk
     _write_read(tmp_path, series, values_backend="zarr", chunk_max_bytes=4, shard_target_bytes=32)
     version = DatasetVersion.open_local(tmp_path / "timenet/nullable/1.0.0")
     rows = [
-        {"chunk_file": "time_series.zarr/x", "chunk_major_idx": 0, "n_values": 3},
-        {"chunk_file": "time_series.zarr/x", "chunk_major_idx": 5, "n_values": 3},
+        StoredChunk(0, "time_series.zarr/x", ChunkDataIndex(0, None), 3),
+        StoredChunk(1, "time_series.zarr/x", ChunkDataIndex(5, None), 3),
     ]
     reader = ZarrValuesReader()
     full = reader.load(version, rows, spec)

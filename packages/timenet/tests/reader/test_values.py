@@ -10,6 +10,7 @@ from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import make_dataset
 from timenet.values_backends.parquet.reader import ParquetValuesReader
+from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 from timenet.writer import TimeFWriter
 
 
@@ -51,7 +52,7 @@ class _Shard:
 def test_row_group_cache_includes_dataset_root(monkeypatch):
     reader = ParquetValuesReader()
     monkeypatch.setattr(reader, "_shard", lambda version, rel_path: _Shard(1.0 if version.root == "a" else 2.0))
-    rows = [{"chunk_file": "time_series/part-00000.parquet", "chunk_major_idx": 0, "chunk_minor_idx": 0}]
+    rows = [StoredChunk(0, "time_series/part-00000.parquet", ChunkDataIndex(0, 0), 1)]
     spec = next(signal for record in make_dataset().records for signal in record.signals).spec
 
     # The reader keys its row-group cache on the handle's root, so the same relative path under two
