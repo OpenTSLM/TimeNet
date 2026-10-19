@@ -108,3 +108,62 @@ h1 { margin: 12px 0 4px; font-size: clamp(32px, 5vw, 52px); line-height: 1.1; }
   .task-preview { -webkit-line-clamp: 3; }
   .task-layout .facts { grid-template-columns: 1fr; padding: 20px; }
 }
+
+.record-task { margin-right: 1rem; overflow-wrap: anywhere; }
+.scalar-plot { width: 100%; height: auto; }
+.scalar-plot text { fill: currentColor; font-size: 12px; }
+
+.record-workspace { display: grid; grid-template-columns: minmax(12rem, 1fr) minmax(0, 3fr); gap: 1.5rem; }
+.record-selector { border-right: 1px solid #ddd; padding-right: 1rem; }
+.record-choice { padding: 0.75rem 0; overflow-wrap: anywhere; }
+.record-choice button { text-align: left; }
+.record-choice small { display: block; opacity: 0.7; }
+.record-choice button[aria-pressed="true"] { font-weight: 700; text-decoration: underline; }
+.inspector-links a { font-size: 0.85rem; }
+.inspector-links { display: flex; gap: 1rem; align-items: baseline; flex-wrap: wrap; margin: 0.5rem 0; }
+.record-inspector { min-width: 0; }
+@media (max-width: 760px) {
+  .record-workspace { grid-template-columns: 1fr; }
+  .record-selector { border-right: 0; border-bottom: 1px solid #ddd; padding: 0 0 1rem; }
+}
+
+.signal-hierarchy { margin: 1rem 0; padding: 1rem 1.25rem; border: 1px solid #dce5ef; border-radius: 12px; background: #f8fafc; }
+.node-kind { display: inline-block; flex-shrink: 0; padding: 0.18rem 0.4rem; border-radius: 4px; font-size: 0.65rem; font-weight: 700; text-transform: uppercase; letter-spacing: 0.04em; }
+.node-kind-record { background: #e8e9f6; color: #554795; }
+.node-kind-source { background: #e4edf9; color: #315e94; }
+.node-kind-signal { background: #dff3ed; color: #16735d; }
+.hierarchy-source summary small, .hierarchy-signal small { color: #60738a; font-size: 0.75rem; font-weight: 400; }
+.hierarchy-roots, .hierarchy-children { list-style: none; margin: 0; padding-left: 1.2rem; border-left: 1px solid #cbd7e5; }
+.hierarchy-roots { margin: 0.4rem 0 0 0.65rem; }
+.hierarchy-source { margin: 0.3rem 0; }
+.hierarchy-source summary { cursor: pointer; padding: 0.45rem 0; overflow-wrap: anywhere; }
+.hierarchy-source summary .node-kind { margin-right: 0.5rem; }
+.hierarchy-source summary small { display: inline-block; margin-left: 0.65rem; }
+.hierarchy-source-actions { margin: 0 0 0.45rem 1rem; }
+.hierarchy-source-actions button { font-size: 0.72rem; font-weight: 400; }
+.hierarchy-signal { position: relative; margin: 0.3rem 0; }
+.hierarchy-signal::before { content: ""; position: absolute; left: -1.2rem; top: 50%; width: 1rem; border-top: 1px solid #cbd7e5; }
+.hierarchy-signal button { display: flex; width: 100%; gap: 0.6rem; align-items: center; flex-wrap: wrap; text-align: left; padding: 0.65rem 0.75rem; background: #fff; color: #253b52; border: 1px solid #dce5ef; border-radius: 8px; }
+.hierarchy-signal button:hover { border-color: #70b6a3; background: #f1fbf7; }
+.hierarchy-signal button[aria-pressed="true"] { border-color: #31937a; background: #e8f7f1; box-shadow: inset 3px 0 #31937a; }
+.signal-glyph { color: #278b73; font-size: 1.3rem; line-height: 1; }
+.selected-node-label { margin-left: auto; color: #16735d; font-size: 0.7rem; font-weight: 600; }
+.hierarchy-empty { color: #60738a; font-size: 0.8rem; padding: 0.4rem; }
+.signal-path { margin: 1.25rem 0 0.65rem; color: #53677d; font-size: 0.8rem; }
+.signal-path ol { display: flex; align-items: center; gap: 0.5rem; flex-wrap: wrap; list-style: none; margin: 0; padding: 0; }
+.signal-path li { display: flex; align-items: center; gap: 0.4rem; }
+.signal-path li[aria-current] { color: #16735d; font-weight: 700; }
+.path-separator { color: #97a9bc; font-size: 1rem; }
+.signal-heading { display: flex; align-items: center; gap: 0.6rem; }
+.signal-heading h2 { margin: 0; }
+.signal-summary { margin-top: 0.5rem; font-size: 0.85rem; color: #60738a; }
+.inspector-facts { margin: 0.75rem 0; padding: 0.65rem 0.85rem; border: 1px solid #e1e8f0; border-radius: 8px; background: #fafbfd; font-size: 0.85rem; }
+.inspector-facts summary { cursor: pointer; color: #53677d; font-weight: 500; }
+.signal-empty { display: flex; align-items: center; gap: 1rem; padding: 1rem; margin: 1rem 0; border: 1px dashed #cbd7e5; border-radius: 10px; color: #60738a; }
+.signal-empty h3 { margin: 0 0 0.35rem; color: #253b52; font-size: 0.95rem; }
+.signal-empty p { margin: 0; font-size: 0.85rem; }
+@media (max-width: 600px) {
+  .signal-hierarchy { padding: 0.85rem; }
+  .hierarchy-source summary small { display: block; margin: 0.35rem 0 0 1rem; }
+  .hierarchy-children { padding-left: 0.85rem; }
+}
