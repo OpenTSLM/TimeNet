@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from hashlib import sha256
 from itertools import islice
 import json
@@ -143,7 +143,7 @@ def _reserve_hierarchy_keys(
     return iter(object_keys), iter(axis_keys)
 
 
-def _insert_rows(connection: duckdb.DuckDBPyConnection, table: Table, rows: list[dict[str, object]]) -> None:
+def _insert_rows(connection: duckdb.DuckDBPyConnection, table: Table, rows: Sequence[Mapping[str, object]]) -> None:
     """Insert one Arrow batch, typed by the table's schema, into a control table."""
     if not rows:
         return
