@@ -11,7 +11,10 @@ description: >-
   LLaSA project and retain the original channel assumptions.
   Published PAMAP2 values also retain upstream missing-data processing consistent
   with zero filling before resampling; original gaps are not marked in the release.
-license: Hippocratic-3.0
+# Hippocratic License 3.0 with modules (HL3-CL-ECO-EXTR-FFD-LAW-MEDIA-MIL-MY-SOC-SV-TAL-USTA),
+# per the license badge in https://github.com/BASHLab/LLaSA. SPDX covers only the core text
+# (Hippocratic-3.0-core), so this combination needs `other`. Legal review required before use.
+license: other
 license_url: https://firstdonoharm.dev/version/3/0/cl-eco-extr-ffd-law-media-mil-my-soc-sv-tal-usta.html
 source_url: https://huggingface.co/datasets/BASH-Lab/SensorCaps
 citation: >-

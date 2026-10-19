@@ -42,7 +42,7 @@ class DatasetMetadata(TimeFModel):
     description: NonEmptyText
     """Free-text description of the dataset."""
     license: License
-    """Legal license of the source data, using SPDX spelling where available."""
+    """Legal license of the source data, as an SPDX-style identifier."""
     domains: tuple[Domain, ...] = ()
     """Kinds of data the dataset contains."""
     tags: tuple[StrictStr, ...] = ()
@@ -50,10 +50,7 @@ class DatasetMetadata(TimeFModel):
     source_url: StrictStr | None = None
     """Link to the dataset's origin, if any."""
     license_url: StrictStr | None = None
-    """URL of the publisher's exact license text.
-
-    Required and nonblank for :attr:`License.OTHER` and :attr:`License.HIPPOCRATIC_3_0`.
-    """
+    """Where to read the full license text. Required and nonblank when ``license`` is :attr:`License.OTHER`."""
     citation: StrictStr | None = None
     """How to cite the dataset, when the source asks for attribution."""
     access: Access = Access.OPEN
@@ -72,10 +69,8 @@ class DatasetMetadata(TimeFModel):
 
     @model_validator(mode="after")
     def _dependent_urls(self) -> Self:
-        if self.license in {License.OTHER, License.HIPPOCRATIC_3_0} and (
-            self.license_url is None or not self.license_url.strip()
-        ):
-            raise TimeFValidationError(f"license_url is required when license is License.{self.license.name}")
+        if self.license is License.OTHER and (self.license_url is None or not self.license_url.strip()):
+            raise TimeFValidationError("license_url is required when license is License.OTHER")
         if self.access is not Access.OPEN and not self.access_url:
             raise ValueError(f"access_url is required when access is {self.access.value!r}")
         return self
