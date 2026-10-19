@@ -64,9 +64,11 @@ Signals can reference the same immutable `TimeAxis`.
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
 in either direction, so TimeF does not store duplicate reverse-index tables.
 
-Every table carries a `BIGINT` internal key drawn from a sequence, and relationships refer to those
-keys. Public IDs (`record_id`, `source_id`, `signal_id`, `axis_id`, `content_id`, `occurrence_id`,
-and `task_id`) are positive int64 values stored once, as `BIGINT`, on the row that owns them. The
+Hierarchy and task tables carry a `BIGINT` internal key drawn from a sequence, and relationships
+between them refer to those keys. The annotation tables have no internal keys. They are keyed by
+their public IDs, and `task_annotation_refs` points at an occurrence by its `occurrence_id`.
+Public IDs (`record_id`, `source_id`, `signal_id`, `axis_id`, `content_id`, `occurrence_id`, and
+`task_id`) are positive int64 values stored once, as `BIGINT`, on the row that owns them. The
 `dataset_id` is the exception: it is the `org/name` string and is stored as `VARCHAR`. Fixed-shape
 fields are typed columns, so spans, task configuration, target values, and annotation values can be
 filtered in SQL. Only the free-form `metadata` dictionaries are JSON.
@@ -104,8 +106,8 @@ records by subject through the annotation tables:
 SELECT DISTINCT r.record_id
 FROM records r
 JOIN annotation_occurrences o
-  ON o.object_type = 'Record' AND o.object_key = r.record_key
-JOIN annotation_contents c USING (content_key)
+  ON o.object_type = 'Record' AND o.object_id = r.record_id
+JOIN annotation_contents c USING (content_id)
 WHERE c.name = 'subject_ids'
   AND list_contains(c.text_list_value, 'patient-1');
 ```
@@ -116,13 +118,16 @@ column is separate from metadata, which can contain its own `description` key. T
 one typed column selected by `value_kind`: `text_value`, `integer_value`, `float_value`,
 `boolean_value`, or `text_list_value`
 for a list of strings such as a target vocabulary. A marker annotation, which only places a span,
-has `NULL` in all of them. `annotation_occurrences` says where the content applies and carries the
-span as `span_type`, `start_us`, `end_us`, and `signal_keys`, plus provenance, confidence, and
-occurrence metadata.
+has `NULL` in all of them. `annotation_occurrences` says where the content applies. It points at
+the content through `content_id` and carries the span as `span_type`, `start_us`, and `end_us`,
+plus provenance, confidence, and occurrence metadata.
 
-An occurrence can annotate a Dataset, Task, Record, Source, or Signal. One content row can therefore
-apply to many objects without copying a long value. Each attachment still has its own
-`occurrence_id` and temporal placement.
+An occurrence can annotate a Dataset, Task, Record, Source, or Signal. It names its owner with
+`object_type` and `object_id`, the owner's public ID. `object_id` is `NULL` exactly when the owner
+is the Dataset. IDs are unique only within one kind, so the type is part of the reference. A read
+of every Record or every Task rejects an occurrence with an unknown owner type or a missing owner,
+instead of dropping it. One content row can apply to many objects without copying a long value.
+Each attachment still has its own `occurrence_id` and temporal placement.
 
 ## Tasks
 
