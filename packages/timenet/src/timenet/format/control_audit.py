@@ -12,9 +12,13 @@ import duckdb
 from timenet.errors import TimeFFormatError
 from timenet.format.control_schema import CONTROL_TABLES, Table
 from timenet.format.duckdb import check_control_schema
+from timenet.format.task_target_kind import TaskTargetKind
 
 
-_DOMAIN_CHECKS = """
+_TARGET_KINDS = ", ".join(f"'{kind.value}'" for kind in TaskTargetKind)
+_TIME_TARGET_KINDS = ", ".join(f"'{kind.value}'" for kind in (TaskTargetKind.TIME_POINT, TaskTargetKind.TIME_INTERVAL))
+
+_DOMAIN_CHECKS = f"""
     SELECT 'sources.parent_source_key' AS field
     FROM sources WHERE parent_source_key = source_key
     UNION ALL
@@ -31,10 +35,7 @@ _DOMAIN_CHECKS = """
     WHERE span_type NOT IN ('static', 'point', 'interval')
     UNION ALL
     SELECT 'task_targets.target_kind' FROM task_targets
-    WHERE target_kind NOT IN (
-        'text', 'integer', 'float', 'boolean', 'record', 'signal',
-        'time_point', 'time_interval', 'step_point', 'step_interval'
-    )
+    WHERE target_kind NOT IN ({_TARGET_KINDS})
     UNION ALL
     SELECT 'task_dependencies.parent_task_key' FROM task_dependencies
     WHERE task_key = parent_task_key
@@ -45,7 +46,7 @@ _DOMAIN_CHECKS = """
     SELECT 'tasks.scope_type' FROM tasks
     WHERE scope_type NOT IN ('time_point', 'time_interval', 'step_point', 'step_interval')
     LIMIT 1
-"""
+"""  # noqa: S608 - tags come only from internal enum values
 
 _CROSS_RECORD_PARENT = """
     SELECT child.source_id
@@ -92,7 +93,7 @@ _CHUNK_COVERAGE = """
     LIMIT 1
 """
 
-_TASK_RECORD_SCOPE = """
+_TASK_RECORD_SCOPE = f"""
     WITH spans AS (
         SELECT row_number() OVER () AS span_key, task_key, signal_keys
         FROM (
@@ -100,7 +101,7 @@ _TASK_RECORD_SCOPE = """
             WHERE scope_type IN ('time_point', 'time_interval')
             UNION ALL
             SELECT task_key, signal_keys FROM task_targets
-            WHERE target_kind IN ('time_point', 'time_interval')
+            WHERE target_kind IN ({_TIME_TARGET_KINDS})
         )
     )
     SELECT tasks.task_id
@@ -114,7 +115,7 @@ _TASK_RECORD_SCOPE = """
         WHEN spans.signal_keys IS NULL OR list_contains(spans.signal_keys, signals.signal_key)
         THEN refs.record_key END) <> 1
     LIMIT 1
-"""
+"""  # noqa: S608 - tags come only from internal enum values
 
 
 def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool = True) -> None:

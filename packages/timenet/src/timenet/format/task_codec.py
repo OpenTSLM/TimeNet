@@ -11,6 +11,7 @@ from typing import Any, cast
 from timenet.dataset.record import Record
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFFormatError
+from timenet.format.task_target_kind import TaskTargetKind
 from timenet.types import (
     ClassificationTask,
     InputModality,
@@ -205,35 +206,37 @@ def encode_target(target: object) -> dict[str, object | None]:
     """
     row: dict[str, object | None] = dict.fromkeys(TARGET_VALUE_COLUMNS)
     if isinstance(target, bool):
-        row.update(target_kind="boolean", boolean_value=target)
+        row.update(target_kind=TaskTargetKind.BOOLEAN.value, boolean_value=target)
     elif isinstance(target, str):
-        row.update(target_kind="text", text_value=target)
+        row.update(target_kind=TaskTargetKind.TEXT.value, text_value=target)
     elif isinstance(target, int):
-        row.update(target_kind="integer", integer_value=target)
+        row.update(target_kind=TaskTargetKind.INTEGER.value, integer_value=target)
     elif isinstance(target, float):
-        row.update(target_kind="float", float_value=target)
+        row.update(target_kind=TaskTargetKind.FLOAT.value, float_value=target)
     elif isinstance(target, Record):
-        row.update(target_kind="record", record_id=target.id)
+        row.update(target_kind=TaskTargetKind.RECORD.value, record_id=target.id)
     elif isinstance(target, Signal):
-        row.update(target_kind="signal", signal_id=target.id)
+        row.update(target_kind=TaskTargetKind.SIGNAL.value, signal_id=target.id)
     elif isinstance(target, TimePoint):
         row.update(
-            target_kind="time_point",
+            target_kind=TaskTargetKind.TIME_POINT.value,
             span_start=target.start_us,
             span_signal_ids=target.time_series_ids,
         )
     elif isinstance(target, TimeInterval):
         row.update(
-            target_kind="time_interval",
+            target_kind=TaskTargetKind.TIME_INTERVAL.value,
             span_start=target.start_us,
             span_end=target.end_us,
             span_signal_ids=target.time_series_ids,
         )
     elif isinstance(target, StepPoint):
-        row.update(target_kind="step_point", span_start=target.start, signal_id=target.time_series_id)
+        row.update(
+            target_kind=TaskTargetKind.STEP_POINT.value, span_start=target.start, signal_id=target.time_series_id
+        )
     elif isinstance(target, StepInterval):
         row.update(
-            target_kind="step_interval",
+            target_kind=TaskTargetKind.STEP_INTERVAL.value,
             span_start=target.start,
             span_end=target.stop,
             signal_id=target.time_series_id,
@@ -257,29 +260,32 @@ def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding b
     Raises:
         TimeFFormatError: If a required value or referenced object is missing, or the kind is unknown.
     """
-    kind = row["target_kind"]
-    if kind == "text":
+    try:
+        kind = TaskTargetKind(row["target_kind"])
+    except ValueError as exc:
+        raise TimeFFormatError(f"task target has unknown kind {row['target_kind']!r}") from exc
+    if kind == TaskTargetKind.TEXT:
         return _required(row, "text_value")
-    if kind == "integer":
+    if kind == TaskTargetKind.INTEGER:
         return _required(row, "integer_value")
-    if kind == "float":
+    if kind == TaskTargetKind.FLOAT:
         return _required(row, "float_value")
-    if kind == "boolean":
+    if kind == TaskTargetKind.BOOLEAN:
         return _required(row, "boolean_value")
-    if kind == "record":
+    if kind == TaskTargetKind.RECORD:
         return _resolve(records, row, "record_id", "Record")
-    if kind == "signal":
+    if kind == TaskTargetKind.SIGNAL:
         return _resolve(signals, row, "signal_id", "Signal")
     start = _required(row, "span_start")
     signal_ids = _tuple_or_none(row["span_signal_ids"])
-    if kind == "time_point":
+    if kind == TaskTargetKind.TIME_POINT:
         return TimePoint(start_us=start, time_series_ids=signal_ids)
-    if kind == "time_interval":
+    if kind == TaskTargetKind.TIME_INTERVAL:
         return TimeInterval(start_us=start, end_us=_required(row, "span_end"), time_series_ids=signal_ids)
     signal_id = _required(row, "signal_id")
-    if kind == "step_point":
+    if kind == TaskTargetKind.STEP_POINT:
         return StepPoint(start=start, time_series_id=signal_id)
-    if kind == "step_interval":
+    if kind == TaskTargetKind.STEP_INTERVAL:
         return StepInterval(start=start, stop=_required(row, "span_end"), time_series_id=signal_id)
     raise TimeFFormatError(f"task target has unknown kind {kind!r}")
 

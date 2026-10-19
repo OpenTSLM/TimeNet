@@ -24,6 +24,7 @@ from timenet.format.task_codec import (
     decode_target,
     decode_task_payload,
 )
+from timenet.format.task_target_kind import TaskTargetKind
 from timenet.types import (
     TASKS,
     Annotation,
@@ -1598,7 +1599,7 @@ class _TaskHydration:
                 None if target.signal_keys is None else tuple(signal_ids_by_key[key] for key in target.signal_keys)
             )
             signal_id = None if target.signal_key is None else signals_by_key[target.signal_key].id
-            if target.target_kind in {"step_point", "step_interval"}:
+            if target.target_kind in {TaskTargetKind.STEP_POINT, TaskTargetKind.STEP_INTERVAL}:
                 signal_id = None if not span_signal_ids else span_signal_ids[0]
             target_values: dict[str, object] = {
                 "target_kind": target.target_kind,
