@@ -51,8 +51,8 @@ from timenet.types.wire import ValueDtype
 
 
 ValueLoader = Callable[[int, TimeSeriesSpec], pa.Array]
-ValueLoaderFactory = Callable[[int, int, TimeSeriesSpec], Callable[[], pa.Array]]
-OffsetsLoader = Callable[[int, IrregularAxis, int], pa.Array]
+ValueLoaderFactory = Callable[[int, TimeSeriesSpec], Callable[[], pa.Array]]
+OffsetsLoader = Callable[[IrregularAxis, int], pa.Array]
 
 
 class _LoadedAxis(NamedTuple):
@@ -65,33 +65,40 @@ class _LoadedAxis(NamedTuple):
 class _RecordRow(NamedTuple):
     """One ``records`` row in schema column order."""
 
-    record_key: int
     record_id: int
     clock_id: int
     time_span_start_us: int | None
     time_span_end_us: int | None
     metadata: str
 
+    @property
+    def id(self) -> int:
+        """The record ID."""
+        return self.record_id
+
 
 class _SourceRow(NamedTuple):
     """One ``sources`` row in schema column order."""
 
-    source_key: int
     source_id: int
-    record_key: int
-    parent_source_key: int | None
+    record_id: int
+    parent_source_id: int | None
     name: str
     metadata: str
+
+    @property
+    def id(self) -> int:
+        """The source ID."""
+        return self.source_id
 
 
 class _SignalRow(NamedTuple):
     """One ``signals`` row in schema column order."""
 
-    signal_key: int
     signal_id: int
-    source_key: int
+    source_id: int
     name: str
-    axis_key: int
+    axis_id: int
     spec_type: str
     spec_name: str
     unit: str | None
@@ -103,6 +110,11 @@ class _SignalRow(NamedTuple):
     n_values: int
     metadata: str
     modality: str
+
+    @property
+    def id(self) -> int:
+        """The signal ID."""
+        return self.signal_id
 
     @property
     def spec_fields(self) -> tuple[Any, ...]:
@@ -248,8 +260,8 @@ _T = TypeVar("_T")
 
 _HIERARCHY_TABLES: dict[type[tuple[Any, ...]], tuple[str, str, str]] = {
     _RecordRow: ("records", "record_id", "record_id"),
-    _SourceRow: ("sources", "record_key", "source_id"),
-    _SignalRow: ("signals", "source_key", "signal_id"),
+    _SourceRow: ("sources", "record_id", "source_id"),
+    _SignalRow: ("signals", "source_id", "signal_id"),
 }
 """Table name, relation column, and public ID column of each hierarchy row type."""
 
@@ -420,49 +432,41 @@ class DuckDBControlReader:
         requested = None if record_ids is None else tuple(check_id(item, "record id") for item in record_ids)
         read_all = requested is None
         rows = self._read_rows(_RecordRow, requested)
-        by_id = self._index_rows(rows, "record", key=lambda row: row.record_id, id_of=lambda row: row.record_id)
+        by_id = self._index_rows(rows, "record")
         order = tuple(by_id) if requested is None else requested
         missing = [record_id for record_id in order if record_id not in by_id]
         if missing:
             raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
 
-        record_keys = [row.record_key for row in rows]
-        source_rows = self._read_rows(_SourceRow, None if read_all else record_keys)
-        source_data = self._index_rows(
-            source_rows, "source", key=lambda row: row.source_key, id_of=lambda row: row.source_id
-        )
-        source_keys = [row.source_key for row in source_rows]
-        signal_rows = self._read_rows(_SignalRow, None if read_all else source_keys)
-        signal_data = self._index_rows(
-            signal_rows, "signal", key=lambda row: row.signal_key, id_of=lambda row: row.signal_id
-        )
+        source_rows = self._read_rows(_SourceRow, None if read_all else by_id)
+        source_data = self._index_rows(source_rows, "source")
+        signal_rows = self._read_rows(_SignalRow, None if read_all else source_data)
+        signal_data = self._index_rows(signal_rows, "signal")
         for signal_row in signal_data.values():
-            if signal_row.source_key not in source_data:
+            if signal_row.source_id not in source_data:
                 raise TimeFFormatError(
-                    f"signal {signal_row.signal_id!r} refers to missing source key {signal_row.source_key!r}"
+                    f"signal {signal_row.signal_id!r} refers to missing source {signal_row.source_id!r}"
                 )
         annotations: dict[tuple[str, int | None], tuple[Annotation, ...]] = {}
         if with_annotations:
             owner_ids: dict[ObjectKind, Collection[int]] = {
                 ObjectKind.RECORD: by_id.keys(),
-                ObjectKind.SOURCE: {row.source_id for row in source_rows},
-                ObjectKind.SIGNAL: {row.signal_id for row in signal_rows},
+                ObjectKind.SOURCE: source_data.keys(),
+                ObjectKind.SIGNAL: signal_data.keys(),
             }
             if read_all:
                 annotations = self._read_annotations(dict.fromkeys(owner_ids))
                 self._check_owners(annotations.keys(), owner_ids)
             else:
                 annotations = self._read_annotations(owner_ids)
-        axes = self._read_axes({row.axis_key for row in signal_rows})
+        axes = self._read_axes({row.axis_id for row in signal_rows})
 
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
         specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
         for signal_row in signal_rows:
-            loaded_axis = axes.get(signal_row.axis_key)
+            loaded_axis = axes.get(signal_row.axis_id)
             if loaded_axis is None:
-                raise TimeFFormatError(
-                    f"signal {signal_row.signal_id!r} refers to missing axis key {signal_row.axis_key!r}"
-                )
+                raise TimeFFormatError(f"signal {signal_row.signal_id!r} refers to missing axis {signal_row.axis_id!r}")
             axis = loaded_axis.axis
             spec = specs.get(signal_row.spec_fields)
             if spec is None:
@@ -472,12 +476,8 @@ class DuckDBControlReader:
             if isinstance(axis, IrregularAxis):
                 if loaded_axis.n_values is None:
                     raise TimeFFormatError(f"irregular axis {axis.id!r} has no Signal length")
-                offsets_loader = (
-                    partial(self._offsets_loader, signal_row.axis_key, axis, loaded_axis.n_values)
-                    if self._offsets_loader is not None
-                    else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
-                )
-            signals_by_source[signal_row.source_key].append(
+                offsets_loader = partial(self._offsets_loader or self.load_axis_offsets, axis, loaded_axis.n_values)
+            signals_by_source[signal_row.source_id].append(
                 Signal.from_loader(
                     id=signal_row.signal_id,
                     name=signal_row.name,
@@ -485,7 +485,7 @@ class DuckDBControlReader:
                     time_axis=axis,
                     n_values=signal_row.n_values,
                     loader=(
-                        self._value_loader_factory(signal_row.signal_key, signal_row.signal_id, spec)
+                        self._value_loader_factory(signal_row.signal_id, spec)
                         if self._value_loader_factory is not None
                         else partial(self._value_loader, signal_row.signal_id, spec)
                     ),
@@ -510,16 +510,16 @@ class DuckDBControlReader:
         children, roots_by_record = self._group_sources(source_rows)
         hydrated_sources: set[int] = set()
 
-        def hydrate_source(source_key: int, record_key: int) -> Source:
-            source_row = source_data[source_key]
-            if source_row.record_key != record_key:
-                raise TimeFFormatError(f"source {source_row.source_id!r} crosses record boundaries")
-            hydrated_sources.add(source_key)
+        def hydrate_source(source_id: int, record_id: int) -> Source:
+            source_row = source_data[source_id]
+            if source_row.record_id != record_id:
+                raise TimeFFormatError(f"source {source_id!r} crosses record boundaries")
+            hydrated_sources.add(source_id)
             return Source(
-                id=source_row.source_id,
+                id=source_id,
                 name=source_row.name,
-                sources=tuple(hydrate_source(child, record_key) for child in children[source_key]),
-                signals=tuple(signals_by_source[source_key]),
+                sources=tuple(hydrate_source(child, record_id) for child in children[source_id]),
+                signals=tuple(signals_by_source[source_id]),
                 annotations=annotations.get((ObjectKind.SOURCE, source_row.source_id), ()),
                 metadata=_decode_json(source_row.metadata, default={}),
             )
@@ -533,10 +533,7 @@ class DuckDBControlReader:
                     start_us=record_row.time_span_start_us,
                     end_us=_required(record_row.time_span_end_us, f"the time span end of record {record_id!r}"),
                 )
-            root_sources = tuple(
-                hydrate_source(source_key, record_row.record_key)
-                for source_key in roots_by_record[record_row.record_key]
-            )
+            root_sources = tuple(hydrate_source(source_id, record_id) for source_id in roots_by_record[record_id])
             record = Record(
                 id=record_id,
                 sources=root_sources,
@@ -578,45 +575,37 @@ class DuckDBControlReader:
         return _rows(cursor, row_type._make)
 
     @staticmethod
-    def _index_rows(
-        rows: list[_HierarchyRow],
-        kind: str,
-        *,
-        key: Callable[[_HierarchyRow], Any],
-        id_of: Callable[[_HierarchyRow], int],
-    ) -> dict[Any, _HierarchyRow]:
-        """Return rows by key and reject duplicate keys or public IDs.
+    def _index_rows(rows: list[_HierarchyRow], kind: str) -> dict[int, _HierarchyRow]:
+        """Return rows by public ID and reject duplicate IDs.
 
         Args:
             rows: The rows to index.
             kind: The object kind named in the error message.
-            key: The value each row is indexed by.
-            id_of: The public ID of each row.
 
         Raises:
-            TimeFFormatError: If a key or public ID occurs more than once.
+            TimeFFormatError: If a public ID occurs more than once.
         """
-        indexed = {key(row): row for row in rows}
-        if len(indexed) != len(rows) or len({id_of(row) for row in rows}) != len(rows):
-            raise TimeFFormatError(f"control.duckdb contains duplicate {kind} IDs or keys")
+        indexed = {row.id: row for row in rows}
+        if len(indexed) != len(rows):
+            raise TimeFFormatError(f"control.duckdb contains duplicate {kind} IDs")
         return indexed
 
     @staticmethod
     def _group_sources(
         rows: list[_SourceRow],
     ) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
-        """Group child and root Source keys.
+        """Group child and root Source IDs.
 
         Returns:
-            Child keys by parent key and root keys by Record key.
+            Child IDs by parent Source ID and root IDs by Record ID.
         """
         children: dict[int, list[int]] = defaultdict(list)
         roots: dict[int, list[int]] = defaultdict(list)
         for row in rows:
-            if row.parent_source_key is None:
-                roots[row.record_key].append(row.source_key)
+            if row.parent_source_id is None:
+                roots[row.record_id].append(row.source_id)
             else:
-                children[row.parent_source_key].append(row.source_key)
+                children[row.parent_source_id].append(row.source_id)
         return children, roots
 
     def read_last_ids(self) -> dict[IdKind, int]:
@@ -647,40 +636,40 @@ class DuckDBControlReader:
             return ()
         return self._read_annotations({ObjectKind.DATASET: None}).get((ObjectKind.DATASET, None), ())
 
-    def chunk_rows_by_key(self, signal_key: int, signal_id: int) -> list[dict[str, Any]]:
+    def chunk_rows(self, signal_id: int) -> list[dict[str, Any]]:
         """Return one Signal's chunk locations in chunk order.
 
         Raises:
             TimeFFormatError: If the Signal has no stored chunks.
         """
-        rows = self.chunk_rows_by_keys((signal_key,))[signal_key]
+        rows = self.chunk_rows_by_ids((signal_id,))[signal_id]
         if not rows:
             raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
         return rows
 
-    def chunk_rows_by_keys(self, signal_keys: Iterable[int]) -> dict[int, list[dict[str, Any]]]:
-        """Return chunk locators for a batch of internal Signal keys.
+    def chunk_rows_by_ids(self, signal_ids: Iterable[int]) -> dict[int, list[dict[str, Any]]]:
+        """Return chunk locators for a batch of Signals.
 
         Args:
-            signal_keys: Internal integer Signal keys.
+            signal_ids: Signal IDs.
 
         Returns:
-            Chunk rows keyed by internal Signal key. Each Signal's rows are in chunk-index order.
+            Chunk rows keyed by Signal ID. Each Signal's rows are in chunk-index order.
         """
-        keys = tuple(signal_keys)
-        if not keys:
+        ids = tuple(signal_ids)
+        if not ids:
             return {}
         rows = self.connection.execute(
-            """SELECT signal_key, chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values
+            """SELECT signal_id, chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values
                FROM signal_chunks
-               WHERE signal_key IN (SELECT unnest(?))
-               ORDER BY signal_key, chunk_index""",
-            [list(keys)],
+               WHERE signal_id IN (SELECT unnest(?))
+               ORDER BY signal_id, chunk_index""",
+            [list(ids)],
         ).fetchall()
         grouped: dict[int, list[tuple[Any, ...]]] = defaultdict(list)
-        for signal_key, *chunk_row in rows:
-            grouped[signal_key].append(tuple(chunk_row))
-        return {signal_key: self._chunk_dicts(grouped[signal_key]) for signal_key in keys}
+        for signal_id, *chunk_row in rows:
+            grouped[signal_id].append(tuple(chunk_row))
+        return {signal_id: self._chunk_dicts(grouped[signal_id]) for signal_id in ids}
 
     @staticmethod
     def _chunk_dicts(rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
@@ -1175,38 +1164,37 @@ class DuckDBControlReader:
 
     def _read_axes(
         self,
-        axis_keys: Iterable[int] | None = None,
+        axis_ids: Iterable[int] | None = None,
     ) -> dict[int, _LoadedAxis]:
         """Hydrate each shared axis exactly once.
 
         Returns:
-            Axes and irregular offset lengths keyed by their stored IDs.
+            Axes and irregular offset lengths keyed by axis ID.
 
         Raises:
             TimeFFormatError: If an axis has an unknown type.
         """
-        requested = None if axis_keys is None else tuple(axis_keys)
+        requested = None if axis_ids is None else tuple(axis_ids)
         if requested == ():
             return {}
         axes: dict[int, _LoadedAxis] = {}
-        query = """SELECT axes.axis_key, axis_id, axis_type, period_numerator_us, period_denominator,
+        query = """SELECT axis_id, axis_type, period_numerator_us, period_denominator,
                           start_index, offset_us, first_us, last_us,
                           lengths.min_n_values, lengths.max_n_values
                    FROM axes
                    LEFT JOIN (
-                       SELECT axis_key, min(n_values) AS min_n_values, max(n_values) AS max_n_values
-                       FROM signals GROUP BY axis_key
-                   ) lengths USING (axis_key)"""
+                       SELECT axis_id, min(n_values) AS min_n_values, max(n_values) AS max_n_values
+                       FROM signals GROUP BY axis_id
+                   ) lengths USING (axis_id)"""
         rows = (
             self.connection.execute(query).fetchall()
             if requested is None
             else self.connection.execute(
-                f"{query} WHERE axes.axis_key IN (SELECT unnest(?))",
+                f"{query} WHERE axis_id IN (SELECT unnest(?))",
                 [list(requested)],
             ).fetchall()
         )
         for (
-            axis_key,
             axis_id,
             axis_type,
             numerator,
@@ -1219,7 +1207,7 @@ class DuckDBControlReader:
             max_n_values,
         ) in rows:
             if axis_type == "regular":
-                axes[axis_key] = _LoadedAxis(
+                axes[axis_id] = _LoadedAxis(
                     RegularAxis(
                         id=axis_id,
                         period_us=Fraction(numerator, denominator),
@@ -1236,18 +1224,18 @@ class DuckDBControlReader:
                         f"axis {axis_id!r} is shared by Signals with different lengths "
                         f"{sorted((min_n_values, max_n_values))}"
                     )
-                axes[axis_key] = _LoadedAxis(
+                axes[axis_id] = _LoadedAxis(
                     IrregularAxis(id=axis_id, first_us=first, last_us=last),
                     int(min_n_values),
                 )
             elif axis_type == "ordinal":
-                axes[axis_key] = _LoadedAxis(OrdinalAxis(id=axis_id), None)
+                axes[axis_id] = _LoadedAxis(OrdinalAxis(id=axis_id), None)
             else:
                 raise TimeFFormatError(f"axis {axis_id!r} has unknown type {axis_type!r}")
         return axes
 
-    def load_axis_offsets_by_key(self, axis_key: int, axis: IrregularAxis, n_values: int) -> pa.Array:
-        """Load one shared irregular axis through its internal integer key.
+    def load_axis_offsets(self, axis: IrregularAxis, n_values: int) -> pa.Array:
+        """Load the offsets of one shared irregular axis.
 
         Returns:
             The axis offsets as Arrow int64 values.
@@ -1259,8 +1247,8 @@ class DuckDBControlReader:
             self.connection.execute(
                 """SELECT offsets.offset_us
                FROM axis_offsets offsets
-               WHERE axis_key = ? ORDER BY offsets.position""",
-                [axis_key],
+               WHERE axis_id = ? ORDER BY offsets.position""",
+                [axis.id],
             )
             .to_arrow_table()
             .column(0)

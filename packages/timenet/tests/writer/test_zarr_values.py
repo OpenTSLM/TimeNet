@@ -67,7 +67,7 @@ def test_index_locator_resolves_to_values(tmp_path):
         row = connection.execute(
             """SELECT chunks.value_path, chunks.chunk_major_index, chunks.chunk_minor_index,
                       chunks.n_values
-               FROM signal_chunks chunks JOIN signals USING (signal_key)
+               FROM signal_chunks chunks JOIN signals USING (signal_id)
                ORDER BY signals.signal_id LIMIT 1"""
         ).fetchone()
     assert row is not None
@@ -87,7 +87,7 @@ def test_one_index_row_per_series(tmp_path):
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         index = connection.execute(
             """SELECT signals.signal_id, chunks.n_values
-               FROM signal_chunks chunks JOIN signals USING (signal_key)"""
+               FROM signal_chunks chunks JOIN signals USING (signal_id)"""
         ).fetchall()
     signal_ids = [row[0] for row in index]
     assert len(signal_ids) == len(set(signal_ids))

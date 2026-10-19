@@ -126,7 +126,7 @@ def test_long_series_splits_into_multiple_chunks(tmp_path):
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         index = connection.execute(
             """SELECT signals.signal_id, chunks.chunk_index
-               FROM signal_chunks chunks JOIN signals USING (signal_key)"""
+               FROM signal_chunks chunks JOIN signals USING (signal_id)"""
         ).fetchall()
     chunks_per_series: dict[str, set] = {}
     for signal_id, chunk_index in index:
@@ -140,7 +140,7 @@ def test_index_offsets_resolve_to_values(tmp_path):
         row = connection.execute(
             """SELECT chunks.value_path, chunks.chunk_major_index, chunks.chunk_minor_index,
                       chunks.n_values
-               FROM signal_chunks chunks JOIN signals USING (signal_key)
+               FROM signal_chunks chunks JOIN signals USING (signal_id)
                ORDER BY signals.signal_id, chunks.chunk_index LIMIT 1"""
         ).fetchone()
     assert row is not None
