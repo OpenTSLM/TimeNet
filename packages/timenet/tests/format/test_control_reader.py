@@ -1,9 +1,10 @@
 from dataclasses import replace
+from fractions import Fraction
 
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source
+from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.control_audit import audit_control_database
 import timenet.format.control_reader as control_reader_module
@@ -26,7 +27,17 @@ from timenet.types import (
 )
 from timenet.types.ids import entity_id
 
-from .test_control_writer import ECG_ID, LEAD_I_ID, LEAD_II_ID, MONITOR_ID, RECORD_ID, SEX_MALE_ID, TASK_ID, _dataset
+from .test_control_writer import (
+    ECG_ID,
+    LEAD_I_ID,
+    LEAD_II_ID,
+    MONITOR_ID,
+    RECORD_ID,
+    SEX_MALE_ID,
+    SPEC,
+    TASK_ID,
+    _dataset,
+)
 
 
 def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
@@ -332,18 +343,6 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
             "UPDATE signals SET source_key = 999 WHERE signal_id = 101",
             "missing source",
         ),
-        (
-            "UPDATE annotation_occurrences SET object_key = 999 "
-            "WHERE content_key IN ("
-            "SELECT content_key FROM annotation_contents WHERE content_id = 201)",
-            "missing Record",
-        ),
-        (
-            "UPDATE annotation_occurrences SET object_type = 'Unknown' "
-            "WHERE content_key IN ("
-            "SELECT content_key FROM annotation_contents WHERE content_id = 201)",
-            "unknown object type",
-        ),
     ],
 )
 def test_control_reader_rejects_corrupt_relationships(tmp_path, statement, message):
@@ -354,6 +353,79 @@ def test_control_reader_rejects_corrupt_relationships(tmp_path, statement, messa
 
     with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match=message):
         reader.read_records()
+
+
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("UPDATE annotation_occurrences SET object_id = 999 WHERE content_id = 201", "missing Record 999"),
+        (
+            "UPDATE annotation_occurrences SET object_type = 'Signal' WHERE content_id = 201",
+            "missing Signal",
+        ),
+        (
+            "UPDATE annotation_occurrences SET object_type = 'Unknown' WHERE content_id = 201",
+            "unknown object type",
+        ),
+        (
+            "UPDATE annotation_occurrences SET object_type = 'Dataset' WHERE content_id = 201",
+            "on Dataset has object id",
+        ),
+        (
+            "UPDATE annotation_occurrences SET object_id = NULL WHERE content_id = 201",
+            "on Record has object id None",
+        ),
+        ("UPDATE annotation_occurrences SET object_id = 999 WHERE object_type = 'Task'", "missing Task 999"),
+    ],
+)
+def test_full_reads_reject_occurrences_with_an_invalid_owner(tmp_path, statement, message):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    with connect_control(path) as connection:
+        connection.execute(statement)
+
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match=message):
+        reader.read_tasks(cached_records=reader.read_records())
+
+
+def test_annotations_stay_with_their_owner_when_explicit_ids_collide_across_kinds(tmp_path):
+    shared_id = 5
+    signal = Signal.from_loader(
+        id=shared_id,
+        name="I",
+        spec=SPEC,
+        time_axis=RegularAxis(id=shared_id, period_us=Fraction(2_000)),
+        n_values=2,
+        loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
+    )
+    source = Source(id=shared_id, name="ECG", signals=(signal,))
+    record = Record(id=shared_id, sources=(source,))
+    record.annotate(Annotation(id=1, key="owner", value="record"))
+    source.annotate(Annotation(id=2, key="owner", value="source"))
+    signal.annotate(Annotation(id=3, key="owner", value="signal"))
+    task = AnswerTask(id=shared_id, inputs=(record,), prompt="Alive?", targets=("Yes",))
+    task.annotate(Annotation(id=4, key="owner", value="task"))
+    dataset = TimeFDataset(metadata=_dataset().metadata)
+    dataset.annotate(Annotation(id=6, key="owner", value="dataset"))
+    dataset.add_record(record=record)
+    dataset.add_task(task=task)
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with connect_control(path, read_only=True) as connection:
+        audit_control_database(connection, require_chunks=False)
+    with DuckDBControlReader(path) as reader:
+        for records in (reader.read_records(), reader.read_records((shared_id,))):
+            (back,) = records
+            (back_source,) = back.sources
+            (back_signal,) = back_source.signals
+            assert [item.value for item in back.annotations] == ["record"]
+            assert [item.value for item in back_source.annotations] == ["source"]
+            assert [item.value for item in back_signal.annotations] == ["signal"]
+            for tasks in (reader.read_tasks(cached_records=records), reader.read_tasks(records)):
+                assert [item.value for item in tasks[0].annotations] == ["task"]
+        assert [item.value for item in reader.read_dataset_annotations(dataset.metadata.dataset_id)] == ["dataset"]
+        assert reader.read_dataset_annotations("org/other") == ()
 
 
 def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tmp_path):

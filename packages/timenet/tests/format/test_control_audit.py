@@ -101,6 +101,30 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
         ("UPDATE records SET record_id = 0", r"invalid records\.record_id value"),
         ("UPDATE signals SET signal_id = -1", r"invalid signals\.signal_id value"),
         ("UPDATE tasks SET task_id = 0", r"invalid tasks\.task_id value"),
+        (
+            "UPDATE annotation_occurrences SET object_id = 999",
+            "annotation occurrence .* refers to missing Record 999",
+        ),
+        (
+            "UPDATE annotation_occurrences SET object_type = 'Signal'",
+            f"refers to missing Signal {RECORD_ID}",
+        ),
+        (
+            "UPDATE annotation_occurrences SET object_type = 'Dataset'",
+            f"on the Dataset has object id {RECORD_ID}",
+        ),
+        (
+            "UPDATE annotation_occurrences SET object_id = NULL",
+            "annotation occurrence .* refers to missing Record None",
+        ),
+        (
+            "UPDATE annotation_occurrences SET object_type = 'Unknown'",
+            r"invalid annotation_occurrences\.object_type value",
+        ),
+        (
+            "UPDATE annotation_occurrences SET content_id = 999",
+            r"annotation_occurrences\.content_id refers to missing annotation_contents\.content_id",
+        ),
     ],
 )
 def test_audit_names_the_first_violated_invariant(control_path, statement, message):
