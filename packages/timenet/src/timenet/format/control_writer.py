@@ -324,6 +324,10 @@ class DuckDBControlWriter:
     @staticmethod
     def _write_scan_order(connection: duckdb.DuckDBPyConnection) -> None:
         """Precompute physical scan order so inherited IDs do not scatter payload reads."""
+        connection.execute(
+            "INSERT INTO payload_scan_groups SELECT DISTINCT owner_key, value_path, chunk_major_index "
+            "FROM signal_chunks ORDER BY owner_key, value_path, chunk_major_index"
+        )
         if not connection.execute("SELECT 1 FROM signal_chunks WHERE owner_key IS NOT NULL LIMIT 1").fetchone():
             return
         connection.execute(
