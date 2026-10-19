@@ -325,9 +325,11 @@ def iter_tasks(records: Sequence[Record]) -> Iterator[Task]:
         # in one of them rather than in neither. Each builder then takes the part it reads.
         span_annotations = [one for one in record.annotations if one.span is not None]
         non_span_annotations = [one for one in record.annotations if one.span is None]
+        # One epoch is attached to every scoring signal. Equal labels share a content id, so the
+        # span tells the epochs apart.
         stages = list(
             {
-                one.id: one
+                (one.id, one.span): one
                 for signal in record.signals
                 for one in signal.annotations
                 if one.key == AnnotationKey.SLEEP_STAGE
