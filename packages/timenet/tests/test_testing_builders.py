@@ -1,3 +1,5 @@
+import copy
+
 import numpy as np
 import pytest
 
@@ -34,18 +36,18 @@ def test_make_dataset_builds_a_valid_dataset():
 
 def test_assert_datasets_equal_compares_resolved_modalities():
     expected = make_dataset()
-    actual = make_dataset()
+    actual = copy.deepcopy(expected)
     actual.tasks[0].input_modalities = frozenset({InputModality.TIME_SERIES})
     assert_datasets_equal(expected, actual)
 
     actual.tasks[0].input_modalities = frozenset({InputModality.IMAGE})
-    with pytest.raises(AssertionError, match="task task-cls-0 differs"):
+    with pytest.raises(AssertionError, match=f"task {actual.tasks[0].id} differs"):
         assert_datasets_equal(expected, actual)
 
 
 def test_assert_datasets_equal_detects_difference():
     ds = make_dataset()
-    other = make_dataset()
+    other = copy.deepcopy(ds)
     other.records[0].annotate(Annotation(key="extra", value=1))
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="annotations differ"):
         assert_datasets_equal(ds, other)

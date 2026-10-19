@@ -1,3 +1,6 @@
+import copy
+import uuid
+
 import pytest
 
 
@@ -11,6 +14,10 @@ from timenet.client import TimeNet  # noqa: E402
 from timenet.errors import TimeNetRegistryError  # noqa: E402
 from timenet.registry import S3Registry  # noqa: E402
 from timenet.testing import assert_datasets_equal, make_dataset  # noqa: E402
+
+
+def _bucket(s3_root: str) -> str:
+    return s3_root.removeprefix("s3://").split("/", 1)[0]
 
 
 @pytest.fixture
@@ -32,18 +39,22 @@ def s3_root(monkeypatch):
         "AWS_DEFAULT_REGION": "us-east-1",
     }.items():
         monkeypatch.setenv(key, value)
-    boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket="tn-test")
-    yield "s3://tn-test/registry"
+    # moto shares one backend across server instances, so a fixed bucket would carry datasets over
+    # from earlier tests.
+    bucket = f"tn-test-{uuid.uuid4().hex[:12]}"
+    boto3.client("s3", endpoint_url=endpoint).create_bucket(Bucket=bucket)
+    yield f"s3://{bucket}/registry"
     server.stop()
 
 
 def test_store_and_lazy_load_round_trip(s3_root, tmp_path):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    version = registry.store(make_dataset())
-    assert version == str(make_dataset().metadata.dataset_version)
+    dataset = make_dataset()
+    version = registry.store(copy.deepcopy(dataset))
+    assert version == str(dataset.metadata.dataset_version)
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
-    loaded = client.load(make_dataset().metadata.dataset_id)  # lazy S3 range reads
-    assert_datasets_equal(make_dataset(), loaded)
+    loaded = client.load(dataset.metadata.dataset_id)  # lazy S3 range reads
+    assert_datasets_equal(dataset, loaded)
 
 
 def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
@@ -51,21 +62,22 @@ def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
     # hold other top-level prefixes beside the datasets.
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
     registry.store(make_dataset())
-    keys = [obj["Key"] for obj in boto3.client("s3").list_objects_v2(Bucket="tn-test")["Contents"]]
+    keys = [obj["Key"] for obj in boto3.client("s3").list_objects_v2(Bucket=_bucket(s3_root))["Contents"]]
     assert keys  # something was stored
     assert all(key.startswith("registry/datasets/") for key in keys)
 
 
 def test_download_then_load_serves_from_cache(s3_root, tmp_path):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    dataset_id = make_dataset().metadata.dataset_id
-    registry.store(make_dataset())
+    dataset = make_dataset()
+    dataset_id = dataset.metadata.dataset_id
+    registry.store(copy.deepcopy(dataset))
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
     path = client.download(dataset_id)  # boto3 GetObject per file, into the cache
     assert (path / "manifest.json").exists()
     handle = registry.open_version(dataset_id)
     assert isinstance(handle.filesystem, pafs.LocalFileSystem)  # cache-first: no S3 reads
-    assert_datasets_equal(make_dataset(), client.load(dataset_id))
+    assert_datasets_equal(dataset, client.load(dataset_id))
 
 
 def test_get_bytes_reraises_non_404_client_errors(tmp_path, monkeypatch):
