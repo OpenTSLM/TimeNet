@@ -17,20 +17,21 @@ from timenet.types import (
     TSEditingTask,
     Version,
 )
+from timenet.types.ids import entity_id
 from timenet.writer import TimeFWriter
 
 
 def test_remove_records_preserves_dataset_annotations_and_their_refs():
     # A dataset annotation and a task reference to its occurrence survive an unrelated record removal.
     dataset = make_dataset()
-    options = dataset.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-shared"))
+    options = dataset.annotate(Annotation(key="answer_options", value=["yes", "no"], id=401))
     answer = _answer(dataset)
     answer.input_annotations = (*answer.input_annotations, options)
 
     # record2's own task cascades out
-    edited = remove_records(dataset, [dataset.records[2].id], cascade=True)
+    edited = remove_records(dataset, [entity_id(dataset.records[2])], cascade=True)
 
-    assert [ann.id for ann in edited.annotations] == ["opts-shared"]
+    assert [ann.id for ann in edited.annotations] == [401]
     kept = next(task for task in edited.tasks if task.id == answer.id)
     assert options in kept.input_annotations
 
@@ -80,7 +81,7 @@ def test_remove_leaf_record():
     dataset = make_dataset()
     dataset.derive_schema()
     record0, record1, record2 = dataset.records
-    edited = remove_records(dataset, [record1.id])
+    edited = remove_records(dataset, [entity_id(record1)])
     assert _ids(edited.records) == {record0.id, record2.id}
     # tasks untouched (record1 had none)
     assert len(dataset.tasks) == 5
@@ -91,7 +92,7 @@ def test_remove_unknown_record_raises():
     dataset = make_dataset()
     dataset.derive_schema()
     with pytest.raises(TimeFEditError, match="unknown record ids"):
-        remove_records(dataset, ["nope"])
+        remove_records(dataset, [999])
 
 
 def test_remove_record_with_task_rejects_without_cascade():
@@ -99,14 +100,14 @@ def test_remove_record_with_task_rejects_without_cascade():
     dataset.derive_schema()
     with pytest.raises(TimeFEditError, match="cascade=True"):
         # every task on record0 would dangle
-        remove_records(dataset, [dataset.records[0].id])
+        remove_records(dataset, [entity_id(dataset.records[0])])
 
 
 def test_remove_record_cascades_dependent_tasks():
     dataset = make_dataset()
     dataset.derive_schema()
     record0, record1, record2 = dataset.records
-    edited = remove_records(dataset, [record0.id], cascade=True)
+    edited = remove_records(dataset, [entity_id(record0)], cascade=True)
     assert _ids(edited.records) == {record1.id, record2.id}
     # every task on record0 goes, and the answer task (which derives from record0's classification)
     # cascades out
@@ -119,7 +120,7 @@ def test_shared_annotation_survives_on_remaining_record():
     dataset.derive_schema()
     record0, record1, _ = dataset.records
     cohort_id = _cohort_id(dataset)
-    edited = remove_records(dataset, [record0.id], cascade=True)
+    edited = remove_records(dataset, [entity_id(record0)], cascade=True)
     kept = next(s for s in edited.records if s.id == record1.id)
     assert any(a.id == cohort_id for a in kept.annotations)
 
@@ -140,7 +141,7 @@ def test_input_annotation_refs_survive_a_reachable_removal():
     # The mirror case: the cohort annotation stays on record0, so removing record1 leaves the ref intact.
     dataset = make_dataset()
     dataset.derive_schema()
-    edited = remove_records(dataset, [dataset.records[1].id])
+    edited = remove_records(dataset, [entity_id(dataset.records[1])])
     rebuilt = next(t for t in edited.tasks if t.id == _answer(dataset).id)
     assert tuple(annotation.id for annotation in rebuilt.input_annotations) == (_cohort_id(dataset),)
 
@@ -156,13 +157,13 @@ def test_target_annotation_refs_are_required():
     localize.target_annotations = tuple(
         annotation for annotation in dataset.records[0].annotations if annotation.key in {"stimulus", "artifact"}
     )
-    dataset.records[2].task_ids = (*dataset.records[2].task_ids, localize.id)
+    dataset.records[2].task_ids = (*dataset.records[2].task_ids, entity_id(localize))
     dataset.derive_schema()
 
     with pytest.raises(TimeFEditError, match=rf"dangle tasks \[[^\]]*\b{localize.id}\b"):
-        remove_records(dataset, [dataset.records[0].id])
+        remove_records(dataset, [entity_id(dataset.records[0])])
 
-    edited = remove_records(dataset, [dataset.records[0].id], cascade=True)
+    edited = remove_records(dataset, [entity_id(dataset.records[0])], cascade=True)
     assert localize.id not in _ids(edited.tasks)
 
 
@@ -195,7 +196,7 @@ def test_target_and_candidate_records_are_required_whatever_the_task_type():
             inputs=(dataset.records[0],),
             prompt="Denoise it.",
             targets=(edited_record,),
-            id="task-edit-0",
+            id=306,
         )
     )
     dataset.add_task(
@@ -204,14 +205,14 @@ def test_target_and_candidate_records_are_required_whatever_the_task_type():
             prompt="Which trace matches?",
             candidate_records=(dataset.records[1], dataset.records[2]),
             targets=(dataset.records[2],),
-            id="task-corr-0",
+            id=307,
         )
     )
     dataset.derive_schema()
-    with pytest.raises(TimeFEditError, match="task-edit-0"):
-        remove_records(dataset, [dataset.records[1].id])  # the edit's produced record
-    with pytest.raises(TimeFEditError, match="task-corr-0"):
-        remove_records(dataset, [dataset.records[2].id])  # a candidate the correspondence answer names
+    with pytest.raises(TimeFEditError, match=r"dangle tasks \[[^\]]*\b306\b"):
+        remove_records(dataset, [entity_id(dataset.records[1])])  # the edit's produced record
+    with pytest.raises(TimeFEditError, match=r"dangle tasks \[[^\]]*\b307\b"):
+        remove_records(dataset, [entity_id(dataset.records[2])])  # a candidate the correspondence answer names
 
 
 # ---- copy-on-write version --------------------------------------------------------------------
@@ -221,7 +222,7 @@ def test_edit_version_round_trip(tmp_path):
     dataset = make_dataset()
     record0, record1, record2 = dataset.records
     base = _base(tmp_path, dataset)
-    out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=[record1.id])
+    out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=[entity_id(record1)])
 
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         restored = reader.read()
@@ -241,5 +242,5 @@ def test_edit_version_same_version_rejected(tmp_path):
     base = _base(tmp_path, dataset)
     with pytest.raises(TimeFEditError, match="must differ"):
         edit_version(
-            base, tmp_path / "out", dataset_version=Version(1, 0, 0), remove_record_ids=[dataset.records[1].id]
+            base, tmp_path / "out", dataset_version=Version(1, 0, 0), remove_record_ids=[entity_id(dataset.records[1])]
         )

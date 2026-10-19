@@ -20,8 +20,8 @@ Build a concrete leaf. The bases (:class:`Span`, :class:`TimeSpan`, :class:`Step
 every span in circulation carries the shape and frame it means::
 
     TimePoint.seconds(1.2)              TimeInterval.seconds(5.0, 8.0)
-    StepPoint(time_series_id="x", start=5)
-    StepInterval(time_series_id="x", start=0, stop=12)
+    StepPoint(time_series_id=signal.id, start=5)
+    StepInterval(time_series_id=signal.id, start=0, stop=12)
 """
 
 from dataclasses import dataclass
@@ -29,6 +29,7 @@ from typing import ClassVar
 
 from timenet.errors import TimeFValidationError
 from timenet.types.clock import check_int64, seconds_to_us
+from timenet.types.ids import check_id
 
 
 def _check_whole(name: str, value: int, *, unit: str, hint: str = "") -> None:
@@ -99,7 +100,7 @@ class TimeSpan(Span):
 
     start_us: int
     """The position, or the start of the interval, in microseconds on the source recording timeline."""
-    time_series_ids: tuple[str, ...] | None = None
+    time_series_ids: tuple[int, ...] | None = None
     """Series the span is scoped to. ``None`` covers every series in the record."""
 
     def __post_init__(self) -> None:
@@ -107,7 +108,8 @@ class TimeSpan(Span):
 
         Raises:
             TimeFValidationError: If an abstract base is constructed, if ``start_us`` is not whole
-                microseconds, or if ``time_series_ids`` is ``()`` rather than ``None`` or non-empty.
+                microseconds, if ``time_series_ids`` is ``()`` rather than ``None`` or non-empty, or
+                if it holds an invalid id.
         """
         super().__post_init__()
         _check_whole(
@@ -118,6 +120,9 @@ class TimeSpan(Span):
         )
         if self.time_series_ids is not None and not self.time_series_ids:
             raise TimeFValidationError("TimeSpan time_series_ids must be None (whole record) or non-empty, got ()")
+        if self.time_series_ids is not None:
+            ids = tuple(check_id(series_id, "TimeSpan time_series_ids entry") for series_id in self.time_series_ids)
+            object.__setattr__(self, "time_series_ids", ids)
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -132,7 +137,7 @@ class TimePoint(TimeSpan):
         return self.start_us + 1
 
     @classmethod
-    def seconds(cls, at: float, *, time_series_ids: tuple[str, ...] | None = None) -> "TimePoint":
+    def seconds(cls, at: float, *, time_series_ids: tuple[int, ...] | None = None) -> "TimePoint":
         """Construct a point from recording seconds, rounded to the nearest microsecond.
 
         Args:
@@ -145,7 +150,7 @@ class TimePoint(TimeSpan):
         return cls(start_us=seconds_to_us(at), time_series_ids=time_series_ids)
 
     @classmethod
-    def micros(cls, at: int, *, time_series_ids: tuple[str, ...] | None = None) -> "TimePoint":
+    def micros(cls, at: int, *, time_series_ids: tuple[int, ...] | None = None) -> "TimePoint":
         """Construct a point from whole microseconds, for a source that already has them.
 
         Args:
@@ -188,7 +193,7 @@ class TimeInterval(TimeSpan):
         return self.end_us
 
     @classmethod
-    def seconds(cls, start: float, end: float, *, time_series_ids: tuple[str, ...] | None = None) -> "TimeInterval":
+    def seconds(cls, start: float, end: float, *, time_series_ids: tuple[int, ...] | None = None) -> "TimeInterval":
         """Construct an interval from recording seconds, each bound rounded to the nearest microsecond.
 
         Args:
@@ -202,7 +207,7 @@ class TimeInterval(TimeSpan):
         return cls(start_us=seconds_to_us(start), end_us=seconds_to_us(end), time_series_ids=time_series_ids)
 
     @classmethod
-    def micros(cls, start: int, end: int, *, time_series_ids: tuple[str, ...] | None = None) -> "TimeInterval":
+    def micros(cls, start: int, end: int, *, time_series_ids: tuple[int, ...] | None = None) -> "TimeInterval":
         """Construct an interval from whole microseconds, for a source that already has them.
 
         Args:
@@ -227,7 +232,7 @@ class StepSpan(Span):
     frame: ClassVar[str] = "steps"
     """The frame its bounds read in, as stored on disk."""
 
-    time_series_id: str
+    time_series_id: int
     """The single series whose steps the span counts."""
     start: int
     """The position, or the start of the interval, as a step ordinal from the series' first stored step."""
@@ -236,12 +241,11 @@ class StepSpan(Span):
         """Validate the base, then the series id and the start ordinal.
 
         Raises:
-            TimeFValidationError: If an abstract base is constructed, if ``time_series_id`` is empty,
-                or if ``start`` is not a whole ordinal ``>= 0``.
+            TimeFValidationError: If an abstract base is constructed, if ``time_series_id`` is not a
+                valid id, or if ``start`` is not a whole ordinal ``>= 0``.
         """
         super().__post_init__()
-        if not self.time_series_id:
-            raise TimeFValidationError("StepSpan time_series_id must name one series; got an empty id")
+        object.__setattr__(self, "time_series_id", check_id(self.time_series_id, "StepSpan time_series_id"))
         _check_whole("StepSpan start", self.start, unit="a whole step ordinal")
         if self.start < 0:
             raise TimeFValidationError(f"StepSpan start must be >= 0, got {self.start}")

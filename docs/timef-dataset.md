@@ -20,6 +20,12 @@ Signal ──N:1── TimeAxis
 `Source` is recursive. `Signal` is the leaf that owns the values, a `TimeAxis`, and a
 `TimeSeriesSpec`. Several Signals can reference the same immutable axis or specification object.
 
+Tasks, Records, Sources, Signals, axes, and Annotations have a positive int64 `id`. If you omit
+it, the dataset sets it when you add the object. IDs carry no meaning, so keep upstream identifiers
+such as a patient or ECG number in `metadata` or in an annotation. Refer to an object through the
+object itself or its `id`. The dataset ID is the exception: it stays the `org/name` string. See
+[IDs](types.md#ids) for the rules.
+
 ## Signal
 
 A `Signal` is one named stream. Pass `data` to the constructor for eager values. Use
@@ -32,7 +38,6 @@ from timenet.dataset.axis import RegularAxis
 axis = RegularAxis.from_rate_hz(500)
 
 lead_i = Signal(
-    id="lead-i",
     name="I",
     data=lead_i_values,
     time_axis=axis,
@@ -42,7 +47,7 @@ lead_i = Signal(
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `id` | `str` | Stable identity. The default is a UUIDv7. |
+| `id` | `int` | Stable identity. Set when the Record joins a dataset. |
 | `name` | `str` | Human-readable name within the Source. |
 | `spec` | `TimeSeriesSpec` | Unit, dtype, shape, and modality contract. |
 | `time_axis` | `TimeAxis` | Regular, irregular, or ordinal placement of values. |
@@ -69,13 +74,11 @@ Sources:
 from timenet.dataset import Source
 
 accelerometer = Source(
-    id="accelerometer",
     name="Accelerometer",
     signals=(acceleration_x, acceleration_y, acceleration_z),
 )
 
 imu = Source(
-    id="imu",
     name="IMU",
     sources=(accelerometer, gyroscope, magnetometer),
 )
@@ -83,7 +86,7 @@ imu = Source(
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `id` | `str` | Stable identity. The default is a UUIDv7. |
+| `id` | `int` | Stable identity. Set when the Record joins a dataset. |
 | `name` | `str` | Human-readable Source name. |
 | `sources` | `tuple[Source, ...]` | Direct child Sources. |
 | `signals` | `tuple[Signal, ...]` | Signals produced directly by this Source. |
@@ -115,15 +118,14 @@ annotations and metadata:
 from timenet.dataset import Record
 
 record = Record(
-    id="record-123",
     sources=(imu,),
-    metadata={"site": "lab-a"},
+    metadata={"site": "lab-a", "session": "record-123"},
 )
 ```
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `id` | `str` | Stable identity. |
+| `id` | `int` | Stable identity. Set when the Record joins a dataset. |
 | `sources` | `tuple[Source, ...]` | Root Sources in the recording hierarchy. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
 | `metadata` | `dict[str, object]` | Optional session metadata. |
@@ -155,7 +157,6 @@ one or more input Records:
 from timenet.types import AnswerTask
 
 task = AnswerTask(
-    id="diagnosis-123",
     inputs=(record,),
     prompt="Diagnose this patient.",
     targets=("The recording shows no cardiac activity.",),

@@ -10,14 +10,14 @@ def test_task_payload_keeps_targets_out_of_configuration_columns():
 
 def test_task_span_codec_preserves_frame_shape_and_scope():
     spans = (
-        TimePoint.seconds(2, time_series_ids=("ecg",)),
-        StepInterval(time_series_id="tokens", start=3, stop=8),
+        TimePoint.seconds(2, time_series_ids=(101,)),
+        StepInterval(time_series_id=102, start=3, stop=8),
     )
     task = TemporalLocalizationTask(targets=(spans[0],))
 
     encoded = [encode_span(span) for span in spans]
     assert [item["span_type"] for item in encoded if item] == ["time_point", "step_interval"]
-    assert [item["signal_ids"] for item in encoded if item] == [("ecg",), ("tokens",)]
+    assert [item["signal_ids"] for item in encoded if item] == [(101,), (102,)]
     assert tuple(decode_span(*_columns(item)) for item in encoded) == spans
     assert encode_task_payload(task)["mode"] == "sparse"
 

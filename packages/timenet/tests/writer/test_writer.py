@@ -262,7 +262,6 @@ def test_per_series_array_contract_enforced(tmp_path):
         name="S",
         unit_value=ureg.dimensionless,
     )
-    import pyarrow as pa  # noqa: PLC0415
 
     # declares 5 observations, loader returns 3
     ts = Signal.from_loader(
@@ -283,45 +282,3 @@ def test_int32_guard_is_exposed():
     from timenet.values_backends.parquet.writer import MAX_ELEMENTS_PER_ROW_GROUP  # noqa: PLC0415
 
     assert MAX_ELEMENTS_PER_ROW_GROUP == 2**31
-
-
-def _dup_dataset():
-    return TimeFDataset(
-        metadata=DatasetMetadata(
-            dataset_id="demo/dup",
-            dataset_version=Version(1, 0, 0),
-            name="Dup",
-            description="d",
-            license=License.MIT,
-        )
-    )
-
-
-def test_same_id_different_series_rejected(tmp_path):
-    # Two records reaching different series under one time_series_id: only one can be written, so the
-    # other record would silently read back the wrong signal. Must fail loudly, not first-wins.
-    spec = TimeSeriesSpec(
-        spec_type="s",
-        name="S",
-        unit_value=ureg.dimensionless,
-    )
-    dataset = _dup_dataset()
-    a = Signal.from_loader(
-        spec=spec,
-        name="a",
-        time_axis=RegularAxis.from_rate_hz(1),
-        n_values=2,
-        loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
-        id="ts-x",
-    )
-    b = Signal.from_loader(  # same id, different signal and window
-        spec=spec,
-        name="b",
-        time_axis=RegularAxis.from_rate_hz(1),
-        n_values=2,
-        loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
-        id="ts-x",
-    )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(a,)),), id="s-a"))
-    with pytest.raises(TimeFValidationError, match="already belong to another Source"):
-        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(b,)),), id="s-b"))

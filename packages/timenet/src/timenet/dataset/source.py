@@ -8,7 +8,9 @@ from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
-from timenet.types import Annotation, SupportsAnnotate, new_id
+from timenet.types import Annotation, SupportsAnnotate
+from timenet.types.annotations import AnnotationBinder
+from timenet.types.ids import EntityId, check_optional_id
 
 
 if TYPE_CHECKING:
@@ -21,8 +23,9 @@ class Source(SupportsAnnotate):
 
     name: str
     """Human-readable source name."""
-    id: str = field(default_factory=new_id)
-    """Stable source identifier."""
+    id: EntityId | None = None
+    """Stable source id. ``None`` until its record is added to a dataset, which then gives it the
+    next source id."""
     sources: tuple["Source", ...] = ()
     """Direct child sources. Their order has no semantic meaning."""
     signals: tuple[Signal, ...] = ()
@@ -31,18 +34,20 @@ class Source(SupportsAnnotate):
     """Annotations attached to this source."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible source metadata."""
+    _binder: AnnotationBinder | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Validate the source's local identity and direct children.
 
         Raises:
-            TimeFValidationError: If the source has no name or repeats a direct child ID.
+            TimeFValidationError: If the source has no name, an invalid id, or repeats a direct child ID.
         """
+        self.id = check_optional_id(self.id, "Source.id")
         if not self.name:
             raise TimeFValidationError("Source.name must be non-empty")
         self.metadata = validate_json_mapping(self.metadata)
-        source_ids = [source.id for source in self.sources]
-        signal_ids = [signal.id for signal in self.signals]
+        source_ids = [source.id for source in self.sources if source.id is not None]
+        signal_ids = [signal.id for signal in self.signals if signal.id is not None]
         if len(source_ids) != len(set(source_ids)):
             raise TimeFValidationError(f"source {self.id!r} contains duplicate child source IDs")
         if len(signal_ids) != len(set(signal_ids)):
@@ -75,7 +80,7 @@ class Source(SupportsAnnotate):
             seen.add(identity)
             active.add(identity)
             yield source
-            for child in sorted(source.sources, key=lambda item: (item.name, item.id)):
+            for child in sorted(source.sources, key=lambda item: (item.name, item.id or 0)):
                 yield from walk(child)
             active.remove(identity)
 
@@ -88,7 +93,7 @@ class Source(SupportsAnnotate):
             Signals from this source and every descendant source.
         """
         for source in self.walk_sources():
-            yield from sorted(source.signals, key=lambda signal: (signal.name, signal.id))
+            yield from sorted(source.signals, key=lambda signal: (signal.name, signal.id or 0))
 
     def annotate(self, annotation: Annotation) -> Annotation:
         """Attach one annotation and return it.
@@ -99,7 +104,7 @@ class Source(SupportsAnnotate):
         if annotation.span is not None:
             signals = tuple(self.walk_signals())
             check_span_within_window(f"annotation {annotation.key!r}", annotation.span, signals, self.id)
-        attached = annotation._new_occurrence()
+        attached = annotation._new_occurrence(self._binder)
         self.annotations = (*self.annotations, attached)
         return attached
 

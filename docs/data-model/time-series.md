@@ -19,7 +19,6 @@ from timenet.dataset.axis import RegularAxis
 from timenet.types import TimeSeriesSpec
 
 temperature = Signal(
-    id="temperature",
     name="Temperature",
     spec=TimeSeriesSpec(
         spec_type="temperature",
@@ -32,8 +31,8 @@ temperature = Signal(
 )
 ```
 
-A Signal has a stable `id` and a human-readable `name`. A Source owns it, and a Record reaches it
-through that Source hierarchy.
+A Signal has a stable int64 `id`, set when its Record is added to a dataset, and a human-readable
+`name`. A Source owns it, and a Record reaches it through that Source hierarchy.
 
 ## Choose an axis
 

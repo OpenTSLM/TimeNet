@@ -29,6 +29,7 @@ from timenet.types import (
     TimeInterval,
     TimePoint,
     TimeSeriesSpec,
+    entity_id,
     ureg,
 )
 
@@ -128,10 +129,10 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             spec=_SINE,
             name="a",
             time_axis=_AXIS,
-            id="ts-shared",
         )
-        # An annotation shared across two records. This uses the dedupe-by-id path.
-        cohort = Annotation(key="cohort", value="A", id="cohort-shared")
+        # An annotation shared across two records. Both attach the same instance, so they share its
+        # content id.
+        cohort = Annotation(key="cohort", value="A")
 
         # Record 0: the full recording, with two modalities, all annotation shapes, and a task chain.
         cosine = Signal.from_values(
@@ -139,30 +140,22 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             spec=_COSINE,
             name="b",
             time_axis=_AXIS,
-            id="ts-cos-0",
         )
         record0 = Record(
-            id="record-0",
             sources=(
                 Source(
-                    id="source-record-0",
                     name="Synthetic generator",
                     signals=(shared, cosine),
                 ),
             ),
         )
         dataset.add_record(record=record0)
-        # These annotations have names. The localization task below can reference them by id instead
-        # of repeating the literal values.
-        stimulus = Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0")
-        artifact = Annotation(
-            key="artifact",
-            span=TimeInterval.seconds(0.0, 0.25),
-            id="art-0",
-        )
+        # The localization task below references these annotations instead of repeating the literal values.
+        stimulus = Annotation(key="stimulus", span=TimePoint.seconds(0.5))
+        artifact = Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25))
         _, record0_cohort, stimulus = record0.add_annotations(
             [
-                Annotation(key="age", value=64, unit="years", id="age-0"),
+                Annotation(key="age", value=64, unit="years"),
                 cohort,
                 stimulus,
             ]
@@ -171,7 +164,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         classification = ClassificationTask(
             inputs=(record0,),
             targets=("normal",),
-            id="task-cls-0",
         )
         dataset.add_tasks(
             tasks=[
@@ -187,14 +179,12 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                     # produce this annotation.
                     input_annotations=(record0_cohort,),
                     from_tasks=(classification,),
-                    id="task-answer-0",
                 ),
                 ScalarPredictionTask(
                     inputs=(record0,),
                     targets=(60.0,),
                     unit="bpm",
                     target_name="mean_rate",
-                    id="task-scalar-0",
                 ),
                 # Localization works backward from a normal task. The query is the input, and the
                 # regions are the output. Here, the task stores the answer by reference, so the target
@@ -204,7 +194,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                     prompt="Locate the stimulus and the artifact.",
                     mode=LocalizationMode.SPARSE,
                     target_annotations=(stimulus, artifact),
-                    id="task-localize-0",
                 ),
             ],
         )
@@ -216,14 +205,11 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             name="a",
             time_axis=_AXIS,
             loader=_wave(np.sin, raw_refs[1].n_values, phase=1.0),
-            id="ts-long-1",
             n_values=raw_refs[1].n_values,
         )
         record1 = Record(
-            id="record-1",
             sources=(
                 Source(
-                    id="source-record-1",
                     name="Synthetic generator",
                     signals=(
                         Signal.from_values(
@@ -231,7 +217,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                             spec=_SINE,
                             name="a",
                             time_axis=_AXIS,
-                            id="ts-short-1",
                         ),
                         long_series,
                     ),
@@ -239,12 +224,12 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             ),
         )
         dataset.add_record(record=record1)
-        record1.annotate(cohort)  # same instance and id, so the annotation is shared
+        record1.annotate(cohort)  # same instance, so the annotation content is shared
 
         # Record 2: a windowed slice with a scoped classification task. This window covers the second
         # half of rec-0. This makes the window a genuine offset window, not a byte-identical prefix of
-        # `ts-shared`. The phase offset continues the same wave, so the values match rec-0 over the
-        # window.
+        # the shared sine signal. The phase offset continues the same wave, so the values match rec-0
+        # over the window.
         window_start = raw_refs[0].n_values // 2
         window = Signal.from_values(
             _wave_values(
@@ -255,13 +240,10 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             spec=_SINE,
             name="a",
             time_axis=_AXIS.at_index(window_start),
-            id="ts-window-2",
         )
         record2 = Record(
-            id="record-2",
             sources=(
                 Source(
-                    id="source-record-2",
                     name="Synthetic generator",
                     signals=(window,),
                 ),
@@ -275,8 +257,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             task=ClassificationTask(
                 inputs=(record2,),
                 targets=("onset",),
-                id="task-cls-2",
-                scope=TimeInterval.seconds(0.5, 0.75, time_series_ids=(window.id,)),
+                scope=TimeInterval.seconds(0.5, 0.75, time_series_ids=(entity_id(window),)),
             ),
         )
         return dataset
