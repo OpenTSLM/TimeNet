@@ -21,28 +21,8 @@ import pyarrow as pa
 
 from timenet.dataset import Signal
 from timenet.values_backends.parquet.config import ParquetValuesConfig
+from timenet.values_backends.types import ChunkDataIndex
 from timenet.values_backends.zarr.config import ZarrValuesConfig
-
-
-@dataclass(frozen=True)
-class ChunkDataIndex:
-    """A backend-defined address locating one chunk's values inside its ``chunk_file``.
-
-    Backends need a different number of coordinates, so ``minor_idx`` is optional:
-
-    - Parquet (two-level): ``major_idx`` is the row-group index within the shard. ``minor_idx`` is the
-      chunk's row within that row group. That row is its element in the ``values`` ``list<float32>``
-      column.
-    - Zarr (one-level): ``major_idx`` is the chunk's element-start index in the per-``spec_type`` array.
-      ``minor_idx`` is ``None``. The chunk is the contiguous range ``[major_idx, major_idx + n_values)``.
-
-    The index persists these flat as the two integer columns ``chunk_major_idx`` and ``chunk_minor_idx``.
-    """
-
-    major_idx: int
-    """Coarse coordinate: which block/region of ``chunk_file`` holds the chunk."""
-    minor_idx: int | None
-    """Fine coordinate: the chunk's position within that block, or ``None`` for a one-level backend."""
 
 
 @dataclass

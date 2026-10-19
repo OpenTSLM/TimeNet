@@ -2,7 +2,7 @@
 
 This module resolves index rows to values through per-``spec_type`` Zarr arrays. It is the inverse of
 :class:`timenet.values_backends.zarr.writer.ZarrValuesBackend`. Each index row locates a run of values by
-``(chunk_file = array path, chunk_major_idx = element start)``. A series usually has one row, so a read is
+``(chunk_file = array path, data_index.major_idx = element start)``. A series usually has one row, so a read is
 one contiguous range. For a series with multiple rows, the reader merges the contiguous rows into as few
 ranges as possible. The reader serves ranges from an LRU cache of decoded storage chunks. Neighboring
 series share storage chunks. Without the cache, each read decodes its full chunks again. This is the same
@@ -26,6 +26,7 @@ from timenet.values_backends.reader import BaseValuesReader
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
     from timenet.types import TimeSeriesSpec
+    from timenet.values_backends.types import StoredChunk
 
 
 _CHUNK_CACHE_MAX_BYTES = 64 * 2**20
@@ -59,8 +60,8 @@ class ZarrValuesReader(BaseValuesReader):
         self._chunk_cache: OrderedDict[tuple[str, int], Shaped[np.ndarray, " chunk *value"]] = OrderedDict()
         self._chunk_cache_bytes = 0
 
-    def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
-        """Read a series' values. ``chunk_major_idx`` is the element start, and ``n_values`` is the length.
+    def load(self, version: DatasetVersion, rows: list[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
+        """Read a series' values. ``data_index.major_idx`` is the element start; ``n_values`` is the length.
 
         Args:
             version: The opened version handle.
@@ -73,7 +74,9 @@ class ZarrValuesReader(BaseValuesReader):
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
         return _to_arrow(combined, spec, self._read_validity(version, rows, spec))
 
-    def _read_validity(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> np.ndarray | None:
+    def _read_validity(
+        self, version: DatasetVersion, rows: list[StoredChunk], spec: TimeSeriesSpec
+    ) -> np.ndarray | None:
         """Read the validity mask covering a series' index rows, or ``None`` when not nullable.
 
         Args:
@@ -93,14 +96,14 @@ class ZarrValuesReader(BaseValuesReader):
         return combined.astype(bool, copy=False)
 
     def load_range(
-        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, rows: list[StoredChunk], start: int, stop: int, spec: TimeSeriesSpec
     ) -> pa.Array:
         """Read only the storage chunks that intersect a temporal step range.
 
         Returns:
             The requested steps in their canonical Arrow representation.
         """
-        total = sum(row["n_values"] for row in rows)
+        total = sum(row.n_values for row in rows)
         bounded_stop = min(stop, total)
         if start >= bounded_stop:
             if spec.dtype == "enum":
@@ -214,7 +217,7 @@ class ZarrValuesReader(BaseValuesReader):
         return self._array_cache[rel_path]
 
 
-def _coalesce_runs(rows: list[dict]) -> list[tuple[str, int, int]]:
+def _coalesce_runs(rows: list[StoredChunk]) -> list[tuple[str, int, int]]:
     """Merge adjacent index rows into contiguous ``(array path, start, stop)`` ranges.
 
     Consecutive placements of one series are contiguous by construction. Because of this, the merge
@@ -228,7 +231,7 @@ def _coalesce_runs(rows: list[dict]) -> list[tuple[str, int, int]]:
     """
     runs: list[tuple[str, int, int]] = []
     for row in rows:
-        rel, start, stop = row["chunk_file"], row["chunk_major_idx"], row["chunk_major_idx"] + row["n_values"]
+        rel, start, stop = row.chunk_file, row.data_index.major_idx, row.data_index.major_idx + row.n_values
         if runs and runs[-1][0] == rel and runs[-1][2] == start:
             runs[-1] = (rel, runs[-1][1], stop)
         else:

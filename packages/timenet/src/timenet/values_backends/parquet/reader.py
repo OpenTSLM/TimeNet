@@ -20,6 +20,7 @@ from timenet.values_backends.reader import BaseValuesReader
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
     from timenet.types import TimeSeriesSpec
+    from timenet.values_backends.types import StoredChunk
 
 
 _ROW_GROUP_CACHE_SIZE = 64
@@ -72,8 +73,8 @@ class ParquetValuesReader(BaseValuesReader):
         self._row_group_cache: OrderedDict[tuple[str, str, int], _DecodedGroup] = OrderedDict()
         self._target_types: dict[str, pa.DataType] = {}
 
-    def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
-        """Read a series' chunks (``chunk_major_idx`` = row group, ``chunk_minor_idx`` = row offset).
+    def load(self, version: DatasetVersion, rows: list[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
+        """Read a series' chunks using row-group and row coordinates in ``data_index``.
 
         This method copies each chunk into a new array. A caller that keeps the values therefore
         does not keep the whole decoded row group alive.
@@ -89,7 +90,7 @@ class ParquetValuesReader(BaseValuesReader):
         # If the stored type matches the spec, skip conversion.
         target = self._target(spec)
         chunks = [
-            self._row_group(version, row["chunk_file"], row["chunk_major_idx"]).values[row["chunk_minor_idx"]].values
+            self._row_group(version, row.chunk_file, row.data_index.major_idx).values[row.data_index.minor_idx].values
             for row in rows
         ]
         return pa.concat_arrays([chunk if chunk.type == target else chunk.cast(target) for chunk in chunks])
@@ -110,7 +111,7 @@ class ParquetValuesReader(BaseValuesReader):
         return target
 
     def load_range(
-        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, rows: list[StoredChunk], start: int, stop: int, spec: TimeSeriesSpec
     ) -> pa.Array:
         """Read a scalar temporal subsection, trimming chunks at the requested boundaries.
 
@@ -118,19 +119,19 @@ class ParquetValuesReader(BaseValuesReader):
             The requested scalar values in the spec's canonical Arrow type.
         """
         target = self._target(spec)
-        total = sum(row["n_values"] for row in rows)
+        total = sum(row.n_values for row in rows)
         bounded_stop = min(stop, total)
         if start >= bounded_stop:
             return pa.array([], type=target)
         parts = []
         cursor = 0
         for row in rows:
-            row_stop = cursor + row["n_values"]
+            row_stop = cursor + row.n_values
             if row_stop > start and cursor < bounded_stop:
-                group = self._row_group(version, row["chunk_file"], row["chunk_major_idx"])
-                values = group.values[row["chunk_minor_idx"]].values
+                group = self._row_group(version, row.chunk_file, row.data_index.major_idx)
+                values = group.values[row.data_index.minor_idx].values
                 lo = max(start - cursor, 0)
-                hi = min(bounded_stop - cursor, row["n_values"])
+                hi = min(bounded_stop - cursor, row.n_values)
                 parts.append(values.slice(lo, hi - lo).cast(target))
             cursor = row_stop
         return pa.concat_arrays(parts)

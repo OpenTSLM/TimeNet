@@ -40,6 +40,7 @@ from timenet.types import (
 )
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
+from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 
 
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
@@ -665,7 +666,7 @@ class DuckDBControlReader:
             return ()
         return self._read_annotations((row[0],)).get(("Dataset", dataset_id), ())
 
-    def chunk_rows_by_key(self, signal_key: int, signal_id: str) -> list[dict[str, Any]]:
+    def chunk_rows_by_key(self, signal_key: int, signal_id: str) -> list[StoredChunk]:
         """Return one Signal's chunk locations in chunk order.
 
         Raises:
@@ -676,7 +677,7 @@ class DuckDBControlReader:
             raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
         return rows
 
-    def chunk_rows_by_keys(self, signal_keys: Iterable[int]) -> dict[int, list[dict[str, Any]]]:
+    def chunk_rows_by_keys(self, signal_keys: Iterable[int]) -> dict[int, list[StoredChunk]]:
         """Return chunk locators for a batch of internal Signal keys.
 
         Args:
@@ -695,28 +696,10 @@ class DuckDBControlReader:
                ORDER BY signal_key, chunk_index""",
             [list(keys)],
         ).fetchall()
-        grouped: dict[int, list[tuple[Any, ...]]] = defaultdict(list)
-        for signal_key, *chunk_row in rows:
-            grouped[signal_key].append(tuple(chunk_row))
-        return {signal_key: self._chunk_dicts(grouped[signal_key]) for signal_key in keys}
-
-    @staticmethod
-    def _chunk_dicts(rows: list[tuple[Any, ...]]) -> list[dict[str, Any]]:
-        """Shape chunk rows as the dicts the values backends read.
-
-        Returns:
-            One dict per chunk, in the rows' order.
-        """
-        return [
-            {
-                "chunk_idx": row[0],
-                "chunk_file": row[1],
-                "chunk_major_idx": row[2],
-                "chunk_minor_idx": row[3],
-                "n_values": row[4],
-            }
-            for row in rows
-        ]
+        grouped: dict[int, list[StoredChunk]] = {key: [] for key in keys}
+        for signal_key, chunk_idx, path, major_idx, minor_idx, n_values in rows:
+            grouped[signal_key].append(StoredChunk(chunk_idx, path, ChunkDataIndex(major_idx, minor_idx), n_values))
+        return grouped
 
     def read_tasks(
         self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = ()
