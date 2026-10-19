@@ -39,6 +39,8 @@ class ChunkPlacement:
     """Signal name of the source series."""
     n_values: int
     """Number of values in the chunk."""
+    owner_key: str | None = None
+    """Physical owner in the manifest; None denotes this release."""
 
 
 @dataclass
