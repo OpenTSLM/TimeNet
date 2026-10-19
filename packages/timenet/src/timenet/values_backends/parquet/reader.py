@@ -128,7 +128,7 @@ class ParquetValuesReader(BaseValuesReader):
         return pa.concat_arrays(parts)
 
     def finish_scan(self) -> None:
-        """Release scan workers and pending groups after an eager read, including errors."""
+        """Release workers and pending groups after a full read or lazy scan."""
         self._parquet.finish_scan()
 
     def close(self) -> None:
