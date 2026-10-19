@@ -25,6 +25,7 @@ from timenet.format.task_codec import (
     decode_task_payload,
 )
 from timenet.format.task_target_kind import is_step_span
+from timenet.format.task_target_row import TaskTargetRow
 from timenet.types import (
     TASKS,
     Annotation,
@@ -1601,7 +1602,7 @@ class _TaskHydration:
             signal_id = None if target.signal_key is None else signals_by_key[target.signal_key].id
             if is_step_span(target.target_kind):
                 signal_id = None if not span_signal_ids else span_signal_ids[0]
-            target_values: dict[str, object] = {
+            target_values: TaskTargetRow = {
                 "target_kind": target.target_kind,
                 "text_value": target.text_value,
                 "integer_value": target.integer_value,

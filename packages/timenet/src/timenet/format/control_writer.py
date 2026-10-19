@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from hashlib import sha256
 from itertools import islice
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, assert_never, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, assert_never
 
 import duckdb
 import numpy as np
@@ -22,6 +22,7 @@ from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
 from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
 from timenet.format.task_target_kind import TaskTargetKind, is_step_span
+from timenet.format.task_target_row import StoredTaskTargetRow
 from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
@@ -142,7 +143,7 @@ def _reserve_hierarchy_keys(
     return iter(object_keys), iter(axis_keys)
 
 
-def _insert_rows(connection: duckdb.DuckDBPyConnection, table: Table, rows: list[dict[str, object]]) -> None:
+def _insert_rows(connection: duckdb.DuckDBPyConnection, table: Table, rows: Sequence[Mapping[str, object]]) -> None:
     """Insert one Arrow batch, typed by the table's schema, into a control table."""
     if not rows:
         return
@@ -459,7 +460,7 @@ class DuckDBControlWriter:
         for batch in _task_batches(tasks_source):
             batch_task_keys = _reserve_keys(connection, "object_key_sequence", len(batch))
             task_rows: list[dict[str, object]] = []
-            target_rows: list[dict[str, object]] = []
+            target_rows: list[StoredTaskTargetRow] = []
             record_ref_rows: list[dict[str, object]] = []
             for task, task_key in zip(batch, batch_task_keys, strict=True):
                 if task.id in task_ids:
@@ -576,7 +577,7 @@ class DuckDBControlWriter:
         target: object,
         record_keys: dict[str, int],
         signal_keys: dict[str, int],
-    ) -> dict[str, object]:
+    ) -> StoredTaskTargetRow:
         """Validate one target and project it onto a ``task_targets`` row.
 
         Returns:
@@ -586,13 +587,13 @@ class DuckDBControlWriter:
             TimeFValidationError: If the target refers to an object outside the dataset.
         """
         row = encode_target(target)
-        record_id = cast("str | None", row["record_id"])
-        signal_id = cast("str | None", row["signal_id"])
+        record_id = row["record_id"]
+        signal_id = row["signal_id"]
         if record_id is not None and record_id not in record_keys:
             raise TimeFValidationError(f"{target_label} refers to unknown Record {record_id!r}")
         if signal_id is not None and signal_id not in signal_keys:
             raise TimeFValidationError(f"{target_label} refers to unknown Signal {signal_id!r}")
-        span_signal_ids = cast("tuple[str, ...] | list[str] | None", row["span_signal_ids"])
+        span_signal_ids = row["span_signal_ids"]
         missing_signals = [item for item in span_signal_ids or () if item not in signal_keys]
         if missing_signals:
             raise TimeFValidationError(f"{target_label} refers to unknown Signals {missing_signals}")

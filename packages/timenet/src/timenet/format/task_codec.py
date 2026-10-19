@@ -6,12 +6,13 @@ public IDs here; the writer and reader swap them for internal keys at the table 
 """
 
 from collections.abc import Iterable
-from typing import Any, cast
+from typing import Any, Literal, cast
 
 from timenet.dataset.record import Record
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFFormatError
 from timenet.format.task_target_kind import TaskTargetKind
+from timenet.format.task_target_row import TaskTargetRow
 from timenet.types import (
     ClassificationTask,
     InputModality,
@@ -28,19 +29,6 @@ from timenet.types import (
     TimePoint,
 )
 
-
-TARGET_VALUE_COLUMNS = (
-    "text_value",
-    "integer_value",
-    "float_value",
-    "boolean_value",
-    "record_id",
-    "signal_id",
-    "span_start",
-    "span_end",
-    "span_signal_ids",
-)
-"""Value columns of one target row, with object references as public IDs."""
 
 PAYLOAD_COLUMNS = ("target_schema", "unit", "target_name", "mode")
 """The ``tasks`` columns that hold subclass-specific configuration. Unused ones are NULL."""
@@ -195,7 +183,39 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
     return {}
 
 
-def encode_target(target: object) -> dict[str, object | None]:
+def _target_row(  # noqa: PLR0913 - the canonical target columns
+    kind: TaskTargetKind,
+    *,
+    text_value: str | None = None,
+    integer_value: int | None = None,
+    float_value: float | None = None,
+    boolean_value: bool | None = None,
+    record_id: str | None = None,
+    signal_id: str | None = None,
+    span_start: int | None = None,
+    span_end: int | None = None,
+    span_signal_ids: tuple[str, ...] | list[str] | None = None,
+) -> TaskTargetRow:
+    """Fill the canonical value columns, leaving unused ones NULL.
+
+    Returns:
+        The stored kind tag and every target value column.
+    """
+    return TaskTargetRow(
+        target_kind=kind.value,
+        text_value=text_value,
+        integer_value=integer_value,
+        float_value=float_value,
+        boolean_value=boolean_value,
+        record_id=record_id,
+        signal_id=signal_id,
+        span_start=span_start,
+        span_end=span_end,
+        span_signal_ids=span_signal_ids,
+    )
+
+
+def encode_target(target: object) -> TaskTargetRow:  # noqa: PLR0911 - one return per target kind
     """Encode one public target item as a typed table row.
 
     Returns:
@@ -204,50 +224,46 @@ def encode_target(target: object) -> dict[str, object | None]:
     Raises:
         TimeFFormatError: If the target type is unsupported.
     """
-    row: dict[str, object | None] = dict.fromkeys(TARGET_VALUE_COLUMNS)
     if isinstance(target, bool):
-        row.update(target_kind=TaskTargetKind.BOOLEAN.value, boolean_value=target)
+        return _target_row(TaskTargetKind.BOOLEAN, boolean_value=target)
     elif isinstance(target, str):
-        row.update(target_kind=TaskTargetKind.TEXT.value, text_value=target)
+        return _target_row(TaskTargetKind.TEXT, text_value=target)
     elif isinstance(target, int):
-        row.update(target_kind=TaskTargetKind.INTEGER.value, integer_value=target)
+        return _target_row(TaskTargetKind.INTEGER, integer_value=target)
     elif isinstance(target, float):
-        row.update(target_kind=TaskTargetKind.FLOAT.value, float_value=target)
+        return _target_row(TaskTargetKind.FLOAT, float_value=target)
     elif isinstance(target, Record):
-        row.update(target_kind=TaskTargetKind.RECORD.value, record_id=target.id)
+        return _target_row(TaskTargetKind.RECORD, record_id=target.id)
     elif isinstance(target, Signal):
-        row.update(target_kind=TaskTargetKind.SIGNAL.value, signal_id=target.id)
+        return _target_row(TaskTargetKind.SIGNAL, signal_id=target.id)
     elif isinstance(target, TimePoint):
-        row.update(
-            target_kind=TaskTargetKind.TIME_POINT.value,
+        return _target_row(
+            TaskTargetKind.TIME_POINT,
             span_start=target.start_us,
             span_signal_ids=target.time_series_ids,
         )
     elif isinstance(target, TimeInterval):
-        row.update(
-            target_kind=TaskTargetKind.TIME_INTERVAL.value,
+        return _target_row(
+            TaskTargetKind.TIME_INTERVAL,
             span_start=target.start_us,
             span_end=target.end_us,
             span_signal_ids=target.time_series_ids,
         )
     elif isinstance(target, StepPoint):
-        row.update(
-            target_kind=TaskTargetKind.STEP_POINT.value, span_start=target.start, signal_id=target.time_series_id
-        )
+        return _target_row(TaskTargetKind.STEP_POINT, span_start=target.start, signal_id=target.time_series_id)
     elif isinstance(target, StepInterval):
-        row.update(
-            target_kind=TaskTargetKind.STEP_INTERVAL.value,
+        return _target_row(
+            TaskTargetKind.STEP_INTERVAL,
             span_start=target.start,
             span_end=target.stop,
             signal_id=target.time_series_id,
         )
     else:
         raise TimeFFormatError(f"cannot encode unsupported target type {type(target).__name__}")
-    return row
 
 
 def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding branch
-    row: dict[str, object],
+    row: TaskTargetRow,
     *,
     records: dict[str, Record],
     signals: dict[str, Signal],
@@ -290,14 +306,26 @@ def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding b
     raise TimeFFormatError(f"task target has unknown kind {kind!r}")
 
 
-def _required(row: dict[str, object], name: str) -> Any:
+def _required(
+    row: TaskTargetRow,
+    name: Literal[
+        "text_value",
+        "integer_value",
+        "float_value",
+        "boolean_value",
+        "record_id",
+        "signal_id",
+        "span_start",
+        "span_end",
+    ],
+) -> Any:
     value = row.get(name)
     if value is None:
         raise TimeFFormatError(f"task target kind {row.get('target_kind')!r} requires {name}")
     return value
 
 
-def _resolve(objects: dict[str, Any], row: dict[str, object], name: str, label: str) -> Any:
+def _resolve(objects: dict[str, Any], row: TaskTargetRow, name: Literal["record_id", "signal_id"], label: str) -> Any:
     public_id = _required(row, name)
     try:
         return objects[public_id]
