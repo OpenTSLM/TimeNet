@@ -7,20 +7,22 @@ from hashlib import sha256
 from itertools import islice
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, assert_never, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, assert_never
 
 import duckdb
 import numpy as np
 import pyarrow as pa
+from pydantic import ValidationError
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeAxis, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
-from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
+from timenet.format.task_codec import encode_span, encode_task_payload
+from timenet.format.task_target_row import TargetValueRow, TaskTargetRow
 from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
@@ -458,7 +460,7 @@ class DuckDBControlWriter:
         for batch in _task_batches(tasks_source):
             batch_task_keys = _reserve_keys(connection, "object_key_sequence", len(batch))
             task_rows: list[dict[str, object]] = []
-            target_rows: list[dict[str, object]] = []
+            target_rows: list[TaskTargetRow] = []
             record_ref_rows: list[dict[str, object]] = []
             for task, task_key in zip(batch, batch_task_keys, strict=True):
                 if task.id in task_ids:
@@ -522,7 +524,7 @@ class DuckDBControlWriter:
                     (task.id, position, parent.id) for position, parent in enumerate(task.from_tasks)
                 )
             _insert_rows(connection, TABLES["tasks"], task_rows)
-            _insert_rows(connection, TABLES["task_targets"], target_rows)
+            _insert_rows(connection, TABLES["task_targets"], [row.model_dump() for row in target_rows])
             _insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
         stored_dependencies: list[dict[str, object]] = []
         for task_id, position, parent_id in dependency_rows:
@@ -575,7 +577,7 @@ class DuckDBControlWriter:
         target: object,
         record_keys: dict[str, int],
         signal_keys: dict[str, int],
-    ) -> dict[str, object]:
+    ) -> TaskTargetRow:
         """Validate one target and project it onto a ``task_targets`` row.
 
         Returns:
@@ -584,40 +586,34 @@ class DuckDBControlWriter:
         Raises:
             TimeFValidationError: If the target refers to an object outside the dataset.
         """
-        row = encode_target(target)
-        record_id = cast("str | None", row["record_id"])
-        signal_id = cast("str | None", row["signal_id"])
-        if record_id is not None and record_id not in record_keys:
-            raise TimeFValidationError(f"{target_label} refers to unknown Record {record_id!r}")
-        if signal_id is not None and signal_id not in signal_keys:
-            raise TimeFValidationError(f"{target_label} refers to unknown Signal {signal_id!r}")
-        span_signal_ids = cast("tuple[str, ...] | list[str] | None", row["span_signal_ids"])
-        missing_signals = [item for item in span_signal_ids or () if item not in signal_keys]
-        if missing_signals:
-            raise TimeFValidationError(f"{target_label} refers to unknown Signals {missing_signals}")
-        kind = row["target_kind"]
-        # A step span names its one series in signal_id; it is stored in signal_keys like a time span's scope.
-        stored_signal_keys = (
-            [signal_keys[signal_id]]
-            if signal_id is not None and kind in {"step_point", "step_interval"}
-            else None
-            if span_signal_ids is None
-            else [signal_keys[item] for item in span_signal_ids]
-        )
-        return {
-            "task_key": task_key,
-            "position": position,
-            "target_kind": kind,
-            "text_value": row["text_value"],
-            "integer_value": row["integer_value"],
-            "float_value": row["float_value"],
-            "boolean_value": row["boolean_value"],
-            "record_key": None if record_id is None else record_keys[record_id],
-            "signal_key": signal_keys[signal_id] if signal_id is not None and kind == "signal" else None,
-            "span_start": row["span_start"],
-            "span_end": row["span_end"],
-            "signal_keys": stored_signal_keys,
-        }
+        try:
+            row = TargetValueRow.from_target(target)
+            record_id = row.record_id
+            signal_id = row.signal_id
+            if record_id is not None and record_id not in record_keys:
+                raise TimeFValidationError(f"{target_label} refers to unknown Record {record_id!r}")
+            if signal_id is not None and signal_id not in signal_keys:
+                raise TimeFValidationError(f"{target_label} refers to unknown Signal {signal_id!r}")
+            span_signal_ids = row.span_signal_ids
+            missing_signals = [item for item in span_signal_ids or () if item not in signal_keys]
+            if missing_signals:
+                raise TimeFValidationError(f"{target_label} refers to unknown Signals {missing_signals}")
+            return TaskTargetRow(
+                task_key=task_key,
+                position=position,
+                target_kind=row.target_kind,
+                text_value=row.text_value,
+                integer_value=row.integer_value,
+                float_value=row.float_value,
+                boolean_value=row.boolean_value,
+                record_key=None if record_id is None else record_keys[record_id],
+                signal_key=None if signal_id is None else signal_keys[signal_id],
+                span_start=row.span_start,
+                span_end=row.span_end,
+                signal_keys=None if span_signal_ids is None else tuple(signal_keys[item] for item in span_signal_ids),
+            )
+        except (TimeFFormatError, ValidationError) as exc:
+            raise TimeFValidationError(f"{target_label}: {exc}") from exc
 
     @staticmethod
     def _task_record_refs(task: Task) -> tuple[tuple[str, tuple[str, ...]], ...]:

@@ -1598,8 +1598,6 @@ class _TaskHydration:
                 None if target.signal_keys is None else tuple(signal_ids_by_key[key] for key in target.signal_keys)
             )
             signal_id = None if target.signal_key is None else signals_by_key[target.signal_key].id
-            if target.target_kind in {"step_point", "step_interval"}:
-                signal_id = None if not span_signal_ids else span_signal_ids[0]
             target_values: dict[str, object] = {
                 "target_kind": target.target_kind,
                 "text_value": target.text_value,

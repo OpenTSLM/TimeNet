@@ -5,12 +5,16 @@ filter on them and the reader builds objects straight from row values. Object re
 public IDs here; the writer and reader swap them for internal keys at the table boundary.
 """
 
-from collections.abc import Iterable
-from typing import Any, cast
+from collections.abc import Iterable, Mapping
+from typing import Any, TypeVar, cast
+
+from pydantic import ValidationError
 
 from timenet.dataset.record import Record
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFFormatError
+from timenet.format.task_target_kind import TaskTargetKind
+from timenet.format.task_target_row import TargetValueRow
 from timenet.types import (
     ClassificationTask,
     InputModality,
@@ -28,18 +32,8 @@ from timenet.types import (
 )
 
 
-TARGET_VALUE_COLUMNS = (
-    "text_value",
-    "integer_value",
-    "float_value",
-    "boolean_value",
-    "record_id",
-    "signal_id",
-    "span_start",
-    "span_end",
-    "span_signal_ids",
-)
-"""Value columns of one target row, with object references as public IDs."""
+_T = TypeVar("_T")
+
 
 PAYLOAD_COLUMNS = ("target_schema", "unit", "target_name", "mode")
 """The ``tasks`` columns that hold subclass-specific configuration. Unused ones are NULL."""
@@ -194,57 +188,8 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
     return {}
 
 
-def encode_target(target: object) -> dict[str, object | None]:
-    """Encode one public target item as a typed table row.
-
-    Returns:
-        A row with one target kind and its corresponding value column.
-
-    Raises:
-        TimeFFormatError: If the target type is unsupported.
-    """
-    row: dict[str, object | None] = dict.fromkeys(TARGET_VALUE_COLUMNS)
-    if isinstance(target, bool):
-        row.update(target_kind="boolean", boolean_value=target)
-    elif isinstance(target, str):
-        row.update(target_kind="text", text_value=target)
-    elif isinstance(target, int):
-        row.update(target_kind="integer", integer_value=target)
-    elif isinstance(target, float):
-        row.update(target_kind="float", float_value=target)
-    elif isinstance(target, Record):
-        row.update(target_kind="record", record_id=target.id)
-    elif isinstance(target, Signal):
-        row.update(target_kind="signal", signal_id=target.id)
-    elif isinstance(target, TimePoint):
-        row.update(
-            target_kind="time_point",
-            span_start=target.start_us,
-            span_signal_ids=target.time_series_ids,
-        )
-    elif isinstance(target, TimeInterval):
-        row.update(
-            target_kind="time_interval",
-            span_start=target.start_us,
-            span_end=target.end_us,
-            span_signal_ids=target.time_series_ids,
-        )
-    elif isinstance(target, StepPoint):
-        row.update(target_kind="step_point", span_start=target.start, signal_id=target.time_series_id)
-    elif isinstance(target, StepInterval):
-        row.update(
-            target_kind="step_interval",
-            span_start=target.start,
-            span_end=target.stop,
-            signal_id=target.time_series_id,
-        )
-    else:
-        raise TimeFFormatError(f"cannot encode unsupported target type {type(target).__name__}")
-    return row
-
-
 def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding branch
-    row: dict[str, object],
+    row: Mapping[str, object] | TargetValueRow,
     *,
     records: dict[str, Record],
     signals: dict[str, Signal],
@@ -257,42 +202,46 @@ def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding b
     Raises:
         TimeFFormatError: If a required value or referenced object is missing, or the kind is unknown.
     """
-    kind = row["target_kind"]
-    if kind == "text":
-        return _required(row, "text_value")
-    if kind == "integer":
-        return _required(row, "integer_value")
-    if kind == "float":
-        return _required(row, "float_value")
-    if kind == "boolean":
-        return _required(row, "boolean_value")
-    if kind == "record":
-        return _resolve(records, row, "record_id", "Record")
-    if kind == "signal":
-        return _resolve(signals, row, "signal_id", "Signal")
-    start = _required(row, "span_start")
-    signal_ids = _tuple_or_none(row["span_signal_ids"])
-    if kind == "time_point":
+    try:
+        values = TargetValueRow.model_validate(row)
+    except ValidationError as exc:
+        raise TimeFFormatError(f"invalid stored task target: {exc}") from exc
+    kind = values.target_kind
+    if kind == TaskTargetKind.TEXT:
+        return _required(values.text_value, kind, "text_value")
+    if kind == TaskTargetKind.INTEGER:
+        return _required(values.integer_value, kind, "integer_value")
+    if kind == TaskTargetKind.FLOAT:
+        return _required(values.float_value, kind, "float_value")
+    if kind == TaskTargetKind.BOOLEAN:
+        return _required(values.boolean_value, kind, "boolean_value")
+    if kind == TaskTargetKind.RECORD:
+        return _resolve(records, _required(values.record_id, kind, "record_id"), "Record")
+    if kind == TaskTargetKind.SIGNAL:
+        return _resolve(signals, _required(values.signal_id, kind, "signal_id"), "Signal")
+    start = _required(values.span_start, kind, "span_start")
+    signal_ids = values.span_signal_ids
+    if kind == TaskTargetKind.TIME_POINT:
         return TimePoint(start_us=start, time_series_ids=signal_ids)
-    if kind == "time_interval":
-        return TimeInterval(start_us=start, end_us=_required(row, "span_end"), time_series_ids=signal_ids)
-    signal_id = _required(row, "signal_id")
-    if kind == "step_point":
+    if kind == TaskTargetKind.TIME_INTERVAL:
+        return TimeInterval(
+            start_us=start, end_us=_required(values.span_end, kind, "span_end"), time_series_ids=signal_ids
+        )
+    (signal_id,) = _required(values.span_signal_ids, kind, "span_signal_ids")
+    if kind == TaskTargetKind.STEP_POINT:
         return StepPoint(start=start, time_series_id=signal_id)
-    if kind == "step_interval":
-        return StepInterval(start=start, stop=_required(row, "span_end"), time_series_id=signal_id)
+    if kind == TaskTargetKind.STEP_INTERVAL:
+        return StepInterval(start=start, stop=_required(values.span_end, kind, "span_end"), time_series_id=signal_id)
     raise TimeFFormatError(f"task target has unknown kind {kind!r}")
 
 
-def _required(row: dict[str, object], name: str) -> Any:
-    value = row.get(name)
+def _required(value: _T | None, kind: TaskTargetKind, name: str) -> _T:
     if value is None:
-        raise TimeFFormatError(f"task target kind {row.get('target_kind')!r} requires {name}")
+        raise TimeFFormatError(f"task target kind {kind.value!r} requires {name}")
     return value
 
 
-def _resolve(objects: dict[str, Any], row: dict[str, object], name: str, label: str) -> Any:
-    public_id = _required(row, name)
+def _resolve(objects: dict[str, _T], public_id: str, label: str) -> _T:
     try:
         return objects[public_id]
     except KeyError as exc:

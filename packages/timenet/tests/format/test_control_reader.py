@@ -14,6 +14,9 @@ from timenet.types import (
     AnswerTask,
     InputModality,
     Split,
+    StepInterval,
+    StepPoint,
+    TimeInterval,
     TimePoint,
     TimeSeriesSpec,
     TSGenerationTask,
@@ -238,8 +241,13 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
     dataset = _dataset()
     record = dataset.records[0]
     signal = record.signals[0]
-    point = TimePoint.seconds(0.001, time_series_ids=(signal.id,))
-    dataset.tasks[0].targets = ("Yes", 7, 0.5, True, record, signal, point)
+    spans = (
+        TimePoint.seconds(0.001, time_series_ids=(signal.id,)),
+        TimeInterval.seconds(0, 0.002, time_series_ids=(signal.id,)),
+        StepPoint(start=1, time_series_id=signal.id),
+        StepInterval(start=0, stop=2, time_series_id=signal.id),
+    )
+    dataset.tasks[0].targets = ("Yes", 7, 0.5, True, record, signal, *spans)
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
@@ -247,11 +255,11 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
         (task,) = reader.read_tasks(records)
 
     assert task.targets is not None
-    text, integer, floating, boolean, target_record, target_signal, target_point = task.targets
+    text, integer, floating, boolean, target_record, target_signal, *target_spans = task.targets
     assert (text, integer, floating, boolean) == ("Yes", 7, 0.5, True)
     assert target_record is records[0]
     assert target_signal is records[0].signals[0]
-    assert target_point == point
+    assert tuple(target_spans) == spans
 
 
 def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
