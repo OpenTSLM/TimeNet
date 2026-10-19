@@ -11,7 +11,7 @@ from timenet.dataset.record import Record
 from timenet.dataset.source import Source
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
-from timenet.types import Access, Annotation
+from timenet.types import Access, Annotation, StepSpan, Task, TimeSpan
 from timenet.types.object_kind import ObjectKind
 from timenet.types.references import DatasetRef, InputLock
 
@@ -45,6 +45,7 @@ class ImportedDataset:
     sources: dict[str, Source] = field(default_factory=dict)
     signals: dict[str, Signal] = field(default_factory=dict)
     annotations: dict[str, Annotation] = field(default_factory=dict)
+    tasks: dict[str, Task] = field(default_factory=dict)
     _axes: dict[str, TimeAxis] = field(default_factory=dict, repr=False)
 
     @property
@@ -56,6 +57,7 @@ class ImportedDataset:
                 (ObjectKind.RECORD, self.records),
                 (ObjectKind.SOURCE, self.sources),
                 (ObjectKind.SIGNAL, self.signals),
+                (ObjectKind.TASK, self.tasks),
                 (ObjectKind.ANNOTATION, self.annotations),
             )
         }
@@ -74,6 +76,7 @@ class ImportedDataset:
             (ObjectKind.RECORD, self.records),
             (ObjectKind.SOURCE, self.sources),
             (ObjectKind.SIGNAL, self.signals),
+            (ObjectKind.TASK, self.tasks),
             (ObjectKind.ANNOTATION, self.annotations),
         ):
             for original, obj in objects.items():
@@ -89,6 +92,7 @@ class _ParentImporter:
         self.result = result
         self.objects: dict[ObjectKind, dict[str, Any]] = {
             ObjectKind.RECORD: {r.id: r for r in self.parent.records},
+            ObjectKind.TASK: {t.id: t for t in self.parent.tasks},
             ObjectKind.SOURCE: {},
             ObjectKind.SIGNAL: {},
             ObjectKind.ANNOTATION: {},
@@ -105,6 +109,8 @@ class _ParentImporter:
                     self.objects[ObjectKind.SIGNAL][signal.id] = signal
                     self.owners[ObjectKind.SIGNAL, signal.id] = (ObjectKind.SOURCE, source.id)
                     self._annotations(ObjectKind.SIGNAL, signal)
+        for task in self.parent.tasks:
+            self._annotations(ObjectKind.TASK, task)
         for annotation in self.parent.annotations:
             self.objects[ObjectKind.ANNOTATION][_occurrence(annotation)] = annotation
             self.owners[ObjectKind.ANNOTATION, _occurrence(annotation)] = (
@@ -123,6 +129,7 @@ class _ParentImporter:
         records: Iterable[str],
         sources: Iterable[str],
         signals: Iterable[str],
+        tasks: Iterable[str],
         annotations: Iterable[str],
     ) -> None:
         """Expand the requested IDs to include each object's required dependencies."""
@@ -130,23 +137,27 @@ class _ParentImporter:
             (ObjectKind.RECORD, records),
             (ObjectKind.SOURCE, sources),
             (ObjectKind.SIGNAL, signals),
+            (ObjectKind.TASK, tasks),
             (ObjectKind.ANNOTATION, annotations),
         ):
             for identity in identities:
                 self._include_with_dependencies(kind, identity)
 
-    def _include_with_dependencies(self, kind: ObjectKind, identity: str) -> None:
+    def _include_with_dependencies(self, kind: ObjectKind, identity: str, active: frozenset[str] = frozenset()) -> None:
         """Include an object and all dependencies needed for a valid child graph.
 
         Args:
             kind: The kind of object to include.
             identity: The object's ID in the parent catalog.
+            active: Task IDs on the current dependency path, used to detect cycles.
 
         Raises:
-            TimeFValidationError: If the selection is absent.
+            TimeFValidationError: If the selection is absent or task dependencies cycle.
         """
         if kind == ObjectKind.DATASET:
             return
+        if kind == ObjectKind.TASK and identity in active:
+            raise TimeFValidationError(f"task dependency cycle at {identity!r}")
         obj = self.objects[kind].get(identity)
         if obj is None:
             raise TimeFValidationError(f"unknown parent {kind} {identity!r}")
@@ -157,8 +168,10 @@ class _ParentImporter:
             self._include_record(obj)
         elif kind == ObjectKind.SOURCE:
             self._include_source(obj)
+        elif kind == ObjectKind.TASK:
+            self._include_task(obj, active)
         elif kind == ObjectKind.ANNOTATION:
-            self._include_annotation(identity)
+            self._include_annotation(identity, active)
         # Attached annotations are copied with full objects. They need no reverse traversal.
         if kind != ObjectKind.ANNOTATION:
             self.selected[ObjectKind.ANNOTATION].update(ann.occurrence_id for ann in obj.annotations)
@@ -175,10 +188,21 @@ class _ParentImporter:
         for signal in source.signals:
             self._include_with_dependencies(ObjectKind.SIGNAL, signal.id)
 
-    def _include_annotation(self, identity: str) -> None:
+    def _include_task(self, task: Task, active: frozenset[str]) -> None:
+        """Include task data, referenced annotations, and prerequisite tasks."""
+        for record in self.child._task_records(task):
+            self._include_with_dependencies(ObjectKind.RECORD, record.id)
+        for signal in self.child._task_signals(task):
+            self._include_with_dependencies(ObjectKind.SIGNAL, signal.id)
+        for annotation in (*task.input_annotations, *task.target_annotations):
+            self._include_with_dependencies(ObjectKind.ANNOTATION, _occurrence(annotation))
+        for prerequisite in task.from_tasks:
+            self._include_with_dependencies(ObjectKind.TASK, prerequisite.id, active | {task.id})
+
+    def _include_annotation(self, identity: str, active: frozenset[str]) -> None:
         """Include the owner needed to attach an explicitly selected annotation."""
         owner_kind, owner_id = self.owners[ObjectKind.ANNOTATION, identity]
-        self._include_with_dependencies(owner_kind, owner_id)
+        self._include_with_dependencies(owner_kind, owner_id, active)
 
     def _copy_annotation(self, original: Annotation) -> Annotation:
         identity = _occurrence(original)
@@ -267,14 +291,30 @@ class _ParentImporter:
             self.result._axes[original.axis_id] = axis
         return axis
 
+    def _remap_value(self, value: Any) -> Any:  # noqa: PLR0911 - distinct reference kinds
+        if isinstance(value, Record):
+            return self.result.records[value.id]
+        if isinstance(value, Signal):
+            return self.result.signals[value.id]
+        if isinstance(value, Annotation):
+            return self._copy_annotation(value)
+        if isinstance(value, StepSpan):
+            return replace(value, time_series_id=self.result.signals[value.time_series_id].id)
+        if isinstance(value, TimeSpan) and value.time_series_ids is not None:
+            return replace(value, time_series_ids=tuple(self.result.signals[key].id for key in value.time_series_ids))
+        if isinstance(value, tuple):
+            return tuple(self._remap_value(item) for item in value)
+        return deepcopy(value)
+
     def copy_selected_objects(self) -> ImportedDataset:
-        """Copy the selected data hierarchy.
+        """Copy the selected hierarchy and remap task references.
 
         Returns:
             The persistent import mapping, including automatically selected objects.
         """
         self._copy_records()
         self._copy_dataset_annotations()
+        self._copy_tasks()
         self.child._schema = None
         return self.result
 
@@ -313,6 +353,46 @@ class _ParentImporter:
                 and _occurrence(annotation) not in self.result.annotations
             ):
                 self.child._annotations.append(self._copy_annotation(annotation))
+
+    def _copy_tasks(self) -> None:
+        """Create all new task copies, then connect their prerequisite task references."""
+        pending: list[tuple[Task, Task]] = []
+        for identity in sorted(self.selected[ObjectKind.TASK]):
+            if identity in self.result.tasks:
+                continue
+            original = self.objects[ObjectKind.TASK][identity]
+            task = self._copy_task(original)
+            self.result.tasks[identity] = task
+            pending.append((original, task))
+        for original, task in pending:
+            task.from_tasks = tuple(self.result.tasks[parent.id] for parent in original.from_tasks)
+        if pending:
+            self.child.add_tasks(tasks=[task for _, task in pending])
+
+    def _copy_task(self, original: Task) -> Task:
+        """Copy task fields after its Record, Signal, and annotation dependencies exist.
+
+        Returns:
+            The task copy, whose prerequisite task references are connected in a later pass.
+        """
+        task = copy(original)
+        task.id = self.result.identity(ObjectKind.TASK, original.id)
+        fields = (
+            "inputs",
+            "targets",
+            "scope",
+            "prompt",
+            "rationale",
+            "input_annotations",
+            "target_annotations",
+            "annotations",
+            "metadata",
+        )
+        if hasattr(original, "candidate_records"):
+            fields += ("candidate_records",)
+        for name in fields:
+            setattr(task, name, self._remap_value(getattr(original, name)))
+        return task
 
 
 def _prepare_import(child: "TimeFDataset", parent: "DatasetHandle", namespace: str | None) -> ImportedDataset:
@@ -363,6 +443,7 @@ def import_from(  # noqa: PLR0913
     records: Iterable[str] = (),
     sources: Iterable[str] = (),
     signals: Iterable[str] = (),
+    tasks: Iterable[str] = (),
     annotations: Iterable[str] = (),
 ) -> ImportedDataset:
     """Import selected objects and required dependencies without decoding stored payloads.
@@ -371,11 +452,13 @@ def import_from(  # noqa: PLR0913
         Copied objects indexed by their parent IDs.
 
     Raises:
-        TimeFValidationError: If the namespace or selection is invalid.
+        TimeFValidationError: If the namespace or selection is invalid, or task dependencies cycle.
     """  # noqa: DOC502 - namespace and dependency helpers raise TimeFValidationError
     imported = _prepare_import(child, parent, namespace)
     importer = _ParentImporter(child, parent, imported)
-    importer.include_requested_objects(records=records, sources=sources, signals=signals, annotations=annotations)
+    importer.include_requested_objects(
+        records=records, sources=sources, signals=signals, tasks=tasks, annotations=annotations
+    )
     importer.copy_selected_objects()
     _record_parent_dependency(child, parent, imported)
     _inherit_access_restrictions(child, parent)
