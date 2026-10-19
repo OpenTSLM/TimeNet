@@ -10,7 +10,7 @@ tags:
 
 A connector is the unit of dataset integration. Each dataset has one connector class. A connector
 fetches raw data and converts it into a [`TimeFDataset`](timef-dataset.md). A connector has no
-knowledge of the registry, the engine, or other connectors. The consumer SDK never runs a connector.
+responsibility for storage or dependency resolution. The consumer SDK never runs a connector.
 
 `BaseConnector` is the connector contract in the `timenet` package. Concrete connectors ship in
 `timenet-connectors`, beside their [dataset cards](manifest.md).
@@ -282,3 +282,46 @@ spec, and a record preview.
 ---
 
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
+
+## Compose a child dataset
+
+A dataset card declares exact parent releases under `inputs`:
+
+```yaml
+inputs:
+  ptbxl: physionet/ptb-xl@1.0.0
+```
+
+The engine resolves these inputs before conversion. A composed connector overrides
+`compose(raw_refs, context)`. The default implementation calls `convert(raw_refs)`.
+
+```python
+from timenet.connectors.context import BuildContext
+from timenet.dataset import TimeFDataset
+
+
+def compose(self, raw_refs, context: BuildContext) -> TimeFDataset:
+    dataset = TimeFDataset(metadata=self.metadata())
+    imported = dataset.import_from(
+        context.inputs["ptbxl"],
+        namespace="ptbxl",
+        records=["ptbxl-1"],
+    )
+    imported.records["ptbxl-1"].metadata["cohort"] = "selected"
+    return dataset
+```
+
+`import_from()` accepts `records`, `sources`, `signals`, `tasks`, and annotation occurrence IDs.
+All selections use parent IDs. Required dependencies enter the child automatically. The returned
+maps expose the copied objects, and `included` lists the imported IDs by object kind.
+
+Each namespace names an immediate parent release. Different parents remain distinct even when they
+share an ancestor. Repeated imports through the same namespace preserve existing child edits.
+Imported metadata is editable. Stored payloads remain shared until the connector replaces their values.
+
+The child manifest records exact input checksums, ancestor metadata, and direct physical storage owners.
+The child inherits the strictest input access restriction. Conflicting snapshots fail during the build.
+
+`physionet/ptb-xl` supplies taskless recordings and clinical metadata from PTB-XL 1.0.3.
+`physionet/ecg-qa-cot` imports its selected recordings, replaces record annotations with its split,
+and adds question tasks. It does not download or duplicate the parent waveforms.
