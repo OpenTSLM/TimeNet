@@ -318,7 +318,7 @@ def _make_record(ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
         for spec, name, sensor, dimension in channels
     )
     record = Record(
-        record_id=ref.id,
+        id=ref.id,
         sources=(Source(id=f"{ref.id}-imu", name="IMU", signals=signals),),
     )
     source = ref.file.partition.rsplit("_", 1)[0]

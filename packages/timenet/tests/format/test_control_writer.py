@@ -22,7 +22,7 @@ SPEC = TimeSeriesSpec(
 
 
 def _dataset() -> TimeFDataset:
-    axis = RegularAxis(axis_id="axis-1", period_us=Fraction(2_000))
+    axis = RegularAxis(id="axis-1", period_us=Fraction(2_000))
     lead_i = Signal.from_loader(
         id="lead-i",
         name="I",
@@ -41,7 +41,7 @@ def _dataset() -> TimeFDataset:
     )
     ecg = Source(id="ecg", name="ECG", signals=(lead_i, lead_ii))
     monitor = Source(id="monitor", name="Monitor", sources=(ecg,))
-    record = Record(record_id="record-1", sources=(monitor,))
+    record = Record(id="record-1", sources=(monitor,))
     record.annotate(Annotation(id="sex-male", key="patient_sex", value="male"))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
@@ -175,7 +175,7 @@ def test_control_writer_removes_database_after_validation_failure(tmp_path):
     annotation = dataset.records[0].annotations[0]
     dataset.records[0].annotate(
         Annotation(
-            id=annotation.content_id,
+            id=annotation.id,
             key="patient_sex",
             value="female",
         )
@@ -217,7 +217,7 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
 
 
 def test_control_writer_rejects_ids_reused_across_records(tmp_path):
-    axis = RegularAxis(axis_id="axis-1", period_us=Fraction(2_000))
+    axis = RegularAxis(id="axis-1", period_us=Fraction(2_000))
 
     def signal(signal_id: str) -> Signal:
         return Signal.from_loader(
@@ -233,8 +233,8 @@ def test_control_writer_rejects_ids_reused_across_records(tmp_path):
         metadata=SimpleNamespace(dataset_id="org/dupes"),
         annotations=(),
         records=(
-            Record(record_id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-i"),)),)),
-            Record(record_id="record-2", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-ii"),)),)),
+            Record(id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-i"),)),)),
+            Record(id="record-2", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-ii"),)),)),
         ),
         iter_tasks=lambda: iter(()),
     )
@@ -244,7 +244,7 @@ def test_control_writer_rejects_ids_reused_across_records(tmp_path):
 
 
 def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path):
-    axis = IrregularAxis(axis_id="axis-irregular", first_us=0, last_us=2_000)
+    axis = IrregularAxis(id="axis-irregular", first_us=0, last_us=2_000)
     signal = Signal.from_loader(
         id="lead-i",
         name="I",
@@ -257,7 +257,7 @@ def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path
     dataset = SimpleNamespace(
         metadata=SimpleNamespace(dataset_id="org/irregular"),
         annotations=(),
-        records=(Record(record_id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal,)),)),),
+        records=(Record(id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal,)),)),),
         iter_tasks=lambda: iter(()),
     )
 

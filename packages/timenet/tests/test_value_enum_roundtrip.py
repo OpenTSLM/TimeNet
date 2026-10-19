@@ -62,7 +62,7 @@ def _dataset(
             name="stage",
             time_axis=RegularAxis.from_rate_hz(1),
         )
-        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id=f"record-{i}"))
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), id=f"record-{i}"))
     dataset.derive_schema()
     return dataset
 
@@ -257,7 +257,7 @@ def test_enum_streaming_write_read(tmp_path):
     spec = _spec(categories=("awake", "light", "deep", "rem", "n1", "n2", "n3"))
     for i, labels in enumerate(records_labels):
         ts = Signal.from_values(labels, spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
-        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id=f"s-{i}"))
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), id=f"s-{i}"))
     dataset.derive_schema()
 
     version_dir = _write(
@@ -309,8 +309,8 @@ def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
     )
     ts1 = Signal.from_values(["a", "b", "c"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
     ts2 = Signal.from_values(["c", "d", "e"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts1,)),), record_id="s-0"))
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts2,)),), record_id="s-1"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts1,)),), id="s-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts2,)),), id="s-1"))
     dataset.derive_schema()
 
     version_dir = _write(tmp_path, dataset, shard_target_bytes=64, chunk_max_bytes=32)
@@ -351,8 +351,8 @@ def test_enum_zarr_indices_consistent_across_shards(tmp_path):
     )
     ts1 = Signal.from_values(["a", "b", "c"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
     ts2 = Signal.from_values(["c", "d", "e"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts1,)),), record_id="s-0"))
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts2,)),), record_id="s-1"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts1,)),), id="s-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts2,)),), id="s-1"))
     dataset.derive_schema()
 
     version_dir = _write(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=32)

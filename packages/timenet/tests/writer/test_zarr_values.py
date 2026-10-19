@@ -189,7 +189,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
                     ),
                 ),
             ),
-            record_id="record-camera",
+            id="record-camera",
         )
     )
     dataset.derive_schema()
@@ -260,7 +260,7 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
                     ),
                 ),
             ),
-            record_id="record-0",
+            id="record-0",
         )
     )
     dataset.derive_schema()
@@ -307,7 +307,7 @@ def test_str_round_trip(tmp_path):
                     ),
                 ),
             ),
-            record_id="record-0",
+            id="record-0",
         )
     )
     dataset.derive_schema()
@@ -348,7 +348,7 @@ def test_str_empty_range_read(tmp_path):
                     ),
                 ),
             ),
-            record_id="record-0",
+            id="record-0",
         )
     )
     dataset.derive_schema()

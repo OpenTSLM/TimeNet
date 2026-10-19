@@ -15,7 +15,7 @@ SPEC = TimeSeriesSpec(spec_type="voltage", name="Voltage", unit_value=ureg.milli
 
 
 def _dataset() -> TimeFDataset:
-    axis = RegularAxis(axis_id="axis-1", period_us=Fraction(2_000))
+    axis = RegularAxis(id="axis-1", period_us=Fraction(2_000))
     lead_i = Signal.from_loader(
         id="lead-i",
         name="I",
@@ -26,7 +26,7 @@ def _dataset() -> TimeFDataset:
     )
     ecg = Source(id="ecg", name="ECG", signals=(lead_i,))
     monitor = Source(id="monitor", name="Monitor", sources=(ecg,))
-    record = Record(record_id="record-1", sources=(monitor,))
+    record = Record(id="record-1", sources=(monitor,))
     record.annotate(Annotation(id="sex-male", key="patient_sex", value="male"))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
