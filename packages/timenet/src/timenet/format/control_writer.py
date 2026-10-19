@@ -2,12 +2,12 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Container, Iterable, Iterator
 from hashlib import sha256
 from itertools import islice
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, assert_never, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, assert_never
 
 import duckdb
 import numpy as np
@@ -20,7 +20,7 @@ from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.control_schema import LAST_ID_PREFIX, TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
-from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
+from timenet.format.task_codec import TaskRelationshipField, encode_span, encode_target, encode_task_payload
 from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
@@ -278,7 +278,7 @@ class DuckDBControlWriter:
             raise
         return task_counts
 
-    def _write_objects(  # noqa: PLR0914 - clock keys are part of the hierarchy state
+    def _write_objects(
         self,
         connection: duckdb.DuckDBPyConnection,
         dataset: TimeFDataset,
@@ -336,17 +336,11 @@ class DuckDBControlWriter:
                 batches,
             )
         batches.flush()
-        annotation_refs, task_counts = self._write_tasks(
-            connection,
-            record_keys,
-            signal_keys,
-            annotations,
-            tasks,
-        )
+        task_counts = self._write_tasks(connection, record_keys.keys(), signal_keys.keys(), annotations, tasks)
         # Clustering occurrences on object_id lets keyed reads skip row groups.
         annotations.sort(key=lambda item: (item[1] is not None, item[1] or 0))
-        occurrence_ids = self._write_annotations(connection, annotations)
-        self._write_task_annotation_refs(connection, annotation_refs, occurrence_ids)
+        self._write_annotations(connection, annotations)
+        self._check_task_references(connection)
         connection.executemany(
             "INSERT INTO control_metadata VALUES (?, ?)",
             [[f"{LAST_ID_PREFIX}{kind}", str(value)] for kind, value in dataset.last_ids.items()],
@@ -406,46 +400,48 @@ class DuckDBControlWriter:
     def _write_tasks(
         self,
         connection: duckdb.DuckDBPyConnection,
-        record_keys: dict[int, int],
-        signal_keys: dict[int, int],
+        record_ids: Container[int],
+        signal_ids: Container[int],
         annotations: list[tuple[ObjectKind, int | None, Annotation]],
         tasks_source: Iterable[Task],
-    ) -> tuple[list[tuple[int, str, int, int]], dict[str, int]]:
-        """Insert tasks and normalized object relationships.
+    ) -> dict[str, int]:
+        """Insert tasks and their relationships, one bounded batch at a time.
+
+        Dependencies and annotation references may name tasks and occurrences that are written
+        later, so :meth:`_check_task_references` checks them once everything is stored.
 
         Returns:
-            Deferred task-to-annotation rows and counts keyed by concrete task type.
+            Counts keyed by concrete task type.
 
         Raises:
-            TimeFValidationError: If a task refers to an object outside the dataset or derives from itself.
+            TimeFValidationError: If a task ID repeats, a task refers to a Record or Signal outside
+                the dataset or to an unbound annotation, or a task derives from itself.
         """
         task_ids: set[int] = set()
-        dependency_rows: list[tuple[int, int, Task]] = []
-        annotation_refs: list[tuple[int, str, int, int]] = []
-        task_keys: dict[int, int] = {}
+        # A streamed task can name a parent that streams later and gets its id then, so
+        # dependencies are stored once every task is written.
+        dependencies: list[tuple[int, int, Task]] = []
         task_counts: dict[str, int] = {}
         for batch in _task_batches(tasks_source):
-            batch_task_keys = _reserve_keys(connection, "object_key_sequence", len(batch))
             task_rows: list[dict[str, object]] = []
             target_rows: list[dict[str, object]] = []
             record_ref_rows: list[dict[str, object]] = []
-            for task, task_key in zip(batch, batch_task_keys, strict=True):
+            annotation_ref_rows: list[dict[str, object]] = []
+            for task in batch:
                 task_id = check_id(task.id, "task id")
                 if task_id in task_ids:
                     raise TimeFValidationError(f"task id {task_id!r} is not unique")
                 task_ids.add(task_id)
-                task_keys[task_id] = task_key
                 task_type = str(task.task_type)
                 task_counts[task_type] = task_counts.get(task_type, 0) + 1
                 task_rows.append(
                     {
-                        "task_key": task_key,
                         "task_id": task_id,
                         "task_type": task_type,
                         "prompt": task.prompt,
                         "input_modalities": sorted(item.value for item in task.resolved_input_modalities),
                         "split": None if task.split is None else parse_split(task.split).value,
-                        **self._scope_columns(task, signal_keys),
+                        **self._scope_columns(task, signal_ids),
                         "has_inline_targets": task.targets is not None,
                         **encode_task_payload(task),
                         "rationale": task.rationale,
@@ -453,66 +449,51 @@ class DuckDBControlWriter:
                     }
                 )
                 target_rows.extend(
-                    self._target_row(
-                        task_key=task_key,
-                        position=position,
-                        target_label=f"task {task.id!r} target {position}",
-                        target=target,
-                        record_keys=record_keys,
-                        signal_keys=signal_keys,
-                    )
+                    self._target_row(task_id, position, target, record_ids, signal_ids)
                     for position, target in enumerate(task.targets or ())
                 )
-                annotations.extend((ObjectKind.TASK, task.id, annotation) for annotation in task.annotations)
+                annotations.extend((ObjectKind.TASK, task_id, annotation) for annotation in task.annotations)
                 for field, records in self._task_record_refs(task):
                     for position, record_id in enumerate(records):
-                        if record_id not in record_keys:
+                        if record_id not in record_ids:
                             raise TimeFValidationError(
-                                f"task {task.id!r} field {field!r} refers to unknown record {record_id!r}"
+                                f"task {task_id!r} field {field.value!r} refers to unknown record {record_id!r}"
                             )
                         record_ref_rows.append(
-                            {
-                                "task_key": task_key,
-                                "field": field,
-                                "position": position,
-                                "record_key": record_keys[record_id],
-                            }
+                            {"task_id": task_id, "field": field, "position": position, "record_id": record_id}
                         )
                 for field, values in (
-                    ("input_annotations", task.input_annotations),
-                    ("target_annotations", task.target_annotations),
+                    (TaskRelationshipField.INPUT_ANNOTATIONS, task.input_annotations),
+                    (TaskRelationshipField.TARGET_ANNOTATIONS, task.target_annotations),
                 ):
                     for position, annotation in enumerate(values):
                         if annotation.occurrence_id is None:
                             raise TimeFValidationError(
-                                f"task {task.id!r} field {field!r} refers to an unbound annotation"
+                                f"task {task_id!r} field {field.value!r} refers to an unbound annotation"
                             )
-                        annotation_refs.append((task_key, field, position, annotation.occurrence_id))
-                dependency_rows.extend((task_id, position, parent) for position, parent in enumerate(task.from_tasks))
+                        annotation_ref_rows.append(
+                            {
+                                "task_id": task_id,
+                                "field": field,
+                                "position": position,
+                                "occurrence_id": annotation.occurrence_id,
+                            }
+                        )
+                dependencies.extend((task_id, position, parent) for position, parent in enumerate(task.from_tasks))
             _insert_rows(connection, TABLES["tasks"], task_rows)
             _insert_rows(connection, TABLES["task_targets"], target_rows)
             _insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
-        stored_dependencies: list[dict[str, object]] = []
-        for task_id, position, parent in dependency_rows:
-            parent_id = parent.id
-            if parent_id == task_id:
+            _insert_rows(connection, TABLES["task_annotation_refs"], annotation_ref_rows)
+        dependency_rows: list[dict[str, object]] = []
+        for task_id, position, parent in dependencies:
+            if parent.id == task_id:
                 raise TimeFValidationError(f"task {task_id!r} depends on itself")
-            if parent_id not in task_ids:
-                raise TimeFValidationError(
-                    f"task {task_id!r} depends on task {parent_id!r}, which is not in the dataset"
-                )
-            stored_dependencies.append(
-                {
-                    "task_key": task_keys[task_id],
-                    "position": position,
-                    "parent_task_key": task_keys[parent_id],
-                }
-            )
-        _insert_rows(connection, TABLES["task_dependencies"], stored_dependencies)
-        return annotation_refs, task_counts
+            dependency_rows.append({"task_id": task_id, "position": position, "parent_task_id": parent.id})
+        _insert_rows(connection, TABLES["task_dependencies"], dependency_rows)
+        return task_counts
 
     @staticmethod
-    def _scope_columns(task: Task, signal_keys: dict[int, int]) -> dict[str, object]:
+    def _scope_columns(task: Task, signal_ids: Container[int]) -> dict[str, object]:
         """Project a task's scope onto the four scope columns.
 
         Returns:
@@ -523,110 +504,96 @@ class DuckDBControlWriter:
         """
         encoded = encode_span(task.scope)
         if encoded is None:
-            return {"scope_type": None, "scope_start": None, "scope_end": None, "scope_signal_keys": None}
-        signal_ids = encoded["signal_ids"]
-        missing = [] if signal_ids is None else [item for item in signal_ids if item not in signal_keys]
+            return {"scope_type": None, "scope_start": None, "scope_end": None, "scope_signal_ids": None}
+        scope_signal_ids = encoded["signal_ids"]
+        missing = [item for item in scope_signal_ids or () if item not in signal_ids]
         if missing:
             raise TimeFValidationError(f"task {task.id!r} scope refers to unknown Signals {missing}")
         return {
             "scope_type": encoded["span_type"],
             "scope_start": encoded["span_start"],
             "scope_end": encoded["span_end"],
-            "scope_signal_keys": None if signal_ids is None else [signal_keys[item] for item in signal_ids],
+            "scope_signal_ids": scope_signal_ids,
         }
 
     @staticmethod
-    def _target_row(  # noqa: PLR0913 - one target projects onto keys from two lookups
-        *,
-        task_key: int,
+    def _target_row(
+        task_id: int,
         position: int,
-        target_label: str,
         target: object,
-        record_keys: dict[int, int],
-        signal_keys: dict[int, int],
+        record_ids: Container[int],
+        signal_ids: Container[int],
     ) -> dict[str, object]:
         """Validate one target and project it onto a ``task_targets`` row.
 
         Returns:
-            The row, with object references as internal keys.
+            The row, with object references as public IDs.
 
         Raises:
             TimeFValidationError: If the target refers to an object outside the dataset.
         """
         row = encode_target(target)
-        record_id = cast("int | None", row["record_id"])
-        signal_id = cast("int | None", row["signal_id"])
-        if record_id is not None and record_id not in record_keys:
-            raise TimeFValidationError(f"{target_label} refers to unknown Record {record_id!r}")
-        if signal_id is not None and signal_id not in signal_keys:
-            raise TimeFValidationError(f"{target_label} refers to unknown Signal {signal_id!r}")
-        span_signal_ids = cast("tuple[int, ...] | list[int] | None", row["span_signal_ids"])
-        missing_signals = [item for item in span_signal_ids or () if item not in signal_keys]
+        label = f"task {task_id!r} target {position}"
+        record_id = row["record_id"]
+        signal_id = row["signal_id"]
+        if record_id is not None and record_id not in record_ids:
+            raise TimeFValidationError(f"{label} refers to unknown Record {record_id!r}")
+        if signal_id is not None and signal_id not in signal_ids:
+            raise TimeFValidationError(f"{label} refers to unknown Signal {signal_id!r}")
+        missing_signals = [item for item in row["span_signal_ids"] or () if item not in signal_ids]
         if missing_signals:
-            raise TimeFValidationError(f"{target_label} refers to unknown Signals {missing_signals}")
-        kind = row["target_kind"]
-        # A step span names its one series in signal_id; it is stored in signal_keys like a time span's scope.
-        stored_signal_keys = (
-            [signal_keys[signal_id]]
-            if signal_id is not None and kind in {"step_point", "step_interval"}
-            else None
-            if span_signal_ids is None
-            else [signal_keys[item] for item in span_signal_ids]
-        )
-        return {
-            "task_key": task_key,
-            "position": position,
-            "target_kind": kind,
-            "text_value": row["text_value"],
-            "integer_value": row["integer_value"],
-            "float_value": row["float_value"],
-            "boolean_value": row["boolean_value"],
-            "record_key": None if record_id is None else record_keys[record_id],
-            "signal_key": signal_keys[signal_id] if signal_id is not None and kind == "signal" else None,
-            "span_start": row["span_start"],
-            "span_end": row["span_end"],
-            "signal_keys": stored_signal_keys,
-        }
+            raise TimeFValidationError(f"{label} refers to unknown Signals {missing_signals}")
+        return {"task_id": task_id, "position": position, **row}
 
     @staticmethod
-    def _task_record_refs(task: Task) -> tuple[tuple[str, tuple[int, ...]], ...]:
+    def _task_record_refs(task: Task) -> tuple[tuple[TaskRelationshipField, tuple[int, ...]], ...]:
         """Project task record objects into normalized field rows.
 
         Returns:
-            Pairs of public field name and ordered record IDs.
+            Pairs of field and ordered record IDs.
         """
-        refs: list[tuple[str, tuple[int, ...]]] = [("inputs", tuple(entity_id(record) for record in task.inputs))]
+        refs = [(TaskRelationshipField.INPUTS, tuple(entity_id(record) for record in task.inputs))]
         if isinstance(task, TSCorrespondenceTask):
-            refs.append(("candidate_records", tuple(entity_id(record) for record in task.candidate_records)))
+            refs.append(
+                (
+                    TaskRelationshipField.CANDIDATE_RECORDS,
+                    tuple(entity_id(record) for record in task.candidate_records),
+                )
+            )
         return tuple(refs)
 
     @staticmethod
-    def _write_task_annotation_refs(
-        connection: duckdb.DuckDBPyConnection,
-        rows: list[tuple[int, str, int, int]],
-        occurrence_ids: set[int],
-    ) -> None:
-        """Insert task annotation references after occurrence rows exist.
+    def _check_task_references(connection: duckdb.DuckDBPyConnection) -> None:
+        """Confirm every stored task dependency and annotation reference names a stored row.
 
         Raises:
-            TimeFValidationError: If a referenced occurrence is not attached to a stored object.
+            TimeFValidationError: If a task depends on a task outside the dataset, or refers to an
+                annotation occurrence that no stored object carries.
         """
-        for start in range(0, len(rows), _TASK_BATCH_SIZE):
-            stored: list[dict[str, object]] = []
-            for task_key, field, position, occurrence_id in rows[start : start + _TASK_BATCH_SIZE]:
-                if occurrence_id not in occurrence_ids:
-                    raise TimeFValidationError(
-                        f"task key {task_key} field {field!r} refers to unknown annotation occurrence {occurrence_id!r}"
-                    )
-                stored.append(
-                    {
-                        "task_key": task_key,
-                        "field": field,
-                        "position": position,
-                        "occurrence_id": occurrence_id,
-                    }
-                )
-            _insert_rows(connection, TABLES["task_annotation_refs"], stored)
+        unknown_parent = connection.execute(
+            """SELECT d.task_id, d.parent_task_id
+               FROM task_dependencies d
+               LEFT JOIN tasks parent ON parent.task_id = d.parent_task_id
+               WHERE parent.task_id IS NULL
+               ORDER BY d.task_id, d.position
+               LIMIT 1"""
+        ).fetchone()
+        if unknown_parent is not None:
+            task_id, parent_id = unknown_parent
+            raise TimeFValidationError(f"task {task_id!r} depends on task {parent_id!r}, which is not in the dataset")
+        unknown_occurrence = connection.execute(
+            """SELECT r.task_id, r.field, r.occurrence_id
+               FROM task_annotation_refs r
+               LEFT JOIN annotation_occurrences o ON o.occurrence_id = r.occurrence_id
+               WHERE o.occurrence_id IS NULL
+               ORDER BY r.task_id, r.field, r.position
+               LIMIT 1"""
+        ).fetchone()
+        if unknown_occurrence is not None:
+            task_id, field, occurrence_id = unknown_occurrence
+            raise TimeFValidationError(
+                f"task {task_id!r} field {field!r} refers to unknown annotation occurrence {occurrence_id!r}"
+            )
 
     def _write_record_sources(  # noqa: PLR0913, PLR0917 - hierarchy maps stay explicit
         self,
@@ -815,16 +782,13 @@ class DuckDBControlWriter:
     def _write_annotations(
         connection: duckdb.DuckDBPyConnection,
         annotations: Iterable[tuple[ObjectKind, int | None, Annotation]],
-    ) -> set[int]:
+    ) -> None:
         """Insert reusable content once and every occurrence separately, in Arrow batches.
 
         Args:
             connection: The open write transaction.
             annotations: ``(object_type, object_id, annotation)`` triples. ``object_id`` is ``None``
                 for the Dataset.
-
-        Returns:
-            The public IDs of the written occurrences.
 
         Raises:
             TimeFValidationError: If an annotation is unbound, one occurrence ID is attached twice,
@@ -877,7 +841,6 @@ class DuckDBControlWriter:
             )
         content_batch.flush()
         occurrence_batch.flush()
-        return occurrence_ids
 
     @staticmethod
     def _check_source_tree(connection: duckdb.DuckDBPyConnection) -> None:
