@@ -22,6 +22,7 @@ from timenet.types import (
     TSGenerationTask,
     ureg,
 )
+from timenet.types.object_kind import ObjectKind
 
 from .test_control_writer import _dataset
 
@@ -449,7 +450,7 @@ def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
         table = reader.task_table().to_pylist()
         targets = reader.target_table().to_pylist()
         subset = reader.task_table(record_ids=("record-0",)).to_pylist()
-        annotations = reader.annotation_table(object_type="Record").to_pylist()
+        annotations = reader.annotation_table(object_type=ObjectKind.RECORD).to_pylist()
 
     assert [row["task_id"] for row in table] == sorted(tasks)
     answer = next(row for row in table if row["task_id"] == "task-answer-0")
