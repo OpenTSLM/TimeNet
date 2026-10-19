@@ -28,6 +28,7 @@ from timenet.types import (
     TimeInterval,
     TimePoint,
 )
+from timenet.types.object_kind import ObjectKind
 
 
 PAYLOAD_COLUMNS = ("target_schema", "unit", "target_name", "mode")
@@ -289,9 +290,9 @@ def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding b
     if kind == TaskTargetKind.BOOLEAN:
         return _required(row, "boolean_value")
     if kind == TaskTargetKind.RECORD:
-        return _resolve(records, row, "record_id", "Record")
+        return _resolve(records, row, "record_id", ObjectKind.RECORD)
     if kind == TaskTargetKind.SIGNAL:
-        return _resolve(signals, row, "signal_id", "Signal")
+        return _resolve(signals, row, "signal_id", ObjectKind.SIGNAL)
     start = _required(row, "span_start")
     signal_ids = _tuple_or_none(row["span_signal_ids"])
     if kind == TaskTargetKind.TIME_POINT:
@@ -325,7 +326,9 @@ def _required(
     return value
 
 
-def _resolve(objects: dict[str, Any], row: TaskTargetRow, name: Literal["record_id", "signal_id"], label: str) -> Any:
+def _resolve(
+    objects: dict[str, Any], row: TaskTargetRow, name: Literal["record_id", "signal_id"], label: ObjectKind
+) -> Any:
     public_id = _required(row, name)
     try:
         return objects[public_id]
