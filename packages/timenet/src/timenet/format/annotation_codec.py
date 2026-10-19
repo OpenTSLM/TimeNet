@@ -9,12 +9,13 @@ from collections.abc import Sequence
 from typing import Any
 
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.annotation_value_kind import AnnotationValueKind
 
 
 VALUE_COLUMNS = ("value_kind", "text_value", "integer_value", "float_value", "boolean_value", "text_list_value")
 """The ``annotation_contents`` columns that together hold one value."""
 
-VALUE_KINDS = ("text", "integer", "float", "boolean", "text_list")
+VALUE_KINDS = tuple(kind.value for kind in AnnotationValueKind)
 """Every ``value_kind`` a stored annotation may carry. A marker has NULL."""
 
 
@@ -36,15 +37,15 @@ def encode_annotation_value(value: object, *, label: str) -> dict[str, Any]:
         return columns
     # bool before int, since bool is an int subclass.
     if isinstance(value, bool):
-        columns.update(value_kind="boolean", boolean_value=value)
+        columns.update(value_kind=AnnotationValueKind.BOOLEAN.value, boolean_value=value)
     elif isinstance(value, int):
-        columns.update(value_kind="integer", integer_value=value)
+        columns.update(value_kind=AnnotationValueKind.INTEGER.value, integer_value=value)
     elif isinstance(value, float):
-        columns.update(value_kind="float", float_value=value)
+        columns.update(value_kind=AnnotationValueKind.FLOAT.value, float_value=value)
     elif isinstance(value, str):
-        columns.update(value_kind="text", text_value=value)
+        columns.update(value_kind=AnnotationValueKind.TEXT.value, text_value=value)
     elif isinstance(value, Sequence) and all(isinstance(item, str) for item in value):
-        columns.update(value_kind="text_list", text_list_value=list(value))
+        columns.update(value_kind=AnnotationValueKind.TEXT_LIST.value, text_list_value=list(value))
     else:
         raise TimeFValidationError(
             f"{label} has an unsupported value {value!r}; use a string, integer, float, boolean, or list of strings"
@@ -70,16 +71,18 @@ def decode_annotation_value(  # noqa: PLR0913, PLR0917 - one positional argument
     """
     if value_kind is None:
         return None
+    try:
+        kind = AnnotationValueKind(value_kind)
+    except ValueError as exc:
+        raise TimeFFormatError(f"annotation value has unknown kind {value_kind!r}") from exc
     stored = {
-        "text": text_value,
-        "integer": integer_value,
-        "float": float_value,
-        "boolean": boolean_value,
-        "text_list": text_list_value,
+        AnnotationValueKind.TEXT: text_value,
+        AnnotationValueKind.INTEGER: integer_value,
+        AnnotationValueKind.FLOAT: float_value,
+        AnnotationValueKind.BOOLEAN: boolean_value,
+        AnnotationValueKind.TEXT_LIST: text_list_value,
     }
-    if value_kind not in stored:
-        raise TimeFFormatError(f"annotation value has unknown kind {value_kind!r}")
-    value = stored[value_kind]
+    value = stored[kind]
     if value is None:
         raise TimeFFormatError(f"annotation value of kind {value_kind!r} has no stored value")
     return value
