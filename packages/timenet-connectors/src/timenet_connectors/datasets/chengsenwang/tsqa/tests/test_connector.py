@@ -64,7 +64,7 @@ def test_metadata():
 def test_convert_builds_one_record_per_row():
     dataset = _convert()
     assert isinstance(dataset, TimeFDataset)
-    assert len(dataset.records) == len(_fixture_rows())
+    assert [record.metadata["row"] for record in dataset.records] == list(range(len(_fixture_rows())))
 
 
 def test_qa_tasks_match_fixture():
