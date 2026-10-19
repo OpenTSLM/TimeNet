@@ -40,7 +40,7 @@ def _write(tmp_path, dataset=None, **kwargs) -> Path:
 
 def _read(version_dir: Path) -> TimeFDataset:
     with TimeFReader(open_local_version(version_dir)) as reader:
-        return reader.read()
+        return reader._read_dataset()
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -211,7 +211,8 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         assert opens >= 1
 
 
-def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
+@pytest.mark.parametrize("eager", [False, True])
+def test_signal_values_batch_chunk_locator_queries(tmp_path, monkeypatch, eager):
     version_dir = _write(tmp_path)
     original = DuckDBControlReader.chunk_rows_by_keys
     calls = []
@@ -222,9 +223,12 @@ def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
 
     monkeypatch.setattr(DuckDBControlReader, "chunk_rows_by_keys", counting_batch)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        records = tuple(reader.iter_records())
+        records = reader._read_dataset().records if eager else tuple(reader.iter_records())
+        if eager:
+            assert reader._read_dataset().records[0] is records[0]
         signals = tuple(signal for record in records for signal in record.signals)
-        assert calls == []
+        if not eager:
+            assert calls == []
 
         for signal in signals:
             signal.to_arrow()
@@ -262,7 +266,7 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
 
         monkeypatch.setattr(pq.ParquetFile, "read", count_reads)
         _ = reader.tasks
-        reader.read().records[0].signals[0].to_arrow()
+        reader._read_dataset().records[0].signals[0].to_arrow()
         assert text in reader.task_table()["prompt"].to_pylist()
         assert read_calls == 1
         state = reader.__getstate__()
@@ -275,13 +279,14 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
     assert state["_tasks"] is None
     assert state["_control"] is None
     assert state["_records"] is None
+    assert state["_dataset"] is None
     assert state["_values"] is None
 
 
 def test_iter_records_preserves_requested_order(tmp_path):
     with TimeFReader(open_local_version(_write(tmp_path))) as reader:
-        selected = tuple(reader.iter_records(record_ids=("record-2", "record-0")))
-    assert [record.record_id for record in selected] == ["record-2", "record-0"]
+        selected = tuple(reader.iter_records(record_ids=iter(("record-2", "record-0", "record-2"))))
+    assert [record.record_id for record in selected] == ["record-2", "record-0", "record-2"]
 
 
 def test_iter_records_rejects_an_unknown_id_before_yielding(tmp_path):
