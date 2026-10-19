@@ -92,6 +92,9 @@ and decoded Zarr chunks until it closes.
 | `tasks` | Return all reconstructed tasks. |
 | `values_backend` | Return the selected values backend. |
 
+In `target_table()`, a step point or step interval names its series in `signal_id`, and its
+`span_signal_ids` is `NULL`. Only time point and time interval targets fill `span_signal_ids`.
+
 ## Errors and integrity
 
 `DatasetVersion.open_local()` and `open_version()` require a valid `manifest.json`. They raise
