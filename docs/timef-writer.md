@@ -90,17 +90,17 @@ The writer fails before publication when it finds an invalid state, including:
 - chunk rows that do not cover a Signal exactly.
 
 These failures raise TimeNet validation errors with object IDs and relationship fields where
-possible. The writer checks them while it streams rows, from the ID sets and key sequences it
-owns, rather than by scanning the finished tables. The same invariants exist in SQL form in
-`timenet.format.control_audit.audit_control_database()`, which scans every table of a
-`control.duckdb` and is what the test suite runs after each round trip.
+possible. The writer checks most of them while it streams rows, from the ID sets it owns, rather
+than by scanning the finished tables. Task dependencies and annotation references go in with each
+task batch. One query for each kind checks them after all rows are written. The same invariants
+exist in SQL form in `timenet.format.control_audit.audit_control_database()`, which scans every
+table of a `control.duckdb` and is what the test suite runs after each round trip.
 
 ## Task streams
 
 A dataset can provide a re-iterable task source with `set_task_stream()`. The writer consumes the
-validated stream once while inserting task rows and object relationships. It retains task IDs and
-deferred dependency edges, not every Task object, so a large task corpus does not need to be
-materialized in Python.
+validated stream once while inserting task rows and object relationships. It retains task IDs,
+not every Task object, so a large task corpus does not need to be materialized in Python.
 
 ## Progress
 
