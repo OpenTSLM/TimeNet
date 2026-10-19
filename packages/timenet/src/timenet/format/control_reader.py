@@ -702,15 +702,17 @@ class DuckDBControlReader:
         if not keys:
             return {}
         rows = self.connection.execute(
-            """SELECT signal_key, chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values
+            """SELECT signal_key, chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values, owner_key
                FROM signal_chunks
                WHERE signal_key IN (SELECT unnest(?))
                ORDER BY signal_key, chunk_index""",
             [list(keys)],
         ).fetchall()
         grouped: dict[int, list[StoredChunk]] = {key: [] for key in keys}
-        for signal_key, chunk_idx, path, major_idx, minor_idx, n_values in rows:
-            grouped[signal_key].append(StoredChunk(chunk_idx, path, ChunkDataIndex(major_idx, minor_idx), n_values))
+        for signal_key, chunk_idx, path, major_idx, minor_idx, n_values, owner_key in rows:
+            grouped[signal_key].append(
+                StoredChunk(chunk_idx, path, ChunkDataIndex(major_idx, minor_idx), n_values, owner_key)
+            )
         return grouped
 
     def read_tasks(

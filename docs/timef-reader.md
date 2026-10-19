@@ -15,7 +15,7 @@ runs connector code.
 
 ```python
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion, open_registry
+from timenet.registry import open_local_version, open_registry
 
 # Read through a registry.
 version = open_registry("~/timenet/registry").open_version(
@@ -23,7 +23,7 @@ version = open_registry("~/timenet/registry").open_version(
 )
 
 # You can also open a version directory directly.
-local_version = DatasetVersion.open_local(version_dir)
+local_version = open_local_version(version_dir)
 
 with TimeFReader(version) as reader:
     dataset = reader.read()
@@ -100,7 +100,7 @@ and decoded Zarr chunks until it closes.
 
 ## Errors and integrity
 
-`DatasetVersion.open_local()` and `open_version()` require a valid `manifest.json`. They raise
+`open_local_version()` and `open_version()` require a valid `manifest.json`. They raise
 `TimeFFormatError` for an invalid or unsupported manifest.
 
 Other files remain lazy. A missing `control.duckdb` therefore fails on the first control-plane
