@@ -14,7 +14,23 @@ from timenet.format.control_schema import CONTROL_TABLES, Table
 from timenet.format.duckdb import check_control_schema
 
 
-_DOMAIN_CHECKS = """
+_ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("records", "record_id"),
+    ("sources", "source_id"),
+    ("axes", "axis_id"),
+    ("signals", "signal_id"),
+    ("annotation_contents", "content_id"),
+    ("annotation_occurrences", "occurrence_id"),
+    ("tasks", "task_id"),
+)
+"""The primary id column of each entity table."""
+
+_ENTITY_ID_CHECKS = " UNION ALL ".join(
+    f"SELECT '{table}.{column}' FROM {table} WHERE {column} <= 0"  # noqa: S608 - fixed table names
+    for table, column in _ENTITY_ID_COLUMNS
+)
+
+_DOMAIN_CHECKS = f"""
     SELECT 'sources.parent_source_key' AS field
     FROM sources WHERE parent_source_key = source_key
     UNION ALL
@@ -44,8 +60,10 @@ _DOMAIN_CHECKS = """
     UNION ALL
     SELECT 'tasks.scope_type' FROM tasks
     WHERE scope_type NOT IN ('time_point', 'time_interval', 'step_point', 'step_interval')
+    UNION ALL
+    {_ENTITY_ID_CHECKS}
     LIMIT 1
-"""
+"""  # noqa: S608 - fixed table names
 
 _CROSS_RECORD_PARENT = """
     SELECT child.source_id

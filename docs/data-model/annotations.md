@@ -30,11 +30,12 @@ content object.
 Reusable content includes these fields:
 
 - `key`, `value`, `unit`, and `description`
-- `id`, which identifies the reusable content
+- `id`, an int64 that identifies the reusable content. The dataset sets it when the annotation is
+  attached, unless you set it yourself
 - `metadata`, which stores JSON-compatible content details
 
-Each occurrence adds its own identity, source, confidence, and metadata. This design lets several
-objects share one long description without sharing occurrence details.
+Each occurrence adds its own int64 `occurrence_id`, source, confidence, and metadata. This design
+lets several objects share one long description without sharing occurrence details.
 
 ## Static context
 

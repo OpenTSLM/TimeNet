@@ -34,16 +34,16 @@ def _namespaced_dataset() -> TimeFDataset:
         name="v",
         time_axis=RegularAxis.from_rate_hz(1),
         loader=sine_loader(n=8, sampling_rate_hz=1.0),
-        id="ns-ts-0",
+        id=101,
         n_values=8,
     )
     record = dataset.add_record(
         record=Record(
-            sources=(Source(id="ns-record-0-source", name="Source", signals=(series,)),),
-            id="ns-record-0",
+            sources=(Source(id=20, name="Source", signals=(series,)),),
+            id=10,
         )
     )
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), id="ns-task-0"))
+    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), id=301))
     return dataset
 
 

@@ -19,6 +19,7 @@ from timenet.errors import TimeFValidationError
 from timenet.format.constants import SHARD_TEMPLATE, part_path
 from timenet.format.schemas import shard_schema
 from timenet.types import TimeSeriesSpec
+from timenet.types.ids import entity_id
 from timenet.values_backends import ValuesBackend
 from timenet.values_backends.parquet.config import ParquetValuesConfig
 from timenet.values_backends.writer import (
@@ -260,7 +261,7 @@ class ParquetValuesBackend(BaseValuesBackend):
 class _Chunk:
     """One sub-chunk of a series buffered for the current row group."""
 
-    time_series_id: str
+    time_series_id: int
     spec_type: str
     signal: str
     chunk_idx: int
@@ -313,7 +314,7 @@ class _ShardStream:
         self._buffer: list[_Chunk] = []
         self._buffer_bytes = 0
         self._shard_paths: list[str] = []
-        self.placements: dict[tuple[str, int], ChunkPlacement] = {}
+        self.placements: dict[tuple[int, int], ChunkPlacement] = {}
         self.encodings: dict[str, ValueEncoding] = {}
         """The encoding chosen for each ``spec_type``, in first-seen order."""
 
@@ -434,7 +435,7 @@ def _plan_chunks(ts: Signal, values: pa.Array, chunk_max_bytes: int) -> list[_Ch
             sub = sub.cast(_ENUM_LEAF)
         chunks.append(
             _Chunk(
-                time_series_id=ts.id,
+                time_series_id=entity_id(ts),
                 spec_type=ts.spec.spec_type,
                 signal=ts.name,
                 chunk_idx=chunk_idx,

@@ -142,8 +142,8 @@ task = item["tasks"][0]
 print(task.prompt, task.targets)
 ```
 
-Each item also contains `record_id` and record-level `annotations`. Signal lengths and task objects
-can vary between records. Use a `transform` or `collate_fn` that matches your model.
+Each item also contains the int `record_id` and record-level `annotations`. Signal lengths and
+task objects can vary between records. Use a `transform` or `collate_fn` that matches your model.
 
 TimeNet imports PyTorch only when this adapter is used.
 

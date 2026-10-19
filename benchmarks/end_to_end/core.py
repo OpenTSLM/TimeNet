@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from dataclasses import asdict, dataclass, fields, is_dataclass
+from dataclasses import asdict, dataclass, field, fields, is_dataclass
 from enum import Enum
 import hashlib
 import importlib
@@ -17,7 +17,7 @@ import numpy as np
 import pyarrow as pa
 
 from benchmarks.end_to_end.corpus import build_corpus
-from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis
+from timenet.dataset import Record, Signal
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.writer import TimeFWriter
@@ -45,8 +45,26 @@ MATRIX = (
 """Default matrix covering both backends, two chunking regimes, and rich Zarr values."""
 
 
-def _canonical(value: Any) -> Any:  # noqa: PLR0911, RUF100 - explicit type cases keep canonicalization readable
+_SKIPPED = frozenset({"id", "task_ids", "occurrence_id", "loader", "time_offsets_loader"})
+"""Raw ids and executable fields. The fingerprint names a referenced object by its position. Private
+fields are skipped too."""
+
+
+@dataclass
+class _Positions:
+    """Where each record and each signal sits in the read order, keyed by id."""
+
+    records: dict[int | None, int] = field(default_factory=dict)
+    signals: dict[int | None, tuple[int, int]] = field(default_factory=dict)
+
+
+def _canonical(value: Any, positions: _Positions | None = None) -> Any:  # noqa: PLR0911 - explicit type cases
     """Convert TimeF values into stable JSON-compatible structures.
+
+    Args:
+        value: The value to convert.
+        positions: When given, a record or signal that the value refers to becomes its position, so a
+            task keeps which record and signal it labels.
 
     Returns:
         A recursively canonicalized value.
@@ -56,23 +74,39 @@ def _canonical(value: Any) -> Any:  # noqa: PLR0911, RUF100 - explicit type case
     if isinstance(value, float):
         return {"float_hex": value.hex()}
     if isinstance(value, Enum):
-        return _canonical(value.value)
+        return _canonical(value.value, positions)
     if isinstance(value, type):
         return f"{value.__module__}.{value.__qualname__}"
+    if positions is not None and isinstance(value, Record):
+        return {"record": positions.records[value.id]}
+    if positions is not None and isinstance(value, Signal):
+        return {"signal": positions.signals[value.id]}
     if is_dataclass(value):
-        unstable_or_executable = {"occurrence_id", "loader", "time_offsets_loader"}
-        if isinstance(value, RegularAxis | IrregularAxis | OrdinalAxis):
-            unstable_or_executable.add("id")
         return {
-            field.name: _canonical(getattr(value, field.name))
-            for field in fields(value)
-            if field.name not in unstable_or_executable
+            item.name: _canonical_field(item.name, getattr(value, item.name), positions)
+            for item in fields(value)
+            if item.name not in _SKIPPED and not item.name.startswith("_")
         }
     if isinstance(value, dict):
-        return {str(key): _canonical(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
+        return {
+            str(key): _canonical(item, positions) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))
+        }
     if isinstance(value, list | tuple):
-        return [_canonical(item) for item in value]
+        return [_canonical(item, positions) for item in value]
     return str(value)
+
+
+def _canonical_field(name: str, value: Any, positions: _Positions | None) -> Any:
+    """Canonicalize one dataclass field, turning the signal ids of a span into signal positions.
+
+    Returns:
+        The canonical field value.
+    """
+    if positions is not None and name == "time_series_ids" and value is not None:
+        return [positions.signals[signal_id] for signal_id in value]
+    if positions is not None and name == "time_series_id":
+        return positions.signals[value]
+    return _canonical(value, positions)
 
 
 def _dataset_dir(root: Path) -> Path:
@@ -111,26 +145,18 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
     digest = hashlib.sha256()
     started = time.perf_counter_ns()
     with TimeFReader(DatasetVersion.open_local(_dataset_dir(root))) as reader:
-        digest.update(
-            json.dumps(
-                {
-                    "metadata": _canonical(reader.metadata),
-                    "schema": _canonical(reader.schema),
-                    "tasks": _canonical(reader.tasks),
-                },
-                sort_keys=True,
-                separators=(",", ":"),
-            ).encode()
-        )
+        positions = _Positions()
         series_count = 0
         value_bytes = 0
-        for record in reader.iter_records():
+        for record_position, record in enumerate(reader.iter_records()):
+            positions.records[record.id] = record_position
+            for signal_position, signal in enumerate(record.signals):
+                positions.signals[signal.id] = (record_position, signal_position)
             digest.update(
                 json.dumps(
                     {
-                        "record_id": record.id,
                         "metadata": record.metadata,
-                        "task_ids": record.task_ids,
+                        "task_count": len(record.task_ids),
                         "annotations": _canonical(record.annotations),
                         "sources": _canonical(record.sources),
                     },
@@ -148,7 +174,6 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                         {
                             "spec": _canonical(series.spec),
                             "signal": series.name,
-                            "time_series_id": series.id,
                             "time_axis": _canonical(series.time_axis),
                             "n_values": series.n_values,
                             "dtype": values.dtype.str,
@@ -164,6 +189,17 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                     digest.update(values.tobytes())
                 series_count += 1
                 value_bytes += values.nbytes
+        digest.update(
+            json.dumps(
+                {
+                    "metadata": _canonical(reader.metadata),
+                    "schema": _canonical(reader.schema),
+                    "tasks": _canonical(reader.tasks, positions),
+                },
+                sort_keys=True,
+                separators=(",", ":"),
+            ).encode()
+        )
     read_ns = time.perf_counter_ns() - started
     disk_bytes = sum(path.stat().st_size for path in _dataset_dir(root).rglob("*") if path.is_file())
     return digest.hexdigest(), {

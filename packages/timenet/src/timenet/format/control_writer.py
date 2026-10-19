@@ -13,12 +13,12 @@ import duckdb
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeAxis, TimeFDataset
+from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, TimeAxis, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
 from timenet.errors import TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
-from timenet.format.control_schema import TABLES, Table
+from timenet.format.control_schema import LAST_ID_PREFIX, TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
 from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
 from timenet.json import validate_json_value
@@ -27,7 +27,9 @@ from timenet.types import (
     Task,
     TSCorrespondenceTask,
     annotation_type_of,
+    check_id,
 )
+from timenet.types.ids import entity_id
 from timenet.types.splits import parse_split
 
 
@@ -125,7 +127,7 @@ def _reserve_hierarchy_keys(
     record_count = 0
     source_count = 0
     signal_count = 0
-    axis_ids: set[str] = set()
+    axis_ids: set[int] = set()
     for record in records:
         record_count += 1
         for source in record.walk_sources():
@@ -199,8 +201,8 @@ class _TableBatch:
 class _HierarchyKeys(NamedTuple):
     """Generated keys of the Sources and Signals written so far, by public ID."""
 
-    sources: dict[str, int]
-    signals: dict[str, int]
+    sources: dict[int, int]
+    signals: dict[int, int]
 
 
 class _OffsetSignature(NamedTuple):
@@ -269,7 +271,7 @@ class DuckDBControlWriter:
     def write_hierarchy(
         self,
         dataset: TimeFDataset,
-        placements: dict[tuple[str, int], ChunkPlacement] | None = None,
+        placements: dict[tuple[int, int], ChunkPlacement] | None = None,
         *,
         tasks: Iterable[Task] | None = None,
     ) -> dict[str, int]:
@@ -327,10 +329,10 @@ class DuckDBControlWriter:
         records = dataset.records
         object_keys, axis_keys = _reserve_hierarchy_keys(connection, records)
         batches = _HierarchyBatches(connection)
-        axes: dict[str, _StoredAxis] = {}
-        source_keys: dict[str, int] = {}
+        axes: dict[int, _StoredAxis] = {}
+        source_keys: dict[int, int] = {}
         clock_keys: dict[int, int] = {}
-        signal_keys: dict[str, int] = {}
+        signal_keys: dict[int, int] = {}
         dataset_key = _returned_key(
             connection.execute(
                 "INSERT INTO datasets (dataset_id) VALUES (?) RETURNING dataset_key",
@@ -340,7 +342,7 @@ class DuckDBControlWriter:
         annotations: list[tuple[str, int, Annotation]] = [
             ("Dataset", dataset_key, annotation) for annotation in dataset.annotations
         ]
-        record_keys: dict[str, int] = {}
+        record_keys: dict[int, int] = {}
         for record in records:
             if record.id in record_keys:
                 raise TimeFValidationError(f"record id {record.id!r} is not unique")
@@ -360,7 +362,7 @@ class DuckDBControlWriter:
                     "metadata": _json(record.metadata),
                 }
             )
-            record_keys[record.id] = record_key
+            record_keys[entity_id(record)] = record_key
             annotations.extend(("Record", record_key, annotation) for annotation in record.annotations)
             self._write_record_sources(
                 record,
@@ -382,12 +384,16 @@ class DuckDBControlWriter:
         )
         occurrence_keys = self._write_annotations(connection, annotations)
         self._write_task_annotation_refs(connection, annotation_refs, occurrence_keys)
+        connection.executemany(
+            "INSERT INTO control_metadata VALUES (?, ?)",
+            [[f"{LAST_ID_PREFIX}{kind}", str(value)] for kind, value in dataset.last_ids.items()],
+        )
         return task_counts
 
     @staticmethod
     def _write_chunks(
         connection: duckdb.DuckDBPyConnection,
-        placements: dict[tuple[str, int], ChunkPlacement] | None,
+        placements: dict[tuple[int, int], ChunkPlacement] | None,
     ) -> None:
         """Insert values-plane chunk locations and check they cover every Signal exactly.
 
@@ -408,7 +414,7 @@ class DuckDBControlWriter:
                 "SELECT signal_id, signal_key, n_values FROM signals"
             ).fetchall()
         }
-        stored_values: dict[str, int] = dict.fromkeys(signals, 0)
+        stored_values: dict[int, int] = dict.fromkeys(signals, 0)
         for (signal_id, chunk_index), placement in placements.items():
             if signal_id not in signals:
                 raise TimeFValidationError(f"chunk {chunk_index} refers to unknown signal {signal_id!r}")
@@ -437,11 +443,11 @@ class DuckDBControlWriter:
     def _write_tasks(
         self,
         connection: duckdb.DuckDBPyConnection,
-        record_keys: dict[str, int],
-        signal_keys: dict[str, int],
+        record_keys: dict[int, int],
+        signal_keys: dict[int, int],
         annotations: list[tuple[str, int, Annotation]],
         tasks_source: Iterable[Task],
-    ) -> tuple[list[tuple[int, str, int, str]], dict[str, int]]:
+    ) -> tuple[list[tuple[int, str, int, int]], dict[str, int]]:
         """Insert tasks and normalized object relationships.
 
         Returns:
@@ -450,10 +456,10 @@ class DuckDBControlWriter:
         Raises:
             TimeFValidationError: If a task refers to an object outside the dataset or derives from itself.
         """
-        task_ids: set[str] = set()
-        dependency_rows: list[tuple[str, int, str]] = []
-        annotation_refs: list[tuple[int, str, int, str]] = []
-        task_keys: dict[str, int] = {}
+        task_ids: set[int] = set()
+        dependency_rows: list[tuple[int, int, Task]] = []
+        annotation_refs: list[tuple[int, str, int, int]] = []
+        task_keys: dict[int, int] = {}
         task_counts: dict[str, int] = {}
         for batch in _task_batches(tasks_source):
             batch_task_keys = _reserve_keys(connection, "object_key_sequence", len(batch))
@@ -461,16 +467,17 @@ class DuckDBControlWriter:
             target_rows: list[dict[str, object]] = []
             record_ref_rows: list[dict[str, object]] = []
             for task, task_key in zip(batch, batch_task_keys, strict=True):
-                if task.id in task_ids:
-                    raise TimeFValidationError(f"task id {task.id!r} is not unique")
-                task_ids.add(task.id)
-                task_keys[task.id] = task_key
+                task_id = check_id(task.id, "task id")
+                if task_id in task_ids:
+                    raise TimeFValidationError(f"task id {task_id!r} is not unique")
+                task_ids.add(task_id)
+                task_keys[task_id] = task_key
                 task_type = str(task.task_type)
                 task_counts[task_type] = task_counts.get(task_type, 0) + 1
                 task_rows.append(
                     {
                         "task_key": task_key,
-                        "task_id": task.id,
+                        "task_id": task_id,
                         "task_type": task_type,
                         "prompt": task.prompt,
                         "input_modalities": sorted(item.value for item in task.resolved_input_modalities),
@@ -518,14 +525,13 @@ class DuckDBControlWriter:
                                 f"task {task.id!r} field {field!r} refers to an unbound annotation"
                             )
                         annotation_refs.append((task_key, field, position, annotation.occurrence_id))
-                dependency_rows.extend(
-                    (task.id, position, parent.id) for position, parent in enumerate(task.from_tasks)
-                )
+                dependency_rows.extend((task_id, position, parent) for position, parent in enumerate(task.from_tasks))
             _insert_rows(connection, TABLES["tasks"], task_rows)
             _insert_rows(connection, TABLES["task_targets"], target_rows)
             _insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
         stored_dependencies: list[dict[str, object]] = []
-        for task_id, position, parent_id in dependency_rows:
+        for task_id, position, parent in dependency_rows:
+            parent_id = parent.id
             if parent_id == task_id:
                 raise TimeFValidationError(f"task {task_id!r} depends on itself")
             if parent_id not in task_ids:
@@ -543,7 +549,7 @@ class DuckDBControlWriter:
         return annotation_refs, task_counts
 
     @staticmethod
-    def _scope_columns(task: Task, signal_keys: dict[str, int]) -> dict[str, object]:
+    def _scope_columns(task: Task, signal_keys: dict[int, int]) -> dict[str, object]:
         """Project a task's scope onto the four scope columns.
 
         Returns:
@@ -573,8 +579,8 @@ class DuckDBControlWriter:
         position: int,
         target_label: str,
         target: object,
-        record_keys: dict[str, int],
-        signal_keys: dict[str, int],
+        record_keys: dict[int, int],
+        signal_keys: dict[int, int],
     ) -> dict[str, object]:
         """Validate one target and project it onto a ``task_targets`` row.
 
@@ -585,13 +591,13 @@ class DuckDBControlWriter:
             TimeFValidationError: If the target refers to an object outside the dataset.
         """
         row = encode_target(target)
-        record_id = cast("str | None", row["record_id"])
-        signal_id = cast("str | None", row["signal_id"])
+        record_id = cast("int | None", row["record_id"])
+        signal_id = cast("int | None", row["signal_id"])
         if record_id is not None and record_id not in record_keys:
             raise TimeFValidationError(f"{target_label} refers to unknown Record {record_id!r}")
         if signal_id is not None and signal_id not in signal_keys:
             raise TimeFValidationError(f"{target_label} refers to unknown Signal {signal_id!r}")
-        span_signal_ids = cast("tuple[str, ...] | list[str] | None", row["span_signal_ids"])
+        span_signal_ids = cast("tuple[int, ...] | list[int] | None", row["span_signal_ids"])
         missing_signals = [item for item in span_signal_ids or () if item not in signal_keys]
         if missing_signals:
             raise TimeFValidationError(f"{target_label} refers to unknown Signals {missing_signals}")
@@ -620,22 +626,22 @@ class DuckDBControlWriter:
         }
 
     @staticmethod
-    def _task_record_refs(task: Task) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    def _task_record_refs(task: Task) -> tuple[tuple[str, tuple[int, ...]], ...]:
         """Project task record objects into normalized field rows.
 
         Returns:
             Pairs of public field name and ordered record IDs.
         """
-        refs: list[tuple[str, tuple[str, ...]]] = [("inputs", tuple(record.id for record in task.inputs))]
+        refs: list[tuple[str, tuple[int, ...]]] = [("inputs", tuple(entity_id(record) for record in task.inputs))]
         if isinstance(task, TSCorrespondenceTask):
-            refs.append(("candidate_records", tuple(record.id for record in task.candidate_records)))
+            refs.append(("candidate_records", tuple(entity_id(record) for record in task.candidate_records)))
         return tuple(refs)
 
     @staticmethod
     def _write_task_annotation_refs(
         connection: duckdb.DuckDBPyConnection,
-        rows: list[tuple[int, str, int, str]],
-        occurrence_keys: dict[str, int],
+        rows: list[tuple[int, str, int, int]],
+        occurrence_keys: dict[int, int],
     ) -> None:
         """Insert task annotation references after occurrence rows exist.
 
@@ -662,9 +668,9 @@ class DuckDBControlWriter:
 
     def _write_record_sources(  # noqa: PLR0913, PLR0917 - hierarchy maps stay explicit
         self,
-        record: Any,
+        record: Record,
         record_key: int,
-        axes: dict[str, _StoredAxis],
+        axes: dict[int, _StoredAxis],
         keys: _HierarchyKeys,
         annotations: list[tuple[str, int, Annotation]],
         object_keys: Iterator[int],
@@ -714,7 +720,7 @@ class DuckDBControlWriter:
         self,
         signal: Signal,
         source_key: int,
-        axes: dict[str, _StoredAxis],
+        axes: dict[int, _StoredAxis],
         object_keys: Iterator[int],
         axis_keys: Iterator[int],
         batches: _HierarchyBatches,
@@ -729,11 +735,12 @@ class DuckDBControlWriter:
                 irregular axis has a different number of offsets than the Signal has values.
         """
         axis = signal.time_axis
-        existing = axes.get(axis.id)
+        axis_id = entity_id(axis)
+        existing = axes.get(axis_id)
         if existing is None:
             axis_key = next(axis_keys)
             offsets = self._write_axis(signal, axis_key, batches)
-            axes[axis.id] = _StoredAxis(axis, axis_key, offsets, signal.time_offsets_loader)
+            axes[axis_id] = _StoredAxis(axis, axis_key, offsets, signal.time_offsets_loader)
         elif existing.axis != axis:
             raise TimeFValidationError(f"axis id {axis.id!r} is reused with different definitions")
         else:
@@ -846,7 +853,7 @@ class DuckDBControlWriter:
     def _write_annotations(
         connection: duckdb.DuckDBPyConnection,
         annotations: Iterable[tuple[str, int, Annotation]],
-    ) -> dict[str, int]:
+    ) -> dict[int, int]:
         """Insert reusable content once and every occurrence separately, in Arrow batches.
 
         Keys come from the content and occurrence sequences up front, so both tables are written
@@ -859,9 +866,9 @@ class DuckDBControlWriter:
             TimeFValidationError: If an annotation is unbound, one occurrence ID is attached twice,
                 or one content ID has two payloads.
         """
-        contents: dict[str, tuple[object, ...]] = {}
-        content_keys: dict[str, int] = {}
-        occurrence_keys: dict[str, int] = {}
+        contents: dict[int, tuple[object, ...]] = {}
+        content_keys: dict[int, int] = {}
+        occurrence_keys: dict[int, int] = {}
         content_batch = _TableBatch(connection, TABLES["annotation_contents"])
         occurrence_batch = _TableBatch(connection, TABLES["annotation_occurrences"])
         content_key_source = _SequenceKeys(connection, "content_key_sequence")
@@ -874,20 +881,21 @@ class DuckDBControlWriter:
                 )
             if annotation.occurrence_id in occurrence_keys:
                 raise TimeFValidationError(f"annotation occurrence id {annotation.occurrence_id!r} is not unique")
+            content_id = check_id(annotation.id, "annotation content id")
             content = annotation._content_fields
-            previous = contents.get(annotation.id)
+            previous = contents.get(content_id)
             if previous is not None and previous != content:
-                raise TimeFValidationError(f"annotation content id {annotation.id!r} is reused with different content")
+                raise TimeFValidationError(f"annotation content id {content_id!r} is reused with different content")
             if previous is None:
-                contents[annotation.id] = content
+                contents[content_id] = content
                 content_key = content_key_source.next()
-                content_keys[annotation.id] = content_key
+                content_keys[content_id] = content_key
                 content_batch.add(
                     {
                         "content_key": content_key,
-                        "content_id": annotation.id,
+                        "content_id": content_id,
                         "name": annotation.name,
-                        **encode_annotation_value(annotation.value, label=f"annotation {annotation.id!r}"),
+                        **encode_annotation_value(annotation.value, label=f"annotation {content_id!r}"),
                         "unit": annotation.unit,
                         "description": annotation.description,
                         "metadata": _json(annotation.metadata),
@@ -900,7 +908,7 @@ class DuckDBControlWriter:
                 {
                     "occurrence_key": occurrence_key,
                     "occurrence_id": annotation.occurrence_id,
-                    "content_key": content_keys[annotation.id],
+                    "content_key": content_keys[content_id],
                     "object_type": object_type,
                     "object_key": object_key,
                     "span_type": str(annotation_type_of(annotation)),

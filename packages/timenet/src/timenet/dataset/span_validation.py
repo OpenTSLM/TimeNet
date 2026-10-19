@@ -4,7 +4,7 @@ from typing import TYPE_CHECKING
 import warnings
 
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
-from timenet.types import Span, StepSpan, TimeInterval, TimeSpan
+from timenet.types import EntityId, Span, StepSpan, TimeInterval, TimeSpan
 
 
 if TYPE_CHECKING:
@@ -15,7 +15,7 @@ def check_span_within_window(  # noqa: PLR0913 (span rules have several branches
     label: str,
     span: Span,
     time_series: tuple["Signal", ...],
-    record_id: str,
+    record_id: EntityId | None,
     time_span: TimeInterval | None = None,
     *,
     warn_when_outside: bool = True,
@@ -103,7 +103,7 @@ def check_span_within_window(  # noqa: PLR0913 (span rules have several branches
         )
         return
 
-    windows = sorted(window for window in covered.values() if window is not None)
+    windows = sorted(ts.span_us for ts in time_series if ts.span_us is not None)
     if not windows:
         raise TimeFValidationError(
             f"{label} is a time-valued region, but record {record_id!r} has no timeline to place it against: "
@@ -113,7 +113,7 @@ def check_span_within_window(  # noqa: PLR0913 (span rules have several branches
 
 
 def _reject_outside(  # noqa: PLR0913 (the sixth is the keyword-only guard)
-    label: str, span: TimeSpan, start: int, end: int, record_id: str, *, warn_when_outside: bool = True
+    label: str, span: TimeSpan, start: int, end: int, record_id: EntityId | None, *, warn_when_outside: bool = True
 ) -> None:
     """Reject a time span that runs past the half-open window ``[start, end)``.
 
@@ -145,7 +145,7 @@ def _reject_outside_union(
     label: str,
     span: TimeSpan,
     windows: list[tuple[int, int]],
-    record_id: str,
+    record_id: EntityId | None,
     *,
     warn_when_outside: bool = True,
 ) -> None:

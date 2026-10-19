@@ -9,6 +9,7 @@ import pyarrow.parquet as pq
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import make_dataset
+from timenet.types.ids import entity_id
 from timenet.values_backends.parquet.reader import ParquetValuesReader
 from timenet.writer import TimeFWriter
 
@@ -93,7 +94,7 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
         control = reader._control_reader()
         row = control.connection.execute("SELECT signal_key FROM signals WHERE signal_id = ?", [series.id]).fetchone()
         assert row is not None
-        rows = control.chunk_rows_by_key(row[0], series.id)
+        rows = control.chunk_rows_by_key(row[0], entity_id(series))
 
     projections: list[list[str]] = []
     values_reader = ParquetValuesReader()

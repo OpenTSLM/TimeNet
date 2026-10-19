@@ -30,6 +30,43 @@ assert str(version) == "1.2.3"
 assert version > Version(1, 2, 0)
 ```
 
+## IDs
+
+Every public entity ID is a positive int64 (`EntityId`): Records, Sources, Signals, axes, annotation
+contents, annotation occurrences, and Tasks. The dataset ID is the exception and stays an
+`org/name` string.
+
+An object has no ID (`id is None`) until you add it to a dataset. Then the dataset gives it the
+next ID of its kind. Each kind has its own counter, so the first Record and the first Signal both
+get ID 1.
+
+- `add_record()` numbers the Record, its Sources, Signals, and axes, and its annotations.
+- `add_task()` numbers the Task and the annotations on the Task.
+- `dataset.annotate()` numbers a dataset-level annotation.
+- `annotate()` on an object that is already in a dataset numbers the new occurrence at once.
+
+You can set an ID yourself. The dataset keeps it, rejects it if another object of the same kind
+already uses it, and continues its counter above it. The writer stores the counters, so an edited
+version continues from them and never reuses the ID of a removed object.
+
+IDs are unique per kind within one dataset and stay the same across edits. They do not follow
+storage order, and two datasets can use the same ID.
+
+An object that refers to a Signal, such as a task scope, needs the Signal ID. Build it after you
+add the Record. `check_id()` returns a valid ID and raises `TimeFValidationError` for anything
+else, including an unset ID, `bool`, zero, negative values, and strings. `entity_id()` returns the
+ID of an object that is already in a dataset.
+
+```python
+from timenet.types import check_id, entity_id
+
+record = dataset.add_record(record=record)
+signal_id = entity_id(record.signals[0])
+assert check_id(signal_id, "Signal id") == signal_id
+```
+
+IDs carry no meaning. Store upstream identifiers in `metadata` or in an annotation.
+
 ## Units
 
 TimeNet uses one [pint](https://pint.readthedocs.io) registry named `ureg`. Use this registry for
@@ -116,7 +153,8 @@ coordinate frame.
 Task time spans can select Signals through `time_series_ids`. Each task span must identify exactly
 one input Record. Annotation spans cannot select Signal IDs. Their owner determines scope.
 
-Step spans always name exactly one Signal through `time_series_id`.
+Step spans always name exactly one Signal through `time_series_id`. Signal IDs are ints, so pass
+the `id` of the Signal object. The Signal has an ID only after its Record is added to a dataset.
 
 ```python
 from timenet.types import StepInterval, TimeInterval, TimePoint
@@ -125,9 +163,9 @@ event = TimePoint.seconds(1.2)
 window = TimeInterval.seconds(
     5.0,
     8.0,
-    time_series_ids=("vibration",),
+    time_series_ids=(vibration.id,),
 )
-tokens = StepInterval(time_series_id="text-series", start=132, stop=144)
+tokens = StepInterval(time_series_id=text_series.id, start=132, stop=144)
 ```
 
 Use `record.time_point()` or `record.time_interval()` to convert wall-clock values through a

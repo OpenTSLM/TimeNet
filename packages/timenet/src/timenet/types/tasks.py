@@ -10,8 +10,8 @@ import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
-from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
-from timenet.types.ids import new_id
+from timenet.types.annotations import Annotation, AnnotationBinder, SupportsAnnotate, value_type_of
+from timenet.types.ids import EntityId, check_optional_id
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
@@ -45,7 +45,7 @@ class TaskType(StrEnum):
 def validate_input_modalities(
     modalities: Iterable[InputModality] | None,
     *,
-    task_id: str,
+    task_id: EntityId | None,
     prompt: str | None,
     has_record_inputs: bool,
 ) -> frozenset[InputModality]:
@@ -104,8 +104,9 @@ class Task(SupportsAnnotate, ABC):
     def task_type(self) -> TaskType:
         """Return the concrete task's stable storage tag."""
 
-    id: str = field(default_factory=new_id)
-    """Unique public task identifier."""
+    id: EntityId | None = None
+    """Unique public task id. ``None`` until the task is added to a dataset, which then gives it
+    the next task id."""
     inputs: tuple["Record", ...] = field(default=(), compare=False)
     """Records supplied to the model, in semantic order."""
     targets: tuple[TargetItem, ...] | None = field(default=None, compare=False)
@@ -131,13 +132,16 @@ class Task(SupportsAnnotate, ABC):
     """Annotations describing this task itself."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible task metadata."""
+    _binder: AnnotationBinder | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
-        """Normalize caller-provided sequences and validate target item types and the split.
+        """Normalize caller-provided sequences and validate the id, target item types, and the split.
 
         Raises:
-            TimeFValidationError: If one target item has an unsupported type, or the split is unknown.
+            TimeFValidationError: If the id is invalid, one target item has an unsupported type, or the
+                split is unknown.
         """
+        self.id = check_optional_id(self.id, "task id")
         self.inputs = tuple(self.inputs)
         self.targets = None if self.targets is None else tuple(self.targets)
         self.input_annotations = tuple(self.input_annotations)
@@ -198,7 +202,7 @@ class Task(SupportsAnnotate, ABC):
         Returns:
             The attached occurrence.
         """
-        attached = annotation._new_occurrence()
+        attached = annotation._new_occurrence(self._binder)
         self.annotations = (*self.annotations, attached)
         return attached
 
@@ -306,8 +310,8 @@ class TSCorrespondenceTask(Task):
         self.candidate_records = tuple(self.candidate_records)
         if not self.candidate_records:
             return
-        candidate_ids = {record.id for record in self.candidate_records}
-        outside = [target.id for target in self.targets or () if _is_record(target) and target.id not in candidate_ids]
+        candidates = {id(record) for record in self.candidate_records}
+        outside = [target.id for target in self.targets or () if _is_record(target) and id(target) not in candidates]
         if outside:
             raise TimeFValidationError(f"TSCorrespondenceTask Record targets {outside} are not in candidate_records")
 

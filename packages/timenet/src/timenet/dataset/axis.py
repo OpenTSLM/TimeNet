@@ -40,7 +40,7 @@ import numpy as np
 
 from timenet.errors import TimeFValidationError
 from timenet.types.clock import INT64_MAX, US_PER_S, check_int64, offset_us
-from timenet.types.ids import new_id
+from timenet.types.ids import EntityId, check_optional_id
 
 
 @unique
@@ -80,8 +80,9 @@ class RegularAxis:
     recording, which keeps a span written against the recording meaningful on the window."""
     offset_us: int = 0
     """Whole microseconds from the record origin to the cadence's zero."""
-    id: str = field(default_factory=new_id, compare=False)
-    """Stable identity used when several signals reference this axis."""
+    id: EntityId | None = field(default=None, compare=False)
+    """Stable identity used when several signals reference this axis. ``None`` until a record that
+    uses the axis is added to a dataset."""
 
     def __post_init__(self) -> None:
         """Reject a period of the wrong type or too fine, or a non-integer or negative origin.
@@ -89,8 +90,9 @@ class RegularAxis:
         Raises:
             TimeFValidationError: If ``period_us`` is not a :class:`~fractions.Fraction`, is under one
                 microsecond, or has a term past int64. Also if ``start_index`` is not a non-negative
-                integer that fits int64.
+                integer that fits int64, or if ``id`` is not a valid id.
         """
+        object.__setattr__(self, "id", check_optional_id(self.id, "RegularAxis.id"))
         if not isinstance(self.period_us, Fraction):
             raise TimeFValidationError(
                 f"RegularAxis.period_us must be a Fraction, got {type(self.period_us).__name__}. A "
@@ -158,7 +160,7 @@ class RegularAxis:
         Returns:
             The window's axis, which shares this period.
         """
-        return replace(self, id=new_id(), start_index=self.start_index + index)
+        return replace(self, id=None, start_index=self.start_index + index)
 
     def time_offset_us(self, index: int) -> int:
         """Return the time offset of one value, floored to whole microseconds.
@@ -291,16 +293,19 @@ class IrregularAxis:
     last_us: int
     """Time offset of the last value. The writer checks it against the stream at write time, so it is
     verified metadata, not an unbacked claim."""
-    id: str = field(default_factory=new_id, compare=False)
-    """Stable identity used when several signals reference this axis."""
+    id: EntityId | None = field(default=None, compare=False)
+    """Stable identity used when several signals reference this axis. ``None`` until a record that
+    uses the axis is added to a dataset."""
 
     def __post_init__(self) -> None:
         """Reject non-integral or backwards endpoints.
 
         Raises:
             TimeFValidationError: If either endpoint is not whole microseconds or does not fit int64,
-                if ``first_us`` is negative, or if ``last_us`` precedes ``first_us``.
+                if ``first_us`` is negative, if ``last_us`` precedes ``first_us``, or if ``id`` is
+                not a valid id.
         """
+        object.__setattr__(self, "id", check_optional_id(self.id, "IrregularAxis.id"))
         for name in ("first_us", "last_us"):
             value = getattr(self, name)
             if isinstance(value, bool) or not isinstance(value, int):
@@ -336,8 +341,17 @@ class OrdinalAxis:
 
     axis_type: ClassVar[AxisType] = AxisType.ORDINAL
     """The stored discriminator."""
-    id: str = field(default_factory=new_id, compare=False)
-    """Stable identity used when several signals reference this axis."""
+    id: EntityId | None = field(default=None, compare=False)
+    """Stable identity used when several signals reference this axis. ``None`` until a record that
+    uses the axis is added to a dataset."""
+
+    def __post_init__(self) -> None:
+        """Reject an invalid ``id``.
+
+        Raises:
+            TimeFValidationError: If ``id`` is not a valid id.
+        """  # noqa: DOC502 (raised by check_optional_id)
+        object.__setattr__(self, "id", check_optional_id(self.id, "OrdinalAxis.id"))
 
 
 TimeAxis = RegularAxis | IrregularAxis | OrdinalAxis
