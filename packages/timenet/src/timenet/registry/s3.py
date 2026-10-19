@@ -3,12 +3,10 @@
 An ``s3://<bucket>/<prefix>`` root holds datasets under ``datasets/<dataset_id>/<version>/``. This
 matches the hosted registry's bucket layout. The manifest's relative file paths do not change. Only
 the key prefix differs from a :class:`~timenet.registry.LocalRegistry`. Credentials, region, and an
-optional endpoint override come
-from the environment through boto3's default session (``AWS_*`` vars, ``AWS_PROFILE``,
-``AWS_ENDPOINT_URL``), so nothing is hardcoded. A read is served lazily through a
-:class:`pyarrow.fs.S3FileSystem` with range reads and no whole-version download. A version already
-cached on local disk is read from there instead. The backend has no catalog, so listing and search are
-unsupported. Use it to ``store`` and to fetch by an explicit ``org/name@version``.
+optional endpoint override come from boto3's default session (``AWS_*`` vars, ``AWS_PROFILE``,
+``AWS_ENDPOINT_URL``). Opening a version resolves physical source manifests upfront and reads remote
+payloads on demand. Complete cached releases are reused. The backend has no catalog, so listing and
+search are unsupported. Use it to ``store`` and to fetch by an explicit ``org/name@version``.
 
 boto3 is optional. Install the ``timenet[s3]`` extra to use this backend.
 """
@@ -18,24 +16,25 @@ import os
 from pathlib import Path
 import shutil
 import tempfile
-from typing import TYPE_CHECKING, Any, BinaryIO
+from typing import Any, BinaryIO
 from urllib.parse import urlparse
 import uuid
+
+import pyarrow.fs as pafs
 
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
+from timenet.registry.dataset_graph_dependency_tools import resolve_read_dependency_graph
+from timenet.registry.shared import validate_dependencies
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter, WriteProgressEvent
-
-
-if TYPE_CHECKING:
-    import pyarrow.fs as pafs
 
 
 # Dataset objects live under a ``datasets/`` prefix, matching the hosted registry's bucket layout, so
@@ -62,6 +61,11 @@ class S3Registry(WritableRegistry):
         self._bucket = parsed.netloc
         self._prefix = parsed.path.strip("/")
         self._cache_dir = Path(cache_dir) if cache_dir is not None else settings().storage_dir
+
+    @property
+    def local_root(self) -> Path:
+        """The directory that holds complete local releases."""
+        return self._cache_dir
 
     def list_datasets(self) -> list[DatasetMetadata]:
         """Unsupported: the S3 backend has no catalog.
@@ -135,25 +139,34 @@ class S3Registry(WritableRegistry):
         return response["Body"]
 
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
-        """Open a committed version as a random-access handle.
-
-        A version already downloaded to the local cache is served from disk. Otherwise the handle reads
-        lazily from S3 through a :class:`pyarrow.fs.S3FileSystem` (range reads, no whole-version fetch).
+        """Resolve physical source manifests, then read remote files on demand.
 
         Args:
-            dataset_id: The ``org/name`` id.
-            version: The version string, or ``None`` for the latest.
+            dataset_id: The dataset ID.
+            version: The release version, or ``None`` for the latest.
 
         Returns:
-            A handle to the committed version's manifest and files.
+            A handle that prefers complete cached releases and otherwise uses S3 range reads.
         """
-        manifest = self.get_manifest(dataset_id, version)
-        resolved = str(manifest.metadata.dataset_version)
-        cached = self._cache_dir / dataset_id / resolved
-        if (cached / MANIFEST_FILE).exists():
-            return DatasetVersion.open_local(cached)
-        root = self._key(dataset_id, resolved)
-        return DatasetVersion(manifest=manifest, filesystem=self._s3_filesystem(), root=f"{self._bucket}/{root}")
+        manifest = None
+        if version in {None, "", "latest"}:
+            manifest = self.get_manifest(dataset_id, version)
+            version = str(manifest.metadata.dataset_version)
+        return resolve_read_dependency_graph(
+            self._cache_dir,
+            DatasetRef.parse(f"{dataset_id}@{version}"),
+            self._open_remote_version,
+        )
+
+    def _open_remote_version(self, reference: DatasetRef) -> DatasetVersion:
+        """Bind one remote manifest to Arrow's native S3 filesystem.
+
+        Returns:
+            A handle without physical sources, which the graph resolver fills in.
+        """
+        manifest = self.get_manifest(reference.dataset_id, str(reference.version))
+        root = f"{self._bucket}/{self._key(reference.dataset_id, str(reference.version))}"
+        return DatasetVersion(manifest, self._s3_filesystem(), root)
 
     def store(
         self,
@@ -193,6 +206,7 @@ class S3Registry(WritableRegistry):
             with TimeFWriter(staging, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
                 writer.write()
             version_dir = staging / dataset_id / version
+            validate_dependencies(self, Manifest.model_validate_json((version_dir / MANIFEST_FILE).read_text()))
             self._delete_prefix(client, f"{final_base}.tmp-")  # sweep a prior crashed publish's temp prefix
             files = sorted(path for path in version_dir.rglob("*") if path.is_file())
             for path in files:
@@ -208,36 +222,15 @@ class S3Registry(WritableRegistry):
         return version
 
     @staticmethod
-    def _client() -> Any:
-        """Return a boto3 S3 client built from the default session (env creds/region/endpoint).
+    def _s3_filesystem() -> pafs.S3FileSystem:
+        """Build Arrow's S3 filesystem using boto3's credentials, region, and endpoint.
+
+        Import boto3 here so local and HTTP users do not need the optional S3 dependency.
 
         Returns:
-            A boto3 S3 client.
-
-        Raises:
-            TimeNetRegistryError: If boto3 is not installed.
+            A configured random-access filesystem.
         """
-        try:
-            import boto3  # noqa: PLC0415
-        except ModuleNotFoundError as exc:
-            raise TimeNetRegistryError("the S3 registry needs boto3; install the 'timenet[s3]' extra") from exc
-        return boto3.client("s3")
-
-    @staticmethod
-    def _s3_filesystem() -> "pafs.S3FileSystem":
-        """Build a pyarrow S3 filesystem, taking credentials/region/endpoint from boto3's default session.
-
-        Returns:
-            A configured :class:`pyarrow.fs.S3FileSystem`.
-
-        Raises:
-            TimeNetRegistryError: If boto3 is not installed.
-        """
-        try:
-            import boto3  # noqa: PLC0415
-        except ModuleNotFoundError as exc:
-            raise TimeNetRegistryError("the S3 registry needs boto3; install the 'timenet[s3]' extra") from exc
-        import pyarrow.fs as pafs  # noqa: PLC0415
+        import boto3  # noqa: PLC0415 - optional S3 dependency
 
         session = boto3.Session()
         credentials = session.get_credentials()
@@ -253,6 +246,19 @@ class S3Registry(WritableRegistry):
             if endpoint.startswith("http://"):
                 kwargs["scheme"] = "http"
         return pafs.S3FileSystem(**kwargs)
+
+    @staticmethod
+    def _client() -> Any:
+        """Return a boto3 S3 client built from the default session (env creds/region/endpoint).
+
+        Import boto3 here so local and HTTP users do not need the optional S3 dependency.
+
+        Returns:
+            A boto3 S3 client.
+        """
+        import boto3  # noqa: PLC0415 - optional S3 dependency
+
+        return boto3.client("s3")
 
     def _key(self, *parts: str) -> str:
         """Build a bucket-relative key: the prefix, then ``datasets/``, then the path parts."""  # noqa: DOC201
