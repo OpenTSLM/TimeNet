@@ -14,12 +14,14 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from timenet.errors import TimeFFormatError
 from timenet.values_backends.reader import BaseValuesReader
 
 
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
     from timenet.types import TimeSeriesSpec
+    from timenet.values_backends.types import StoredChunk
 
 
 _ROW_GROUP_CACHE_SIZE = 64
@@ -72,8 +74,8 @@ class ParquetValuesReader(BaseValuesReader):
         self._row_group_cache: OrderedDict[tuple[str, str, int], _DecodedGroup] = OrderedDict()
         self._target_types: dict[str, pa.DataType] = {}
 
-    def load(self, version: DatasetVersion, rows: list[dict], spec: TimeSeriesSpec) -> pa.Array:
-        """Read a series' chunks (``chunk_major_idx`` = row group, ``chunk_minor_idx`` = row offset).
+    def load(self, version: DatasetVersion, rows: list[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
+        """Read a series' chunks using row-group and row coordinates in ``data_index``.
 
         This method copies each chunk into a new array. A caller that keeps the values therefore
         does not keep the whole decoded row group alive.
@@ -88,10 +90,7 @@ class ParquetValuesReader(BaseValuesReader):
         """
         # If the stored type matches the spec, skip conversion.
         target = self._target(spec)
-        chunks = [
-            self._row_group(version, row["chunk_file"], row["chunk_major_idx"]).values[row["chunk_minor_idx"]].values
-            for row in rows
-        ]
+        chunks = [self._chunk_values(version, row) for row in rows]
         return pa.concat_arrays([chunk if chunk.type == target else chunk.cast(target) for chunk in chunks])
 
     def _target(self, spec: TimeSeriesSpec) -> pa.DataType:
@@ -110,7 +109,7 @@ class ParquetValuesReader(BaseValuesReader):
         return target
 
     def load_range(
-        self, version: DatasetVersion, rows: list[dict], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, rows: list[StoredChunk], start: int, stop: int, spec: TimeSeriesSpec
     ) -> pa.Array:
         """Read a scalar temporal subsection, trimming chunks at the requested boundaries.
 
@@ -118,19 +117,18 @@ class ParquetValuesReader(BaseValuesReader):
             The requested scalar values in the spec's canonical Arrow type.
         """
         target = self._target(spec)
-        total = sum(row["n_values"] for row in rows)
+        total = sum(row.n_values for row in rows)
         bounded_stop = min(stop, total)
         if start >= bounded_stop:
             return pa.array([], type=target)
         parts = []
         cursor = 0
         for row in rows:
-            row_stop = cursor + row["n_values"]
+            row_stop = cursor + row.n_values
             if row_stop > start and cursor < bounded_stop:
-                group = self._row_group(version, row["chunk_file"], row["chunk_major_idx"])
-                values = group.values[row["chunk_minor_idx"]].values
+                values = self._chunk_values(version, row)
                 lo = max(start - cursor, 0)
-                hi = min(bounded_stop - cursor, row["n_values"])
+                hi = min(bounded_stop - cursor, row.n_values)
                 parts.append(values.slice(lo, hi - lo).cast(target))
             cursor = row_stop
         return pa.concat_arrays(parts)
@@ -141,6 +139,26 @@ class ParquetValuesReader(BaseValuesReader):
             handle.close()
         self._shard_cache.clear()
         self._row_group_cache.clear()
+
+    def _chunk_values(self, version: DatasetVersion, chunk: StoredChunk) -> pa.Array:
+        """Resolve one chunk's coordinates through the shared row-group cache.
+
+        Returns:
+            The chunk's stored values before trimming or casting.
+
+        Raises:
+            TimeFFormatError: If the chunk has no row index or the index is out of bounds.
+        """
+        row_index = chunk.data_index.minor_idx
+        if row_index is None or row_index < 0:
+            raise TimeFFormatError(f"Parquet chunk {chunk.chunk_file!r} has invalid row index {row_index!r}")
+        group = self._row_group(version, chunk.chunk_file, chunk.data_index.major_idx)
+        if row_index >= len(group.values):
+            raise TimeFFormatError(
+                f"Parquet chunk {chunk.chunk_file!r} row index {row_index} exceeds row group "
+                f"{chunk.data_index.major_idx} with {len(group.values)} rows"
+            )
+        return group.values[row_index].values
 
     def _row_group(self, version: DatasetVersion, rel_path: str, row_group: int) -> _DecodedGroup:
         """Return a shard row group's values, decoding it at most once.
