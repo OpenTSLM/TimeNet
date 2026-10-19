@@ -20,6 +20,7 @@ from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
+from timenet.format.signal_loader import MemoryArray
 from timenet.format.stored_values import PackedValueWriter, ValueHandle
 from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
 from timenet.format.task_target_kind import TaskTargetKind, is_step_span
@@ -839,6 +840,8 @@ class DuckDBControlWriter:
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
             loader = signal.time_offsets_loader
+            while isinstance(loader, MemoryArray):
+                loader = loader.source
             if self.external is not None and isinstance(loader, ValueHandle):
                 self._pack(ObjectKind.AXIS, axis.axis_id, "offsets", loader)
                 return _OffsetSignature(loader.length, loader.digest)
