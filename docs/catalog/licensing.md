@@ -15,11 +15,11 @@ converts. Each dataset keeps the license set by whoever published it.
 
 Every dataset ships a card (`dataset.yaml`) with fields that tell you what applies:
 
-- `license`: a supported identifier from `timenet.types.License`, using
-  [SPDX](https://spdx.org/licenses/) spelling where available, such as `MIT`, `Apache-2.0`, or
-  `CC-BY-4.0`. This also includes `Hippocratic-3.0`; use `other` for licenses outside the list.
-- `license_url`: where to read the full license text. Required and nonblank for `other` and
-  `Hippocratic-3.0`.
+- `license`: an SPDX identifier, such as `MIT`, `Apache-2.0`, or `CC-BY-4.0`. The dataset-card schema
+  limits this field to a fixed set of SPDX identifiers, kept in sync with `timenet.types.License`, so
+  the value is one you can look up on [SPDX](https://spdx.org/licenses/). A license outside that set,
+  such as a Hippocratic License 3.0 build with modules, uses `other` instead.
+- `license_url`: where to read the full license text. Required when `license` is `other`.
 - `source_url`: where the data comes from. Open it to read the upstream terms in full. This field is
   optional, so a purely synthetic dataset may leave it out.
 

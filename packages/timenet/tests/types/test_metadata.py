@@ -77,11 +77,11 @@ def test_metadata_picklable():
     assert pickle.loads(pickle.dumps(_metadata())) == _metadata()
 
 
-@pytest.mark.parametrize("license", [License.OTHER, License.HIPPOCRATIC_3_0])
 @pytest.mark.parametrize("license_url", [None, "", " \t\n"])
-def test_license_requires_a_nonblank_license_url(license, license_url):
+def test_license_other_requires_a_nonblank_license_url(license_url):
     with pytest.raises(ValidationError, match="license_url is required"):
-        _metadata(license=license, license_url=license_url)
+        _metadata(license=License.OTHER, license_url=license_url)
+    assert _metadata(license=License.OTHER, license_url="https://l.example").license is License.OTHER
 
 
 def test_non_open_access_requires_an_access_url():
