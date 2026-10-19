@@ -72,7 +72,6 @@ def _dataset(spec: TimeSeriesSpec, values, signal: str = "c", record_id: str = "
         spec=spec,
         name=signal,
         time_axis=RegularAxis.from_rate_hz(1),
-        id=f"ts-{signal}",
     )
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), id=record_id))
     dataset.derive_schema()
