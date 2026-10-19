@@ -37,7 +37,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        for index, row in enumerate(raw_refs):
+        for row in raw_refs:
             series = json.loads(row["Series"])
             signals = series if series and isinstance(series[0], list) else [series]
             time_series = tuple(
@@ -46,24 +46,19 @@ class TSQAConnector(BaseHuggingFaceConnector):
                     spec=_SPEC,
                     name=f"c{signal}",
                     time_axis=OrdinalAxis(),
-                    id=f"row-{index}-c{signal}",
                 )
                 for signal, values in enumerate(signals)
             )
-            record = Record(
-                id=f"row-{index}",
-                sources=(Source(id=f"row-{index}-source", name="TSQA series", signals=time_series),),
-            )
+            record = Record(sources=(Source(name="TSQA series", signals=time_series),))
             dataset.add_record(record=record)
-            record.annotate(Annotation(key="task", value=row["Task"], id=f"task-{index}"))
+            record.annotate(Annotation(key="task", value=row["Task"]))
             if row.get("Label"):
-                record.annotate(Annotation(key="label", value=row["Label"], id=f"label-{index}"))
+                record.annotate(Annotation(key="label", value=row["Label"]))
             dataset.add_task(
                 task=AnswerTask(
                     inputs=(record,),
                     prompt=row["Question"],
                     targets=(row["Answer"],),
-                    id=f"qa-{index}",
                 )
             )
         return dataset
