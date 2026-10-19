@@ -1,6 +1,6 @@
 from pathlib import Path
 import tempfile
-from typing import cast
+from typing import Any, ClassVar, cast
 
 import pytest
 
@@ -8,10 +8,12 @@ from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.engine import publish_pipeline, run_pipeline, store_dataset
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
+from timenet.registry import LocalRegistry
 from timenet.registry.writable import WritableRegistry
 from timenet.testing import make_dataset
+from timenet.types.references import DatasetRef
 
 
 def _write_demo_card() -> Path:
@@ -227,3 +229,50 @@ def test_run_pipeline_keeps_the_cache_when_convert_fails(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="convert blew up"):
         run_pipeline(_FailingConnector(), tmp_path / "root")
     assert (settings().cache_dir / make_dataset().metadata.dataset_id).exists()
+
+
+_PARENT = DatasetRef(dataset_id=make_dataset().metadata.dataset_id, version=make_dataset().metadata.dataset_version)
+
+
+class _ChildConnector(BaseConnector[str]):
+    """Declares the demo dataset as its ``parent`` input and imports one record with ``IMPORT``."""
+
+    IMPORT: ClassVar[dict[str, Any] | None] = {"namespace": "parent"}
+
+    def metadata(self):
+        return make_dataset().metadata.model_copy(update={"dataset_id": "test/child", "inputs": {"parent": _PARENT}})
+
+    def download(self, cache_dir):
+        return []
+
+    def compose(self, raw_refs, context):
+        dataset = TimeFDataset(metadata=self.metadata())
+        if self.IMPORT is not None:
+            dataset.import_from(context.inputs["parent"], records=[make_dataset().records[0].id], **self.IMPORT)
+        return dataset
+
+
+def test_run_pipeline_records_each_declared_parent_once(tmp_path):
+    LocalRegistry(tmp_path).store(make_dataset())
+
+    version_dir = run_pipeline(_ChildConnector(), tmp_path, cache_dir=tmp_path / "cache")
+
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
+    assert {alias: lock.source for alias, lock in manifest.input_locks.items()} == {"parent": _PARENT}
+
+
+@pytest.mark.parametrize("imported", [None, {}], ids=["not-imported", "default-namespace"])
+def test_run_pipeline_rejects_imports_that_differ_from_the_card(tmp_path, monkeypatch, imported):
+    LocalRegistry(tmp_path).store(make_dataset())
+    monkeypatch.setattr(_ChildConnector, "IMPORT", imported)
+
+    with pytest.raises(TimeFValidationError, match="declares inputs"):
+        run_pipeline(_ChildConnector(), tmp_path, cache_dir=tmp_path / "cache")
+    assert not (tmp_path / "test/child").exists()
+
+
+def test_run_pipeline_fails_on_a_missing_parent_before_downloading(tmp_path, monkeypatch):
+    monkeypatch.setattr(_ChildConnector, "download", lambda self, cache_dir: pytest.fail("downloaded"))
+
+    with pytest.raises(TimeNetDatasetNotFoundError, match=str(_PARENT)):
+        run_pipeline(_ChildConnector(), tmp_path, cache_dir=tmp_path / "cache")

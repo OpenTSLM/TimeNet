@@ -1,4 +1,3 @@
-from abc import ABC
 from pathlib import Path
 
 import pytest
@@ -8,15 +7,13 @@ from timenet.dataset import TimeFDataset
 from timenet.testing import make_dataset
 
 
-def test_base_connector_is_abstract():
-    assert issubclass(BaseConnector, ABC)
-    # download() is concrete now (it bridges to download_async); only convert() stays abstract.
-    assert BaseConnector.__abstractmethods__ == frozenset({"convert"})
+def test_connector_without_convert_or_compose_fails_at_construction():
+    class NoConversion(BaseConnector[str]):
+        def download(self, cache_dir):
+            return []
 
-
-def test_base_connector_cannot_instantiate():
-    with pytest.raises(TypeError):
-        BaseConnector()
+    with pytest.raises(TypeError, match="must implement convert"):
+        NoConversion()
 
 
 def test_concrete_connector_implements_contract(tmp_path):
