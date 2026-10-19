@@ -65,6 +65,7 @@ class _RecordRow(NamedTuple):
     time_span_start_us: int | None
     time_span_end_us: int | None
     metadata: str
+    read_order: int
 
 
 class _SourceRow(NamedTuple):
@@ -312,7 +313,7 @@ _Ref = TypeVar("_Ref", Record, Annotation)
 _T = TypeVar("_T")
 
 _HIERARCHY_TABLES: dict[type[tuple[Any, ...]], tuple[str, str, str]] = {
-    _RecordRow: ("records", "record_id", "record_id"),
+    _RecordRow: ("records", "record_id", "read_order"),
     _SourceRow: ("sources", "record_key", "source_id"),
     _SignalRow: ("signals", "source_key", "signal_id"),
 }
@@ -463,7 +464,7 @@ class DuckDBControlReader:
             The Record IDs sorted by ID.
         """
         return tuple(
-            row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY record_id").fetchall()
+            row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY read_order").fetchall()
         )
 
     def read_records(
@@ -503,6 +504,10 @@ class DuckDBControlReader:
                 raise TimeFFormatError(
                     f"signal {signal_row.signal_id!r} refers to missing source key {signal_row.source_key!r}"
                 )
+        if eager:
+            # Construct native arrays in Record scan order, which may differ from namespaced IDs.
+            record_order = {row.record_key: index for index, row in enumerate(record_rows)}
+            signal_rows.sort(key=lambda row: record_order[sources_by_key[row.source_key].record_key])
         annotation_keys = None
         if not read_all:
             annotation_keys = [row.record_key for row in record_rows]
