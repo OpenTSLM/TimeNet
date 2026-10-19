@@ -146,13 +146,8 @@ def test_control_writer_preserves_relationships_across_task_batches(tmp_path, mo
 def test_control_writer_removes_database_after_validation_failure(tmp_path):
     dataset = _dataset()
     annotation = dataset.records[0].annotations[0]
-    dataset.records[0].annotate(
-        Annotation(
-            id=annotation.id,
-            key="patient_sex",
-            value="female",
-        )
-    )
+    other = dataset.records[0].annotate(Annotation(key="patient_sex", value="female"))
+    object.__setattr__(other, "id", annotation.id)
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match="reused with different content"):

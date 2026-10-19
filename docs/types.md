@@ -45,6 +45,12 @@ get ID 1.
 - `dataset.annotate()` numbers a dataset-level annotation.
 - `annotate()` on an object that is already in a dataset numbers the new occurrence at once.
 
+Equal annotation contents share one content ID, and equal regular or ordinal axes share one axis
+ID. Contents are equal if the name, the value and its type, the unit, the description, and the
+metadata are equal. `0.0` and `-0.0` are equal, but `True`, `1`, and `1.0` are not. Irregular axes
+always get their own ID, because equal endpoints do not mean equal time offsets. The writer stores
+a shared content or axis once.
+
 You can set an ID yourself. The dataset keeps it, rejects it if another object of the same kind
 already uses it, and continues its counter above it. The writer stores the counters, so an edited
 version continues from them and never reuses the ID of a removed object.

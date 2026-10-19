@@ -369,7 +369,7 @@ def test_an_epoch_task_covers_each_scored_epoch(release, monkeypatch):
     scored = sum(
         (one.span.exclusive_end - one.span.start_us) // (30 * US_PER_S)
         for record in dataset.records
-        for one in {a.id: a for a in record.walk_annotations()}.values()
+        for one in {(a.id, a.span): a for a in record.walk_annotations()}.values()
         if one.key == "sleep_stage" and one.span is not None
     )
     assert len(epochs) == scored

@@ -385,7 +385,7 @@ class TimeFWriter:
         record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
         for ann in record_annotations:
             content_id = check_id(ann.id, "annotation content id")
-            content = ann._content_fields
+            content = ann._content_key
             if content_id in seen and seen[content_id] != content:
                 raise TimeFValidationError(f"annotation content id {content_id!r} is reused with different content")
             seen[content_id] = content
