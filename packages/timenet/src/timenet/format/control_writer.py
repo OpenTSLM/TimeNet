@@ -731,7 +731,7 @@ class DuckDBControlWriter:
             if annotation.occurrence_id in occurrence_ids:
                 raise TimeFValidationError(f"annotation occurrence id {annotation.occurrence_id!r} is not unique")
             content_id = check_id(annotation.id, "annotation content id")
-            content = annotation._content_fields
+            content = annotation._content_key
             previous = contents.get(content_id)
             if previous is not None and previous != content:
                 raise TimeFValidationError(f"annotation content id {content_id!r} is reused with different content")

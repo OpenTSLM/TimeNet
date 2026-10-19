@@ -323,19 +323,14 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
     DuckDBControlWriter(path).write_hierarchy(dataset)
     with connect_control(path) as connection:
         connection.execute(
-            """UPDATE axes SET axis_type = 'corrupt'
-               WHERE axis_id IN (
-                   SELECT signals.axis_id
-                   FROM signals
-                   JOIN sources USING (source_id)
-                   WHERE sources.record_id = ?
-               )""",
+            """UPDATE signals SET modality = 'corrupt'
+               WHERE source_id IN (SELECT source_id FROM sources WHERE record_id = ?)""",
             [record1.id],
         )
     with DuckDBControlReader(path) as reader:
         (selected,) = reader.read_records((entity_id(record0),))
         assert selected.id == record0.id
-        with pytest.raises(TimeFFormatError, match="unknown type"):
+        with pytest.raises(TimeFFormatError, match="invalid modality"):
             reader.read_records((entity_id(record1),))
 
 

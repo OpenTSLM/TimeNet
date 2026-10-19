@@ -1,7 +1,7 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 import sys
 from typing import Literal, TextIO, TypeVar, cast, overload
@@ -9,7 +9,7 @@ from typing import Literal, TextIO, TypeVar, cast, overload
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset.axis import TimeAxis
+from timenet.dataset.axis import IrregularAxis, TimeAxis
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record
 from timenet.dataset.source import Source
@@ -80,6 +80,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._tasks: list[Task] = []
         self._task_ids: set[int] = set()
         self._axes_by_id: dict[int, TimeAxis] = {}
+        self._axis_ids_by_value: dict[TimeAxis, EntityId] = {}
+        self._content_ids_by_value: dict[Hashable, EntityId] = {}
+        self._content_values_by_id: dict[EntityId, Hashable] = {}
         self._occurrence_ids: set[int] = set()
         self._ids = IdCounters()
         self._streamed_task_base = 0
@@ -94,7 +97,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """Register and return a complete record.
 
         The record, its sources, signals, and axes, and its annotations get the next id of their
-        kind if they have none. An explicit id is kept, and later ids continue above it.
+        kind if they have none. An explicit id is kept, and later ids continue above it. An axis or
+        annotation content without an id reuses the id of an equal one that is already in the
+        dataset, see :meth:`_axis_id` and :meth:`_content_id`.
 
         Args:
             record: The complete record hierarchy to register.
@@ -124,7 +129,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             set_field(signal, "_binder", self)
             self._signals_by_id[cast("int", signal.id)] = signal
         for axis in axes:
-            set_field(axis, "id", self._take_id(IdKind.AXIS, axis.id))
+            set_field(axis, "id", self._axis_id(axis))
             self._axes_by_id.setdefault(cast("int", axis.id), axis)
         for annotation in annotations:
             self._bind_annotation(annotation)
@@ -136,6 +141,46 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     def _take_id(self, kind: IdKind, value: EntityId | None) -> EntityId:
         """Return ``value`` after recording it, or the next id of ``kind`` if it is ``None``."""
         return self._ids.next(kind) if value is None else self._ids.claim(kind, value)
+
+    def _axis_id(self, axis: TimeAxis) -> EntityId:
+        """Return the id of an axis, reusing the id of an equal regular or ordinal axis.
+
+        Irregular axes are not compared by value: two of them can have equal endpoints and
+        different time offsets.
+
+        Returns:
+            The explicit id, the id of an equal axis that is already in the dataset, or a new id.
+        """
+        if isinstance(axis, IrregularAxis):
+            return self._take_id(IdKind.AXIS, axis.id)
+        if axis.id is None and axis in self._axis_ids_by_value:
+            return self._axis_ids_by_value[axis]
+        axis_id = self._take_id(IdKind.AXIS, axis.id)
+        self._axis_ids_by_value.setdefault(axis, axis_id)
+        return axis_id
+
+    def _content_id(self, annotation: Annotation) -> EntityId:
+        """Return the content id of an annotation, reusing the id of equal content.
+
+        Two contents are equal if their :attr:`Annotation._content_key` values are equal.
+
+        Returns:
+            The explicit id, the id of equal content that is already in the dataset, or a new id.
+
+        Raises:
+            TimeFValidationError: If an explicit id is already used by different content.
+        """
+        content = annotation._content_key
+        if annotation.id is None:
+            known = self._content_ids_by_value.get(content)
+            if known is not None:
+                return known
+        elif self._content_values_by_id.get(annotation.id, content) != content:
+            raise TimeFValidationError(f"annotation content id {annotation.id!r} is already used by different content")
+        content_id = self._take_id(IdKind.CONTENT, annotation.id)
+        self._content_values_by_id.setdefault(content_id, content)
+        self._content_ids_by_value.setdefault(content, content_id)
+        return content_id
 
     def _check_record_ids(
         self,
@@ -186,10 +231,10 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         set_field = object.__setattr__
         template = annotation._template
         if annotation.id is None and template is not None:
-            set_field(template, "id", self._take_id(IdKind.CONTENT, template.id))
+            set_field(template, "id", self._content_id(template))
             set_field(annotation, "id", template.id)
         else:
-            set_field(annotation, "id", self._take_id(IdKind.CONTENT, annotation.id))
+            set_field(annotation, "id", self._content_id(annotation))
         set_field(annotation, "_template", None)
         if annotation.occurrence_id in self._occurrence_ids:
             raise TimeFValidationError(
