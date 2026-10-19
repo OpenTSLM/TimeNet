@@ -1,19 +1,116 @@
 from pathlib import Path
+import shutil
 
 from pydantic import ValidationError
 import pytest
 
-from timenet import client as client_module
+from timenet import builders as builders_module, client as client_module
 from timenet.client import TimeNet
-from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetAccessError, TimeNetDatasetNotFoundError
+from timenet.connectors import BuildContext
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
-from timenet.reader import DatasetHandle
-from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
+from timenet.reader import DatasetHandle, TimeFReader
+from timenet.registry import TIMENET_REGISTRY_URL, LocalRegistry, RemoteRegistry, open_local_version
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, DatasetMetadata, Domain, License, Version
+from timenet.types.object_kind import ObjectKind
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
+
+
+def test_local_child_fetches_complete_parents_before_returning_a_handle(tmp_path):
+    parent = make_dataset()
+    origin = LocalRegistry(tmp_path / "origin")
+    origin.store(parent)
+    child = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}))
+    with TimeNet(origin).get_handle(parent.metadata.dataset_id) as handle:
+        child.import_from(handle, records=[parent.records[0].id])
+    origin.store(child)
+    cache = tmp_path / "cache"
+    shutil.copytree(origin.root / "test/child/1.0.0", cache / "test/child/1.0.0")
+    client = TimeNet(cache)
+    with pytest.raises(TimeNetDatasetNotFoundError, match=parent.metadata.dataset_id):
+        client.get_handle("test/child", auto_build=False)
+    with client.get_handle("test/child", fetch_parents=str(origin.root)) as handle:
+        assert (cache / parent.metadata.dataset_id / "1.0.0/control.duckdb").is_file()
+        shutil.rmtree(origin.root)
+        assert handle.read().records[0].signals[0].to_arrow().equals(parent.records[0].signals[0].to_arrow())
+    with client.load("test/child") as handle:
+        assert handle.reader._control is None
+        assert handle.read().records
+
+
+def test_resampled_child_reads_and_downloads_without_its_build_input(tmp_path):
+    parent = make_dataset()
+    origin = LocalRegistry(tmp_path / "origin")
+    origin.store(parent)
+    reference = DatasetRef(dataset_id=parent.metadata.dataset_id, version=parent.metadata.dataset_version)
+    metadata = parent.metadata.model_copy(update={"dataset_id": "test/resampled", "inputs": {"parent": reference}})
+    with BuildContext.open(metadata, origin) as context:
+        original = context.inputs["parent"].get_handle(ObjectKind.SIGNAL, parent.records[0].signals[0].id).read()
+        signal = Signal.from_values(
+            original.to_numpy()[::2], spec=original.spec, name=original.name, time_axis=RegularAxis.from_rate_hz(8)
+        )
+        child = TimeFDataset(metadata=metadata)
+        child.add_record(record=Record(record_id="resampled", sources=(Source(name="Monitor", signals=(signal,)),)))
+        child.import_from(context.inputs["parent"], namespace="parent")
+        context.check_imports(child)
+        origin.store(child)
+    manifest = origin.get_manifest(metadata.dataset_id)
+    assert manifest.input_locks["parent"].source == reference
+    assert manifest.payload_sources == {}
+    shutil.rmtree(origin.root / reference.dataset_id)
+
+    # Reading the compiled result needs no original samples, even when fetching/building is enabled.
+    with TimeNet(origin).load(metadata.dataset_id, fetch_parents=str(origin.root), build_parents=True) as handle:
+        assert handle.read().records[0].signals[0].to_arrow().equals(signal.to_arrow())
+    # Running the connector again still requires its declared input.
+    with pytest.raises(TimeNetDatasetNotFoundError, match=reference.dataset_id):
+        BuildContext.open(metadata, origin)
+
+    cache = tmp_path / "download"
+    directory = TimeNet(origin, storage_path=cache).download(metadata.dataset_id)
+    assert not (cache / reference.dataset_id).exists()
+    shutil.rmtree(origin.root)
+    version = open_local_version(directory)
+    assert version.manifest.input_locks == manifest.input_locks
+    with TimeFReader(version) as reader:
+        reader.verify()
+        assert reader.get_handle().read().records[0].signals[0].to_arrow().equals(signal.to_arrow())
+
+
+@pytest.mark.parametrize("declared_version", ["1.0.0", "2.0.0"])
+def test_local_child_builds_only_the_exact_missing_physical_source(tmp_path, monkeypatch, declared_version):
+    parent = make_dataset()
+    registry = LocalRegistry(tmp_path / "registry")
+    registry.store(parent)
+    child = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}))
+    with TimeNet(registry).get_handle(parent.metadata.dataset_id) as handle:
+        child.import_from(handle, records=[parent.records[0].id])
+    registry.store(child)
+    shutil.rmtree(registry.root / parent.metadata.dataset_id)
+    calls = []
+
+    class Builder:
+        def declared_version(self, dataset_id):
+            return declared_version
+
+        def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_parents=None):
+            calls.append((dataset_id, force, build_parents, fetch_parents))
+            LocalRegistry(root).store(make_dataset(), force=force)
+            return root / dataset_id / declared_version
+
+    monkeypatch.setattr(builders_module, "find_builder", lambda dataset_id: Builder())
+    if declared_version != "1.0.0":
+        with pytest.raises(TimeFValidationError, match="exact input"):
+            TimeNet(registry).get_handle("test/child", auto_build=False, build_parents=True)
+        assert calls == []
+        return
+    with TimeNet(registry).get_handle("test/child", auto_build=False, build_parents=True) as handle:
+        assert handle.read().records[0].signals[0].to_arrow().equals(parent.records[0].signals[0].to_arrow())
+    assert calls == [(parent.metadata.dataset_id, False, True, None)]
 
 
 @pytest.fixture(autouse=True)
@@ -208,7 +305,7 @@ def test_load_names_the_buildable_version_when_a_pin_cannot_be_built(registry_ro
         def declared_version(self, dataset_id):
             return "1.0.0"
 
-        def build(self, dataset_id, root, *, force=False):
+        def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_parents=None):
             self.built = True
             return Path(root) / dataset_id / "1.0.0"
 
@@ -232,7 +329,7 @@ def test_load_accepts_the_latest_sentinels_after_a_build(tmp_path, monkeypatch, 
         def declared_version(self, dataset_id):
             return "1.0.0"
 
-        def build(self, dataset_id, root, *, force=False):
+        def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_parents=None):
             dataset = make_dataset()
             dataset.derive_schema()
             with TimeFWriter(Path(root), dataset) as writer:
@@ -259,7 +356,7 @@ def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, m
         def declared_version(self, dataset_id):
             return "1.0.0"
 
-        def build(self, dataset_id, root, *, force=False):
+        def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_parents=None):
             self.built = True
             return Path(root) / dataset_id / "1.0.0"
 
