@@ -59,7 +59,7 @@ def test_remove_leaf_record():
     dataset = make_dataset()
     dataset.derive_schema()
     edited = remove_records(dataset, ["record-1"])
-    assert {s.record_id for s in edited.records} == {"record-0", "record-2"}
+    assert {s.id for s in edited.records} == {"record-0", "record-2"}
     # tasks untouched (record-1 had none)
     assert {t.id for t in edited.tasks} == {
         "task-cls-0",
@@ -88,7 +88,7 @@ def test_remove_record_cascades_dependent_tasks():
     dataset = make_dataset()
     dataset.derive_schema()
     edited = remove_records(dataset, ["record-0"], cascade=True)
-    assert {s.record_id for s in edited.records} == {"record-1", "record-2"}
+    assert {s.id for s in edited.records} == {"record-1", "record-2"}
     # every task on record-0 goes, and task-answer-0 (which derives from task-cls-0) cascades out
     assert {t.id for t in edited.tasks} == {"task-cls-2"}
 
@@ -97,7 +97,7 @@ def test_shared_annotation_survives_on_remaining_record():
     dataset = make_dataset()
     dataset.derive_schema()
     edited = remove_records(dataset, ["record-0"], cascade=True)
-    record1 = next(s for s in edited.records if s.record_id == "record-1")
+    record1 = next(s for s in edited.records if s.id == "record-1")
     assert any(a.id == "cohort-shared" for a in record1.annotations)
 
 
@@ -153,7 +153,7 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
         restored = reader.read()
 
     by_record = {
-        record.record_id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
+        record.id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
     }
     for task in restored.tasks:
         reachable = set().union(*(by_record[record.id] for record in task.inputs))
@@ -197,7 +197,7 @@ def test_edit_version_round_trip(tmp_path):
 
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         restored = reader.read()
-    assert {s.record_id for s in restored.records} == {"record-0", "record-2"}
+    assert {s.id for s in restored.records} == {"record-0", "record-2"}
 
     manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
     assert str(manifest.metadata.dataset_version) == "1.0.1"

@@ -17,6 +17,7 @@ import numpy as np
 import pyarrow as pa
 
 from benchmarks.end_to_end.corpus import build_corpus
+from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.writer import TimeFWriter
@@ -59,7 +60,9 @@ def _canonical(value: Any) -> Any:  # noqa: PLR0911, RUF100 - explicit type case
     if isinstance(value, type):
         return f"{value.__module__}.{value.__qualname__}"
     if is_dataclass(value):
-        unstable_or_executable = {"axis_id", "occurrence_id", "loader", "time_offsets_loader"}
+        unstable_or_executable = {"occurrence_id", "loader", "time_offsets_loader"}
+        if isinstance(value, RegularAxis | IrregularAxis | OrdinalAxis):
+            unstable_or_executable.add("id")
         return {
             field.name: _canonical(getattr(value, field.name))
             for field in fields(value)
@@ -125,7 +128,7 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
             digest.update(
                 json.dumps(
                     {
-                        "record_id": record.record_id,
+                        "record_id": record.id,
                         "metadata": record.metadata,
                         "task_ids": record.task_ids,
                         "annotations": _canonical(record.annotations),

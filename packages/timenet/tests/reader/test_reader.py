@@ -101,7 +101,7 @@ def _referenced_annotation_dataset() -> TimeFDataset:
     record = dataset.add_record(
         record=Record(
             sources=(Source(id="rec-0-source", name="Source", signals=(signal,)),),
-            record_id="rec-0",
+            id="rec-0",
         )
     )
     options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno"))
@@ -186,9 +186,9 @@ def test_metadata_and_schema_come_from_the_manifest_without_opening_control(tmp_
 def test_iter_records_matches_full_read(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        streamed = {record.record_id for record in reader.iter_records()}
+        streamed = {record.id for record in reader.iter_records()}
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        materialized = {record.record_id for record in reader.read().records}
+        materialized = {record.id for record in reader.read().records}
     assert streamed == materialized
 
 
@@ -261,7 +261,7 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path):
 def test_iter_records_preserves_requested_order(tmp_path):
     with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
         selected = tuple(reader.iter_records(record_ids=("record-2", "record-0")))
-    assert [record.record_id for record in selected] == ["record-2", "record-0"]
+    assert [record.id for record in selected] == ["record-2", "record-0"]
 
 
 def test_iter_records_rejects_an_unknown_id_before_yielding(tmp_path):
@@ -323,7 +323,7 @@ def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_pa
         tasks = list(reader.iter_tasks((record0,)))
         every = reader.tasks
 
-    assert {task.id for task in tasks} == {task.id for task in every if task.inputs[0].record_id == "record-0"}
+    assert {task.id for task in tasks} == {task.id for task in every if task.inputs[0].id == "record-0"}
     assert all(task.inputs[0] is record0 for task in tasks)
     answer = next(task for task in tasks if task.id == "task-answer-0")
     cohort = next(annotation for annotation in record0.annotations if annotation.id == "cohort-shared")
