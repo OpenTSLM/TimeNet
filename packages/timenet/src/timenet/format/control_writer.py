@@ -7,7 +7,7 @@ from hashlib import sha256
 from itertools import islice
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Any, NamedTuple, assert_never, cast
+from typing import TYPE_CHECKING, Any, NamedTuple, assert_never
 
 import duckdb
 import numpy as np
@@ -586,13 +586,13 @@ class DuckDBControlWriter:
             TimeFValidationError: If the target refers to an object outside the dataset.
         """
         row = encode_target(target)
-        record_id = cast("str | None", row["record_id"])
-        signal_id = cast("str | None", row["signal_id"])
+        record_id = row["record_id"]
+        signal_id = row["signal_id"]
         if record_id is not None and record_id not in record_keys:
             raise TimeFValidationError(f"{target_label} refers to unknown Record {record_id!r}")
         if signal_id is not None and signal_id not in signal_keys:
             raise TimeFValidationError(f"{target_label} refers to unknown Signal {signal_id!r}")
-        span_signal_ids = cast("tuple[str, ...] | list[str] | None", row["span_signal_ids"])
+        span_signal_ids = row["span_signal_ids"]
         missing_signals = [item for item in span_signal_ids or () if item not in signal_keys]
         if missing_signals:
             raise TimeFValidationError(f"{target_label} refers to unknown Signals {missing_signals}")
