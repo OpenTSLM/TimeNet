@@ -29,6 +29,7 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.types.ids import entity_id
 from timenet.writer import TimeFWriter
 
 
@@ -58,12 +59,12 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
     dataset = _referenced_annotation_dataset()
     record = dataset.records[0]
     if subjects:
-        record.annotate(Annotation(key="subject_ids", value=list(subjects), id="record-subjects"))
+        record.annotate(Annotation(key="subject_ids", value=list(subjects), id=250))
     version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
-        (selected,) = reader.iter_records((record.id,))
+        (selected,) = reader.iter_records((entity_id(record),))
 
     for back in (restored.records[0], selected):
         values = [annotation.value for annotation in back.annotations if annotation.key == "subject_ids"]
@@ -98,22 +99,22 @@ def _referenced_annotation_dataset() -> TimeFDataset:
         name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         data=[0.0, 1.0, 2.0],
-        id="ecg-rec-0-I",
+        id=101,
     )
     record = dataset.add_record(
         record=Record(
-            sources=(Source(id="rec-0-source", name="Source", signals=(signal,)),),
-            id="rec-0",
+            sources=(Source(id=20, name="Source", signals=(signal,)),),
+            id=10,
         )
     )
-    options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno"))
+    options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id=201))
     dataset.add_task(
         task=AnswerTask(
             prompt="Rhythm?",
             targets=("yes",),
             inputs=(record,),
             input_annotations=(options,),
-            id="qa-0",
+            id=300,
         )
     )
     return dataset
@@ -141,7 +142,7 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
             rationale=f"reason {index}",
             inputs=(record,),
             input_annotations=(options,),
-            id=f"qa-{index}",
+            id=300 + index,
         )
         for index in range(5)
     ]
@@ -154,7 +155,7 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
 
 def test_streamed_tasks_round_trip_and_back_populate_records(tmp_path):
     restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)))
-    task = next(task for task in restored.tasks if task.id == "qa-3")
+    task = next(task for task in restored.tasks if task.id == 303)
     assert task.prompt == "Question 3?"
     assert task.rationale == "reason 3"
     assert task.inputs == (restored.records[0],)
@@ -262,7 +263,7 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path):
 
 def test_iter_records_preserves_requested_order(tmp_path):
     dataset = make_dataset()
-    requested = (dataset.records[2].id, dataset.records[0].id)
+    requested = (entity_id(dataset.records[2]), entity_id(dataset.records[0]))
     with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
         selected = tuple(reader.iter_records(record_ids=requested))
     assert tuple(record.id for record in selected) == requested
@@ -274,7 +275,7 @@ def test_iter_records_rejects_an_unknown_id_before_yielding(tmp_path):
         TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader,
         pytest.raises(TimeFValidationError, match="no such record"),
     ):
-        next(reader.iter_records(record_ids=(dataset.records[0].id, "record-nope")))
+        next(reader.iter_records(record_ids=(entity_id(dataset.records[0]), 99)))
 
 
 def test_iter_records_can_skip_annotations_without_losing_values(tmp_path):
@@ -324,7 +325,7 @@ def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_pat
 
 def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_path):
     dataset = make_dataset()
-    record0_id = dataset.records[0].id
+    record0_id = entity_id(dataset.records[0])
     with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
         record0 = next(reader.iter_records((record0_id,)))
         tasks = list(reader.iter_tasks((record0,)))
@@ -355,3 +356,14 @@ def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
         train.id: Split.TRAIN,
         test.id: Split.TEST,
     }
+
+
+def test_task_views_reject_a_non_int_record_id(tmp_path):
+    dataset = make_dataset()
+    record0 = dataset.records[0]
+    assert len(record0.task_ids) == 4
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+        assert set(reader.task_table(record_ids=(entity_id(record0),))["task_id"].to_pylist()) == set(record0.task_ids)
+        for view in (reader.task_table, reader.target_table):
+            with pytest.raises(TimeFValidationError, match="positive int64 id"):
+                view(record_ids=(str(record0.id),))  # ty: ignore[invalid-argument-type]

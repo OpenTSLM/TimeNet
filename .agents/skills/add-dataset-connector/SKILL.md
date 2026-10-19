@@ -80,9 +80,10 @@ Add the org namespace `__init__.py` if the org is new. Keep `download` I/O-only 
 with lazy value loaders (never materialize arrays in `convert`). See the worked example in
 `references/connector-anatomy.md`.
 
-Do not pass ids to records, sources, signals, annotations, or tasks. Each one gets a generated id.
-Put upstream identifiers in `Record.metadata` (for example `{"ecg_id": 17}`) or in an annotation,
-and reference other objects by the Python object, not by an id.
+Do not pass ids to records, sources, signals, annotations, or tasks. The dataset gives each one an
+int id when you add it. Put upstream identifiers in `Record.metadata` (for example `{"ecg_id": 17}`)
+or in an annotation, and reference other objects by the Python object, not by an id. Build anything
+that names a Signal id, such as a task scope, after `dataset.add_record()`.
 
 ### 7. Verify
 - Add a fixture-based test in `<org>/<name>/tests/`, mirroring the one at

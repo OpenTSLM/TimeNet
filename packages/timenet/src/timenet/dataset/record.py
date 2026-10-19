@@ -12,8 +12,10 @@ from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
-from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint, new_id
+from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint
+from timenet.types.annotations import AnnotationBinder
 from timenet.types.clock import check_int64, offset_us, unix_us
+from timenet.types.ids import EntityId, check_id, check_optional_id
 
 
 @dataclass(kw_only=True)
@@ -32,9 +34,10 @@ class Record(SupportsAnnotate):
     """The root sources that belong to this recording."""
     start_time: TimeOrigin = field(default_factory=TimeOrigin)
     """The common relative zero, with an optional absolute timestamp."""
-    id: str = field(default_factory=new_id)
-    """Unique id for the record (default: an auto-generated uuid7)."""
-    task_ids: tuple[str, ...] = ()
+    id: EntityId | None = None
+    """Unique id for the record. ``None`` until :meth:`~timenet.dataset.TimeFDataset.add_record`
+    gives it the next record id."""
+    task_ids: tuple[EntityId, ...] = ()
     """Ids of the tasks attached to this record."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the record."""
@@ -46,20 +49,23 @@ class Record(SupportsAnnotate):
     one, for example a note taken while every sensor was briefly off. This checks an unscoped span
     against it, rather than against the union of the series' windows. Its ``time_series_ids`` must be
     ``None``, and it must contain every series' window."""
+    _binder: AnnotationBinder | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:  # noqa: PLR0912 - hierarchy, timing, and annotation invariants
         """Validate the record hierarchy and its optional single-clock session span.
 
         Raises:
-            TimeFValidationError: If ``time_span`` is not a whole-record ``TimeInterval`` or does not
-                contain some series' window.
+            TimeFValidationError: If ``id`` or a task id is invalid, or ``time_span`` is not a
+                whole-record ``TimeInterval`` or does not contain some series' window.
         """
+        self.id = check_optional_id(self.id, "Record.id")
+        self.task_ids = tuple(check_id(task_id, "Record.task_ids entry") for task_id in self.task_ids)
         if not isinstance(self.start_time, TimeOrigin):
             raise TimeFValidationError("Record.start_time must be a TimeOrigin")
         self.metadata = validate_json_mapping(self.metadata)
         if self.sources:
             tuple(self.walk_sources())
-            signal_ids = [signal.id for signal in self.walk_signals()]
+            signal_ids = [signal.id for signal in self.walk_signals() if signal.id is not None]
             if len(signal_ids) != len(set(signal_ids)):
                 raise TimeFValidationError(f"record {self.id!r} contains duplicate signal IDs")
         for signal in self.signals:
@@ -116,17 +122,17 @@ class Record(SupportsAnnotate):
             seen.add(identity)
             active.add(identity)
             yield source
-            for child in sorted(source.sources, key=lambda item: (item.name, item.id)):
+            for child in sorted(source.sources, key=lambda item: (item.name, item.id or 0)):
                 yield from walk(child)
             active.remove(identity)
 
-        for root in sorted(self.sources, key=lambda item: (item.name, item.id)):
+        for root in sorted(self.sources, key=lambda item: (item.name, item.id or 0)):
             yield from walk(root)
 
     def walk_signals(self) -> Iterable[Signal]:
         """Yield every signal in deterministic source and signal order."""
         for source in self.walk_sources():
-            yield from sorted(source.signals, key=lambda signal: (signal.name, signal.id))
+            yield from sorted(source.signals, key=lambda signal: (signal.name, signal.id or 0))
 
     def walk_annotations(self) -> Iterable[Annotation]:
         """Yield annotation occurrences from this Record, its Sources, and its Signals."""
@@ -141,7 +147,7 @@ class Record(SupportsAnnotate):
         """Whether this record's relative timeline has a Unix-time anchor."""
         return self.start_time.timestamp is not None
 
-    def time_point(self, at: datetime, *, time_series_ids: tuple[str, ...] | None = None) -> TimePoint:
+    def time_point(self, at: datetime, *, time_series_ids: tuple[EntityId, ...] | None = None) -> TimePoint:
         """Build a :class:`~timenet.types.TimePoint` at a wall-clock moment on this record's timeline.
 
         The Record must have a known absolute timestamp.
@@ -156,7 +162,7 @@ class Record(SupportsAnnotate):
         return TimePoint(start_us=offset_us(at, self.start_time.timestamp), time_series_ids=time_series_ids)
 
     def time_interval(
-        self, start: datetime, end: datetime, *, time_series_ids: tuple[str, ...] | None = None
+        self, start: datetime, end: datetime, *, time_series_ids: tuple[EntityId, ...] | None = None
     ) -> TimeInterval:
         """Build a :class:`~timenet.types.TimeInterval` between two wall-clock moments on this timeline.
 
@@ -193,7 +199,7 @@ class Record(SupportsAnnotate):
                 the series' windows and ``warn_when_outside`` is False.
         """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
         self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
-        attached = annotation._new_occurrence()
+        attached = annotation._new_occurrence(self._binder)
         self.annotations = (*self.annotations, attached)
         return attached
 
@@ -219,7 +225,7 @@ class Record(SupportsAnnotate):
         batch = tuple(annotations)
         for annotation in batch:
             self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
-        attached = tuple(annotation._new_occurrence() for annotation in batch)
+        attached = tuple(annotation._new_occurrence(self._binder) for annotation in batch)
         self.annotations = (*self.annotations, *attached)
         return attached
 

@@ -21,7 +21,7 @@ from pydantic import BeforeValidator, StrictStr
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._model import TimeFModel
-from timenet.types.ids import new_id
+from timenet.types.ids import EntityId, check_optional_id
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
 from timenet.types.units import normalize_unit
 from timenet.types.wire import ValueType
@@ -68,16 +68,18 @@ class Annotation:
     """Optional per-instance provenance (the rater, method, or model behind this value). Unlike
     ``description``, which the descriptor holds once per key, ``source`` can differ between
     annotations that share a key."""
-    id: str = field(default_factory=new_id)
-    """Reusable content identifier, a UUIDv7 string by default."""
-    occurrence_id: str | None = field(default=None, compare=False)
-    """Identity of one attachment. It is assigned by ``annotate()``."""
+    id: EntityId | None = None
+    """Reusable content id. ``None`` until the annotation is attached in a dataset, which then
+    gives it the next content id."""
+    occurrence_id: EntityId | None = field(default=None, compare=False)
+    """Identity of one attachment. ``None`` until the attachment joins a dataset."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional metadata that is part of the reusable content."""
     confidence: float | None = field(default=None, compare=False)
     """Optional confidence for this particular application."""
     occurrence_metadata: JsonMapping = field(default_factory=dict, compare=False)
     """Optional metadata for this particular application."""
+    _template: "Annotation | None" = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Canonicalize a sequence ``value`` to a list and normalize ``unit`` against the registry.
@@ -88,9 +90,12 @@ class Annotation:
         guarantee.
 
         Raises:
-            TimeFValidationError: If the caller sets ``span`` to something that is not a span, or
-                the annotation has neither a value nor a span.
+            TimeFValidationError: If the caller sets ``span`` to something that is not a span, if
+                ``id`` or ``occurrence_id`` is not a valid id, or if the annotation has neither a
+                value nor a span.
         """
+        object.__setattr__(self, "id", check_optional_id(self.id, "annotation id"))
+        object.__setattr__(self, "occurrence_id", check_optional_id(self.occurrence_id, "annotation occurrence_id"))
         if isinstance(self.value, tuple):
             object.__setattr__(self, "value", list(self.value))
         object.__setattr__(self, "unit", normalize_unit(self.unit))
@@ -125,9 +130,31 @@ class Annotation:
         """Return the annotation's public name."""
         return self.key
 
-    def _new_occurrence(self) -> "Annotation":
-        """Return an internal copy representing one new attachment occurrence."""
-        return replace(self, occurrence_id=new_id())
+    def _new_occurrence(self, binder: "AnnotationBinder | None") -> "Annotation":
+        """Return an internal copy representing one new attachment occurrence.
+
+        Args:
+            binder: The dataset of the owner, which gives the copy its ids, or ``None`` while the
+                owner is not in a dataset yet.
+
+        Returns:
+            The new occurrence. It shares this annotation's content id, also when the dataset gives
+            that id later.
+        """
+        occurrence = replace(self, occurrence_id=None)
+        if self.id is None:
+            object.__setattr__(occurrence, "_template", self._template or self)  # noqa: PLC2801
+        if binder is not None:
+            binder._bind_annotation(occurrence)
+        return occurrence
+
+
+class AnnotationBinder(Protocol):
+    """A dataset that gives annotation occurrences their ids when they join it."""
+
+    def _bind_annotation(self, annotation: Annotation) -> None:
+        """Give ``annotation`` its content and occurrence ids, and register the occurrence."""
+        ...
 
 
 def annotation_type_of(annotation: Annotation) -> AnnotationType:

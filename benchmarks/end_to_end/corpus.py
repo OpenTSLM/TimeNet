@@ -59,28 +59,13 @@ SCENARIOS = (
 """The eight portable workloads. All use scalar float32 values for cross-backend runs."""
 
 
-def _add_record(
-    dataset: TimeFDataset,
-    *,
-    record_id: str,
-    source_name: str,
-    signals: tuple[Signal, ...],
-) -> Record:
+def _add_record(dataset: TimeFDataset, *, source_name: str, signals: tuple[Signal, ...]) -> Record:
     """Add one explicit benchmark hierarchy.
 
     Returns:
         The registered Record.
     """
-    record = Record(
-        id=record_id,
-        sources=(
-            Source(
-                id=f"{record_id}-source",
-                name=source_name,
-                signals=signals,
-            ),
-        ),
-    )
+    record = Record(sources=(Source(name=source_name, signals=signals),))
     dataset.add_record(record=record)
     return record
 
@@ -129,7 +114,6 @@ def _scalar_series(
         spec=spec,
         name=signal,
         time_axis=RegularAxis.from_rate_hz(Fraction(scenario.sampling_rate_hz)),
-        id=f"{scenario.name}-{signal}",
         n_values=len(values),
     )
 
@@ -173,7 +157,6 @@ def _nonfloat_series(
         spec=spec,
         name=name,
         time_axis=RegularAxis.from_rate_hz(Fraction(1)),
-        id=f"portable-{name}",
         n_values=len(array),
     )
 
@@ -204,7 +187,6 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
             inputs=(vibration,),
             targets=("outer-race-fault",),
             target_schema="condition",
-            id="task-vibration-class",
         ),
     )
     dataset.add_task(
@@ -212,7 +194,6 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
             inputs=(ecg,),
             targets=("atrial-fibrillation",),
             target_schema="rhythm",
-            id="task-ecg-class",
         ),
     )
     dataset.add_task(
@@ -221,14 +202,12 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
             targets=("N2",),
             target_schema="sleep-stage",
             scope=TimeInterval.seconds(30.0, 60.0),
-            id="task-sleep-label",
         ),
     )
     dataset.add_task(
         task=AnswerTask(
             inputs=(accelerometer,),
             targets=("A trace with rising amplitude and a periodic impact after five seconds.",),
-            id="task-accelerometer-caption",
         ),
     )
     dataset.add_task(
@@ -236,7 +215,6 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
             inputs=(finance,),
             prompt="Summarize the session.",
             targets=("Choppy open, midday rally, positive close.",),
-            id="task-finance-qa",
         ),
     )
     dataset.add_task(
@@ -245,7 +223,6 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
             prompt="Assess this workout.",
             targets=("Aerobic base session",),
             rationale="Heart-rate drift appears late while pace remains stable.",
-            id="task-workout-reasoning",
         ),
     )
     # A single unsplit recording carrying its own horizon: predict the tail from the head. The energy
@@ -256,7 +233,6 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
             inputs=(energy,),
             scope=TimeInterval.seconds(0.0, 16000.0),
             targets=(TimeInterval.seconds(16000.0, 16380.0),),
-            id="task-energy-forecast",
         ),
     )
     dataset.add_task(
@@ -265,7 +241,6 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
             prompt="Estimate remaining useful life.",
             targets=("74 cycles",),
             rationale="Vibration rises while torque efficiency falls.",
-            id="task-automotive-reasoning",
         ),
     )
 
@@ -285,26 +260,23 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
                 name=signal.name,
                 time_axis=signal.time_axis,
                 loader=signal.loader,
-                id=f"{signal.id}-question-{index:03d}",
                 n_values=signal.n_values,
             )
             for signal in ecg.signals
         )
         record = _add_record(
             dataset,
-            record_id=f"record-ecg-question-{index:03d}",
             source_name="Synthetic ECG monitor",
             signals=signals,
         )
-        record.annotate(Annotation(key="subject_ids", value=["subject-ecg"], id=f"{record.id}-subjects"))
-        record.annotate(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
+        record.annotate(Annotation(key="subject_ids", value=["subject-ecg"]))
+        record.annotate(Annotation(key="scenario", value="ecg"))
         dataset.add_task(
             task=AnswerTask(
                 inputs=(record,),
                 prompt=f"Is rhythm abnormal in view {index}?",
                 targets=("atrial-fibrillation",),
                 rationale="The synthetic rhythm has repeatable irregular intervals.",
-                id=f"task-ecg-reasoning-{index:03d}",
             ),
         )
 
@@ -318,24 +290,21 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
                 spec=finance_spec,
                 name=f"c{signal}",
                 time_axis=OrdinalAxis(),
-                id=f"tsqa-row-{index:04d}-c{signal}",
                 n_values=length,
             )
             for signal in range(signal_count)
         )
         record = _add_record(
             dataset,
-            record_id=f"record-tsqa-{index:04d}",
             source_name="TSQA row",
             signals=series,
         )
-        record.annotate(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
+        record.annotate(Annotation(key="scenario", value="tsqa"))
         dataset.add_task(
             task=AnswerTask(
                 inputs=(record,),
                 prompt=f"What pattern appears in series {index}?",
                 targets=("A deterministic trend with periodic variation.",),
-                id=f"task-tsqa-{index:04d}",
             ),
         )
 
@@ -348,22 +317,19 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             spec=vibration_spec,
             name="signal",
             time_axis=RegularAxis.from_rate_hz(16),
-            id=f"mean-series-{index:04d}",
             n_values=len(values),
         )
         record = _add_record(
             dataset,
-            record_id=f"record-mean-{index:04d}",
             source_name="Synthetic mean generator",
             signals=(series,),
         )
-        record.annotate(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
+        record.annotate(Annotation(key="scenario", value="test-mean"))
         dataset.add_task(
             task=ClassificationTask(
                 inputs=(record,),
                 targets=("above-zero" if offset > 0 else "below-zero",),
                 target_schema="mean-sign",
-                id=f"task-mean-{index:04d}",
             ),
         )
 
@@ -378,7 +344,6 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
             name=signal,
             time_axis=RegularAxis.from_rate_hz(50),
             loader=lambda: array,
-            id=f"rich-{signal}",
             n_values=len(values),
         )
 
@@ -399,12 +364,11 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
         )
         record = _add_record(
             dataset,
-            record_id=f"record-rich-{name}",
             source_name="Rich signal generator",
             signals=(tensor(values, spec, name),),
         )
-        record.annotate(Annotation(key="subject_ids", value=[f"subject-rich-{name}"], id=f"{record.id}-subjects"))
-        record.annotate(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
+        record.annotate(Annotation(key="subject_ids", value=[f"subject-rich-{name}"]))
+        record.annotate(Annotation(key="rich-profile", value=True))
 
 
 def _add_nonfloat_record(dataset: TimeFDataset, scale: int) -> None:
@@ -420,12 +384,11 @@ def _add_nonfloat_record(dataset: TimeFDataset, scale: int) -> None:
     )
     record = _add_record(
         dataset,
-        record_id="record-nonfloat",
         source_name="Non-float signal generator",
         signals=series,
     )
-    record.annotate(Annotation(key="subject_ids", value=["subject-nonfloat"], id=f"{record.id}-subjects"))
-    record.annotate(Annotation(key="scenario", value="nonfloat", id="annotation-nonfloat"))
+    record.annotate(Annotation(key="subject_ids", value=["subject-nonfloat"]))
+    record.annotate(Annotation(key="scenario", value="nonfloat"))
 
 
 def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
@@ -465,21 +428,19 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
         )
         record = _add_record(
             dataset,
-            record_id=f"record-{scenario.name}",
             source_name=scenario.name.replace("-", " ").title(),
             signals=series,
         )
-        record.annotate(Annotation(key="subject_ids", value=[f"subject-{scenario.name}"], id=f"{record.id}-subjects"))
+        record.annotate(Annotation(key="subject_ids", value=[f"subject-{scenario.name}"]))
         annotations = [
-            Annotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario"),
-            Annotation(key="event", span=TimePoint.seconds(1.0), id=f"annotation-{scenario.name}-event"),
+            Annotation(key="scenario", value=scenario.name),
+            Annotation(key="event", span=TimePoint.seconds(1.0)),
         ]
         if scenario.steps / scenario.sampling_rate_hz > 2:  # noqa: PLR2004, RUF100 - minimum interval duration
             annotations.append(
                 Annotation(
                     key="quality-window",
                     span=TimeInterval.seconds(1.0, 2.0),
-                    id=f"annotation-{scenario.name}-window",
                 )
             )
         record.add_annotations(annotations)

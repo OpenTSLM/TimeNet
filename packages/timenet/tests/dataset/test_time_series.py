@@ -75,21 +75,16 @@ def test_frozen():
         ts.name = "V1"
 
 
-def test_default_id_unique_explicit_id_kept():
-    assert _series().id != _series().id
-    assert _series(time_series_id="fixed").id == "fixed"
-
-
 def test_signal_accepts_declarative_eager_data():
     signal = Signal(
-        id="lead-i",
+        id=101,
         name="I",
         data=[1.0, 2.0],
         spec=_spec(),
         time_axis=RegularAxis.from_rate_hz(500),
     )
 
-    assert signal.id == "lead-i"
+    assert signal.id == 101
     assert signal.name == "I"
     assert signal.n_values == 2
     assert signal.to_arrow().to_pylist() == [1.0, 2.0]
@@ -134,14 +129,6 @@ def test_from_values_counts_the_array_it_was_given():
     assert ts.span_us == (1_000_000, 1_500_000)  # starts 4 values into a 4 Hz axis
 
 
-def test_from_values_generates_unique_id_unless_given():
-    a = Signal.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1))
-    b = Signal.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1))
-    assert a.id != b.id
-    fixed = Signal.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1), id="x")
-    assert fixed.id == "x"
-
-
 def test_from_values_casts_to_the_specified_numpy_dtype():
     spec = _spec().model_copy(update={"dtype": "int16"})
     arr = Signal.from_values([1, 2, 3], spec=spec, name="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
@@ -156,7 +143,7 @@ def test_from_values_str_spec_keeps_string_labels():
     assert arr.to_pylist() == ["normal", "afib"]
 
 
-def _counting(n, tsid="s", axis=None):
+def _counting(n, tsid=7, axis=None):
     return _series(
         n_values=n,
         time_series_id=tsid,
@@ -167,7 +154,7 @@ def _counting(n, tsid="s", axis=None):
 
 def test_step_range_of_a_steps_span_is_the_span():
     ts = _counting(6)
-    assert ts.step_range(StepInterval(time_series_id="s", start=2, stop=5)) == (2, 5)
+    assert ts.step_range(StepInterval(time_series_id=7, start=2, stop=5)) == (2, 5)
 
 
 def test_step_range_of_a_seconds_span_on_a_regular_axis():
@@ -186,24 +173,24 @@ def test_step_range_of_a_seconds_span_on_an_irregular_axis():
 
 def test_step_range_horizon_matches_n_steps():
     ts = _counting(12)
-    span = StepInterval(time_series_id="s", start=0, stop=12)
+    span = StepInterval(time_series_id=7, start=0, stop=12)
     start, stop = ts.step_range(span)
     assert stop - start == span.n_steps
 
 
 def test_step_range_rejects_a_point():
     with pytest.raises(TimeFValidationError, match="not a point"):
-        _counting(3).step_range(StepPoint(time_series_id="s", start=1))
+        _counting(3).step_range(StepPoint(time_series_id=7, start=1))
 
 
 def test_step_range_rejects_a_steps_span_naming_another_series():
     with pytest.raises(TimeFValidationError, match="not this series"):
-        _counting(6).step_range(StepInterval(time_series_id="other", start=0, stop=3))
+        _counting(6).step_range(StepInterval(time_series_id=8, start=0, stop=3))
 
 
 def test_step_range_rejects_a_steps_span_past_the_series():
     with pytest.raises(TimeFValidationError, match="runs past"):
-        _counting(3).step_range(StepInterval(time_series_id="s", start=0, stop=4))
+        _counting(3).step_range(StepInterval(time_series_id=7, start=0, stop=4))
 
 
 def test_step_range_rejects_a_seconds_span_on_an_ordinal_series():

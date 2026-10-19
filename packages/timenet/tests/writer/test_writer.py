@@ -312,7 +312,7 @@ def test_same_id_different_series_rejected(tmp_path):
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
-        id="ts-x",
+        id=7,
     )
     b = Signal.from_loader(  # same id, different signal and window
         spec=spec,
@@ -320,8 +320,8 @@ def test_same_id_different_series_rejected(tmp_path):
         time_axis=RegularAxis.from_rate_hz(1),
         n_values=2,
         loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
-        id="ts-x",
+        id=7,
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(a,)),), id="s-a"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(a,)),), id=1))
     with pytest.raises(TimeFValidationError, match="already belong to another Source"):
-        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(b,)),), id="s-b"))
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(b,)),), id=2))

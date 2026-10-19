@@ -16,6 +16,7 @@ from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
+from timenet.types.ids import entity_id
 from timenet.values_backends.zarr import reader as zarr_reader_module
 from timenet.values_backends.zarr.reader import ZarrValuesReader
 from timenet.values_backends.zarr.writer import _array_name
@@ -90,7 +91,7 @@ def test_one_index_row_per_series(tmp_path):
         ).fetchall()
     signal_ids = [row[0] for row in index]
     assert len(signal_ids) == len(set(signal_ids))
-    long_series = next(row for row in index if row[0] == dataset.records[1].signals[0].id)
+    long_series = next(row for row in index if row[0] == dataset.records[1].signals[1].id)
     assert long_series[1] == 512  # the fixture's long series, unsplit
 
 
@@ -114,7 +115,7 @@ def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
         version_dir,
         tmp_path / "out",
         dataset_version=Version(1, 0, 1),
-        remove_record_ids=(dataset.records[1].id,),
+        remove_record_ids=(entity_id(dataset.records[1]),),
     )
     manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
@@ -193,12 +194,12 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
                             loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
                                 frames, dim_names=spec.dimension_names
                             ),
-                            id="camera-1",
+                            id=2,
                         ),
                     ),
                 ),
             ),
-            id="record-camera",
+            id=1,
         )
     )
     dataset.derive_schema()
@@ -252,7 +253,7 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
                             spec=nd_spec,
                             name="rgb",
                             time_axis=RegularAxis.from_rate_hz(10),
-                            id="cam-1",
+                            id=2,
                             n_values=len(frames),
                             loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
                                 frames, dim_names=nd_spec.dimension_names
@@ -262,14 +263,14 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
                             spec=scalar_spec,
                             name="i",
                             time_axis=RegularAxis.from_rate_hz(10),
-                            id="sig-1",
+                            id=3,
                             n_values=6,
                             loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
                         ),
                     ),
                 ),
             ),
-            id="record-0",
+            id=1,
         )
     )
     dataset.derive_schema()
@@ -316,7 +317,7 @@ def test_str_round_trip(tmp_path):
                     ),
                 ),
             ),
-            id="record-0",
+            id=1,
         )
     )
     dataset.derive_schema()
@@ -357,7 +358,7 @@ def test_str_empty_range_read(tmp_path):
                     ),
                 ),
             ),
-            id="record-0",
+            id=1,
         )
     )
     dataset.derive_schema()
