@@ -10,12 +10,14 @@ the write path. Tests run it after each round trip, and tooling can run it over 
 import duckdb
 
 from timenet.errors import TimeFFormatError
+from timenet.format.annotation_value_kind import AnnotationValueKind
 from timenet.format.control_schema import CONTROL_TABLES, Table
 from timenet.format.duckdb import check_control_schema
 from timenet.format.task_target_kind import TaskTargetKind
 
 
 _TARGET_KINDS = ", ".join(f"'{kind.value}'" for kind in TaskTargetKind)
+_ANNOTATION_VALUE_KINDS = ", ".join(f"'{kind.value}'" for kind in AnnotationValueKind)
 _TIME_TARGET_KINDS = ", ".join(f"'{kind.value}'" for kind in (TaskTargetKind.TIME_POINT, TaskTargetKind.TIME_INTERVAL))
 
 _DOMAIN_CHECKS = f"""
@@ -41,7 +43,7 @@ _DOMAIN_CHECKS = f"""
     WHERE task_key = parent_task_key
     UNION ALL
     SELECT 'annotation_contents.value_kind' FROM annotation_contents
-    WHERE value_kind NOT IN ('text', 'integer', 'float', 'boolean', 'text_list')
+    WHERE value_kind NOT IN ({_ANNOTATION_VALUE_KINDS})
     UNION ALL
     SELECT 'tasks.scope_type' FROM tasks
     WHERE scope_type NOT IN ('time_point', 'time_interval', 'step_point', 'step_interval')
