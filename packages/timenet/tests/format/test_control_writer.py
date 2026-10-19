@@ -10,7 +10,17 @@ from timenet.format.control_audit import audit_control_database
 import timenet.format.control_writer as control_writer_module
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
-from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
+from timenet.types import (
+    Annotation,
+    AnswerTask,
+    DatasetMetadata,
+    License,
+    StepPoint,
+    TimeInterval,
+    TimeSeriesSpec,
+    Version,
+    ureg,
+)
 
 
 SPEC = TimeSeriesSpec(
@@ -86,16 +96,13 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
             "SELECT task_type, prompt, scope_type, target_schema, unit, target_name, mode FROM tasks"
         ).fetchone() == ("answer", "Alive?", None, None, None, None, None)
         assert connection.execute(
-            "SELECT position, target_kind, text_value, integer_value, record_key FROM task_targets"
+            "SELECT position, target_kind, text_value, integer_value, record_id FROM task_targets"
         ).fetchone() == (0, "text", "Yes", None, None)
-        assert connection.execute(
-            """SELECT refs.field, records.record_id
-               FROM task_record_refs refs JOIN records USING (record_key)"""
-        ).fetchone() == (
+        assert connection.execute("SELECT task_id, field, record_id FROM task_record_refs").fetchone() == (
+            TASK_ID,
             "inputs",
             RECORD_ID,
         )
-        assert connection.execute("SELECT typeof(record_key) FROM task_record_refs").fetchone() == ("BIGINT",)
         assert connection.execute(
             """SELECT parent.source_id
                FROM sources child
@@ -111,36 +118,6 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
                WHERE contents.content_id = ? AND occurrences.object_type = 'Record'""",
             [SEX_MALE_ID],
         ).fetchone() == (SEX_MALE_ID, "Record", RECORD_ID)
-
-
-def test_control_relationships_use_integer_keys(tmp_path):
-    path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
-
-    relationship_columns = (
-        ("sources", "record_key"),
-        ("sources", "parent_source_key"),
-        ("signals", "source_key"),
-        ("signals", "axis_key"),
-        ("annotation_occurrences", "content_id"),
-        ("annotation_occurrences", "object_id"),
-        ("task_targets", "task_key"),
-        ("task_targets", "record_key"),
-        ("task_targets", "signal_key"),
-        ("task_record_refs", "task_key"),
-        ("task_record_refs", "record_key"),
-    )
-    with connect_control(path, read_only=True) as connection:
-        for table, column in relationship_columns:
-            row = connection.execute(
-                """SELECT data_type
-                   FROM information_schema.columns
-                   WHERE table_name = ? AND column_name = ?""",
-                [table, column],
-            ).fetchone()
-            assert row is not None
-            (stored_type,) = row
-            assert stored_type == "BIGINT", f"{table}.{column} stores {stored_type}"
 
 
 def test_control_writer_preserves_relationships_across_task_batches(tmp_path, monkeypatch):
@@ -161,8 +138,9 @@ def test_control_writer_preserves_relationships_across_task_batches(tmp_path, mo
         parent = task
     monkeypatch.setattr(control_writer_module, "_TASK_BATCH_SIZE", 2)
     path = tmp_path / "control.duckdb"
+    first, *rest = dataset.tasks
 
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path).write_hierarchy(dataset, tasks=(*rest, first))
 
     with connect_control(path, read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM tasks").fetchone() == (6,)
@@ -171,12 +149,8 @@ def test_control_writer_preserves_relationships_across_task_batches(tmp_path, mo
         assert connection.execute("SELECT count(*) FROM task_annotation_refs").fetchone() == (6,)
         assert connection.execute("SELECT count(*) FROM task_dependencies").fetchone() == (5,)
         assert connection.execute(
-            """SELECT parent.task_id, child.task_id
-               FROM task_dependencies dependencies
-               JOIN tasks child ON child.task_key = dependencies.task_key
-               JOIN tasks parent ON parent.task_key = dependencies.parent_task_key
-               WHERE child.task_id = 303"""
-        ).fetchone() == (302, 303)
+            "SELECT task_id, parent_task_id FROM task_dependencies WHERE task_id IN (302, 303) ORDER BY task_id"
+        ).fetchall() == [(302, TASK_ID), (303, 302)]
 
 
 def test_control_writer_removes_database_after_validation_failure(tmp_path):
@@ -193,6 +167,77 @@ def test_control_writer_removes_database_after_validation_failure(tmp_path):
 
     with pytest.raises(TimeFValidationError, match="reused with different content"):
         DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    assert not path.exists()
+
+
+def _task_on_an_unwritten_parent(task: AnswerTask) -> AnswerTask:
+    outside = AnswerTask(id=399, inputs=task.inputs, targets=("outside",))
+    return AnswerTask(id=302, inputs=task.inputs, targets=("child",), from_tasks=(outside,))
+
+
+def _task_on_an_unwritten_occurrence(task: AnswerTask) -> AnswerTask:
+    outside = Annotation(id=299, occurrence_id=499, key="outside", value="x")
+    return AnswerTask(id=302, inputs=task.inputs, targets=("child",), input_annotations=(outside,))
+
+
+def _task_on_itself(task: AnswerTask) -> AnswerTask:
+    child = AnswerTask(id=302, inputs=task.inputs, targets=("child",))
+    child.from_tasks = (child,)
+    return child
+
+
+def _task_on_an_unknown_input_record(task: AnswerTask) -> AnswerTask:
+    return AnswerTask(id=302, inputs=(Record(id=99),), prompt="q", targets=("x",))
+
+
+def _task_with_an_unknown_target_record(task: AnswerTask) -> AnswerTask:
+    return AnswerTask(id=302, inputs=task.inputs, targets=(Record(id=99),))
+
+
+def _task_with_a_step_on_an_unknown_signal(task: AnswerTask) -> AnswerTask:
+    return AnswerTask(id=302, inputs=task.inputs, targets=(StepPoint(start=1, time_series_id=999),))
+
+
+def _task_with_a_span_on_an_unknown_signal(task: AnswerTask) -> AnswerTask:
+    span = TimeInterval(start_us=0, end_us=2000, time_series_ids=(999,))
+    return AnswerTask(id=302, inputs=task.inputs, targets=(span,))
+
+
+@pytest.mark.parametrize(
+    ("make_task", "message"),
+    [
+        (_task_on_an_unwritten_parent, "task 302 depends on task 399, which is not in the dataset"),
+        (
+            _task_on_an_unwritten_occurrence,
+            "task 302 field 'input_annotations' refers to unknown annotation occurrence",
+        ),
+        (_task_on_itself, "task 302 depends on itself"),
+        (_task_on_an_unknown_input_record, "task 302 field 'inputs' refers to unknown record 99"),
+        (_task_with_an_unknown_target_record, "task 302 target 0 refers to unknown Record 99"),
+        (_task_with_a_step_on_an_unknown_signal, "task 302 target 0 refers to unknown Signal 999"),
+        (_task_with_a_span_on_an_unknown_signal, r"task 302 target 0 refers to unknown Signals \[999\]"),
+    ],
+)
+def test_control_writer_rejects_task_references_outside_the_dataset(tmp_path, make_task, message):
+    dataset = _dataset()
+    (task,) = dataset.tasks
+    path = tmp_path / "control.duckdb"
+
+    with pytest.raises(TimeFValidationError, match=message):
+        DuckDBControlWriter(path).write_hierarchy(dataset, tasks=(task, make_task(task)))
+
+    assert not path.exists()
+
+
+def test_control_writer_rejects_a_repeated_task_id(tmp_path):
+    dataset = _dataset()
+    (task,) = dataset.tasks
+    repeat = AnswerTask(id=TASK_ID, inputs=task.inputs, targets=("again",))
+    path = tmp_path / "control.duckdb"
+
+    with pytest.raises(TimeFValidationError, match=f"task id {TASK_ID} is not unique"):
+        DuckDBControlWriter(path).write_hierarchy(dataset, tasks=(task, repeat))
 
     assert not path.exists()
 

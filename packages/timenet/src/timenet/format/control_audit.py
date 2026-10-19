@@ -7,15 +7,29 @@ This module holds the SQL form of the same invariants. It scans every table, so 
 the write path. Tests run it after each round trip, and tooling can run it over a published version.
 """
 
+from collections.abc import Iterable
+
 import duckdb
 
 from timenet.errors import TimeFFormatError
 from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, ANNOTATED_OWNER_TABLES, CONTROL_TABLES, Table
 from timenet.format.duckdb import check_control_schema
+from timenet.format.task_codec import (
+    ANNOTATION_FIELDS,
+    RECORD_FIELDS,
+    TIME_SPAN_KINDS,
+    SpanKind,
+    TargetKind,
+    TaskRelationshipField,
+)
 from timenet.types import ObjectKind
 
 
-_OBJECT_TYPES_SQL = ", ".join(f"'{name}'" for name in sorted(ANNOTATED_OBJECT_TYPES))
+def _sql_list(values: Iterable[str]) -> str:
+    return ", ".join(f"'{value}'" for value in sorted(values))
+
+
+_OBJECT_TYPES_SQL = _sql_list(ANNOTATED_OBJECT_TYPES)
 
 _ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
     ("records", "record_id"),
@@ -50,19 +64,22 @@ _DOMAIN_CHECKS = f"""
     WHERE span_type NOT IN ('static', 'point', 'interval')
     UNION ALL
     SELECT 'task_targets.target_kind' FROM task_targets
-    WHERE target_kind NOT IN (
-        'text', 'integer', 'float', 'boolean', 'record', 'signal',
-        'time_point', 'time_interval', 'step_point', 'step_interval'
-    )
+    WHERE target_kind NOT IN ({_sql_list(TargetKind)})
     UNION ALL
-    SELECT 'task_dependencies.parent_task_key' FROM task_dependencies
-    WHERE task_key = parent_task_key
+    SELECT 'task_record_refs.field' FROM task_record_refs
+    WHERE field NOT IN ({_sql_list(RECORD_FIELDS)})
+    UNION ALL
+    SELECT 'task_annotation_refs.field' FROM task_annotation_refs
+    WHERE field NOT IN ({_sql_list(ANNOTATION_FIELDS)})
+    UNION ALL
+    SELECT 'task_dependencies.parent_task_id' FROM task_dependencies
+    WHERE task_id = parent_task_id
     UNION ALL
     SELECT 'annotation_contents.value_kind' FROM annotation_contents
     WHERE value_kind NOT IN ('text', 'integer', 'float', 'boolean', 'text_list')
     UNION ALL
     SELECT 'tasks.scope_type' FROM tasks
-    WHERE scope_type NOT IN ('time_point', 'time_interval', 'step_point', 'step_interval')
+    WHERE scope_type NOT IN ({_sql_list(SpanKind)})
     UNION ALL
     {_ENTITY_ID_CHECKS}
     LIMIT 1
@@ -129,29 +146,29 @@ _CHUNK_COVERAGE = """
     LIMIT 1
 """
 
-_TASK_RECORD_SCOPE = """
+_TASK_RECORD_SCOPE = f"""
     WITH spans AS (
-        SELECT row_number() OVER () AS span_key, task_key, signal_keys
+        SELECT row_number() OVER () AS span_number, task_id, signal_ids
         FROM (
-            SELECT task_key, scope_signal_keys AS signal_keys FROM tasks
-            WHERE scope_type IN ('time_point', 'time_interval')
+            SELECT task_id, scope_signal_ids AS signal_ids FROM tasks
+            WHERE scope_type IN ({_sql_list(TIME_SPAN_KINDS)})
             UNION ALL
-            SELECT task_key, signal_keys FROM task_targets
-            WHERE target_kind IN ('time_point', 'time_interval')
+            SELECT task_id, span_signal_ids FROM task_targets
+            WHERE target_kind IN ({_sql_list(TIME_SPAN_KINDS)})
         )
     )
-    SELECT tasks.task_id
+    SELECT spans.task_id
     FROM spans
-    JOIN tasks USING (task_key)
-    LEFT JOIN task_record_refs refs ON refs.task_key = spans.task_key AND refs.field = 'inputs'
-    LEFT JOIN sources ON sources.record_key = refs.record_key
+    LEFT JOIN task_record_refs refs ON refs.task_id = spans.task_id AND refs.field = '{TaskRelationshipField.INPUTS}'
+    LEFT JOIN records ON records.record_id = refs.record_id
+    LEFT JOIN sources ON sources.record_key = records.record_key
     LEFT JOIN signals USING (source_key)
-    GROUP BY spans.span_key, tasks.task_id, spans.signal_keys
+    GROUP BY spans.span_number, spans.task_id, spans.signal_ids
     HAVING count(DISTINCT CASE
-        WHEN spans.signal_keys IS NULL OR list_contains(spans.signal_keys, signals.signal_key)
-        THEN refs.record_key END) <> 1
+        WHEN spans.signal_ids IS NULL OR list_contains(spans.signal_ids, signals.signal_id)
+        THEN refs.record_id END) <> 1
     LIMIT 1
-"""
+"""  # noqa: S608 - fixed kind and field names
 
 
 def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool = True) -> None:
@@ -164,8 +181,8 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
 
     Raises:
         TimeFFormatError: If a key is repeated, a relationship dangles, a value is outside its
-            domain, the Source tree is not a forest of per-Record trees, or an axis or chunk
-            length disagrees with its Signal.
+            domain, the Source tree is not a forest of per-Record trees, or an axis or chunk length
+            disagrees with its Signal.
     """
     for table in CONTROL_TABLES:
         _audit_unique_keys(connection, table)
@@ -177,7 +194,7 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
 
     check_control_schema(connection)
     invalid_modality = connection.execute(
-        """SELECT task_id FROM tasks
+        f"""SELECT task_id FROM tasks
            WHERE len(input_modalities) = 0
               OR EXISTS (SELECT 1 FROM unnest(input_modalities) AS m(value)
                          WHERE value NOT IN ('text', 'time_series', 'image', 'audio', 'no_input'))
@@ -187,8 +204,8 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
               OR (list_contains(input_modalities, 'no_input')
                   AND (len(list_filter(input_modalities, x -> x NOT IN ('text', 'no_input'))) > 0
                        OR EXISTS (SELECT 1 FROM task_record_refs r
-                                  WHERE r.task_key = tasks.task_key AND r.field = 'inputs')))
-           LIMIT 1"""
+                                  WHERE r.task_id = tasks.task_id AND r.field = '{TaskRelationshipField.INPUTS}')))
+           LIMIT 1"""  # noqa: S608 - fixed field name
     ).fetchone()
     if invalid_modality is not None:
         raise TimeFFormatError(f"task {invalid_modality[0]!r} has invalid input_modalities")
@@ -246,9 +263,12 @@ def _audit_foreign_keys(connection: duckdb.DuckDBPyConnection, table: Table) -> 
         TimeFFormatError: If a child column refers to a parent key that does not exist.
     """
     for key in table.foreign_keys:
+        child = (
+            f"(SELECT unnest({key.column}) AS {key.column} FROM {table.name})" if key.many else table.name  # noqa: S608
+        )
         orphan = connection.execute(
             f"""SELECT child.{key.column}
-                FROM {table.name} child
+                FROM {child} child
                 LEFT JOIN {key.table} parent
                   ON parent.{key.references} = child.{key.column}
                 WHERE child.{key.column} IS NOT NULL
