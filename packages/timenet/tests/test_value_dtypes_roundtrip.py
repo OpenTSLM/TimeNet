@@ -87,7 +87,7 @@ def _write(tmp_path, dataset, **kwargs) -> Path:
 
 def _first_series(version_dir):
     with TimeFReader(open_local_version(version_dir)) as reader:
-        return reader.read().records[0].signals[0]
+        return reader.read().read().records[0].signals[0]
 
 
 @pytest.mark.parametrize("dtype", SCALAR_DTYPES)
@@ -167,7 +167,7 @@ def test_copy_on_write_edit_keeps_bool_and_str(tmp_path):
         version_dir, tmp_path / "out", dataset_version=Version(1, 1, 0), remove_record_ids=["record-1"]
     )
     with TimeFReader(open_local_version(edited)) as reader:
-        record = reader.read().records[0]
+        record = reader.read().read().records[0]
     series = {ts.name: ts for ts in record.signals}
     assert series["active"].to_arrow().type == pa.bool_()
     assert series["active"].to_numpy().tolist() == [True, False, True]
@@ -195,7 +195,7 @@ def test_log_book_strings_round_trip_byte_identical(tmp_path):
 
     version_dir = _write(tmp_path, _dataset(_spec(dtype="str"), entries), values_backend="parquet")
     with TimeFReader(open_local_version(version_dir)) as reader:
-        series = reader.read().records[0].signals[0]
+        series = reader.read().read().records[0].signals[0]
 
     # Byte-identical: the whole series and a ranged read must equal the original utf-8 bytes.
     assert series.to_arrow().equals(original)
@@ -232,7 +232,7 @@ def test_mixed_dtypes_byte_identical_across_backends(tmp_path, values_backend):
     version_dir = _write(tmp_path, dataset, values_backend=values_backend)
 
     with TimeFReader(open_local_version(version_dir)) as reader:
-        record = reader.read().records[0]
+        record = reader.read().read().records[0]
     by_signal = {ts.name: ts for ts in record.signals}
     for name, spec, values in signals:
         expected = pa.array(np.asarray(values), type=pa.from_numpy_dtype(np.dtype(spec.dtype)))
