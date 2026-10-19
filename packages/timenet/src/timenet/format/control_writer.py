@@ -21,6 +21,7 @@ from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
 from timenet.format.task_codec import encode_span, encode_target, encode_task_payload
+from timenet.format.task_target_kind import TaskTargetKind, is_step_span
 from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
@@ -595,11 +596,11 @@ class DuckDBControlWriter:
         missing_signals = [item for item in span_signal_ids or () if item not in signal_keys]
         if missing_signals:
             raise TimeFValidationError(f"{target_label} refers to unknown Signals {missing_signals}")
-        kind = row["target_kind"]
+        kind = TaskTargetKind(row["target_kind"])
         # A step span names its one series in signal_id; it is stored in signal_keys like a time span's scope.
         stored_signal_keys = (
             [signal_keys[signal_id]]
-            if signal_id is not None and kind in {"step_point", "step_interval"}
+            if signal_id is not None and is_step_span(kind)
             else None
             if span_signal_ids is None
             else [signal_keys[item] for item in span_signal_ids]
@@ -607,13 +608,13 @@ class DuckDBControlWriter:
         return {
             "task_key": task_key,
             "position": position,
-            "target_kind": kind,
+            "target_kind": kind.value,
             "text_value": row["text_value"],
             "integer_value": row["integer_value"],
             "float_value": row["float_value"],
             "boolean_value": row["boolean_value"],
             "record_key": None if record_id is None else record_keys[record_id],
-            "signal_key": signal_keys[signal_id] if signal_id is not None and kind == "signal" else None,
+            "signal_key": signal_keys[signal_id] if signal_id is not None and kind == TaskTargetKind.SIGNAL else None,
             "span_start": row["span_start"],
             "span_end": row["span_end"],
             "signal_keys": stored_signal_keys,
