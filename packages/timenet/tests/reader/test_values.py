@@ -1,5 +1,7 @@
 """Tests for reader-side values backends."""
 
+import threading
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -33,9 +35,9 @@ class _ProjectionSpy:
     def __getattr__(self, name):
         return getattr(self._handle, name)
 
-    def read_row_group(self, row_group: int, *, columns: list[str]) -> pa.Table:
+    def read_row_group(self, row_group: int, *, columns: list[str], use_threads: bool = True) -> pa.Table:
         self._projections.append(columns)
-        return self._handle.read_row_group(row_group, columns=columns)
+        return self._handle.read_row_group(row_group, columns=columns, use_threads=use_threads)
 
 
 def test_row_group_cache_includes_dataset_root(tmp_path):
@@ -131,3 +133,33 @@ def test_parquet_cache_reports_missing_files(tmp_path, row_group):
     with pytest.raises(TimeFFormatError, match=r"cannot read Parquet file .*missing\.parquet"):
         cache.read_table(version, "missing.parquet", row_group=row_group)
     cache.close()
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+def test_eager_scan_releases_workers_on_success_and_failure(tmp_path, monkeypatch, corrupt):
+    path = _write(tmp_path, shard_target_bytes=64, row_group_target_bytes=32, chunk_max_bytes=32)
+    version = open_local_version(path)
+    decoding_threads = []
+    original_read = pq.ParquetFile.read_row_group
+
+    def read_group(*args, **kwargs):
+        decoding_threads.append(threading.current_thread().name)
+        return original_read(*args, **kwargs)
+
+    monkeypatch.setattr(pq.ParquetFile, "read_row_group", read_group)
+    if corrupt:
+        # Simulate a file disappearing after preparation, while the reader is about to use it.
+        shards = sorted((path / "time_series").glob("*.parquet"))
+        shards[1].unlink()
+    with TimeFReader(version) as reader:
+        if corrupt:
+            with pytest.raises(TimeFFormatError):
+                reader.read().read()
+        else:
+            dataset = reader.read().read()
+            assert dataset.records
+            assert any(name.startswith("timef-scan") for name in decoding_threads)
+            decoded_groups = len(decoding_threads)
+            assert reader.read().read() is dataset
+            assert len(decoding_threads) == decoded_groups
+        assert not [thread for thread in threading.enumerate() if thread.name.startswith("timef-scan")]
