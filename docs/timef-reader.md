@@ -41,6 +41,12 @@ annotations opens `control.duckdb` in read-only mode.
 Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy. A call to
 `to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from Parquet or Zarr.
 
+Large text fields and annotation string lists return `ValueHandle` objects. Call `read()` on a
+handle to obtain the native value. Small fields remain ordinary Python values. The Arrow
+`create_task_table()`, `create_target_table()`, and `create_annotation_table()` APIs resolve external
+text automatically.
+The reader caches up to eight payload files.
+
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
 `TimeFDataset`.
 
@@ -49,9 +55,9 @@ Tasks have three useful read paths:
 - `tasks` loads and caches every task.
 - `iter_tasks(records)` yields tasks for selected Records in bounded batches. Its `split`,
   `required_modalities`, and `supported_modalities` arguments filter in DuckDB before any task is
-  built, as they do on `task_table()` and `target_table()`.
-- `task_table()`, `target_table()`, and `annotation_table()` return Arrow tables without creating
-  Python task objects.
+  built, as they do on `create_task_table()` and `create_target_table()`.
+- `create_task_table()`, `create_target_table()`, and `create_annotation_table()` return Arrow tables
+  without creating Python task objects.
 
 Objects keep their identity within one reader. For example, a task input is the same `Record`
 instance that `iter_records()` returned.
@@ -83,9 +89,9 @@ and decoded Zarr chunks until it closes.
 | `read()` | Create the complete `TimeFDataset`. |
 | `iter_records()` | Yield Records without building a dataset. |
 | `iter_tasks(records, split=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
-| `task_table()` | Return the task table with public IDs. |
-| `target_table()` | Return ordered task targets with public IDs. |
-| `annotation_table()` | Return annotation occurrences with public IDs. |
+| `create_task_table()` | Return the task table with public IDs. |
+| `create_target_table()` | Return ordered task targets with public IDs. |
+| `create_annotation_table()` | Return annotation occurrences with public IDs. |
 | `verify()` | Check every manifest-listed file against its size and checksum. |
 | `metadata` | Return the dataset metadata. |
 | `schema` | Return the dataset schema. |

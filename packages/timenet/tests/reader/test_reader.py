@@ -248,11 +248,31 @@ def test_tasks_are_cached_after_first_access(tmp_path):
         assert reader.tasks is first
 
 
-def test_pickling_drops_connections_and_decoded_caches(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
+def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
+    dataset = make_dataset()
+    text = "A detailed clinical report. " * 300
+    dataset.tasks[0].prompt = text
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+        original = pq.ParquetFile.read
+        read_calls = 0
+
+        def count_reads(*args, **kwargs):
+            nonlocal read_calls
+            read_calls += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(pq.ParquetFile, "read", count_reads)
         _ = reader.tasks
         reader.read().records[0].signals[0].to_arrow()
+        assert text in reader.create_task_table()["prompt"].to_pylist()
+        assert read_calls == 1
         state = reader.__getstate__()
+        with pickle.loads(pickle.dumps(reader)) as restored:
+            assert text in restored.create_task_table()["prompt"].to_pylist()
+        assert read_calls == 2
+    with reader:
+        assert text in reader.create_task_table()["prompt"].to_pylist()
+    assert read_calls == 3
     assert state["_tasks"] is None
     assert state["_control"] is None
     assert state["_records"] is None
@@ -351,11 +371,31 @@ def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         assert [task.id for task in reader.iter_tasks(split="train")] == [train_task.id]
-        assert reader.task_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
-        assert reader.target_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
+        assert reader.create_task_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
+        assert reader.create_target_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
         loaded = reader.read()
 
     assert {task.id: task.split for task in loaded.tasks if task.split is not None} == {
         train_task.id: Split.TRAIN,
         test_task.id: Split.TEST,
     }
+
+
+@pytest.mark.parametrize(
+    "column,value", [("field", "promtp"), ("field", "offsets"), ("row_index", -1), ("value_kind", "texts")]
+)
+def test_invalid_external_locator_is_rejected_before_exposing_placeholders(tmp_path, column, value):
+    dataset = make_dataset()
+    dataset.tasks[0].prompt = "A detailed clinical report. " * 300
+    version_dir = _write(tmp_path, dataset)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        connection.execute(
+            f"UPDATE external_values SET {column} = ? WHERE field = 'prompt'",  # noqa: S608 - fixed test columns
+            [value],
+        )
+
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="invalid external locator"),
+    ):
+        reader.create_task_table()
