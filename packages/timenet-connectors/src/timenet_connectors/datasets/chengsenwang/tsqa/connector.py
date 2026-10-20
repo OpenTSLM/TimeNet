@@ -51,7 +51,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 for signal, values in enumerate(signals)
             )
             record = Record(
-                record_id=f"row-{index}",
+                id=f"row-{index}",
                 sources=(Source(id=f"row-{index}-source", name="TSQA series", signals=time_series),),
             )
             dataset.add_record(record=record)

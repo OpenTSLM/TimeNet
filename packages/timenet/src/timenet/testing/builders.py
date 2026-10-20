@@ -120,7 +120,7 @@ def make_dataset() -> TimeFDataset:
 
     record0 = dataset.add_record(
         record=Record(
-            record_id="record-0",
+            id="record-0",
             start_time=TimeOrigin(9_007_199_254_740_993),
             sources=(
                 Source(
@@ -174,7 +174,7 @@ def make_dataset() -> TimeFDataset:
 
     record1 = dataset.add_record(
         record=Record(
-            record_id="record-1",
+            id="record-1",
             sources=(
                 Source(
                     id="source-record-1",
@@ -192,7 +192,7 @@ def make_dataset() -> TimeFDataset:
     window = _series(_SINE, "a", 8, "ts-window-2")
     record2 = dataset.add_record(
         record=Record(
-            record_id="record-2",
+            id="record-2",
             sources=(Source(id="source-record-2", name="Synthetic monitor", signals=(window,)),),
         )
     )
@@ -220,8 +220,8 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     """
     assert expected.metadata == actual.metadata, "metadata differs"
 
-    exp_records = {s.record_id: s for s in expected.records}
-    act_records = {s.record_id: s for s in actual.records}
+    exp_records = {s.id: s for s in expected.records}
+    act_records = {s.id: s for s in actual.records}
     assert exp_records.keys() == act_records.keys(), "record ids differ"
     for record_id, exp in exp_records.items():
         act = act_records[record_id]

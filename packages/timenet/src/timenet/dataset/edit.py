@@ -48,13 +48,13 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
         TimeFEditError: If an id is unknown, or a required reference dangles and ``cascade`` is off.
     """
     remove = set(record_ids)
-    known = {record.record_id for record in dataset.records}
+    known = {record.id for record in dataset.records}
     unknown = remove - known
     if unknown:
         raise TimeFEditError(f"cannot remove unknown record ids: {sorted(unknown)}")
 
     annotations_by_record = {
-        record.record_id: frozenset(
+        record.id: frozenset(
             annotation.occurrence_id
             for annotation in (
                 *record.annotations,
@@ -64,14 +64,12 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
             if annotation.occurrence_id is not None
         )
         for record in dataset.records
-        if record.record_id not in remove
+        if record.id not in remove
     }
     dataset_annotation_ids = frozenset(
         annotation.occurrence_id for annotation in dataset.annotations if annotation.occurrence_id is not None
     )
-    removed_signal_ids = {
-        signal.id for record in dataset.records if record.record_id in remove for signal in record.signals
-    }
+    removed_signal_ids = {signal.id for record in dataset.records if record.id in remove for signal in record.signals}
     removed_task_ids = _tasks_to_remove(
         dataset,
         remove,
@@ -85,7 +83,7 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
     records = [
         replace(record, task_ids=tuple(tid for tid in record.task_ids if tid in surviving_task_ids))
         for record in dataset.records
-        if record.record_id not in remove
+        if record.id not in remove
     ]
     records_by_id = {record.id: record for record in records}
     tasks = _rebuild_tasks(
