@@ -190,10 +190,7 @@ def _ensure_dataset_version_available_locally(  # noqa: PLR0913
         if built is not None:
             return built
 
-    raise TimeNetDatasetNotFoundError(
-        f"complete release {reference} is missing at {directory}; "
-        "fetch it first or enable --fetch-parents or --build-parents"
-    )
+    raise TimeNetDatasetNotFoundError(f"complete release {reference} is missing at {directory}")
 
 
 def _load_complete_local_manifest(
