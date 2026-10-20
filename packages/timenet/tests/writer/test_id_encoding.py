@@ -24,6 +24,7 @@ from timenet.types import (
     TSEditingTask,
     TSGenerationTask,
     Version,
+    new_id,
     ureg,
 )
 from timenet.writer import TimeFWriter
@@ -79,6 +80,12 @@ def test_default_ids_are_uuid7():
     sid = dataset.records[0].id
     assert uuid.UUID(sid).version == 7
     assert str(uuid.UUID(sid)) == sid  # canonical
+
+
+def test_new_ids_sort_in_the_order_they_are_made():
+    # Many of these share one millisecond. The writer orders stored rows by these ids.
+    ids = [new_id() for _ in range(1_000)]
+    assert ids == sorted(ids)
 
 
 def test_manifest_has_no_id_encoding(tmp_path):

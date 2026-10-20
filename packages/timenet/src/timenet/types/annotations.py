@@ -21,7 +21,7 @@ from pydantic import BeforeValidator, StrictStr
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._model import TimeFModel
-from timenet.types.ids import new_id
+from timenet.types.ids import EntityId
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
 from timenet.types.units import normalize_unit
 from timenet.types.wire import ValueType
@@ -68,16 +68,15 @@ class Annotation:
     """Optional per-instance provenance (the rater, method, or model behind this value). Unlike
     ``description``, which the descriptor holds once per key, ``source`` can differ between
     annotations that share a key."""
-    id: str = field(default_factory=new_id)
-    """Reusable content identifier, a UUIDv7 string by default."""
-    occurrence_id: str | None = field(default=None, compare=False)
-    """Identity of one attachment. It is assigned by ``annotate()``."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional metadata that is part of the reusable content."""
     confidence: float | None = field(default=None, compare=False)
     """Optional confidence for this particular application."""
     occurrence_metadata: JsonMapping = field(default_factory=dict, compare=False)
     """Optional metadata for this particular application."""
+    _template: "Annotation | None" = field(default=None, init=False, repr=False, compare=False)
+    _content_id: EntityId | None = field(default=None, init=False, repr=False, compare=False)
+    _occurrence_id: EntityId | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Canonicalize a sequence ``value`` to a list and normalize ``unit`` against the registry.
@@ -121,13 +120,32 @@ class Annotation:
         return (self.key, self.value, self.unit, self.description, self.metadata)
 
     @property
+    def _content_identity(self) -> tuple[str, EntityId | int]:
+        """Return what decides which occurrences share one stored content row.
+
+        An occurrence read from storage keeps its stored content id. Any other occurrence shares
+        content with the occurrences made from the same annotation object.
+        """
+        if self._content_id is not None:
+            return ("stored", self._content_id)
+        return ("object", id(self._template or self))
+
+    @property
     def name(self) -> str:
         """Return the annotation's public name."""
         return self.key
 
     def _new_occurrence(self) -> "Annotation":
-        """Return an internal copy representing one new attachment occurrence."""
-        return replace(self, occurrence_id=new_id())
+        """Return an internal copy representing one new attachment occurrence.
+
+        Returns:
+            The new occurrence. It shares this annotation's content.
+        """
+        occurrence = replace(self)
+        set_field = object.__setattr__
+        set_field(occurrence, "_template", self._template or self)
+        set_field(occurrence, "_content_id", self._content_id)
+        return occurrence
 
 
 def annotation_type_of(annotation: Annotation) -> AnnotationType:

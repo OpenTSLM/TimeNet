@@ -58,7 +58,7 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
     dataset = _referenced_annotation_dataset()
     record = dataset.records[0]
     if subjects:
-        record.annotate(Annotation(key="subject_ids", value=list(subjects), id="record-subjects"))
+        record.annotate(Annotation(key="subject_ids", value=list(subjects)))
     version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -102,11 +102,11 @@ def _referenced_annotation_dataset() -> TimeFDataset:
     )
     record = dataset.add_record(
         record=Record(
-            sources=(Source(id="rec-0-source", name="Source", signals=(signal,)),),
+            sources=(Source(name="Source", signals=(signal,)),),
             id="rec-0",
         )
     )
-    options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno"))
+    options = record.annotate(Annotation(key="answer_options", value=["yes", "no"]))
     dataset.add_task(
         task=AnswerTask(
             prompt="Rhythm?",

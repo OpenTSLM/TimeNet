@@ -95,6 +95,9 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
     DuckDBControlWriter(path).write_hierarchy(dataset)
+    with connect_control(path, read_only=True) as connection:
+        source_ids = dict(connection.execute("SELECT name, source_id FROM sources").fetchall())
+        content_ids = dict(connection.execute("SELECT name, content_id FROM annotation_contents").fetchall())
     values = {
         "lead-i": pa.array([1.0, 2.0], type=pa.float32()),
         "lead-ii": pa.array([3.0, 4.0], type=pa.float32()),
@@ -105,16 +108,16 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
         (task,) = reader.read_tasks((record,))
 
     assert record.id == "record-1"
-    assert record.sources[0].id == "monitor"
-    assert record.sources[0].sources[0].id == "ecg"
+    assert record.sources[0]._stored_id == source_ids["Monitor"]
+    assert record.sources[0].sources[0]._stored_id == source_ids["ECG"]
     lead_i, lead_ii = record.signals
     assert lead_i.time_axis is lead_ii.time_axis
     assert lead_i.spec is lead_ii.spec
     assert lead_i.metadata == lead_ii.metadata == {}
     assert lead_i.metadata is not lead_ii.metadata
     assert lead_i.to_arrow().to_pylist() == [1.0, 2.0]
-    assert record.annotations[0].id == "sex-male"
-    assert record.annotations[0].occurrence_id is not None
+    assert record.annotations[0]._content_id == content_ids["patient_sex"]
+    assert record.annotations[0]._occurrence_id is not None
     assert task.inputs[0] is record
     assert task.prompt == "Alive?"
     assert task.targets == ("Yes",)
@@ -261,7 +264,7 @@ def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
     record = dataset.records[0]
-    second = record.annotate(Annotation(id="age-65", key="patient_age", value=65, unit="year"))
+    second = record.annotate(Annotation(key="patient_age", value=65, unit="year"))
     dataset.tasks[0].input_annotations = (second, record.annotations[0])
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
@@ -270,7 +273,7 @@ def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
         (task,) = reader.read_tasks(records)
 
     assert task.inputs == records
-    assert tuple(annotation.id for annotation in task.input_annotations) == ("age-65", "sex-male")
+    assert tuple(annotation.key for annotation in task.input_annotations) == ("patient_age", "patient_sex")
 
 
 def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
@@ -317,11 +320,11 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
     ("statement", "message"),
     [
         (
-            "DELETE FROM annotation_contents WHERE content_id = 'sex-male'",
+            "DELETE FROM annotation_contents WHERE name = 'patient_sex'",
             "missing content",
         ),
         (
-            "UPDATE sources SET parent_source_key = 999 WHERE source_id = 'ecg'",
+            "UPDATE sources SET parent_source_key = 999 WHERE name = 'ECG'",
             "missing parent",
         ),
         (
@@ -331,13 +334,13 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
         (
             "UPDATE annotation_occurrences SET object_key = 999 "
             "WHERE content_key IN ("
-            "SELECT content_key FROM annotation_contents WHERE content_id = 'sex-male')",
+            "SELECT content_key FROM annotation_contents WHERE name = 'patient_sex')",
             "missing Record",
         ),
         (
             "UPDATE annotation_occurrences SET object_type = 'Unknown' "
             "WHERE content_key IN ("
-            "SELECT content_key FROM annotation_contents WHERE content_id = 'sex-male')",
+            "SELECT content_key FROM annotation_contents WHERE name = 'patient_sex')",
             "unknown object type",
         ),
     ],
@@ -428,19 +431,17 @@ def _scope_key(task):
 def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value, kind):
     dataset = _dataset()
     record = dataset.records[0]
-    annotation = Annotation(
-        key="probe", value=value, id="probe-content", span=None if value is not None else TimePoint(start_us=0)
-    )
+    annotation = Annotation(key="probe", value=value, span=None if value is not None else TimePoint(start_us=0))
     record.annotate(annotation)
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         (restored,) = reader.read_records((record.id,))
-    back = next(item for item in restored.annotations if item.id == "probe-content")
+    back = next(item for item in restored.annotations if item.key == "probe")
     stored = (
         connect_control(path, read_only=True)
-        .execute("SELECT value_kind FROM annotation_contents WHERE content_id = 'probe-content'")
+        .execute("SELECT value_kind FROM annotation_contents WHERE name = 'probe'")
         .fetchone()
     )
 

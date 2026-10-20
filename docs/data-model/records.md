@@ -39,12 +39,10 @@ Build the hierarchy from the leaves upward:
 from timenet.dataset import Record, Source
 
 accelerometer = Source(
-    id="accelerometer",
     name="Accelerometer",
     signals=(acceleration_x, acceleration_y, acceleration_z),
 )
 imu = Source(
-    id="imu",
     name="IMU",
     sources=(accelerometer,),
 )

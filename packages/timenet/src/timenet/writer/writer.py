@@ -378,13 +378,14 @@ class TimeFWriter:
         Raises:
             TimeFValidationError: If one content ID has different payloads.
         """
-        seen: dict[str, tuple[object, ...]] = {}
+        seen: dict[tuple[str, object], tuple[object, ...]] = {}
         record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
         for ann in record_annotations:
             content = ann._content_fields
-            if ann.id in seen and seen[ann.id] != content:
-                raise TimeFValidationError(f"annotation content id {ann.id!r} is reused with different content")
-            seen[ann.id] = content
+            identity = ann._content_identity
+            if identity in seen and seen[identity] != content:
+                raise TimeFValidationError(f"annotation content {identity!r} is reused with different content")
+            seen[identity] = content
 
     def _build_counts(self) -> ManifestCounts:
         """Read exact entity counts from the completed control database.

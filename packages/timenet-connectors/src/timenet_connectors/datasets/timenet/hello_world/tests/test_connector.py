@@ -53,13 +53,13 @@ def test_each_signal_has_one_owner():
     assert series_by_id and set(series_by_id.values()) == {1}
 
 
-def test_shares_an_annotation_across_records_by_id():
+def test_shares_an_annotation_across_records_by_object():
     dataset = _convert()
-    ann_ids: dict[str, int] = {}
+    contents: dict[tuple[str, str | int], int] = {}
     for record in dataset.records:
         for ann in record.annotations:
-            ann_ids[ann.id] = ann_ids.get(ann.id, 0) + 1
-    assert any(count >= 2 for count in ann_ids.values()), "expected an annotation shared across records"
+            contents[ann._content_identity] = contents.get(ann._content_identity, 0) + 1
+    assert any(count >= 2 for count in contents.values()), "expected an annotation shared across records"
 
 
 def test_has_a_task_chain():

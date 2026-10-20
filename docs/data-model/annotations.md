@@ -30,11 +30,12 @@ content object.
 Reusable content includes these fields:
 
 - `key`, `value`, `unit`, and `description`
-- `id`, which identifies the reusable content
 - `metadata`, which stores JSON-compatible content details
 
-Each occurrence adds its own identity, source, confidence, and metadata. This design lets several
-objects share one long description without sharing occurrence details.
+Each occurrence adds its own source, confidence, and metadata. This design lets several objects
+share one long description without sharing occurrence details. Occurrences made from the same
+Annotation object share its content. Neither the content nor an occurrence has a public ID. The
+writer gives each one a storage ID.
 
 ## Static context
 

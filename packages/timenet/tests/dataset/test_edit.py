@@ -169,13 +169,11 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         restored = reader.read()
 
-    by_record = {
-        record.id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
-    }
+    by_record = {record.id: {id(annotation) for annotation in record.annotations} for record in restored.records}
     for task in restored.tasks:
         reachable = set().union(*(by_record[record.id] for record in task.inputs))
         named = (*task.input_annotations, *task.target_annotations)
-        assert not [annotation for annotation in named if annotation.occurrence_id not in reachable]
+        assert not [annotation for annotation in named if id(annotation) not in reachable]
 
 
 def test_target_and_candidate_records_are_required_whatever_the_task_type():

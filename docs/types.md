@@ -30,6 +30,13 @@ assert str(version) == "1.2.3"
 assert version > Version(1, 2, 0)
 ```
 
+## IDs
+
+Sources, axes, annotation contents, and annotation occurrences have no public ID. Share them by
+object: attach the same Annotation object, or give Signals the same axis object. The writer gives
+each of them a storage ID when it writes their rows. An object read back from storage keeps its
+storage ID, so an edited version writes it to the same row.
+
 ## Units
 
 TimeNet uses one [pint](https://pint.readthedocs.io) registry named `ureg`. Use this registry for
