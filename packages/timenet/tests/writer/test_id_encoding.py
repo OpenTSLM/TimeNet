@@ -25,6 +25,7 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.types.text import read_value
 from timenet.writer import TimeFWriter
 
 
@@ -198,8 +199,8 @@ def test_correspondence_record_targets_round_trip(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, TSCorrespondenceTask)
-    assert task.targets is not None and isinstance(task.targets[0], Record)
-    assert task.targets[0].id == match.id
+    assert task.targets is not None and isinstance(read_value(task.targets[0]), Record)
+    assert read_value(task.targets[0]).id == match.id
     assert tuple(record.id for record in task.candidate_records) == (match.id, other.id)
 
 
@@ -230,13 +231,13 @@ def test_editing_and_generation_record_targets_round_trip(tmp_path):
     edit = tasks[TSEditingTask]
     assert isinstance(edit, TSEditingTask)
     assert tuple(record.id for record in edit.inputs) == (source.id,)
-    assert edit.targets is not None and isinstance(edit.targets[0], Record)
-    assert edit.targets[0].id == edited.id
-    assert edit.prompt == "Remove the baseline wander."
+    assert edit.targets is not None and isinstance(read_value(edit.targets[0]), Record)
+    assert read_value(edit.targets[0]).id == edited.id
+    assert read_value(edit.prompt) == "Remove the baseline wander."
     generation = tasks[TSGenerationTask]
     assert isinstance(generation, TSGenerationTask)
-    assert generation.targets is not None and isinstance(generation.targets[0], Record)
-    assert generation.targets[0].id == edited.id
+    assert generation.targets is not None and isinstance(read_value(generation.targets[0]), Record)
+    assert read_value(generation.targets[0]).id == edited.id
 
 
 def test_time_span_round_trips(tmp_path):

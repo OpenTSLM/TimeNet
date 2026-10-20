@@ -5,6 +5,7 @@ import pytest
 
 from timenet.errors import TimeFValidationError
 from timenet.types import US_PER_S
+from timenet.types.text import read_value
 from timenet_connectors.datasets.physionet.sleep_edfx import metadata
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 
@@ -26,7 +27,11 @@ def test_one_value_gives_one_instance():
 def test_two_builds_of_one_value_state_the_same_thing():
     first = metadata.MetadataAnnotation().get_annotation(AnnotationKey.SEX, "F")
     second = metadata.MetadataAnnotation().get_annotation(AnnotationKey.SEX, "F")
-    assert (first.key, first.value, first.description) == (second.key, second.value, second.description)
+    assert (first.key, read_value(first.value), first.description) == (
+        second.key,
+        read_value(second.value),
+        second.description,
+    )
 
 
 def test_a_shared_annotation_carries_its_key_and_value():
@@ -37,7 +42,7 @@ def test_a_shared_annotation_carries_its_key_and_value():
         metadata_annotation.get_annotation(AnnotationKey.SEX, "M"),
         metadata_annotation.get_annotation(AnnotationKey.CONDITION, "placebo"),
     )
-    assert tuple((one.key, one.value) for one in built) == (
+    assert tuple((one.key, read_value(one.value)) for one in built) == (
         ("study", "sleep-cassette"),
         ("night", 1),
         ("sex", "M"),
@@ -60,18 +65,18 @@ def test_the_counts_state_how_many_distinct_annotations_were_built():
 
 def test_age_carries_its_value_and_the_unit():
     annotation = metadata.build_age(44)
-    assert (annotation.key, annotation.value, annotation.span) == ("age", 44, None)
+    assert (annotation.key, read_value(annotation.value), annotation.span) == ("age", 44, None)
     assert annotation.unit is not None
 
 
 def test_age_has_no_upper_bound():
-    assert metadata.build_age(103).value == 103
+    assert read_value(metadata.build_age(103).value) == 103
 
 
 def test_the_header_clock_is_carried_as_text_with_no_zone():
     annotation = metadata.build_recording_start_local(_RECORD_ID, datetime(1992, 3, 11, 21, 40, 0))
     assert annotation.key == "recording_start_local"
-    assert annotation.value == "1992-03-11T21:40:00"
+    assert read_value(annotation.value) == "1992-03-11T21:40:00"
     assert annotation.span is None
 
 
@@ -92,14 +97,14 @@ def test_a_sex_that_disagrees_is_recorded():
     note = metadata.build_demographics_note("X M X Male_44yr", 44, "F")
     assert note is not None
     assert note.key == "demographics_note"
-    assert "F" in str(note.value)
+    assert "F" in str(read_value(note.value))
 
 
 def test_a_note_gives_both_readings():
     note = metadata.build_demographics_note("X M X Male_57yr", 58, "F")
     assert note is not None
-    assert "57" in str(note.value)
-    assert "58" in str(note.value)
+    assert "57" in str(read_value(note.value))
+    assert "58" in str(read_value(note.value))
 
 
 def test_a_lights_off_time_after_midnight_wraps_forward():
@@ -122,7 +127,7 @@ def test_a_lights_off_time_at_the_start_is_the_first_moment():
 
 def test_lights_off_keeps_the_clock_and_places_the_point():
     annotation = metadata.build_lights_off(time(1, 5, 0), datetime(1992, 3, 11, 21, 40, 0))
-    assert annotation.value == "01:05:00"
+    assert read_value(annotation.value) == "01:05:00"
     assert annotation.span is not None
     assert annotation.span.start_us == 12300 * US_PER_S
     assert annotation.span.is_point

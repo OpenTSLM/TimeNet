@@ -12,6 +12,7 @@ from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
 from timenet.types import AnswerTask
 from timenet.types.splits import Split
+from timenet.types.text import read_value
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.datasets.chengsenwang.tsqa import TSQAConnector
 
@@ -94,8 +95,8 @@ def test_qa_tasks_match_fixture():
     rows = _fixture_rows()
     qa = [t for t in dataset.tasks if isinstance(t, AnswerTask)]
     assert len(qa) == len(rows)
-    assert {t.prompt for t in qa} == {r["Question"] for r in rows}
-    assert {t.targets[0] for t in qa if t.targets is not None} == {r["Answer"] for r in rows}
+    assert {read_value(t.prompt) for t in qa} == {r["Question"] for r in rows}
+    assert {read_value(t.targets[0]) for t in qa if t.targets is not None} == {r["Answer"] for r in rows}
 
 
 def test_series_values_parsed_from_fixture():
@@ -164,7 +165,7 @@ def test_split_assignments_are_repeatable_and_preserve_source_ids():
     assert {record.record_id for record in first.records} == {f"row-{index}" for index in range(len(rows))}
     for task in first.tasks:
         index = int(task.id.removeprefix("qa-"))
-        assert task.prompt == rows[index]["Question"]
+        assert read_value(task.prompt) == rows[index]["Question"]
         assert task.inputs[0].record_id == f"row-{index}"
 
 
@@ -180,7 +181,7 @@ def test_equivalent_series_encodings_share_a_split(series):
     for encoded in series:
         rows.append({"Series": encoded, "Task": "Trend", "Question": "duplicate", "Answer": "a"})
     dataset = TSQAConnector().convert(rows)
-    duplicates = [task for task in dataset.tasks if task.prompt == "duplicate"]
+    duplicates = [task for task in dataset.tasks if read_value(task.prompt) == "duplicate"]
     assert len(duplicates) == len(series)
     assert len({task.split for task in duplicates}) == 1
     assert duplicates[0].split is not None

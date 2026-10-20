@@ -9,12 +9,14 @@ from timenet.types import (
     Annotation,
     AnnotationDescriptor,
     AnnotationType,
+    TextValue,
     TimeInterval,
     TimePoint,
     annotation_type_of,
     ureg,
     value_type_of,
 )
+from timenet.types.text import read_value
 
 
 def test_an_annotation_needs_a_value_or_a_span():
@@ -25,12 +27,12 @@ def test_an_annotation_needs_a_value_or_a_span():
 
 def test_a_span_alone_is_enough():
     # A pure marker: no payload, but it marks a region, which is information.
-    assert Annotation(key="artifact", span=TimePoint.seconds(0.5)).value is None
+    assert read_value(Annotation(key="artifact", span=TimePoint.seconds(0.5)).value) is None
 
 
 def test_static_with_value():
     ann = Annotation(key="age", value=64, unit="years")
-    assert ann.value == 64
+    assert read_value(ann.value) == 64
     assert ann.unit == "years"  # a recognized unit string is kept as written
 
 
@@ -45,7 +47,7 @@ def test_unknown_unit_string_raises():
 
 def test_point_is_a_pure_marker_by_default():
     ann = Annotation(key="stimulus", span=TimePoint.seconds(4.0))
-    assert ann.value is None
+    assert read_value(ann.value) is None
     assert ann.span is not None
     assert ann.span.start_us == 4_000_000
     assert ann.span is not None
@@ -86,8 +88,8 @@ def test_sequence_value_canonicalized_to_list():
     # value_type is "list" for any sequence, and the manifest stores it as a JSON array that decodes
     # back to a list; normalizing at construction keeps an annotation equal to its read-back form.
     ann = Annotation(key="labels", value=("a", "b"))
-    assert ann.value == ["a", "b"]
-    assert isinstance(ann.value, list)
+    assert isinstance(ann.value, TextValue)
+    assert ann.value.read() == ["a", "b"]
 
 
 def test_frozen():
@@ -110,7 +112,7 @@ def test_subclass_with_field_defaults_authoring():
     age = Age(value=64)
     assert age.key == "age"
     assert age.unit == "years"
-    assert age.value == 64
+    assert read_value(age.value) == 64
     assert annotation_type_of(age) is AnnotationType.STATIC
 
 

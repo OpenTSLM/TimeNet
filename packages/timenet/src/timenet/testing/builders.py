@@ -1,7 +1,7 @@
 """Deterministic dataset builders, a counting loader, and a logical dataset comparison."""
 
 from collections.abc import Callable, Sequence
-from dataclasses import replace
+from dataclasses import fields
 
 import numpy as np
 import pyarrow as pa
@@ -17,7 +17,9 @@ from timenet.types import (
     License,
     LocalizationMode,
     ScalarPredictionTask,
+    Task,
     TemporalLocalizationTask,
+    TextValue,
     TimeInterval,
     TimeOrigin,
     TimePoint,
@@ -228,9 +230,9 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
         assert exp.start_time.timestamp == act.start_time.timestamp, f"start_time differs for {record_id}"
         assert tuple(sorted(exp.task_ids)) == tuple(sorted(act.task_ids)), f"task_ids differ for {record_id}"
         assert exp.metadata == act.metadata, f"metadata differs for {record_id}"
-        assert sorted(exp.annotations, key=lambda a: a.id) == sorted(act.annotations, key=lambda a: a.id), (
-            f"annotations differ for {record_id}"
-        )
+        assert _read_annotations(tuple(sorted(exp.annotations, key=lambda a: a.id))) == _read_annotations(
+            tuple(sorted(act.annotations, key=lambda a: a.id))
+        ), f"annotations differ for {record_id}"
         _assert_sources_equal(record_id, exp.sources, act.sources)
         _assert_series_equal(record_id, exp.signals, act.signals)
 
@@ -239,9 +241,39 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     assert exp_tasks.keys() == act_tasks.keys(), "task ids differ"
     for task_id, exp_task in exp_tasks.items():
         act_task = act_tasks[task_id]
-        assert replace(exp_task, input_modalities=exp_task.resolved_input_modalities) == replace(
-            act_task, input_modalities=act_task.resolved_input_modalities
-        ), f"task {task_id} differs"
+        assert _read_comparison_value(exp_task) == _read_comparison_value(act_task), f"task {task_id} differs"
+
+
+def _read_annotations(annotations: tuple[Annotation, ...]) -> tuple[object, ...]:
+    """Materialize annotation text for comparison.
+
+    Returns:
+        Comparable annotation fields with native text values.
+    """
+    return tuple(_read_comparison_value(annotation) for annotation in annotations)
+
+
+def _read_comparison_value(value: object) -> object:
+    """Read text and comparison fields without constructing new text handles.
+
+    Returns:
+        Native text, comparable model fields, or an unchanged scalar or descriptor.
+    """
+    if isinstance(value, TextValue):
+        return value.read()
+    if isinstance(value, Annotation | Task):
+        compared = []
+        for item in fields(value):
+            if not item.compare:
+                continue
+            field_value = getattr(value, item.name)
+            if isinstance(value, Task) and item.name == "input_modalities":
+                field_value = value.resolved_input_modalities
+            compared.append((item.name, _read_comparison_value(field_value)))
+        return type(value), tuple(compared)
+    if isinstance(value, tuple):
+        return tuple(_read_comparison_value(item) for item in value)
+    return value
 
 
 def _assert_sources_equal(record_id: str, expected: tuple[Source, ...], actual: tuple[Source, ...]) -> None:
@@ -253,7 +285,9 @@ def _assert_sources_equal(record_id: str, expected: tuple[Source, ...], actual: 
         act_source = act[source_id]
         assert exp_source.name == act_source.name, f"source name differs for {source_id}"
         assert exp_source.metadata == act_source.metadata, f"source metadata differs for {source_id}"
-        assert exp_source.annotations == act_source.annotations, f"source annotations differ for {source_id}"
+        assert _read_annotations(exp_source.annotations) == _read_annotations(act_source.annotations), (
+            f"source annotations differ for {source_id}"
+        )
         assert {source.id for source in exp_source.sources} == {source.id for source in act_source.sources}, (
             f"child sources differ for {source_id}"
         )
@@ -273,7 +307,9 @@ def _assert_series_equal(record_id: str, expected: tuple[Signal, ...], actual: t
         assert exp_ts.name == act_ts.name, f"signal differs for {series_id}"
         assert exp_ts.time_axis == act_ts.time_axis, f"time axis differs for {series_id}"
         assert exp_ts.metadata == act_ts.metadata, f"metadata differs for {series_id}"
-        assert exp_ts.annotations == act_ts.annotations, f"annotations differ for {series_id}"
+        assert _read_annotations(exp_ts.annotations) == _read_annotations(act_ts.annotations), (
+            f"annotations differ for {series_id}"
+        )
         assert exp_ts.n_values == act_ts.n_values, f"n_values differs for {series_id}"
         assert exp_ts.to_arrow().equals(act_ts.to_arrow()), f"values differ for {series_id}"
         # An irregular axis carries only its endpoints, so two streams differing in the middle compare

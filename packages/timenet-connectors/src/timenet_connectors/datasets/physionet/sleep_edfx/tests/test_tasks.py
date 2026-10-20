@@ -11,6 +11,7 @@ from timenet.types import (
     TimeInterval,
     TimePoint,
 )
+from timenet.types.text import read_value
 from timenet_connectors.datasets.physionet.sleep_edfx import tasks
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 
@@ -58,9 +59,9 @@ def test_a_vocabulary_is_one_annotation_for_each_set():
 
 def test_a_vocabulary_holds_the_whole_set_and_not_one_member():
     stages, sexes, conditions = tasks.build_vocabularies(_PREFIX)
-    assert stages.value == list(tasks.STAGE_LABELS)
-    assert sexes.value == ["F", "M"]
-    assert conditions.value == ["placebo", "temazepam"]
+    assert read_value(stages.value) == list(tasks.STAGE_LABELS)
+    assert read_value(sexes.value) == ["F", "M"]
+    assert read_value(conditions.value) == ["placebo", "temazepam"]
 
 
 def test_a_vocabulary_carries_no_span():
@@ -75,7 +76,7 @@ def test_two_builds_give_one_set_of_vocabularies():
     first = tasks.build_vocabularies(_PREFIX)
     second = tasks.build_vocabularies(_PREFIX)
     assert [one.id for one in first] == [one.id for one in second]
-    assert [one.value for one in first] == [one.value for one in second]
+    assert [read_value(one.value) for one in first] == [read_value(one.value) for one in second]
 
 
 def _scope(task) -> TimeInterval:
@@ -96,7 +97,9 @@ def _stage(label, onset_s, end_s):
 def test_a_run_expands_into_one_task_for_each_epoch():
     built = list(tasks.build_epoch_tasks(_RECORD_ID, _PREFIX, [_stage("Sleep stage W", 0, 900)]))
     assert len(built) == 30
-    assert {one.targets for one in built} == {("Sleep stage W",)}
+    for one in built:
+        assert one.targets is not None
+        assert tuple(map(read_value, one.targets)) == ("Sleep stage W",)
 
 
 def test_an_entry_of_one_epoch_gives_one_task():
@@ -130,12 +133,14 @@ def test_an_epoch_is_placed_from_the_onset_it_is_given():
 
 def test_the_label_is_kept_as_the_scorer_wrote_it():
     built = list(tasks.build_epoch_tasks(_RECORD_ID, _PREFIX, [_stage("Sleep stage 4", 0, 30)]))
-    assert built[0].targets == ("Sleep stage 4",)
+    assert built[0].targets is not None
+    assert tuple(map(read_value, built[0].targets)) == ("Sleep stage 4",)
 
 
 def test_a_label_that_names_no_sleep_stage_still_becomes_a_task():
     built = list(tasks.build_epoch_tasks(_RECORD_ID, _PREFIX, [_stage("Movement time", 0, 30)]))
-    assert built[0].targets == ("Movement time",)
+    assert built[0].targets is not None
+    assert tuple(map(read_value, built[0].targets)) == ("Movement time",)
 
 
 def test_every_task_names_the_stage_vocabulary():
@@ -145,7 +150,7 @@ def test_every_task_names_the_stage_vocabulary():
 
 def test_no_task_carries_a_prompt():
     built = list(tasks.build_epoch_tasks(_RECORD_ID, _PREFIX, [_stage("Sleep stage 2", 0, 60)]))
-    assert all(one.prompt is None for one in built)
+    assert all(read_value(one.prompt) is None for one in built)
 
 
 def test_a_scoring_that_starts_late_gets_no_task_for_the_time_before_it():
@@ -242,7 +247,7 @@ def test_age_is_a_scalar_with_a_unit():
 def test_sex_carries_the_decoded_letter():
     built = list(tasks.build_record_tasks(_RECORD_ID, _PREFIX, _CASSETTE_FACTS, []))
     sex = _pick(built, ClassificationTask, "sleep-edfx-vocabulary-sex")
-    assert sex.targets == ("F",)
+    assert tuple(map(read_value, sex.targets)) == ("F",)
     assert sex.target_schema == "sleep-edfx-vocabulary-sex"
     assert sex.scope is None
 
@@ -252,14 +257,14 @@ def test_the_same_sheet_code_decodes_to_the_other_letter_elsewhere():
     # decoder gave.
     telemetry = [_fact("sex", "M"), _fact("age", 40)]
     built = list(tasks.build_record_tasks(_RECORD_ID, _PREFIX, telemetry, []))
-    assert _pick(built, ClassificationTask, "sleep-edfx-vocabulary-sex").targets == ("M",)
+    assert tuple(map(read_value, _pick(built, ClassificationTask, "sleep-edfx-vocabulary-sex").targets)) == ("M",)
 
 
 def test_a_telemetry_night_carries_its_condition():
     facts = [*_CASSETTE_FACTS, _fact("condition", "placebo")]
     built = list(tasks.build_record_tasks(_RECORD_ID, _PREFIX, facts, []))
     condition = _pick(built, ClassificationTask, "sleep-edfx-vocabulary-condition")
-    assert condition.targets == ("placebo",)
+    assert tuple(map(read_value, condition.targets)) == ("placebo",)
     assert condition.scope is None
 
 
@@ -388,4 +393,4 @@ def test_the_lights_off_task_names_no_vocabulary():
     built = tasks.build_lights_off_task(_RECORD_ID, _SESSION, [_fact(AnnotationKey.LIGHTS_OFF, "22:30:00", 1800)])
     assert built is not None
     assert built.target_annotations == ()
-    assert built.prompt is None
+    assert read_value(built.prompt) is None

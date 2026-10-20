@@ -42,6 +42,7 @@ from timenet.types.tasks import (
     TSEditingTask,
     TSGenerationTask,
 )
+from timenet.types.text import InlineText, TextValue, read_value
 from timenet.types.units import normalize_unit, ureg, use_as_application_registry
 from timenet.types.version import Version
 
@@ -59,6 +60,7 @@ __all__ = [
     "DatasetSchema",
     "Domain",
     "ForecastingTask",
+    "InlineText",
     "InputModality",
     "License",
     "LocalizationMode",
@@ -77,6 +79,7 @@ __all__ = [
     "Task",
     "TaskType",
     "TemporalLocalizationTask",
+    "TextValue",
     "TimeInterval",
     "TimeOrigin",
     "TimePoint",
@@ -88,6 +91,7 @@ __all__ = [
     "normalize_unit",
     "offset_us",
     "parse_split",
+    "read_value",
     "seconds_to_us",
     "unix_us",
     "ureg",

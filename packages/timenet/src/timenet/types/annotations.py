@@ -20,9 +20,11 @@ from pydantic import BeforeValidator, StrictStr
 
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
+from timenet.types._fields import ValueField
 from timenet.types._model import TimeFModel
 from timenet.types.ids import new_id
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
+from timenet.types.text import InlineText, TextValue, read_value
 from timenet.types.units import normalize_unit
 from timenet.types.wire import ValueType
 
@@ -34,6 +36,23 @@ class AnnotationType(StrEnum):
     STATIC = "static"
     POINT = "point"
     INTERVAL = "interval"
+
+
+AnnotationValue = TextValue[str] | TextValue[list[str]] | bool | int | float | None
+
+
+def _annotation_value(value: Any) -> AnnotationValue:
+    """Normalize text values to handles and reject unsupported annotation values.
+
+    Returns:
+        A text handle, a native scalar, or an absent marker value.
+    """
+    value_type_of(value)
+    if isinstance(value, str):
+        return InlineText(value)
+    if isinstance(value, list | tuple):
+        return InlineText(list(value))
+    return value
 
 
 @dataclass(frozen=True, kw_only=True)
@@ -52,9 +71,11 @@ class Annotation:
 
     key: str
     """Name identifying the annotation."""
-    value: Any = None
-    """The annotation's payload value. ``None`` makes it a pure marker, which needs a ``span`` to
-    mark something."""
+    value: ValueField[Any, AnnotationValue] = field(default=ValueField(_annotation_value, None))
+    """A native scalar or a text handle. Call ``read()`` for string and string-list values.
+
+    ``None`` makes it a pure marker, which needs a ``span`` to mark something.
+    """
     span: TimePoint | TimeInterval | None = None
     """Where on the Record timeline this annotation applies. Its owner determines its scope.
     ``None`` means it is record-scoped context with no place in time."""
@@ -80,19 +101,15 @@ class Annotation:
     """Optional metadata for this particular application."""
 
     def __post_init__(self) -> None:
-        """Canonicalize a sequence ``value`` to a list and normalize ``unit`` against the registry.
+        """Normalize units and validate the annotation's span and content.
 
-        ``value_type`` is ``"list"`` for any sequence, and the manifest stores it as a JSON array that
-        decodes back to a list. This method converts a tuple to a list and the unit to a string. That
-        keeps an in-memory annotation equal to its read-back form, the reader's field-for-field
-        guarantee.
+        The value field wraps strings and string sequences in text handles. Call ``value.read()``
+        to obtain the native string or list. Numeric and boolean values remain native scalars.
 
         Raises:
             TimeFValidationError: If the caller sets ``span`` to something that is not a span, or
                 the annotation has neither a value nor a span.
         """
-        if isinstance(self.value, tuple):
-            object.__setattr__(self, "value", list(self.value))
         object.__setattr__(self, "unit", normalize_unit(self.unit))
         object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
         object.__setattr__(
@@ -123,7 +140,7 @@ class Annotation:
     @property
     def _content_fields(self) -> tuple[object, ...]:
         """Return the reusable payload, without occurrence-specific fields."""
-        return (self.key, self.value, self.unit, self.description, self.metadata)
+        return (self.key, read_value(self.value), self.unit, self.description, self.metadata)
 
     @property
     def name(self) -> str:
@@ -199,6 +216,8 @@ def value_type_of(value: Any) -> ValueType | None:
     Raises:
         TimeFValidationError: If ``value`` is a non-null value of an unsupported type.
     """
+    if isinstance(value, TextValue):
+        return value.value_type
     if value is None:
         return None
     # bool before int, since bool is an int subclass.

@@ -23,6 +23,7 @@ from timenet.types import (
     ureg,
 )
 from timenet.types.object_kind import ObjectKind
+from timenet.types.text import read_value
 
 from .test_control_writer import _dataset
 
@@ -117,8 +118,9 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert record.annotations[0].content_id == "sex-male"
     assert record.annotations[0].occurrence_id is not None
     assert task.inputs[0] is record
-    assert task.prompt == "Alive?"
-    assert task.targets == ("Yes",)
+    assert read_value(task.prompt) == "Alive?"
+    assert task.targets is not None
+    assert tuple(map(read_value, task.targets)) == ("Yes",)
     assert task.annotations[0].name == "task_kind"
 
 
@@ -257,7 +259,7 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
 
     assert task.targets is not None
     text, integer, floating, boolean, target_record, target_signal, *target_spans = task.targets
-    assert (text, integer, floating, boolean) == ("Yes", 7, 0.5, True)
+    assert (read_value(text), integer, floating, boolean) == ("Yes", 7, 0.5, True)
     assert target_record is records[0]
     assert target_signal is records[0].signals[0]
     assert tuple(target_spans) == spans
@@ -292,7 +294,8 @@ def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
         )
         (task,) = reader.read_tasks(records)
 
-    assert task.targets == ("Yes",)
+    assert task.targets is not None
+    assert tuple(map(read_value, task.targets)) == ("Yes",)
 
 
 def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path):
@@ -450,8 +453,8 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
         .fetchone()
     )
 
-    assert back.value == value
-    assert type(back.value) is type(value)
+    assert read_value(back.value) == value
+    assert type(read_value(back.value)) is type(value)
     assert stored == (kind,)
 
 
@@ -482,12 +485,12 @@ def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
     }
     assert classification_task.targets is not None
     assert [(row["target_kind"], row["text_value"]) for row in targets if row["task_id"] == classification_task.id] == [
-        ("text", target) for target in classification_task.targets
+        ("text", read_value(target)) for target in classification_task.targets
     ]
     age = next(row for row in annotations if row["content_id"] == age_annotation.id and row["object_id"] == record.id)
     assert (age["value_kind"], age["integer_value"], age["unit"]) == (
         "integer",
-        age_annotation.value,
+        read_value(age_annotation.value),
         age_annotation.unit,
     )
 
