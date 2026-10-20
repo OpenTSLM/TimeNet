@@ -174,6 +174,34 @@ def download(
     typer.echo(str(target))
 
 
+@app.command()
+def view(
+    dataset_ref: str | None = typer.Argument(None, help="Optional dataset id, pinned with @version if desired."),
+    registry: str | None = _registry_option,
+    port: int = typer.Option(0, "--port", min=0, max=65535, help="Port on 127.0.0.1 (0 chooses one)."),
+    no_browser: bool = typer.Option(False, "--no-browser", help="Print the URL without opening it."),
+) -> None:
+    """Browse a registry or open one committed TimeF version in a browser.
+
+    Raises:
+        BadParameter: If the optional viewer dependencies are unavailable.
+        ModuleNotFoundError: If an unrelated dependency is missing.
+    """
+    try:
+        from timenet.viewer.launch import open_viewer, serve  # noqa: PLC0415
+    except ModuleNotFoundError as exc:
+        if (exc.name or "").split(".")[0] not in {"fastapi", "uvicorn"}:
+            raise
+        raise typer.BadParameter("the viewer needs: uv sync --extra viewer") from exc
+    backend, initial_manifest = open_viewer(dataset_ref, registry)
+    serve(
+        backend,
+        initial_manifest=initial_manifest,
+        port=port,
+        open_browser=not no_browser,
+    )
+
+
 def _download(client: TimeNet, dataset_id: str, version: str | None, total: int) -> Path:
     """Download a version, rendering a live progress bar on stderr when the terminal supports it.
 
