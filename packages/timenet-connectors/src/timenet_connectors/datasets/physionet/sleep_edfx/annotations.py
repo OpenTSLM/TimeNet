@@ -20,24 +20,26 @@ from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 _signal_names_for_annotations = ("EEG Fpz-Cz", "EEG Pz-Oz", "EOG horizontal", "EMG submental")
 
 
-def _signal_ids_of_annotation(record_id: str, series: tuple[Signal, ...], signals: tuple[str, ...]) -> tuple[str, ...]:
-    """Give the time series ids of named signals, in the order they were named.
+def _signals_of_annotation(
+    recording_id: str, series: tuple[Signal, ...], signals: tuple[str, ...]
+) -> tuple[Signal, ...]:
+    """Give the named signals, in the order they were named.
 
     Args:
-        record_id: The record these signals belong to, for the error message.
+        recording_id: The recording these signals belong to, for the error message.
         series: Its time series.
         signals: The signal names to look up.
 
     Returns:
-        One time series id for each name, in that order.
+        One signal for each name, in that order.
 
     Raises:
         TimeFFormatError: If the recording does not hold one of the named signals.
     """
-    by_signal = {one.name: one.id for one in series}
+    by_signal = {one.name: one for one in series}
     missing = [signal for signal in signals if signal not in by_signal]
     if missing:
-        raise TimeFFormatError(f"{record_id}: does not hold the signals {missing}")
+        raise TimeFFormatError(f"{recording_id}: does not hold the signals {missing}")
 
     return tuple(by_signal[signal] for signal in signals)
 
@@ -65,7 +67,7 @@ def measure_overrun_microseconds(entries: tuple[reader.EdfAnnotation, ...], end_
 
 
 def build(
-    record_id: str,
+    recording_id: str,
     entries: tuple[reader.EdfAnnotation, ...],
     series: tuple[Signal, ...],
 ) -> list[Annotation]:
@@ -75,8 +77,8 @@ def build(
     file states. An entry that reaches past the last recorded data point warns and is kept.
 
     Args:
-        record_id: The id of the record this scoring belongs to, from ``connector.py``. It
-            names the recording in any message this build gives.
+        recording_id: The name of the recording this scoring belongs to, from ``connector.py``.
+            It names the recording in any message this build gives.
         entries: Its scoring, as :func:`reader.read_annotations` gives it.
         series: Its time series, which name the signals a stage was scored from.
 
@@ -85,8 +87,8 @@ def build(
 
     Raises:
         TimeFFormatError: If the recording does not hold all four scoring signals.
-    """  # noqa: DOC502 (raised by _signal_ids_of_annotation, not directly here)
-    _signal_ids_of_annotation(record_id, series, _signal_names_for_annotations)
+    """  # noqa: DOC502 (raised by _signals_of_annotation, not directly here)
+    _signals_of_annotation(recording_id, series, _signal_names_for_annotations)
     return [
         Annotation(
             key=AnnotationKey.SLEEP_STAGE,
@@ -100,10 +102,8 @@ def build(
     ]
 
 
-def attach(record_id: str, series: tuple[Signal, ...], stages: list[Annotation]) -> None:
+def attach(recording_id: str, series: tuple[Signal, ...], stages: list[Annotation]) -> None:
     """Attach each scoring entry to its four scoring Signals with shared content."""
-    ids = _signal_ids_of_annotation(record_id, series, _signal_names_for_annotations)
-    for signal in series:
-        if signal.id in ids:
-            for stage in stages:
-                signal.annotate(stage)
+    for signal in _signals_of_annotation(recording_id, series, _signal_names_for_annotations):
+        for stage in stages:
+            signal.annotate(stage)
