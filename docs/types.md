@@ -144,7 +144,7 @@ Record's known origin. Relative spans also work when its absolute timestamp is u
 | `name` | yes | Display name. |
 | `description` | yes | Short dataset description. |
 | `license` | yes | Known SPDX-style license value. |
-| `domains` | no | Searchable application domains. |
+| `domains` | no | Searchable application domains. See [Domains](#domains). |
 | `tags` | no | Searchable free-form labels. |
 | `source_url` | no | Canonical source location. |
 | `license_url` | conditional | License text when `license` is `OTHER`. |
@@ -177,6 +177,31 @@ The main string enums are:
 - `LocalizationMode` for sparse or exhaustive temporal localization.
 
 They are `StrEnum` values and compare equal to their stored string values.
+
+### Domains
+
+A card declares every domain that a substantial part of its records belongs to.
+Finer labels, such as a sensor or a benchmark name, belong in `tags`.
+
+The **Covers** column presents typical examples, and does not claim to be an exhaustive list.
+
+| Value | Covers |
+| --- | --- |
+| `health` | Human physiology and clinical care. Declare it alongside `cardiology`, `respiratory`, and `sleep`. |
+| `cardiology` | The heart: ECG, heart rate, heart sounds. |
+| `respiratory` | Breathing and the lungs: respiration, airflow, oxygen saturation, cough. |
+| `sleep` | Sleep studies: polysomnography and sleep staging. |
+| `activity` | Labeled human activities and daily behavior. Add `motion` when the signals are the movement. |
+| `motion` | Movement of a body or object: IMU channels and motion capture. |
+| `economics` | Macroeconomic indicators, prices, sales, and demand. |
+| `finance` | Asset prices, returns, trading volumes, and exchange rates. |
+| `environment` | Weather, climate, air quality, and hydrology. |
+| `energy` | Electricity load, generation, power grids, and transformers. |
+| `transport` | Transport networks: road traffic, congestion, ridership. Not a vehicle's own machinery. |
+| `observability` | Software and IT infrastructure: service metrics and cloud monitoring. |
+| `audio` | Recorded sound as content. |
+| `industrial` | Machines and industrial processes: condition monitoring, faults, remaining useful life. |
+| `general` | Synthetic, demo, or generic data without a stated field. |
 
 ## Errors and warnings
 

@@ -16,6 +16,7 @@ from timenet.schemas import DATASET_CARD_SCHEMA
         "transport",
         "observability",
         "audio",
+        "industrial",
     ],
 )
 def test_card_schema_accepts_benchmark_domain(domain):
