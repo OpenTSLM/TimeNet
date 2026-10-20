@@ -2,7 +2,7 @@
 
 import secrets
 import socket
-from urllib.parse import urlencode
+from urllib.parse import urlencode, urlsplit
 import webbrowser
 
 import typer
@@ -39,26 +39,35 @@ def open_viewer(reference: str | None = None, registry: str | None = None) -> tu
     return backend, backend.get_manifest(dataset_id, version)
 
 
-def serve(
+def serve(  # noqa: PLR0913 - launch options map to CLI flags
     registry: BaseRegistry,
     *,
     initial_manifest: Manifest | None = None,
     port: int = 0,
+    public_origin: str | None = None,
     open_browser: bool = True,
     quiet: bool = False,
 ) -> None:
     """Bind the authenticated viewer to loopback until the process is interrupted.
 
+    The viewer never listens beyond loopback, so its token never crosses the network in plain HTTP.
+    A reverse proxy that serves ``public_origin`` runs on the same machine, or reaches the port
+    through a tunnel.
+
     Args:
         registry: Registry to browse.
         initial_manifest: Pinned manifest for a direct dataset launch, if any.
         port: TCP port on 127.0.0.1, with zero choosing an available port.
+        public_origin: HTTPS origin of a reverse proxy in front of the loopback port, when used.
         open_browser: Whether to open the printed URL locally.
         quiet: Hide the server's status logs, keeping warnings and errors. The URL still prints.
 
     Raises:
-        TimeFValidationError: If the port cannot be bound.
+        TimeFValidationError: If the public origin is not HTTPS, or the port cannot be bound.
     """
+    # The request boundary normalizes and validates the origin; only the scheme is checked here.
+    if public_origin is not None and urlsplit(public_origin).scheme != "https":
+        raise TimeFValidationError("--public-origin must be an HTTPS origin")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
@@ -67,7 +76,7 @@ def serve(
             raise TimeFValidationError(f"cannot bind the viewer to {_LOOPBACK}:{port}: {exc}") from exc
         sock.listen()
         actual_port = sock.getsockname()[1]
-        origin = f"http://{_LOOPBACK}:{actual_port}"
+        origin = public_origin or f"http://{_LOOPBACK}:{actual_port}"
         token = secrets.token_urlsafe(_TOKEN_BYTES)
         app = create_app(registry, token=token, origin=origin, initial_manifest=initial_manifest)
         query = ""
