@@ -84,4 +84,5 @@ machine; remote access is not supported yet.
 
 The catalog shows the latest version of each dataset and lets you open its full
 manifest. The S3 backend does not provide a catalog; use a dataset ID for direct
-opening there. Task, record, and annotation views are planned for future releases.
+opening there. The task view pages through a version's tasks, filtered by split, and opens
+one task with its prompt, typed targets, and annotations. Record views are planned.
