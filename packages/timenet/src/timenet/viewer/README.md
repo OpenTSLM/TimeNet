@@ -5,8 +5,8 @@ A read-only browser view of a TimeNet registry, or of one dataset version. Start
 
 ## Files
 
-- `launch.py` opens the registry, binds `127.0.0.1`, makes a new access token for each launch,
-  and opens the browser.
+- `launch.py` opens the registry, binds `127.0.0.1` (also behind an HTTPS reverse proxy, with
+  `--public-origin`), makes a new access token for each launch, and opens the browser.
 - `security.py` checks every request: the Host, the Origin, and the token. It also adds browser
   security headers.
 - `errors.py` holds the structured error every API route returns, the mapping of registry and
@@ -49,16 +49,24 @@ hydration. Selecting a signal loads its first window; values and irregular offse
 when a window is requested. Windows return at most `RecordLimits.window` steps (2,000 by
 default), but storage may read entire intersecting chunks.
 
+## Remote access
+
+`--public-origin` serves the viewer through an HTTPS reverse proxy. The viewer still binds only
+`127.0.0.1`, so the token never crosses the network in plain HTTP: run the proxy on the same
+machine, or reach the port through a tunnel (`ssh -L`). The origin is normalized as browsers do
+(lowercase host, no default port, IDNA) and becomes the only accepted Host and Origin, and the
+viewer sends `Strict-Transport-Security` for it. The proxy must forward the original `Host`
+header (for nginx, `proxy_set_header Host $host;`).
+
+Anyone who reaches the proxy with the printed URL can read every dataset in the registry, so put
+the proxy behind its own authentication.
+
 ## TODO
 
-- **Remote access through an HTTPS reverse proxy.** v0 accepts only the `127.0.0.1` origin.
-  Serving through a proxy on the same machine needs:
-  - `--public-origin`, checked to be HTTPS and normalized as browsers do (lowercase host, no
-    default port, IDNA). It becomes the only accepted Host and Origin, and the base of the
-    printed URL, while the viewer keeps binding `127.0.0.1`.
-  - Docs that say the proxy must forward the original `Host` header (for nginx,
-    `proxy_set_header Host $host;`), and a threat model for using the token beyond loopback.
-  - Tests for origin normalization and port mismatches.
+- **Proxy on another machine.** The viewer has no non-loopback bind. Allowing one safely needs
+  TLS on the viewer itself (`--ssl-certfile` and `--ssl-keyfile`, required for that bind), an
+  optional `--allow-from <proxy address>` checked in the request boundary, and `ipaddress`-based
+  loopback detection that also accepts IPv6.
 - **Catalog scale.** Each catalog request lists the whole registry, then reads the manifests on
   one page. Large registries will need filtering and paging in the registry itself.
 - **Catalog errors.** A dataset that is listed but whose manifest cannot be read makes the whole
