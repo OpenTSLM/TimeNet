@@ -12,10 +12,9 @@ ORIGIN = "http://127.0.0.1:8765"
 AUTHORIZED = {"Authorization": "Bearer secret"}
 
 
-@pytest.fixture
-def client():
+def _secured_client(origin: str, base_url: str) -> TestClient:
     app = FastAPI()
-    install_security(app, token="secret", origin=ORIGIN)
+    install_security(app, token="secret", origin=origin)
 
     @app.get("/api/v1/ping")
     def ping() -> dict[str, bool]:
@@ -25,7 +24,12 @@ def client():
     def shell() -> str:
         return "shell"
 
-    return TestClient(app, base_url=ORIGIN)
+    return TestClient(app, base_url=base_url)
+
+
+@pytest.fixture
+def client():
+    return _secured_client(ORIGIN, ORIGIN)
 
 
 def test_authorized_same_origin_request_passes_with_security_headers(client):
@@ -70,6 +74,37 @@ def test_request_boundary_rejects_foreign_requests(client, header, foreign, stat
     assert response.headers["X-Frame-Options"] == "DENY"
 
 
-def test_origin_without_a_host_is_rejected():
-    with pytest.raises(TimeFValidationError, match="no host name"):
-        install_security(FastAPI(), token="secret", origin="http://")
+@pytest.mark.parametrize(
+    ("configured_origin", "browser_origin"),
+    [
+        ("https://viewer.example.test", "https://viewer.example.test"),
+        ("https://VIEWER.example.test:443", "https://viewer.example.test"),
+        ("http://VIEWER.example.test:80", "http://viewer.example.test"),
+        ("https://viewer.example.test:8443", "https://viewer.example.test:8443"),
+        ("https://[::1]:443", "https://[::1]"),
+    ],
+)
+def test_browser_normalized_origin_is_accepted(configured_origin, browser_origin):
+    client = _secured_client(configured_origin, browser_origin)
+    response = client.get("/api/v1/ping", headers={**AUTHORIZED, "Origin": browser_origin})
+    assert response.status_code == 200
+
+
+def test_public_origin_rejects_the_same_host_on_another_port():
+    client = _secured_client("https://viewer.example.test:443", "https://viewer.example.test")
+    foreign = {**AUTHORIZED, "Origin": "https://viewer.example.test:8443"}
+    assert client.get("/api/v1/ping", headers=foreign).status_code == 403
+
+
+@pytest.mark.parametrize("origin", ["http://", "ftp://viewer.example.test", "https://viewer.example.test/path"])
+def test_origin_must_be_an_http_origin_with_a_host(origin):
+    with pytest.raises(TimeFValidationError, match=r"HTTP\(S\) origin"):
+        install_security(FastAPI(), token="secret", origin=origin)
+
+
+def test_https_origin_adds_strict_transport_security(client):
+    public = _secured_client("https://viewer.example.test", "https://viewer.example.test")
+    response = public.get("/api/v1/ping", headers=AUTHORIZED)
+    assert response.headers["Strict-Transport-Security"] == "max-age=31536000"
+    assert public.get("/api/v1/ping").headers["Strict-Transport-Security"] == "max-age=31536000"
+    assert "Strict-Transport-Security" not in client.get("/api/v1/ping", headers=AUTHORIZED).headers
