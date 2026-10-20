@@ -1,4 +1,4 @@
-"""Read-only HTTP catalog and manifest contract for a TimeF registry."""
+"""Read-only HTTP catalog, manifest, and task browsing for a TimeF registry."""
 
 from importlib.resources import files
 from typing import Any
@@ -12,6 +12,7 @@ from timenet.registry import BaseRegistry
 from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
 from timenet.viewer.security import install_security
+from timenet.viewer.tasks import install_task_routes
 
 
 def create_app(
@@ -109,6 +110,8 @@ def create_app(
             return registry.get_manifest(dataset_id, version).to_dict()
         except TimeNetDatasetNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    install_task_routes(app, registry, initial_manifest)
 
     @app.get("/", response_class=HTMLResponse)
     def shell() -> str:
