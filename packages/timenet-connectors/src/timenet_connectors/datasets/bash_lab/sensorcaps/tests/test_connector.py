@@ -182,7 +182,10 @@ def _assert_records_and_tasks(records, tasks):
 def test_conversion_preserves_source_semantics_and_reiterable_tasks(tmp_path):
     dataset = SensorCapsConnector().convert(_refs(tmp_path))
     assert _annotations(dataset) == _DATASET_ANNOTATIONS
-    assert dataset.derive_schema().tasks == (AnswerTask,)
+    dataset.derive_schema()
+    list(dataset.iter_streamed_tasks_validated())  # the write's pass records the stream's task types
+    assert dataset.schema is not None
+    assert dataset.schema.tasks == (AnswerTask,)
     # Verify complete content on both passes, including row-to-record associations.
     for _ in range(2):
         _assert_records_and_tasks(dataset.records, list(dataset.iter_tasks()))

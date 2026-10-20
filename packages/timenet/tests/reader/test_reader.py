@@ -145,7 +145,7 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
         for index in range(5)
     ]
     if streaming:
-        dataset.set_task_stream([AnswerTask], lambda: iter(tasks))
+        dataset.set_task_stream(lambda: iter(tasks))
     else:
         dataset.add_tasks(tasks=tasks)
     return dataset
@@ -164,6 +164,9 @@ def test_streamed_and_batched_tasks_read_back_equally(tmp_path):
     batched = _read(_write(tmp_path / "batch", dataset=_tasks_dataset(streaming=False)))
     streamed = _read(_write(tmp_path / "stream", dataset=_tasks_dataset(streaming=True)))
     assert {task.id: task for task in batched.tasks} == {task.id: task for task in streamed.tasks}
+    # The writer learns streamed task types while writing, so the manifests declare the same ones.
+    assert streamed.schema is not None and batched.schema is not None
+    assert streamed.schema.tasks == batched.schema.tasks == (AnswerTask,)
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
