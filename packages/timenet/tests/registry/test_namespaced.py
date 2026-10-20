@@ -75,7 +75,7 @@ def test_namespaced_round_trip(tmp_path):
     version_dir = tmp_path / "ChengsenWang" / "TSQA" / "1.0.0"
     assert version_dir.exists()
     with TimeFReader(open_local_version(version_dir)) as reader:
-        assert_datasets_equal(original, reader.read())
+        assert_datasets_equal(original, reader.read().read())
 
 
 def test_cache_dir_is_ignored_by_list(tmp_path):

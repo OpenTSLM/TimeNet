@@ -286,13 +286,9 @@ class TimeFReader:
         """Return a lazy dataset handle without reading the catalog or payloads."""
         return DatasetHandle(self)
 
-    def read(self) -> TimeFDataset:
-        """Hydrate the dataset while keeping every Signal's values lazy.
-
-        Returns:
-            The reconstructed dataset with lazy values.
-        """
-        return self._read_catalog()
+    def read(self) -> DatasetHandle:
+        """Return a lazy dataset handle. Call its ``read()`` method to load all values."""
+        return self.get_handle()
 
     def _read_dataset(self) -> TimeFDataset:
         """Return the cached dataset with every value materialized in memory."""
