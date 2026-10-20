@@ -17,6 +17,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
+from timenet.format.signal_loader import MemoryArray
 from timenet.format.stored_values import ExternalObjectFieldKey, OffsetHandle, PackedField, ValueHandle
 from timenet.format.task_codec import (
     decode_input_modalities,
@@ -466,17 +467,19 @@ class DuckDBControlReader:
             row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY record_id").fetchall()
         )
 
-    def read_records(  # noqa: PLR0912, PLR0914, PLR0915 - related row sets stay together
+    def read_records(
         self,
         record_ids: Iterable[str] | None = None,
         *,
         with_annotations: bool = True,
+        eager: bool = False,
     ) -> tuple[Record, ...]:
-        """Hydrate complete recursive records while leaving signal values lazy.
+        """Hydrate complete recursive records, optionally loading their stored values.
 
         Args:
             record_ids: Requested IDs in result order, or ``None`` for every record.
             with_annotations: Whether to hydrate annotations on records, sources, and signals.
+            eager: Load stored values before constructing the objects.
 
         Returns:
             The hydrated records.
@@ -484,60 +487,96 @@ class DuckDBControlReader:
         Raises:
             TimeFValidationError: If a requested record is absent.
             TimeFFormatError: If the stored hierarchy is inconsistent.
-        """
+        """  # noqa: DOC502 - row selection and hierarchy helpers validate the stored data
         requested = None if record_ids is None else tuple(record_ids)
         read_all = requested is None
-        records_by_id = self._query_records_by_id(record_ids=requested)
-        self._record_keys.update((row.record_id, row.record_key) for row in records_by_id.values())
-        order = tuple(records_by_id) if requested is None else requested
-        missing = [record_id for record_id in order if record_id not in records_by_id]
-        if missing:
-            raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
-
-        record_keys = [row.record_key for row in records_by_id.values()]
-        sources_by_key = self._query_sources_by_key(record_keys=None if read_all else record_keys)
-        source_keys = list(sources_by_key)
-        signals_by_key = self._query_signals_by_key(source_keys=None if read_all else source_keys)
-        signal_keys = list(signals_by_key)
-        for signal_row in signals_by_key.values():
+        record_rows = self._read_record_rows(requested)
+        sources_by_key = self._query_sources_by_key(
+            record_keys=None if read_all else [row.record_key for row in record_rows]
+        )
+        signals_by_key = self._query_signals_by_key(source_keys=None if read_all else sources_by_key)
+        signal_rows = list(signals_by_key.values())
+        for signal_row in signal_rows:
             if signal_row.source_key not in sources_by_key:
                 raise TimeFFormatError(
                     f"signal {signal_row.signal_id!r} refers to missing source key {signal_row.source_key!r}"
                 )
-        object_keys = [*record_keys, *source_keys, *signal_keys]
-        annotation_keys = None if read_all else object_keys
-        annotations = self._read_annotations(annotation_keys) if with_annotations else {}
-        axes = self._read_axes({row.axis_key for row in signals_by_key.values()})
+        annotation_keys = None
+        if not read_all:
+            annotation_keys = [row.record_key for row in record_rows]
+            annotation_keys.extend(sources_by_key)
+            annotation_keys.extend(row.signal_key for row in signal_rows)
+        annotations = self._read_annotations(annotation_keys, eager=eager) if with_annotations else {}
+        signals_by_source = self._read_signals(signal_rows, annotations, eager=eager)
+        self._cache_record_clocks(record_rows)
+        return self._assemble_records(record_rows, sources_by_key, signals_by_source, annotations)
 
-        signals_by_source: dict[int, list[Signal]] = defaultdict(list)
+    def _read_record_rows(self, requested: tuple[str, ...] | None) -> list[_RecordRow]:
+        """Select and validate record rows, preserving the requested order.
+
+        Args:
+            requested: Record IDs in result order, or ``None`` for every record.
+
+        Returns:
+            Record rows in result order, including repeated requests for the same record.
+
+        Raises:
+            TimeFValidationError: If a requested record is absent.
+        """
+        records_by_id = self._query_records_by_id(record_ids=requested)
+        self._record_keys.update((row.record_id, row.record_key) for row in records_by_id.values())
+        if requested is None:
+            return list(records_by_id.values())
+        missing = [record_id for record_id in requested if record_id not in records_by_id]
+        if missing:
+            raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
+        return [records_by_id[record_id] for record_id in requested]
+
+    def _read_signals(
+        self,
+        signal_rows: list[_SignalRow],
+        annotations: dict[tuple[ObjectKind, str], tuple[Annotation, ...]],
+        *,
+        eager: bool,
+    ) -> dict[int, list[Signal]]:
+        """Build signal objects after registering the complete loader batch.
+
+        Returns:
+            Signals grouped by their source key.
+
+        Raises:
+            TimeFFormatError: If a signal refers to a missing axis.
+        """
+        axes = self._read_axes({row.axis_key for row in signal_rows})
+        # Register the complete batch before the first eager read. Otherwise each Signal would
+        # query its chunk locations separately while the batch is still being built.
+        loaders: dict[int, Callable[[], pa.Array]] = {}
         specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
-        for signal_row in signals_by_key.values():
+        for row in signal_rows:
+            spec = specs.get(row.spec_fields)
+            if spec is None:
+                spec = self._spec_from_row(row)
+                specs[row.spec_fields] = spec
+            loaders[row.signal_key] = (
+                self._value_loader_factory(row.signal_key, row.signal_id, spec)
+                if self._value_loader_factory is not None
+                else partial(self._value_loader, row.signal_id, spec)
+            )
+        signals_by_source: dict[int, list[Signal]] = defaultdict(list)
+        for signal_row in signal_rows:
             loaded_axis = axes.get(signal_row.axis_key)
             if loaded_axis is None:
                 raise TimeFFormatError(
                     f"signal {signal_row.signal_id!r} refers to missing axis key {signal_row.axis_key!r}"
                 )
             axis = loaded_axis.axis
-            spec = specs.get(signal_row.spec_fields)
-            if spec is None:
-                spec = self._spec_from_row(signal_row)
-                specs[signal_row.spec_fields] = spec
-            offsets_loader = None
-            if isinstance(axis, IrregularAxis):
-                if loaded_axis.n_values is None:
-                    raise TimeFFormatError(f"irregular axis {axis.axis_id!r} has no Signal length")
-                offsets_loader = (
-                    partial(self._offsets_loader, signal_row.axis_key, axis, loaded_axis.n_values)
-                    if self._offsets_loader is not None
-                    else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
-                )
-            offset_key = ExternalObjectFieldKey(
-                object_kind=ObjectKind.AXIS, object_id=axis.axis_id, field=PackedField.OFFSETS
-            )
-            if (stored_offsets := self.external.get(offset_key)) is not None:
-                if not isinstance(axis, IrregularAxis) or stored_offsets.length != signal_row.n_values:
-                    raise TimeFFormatError(f"external offsets disagree with signal {signal_row.signal_id!r}")
-                offsets_loader = OffsetHandle(**vars(stored_offsets), first=axis.first_us, last=axis.last_us)
+            spec = specs[signal_row.spec_fields]
+            offsets_loader = self._signal_offsets_loader(signal_row, loaded_axis)
+            loader = loaders[signal_row.signal_key]
+            if eager:
+                loader = MemoryArray(loader(), loader)
+                if offsets_loader is not None:
+                    offsets_loader = MemoryArray(offsets_loader(), offsets_loader)
             signals_by_source[signal_row.source_key].append(
                 Signal.from_loader(
                     id=signal_row.signal_id,
@@ -545,18 +584,48 @@ class DuckDBControlReader:
                     spec=spec,
                     time_axis=axis,
                     n_values=signal_row.n_values,
-                    loader=(
-                        self._value_loader_factory(signal_row.signal_key, signal_row.signal_id, spec)
-                        if self._value_loader_factory is not None
-                        else partial(self._value_loader, signal_row.signal_id, spec)
-                    ),
+                    loader=loader,
                     time_offsets_loader=offsets_loader,
                     annotations=annotations.get((ObjectKind.SIGNAL, signal_row.signal_id), ()),
                     metadata=_decode_json(signal_row.metadata, default={}),
                 )
             )
+        return signals_by_source
 
-        missing_clocks = {row.clock_id for row in records_by_id.values()} - self._clock_cache.keys()
+    def _signal_offsets_loader(self, row: _SignalRow, loaded_axis: _LoadedAxis) -> Callable[[], pa.Array] | None:
+        """Choose the signal's timestamp loader without reading its values.
+
+        Returns:
+            An irregular timestamp loader, or ``None`` for a regular or ordinal axis.
+
+        Raises:
+            TimeFFormatError: If the axis length or external offsets disagree with the signal.
+        """
+        axis = loaded_axis.axis
+        offset_key = ExternalObjectFieldKey(
+            object_kind=ObjectKind.AXIS, object_id=axis.axis_id, field=PackedField.OFFSETS
+        )
+        stored_offsets = self.external.get(offset_key)
+        if not isinstance(axis, IrregularAxis):
+            if stored_offsets is not None:
+                raise TimeFFormatError(f"external offsets disagree with signal {row.signal_id!r}")
+            return None
+        if loaded_axis.n_values is None:
+            raise TimeFFormatError(f"irregular axis {axis.axis_id!r} has no Signal length")
+        if stored_offsets is not None:
+            if stored_offsets.length != row.n_values:
+                raise TimeFFormatError(f"external offsets disagree with signal {row.signal_id!r}")
+            return OffsetHandle(**vars(stored_offsets), first=axis.first_us, last=axis.last_us)
+        load_offsets = self._offsets_loader if self._offsets_loader is not None else self.load_axis_offsets_by_key
+        return partial(load_offsets, row.axis_key, axis, loaded_axis.n_values)
+
+    def _cache_record_clocks(self, rows: list[_RecordRow]) -> None:
+        """Cache the selected records' clock origins in one query.
+
+        Raises:
+            TimeFFormatError: If a record refers to a missing clock.
+        """
+        missing_clocks = {row.clock_id for row in rows} - self._clock_cache.keys()
         if missing_clocks:
             for clock_id, timestamp in self.connection.execute(
                 "SELECT clock_id, start_time_us FROM clocks WHERE clock_id IN (SELECT unnest(?))",
@@ -568,6 +637,21 @@ class DuckDBControlReader:
                 f"records reference missing clocks {sorted(missing_clocks - self._clock_cache.keys())}"
             )
 
+    def _assemble_records(
+        self,
+        rows: list[_RecordRow],
+        sources_by_key: dict[int, _SourceRow],
+        signals_by_source: dict[int, list[Signal]],
+        annotations: dict[tuple[ObjectKind, str], tuple[Annotation, ...]],
+    ) -> tuple[Record, ...]:
+        """Attach signals and annotations to the recursive source trees and records.
+
+        Returns:
+            Records in the supplied row order.
+
+        Raises:
+            TimeFFormatError: If a source tree is incomplete or crosses record boundaries.
+        """
         children, roots_by_record = self._group_sources(sources_by_key.values())
         hydrated_sources: set[int] = set()
 
@@ -586,8 +670,8 @@ class DuckDBControlReader:
             )
 
         records: list[Record] = []
-        for record_id in order:
-            record_row = records_by_id[record_id]
+        for record_row in rows:
+            record_id = record_row.record_id
             span = None
             if record_row.time_span_start_us is not None:
                 span = TimeInterval(
@@ -718,8 +802,12 @@ class DuckDBControlReader:
                 children[row.parent_source_key].append(row.source_key)
         return children, roots
 
-    def read_dataset_annotations(self, dataset_id: str) -> tuple[Annotation, ...]:
+    def read_dataset_annotations(self, dataset_id: str, *, eager: bool = False) -> tuple[Annotation, ...]:
         """Return annotations attached directly to a dataset.
+
+        Args:
+            dataset_id: The stored dataset ID.
+            eager: Resolve stored values before constructing annotations.
 
         Returns:
             Dataset-level annotation occurrences in stable occurrence-ID order.
@@ -730,7 +818,7 @@ class DuckDBControlReader:
         ).fetchone()
         if row is None:
             return ()
-        return self._read_annotations((row[0],)).get((ObjectKind.DATASET, dataset_id), ())
+        return self._read_annotations((row[0],), eager=eager).get((ObjectKind.DATASET, dataset_id), ())
 
     def chunk_rows_by_key(self, signal_key: int, signal_id: str) -> list[StoredChunk]:
         """Return one Signal's chunk locations in chunk order.
@@ -771,13 +859,15 @@ class DuckDBControlReader:
         return grouped
 
     def read_tasks(
-        self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = ()
+        self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = (), eager: bool = False
     ) -> tuple[Task, ...]:
         """Hydrate every task attached to ``records`` and restore all in-memory object references.
 
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
             cached_records: Hydrated Records to reuse without restricting the selection.
+            eager: Load values while constructing tasks and any missing Records. Cached Records
+                must already have their values loaded.
 
         Returns:
             Concrete tasks in stable ID order.
@@ -785,7 +875,9 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
         """  # noqa: DOC502 - raised by _TaskHydration
-        hydration = _TaskHydration(self, None if records is None else tuple(records), cached_records=cached_records)
+        hydration = _TaskHydration(
+            self, None if records is None else tuple(records), cached_records=cached_records, eager=eager
+        )
         return tuple(hydration.read_all())
 
     def iter_tasks(
@@ -1393,12 +1485,22 @@ class DuckDBControlReader:
             modality=modality,
         )
 
+    @staticmethod
+    def _read_value(value: Any, *, eager: bool) -> Any:
+        """Resolve a stored leaf before constructing its containing object.
+
+        Returns:
+            The native value for eager reads, otherwise the original handle or inline value.
+        """
+        return value.read() if eager and isinstance(value, ValueHandle) else value
+
     def _read_annotations(
         self,
         object_keys: Iterable[int] | None = None,
         *,
         object_type: ObjectKind | None = None,
         annotations_by_occurrence: dict[int, Annotation] | None = None,
+        eager: bool = False,
     ) -> dict[tuple[ObjectKind, str], tuple[Annotation, ...]]:
         """Hydrate annotation content and occurrences for hierarchy objects.
 
@@ -1407,6 +1509,7 @@ class DuckDBControlReader:
             object_type: Restrict the read to occurrences on one object type, which also limits
                 the object lookup to that type's table.
             annotations_by_occurrence: Filled with every hydrated occurrence by its internal key.
+            eager: Resolve stored values before constructing annotations.
 
         Returns:
             Attached occurrences keyed by object type and object ID.
@@ -1448,18 +1551,21 @@ class DuckDBControlReader:
                 occurrence_id=row.occurrence_id,
                 id=content_id,
                 key=name,
-                value=self.external.get(
-                    ExternalObjectFieldKey(
-                        object_kind=ObjectKind.ANNOTATION, object_id=content_id, field=PackedField.VALUE
+                value=self._read_value(
+                    self.external.get(
+                        ExternalObjectFieldKey(
+                            object_kind=ObjectKind.ANNOTATION, object_id=content_id, field=PackedField.VALUE
+                        )
                     )
-                )
-                or decode_annotation_value(
-                    row.value_kind,
-                    row.text_value,
-                    row.integer_value,
-                    row.float_value,
-                    row.boolean_value,
-                    row.text_list_value,
+                    or decode_annotation_value(
+                        row.value_kind,
+                        row.text_value,
+                        row.integer_value,
+                        row.float_value,
+                        row.boolean_value,
+                        row.text_list_value,
+                    ),
+                    eager=eager,
                 ),
                 unit=row.unit,
                 description=row.description,
@@ -1492,6 +1598,7 @@ class _TaskHydration:
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
+        eager: bool = False,
     ) -> None:
         """Index the caller's Records and decide whether the task table needs filtering.
 
@@ -1499,6 +1606,7 @@ class _TaskHydration:
             TimeFValidationError: If one of ``records`` is not stored in the control database.
         """
         self.reader = reader
+        self.eager = eager
         self.required_modalities = required_modalities
         self.supported_modalities = supported_modalities
         self.split = split
@@ -1637,7 +1745,9 @@ class _TaskHydration:
         annotation_refs = reader._task_relationships("task_annotation_refs", "occurrence_key", task_keys)
         target_rows = reader._target_rows(task_keys)
         task_annotations = (
-            reader._read_annotations(task_keys, object_type=ObjectKind.TASK) if self.tasks_annotated else {}
+            reader._read_annotations(task_keys, object_type=ObjectKind.TASK, eager=self.eager)
+            if self.tasks_annotated
+            else {}
         )
 
         self._ensure_records(
@@ -1673,15 +1783,18 @@ class _TaskHydration:
                 "span_signal_ids": span_signal_ids,
             }
             targets_by_task[target.task_key].append(
-                reader.external.get(
-                    ExternalObjectFieldKey(
-                        object_kind=ObjectKind.TASK,
-                        object_id=ids_by_key[target.task_key],
-                        field=PackedField.TARGETS,
-                        position=len(targets_by_task[target.task_key]),
+                reader._read_value(
+                    reader.external.get(
+                        ExternalObjectFieldKey(
+                            object_kind=ObjectKind.TASK,
+                            object_id=ids_by_key[target.task_key],
+                            field=PackedField.TARGETS,
+                            position=len(targets_by_task[target.task_key]),
+                        )
                     )
+                    or decode_target(target_values, records=self.records_by_id, signals=self.signals_by_id),
+                    eager=self.eager,
                 )
-                or decode_target(target_values, records=self.records_by_id, signals=self.signals_by_id)
             )
 
         tasks: dict[int, Task] = {}
@@ -1696,11 +1809,14 @@ class _TaskHydration:
                 "id": row.task_id,
                 "inputs": reader._resolve(row.task_id, "inputs", refs, self.records_by_key, "record"),
                 "targets": tuple(targets_by_task.get(row.task_key, ())) if row.has_inline_targets else None,
-                "prompt": reader.external.get(
-                    ExternalObjectFieldKey(
-                        object_kind=ObjectKind.TASK, object_id=row.task_id, field=PackedField.PROMPT
+                "prompt": reader._read_value(
+                    reader.external.get(
+                        ExternalObjectFieldKey(
+                            object_kind=ObjectKind.TASK, object_id=row.task_id, field=PackedField.PROMPT
+                        ),
+                        row.prompt,
                     ),
-                    row.prompt,
+                    eager=self.eager,
                 ),
                 "input_modalities": decode_input_modalities(row.input_modalities),
                 "split": decode_split(row.split),
@@ -1710,11 +1826,14 @@ class _TaskHydration:
                     row.scope_end,
                     None if row.scope_signal_keys is None else [signal_ids_by_key[k] for k in row.scope_signal_keys],
                 ),
-                "rationale": reader.external.get(
-                    ExternalObjectFieldKey(
-                        object_kind=ObjectKind.TASK, object_id=row.task_id, field=PackedField.RATIONALE
+                "rationale": reader._read_value(
+                    reader.external.get(
+                        ExternalObjectFieldKey(
+                            object_kind=ObjectKind.TASK, object_id=row.task_id, field=PackedField.RATIONALE
+                        ),
+                        row.rationale,
                     ),
-                    row.rationale,
+                    eager=self.eager,
                 ),
                 "annotations": task_annotations.get((ObjectKind.TASK, row.task_id), ()),
                 "metadata": _decode_json(row.metadata, default={}),
@@ -1779,7 +1898,7 @@ class _TaskHydration:
             unknown = sorted(set(missing) - {key for key, _ in rows})
             raise TimeFFormatError(f"task refers to missing record key {unknown[0]!r}")
         ids_by_key = dict(rows)
-        hydrated = self.reader.read_records([ids_by_key[key] for key in missing])
+        hydrated = self.reader.read_records([ids_by_key[key] for key in missing], eager=self.eager)
         for record_key, record in zip(missing, hydrated, strict=True):
             self._index_record(record_key, record)
 
@@ -1840,7 +1959,7 @@ class _TaskHydration:
         """Add the Dataset-level annotation occurrences to the lookups, once."""
         self._dataset_annotations_indexed = True
         for (dataset_key,) in self.connection.execute("SELECT dataset_key FROM datasets").fetchall():
-            for annotations in self.reader._read_annotations((dataset_key,)).values():
+            for annotations in self.reader._read_annotations((dataset_key,), eager=self.eager).values():
                 for annotation in annotations:
                     if annotation.occurrence_id is not None:
                         self.annotations_by_id[annotation.occurrence_id] = annotation
