@@ -9,8 +9,9 @@ tags:
 # Datasets
 
 A dataset is a versioned collection of [records](records.md). Its address is `org/name@version`, for
-example `chengsenwang/tsqa@1.0.0`. The id is a HuggingFace-style `org/name` pair. The version is the
-semantic version of the upstream source.
+example `chengsenwang/tsqa@1.0.0`. The id is a HuggingFace-style `org/name` pair. The version identifies
+the compiled TimeNet release. The optional `source_revision` field identifies the upstream release,
+tag, or commit.
 
 <figure markdown="span">
   ![Six small record signals under the header org/name@1.0.0, a versioned collection of records](../assets/figures/dataset-example.svg)
