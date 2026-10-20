@@ -12,7 +12,7 @@ from timenet.format import control_writer
 from timenet.format.control_audit import audit_control_database
 from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.types import AnswerTask, InputModality, Split, TimeSeriesSpec
 from timenet_connectors.datasets.bash_lab.sensorcaps import SensorCapsConnector, connector as module
 from timenet_connectors.datasets.bash_lab.sensorcaps.connector import (
@@ -228,10 +228,10 @@ def test_pipeline_preserves_source_semantics_after_source_removal(monkeypatch, t
 
     with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
         audit_control_database(connection)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         assert reader.metadata == connector.metadata()
         assert reader.schema.tasks == (AnswerTask,)
-        restored = reader.read()
+        restored = reader.read().read()
         _assert_records_and_tasks(restored.records, restored.tasks)
         records = list(reader.iter_records())
         _assert_records_and_tasks(records, list(reader.iter_tasks(records)))

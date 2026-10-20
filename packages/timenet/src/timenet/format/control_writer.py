@@ -19,9 +19,11 @@ from timenet.dataset.axis import to_time_offsets_us
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
+from timenet.format.control_cache import materialize_control
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
-from timenet.format.stored_values import InlineValue, PackedField, PackedValueKind, PackedValueWriter
+from timenet.format.signal_loader import MemoryArray
+from timenet.format.stored_values import InlineValue, PackedField, PackedValueKind, PackedValueWriter, ValueHandle
 from timenet.format.table_writer import insert_rows
 from timenet.format.task_codec import encode_span, encode_task_payload
 from timenet.format.task_target_row import TargetValueRow, TaskTargetRow
@@ -295,6 +297,8 @@ class DuckDBControlWriter:
                         dataset.iter_tasks() if tasks is None else tasks,
                     )
                     self._write_chunks(connection, placements)
+                    self._write_scan_order(connection)
+                    self._write_namespaces(connection, dataset)
                     self._check_source_tree(connection)
                     if self.external is not None:
                         self.external.finish(connection)
@@ -306,6 +310,83 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
         return task_counts
+
+    @staticmethod
+    def _write_scan_order(connection: duckdb.DuckDBPyConnection) -> None:
+        """Precompute physical scan order so inherited IDs do not scatter payload reads."""
+        connection.execute(
+            "INSERT INTO payload_scan_groups SELECT DISTINCT owner_key, value_path, chunk_major_index "
+            "FROM signal_chunks ORDER BY owner_key, value_path, chunk_major_index"
+        )
+        if not connection.execute("SELECT 1 FROM signal_chunks WHERE owner_key IS NOT NULL LIMIT 1").fetchone():
+            return
+        connection.execute(
+            """UPDATE records SET read_order = ordered.position FROM (
+                SELECT record_key, row_number() OVER (ORDER BY location, record_key) AS position
+                FROM (
+                    SELECT record_key, min(struct_pack(
+                        owner := coalesce(owner_key, ''), path := value_path,
+                        major := chunk_major_index, minor := chunk_minor_index
+                    )) AS location
+                    FROM sources JOIN signals USING (source_key)
+                    JOIN signal_chunks USING (signal_key)
+                    GROUP BY record_key
+                )
+            ) ordered WHERE records.record_key = ordered.record_key"""
+        )
+
+    @staticmethod
+    def _write_namespaces(connection: duckdb.DuckDBPyConnection, dataset: TimeFDataset) -> None:
+        """Store import lookup information outside the ordinary read path."""
+        if dataset._namespace_source is not None:
+            with connect_control(materialize_control(dataset._namespace_source), read_only=True) as stored:
+                for name in ("namespaces", "imported_objects"):
+                    rows = stored.execute(f"SELECT * FROM {name}").to_arrow_table().to_pylist()  # noqa: S608
+                    insert_rows(connection, TABLES[name], rows)
+            for kind, table, column in (
+                (ObjectKind.RECORD, "records", "record_id"),
+                (ObjectKind.SOURCE, "sources", "source_id"),
+                (ObjectKind.SIGNAL, "signals", "signal_id"),
+                (ObjectKind.TASK, "tasks", "task_id"),
+                (ObjectKind.ANNOTATION, "annotation_occurrences", "occurrence_id"),
+            ):
+                connection.execute(
+                    f"DELETE FROM imported_objects WHERE object_kind = ? AND object_id NOT IN (SELECT {column} FROM {table})",  # noqa: S608
+                    [kind],
+                )
+        aliases = dict(connection.execute("SELECT alias, namespace_key FROM namespaces").fetchall())
+        first_key = max(aliases.values(), default=0) + 1
+        present = (
+            {
+                kind: {row[0] for row in connection.execute(query).fetchall()}
+                for kind, query in (
+                    (ObjectKind.RECORD, "SELECT record_id FROM records"),
+                    (ObjectKind.SOURCE, "SELECT source_id FROM sources"),
+                    (ObjectKind.SIGNAL, "SELECT signal_id FROM signals"),
+                    (ObjectKind.TASK, "SELECT task_id FROM tasks"),
+                    (ObjectKind.ANNOTATION, "SELECT occurrence_id FROM annotation_occurrences"),
+                )
+            }
+            if dataset._imports
+            else {}
+        )
+        for candidate, (alias, imported) in enumerate(dataset._imports.items(), first_key):
+            key = aliases.get(alias, candidate)
+            if alias not in aliases:
+                insert_rows(
+                    connection,
+                    TABLES["namespaces"],
+                    [{"namespace_key": key, "namespace": str(imported.source), "alias": alias}],
+                )
+            insert_rows(
+                connection,
+                TABLES["imported_objects"],
+                [
+                    {"namespace_key": key, "object_kind": kind.value, "source_id": original, "object_id": identity}
+                    for kind, original, identity in imported.rows()
+                    if identity in present[kind]
+                ],
+            )
 
     def _pack(self, kind: ObjectKind, identity: str, field: PackedField, value: Any, position: int = 0) -> Any:
         """Construct a catalog value from the explicit packing result.
@@ -345,6 +426,7 @@ class DuckDBControlWriter:
             TimeFValidationError: If two records share an ID.
         """
         records = dataset.records
+        read_order = {identity: index for index, identity in enumerate(sorted(record.id for record in records))}
         object_keys, axis_keys = _reserve_hierarchy_keys(connection, records)
         batches = _HierarchyBatches(connection)
         axes: dict[str, _StoredAxis] = {}
@@ -374,6 +456,7 @@ class DuckDBControlWriter:
                 {
                     "record_key": record_key,
                     "record_id": record.record_id,
+                    "read_order": read_order[record.id],
                     "clock_id": clock_keys[identity],
                     "time_span_start_us": None if span is None else span.start_us,
                     "time_span_end_us": None if span is None else span.end_us,
@@ -447,6 +530,7 @@ class DuckDBControlWriter:
                     "signal_key": signals[signal_id][0],
                     "chunk_index": chunk_index,
                     "value_path": placement.chunk_file,
+                    "owner_key": placement.owner_key,
                     "chunk_major_index": placement.data_index.major_idx,
                     "chunk_minor_index": placement.data_index.minor_idx,
                     "n_values": placement.n_values,
@@ -760,7 +844,12 @@ class DuckDBControlWriter:
             if stored_offsets is None:
                 raise TimeFValidationError(f"irregular axis {axis.axis_id!r} stores no time offsets")
             if signal.time_offsets_loader is not existing.offsets_loader:
-                candidate_signature = _offset_signature(_validated_irregular_offsets(signal))
+                if isinstance(signal.time_offsets_loader, ValueHandle):
+                    candidate_signature = _OffsetSignature(
+                        signal.time_offsets_loader.length, signal.time_offsets_loader.digest
+                    )
+                else:
+                    candidate_signature = _offset_signature(_validated_irregular_offsets(signal))
                 if candidate_signature != stored_offsets:
                     raise TimeFValidationError(
                         f"axis id {axis.axis_id!r} is shared by signals with different time offsets"
@@ -836,6 +925,12 @@ class DuckDBControlWriter:
             )
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
+            loader = signal.time_offsets_loader
+            while isinstance(loader, MemoryArray):
+                loader = loader.source
+            if self.external is not None and isinstance(loader, ValueHandle):
+                self._pack(ObjectKind.AXIS, axis.axis_id, PackedField.OFFSETS, loader)
+                return _OffsetSignature(loader.length, loader.digest)
             offsets = _validated_irregular_offsets(signal)
             if self.external is not None:
                 self.external.pack(

@@ -1,5 +1,7 @@
 """Tests for reader-side values backends."""
 
+import threading
+
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
@@ -7,9 +9,10 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.storage.parquet import PayloadTableCache, SignalRowGroupCache
 from timenet.testing import make_dataset
+from timenet.values_backends.parquet import reader as parquet_reader
 from timenet.values_backends.parquet.reader import ParquetValuesReader
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 from timenet.writer import TimeFWriter
@@ -35,7 +38,7 @@ def test_row_group_cache_includes_dataset_root(tmp_path):
                 [value], spec=spec, name="sensor", time_axis=sample.records[0].signals[0].time_axis
             )
             dataset.add_record(record=Record(sources=(Source(name="sensor", signals=(signal,)),)))
-            version = DatasetVersion.open_local(_write(tmp_path / name, dataset))
+            version = open_local_version(_write(tmp_path / name, dataset))
             assert reader.load(version, rows, spec).to_pylist() == [value]
     finally:
         reader.close()
@@ -55,7 +58,7 @@ def test_a_loaded_series_does_not_pin_its_row_group(tmp_path):
         handle.close()
     assert widest_group > 1, "the fixture needs one row group to hold several chunks"
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         for record in reader.iter_records(with_annotations=False):
             for series in record.signals:
                 values = series.to_arrow()
@@ -66,7 +69,7 @@ def test_a_loaded_series_does_not_pin_its_row_group(tmp_path):
 def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch):
     # Time offsets belong to the shared control-plane axis, so every values read projects only values.
     version_dir = _write(tmp_path)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         record = next(iter(reader.iter_records(with_annotations=False)))
         series = record.signals[0]
         control = reader._control_reader()
@@ -78,12 +81,12 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
     values_reader = ParquetValuesReader()
     original_read = pq.ParquetFile.read_row_group
 
-    def read_row_group(handle, row_group, *, columns):
+    def read_row_group(handle, row_group, *, columns, **kwargs):
         projections.append(columns)
-        return original_read(handle, row_group, columns=columns)
+        return original_read(handle, row_group, columns=columns, **kwargs)
 
     monkeypatch.setattr(pq.ParquetFile, "read_row_group", read_row_group)
-    version = DatasetVersion.open_local(version_dir)
+    version = open_local_version(version_dir)
     expected = values_reader.load(version, rows, series.spec)
     assert values_reader.load(version, rows, series.spec).equals(expected)
     values_reader.close()
@@ -92,7 +95,7 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
 
 
 def test_signal_cache_separates_files_and_groups(tmp_path, monkeypatch):
-    version = DatasetVersion.open_local(_write(tmp_path))
+    version = open_local_version(_write(tmp_path))
     opened = []
     original_open = pq.ParquetFile
 
@@ -105,7 +108,9 @@ def test_signal_cache_separates_files_and_groups(tmp_path, monkeypatch):
     cache = SignalRowGroupCache(2)
     try:
         for name, start in (("first.parquet", 0), ("second.parquet", 10), ("third.parquet", 20)):
-            pq.write_table(pa.table({"values": [[start], [start + 1]]}), version.path(name), row_group_size=1)
+            pq.write_table(
+                pa.table({"values": [[start], [start + 1]]}), version.resolve_file_path(name), row_group_size=1
+            )
         assert cache.read_values(version, "first.parquet", 0).to_pylist() == [[0]]
         assert cache.read_values(version, "first.parquet", 1).to_pylist() == [[1]]
         assert cache.read_values(version, "second.parquet", 0).to_pylist() == [[10]]
@@ -126,7 +131,7 @@ def test_signal_cache_separates_files_and_groups(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("cache_type", [PayloadTableCache, SignalRowGroupCache])
 def test_parquet_cache_reports_missing_files(tmp_path, cache_type):
-    version = DatasetVersion.open_local(_write(tmp_path))
+    version = open_local_version(_write(tmp_path))
     cache = cache_type(8)
     with pytest.raises(TimeFFormatError, match=r"cannot read Parquet file .*missing\.parquet"):
         if isinstance(cache, PayloadTableCache):
@@ -138,10 +143,42 @@ def test_parquet_cache_reports_missing_files(tmp_path, cache_type):
 
 @pytest.mark.parametrize("row_group", [0, 1])
 def test_signal_cache_rejects_missing_values_or_row_group(tmp_path, row_group):
-    version = DatasetVersion.open_local(_write(tmp_path))
-    pq.write_table(pa.table({"wrong_column": [1]}), version.path("broken.parquet"))
+    version = open_local_version(_write(tmp_path))
+    pq.write_table(pa.table({"wrong_column": [1]}), version.resolve_file_path("broken.parquet"))
     cache = SignalRowGroupCache(8)
     # Group 0 lacks values; group 1 is outside the file. Both must fail with file context.
     with pytest.raises(TimeFFormatError, match=rf"broken\.parquet.*row group {row_group}"):
         cache.read_values(version, "broken.parquet", row_group)
     cache.close()
+
+
+@pytest.mark.parametrize("corrupt", [False, True])
+@pytest.mark.parametrize("cache_entries", [2, 64])
+def test_eager_scan_releases_workers_on_success_and_failure(tmp_path, monkeypatch, corrupt, cache_entries):
+    monkeypatch.setattr(parquet_reader, "_ROW_GROUP_CACHE_SIZE", cache_entries)
+    path = _write(tmp_path, shard_target_bytes=64, row_group_target_bytes=32, chunk_max_bytes=32)
+    version = open_local_version(path)
+    decoding_threads = []
+    original_read = pq.ParquetFile.read_row_group
+
+    def read_group(*args, **kwargs):
+        decoding_threads.append(threading.current_thread().name)
+        return original_read(*args, **kwargs)
+
+    monkeypatch.setattr(pq.ParquetFile, "read_row_group", read_group)
+    if corrupt:
+        # Simulate a file disappearing after preparation, while the reader is about to use it.
+        shards = sorted((path / "time_series").glob("*.parquet"))
+        shards[1].unlink()
+    with TimeFReader(version) as reader:
+        if corrupt:
+            with pytest.raises(TimeFFormatError):
+                reader.read().read()
+        else:
+            dataset = reader.read().read()
+            assert dataset.records
+            assert any(name.startswith("timef-scan") for name in decoding_threads)
+            decoded_groups = len(decoding_threads)
+            assert reader.read().read() is dataset
+            assert len(decoding_threads) == decoded_groups
+        assert not [thread for thread in threading.enumerate() if thread.name.startswith("timef-scan")]

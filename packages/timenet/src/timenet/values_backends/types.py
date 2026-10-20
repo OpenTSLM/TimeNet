@@ -52,3 +52,5 @@ class StoredChunk:
     """Backend coordinates within the file."""
     n_values: int
     """Number of values in the chunk."""
+    owner_key: str | None = None
+    """Physical source in the manifest, or None when this release owns the values."""

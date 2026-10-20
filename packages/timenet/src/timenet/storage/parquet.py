@@ -1,5 +1,7 @@
 """Bounded caches for packed payload tables and Signal values row groups."""
 
+from collections.abc import Iterator
+from concurrent.futures import Future, ThreadPoolExecutor, wait
 from typing import TYPE_CHECKING, Self
 
 from cachetools import LRUCache
@@ -11,6 +13,9 @@ from timenet.errors import TimeFFormatError
 
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
+
+
+_SCAN_WORKERS = 4
 
 
 class PayloadTableCache:
@@ -37,10 +42,12 @@ class PayloadTableCache:
         if cached is not None:
             return cached
         try:
-            with pq.ParquetFile(version.path(path), filesystem=version.filesystem, pre_buffer=True) as source:
+            with pq.ParquetFile(
+                version.resolve_file_path(path), filesystem=version.filesystem, pre_buffer=True
+            ) as source:
                 table = source.read(use_threads=False)
         except (OSError, pa.ArrowException) as exc:
-            raise TimeFFormatError(f"cannot read Parquet file {version.path(path)}: {exc}") from exc
+            raise TimeFFormatError(f"cannot read Parquet file {version.resolve_file_path(path)}: {exc}") from exc
         self._tables[key] = table
         return table
 
@@ -64,10 +71,37 @@ class SignalRowGroupCache:
     def __init__(self, max_entries: int) -> None:
         self._groups: LRUCache[tuple[str, str, int], pa.Array] = LRUCache(max_entries)
         self._files = _OpenParquetFiles(max_entries)
+        self._scan_executor: ThreadPoolExecutor | None = None
+        self._scan_pending: dict[tuple[str, str, int], Future[pa.Array]] = {}
+        self._scan_groups: Iterator[tuple[DatasetVersion, str, int]] = iter(())
 
     def __reduce__(self) -> tuple[type[Self], tuple[int]]:
         # Recreate an empty cache in the receiving process.
         return type(self), (int(self._groups.maxsize),)
+
+    def prepare_scan(
+        self, version: "DatasetVersion", groups: list[tuple[str, int]], executor: ThreadPoolExecutor
+    ) -> None:
+        """Prefetch a bounded window of required values arrays in the supplied order."""
+        if not groups or self._scan_executor is not None:
+            return
+        self._scan_executor = executor
+        self._scan_groups = ((version, path, group) for path, group in groups)
+        self._fill_scan()
+
+    def _fill_scan(self) -> None:
+        """Keep at most four required row groups decoding ahead of the consumer."""
+        if self._scan_executor is None:
+            return
+        while len(self._scan_pending) < _SCAN_WORKERS:
+            item = next(self._scan_groups, None)
+            if item is None:
+                break
+            version, path, group = item
+            key = (version.root, path, group)
+            if key not in self._groups and key not in self._scan_pending:
+                file = self._open_file(version, path)
+                self._scan_pending[key] = self._scan_executor.submit(self._decode, file, group)
 
     def read_values(self, version: "DatasetVersion", path: str, row_group: int) -> pa.Array:
         """Read and resolve the values column once per cached row group.
@@ -83,30 +117,48 @@ class SignalRowGroupCache:
         if cached is not None:
             return cached
         try:
-            table = self._open_file(version, path).read_row_group(row_group, columns=["values"])
-            # Arrow silently omits a requested column if the file does not contain it.
-            if "values" not in table.column_names:
-                raise TimeFFormatError(
-                    f"missing Parquet column 'values' in {version.path(path)}, row group {row_group}"
-                )
-            values = table.column("values").combine_chunks()
-        except (OSError, pa.ArrowException) as exc:
+            pending = self._scan_pending.pop(key, None)
+            values = (
+                pending.result() if pending is not None else self._decode(self._open_file(version, path), row_group)
+            )
+        except (OSError, pa.ArrowException, TimeFFormatError) as exc:
             raise TimeFFormatError(
-                f"cannot read Parquet file {version.path(path)}, row group {row_group}: {exc}"
+                f"cannot read Parquet file {version.resolve_file_path(path)}, row group {row_group}: {exc}"
             ) from exc
+        self._fill_scan()
         self._groups[key] = values
         return values
+
+    @staticmethod
+    def _decode(file: pq.ParquetFile, row_group: int) -> pa.Array:
+        table = file.read_row_group(row_group, columns=["values"], use_threads=False)
+        # Arrow silently omits a requested column if the file does not contain it.
+        if "values" not in table.column_names:
+            raise TimeFFormatError("missing Parquet column 'values'")
+        return table.column("values").combine_chunks()
 
     def _open_file(self, version: "DatasetVersion", path: str) -> pq.ParquetFile:
         key = (version.root, path)
         handle = self._files.get(key)
         if handle is None:
-            handle = pq.ParquetFile(version.path(path), filesystem=version.filesystem, pre_buffer=True)
+            if len(self._files) == self._files.maxsize:
+                # Workers must finish before an eviction closes a file they may still be reading.
+                wait(self._scan_pending.values())
+            handle = pq.ParquetFile(version.resolve_file_path(path), filesystem=version.filesystem, pre_buffer=False)
             self._files[key] = handle
         return handle
 
+    def finish_scan(self) -> None:
+        """Release scan workers and pending groups after successful or failed reads."""
+        if self._scan_executor is not None:
+            self._scan_executor.shutdown(wait=True, cancel_futures=True)
+            self._scan_executor = None
+        self._scan_pending.clear()
+        self._scan_groups = iter(())
+
     def close(self) -> None:
         """Close shard files and release decoded groups, keeping the cache reusable."""
+        self.finish_scan()
         for handle in self._files.values():
             handle.close()
         self._files.clear()

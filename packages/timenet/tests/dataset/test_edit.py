@@ -9,7 +9,7 @@ from timenet.dataset.edit import edit_version, remove_records
 from timenet.errors import TimeFEditError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.testing import make_dataset
 from timenet.types import Annotation, AnswerTask, TemporalLocalizationTask, TSCorrespondenceTask, TSEditingTask, Version
 from timenet.writer import TimeFWriter
@@ -167,8 +167,8 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
     context_record = answer.inputs[1]
     base = _base(tmp_path, dataset)
     out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=[context_record.id])
-    with TimeFReader(DatasetVersion.open_local(out)) as reader:
-        restored = reader.read()
+    with TimeFReader(open_local_version(out)) as reader:
+        restored = reader.read().read()
 
     by_record = {
         record.record_id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
@@ -217,8 +217,8 @@ def test_edit_version_round_trip(tmp_path):
     base = _base(tmp_path, dataset)
     out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=[removed_record.id])
 
-    with TimeFReader(DatasetVersion.open_local(out)) as reader:
-        restored = reader.read()
+    with TimeFReader(open_local_version(out)) as reader:
+        restored = reader.read().read()
     assert {record.id for record in restored.records} == {record.id for record in retained_records}
 
     manifest = Manifest.model_validate_json((out / "manifest.json").read_text())

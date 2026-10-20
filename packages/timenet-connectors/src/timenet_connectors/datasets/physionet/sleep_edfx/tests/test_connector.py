@@ -9,7 +9,7 @@ from timenet.dataset import TimeFDataset
 from timenet.engine import store_dataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.types import (
     US_PER_S,
     Annotation,
@@ -290,8 +290,8 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
     dataset = _convert(release, monkeypatch)
     dataset.derive_schema()
     version_dir = store_dataset(dataset, tmp_path / "out")
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        restored = reader.read()
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        restored = reader.read().read()
     assert {record.record_id for record in restored.records} == {"sleep-edfx-SC4901E0", "sleep-edfx-SC4902E0"}
     record = next(one for one in restored.records if one.record_id == "sleep-edfx-SC4901E0")
     assert len(record.signals) == len(_SIGNALS)

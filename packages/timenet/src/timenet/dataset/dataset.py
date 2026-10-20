@@ -4,11 +4,12 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 import sys
-from typing import Literal, TextIO, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Literal, TextIO, TypeVar, cast, overload
 
 import numpy as np
 import pyarrow as pa
 
+from timenet.dataset.composition import ImportedDataset, import_from
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record
 from timenet.dataset.source import Source
@@ -28,8 +29,14 @@ from timenet.types import (
     annotation_type_of,
     value_type_of,
 )
+from timenet.types.references import InputLock
 from timenet.types.splits import Split, parse_split, parse_splits
 from timenet.values_backends import ValuesBackend
+
+
+if TYPE_CHECKING:
+    from timenet.reader.handles import DatasetHandle
+    from timenet.registry.version import DatasetVersion
 
 
 T = TypeVar("T")
@@ -69,6 +76,10 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             metadata: The dataset's descriptive identity.
         """
         self._metadata = metadata
+        self._imports: dict[str, ImportedDataset] = {}
+        self._namespace_source: DatasetVersion | None = None
+        self.input_locks: dict[str, InputLock] = {}
+        self.lineage: dict[str, InputLock] = {}
         self._records: list[Record] = []
         self._records_by_id: dict[str, Record] = {}
         self._sources_by_id: dict[str, Source] = {}
@@ -82,6 +93,29 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._task_stream: Callable[[], Iterator[Task]] | None = None
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
+
+    def import_from(  # noqa: PLR0913 - independent selection kinds
+        self,
+        parent: "DatasetHandle",
+        *,
+        namespace: str | None = None,
+        records: Iterable[str] = (),
+        sources: Iterable[str] = (),
+        signals: Iterable[str] = (),
+        tasks: Iterable[str] = (),
+        annotations: Iterable[str] = (),
+    ) -> "ImportedDataset":
+        """Return editable copies of selected parent objects and their required dependencies."""
+        return import_from(
+            self,
+            parent,
+            namespace=namespace,
+            records=records,
+            sources=sources,
+            signals=signals,
+            tasks=tasks,
+            annotations=annotations,
+        )
 
     def add_record(self, *, record: Record) -> Record:
         """Register and return a complete record.
@@ -177,20 +211,19 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return root / self.metadata.dataset_id / str(self.metadata.dataset_version)
 
     @classmethod
-    def open(cls, *, path: str | Path) -> "TimeFDataset":
-        """Open one local TimeF version directory.
+    def open(cls, *, path: str | Path) -> "DatasetHandle":
+        """Return a lazy handle for one local TimeF version directory.
 
         Args:
             path: Directory containing ``manifest.json`` and ``control.duckdb``.
 
         Returns:
-            The hydrated dataset with lazy Signal values.
+            A dataset handle. Call ``read()`` to load all values, then close the handle after use.
         """
         from timenet.reader import TimeFReader  # noqa: PLC0415
-        from timenet.registry.version import DatasetVersion  # noqa: PLC0415
+        from timenet.registry.dataset_graph_dependency_tools import open_local_version  # noqa: PLC0415
 
-        with TimeFReader(DatasetVersion.open_local(path)) as reader:
-            return reader.read()
+        return TimeFReader(open_local_version(path)).read()
 
     def add_task(self, *, task: Task) -> Task:
         """Validate and register one fully constructed task.

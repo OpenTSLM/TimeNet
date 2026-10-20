@@ -4,8 +4,8 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
-from dataclasses import dataclass
 import types as _types
 from typing import TYPE_CHECKING
 
@@ -16,10 +16,13 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
+from timenet.format.signal_loader import StoredSignalLoader
 from timenet.format.stored_values import PackedValueReader, materialize_table
+from timenet.reader.handles import DatasetHandle, _materialize_record
 from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.object_kind import ObjectKind
 from timenet.types.splits import Split
+from timenet.values_backends.parquet.reader import ParquetValuesReader
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
@@ -40,8 +43,8 @@ class TimeFReader:
     def __init__(self, version: DatasetVersion) -> None:
         """Configure a lazy reader for an opened dataset version.
 
-        Opening a reader does not download or query ``control.duckdb``. The first structural read
-        materializes the control database locally, verifies it, and opens it read-only.
+        The version is already prepared, including its dependencies. Opening a reader does not
+        query ``control.duckdb``. The first structural read opens the local catalog read-only.
 
         Args:
             version: Opened dataset version containing a parsed manifest and filesystem handle.
@@ -54,7 +57,10 @@ class TimeFReader:
         self._tasks: tuple[Task, ...] | None = None
         self._control: DuckDBControlReader | None = None
         self._records: tuple[Record, ...] | None = None
+        self._dataset: TimeFDataset | None = None
+        self._scan_active = False
         self._values: BaseValuesReader | None = None
+        self._owner_readers: dict[str, BaseValuesReader] = {}
         self._chunk_locator_batches: list[list[int]] = []
         self._chunk_locator_batch_by_key: dict[int, int] = {}
         self._chunk_rows_cache: dict[int, list[StoredChunk]] = {}
@@ -67,7 +73,10 @@ class TimeFReader:
         state["_tasks"] = None
         state["_control"] = None
         state["_records"] = None
+        state["_dataset"] = None
+        state["_scan_active"] = False
         state["_values"] = None
+        state["_owner_readers"] = {}
         state["_chunk_rows_cache"] = {}
         state["_axis_offsets_cache"] = OrderedDict()
         state["_axis_offsets_cache_bytes"] = 0
@@ -94,7 +103,11 @@ class TimeFReader:
         if self._control is not None:
             self._control.close()
             self._control = None
+        for backend in self._owner_readers.values():
+            backend.close()
+        self._owner_readers.clear()
         self._records = None
+        self._dataset = None
         self._tasks = None
         self._packed_value_reader.close()
         self._chunk_rows_cache.clear()
@@ -107,9 +120,13 @@ class TimeFReader:
         Raises:
             TimeFFormatError: If a listed artifact is missing or does not match its manifest entry.
         """
-        for part in sorted(self._manifest.files.all_files(), key=lambda item: item.path):
+        artifacts = [(self._version, part) for part in self._manifest.files.all_files()]
+        for key in self._manifest.payload_sources:
+            owner = self._version.resolve_payload_source(key)
+            artifacts.extend((owner, part) for part in owner.manifest.files.all_files())
+        for version, part in artifacts:
             try:
-                handle = self._fs.open_input_file(self._version.path(part.path))
+                handle = version.filesystem.open_input_file(version.resolve_file_path(part.path))
             except FileNotFoundError as exc:
                 raise TimeFFormatError(f"manifest lists a missing file: {part.path}") from exc
             with handle:
@@ -161,9 +178,11 @@ class TimeFReader:
             Concrete tasks in stable ID order.
         """
         with self._as_format_error(preserve_validation=True):
-            return self._control_reader().read_tasks(
-                records, cached_records=self._all_records() if records is None else ()
-            )
+            selected = None if records is None else tuple(records)
+            tasks = self._control_reader().read_tasks(selected, eager=True)
+            for record in selected or ():
+                _materialize_record(record)
+            return tasks
 
     def iter_tasks(
         self,
@@ -270,27 +289,105 @@ class TimeFReader:
         """Return the values-plane backend named by the manifest."""
         return self._manifest.values_backend
 
-    def read(self) -> TimeFDataset:
-        """Hydrate the dataset while keeping every Signal's values lazy.
+    def get_handle(self) -> DatasetHandle:
+        """Return a lazy dataset handle without reading the catalog or payloads."""
+        return DatasetHandle(self)
+
+    def read(self) -> DatasetHandle:
+        """Return a lazy dataset handle. Call its ``read()`` method to load all values."""
+        return self.get_handle()
+
+    def _read_dataset(self) -> TimeFDataset:
+        """Return the cached dataset with every value materialized in memory."""
+        if self._dataset is None:
+            with self._as_format_error(), self._parallel_scan():
+                self._dataset = self._read_catalog(eager=True)
+        return self._dataset
+
+    @contextmanager
+    def scan(self) -> Iterator[TimeFDataset]:
+        """Reconstruct a lazy dataset and prefetch Parquet signal groups with four workers.
+
+        Use this context for sequential reads of many signals. Values remain lazy, and decoded
+        groups use the existing bounded cache. Leaving the context releases scan workers, including
+        after an early exit or error. Nested scans share the outer context's workers.
+
+        Yields:
+            The reconstructed dataset with lazy signal arrays and stored fields.
+        """
+        with self._parallel_scan():
+            with self._as_format_error():
+                dataset = self._read_catalog()
+            yield dataset  # noqa: RUF070 - consumer errors must stay outside the format-error wrapper
+
+    @contextmanager
+    def _parallel_scan(self) -> Iterator[None]:
+        """Share bounded Parquet decoding across eager reads and lazy scan contexts."""
+        if self._scan_active:
+            yield
+            return
+        self._scan_active = True
+        try:
+            with self._as_format_error():
+                self._prepare_scan()
+            yield
+        finally:
+            self._scan_active = False
+            for backend in (self._values, *self._owner_readers.values()):
+                if isinstance(backend, ParquetValuesReader):
+                    backend.finish_scan()
+
+    def _prepare_scan(self) -> None:
+        """Use the write-time group plan for bounded parallel Parquet decoding."""
+        groups: dict[str | None, list[tuple[str, int]]] = {}
+        for owner, path, group in (
+            self._control_reader()
+            .connection.execute("SELECT * FROM payload_scan_groups ORDER BY owner_key, value_path, chunk_major_index")
+            .fetchall()
+        ):
+            groups.setdefault(owner, []).append((path, group))
+        executor = None
+        for owner, locations in groups.items():
+            version = self._version.resolve_payload_source(owner)
+            if owner is None:
+                backend = self._values_reader()
+            else:
+                backend = self._owner_readers.get(owner)
+                if backend is None:
+                    backend = make_values_reader(version.manifest.values_backend)
+                    self._owner_readers[owner] = backend
+            if isinstance(backend, ParquetValuesReader):
+                if executor is None:
+                    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="timef-scan")
+                backend.prepare_scan(version, locations, executor)
+
+    def _read_catalog(self, *, eager: bool = False) -> TimeFDataset:
+        """Hydrate the dataset with native values for eager reads and handles otherwise.
 
         Returns:
             The reconstructed dataset.
         """
-        records = list(self._all_records())
-        tasks = self.tasks
+        control = self._control_reader()
+        records = list(control.read_records(eager=True) if eager else self._all_records())
+        tasks = control.read_tasks(cached_records=records, eager=True) if eager else self.tasks
         by_id = {record.record_id: record for record in records}
         for task in tasks:
             for referenced in task.inputs:
                 record = by_id.get(referenced.id)
                 if record is not None and task.id not in record.task_ids:
                     record.task_ids = (*record.task_ids, task.id)
-        return TimeFDataset.from_parts(
+        dataset = TimeFDataset.from_parts(
             metadata=self.metadata,
             records=records,
             tasks=tasks,
             schema=self.schema,
-            annotations=self._control_reader().read_dataset_annotations(self._manifest.dataset_id),
+            annotations=control.read_dataset_annotations(self._manifest.dataset_id, eager=eager),
         )
+
+        dataset.input_locks = dict(self._manifest.input_locks)
+        dataset.lineage = {str(lock.source): lock for lock in self._manifest.lineage}
+        dataset._namespace_source = self._version
+        return dataset
 
     def iter_records(
         self,
@@ -347,7 +444,8 @@ class TimeFReader:
             The complete canonical Arrow array.
         """
         rows = self._chunk_rows(signal_key, signal_id)
-        return self._values_reader().load(self._version, rows, spec)
+        version, backend = self._storage_reader(rows)
+        return backend.load(version, rows, spec)
 
     def _load_signal_range(
         self,
@@ -363,7 +461,27 @@ class TimeFReader:
             The requested canonical Arrow values.
         """
         rows = self._chunk_rows(signal_key, signal_id)
-        return self._values_reader().load_range(self._version, rows, start, stop, spec)
+        version, backend = self._storage_reader(rows)
+        return backend.load_range(version, rows, start, stop, spec)
+
+    def _storage_reader(self, rows: list[StoredChunk]) -> tuple[DatasetVersion, BaseValuesReader]:
+        """Select one direct physical owner and its cached backend.
+
+        Returns:
+            The version handle and its backend.
+
+        Raises:
+            TimeFFormatError: If a signal mixes physical owners.
+        """
+        key = rows[0].owner_key
+        if any(row.owner_key != key for row in rows):
+            raise TimeFFormatError("a signal has chunks from multiple physical owners")
+        if key is None:
+            return self._version, self._values_reader()
+        version = self._version.resolve_payload_source(key)
+        if key not in self._owner_readers:
+            self._owner_readers[key] = make_values_reader(version.manifest.values_backend)
+        return version, self._owner_readers[key]
 
     def _chunk_rows(self, signal_key: int, signal_id: str) -> list[StoredChunk]:
         """Return cached chunk locators after loading the Signal's bounded batch.
@@ -386,7 +504,7 @@ class TimeFReader:
             raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
         return rows
 
-    def _make_signal_loader(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> _SignalLoader:
+    def _make_signal_loader(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> StoredSignalLoader:
         """Return a picklable, range-aware Signal loader."""
         if signal_key not in self._chunk_locator_batch_by_key:
             if not self._chunk_locator_batches or len(self._chunk_locator_batches[-1]) >= _CHUNK_LOCATOR_BATCH_SIZE:
@@ -394,7 +512,7 @@ class TimeFReader:
             batch_index = len(self._chunk_locator_batches) - 1
             self._chunk_locator_batches[batch_index].append(signal_key)
             self._chunk_locator_batch_by_key[signal_key] = batch_index
-        return _SignalLoader(self, signal_key, signal_id, spec)
+        return StoredSignalLoader(self, signal_key, signal_id, spec)
 
     def _load_offsets(self, axis_key: int, axis: IrregularAxis, n_values: int) -> pa.Array:
         """Load stored offsets and keep recently used shared axes in an LRU cache.
@@ -441,29 +559,3 @@ class TimeFReader:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
         except (ValueError, KeyError, TypeError, AttributeError, OSError, pa.ArrowException) as exc:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
-
-
-@dataclass(frozen=True)
-class _SignalLoader:
-    """Picklable values loader for one DuckDB-indexed Signal."""
-
-    reader: TimeFReader
-    signal_key: int
-    signal_id: str
-    spec: TimeSeriesSpec
-
-    def __call__(self) -> pa.Array:
-        """Load all Signal values.
-
-        Returns:
-            The complete canonical Arrow array.
-        """
-        return self.reader._load_signal(self.signal_key, self.signal_id, self.spec)
-
-    def read_steps(self, start: int, stop: int) -> pa.Array:
-        """Load a half-open Signal step range.
-
-        Returns:
-            The requested canonical Arrow values.
-        """
-        return self.reader._load_signal_range(self.signal_key, self.signal_id, self.spec, start, stop)

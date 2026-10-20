@@ -13,15 +13,16 @@ tags:
 
 ```python
 from timenet.client import TimeNet
-from timenet.types import Domain
+from timenet.types import Domain, ObjectKind
 
 client = TimeNet(".timenet-registry")
 
 for metadata in client.search(domain=Domain.CARDIOLOGY):
     print(metadata.dataset_id)
 
-dataset = client.load("timenet/hello-world")
-values = dataset.records[0].signals[0].to_numpy()
+with client.load("timenet/hello-world") as dataset:
+    signal = dataset.get_handle(ObjectKind.SIGNAL, "ts-shared")
+    values = signal.to_numpy()
 ```
 
 ## Choose a registry
@@ -79,14 +80,39 @@ dataset IDs, and tags. See [Registry search](registry.md#search) for their match
 
 ## Load or download
 
-`load()` returns a `TimeFDataset`. The hierarchy is in memory, but each Signal keeps a lazy values
-loader.
+`load()` returns a lazy `DatasetHandle`, as does `get_handle()`. Neither method opens the catalog
+or decodes payloads after the registry prepares the version. A handle owns its reader. Use a context
+manager to close it after use.
 
 ```python
-dataset = client.load("timenet/hello-world")
-signal = dataset.records[0].signals[0]
-window = signal.read_steps(0, 100)
+with client.load("timenet/hello-world") as dataset:
+    signal = dataset.get_handle(ObjectKind.SIGNAL, "ts-shared")
+    window = signal.read_steps(0, 100)
 ```
+
+Call `read()` on an entity handle to load that object and its dependencies. Call `read()` on the
+dataset handle to load the complete `TimeFDataset`. Materialized results remain usable after the
+handle closes:
+
+```python
+with client.load("timenet/hello-world") as handle:
+    dataset = handle.read()
+
+dataset.describe()
+```
+
+For sequential reads of many signals, use `scan()` to decode Parquet groups with four workers.
+Values remain lazy, and the reader keeps a bounded cache:
+
+```python
+with client.load("timenet/hello-world") as handle:
+    with handle.scan() as dataset:
+        for record in dataset.records:
+            for signal in record.signals:
+                values = signal.to_arrow()
+```
+
+The scan context releases its workers when it ends, including after an early exit or error.
 
 For a local registry, the reader opens the version in place. If the version is missing, `load()` can
 build it from an installed connector.
@@ -98,20 +124,52 @@ dataset = TimeNet(".timenet-registry").load(
 )
 ```
 
-Set `auto_build=False` to report a missing local version without starting a build. Remote registries
-never run connector code.
+Set `auto_build=False` to report a missing local version without starting a build.
+The separate `build_parents` option permits parent builds during preparation, including for remote reads.
 
-For an HTTP registry, `load()` downloads the complete version into `TIMENET_STORAGE` first. A later
-load reuses that committed copy. An S3 registry reads in place unless the storage directory already
-contains a complete copy.
+HTTP and S3 reads resolve physical source manifests before returning a handle.
+They reuse complete cached releases and otherwise read remote payload ranges on demand.
+The first structural read downloads and verifies the child's catalog. Parent catalogs stay unopened.
+Build-only inputs remain recorded as provenance and are not fetched for reading.
 
-`download()` always copies the complete version into local storage:
+A local registry requires complete copies of the release and its physical sources.
+To fetch missing physical sources, supply a registry URI through `fetch_parents`.
+To build sources that fetching cannot find, set `build_parents=True`.
+
+```python
+with TimeNet(".timenet-registry").get_handle(
+    "physionet/ecg-qa-cot@1.0.0",
+    fetch_parents="timenet://",
+    build_parents=True,
+) as dataset:
+    records = dataset.read().records
+```
+
+These options also apply to `load()` and `load_torch()`. Parent builds require an installed connector
+that declares the requested version.
+
+```python
+from timenet.types import ObjectKind
+
+with client.get_handle("physionet/ecg-qa-cot@1.0.0") as dataset:
+    signal = dataset.get_handle(
+        ObjectKind.SIGNAL, "ecg-1-I", namespace="ptbxl"
+    )
+    window = signal.read_steps(0, 100)
+```
+
+`download()` copies the complete child release and its physical source releases for offline use:
 
 ```python
 path = client.download("chengsenwang/tsqa@1.0.0")
 ```
 
 Use `force=True` to replace an existing local copy.
+To preload files, call `download()` before `load()`; the later read reuses the complete cached releases.
+Remote clients still request manifests. For offline reads, point `TimeNet` at the storage directory
+and set `auto_build=False`. Payload ranges are cached in memory; `download()` creates persistent copies.
+
+Reads with `build_parents=True` prepare complete local physical releases before returning a handle.
 
 ## Pin a version
 

@@ -12,7 +12,7 @@ from timenet.dataset.edit import edit_version
 from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
 from timenet.values_backends.zarr import reader as zarr_reader_module
@@ -95,8 +95,8 @@ def test_one_index_row_per_series(tmp_path):
 def test_shard_aligned_appends_round_trip(tmp_path):
     # Tiny chunks and shards force many mid-stream shard flushes plus trailing partial shards.
     version_dir = _write(tmp_path, chunk_max_bytes=64, shard_target_bytes=128)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        assert_datasets_equal(make_dataset(), reader.read())
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        assert_datasets_equal(make_dataset(), reader.read().read())
 
 
 def test_high_compression_level_is_rejected_for_blosc(tmp_path):
@@ -109,7 +109,7 @@ def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
     out = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=("record-1",))
     manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
-    with TimeFReader(DatasetVersion.open_local(out)) as reader:
+    with TimeFReader(open_local_version(out)) as reader:
         record = next(iter(reader.iter_records()))
         assert len(record.signals[0].to_arrow()) > 0
 
@@ -198,7 +198,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
     version_dir = tmp_path / "bench/camera/1.0.0"
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert manifest.timef_format_version == 1
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         restored = next(iter(reader.iter_records())).signals[0]
         assert isinstance(restored.to_arrow(), pa.FixedShapeTensorArray)
         np.testing.assert_array_equal(restored.to_numpy(), frames)
@@ -266,7 +266,7 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
         writer.write()
-    with TimeFReader(DatasetVersion.open_local(tmp_path / "bench/empty/1.0.0")) as reader:
+    with TimeFReader(open_local_version(tmp_path / "bench/empty/1.0.0")) as reader:
         series = {ts.spec.spec_type: ts for ts in next(iter(reader.iter_records())).signals}
 
     nd_empty = series["camera"].read_steps(2, 2)  # valid but empty half-open range
@@ -314,7 +314,7 @@ def test_str_round_trip(tmp_path):
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
         writer.write()
     version_dir = tmp_path / "t/str/1.0.0"
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         restored = next(iter(reader.iter_records())).signals[0]
         assert restored.to_arrow().type == pa.string()
         assert restored.to_arrow().to_pylist() == labels
@@ -355,7 +355,7 @@ def test_str_empty_range_read(tmp_path):
     with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
         writer.write()
     version_dir = tmp_path / "t/str-empty/1.0.0"
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         ts = next(iter(reader.iter_records())).signals[0]
         empty = ts.read_steps(3, 3)
         assert len(empty) == 0

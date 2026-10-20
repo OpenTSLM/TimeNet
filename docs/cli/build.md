@@ -23,7 +23,7 @@ author or change a connector.
 timenet-build [--quiet] build <dataset_id> \
     [--out <registry>] \
     [--values-backend parquet|zarr] \
-    [--force] [--keep-cache] [--no-isolation]
+    [--force] [--keep-cache] [--build-parents] [--no-isolation]
 ```
 
 | Option | Default | Purpose |
@@ -33,6 +33,7 @@ timenet-build [--quiet] build <dataset_id> \
 | `--values-backend` | connector setting | Override the Parquet or Zarr values backend. |
 | `--force`, `-f` | off | Rebuild or republish an existing version. |
 | `--keep-cache` | off | Keep downloaded source files after a successful build. |
+| `--build-parents` | off | Build missing exact parent inputs before the child. |
 | `--no-isolation` | isolation on | Use the current environment instead of a connector-specific one. |
 | `--quiet`, `-q` | off | Hide status output. Place this option before `build`. |
 
@@ -85,7 +86,8 @@ Or load it in Python:
 ```python
 from timenet.client import TimeNet
 
-dataset = TimeNet(".timenet-registry").load("timenet/hello-world")
+with TimeNet(".timenet-registry").load("timenet/hello-world") as handle:
+    dataset = handle.read()
 ```
 
 See [Build and publish](../build.md) for the pipeline and [Connectors](../connectors.md) for the

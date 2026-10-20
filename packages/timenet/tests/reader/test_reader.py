@@ -7,13 +7,14 @@ import pyarrow.parquet as pq
 from pydantic import ValidationError
 import pytest
 
+from timenet.client import TimeNet
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
-from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.reader import DatasetHandle, TimeFReader
+from timenet.registry import open_local_version
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
     Annotation,
@@ -28,6 +29,7 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.types.object_kind import ObjectKind
 from timenet.writer import TimeFWriter
 
 
@@ -40,8 +42,8 @@ def _write(tmp_path, dataset=None, **kwargs) -> Path:
 
 
 def _read(version_dir: Path) -> TimeFDataset:
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        return reader.read()
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        return reader.read().read()
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -60,8 +62,8 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
         record.annotate(Annotation(key="subject_ids", value=list(subjects), id="record-subjects"))
     version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        restored = reader.read()
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        restored = reader.read().read()
         (selected,) = reader.iter_records((record.id,))
 
     for back in (restored.records[0], selected):
@@ -169,7 +171,7 @@ def test_streamed_and_batched_tasks_read_back_equally(tmp_path):
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_split_value_chunks_round_trip_and_support_range_reads(tmp_path, backend):
     version_dir = _write(tmp_path, values_backend=backend, chunk_max_bytes=64)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         signal = next(iter(reader.iter_records())).signals[0]
         expected = signal.to_arrow().slice(3, 7)
         assert signal.read_steps(3, 10).equals(expected)
@@ -177,7 +179,7 @@ def test_split_value_chunks_round_trip_and_support_range_reads(tmp_path, backend
 
 def test_metadata_and_schema_come_from_the_manifest_without_opening_control(tmp_path):
     dataset = make_dataset()
-    reader = TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset)))
+    reader = TimeFReader(open_local_version(_write(tmp_path, dataset)))
     assert reader._control is None
     assert reader.metadata == dataset.metadata
     assert reader.schema == dataset.schema
@@ -186,14 +188,15 @@ def test_metadata_and_schema_come_from_the_manifest_without_opening_control(tmp_
 
 def test_iter_records_matches_full_read(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         streamed = {record.record_id for record in reader.iter_records()}
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        materialized = {record.record_id for record in reader.read().records}
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        materialized = {record.record_id for record in reader.read().read().records}
     assert streamed == materialized
 
 
-def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
+@pytest.mark.parametrize("entry_point", ["reader", "client", "dataset"])
+def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch, entry_point):
     version_dir = _write(tmp_path)
     original_open = pq.ParquetFile
     opens = 0
@@ -203,16 +206,26 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         opens += 1
         return original_open(*args, **kwargs)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        dataset = reader.read()
-        monkeypatch.setattr(pq, "ParquetFile", counting_open)
-        signal = dataset.records[0].signals[0]
+    monkeypatch.setattr(pq, "ParquetFile", counting_open)
+    if entry_point == "reader":
+        handle = TimeFReader(open_local_version(version_dir)).read()
+    elif entry_point == "client":
+        handle = TimeNet(tmp_path).load("timenet/hello-world")
+    else:
+        handle = TimeFDataset.open(path=version_dir)
+    with handle:
+        assert isinstance(handle, DatasetHandle)
+        assert handle.reader._control is None
+        assert handle.metadata.dataset_id == "timenet/hello-world"
+        signal_id = make_dataset().records[0].signals[0].id
+        signal = handle.get_handle(ObjectKind.SIGNAL, signal_id)
         assert opens == 0
         signal.to_arrow()
         assert opens >= 1
 
 
-def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
+@pytest.mark.parametrize("eager", [False, True])
+def test_signal_values_batch_chunk_locator_queries(tmp_path, monkeypatch, eager):
     version_dir = _write(tmp_path)
     original = DuckDBControlReader.chunk_rows_by_keys
     calls = []
@@ -222,10 +235,13 @@ def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
         return original(reader, signals)
 
     monkeypatch.setattr(DuckDBControlReader, "chunk_rows_by_keys", counting_batch)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        records = tuple(reader.iter_records())
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        records = reader.read().read().records if eager else tuple(reader.iter_records())
+        if eager:
+            assert reader.read().read().records[0] is records[0]
         signals = tuple(signal for record in records for signal in record.signals)
-        assert calls == []
+        if not eager:
+            assert calls == []
 
         for signal in signals:
             signal.to_arrow()
@@ -236,14 +252,14 @@ def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_read_dataset_and_lazy_loaders_are_picklable(tmp_path, backend):
-    dataset = TimeFReader(DatasetVersion.open_local(_write(tmp_path, values_backend=backend))).read()
+    dataset = TimeFReader(open_local_version(_write(tmp_path, values_backend=backend))).read().read()
     expected = dataset.records[0].signals[0].to_arrow()
     restored = pickle.loads(pickle.dumps(dataset))
     assert restored.records[0].signals[0].to_arrow().equals(expected)
 
 
 def test_tasks_are_cached_after_first_access(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
+    with TimeFReader(open_local_version(_write(tmp_path))) as reader:
         first = reader.tasks
         assert reader.tasks is first
 
@@ -252,7 +268,7 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
     dataset = make_dataset()
     text = "A detailed clinical report. " * 300
     dataset.tasks[0].prompt = text
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
         original = pq.ParquetFile.read
         read_calls = 0
 
@@ -263,7 +279,7 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
 
         monkeypatch.setattr(pq.ParquetFile, "read", count_reads)
         _ = reader.tasks
-        reader.read().records[0].signals[0].to_arrow()
+        reader.read().read().records[0].signals[0].to_arrow()
         assert text in reader.create_task_table()["prompt"].to_pylist()
         assert read_calls == 1
         state = reader.__getstate__()
@@ -276,29 +292,30 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
     assert state["_tasks"] is None
     assert state["_control"] is None
     assert state["_records"] is None
+    assert state["_dataset"] is None
     assert state["_values"] is None
 
 
 def test_iter_records_preserves_requested_order(tmp_path):
     dataset = make_dataset()
     ordered_records = sorted(dataset.records, key=lambda record: record.id)
-    requested = (ordered_records[-1].id, ordered_records[0].id)
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
-        selected = tuple(reader.iter_records(record_ids=requested))
+    requested = (ordered_records[-1].id, ordered_records[0].id, ordered_records[-1].id)
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        selected = tuple(reader.iter_records(record_ids=iter(requested)))
     assert tuple(record.id for record in selected) == requested
 
 
 def test_iter_records_rejects_an_unknown_id_before_yielding(tmp_path):
     dataset = make_dataset()
     with (
-        TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader,
+        TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader,
         pytest.raises(TimeFValidationError, match="no such record"),
     ):
         next(reader.iter_records(record_ids=(dataset.records[0].id, "record-nope")))
 
 
 def test_iter_records_can_skip_annotations_without_losing_values(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
+    with TimeFReader(open_local_version(_write(tmp_path))) as reader:
         record = next(reader.iter_records(with_annotations=False))
         assert record.annotations == ()
         assert all(source.annotations == () for source in record.walk_sources())
@@ -308,11 +325,11 @@ def test_iter_records_can_skip_annotations_without_losing_values(tmp_path):
 
 def test_missing_root_or_manifest_raises(tmp_path):
     with pytest.raises(FileNotFoundError):
-        DatasetVersion.open_local(tmp_path / "missing")
+        open_local_version(tmp_path / "missing")
     empty = tmp_path / "empty"
     empty.mkdir()
     with pytest.raises(FileNotFoundError):
-        DatasetVersion.open_local(empty)
+        open_local_version(empty)
 
 
 @pytest.mark.parametrize("format_version", [2, 3, 99])
@@ -323,12 +340,12 @@ def test_unsupported_format_version_raises(tmp_path, format_version):
     manifest["timef_format_version"] = format_version
     manifest_path.write_text(json.dumps(manifest))
     with pytest.raises(ValidationError, match="timef_format_version"):
-        DatasetVersion.open_local(version_dir)
+        open_local_version(version_dir)
 
 
 def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_path):
     version_dir = _write(tmp_path)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         reader.verify()
 
     control_path = version_dir / "control.duckdb"
@@ -336,7 +353,7 @@ def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_pat
     payload[len(payload) // 2] ^= 1
     control_path.write_bytes(payload)
     with (
-        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        TimeFReader(open_local_version(version_dir)) as reader,
         pytest.raises(TimeFFormatError, match="checksum mismatch"),
     ):
         reader.verify()
@@ -347,7 +364,7 @@ def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_pa
     expected_answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
     (record,) = expected_answer.inputs
     (expected_context,) = expected_answer.input_annotations
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
         record0 = next(reader.iter_records((record.id,)))
         tasks = list(reader.iter_tasks((record0,)))
         every = reader.tasks
@@ -369,11 +386,11 @@ def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
     test_task.split = Split.TEST
     version_dir = _write(tmp_path, dataset)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         assert [task.id for task in reader.iter_tasks(split="train")] == [train_task.id]
         assert reader.create_task_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
         assert reader.create_target_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
-        loaded = reader.read()
+        loaded = reader.read().read()
 
     assert {task.id: task.split for task in loaded.tasks if task.split is not None} == {
         train_task.id: Split.TRAIN,
@@ -388,6 +405,7 @@ def test_invalid_external_locator_is_rejected_before_exposing_placeholders(tmp_p
     dataset = make_dataset()
     dataset.tasks[0].prompt = "A detailed clinical report. " * 300
     version_dir = _write(tmp_path, dataset)
+    version = open_local_version(version_dir)
     with connect_control(version_dir / "control.duckdb") as connection:
         connection.execute(
             f"UPDATE external_values SET {column} = ? WHERE field = 'prompt'",  # noqa: S608 - fixed test columns
@@ -395,7 +413,7 @@ def test_invalid_external_locator_is_rejected_before_exposing_placeholders(tmp_p
         )
 
     with (
-        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        TimeFReader(version) as reader,
         pytest.raises(TimeFFormatError, match="invalid external locator"),
     ):
         reader.create_task_table()

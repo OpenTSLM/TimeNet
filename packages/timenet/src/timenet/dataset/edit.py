@@ -17,7 +17,7 @@ from timenet.dataset.dataset import TimeFDataset
 from timenet.dataset.record import Record
 from timenet.errors import TimeFEditError
 from timenet.reader import TimeFReader
-from timenet.registry.version import DatasetVersion
+from timenet.registry.dataset_graph_dependency_tools import open_local_version
 from timenet.types import DatasetSchema, Task, Version
 from timenet.writer import TimeFWriter
 
@@ -107,6 +107,10 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
         schema=DatasetSchema(),
         annotations=dataset.annotations,
     )
+    edited.input_locks = dict(dataset.input_locks)
+    edited.lineage = dict(dataset.lineage)
+    edited._namespace_source = dataset._namespace_source
+    edited._imports = dict(dataset._imports)
     edited.derive_schema()
     return edited
 
@@ -309,12 +313,22 @@ def edit_version(
     # values. If the reader's `with` block exits first, the write happens through a closed
     # reader. That only worked because close() silently reopened the shards and leaked the
     # handles.
-    with TimeFReader(DatasetVersion.open_local(base_dir)) as reader:
+    if base_dir.parents[2].resolve() != out_root.resolve():
+        from timenet.registry.local import LocalRegistry  # noqa: PLC0415 - writer/registry cycle
+
+        manifest = open_local_version(base_dir).manifest
+        LocalRegistry(base_dir.parents[2]).download_version(
+            manifest.dataset_id,
+            str(manifest.metadata.dataset_version),
+            out_root / manifest.dataset_id / str(manifest.metadata.dataset_version),
+            manifest=manifest,
+        )
+    with TimeFReader(open_local_version(base_dir)) as reader:
         base_version = str(reader.metadata.dataset_version)
         if str(dataset_version) == base_version:
             raise TimeFEditError(f"derived version {dataset_version} must differ from the base version {base_version}")
 
-        base = reader.read()
+        base = reader._read_catalog()
         writer_kwargs.setdefault("values_backend", reader.values_backend)  # an edit keeps the base dataset's backend
         edited = remove_records(base, remove_record_ids, cascade=cascade)
         edited = TimeFDataset.from_parts(
@@ -324,6 +338,9 @@ def edit_version(
             schema=DatasetSchema(),
             annotations=edited.annotations,
         )
+        edited.input_locks = dict(base.input_locks)
+        edited.lineage = dict(base.lineage)
+        edited._namespace_source = base._namespace_source
         edited.derive_schema()
 
         with TimeFWriter(out_root, edited, **writer_kwargs) as writer:  # ty: ignore[invalid-argument-type]
