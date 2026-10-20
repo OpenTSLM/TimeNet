@@ -760,8 +760,7 @@ class DuckDBControlWriter:
             if stored_offsets is None:
                 raise TimeFValidationError(f"irregular axis {axis.axis_id!r} stores no time offsets")
             if signal.time_offsets_loader is not existing.offsets_loader:
-                candidate = _validated_irregular_offsets(signal)
-                candidate_signature = _offset_signature(candidate)
+                candidate_signature = _offset_signature(_validated_irregular_offsets(signal))
                 if candidate_signature != stored_offsets:
                     raise TimeFValidationError(
                         f"axis id {axis.axis_id!r} is shared by signals with different time offsets"
@@ -796,8 +795,7 @@ class DuckDBControlWriter:
         )
         return signal_key
 
-    @staticmethod
-    def _write_axis(signal: Signal, axis_key: int, batches: _HierarchyBatches) -> _OffsetSignature | None:
+    def _write_axis(self, signal: Signal, axis_key: int, batches: _HierarchyBatches) -> _OffsetSignature | None:
         """Buffer an axis and any irregular offsets.
 
         Returns:
@@ -839,6 +837,11 @@ class DuckDBControlWriter:
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
             offsets = _validated_irregular_offsets(signal)
+            if self.external is not None:
+                self.external.pack(
+                    ObjectKind.AXIS, axis.axis_id, PackedField.OFFSETS, pa.array(offsets, type=pa.int64())
+                )
+                return _offset_signature(offsets)
             for position, offset in enumerate(offsets):
                 batches.axis_offsets.add({"axis_key": axis_key, "position": position, "offset_us": int(offset)})
             return _offset_signature(offsets)

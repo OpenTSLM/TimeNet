@@ -10,7 +10,7 @@ tags:
 
 TimeF separates relational structure from large signal arrays. One immutable DuckDB database
 stores the hierarchy, relationships, annotations, axes, and chunk locations. Parquet or Zarr stores
-the signal values. Large text fields use packed Parquet payloads.
+the signal values. Large text fields and irregular timestamp arrays use packed Parquet payloads.
 
 ## Directory layout
 
@@ -54,8 +54,8 @@ Signals can reference the same immutable `TimeAxis`.
 | `sources` | Recursive sources, linked to their record and parent source by internal keys. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
-| `axis_offsets` | Shared offsets for irregular axes. |
-| `external_values` | File and row locations for external text. |
+| `axis_offsets` | Inline offsets for direct control-writer use. Normal writes use payloads. |
+| `external_values` | File and row locations for external text and irregular offsets. |
 | `tasks` | Concrete task type, typed scope columns, and subclass configuration columns. |
 | `task_targets` | Ordered inline targets, one typed row each. |
 | `task_record_refs` | Ordered task-to-record object relationships. |
@@ -89,14 +89,14 @@ compress well in DuckDB. `categories` and `dimension_names` are `VARCHAR[]` and 
 it between the Signals that use it.
 
 Regular axes store a rational microsecond period and origin. Ordinal axes need only their type.
-Irregular axes store their endpoints in `axes` and their ordered microsecond offsets in
-`axis_offsets`. Signals that share an axis reference the same `axis_id`, so the offsets are stored
-once regardless of how many Signals use that timeline.
+Irregular axes store their endpoints in `axes` and their ordered microsecond offsets in packed
+Parquet files. The `external_values` table locates each array. Signals that share an axis reference
+the same `axis_id`, so the offsets are stored once for that timeline.
 
 ## External values
 
 The writer keeps text and string lists inline when their encoded size is at most 4,096 bytes.
-Larger values go into Zstandard-compressed Parquet files under
+Larger values and all irregular timestamp arrays go into Zstandard-compressed Parquet files under
 `payloads/`. This storage is independent of the Signal values backend. Each file targets about
 4 MiB of encoded input, but one large value can exceed that target.
 
@@ -161,7 +161,7 @@ chunk_minor_index, n_values
 For Parquet, the locator identifies a shard row group and row. For Zarr, it identifies an array and
 element range. The reader resolves only the requested Signal's rows and keeps its values lazy. Range
 reads load only intersecting chunks. The values plane does not duplicate irregular offsets; the
-reader obtains them from the shared axis in `control.duckdb` and caches each loaded axis once.
+reader obtains them through the shared axis locator and caches the payload file.
 
 ## Integrity
 

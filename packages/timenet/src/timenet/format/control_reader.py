@@ -17,7 +17,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
-from timenet.format.stored_values import ExternalObjectFieldKey, PackedField, ValueHandle
+from timenet.format.stored_values import ExternalObjectFieldKey, OffsetHandle, PackedField, ValueHandle
 from timenet.format.task_codec import (
     decode_input_modalities,
     decode_span,
@@ -529,6 +529,13 @@ class DuckDBControlReader:
                     if self._offsets_loader is not None
                     else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
                 )
+            offset_key = ExternalObjectFieldKey(
+                object_kind=ObjectKind.AXIS, object_id=axis.axis_id, field=PackedField.OFFSETS
+            )
+            if (stored_offsets := self.external.get(offset_key)) is not None:
+                if not isinstance(axis, IrregularAxis) or stored_offsets.length != signal_row.n_values:
+                    raise TimeFFormatError(f"external offsets disagree with signal {signal_row.signal_id!r}")
+                offsets_loader = OffsetHandle(**vars(stored_offsets), first=axis.first_us, last=axis.last_us)
             signals_by_source[signal_row.source_key].append(
                 Signal.from_loader(
                     id=signal_row.signal_id,
