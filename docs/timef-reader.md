@@ -44,17 +44,46 @@ Records load with their Sources, Signals, axes, and annotations. Signal values s
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
 `TimeFDataset`.
 
-Tasks have three useful read paths:
+Tasks have these read paths:
 
 - `tasks` loads and caches every task.
+- `get_task(task_id)` loads one task and its required dependencies, or returns `None` if absent.
+  It reuses records already cached by the reader and leaves signal values lazy.
 - `iter_tasks(records)` yields tasks for selected Records in bounded batches. Its `split`,
   `required_modalities`, and `supported_modalities` arguments filter in DuckDB before any task is
   built, as they do on `task_table()` and `target_table()`.
 - `task_table()`, `target_table()`, and `annotation_table()` return Arrow tables without creating
   Python task objects.
 
-Objects keep their identity within one reader. For example, a task input is the same `Record`
-instance that `iter_records()` returned.
+`task_table(columns=..., offset=0, limit=None)` also supports column projection and SQL pagination
+after filtering, in task ID order. For example, read a summary page without loading record hierarchies:
+
+```python
+page = reader.task_table(
+    columns=("task_id", "task_type", "split", "prompt"),
+    split="train",
+    offset=20,
+    limit=20,
+)
+```
+
+Omitting `columns` preserves the complete task-table schema. A zero limit returns an empty table
+with the requested schema. Column names must be unique and valid, and pagination bounds nonnegative.
+
+Task hydration reuses Records passed explicitly to `iter_tasks(records)` or `read_tasks(records)`,
+and `get_task()` reuses records already cached by a full read. Independent streaming or keyed reads
+do not establish a shared object cache. To reuse a streamed Record in its tasks, pass it explicitly:
+
+```python
+record = next(reader.iter_records(("record-0",)))
+tasks = list(reader.iter_tasks((record,)))
+assert all(
+    item is record
+    for task in tasks
+    for item in task.inputs
+    if item.id == record.id
+)
+```
 
 ## Type reconstruction
 

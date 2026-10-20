@@ -10,6 +10,7 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
+import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
@@ -347,3 +348,49 @@ def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
         "task-cls-0": Split.TRAIN,
         "task-scalar-0": Split.TEST,
     }
+
+
+def test_task_lookup_hydrates_only_dependency_closure_and_reuses_cached_records(tmp_path, monkeypatch):
+    built = []
+    original = control_reader_module._TaskHydration._build
+
+    def track_build(self, *args, **kwargs):
+        tasks = original(self, *args, **kwargs)
+        built.extend(task.id for task in tasks.values())
+        return tasks
+
+    monkeypatch.setattr(control_reader_module._TaskHydration, "_build", track_build)
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
+        record = next(record for record in reader.read().records if record.id == "record-0")
+        cached_tasks = reader.tasks
+        built.clear()
+        monkeypatch.setattr(reader, "_all_records", lambda: pytest.fail("all records"))
+        monkeypatch.setattr(reader, "iter_tasks", lambda *a, **k: pytest.fail("task scan"))
+        monkeypatch.setattr(reader, "_load_offsets", lambda *a, **k: pytest.fail("offset reads"))
+        monkeypatch.setattr(Signal, "read_steps", lambda *a, **k: pytest.fail("value reads"))
+        task = reader.get_task("task-answer-0")
+        assert task is not None
+        assert task.id == "task-answer-0"
+        assert task.inputs[0] is record
+        assert task.from_tasks[0].id == "task-cls-0"
+        assert task.from_tasks[0].inputs[0] is record
+        assert set(built) == {"task-answer-0", "task-cls-0"}
+        cohort = next(annotation for annotation in record.annotations if annotation.id == "cohort-shared")
+        assert task.input_annotations[0] is cohort
+        assert reader.tasks is cached_tasks
+
+
+def test_task_query_sdk_reads_stay_lazy_without_cached_records(tmp_path, monkeypatch):
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
+        monkeypatch.setattr(reader, "_all_records", lambda: pytest.fail("all records"))
+        monkeypatch.setattr(Signal, "read_steps", lambda *a, **k: pytest.fail("value reads"))
+        table = reader.task_table(columns=("task_id", "prompt"), offset=1, limit=2)
+        assert len(table) == 2
+        assert reader._records is None
+        assert reader.get_task("missing") is None
+        task = reader.get_task("task-answer-0")
+        assert task is not None
+        assert task.from_tasks[0].id == "task-cls-0"
+        assert reader._records is None
+        with pytest.raises(TimeFValidationError):
+            reader.task_table(limit=-1)

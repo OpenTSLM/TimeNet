@@ -1,3 +1,5 @@
+from unittest.mock import MagicMock
+
 import pyarrow as pa
 import pytest
 
@@ -500,3 +502,96 @@ def test_split_round_trips_and_filters_before_hydration(tmp_path, monkeypatch):
         "task-train-1": "train",
         "task-train-2": "train",
     }
+
+
+@pytest.mark.parametrize(
+    "columns", [None, ("task_id", "prompt"), ("from_task_ids", "scope_signal_ids", "input_record_ids", "task_id")]
+)
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {},
+        {"split": Split.TRAIN},
+        {"record_ids": ["record-0"]},
+        {"required_modalities": [InputModality.TIME_SERIES]},
+        {"supported_modalities": [InputModality.TEXT, InputModality.NO_INPUT]},
+    ],
+)
+def test_task_table_projects_and_pages_after_filters(tmp_path, columns, filters):
+    dataset = make_dataset()
+    for index, task in enumerate(sorted(dataset.tasks, key=lambda task: task.id)):
+        task.split = Split.TRAIN if index % 2 else Split.TEST
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+    with DuckDBControlReader(path) as reader:
+        full = reader.task_table(**filters)
+        expected = full if columns is None else full.select(columns)
+        for offset, limit in ((0, 2), (2, 3), (1, None), (0, 0), (100, 1)):
+            page = reader.task_table(**filters, columns=columns, offset=offset, limit=limit)
+            assert page.equals(expected.slice(offset, limit))
+            assert page.schema == expected.schema
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"columns": []},
+        {"columns": ["task_id", "task_id"]},
+        {"columns": ["private_key"]},
+        {"columns": ["task_id; DROP TABLE tasks"]},
+        {"offset": -1},
+        {"limit": -1},
+        {"offset": 1.5},
+        {"limit": True},
+    ],
+)
+def test_task_table_rejects_invalid_projection_and_bounds(tmp_path, kwargs):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFValidationError):
+        reader.task_table(**kwargs)
+
+
+def test_task_summary_query_does_not_join_relationships_or_hydrate(tmp_path, monkeypatch):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    with DuckDBControlReader(path) as reader:
+        connection = MagicMock(wraps=reader.connection)
+        monkeypatch.setattr(reader, "connection", connection)
+        monkeypatch.setattr(
+            control_reader_module._TaskHydration, "__init__", lambda *a, **k: pytest.fail("task hydration")
+        )
+        monkeypatch.setattr(reader, "read_records", lambda *a, **k: pytest.fail("record hydration"))
+        page = reader.task_table(columns=("task_id", "task_type", "split", "prompt"), offset=1, limit=2)
+        assert len(page) == 2
+        ((sql, parameters),) = [call.args for call in connection.execute.call_args_list]
+        assert "JOIN" not in sql.upper()
+        assert "t.*" not in sql
+        assert "metadata" not in sql
+        assert "rationale" not in sql
+        assert parameters == [2, 1]
+        assert not any(name in sql for name in ("task_targets", "annotation_occurrences", "signals", "records"))
+
+
+def test_missing_task_lookup_returns_before_hydration(tmp_path, monkeypatch):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    with DuckDBControlReader(path) as reader:
+        monkeypatch.setattr(
+            control_reader_module._TaskHydration, "__init__", lambda *a, **k: pytest.fail("task hydration")
+        )
+        assert reader.get_task("missing") is None
+        assert reader.get_task("' OR 1=1 --") is None
+
+
+@pytest.mark.parametrize(("parent", "message"), [("task_key", "cycle"), ("999999", "missing task key")])
+def test_task_lookup_reports_corrupt_dependencies(tmp_path, parent, message):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    with connect_control(path) as connection:
+        if parent == "task_key":
+            connection.execute("UPDATE task_dependencies SET parent_task_key = task_key")
+        else:
+            connection.execute("UPDATE task_dependencies SET parent_task_key = ?", [int(parent)])
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match=message):
+        reader.get_task("task-answer-0")

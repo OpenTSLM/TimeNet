@@ -1,10 +1,11 @@
 """Hydrate the TimeF object hierarchy from ``control.duckdb``."""
 
 from collections import defaultdict
-from collections.abc import Callable, Iterable, Iterator
+from collections.abc import Callable, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from fractions import Fraction
 from functools import partial
+from graphlib import CycleError, TopologicalSorter
 import json
 from pathlib import Path
 from typing import Any, NamedTuple, TypeVar, cast
@@ -832,56 +833,114 @@ class DuckDBControlReader:
             self._task_facts = _TaskFacts(frozenset(parent_keys), annotated > 0)
         return self._task_facts
 
-    def task_table(
+    def task_table(  # noqa: PLR0913 - existing filters plus projection and pagination
         self,
         record_ids: Iterable[str] | None = None,
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
+        columns: Sequence[str] | None = None,
+        offset: int = 0,
+        limit: int | None = None,
     ) -> pa.Table:
-        """Return the task table as Arrow, with object references as public IDs, without building Tasks.
-
-        One row per task with its type, prompt, rationale, the four scope columns (Signal keys
-        resolved to IDs), the configuration columns, ordered ``input_record_ids``, ordered
-        ``from_task_ids``, and the metadata JSON string. Targets are in :meth:`target_table`.
+        """Return projected task facts in task ID order without hydrating objects.
 
         Args:
-            record_ids: Keep only tasks whose inputs include one of these Records, or ``None`` for all.
-            split: Keep only tasks of this split, or ``None`` for all.
+            record_ids: Keep tasks whose inputs include these Records, or all for ``None``.
+            split: Keep only this split, or all for ``None``.
+            columns: Existing task-table columns to return, in order; ``None`` returns all.
+            offset: Rows to skip after filtering and ordering.
+            limit: Maximum rows to return, or all remaining rows for ``None``.
 
         Returns:
-            The tasks in task ID order.
+            An Arrow table with public IDs instead of object references.
+
+        Raises:
+            TimeFValidationError: If columns or pagination bounds are invalid.
         """
+        names = (
+            "task_id",
+            "task_type",
+            "prompt",
+            "rationale",
+            "scope_type",
+            "scope_start",
+            "scope_end",
+            "scope_signal_ids",
+            "target_schema",
+            "unit",
+            "target_name",
+            "mode",
+            "has_inline_targets",
+            "input_modalities",
+            "split",
+            "input_record_ids",
+            "from_task_ids",
+            "metadata",
+        )
+        selected = names if columns is None else tuple(columns)
+        if not selected or any(name not in names for name in selected) or len(set(selected)) != len(selected):
+            raise TimeFValidationError("task columns must be a nonempty, unique selection of task-table columns")
+        for bound in (offset,) if limit is None else (offset, limit):
+            if isinstance(bound, bool) or not isinstance(bound, int) or bound < 0:
+                raise TimeFValidationError("task offset and limit must be nonnegative integers")
         where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
+        paging = ""
+        if limit is not None:
+            paging += " LIMIT ?"
+            parameters.append(limit)
+        paging += " OFFSET ?"
+        parameters.append(offset)
+        derived = {"scope_signal_ids", "input_record_ids", "from_task_ids"}
+        needed = {"task_id", *(name for name in selected if name not in derived)}
+        if derived.intersection(selected):
+            needed.add("task_key")
+        if "scope_signal_ids" in selected:
+            needed.add("scope_signal_keys")
+        page_columns = ", ".join(f"t.{name}" for name in sorted(needed))
+        ctes = [f"selected_tasks AS (SELECT {page_columns} FROM tasks t {where} ORDER BY t.task_id{paging})"]  # noqa: S608 - validated identifiers and bound paging
+        expressions = {name: f"t.{name}" for name in names}
+        joins = []
+        if "scope_signal_ids" in selected:
+            ctes.append(
+                _signal_ids_cte("scope_ids", "selected_tasks", "scope_signal_keys", ("task_key",), "scope_signal_ids")
+            )
+            joins.append("LEFT JOIN scope_ids USING (task_key)")
+            expressions["scope_signal_ids"] = "scope_ids.scope_signal_ids"
+        if "input_record_ids" in selected:
+            ctes.append("""inputs AS (
+                SELECT task_key, list(record_id ORDER BY position) AS input_record_ids
+                FROM task_record_refs JOIN selected_tasks USING (task_key) JOIN records USING (record_key)
+                WHERE field = 'inputs' GROUP BY task_key
+            )""")
+            joins.append("LEFT JOIN inputs USING (task_key)")
+            expressions["input_record_ids"] = "coalesce(inputs.input_record_ids, []) AS input_record_ids"
+        if "from_task_ids" in selected:
+            ctes.append("""parents AS (
+                SELECT d.task_key, list(parent.task_id ORDER BY d.position) AS from_task_ids
+                FROM task_dependencies d JOIN selected_tasks s ON s.task_key = d.task_key
+                JOIN tasks parent ON parent.task_key = d.parent_task_key GROUP BY d.task_key
+            )""")
+            joins.append("LEFT JOIN parents USING (task_key)")
+            expressions["from_task_ids"] = "coalesce(parents.from_task_ids, []) AS from_task_ids"
+        projection = ", ".join(expressions[name] for name in selected)
         return self.connection.execute(
-            f"""WITH {_signal_ids_cte("scope_ids", "tasks", "scope_signal_keys", ("task_key",), "scope_signal_ids")},
-                inputs AS (
-                    SELECT task_key, list(record_id ORDER BY position) AS input_record_ids
-                    FROM task_record_refs JOIN records USING (record_key)
-                    WHERE field = 'inputs'
-                    GROUP BY task_key
-                ),
-                parents AS (
-                    SELECT d.task_key, list(parent.task_id ORDER BY d.position) AS from_task_ids
-                    FROM task_dependencies d JOIN tasks parent ON parent.task_key = d.parent_task_key
-                    GROUP BY d.task_key
-                )
-                SELECT t.task_id, t.task_type, t.prompt, t.rationale,
-                       t.scope_type, t.scope_start, t.scope_end, scope_ids.scope_signal_ids,
-                       t.target_schema, t.unit, t.target_name, t.mode, t.has_inline_targets,
-                       t.input_modalities, t.split,
-                       coalesce(inputs.input_record_ids, []) AS input_record_ids,
-                       coalesce(parents.from_task_ids, []) AS from_task_ids,
-                       t.metadata
-                FROM tasks t
-                LEFT JOIN scope_ids USING (task_key)
-                LEFT JOIN inputs USING (task_key)
-                LEFT JOIN parents USING (task_key)
-                {where}
-                ORDER BY t.task_id""",  # noqa: S608 - fixed fragments
+            f"WITH {', '.join(ctes)} SELECT {projection} FROM selected_tasks t {' '.join(joins)} ORDER BY t.task_id",  # noqa: S608 - validated fixed identifiers
             parameters,
         ).to_arrow_table()
+
+    def get_task(self, task_id: str, *, cached_records: Iterable[Record] = ()) -> Task | None:
+        """Hydrate one task and its dependencies, or return ``None`` for a missing ID.
+
+        Returns:
+            The selected task, reusing any supplied records and leaving values lazy.
+        """
+        row = self.connection.execute("SELECT task_key FROM tasks WHERE task_id = ?", [task_id]).fetchone()
+        if row is None:
+            return None
+        hydration = _TaskHydration(self, None, cached_records=cached_records)
+        return hydration._hydrate([row[0]])[0]
 
     def target_table(
         self,
@@ -1556,6 +1615,10 @@ class _TaskHydration:
         if task_rows is not None:
             task_rows = [row for row in task_rows if row.task_key not in self.retained]
         dependencies = self.reader._task_dependencies(pending) if self.parent_keys else {}
+        try:
+            TopologicalSorter(dependencies).prepare()
+        except CycleError as exc:
+            raise TimeFFormatError("task dependencies contain a cycle within the selected batch") from exc
         in_batch = None if pending is None else set(pending)
         missing_parents = (
             []

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Iterable, Iterator
+from collections.abc import Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 import types as _types
@@ -191,30 +191,51 @@ class TimeFReader:
                 cached_records=cached_records,
             )
 
-    def task_table(
+    def get_task(self, task_id: str) -> Task | None:
+        """Return one task and its dependencies without hydrating unrelated tasks.
+
+        Returns:
+            The selected task, or ``None`` if the ID is absent. Signal values stay lazy.
+        """
+        with self._as_format_error():
+            return self._control_reader().get_task(task_id, cached_records=self._records or ())
+
+    def task_table(  # noqa: PLR0913 - existing filters plus projection and pagination
         self,
         record_ids: Iterable[str] | None = None,
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
+        columns: Sequence[str] | None = None,
+        offset: int = 0,
+        limit: int | None = None,
     ) -> pa.Table:
         """Return the tasks as an Arrow table without building Task objects.
 
         Args:
             record_ids: Keep only tasks whose inputs include one of these Records, or ``None`` for all.
             split: Keep only tasks of this split, or ``None`` for all.
+            columns: Existing task-table columns to return, in order; ``None`` returns all.
+            offset: Rows to skip after filtering and ordering.
+            limit: Maximum rows to return, or all remaining rows for ``None``.
 
         Returns:
             One row per task with public IDs in place of object references. Targets are in
             :meth:`target_table`.
-        """
-        with self._as_format_error():
+
+        Raises:
+            TimeFValidationError: If columns or pagination bounds are invalid.
+        """  # noqa: DOC502 - raised by the control reader
+        with self._as_format_error(preserve_validation=True):
             return self._control_reader().task_table(
                 record_ids,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
                 split=split,
+                columns=columns,
+                offset=offset,
+                limit=limit,
             )
 
     def target_table(
