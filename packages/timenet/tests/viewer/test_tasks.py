@@ -1,4 +1,4 @@
-"""Task browsing uses public iterators, explicit versions, and request-owned readers."""
+"""Task browsing uses projected queries, explicit versions, and request-owned readers."""
 
 from threading import get_ident
 from unittest.mock import MagicMock
@@ -205,30 +205,40 @@ def test_task_authentication_precedes_opening(task_registry, monkeypatch, path):
         (("/api/v1/tasks", {"limit": 1}), None, 200),
         (("/api/v1/task", {"task_id": "page-000"}), None, 200),
         (("/api/v1/task", {"task_id": "missing"}), None, 404),
-        (("/api/v1/tasks", {}), "iteration", 500),
+        (("/api/v1/tasks", {}), "query", 500),
+        (("/api/v1/task", {"task_id": "page-000"}), "query", 500),
         (("/api/v1/task", {"task_id": "page-000"}), "projection", 500),
     ],
 )
-def test_reader_and_iterator_cleanup_on_same_worker(task_registry, monkeypatch, route, failure, expected):
+def test_reader_queries_and_cleanup_on_same_worker(task_registry, monkeypatch, route, failure, expected):
     path, params = route
     events = []
-    yielded = []
+    queries = []
 
     class TrackingReader(TimeFReader):
         def __init__(self, version):
             super().__init__(version)
             events.append(("open", get_ident()))
 
+        def task_table(self, *args, **kwargs):
+            events.append(("query", get_ident()))
+            queries.append(kwargs)
+            if failure == "query":
+                raise TimeFFormatError("private /server/path")
+            return super().task_table(*args, **kwargs)
+
+        def get_task(self, task_id):
+            events.append(("query", get_ident()))
+            queries.append(task_id)
+            if failure == "query":
+                raise TimeFFormatError("private /server/path")
+            return super().get_task(task_id)
+
         def iter_tasks(self, *args, **kwargs):
-            try:
-                if failure == "iteration":
-                    raise TimeFFormatError("private /server/path")
-                for task in super().iter_tasks(*args, **kwargs):
-                    yielded.append(task.id)
-                    events.append(("yield", get_ident()))
-                    yield task
-            finally:
-                events.append(("iterator closed", get_ident()))
+            pytest.fail("viewer must not scan hydrated tasks")
+
+        def _all_records(self):
+            pytest.fail("viewer must not hydrate all records")
 
         def close(self):
             events.append(("reader closed", get_ident()))
@@ -242,14 +252,16 @@ def test_reader_and_iterator_cleanup_on_same_worker(task_registry, monkeypatch, 
     )
     response = client.get(path, params={**IDENTITY, **params}, headers=HEADERS)
     assert response.status_code == expected
-    assert events[-2][0] == "iterator closed"
+    assert events[-2][0] == "query"
     assert events[-1][0] == "reader closed"
     assert len({thread for _, thread in events}) == 1
     if params == {"limit": 1}:
-        assert len(yielded) == 2
+        assert queries == [
+            {"split": None, "columns": ("task_id", "task_type", "split", "prompt"), "offset": 0, "limit": 2}
+        ]
     if params == {"task_id": "page-000"}:
-        assert yielded == ["page-000"]
-    if failure == "iteration":
+        assert queries == ["page-000"]
+    if failure == "query":
         assert "/server/path" not in response.text
 
 

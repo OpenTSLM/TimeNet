@@ -38,11 +38,9 @@ calls `tests/harness.mjs` to bundle the sources it renders.
 
 ## Loading costs
 
-Task pages limit the response, but later pages repeat a scan and hydrate skipped tasks. Opening a
-task scans from the start; a missing ID scans every task. Without a split filter, the reader
-hydrates all records before yielding tasks. Split filtering can still hydrate referenced records
-and dependencies. Opening a remote version may download the full dataset. Signal values remain
-lazy.
+Task lists read a page of summary fields without loading record hierarchies. Opening a task loads
+that task and its referenced records and dependencies. Opening a remote version may download the
+full dataset. Signal values remain lazy.
 
 Opening a record hydrates the entire record hierarchy and annotations; signal windows repeat that
 hydration. Selecting a signal loads its first window; values and irregular offsets are read only
