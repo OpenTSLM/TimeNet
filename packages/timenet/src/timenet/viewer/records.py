@@ -1,14 +1,15 @@
-"""Bounded record projections with lazy signal values."""
+"""Bounded record projections and explicit scalar signal windows."""
 
 from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 import json
+import math
 from typing import Any
 
 from fastapi import FastAPI, Query
 from fastapi.responses import Response
-from pydantic import BaseModel
+from pydantic import BaseModel, StrictFloat, StrictInt
 
 from timenet.dataset import Record, Signal, Source
 from timenet.dataset.axis import AxisType, IrregularAxis, RegularAxis
@@ -29,6 +30,7 @@ class RecordLimits:
 
     hierarchy: int = 5_000
     annotations: int = 10_000
+    window: int = 2_000
     response_bytes: int = 2 * 1024 * 1024
 
 
@@ -92,6 +94,18 @@ class RecordDetail(BaseModel):
     annotations: list[AnnotationDetail]
     sources: list[SourceDetail]
     signals: list[SignalDetail]
+
+
+class SignalWindow(BaseModel):
+    """A half-open step window with JSON-safe gaps."""
+
+    record_id: str
+    signal_id: str
+    start: int
+    stop: int
+    dtype: str
+    values: list[StrictInt | StrictFloat | None]
+    nonfinite_steps: list[int]
 
 
 def _cap(count: int, maximum: int, operation: str, label: str) -> None:
@@ -180,7 +194,9 @@ def _hierarchy(record: Record, limits: RecordLimits, operation: str) -> list[tup
             (child, source.id) for child in sorted(source.sources, key=lambda item: (item.name, item.id), reverse=True)
         )
     _cap(annotations, limits.annotations, operation, "Attached annotations")
-    _preflight(record, result, limits, operation)
+    # A window response holds no record fields, so only record details measure them.
+    if operation == "record":
+        _preflight(record, result, limits, operation)
     return result
 
 
@@ -269,7 +285,7 @@ def _signal(signal: Signal, source_id: str) -> SignalDetail:
 def install_record_routes(
     app: FastAPI, registry: BaseRegistry, initial_manifest: Manifest | None, limits: RecordLimits
 ) -> None:
-    """Install the authenticated record endpoint with request-owned readers."""
+    """Install authenticated record and signal endpoints with request-owned readers."""
 
     @app.get("/api/v1/record")
     def record(dataset_id: str, version: str, record_id: str = Query(..., min_length=1)) -> Response:
@@ -305,3 +321,74 @@ def install_record_routes(
                 ],
             )
             return _response(detail, limits, operation)
+
+    @app.get("/api/v1/signal-window")
+    def window(  # noqa: PLR0913 - explicit HTTP window identity and bounds
+        *,
+        dataset_id: str,
+        version: str,
+        start: int = Query(..., ge=0),
+        stop: int = Query(..., ge=1),
+        record_id: str = Query(..., min_length=1),
+        signal_id: str = Query(..., min_length=1),
+    ) -> Response:
+        """Read exactly one eligible signal's explicit half-open step window.
+
+        Returns:
+            A bounded JSON window response.
+        """
+        operation = "signal-window"
+        version = resolve_version(dataset_id, version, initial_manifest, operation)
+        if stop <= start:
+            fail(422, "invalid_parameters", "Require 0 <= start < stop.", operation)
+        _cap(stop - start, limits.window, operation, "Signal window")
+        with (
+            registry_errors(operation),
+            TimeFReader(registry.open_version(dataset_id, version)) as reader,
+            _record(reader, record_id, operation) as item,
+        ):
+            hierarchy = _hierarchy(item, limits, operation)
+            selected = next((s for source, _ in hierarchy for s in source.signals if s.id == signal_id), None)
+            if selected is None:
+                fail(404, "not_found", "Signal not found in this record.", operation)
+            if stop > selected.n_values:
+                fail(422, "invalid_parameters", "Window exceeds the signal length.", operation)
+            reason = _reason(selected)
+            if reason:
+                fail(422, "unsupported_plot", reason, operation)
+            return _response(_window(selected, record_id, start, stop, operation), limits, operation)
+
+
+def _window(selected: Signal, record_id: str, start: int, stop: int, operation: str) -> SignalWindow:
+    """Project a scalar window, retaining integer precision and nonfinite gaps.
+
+    Returns:
+        Values and absolute indices of nonfinite gaps.
+
+    Raises:
+        TimeFFormatError: If storage returns the wrong number of steps.
+    """
+    array = selected.read_steps(start, stop)
+    if len(array) != stop - start:
+        raise TimeFFormatError("incorrect window length")
+    values: list[int | float | None] = []
+    nonfinite: list[int] = []
+    for index, scalar in enumerate(array):
+        value = scalar.as_py()
+        if value is not None and (isinstance(value, bool) or not isinstance(value, (int, float))):
+            raise TimeFFormatError("non-numeric scalar in numeric signal")
+        if isinstance(value, int) and abs(value) > 2**53 - 1:
+            fail(422, "unsupported_plot", "Observed integer exceeds JavaScript safe integer range.", operation)
+        if isinstance(value, float) and not math.isfinite(value):
+            value = None
+            nonfinite.append(start + index)
+        values.append(value)
+    return SignalWindow(
+        record_id=record_id,
+        signal_id=selected.id,
+        start=start,
+        stop=stop,
+        dtype=selected.spec.dtype,
+        values=values,
+        nonfinite_steps=nonfinite,
+    )
