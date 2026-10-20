@@ -398,6 +398,11 @@ IMPORTED_OBJECTS = Table(
 )
 """Local object IDs indexed by input alias, object kind, and original parent ID."""
 
+PAYLOAD_SCAN_GROUPS = Table(
+    "payload_scan_groups",
+    (Column("owner_key", ColumnType.VARCHAR), _required("value_path"), _key("chunk_major_index")),
+)
+
 CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
     IMPORTS,
@@ -411,6 +416,7 @@ CONTROL_TABLES: tuple[Table, ...] = (
     AXIS_OFFSETS,
     SIGNALS,
     SIGNAL_CHUNKS,
+    PAYLOAD_SCAN_GROUPS,
     ANNOTATION_CONTENTS,
     ANNOTATION_OCCURRENCES,
     TASKS,
