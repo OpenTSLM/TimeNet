@@ -26,6 +26,9 @@ npm run build
 `make frontend-check` rebuilds and fails if `static/` no longer matches the source. Run it before
 you commit frontend changes.
 
+`npm test` runs the frontend tests in Node.js with jsdom; no browser is needed. Each test file
+calls `tests/harness.mjs` to bundle the sources it renders.
+
 ## TODO
 
 - **Catalog scale.** Each catalog request lists the whole registry, then reads the manifests on
