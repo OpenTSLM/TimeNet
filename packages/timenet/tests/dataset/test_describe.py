@@ -8,36 +8,39 @@ def test_describe_text_has_all_sections():
     dataset = make_dataset()
     dataset.derive_schema()
     text = describe_text(dataset, rows=5)
-    assert "timenet/hello-world @ 1.0.0" in text
-    assert "CC-BY-4.0" in text
+    assert f"{dataset.metadata.dataset_id} @ {dataset.metadata.dataset_version}" in text
+    assert str(dataset.metadata.license) in text
     assert "counts" in text
     # Counts are asserted loosely: make_dataset() gains records and specs further up the stack, and
     # this test is about the sections rendering, not the fixture's exact size.
-    assert "classification=" in text  # tasks histogram
-    assert "sine=" in text  # series-by-spec histogram
+    assert f"{dataset.tasks[0].task_type}=" in text  # tasks histogram
+    spec_type = dataset.records[0].signals[0].spec.spec_type
+    assert f"{spec_type}=" in text  # series-by-spec histogram
     assert "specs" in text
-    assert "sine" in text
-    assert "record-0" in text  # record preview
+    assert spec_type in text
+    assert dataset.records[0].id in text  # record preview
 
 
 def test_describe_works_without_derived_schema():
     dataset = make_dataset()  # derive_schema() not called
     assert dataset.schema is None
     text = describe_text(dataset, rows=5)
-    assert "timenet/hello-world @ 1.0.0" in text
-    assert "record-0" in text
+    assert f"{dataset.metadata.dataset_id} @ {dataset.metadata.dataset_version}" in text
+    assert dataset.records[0].id in text
 
 
 def test_describe_rows_limits_preview():
-    text = describe_text(make_dataset(), rows=1)
+    dataset = make_dataset()
+    text = describe_text(dataset, rows=1)
     assert "first 1 of " in text
-    assert "record-0" in text
-    assert "record-1" not in text
+    assert dataset.records[0].id in text
+    assert dataset.records[1].id not in text
 
 
 def test_describe_prints_to_stdout(capsys):
-    make_dataset().describe()
-    assert "timenet/hello-world @ 1.0.0" in capsys.readouterr().out
+    dataset = make_dataset()
+    dataset.describe()
+    assert f"{dataset.metadata.dataset_id} @ {dataset.metadata.dataset_version}" in capsys.readouterr().out
 
 
 def test_describe_empty_dataset_does_not_crash():

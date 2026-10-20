@@ -22,6 +22,7 @@ from timenet.types import (
     DatasetMetadata,
     Domain,
     License,
+    ScalarPredictionTask,
     Split,
     TimeSeriesSpec,
     Version,
@@ -175,11 +176,11 @@ def test_split_value_chunks_round_trip_and_support_range_reads(tmp_path, backend
 
 
 def test_metadata_and_schema_come_from_the_manifest_without_opening_control(tmp_path):
-    reader = TimeFReader(DatasetVersion.open_local(_write(tmp_path)))
+    dataset = make_dataset()
+    reader = TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset)))
     assert reader._control is None
-    assert reader.metadata.dataset_id == "timenet/hello-world"
-    assert {spec.spec_type for spec in reader.schema.time_series_specs} == {"sine", "cosine"}
-    assert ClassificationTask in reader.schema.tasks
+    assert reader.metadata == dataset.metadata
+    assert reader.schema == dataset.schema
     assert reader._control is None
 
 
@@ -259,17 +260,21 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path):
 
 
 def test_iter_records_preserves_requested_order(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
-        selected = tuple(reader.iter_records(record_ids=("record-2", "record-0")))
-    assert [record.record_id for record in selected] == ["record-2", "record-0"]
+    dataset = make_dataset()
+    ordered_records = sorted(dataset.records, key=lambda record: record.id)
+    requested = (ordered_records[-1].id, ordered_records[0].id)
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+        selected = tuple(reader.iter_records(record_ids=requested))
+    assert tuple(record.id for record in selected) == requested
 
 
 def test_iter_records_rejects_an_unknown_id_before_yielding(tmp_path):
+    dataset = make_dataset()
     with (
-        TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader,
+        TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader,
         pytest.raises(TimeFValidationError, match="no such record"),
     ):
-        next(reader.iter_records(record_ids=("record-0", "record-nope")))
+        next(reader.iter_records(record_ids=(dataset.records[0].id, "record-nope")))
 
 
 def test_iter_records_can_skip_annotations_without_losing_values(tmp_path):
@@ -318,32 +323,39 @@ def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_pat
 
 
 def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
-        record0 = next(reader.iter_records(("record-0",)))
+    dataset = make_dataset()
+    expected_answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
+    (record,) = expected_answer.inputs
+    (expected_context,) = expected_answer.input_annotations
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+        record0 = next(reader.iter_records((record.id,)))
         tasks = list(reader.iter_tasks((record0,)))
         every = reader.tasks
 
-    assert {task.id for task in tasks} == {task.id for task in every if task.inputs[0].record_id == "record-0"}
+    assert {task.id for task in tasks} == {
+        task.id for task in every if any(item.id == record.id for item in task.inputs)
+    }
     assert all(task.inputs[0] is record0 for task in tasks)
-    answer = next(task for task in tasks if task.id == "task-answer-0")
-    cohort = next(annotation for annotation in record0.annotations if annotation.id == "cohort-shared")
+    answer = next(task for task in tasks if task.id == expected_answer.id)
+    cohort = next(annotation for annotation in record0.annotations if annotation.id == expected_context.id)
     assert answer.input_annotations[0] is cohort
 
 
 def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
     dataset = make_dataset()
-    tasks = {task.id: task for task in dataset.tasks}
-    tasks["task-cls-0"].split = Split.TRAIN
-    tasks["task-scalar-0"].split = Split.TEST
+    train_task = next(task for task in dataset.tasks if isinstance(task, ClassificationTask))
+    test_task = next(task for task in dataset.tasks if isinstance(task, ScalarPredictionTask))
+    train_task.split = Split.TRAIN
+    test_task.split = Split.TEST
     version_dir = _write(tmp_path, dataset)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        assert [task.id for task in reader.iter_tasks(split="train")] == ["task-cls-0"]
-        assert reader.task_table(split=Split.TEST)["task_id"].to_pylist() == ["task-scalar-0"]
-        assert reader.target_table(split=Split.TEST)["task_id"].to_pylist() == ["task-scalar-0"]
+        assert [task.id for task in reader.iter_tasks(split="train")] == [train_task.id]
+        assert reader.task_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
+        assert reader.target_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
         loaded = reader.read()
 
     assert {task.id: task.split for task in loaded.tasks if task.split is not None} == {
-        "task-cls-0": Split.TRAIN,
-        "task-scalar-0": Split.TEST,
+        train_task.id: Split.TRAIN,
+        test_task.id: Split.TEST,
     }

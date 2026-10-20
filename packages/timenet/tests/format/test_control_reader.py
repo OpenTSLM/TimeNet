@@ -296,8 +296,10 @@ def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
 
 
 def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path):
+    dataset = make_dataset()
+    selected_record, corrupt_record = dataset.records[:2]
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    DuckDBControlWriter(path).write_hierarchy(dataset)
     with connect_control(path) as connection:
         connection.execute(
             """UPDATE axes SET axis_type = 'corrupt'
@@ -306,14 +308,15 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
                    FROM signals
                    JOIN sources USING (source_key)
                    JOIN records USING (record_key)
-                   WHERE records.record_id = 'record-1'
-               )"""
+                   WHERE records.record_id = ?
+               )""",
+            [corrupt_record.id],
         )
     with DuckDBControlReader(path) as reader:
-        (selected,) = reader.read_records(("record-0",))
-        assert selected.id == "record-0"
+        (selected,) = reader.read_records((selected_record.id,))
+        assert selected.id == selected_record.id
         with pytest.raises(TimeFFormatError, match="unknown type"):
-            reader.read_records(("record-1",))
+            reader.read_records((corrupt_record.id,))
 
 
 @pytest.mark.parametrize(
@@ -356,34 +359,46 @@ def test_control_reader_rejects_corrupt_relationships(tmp_path, statement, messa
 
 
 def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tmp_path):
+    dataset = make_dataset()
+    expected_answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
+    (expected_record,) = expected_answer.inputs
+    (expected_parent,) = expected_answer.from_tasks
+    expected_ids = sorted(task.id for task in dataset.tasks if expected_record in task.inputs)
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
-        record0 = next(record for record in records if record.record_id == "record-0")
+        record0 = next(record for record in records if record.id == expected_record.id)
         tasks = list(reader.iter_tasks((record0,)))
 
-    assert [task.id for task in tasks] == ["task-answer-0", "task-cls-0", "task-localize-0", "task-scalar-0"]
+    assert [task.id for task in tasks] == expected_ids
     assert all(task.inputs[0] is record0 for task in tasks)
-    answer = tasks[0]
-    assert answer.from_tasks == (tasks[1],)
-    assert answer.from_tasks[0] is tasks[1]
+    answer = next(task for task in tasks if task.id == expected_answer.id)
+    parent = next(task for task in tasks if task.id == expected_parent.id)
+    assert answer.from_tasks == (parent,)
+    assert answer.from_tasks[0] is parent
 
 
 @pytest.mark.parametrize("materialize", [False, True])
 def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, monkeypatch, materialize):
     monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 1)
+    dataset = make_dataset()
+    answer_task = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
+    (parent_task,) = answer_task.from_tasks
+    (expected_record,) = answer_task.inputs
+    assert answer_task.id < parent_task.id, "the fixture must load the dependant before its parent"
+    expected_ids = {task.id for task in dataset.tasks if expected_record in task.inputs}
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
-        record = next(record for record in reader.read_records() if record.id == "record-0")
+        record = next(record for record in reader.read_records() if record.id == expected_record.id)
         tasks = reader.read_tasks((record,)) if materialize else list(reader.iter_tasks((record,)))
 
     by_id = {task.id: task for task in tasks}
-    assert set(by_id) == {"task-answer-0", "task-cls-0", "task-localize-0", "task-scalar-0"}
-    assert by_id["task-answer-0"].from_tasks[0] is by_id["task-cls-0"]
+    assert set(by_id) == expected_ids
+    assert by_id[answer_task.id].from_tasks[0] is by_id[parent_task.id]
     assert tuple(sorted(by_id)) == tuple(task.id for task in tasks)
 
 
