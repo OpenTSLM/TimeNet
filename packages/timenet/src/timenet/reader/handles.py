@@ -1,6 +1,7 @@
 """Explicit lazy dataset and entity access, separate from materialized reads."""
 
 from builtins import object as _object
+from contextlib import AbstractContextManager
 from dataclasses import dataclass
 from typing import TYPE_CHECKING, Any
 
@@ -273,6 +274,10 @@ class DatasetHandle:
     def read(self) -> TimeFDataset:
         """Return the fully materialized dataset."""
         return self.reader._read_dataset()
+
+    def scan(self) -> AbstractContextManager[TimeFDataset]:
+        """Return a lazy dataset context with bounded four-worker Parquet prefetch."""
+        return self.reader.scan()
 
     def close(self) -> None:
         """Release reader connections and cached payload groups."""
