@@ -1,4 +1,4 @@
-.PHONY: sync test test-unit test-connectors check check-ci install-hooks lint-fix build license-check schemas schemas-check docs docs-serve docs-preview docs-datasets docs-api clean
+.PHONY: sync test test-unit test-connectors check check-ci install-hooks lint-fix build license-check schemas schemas-check frontend-check docs docs-serve docs-preview docs-datasets docs-api clean
 
 sync:
 	uv sync --all-groups --all-extras
@@ -84,6 +84,18 @@ schemas:
 
 schemas-check:
 	uv run python scripts/gen_schemas.py --check
+
+# Rebuild the viewer frontend into a scratch directory and fail if the bundle under
+# VIEWER_STATIC no longer matches its source, the way schemas-check guards the generated schemas.
+# Needs Node.js 22 or later, so it is not a pre-commit hook.
+VIEWER_STATIC := packages/timenet/src/timenet/viewer/static
+frontend-check:
+	@out="$$(mktemp -d)"; trap 'rm -rf "$$out"' EXIT; \
+	(cd frontend && npm ci && npm run build -- --outDir "$$out" --emptyOutDir) || exit 1; \
+	if ! diff -rq "$$out" $(VIEWER_STATIC); then \
+		echo "The frontend bundle is stale. Run 'cd frontend && npm run build' and commit $(VIEWER_STATIC)."; \
+		exit 1; \
+	fi
 
 install-hooks:
 	uv run pre-commit install

@@ -164,3 +164,13 @@ def test_s3_catalog_reports_unsupported_backend():
     response = client.get("/api/v1/catalog", headers={"Authorization": "Bearer secret"})
     assert response.status_code == 501
     assert "no catalog" in response.json()["detail"]
+
+
+def test_shell_and_packaged_assets(registry):
+    client = TestClient(create_app(registry, token="secret", origin="http://testserver"))
+    shell = client.get("/")
+    assert shell.status_code == 200
+    assert "/static/app.js" in shell.text
+    assert client.get("/static/app.js").status_code == 200
+    assert "MIT License" in client.get("/static/REACT-LICENSE").text
+    assert client.get("/static/unknown.js").status_code == 404

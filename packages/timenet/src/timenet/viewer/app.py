@@ -1,8 +1,10 @@
 """Read-only HTTP catalog and manifest contract for a TimeF registry."""
 
+from importlib.resources import files
 from typing import Any
 
 from fastapi import FastAPI, HTTPException, Query
+from fastapi.responses import HTMLResponse, Response
 from pydantic import BaseModel
 
 from timenet.errors import TimeNetDatasetNotFoundError
@@ -17,6 +19,14 @@ _QUERY_MAX_LENGTH = 100
 _FILTER_MAX_LENGTH = 80
 _CATALOG_PAGE_SIZE = 24
 _CATALOG_MAX_PAGE_SIZE = 50
+
+# Packaged frontend assets and their media types. An explicit list, rather than a static files
+# mount, keeps every other path under /static a 404.
+_STATIC_MEDIA_TYPES = {
+    "app.js": "application/javascript",
+    "app.css": "text/css",
+    "REACT-LICENSE": "text/plain",
+}
 
 
 class CatalogCounts(BaseModel):
@@ -152,6 +162,19 @@ def create_app(
             return registry.get_manifest(dataset_id, version).to_dict()
         except TimeNetDatasetNotFoundError as exc:
             raise HTTPException(status_code=404, detail=str(exc)) from exc
+
+    @app.get("/", response_class=HTMLResponse)
+    def shell() -> str:
+        """Return the browser shell bundled with the Python package."""
+        return files("timenet.viewer").joinpath("static", "index.html").read_text(encoding="utf-8")
+
+    @app.get("/static/{asset}")
+    def static_asset(asset: str) -> Response:
+        """Return a known packaged frontend asset."""
+        if asset not in _STATIC_MEDIA_TYPES:
+            return Response(status_code=404)
+        content = files("timenet.viewer").joinpath("static", asset).read_bytes()
+        return Response(content, media_type=_STATIC_MEDIA_TYPES[asset])
 
     return app
 

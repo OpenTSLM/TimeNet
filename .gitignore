@@ -26,6 +26,7 @@ dist/
 # Virtual environments (uv + conventional)
 .venv/
 env/
+frontend/node_modules/
 
 # Secrets / local env
 .env
