@@ -24,12 +24,13 @@ from timenet.types import Annotation, TimeSeriesSpec, Version
 from timenet.viewer import records as routes
 from timenet.viewer.app import create_app
 from timenet.viewer.records import RecordLimits
+from timenet.writer import TimeFWriter
 
 
 HEADERS = {"Authorization": "Bearer secret"}
 IDENTITY = {"dataset_id": "timenet/hello-world", "version": "1.0.0"}
-RECORD = {**IDENTITY, "record_id": "record-0"}
-OPERATIONS = ["record"]
+WINDOW = {**IDENTITY, "record_id": "record-0", "signal_id": "ts-shared", "start": 0, "stop": 4}
+OPERATIONS = ["record", "signal-window"]
 
 
 def _spec(**fields):
@@ -69,7 +70,7 @@ def registry(tmp_path):
 def get(registry):
     def request(operation="record", params=None, **options):
         client = TestClient(create_app(registry, token="secret", origin="http://testserver", **options))
-        return client.get(f"/api/v1/{operation}", params={**RECORD, **(params or {})}, headers=HEADERS)
+        return client.get(f"/api/v1/{operation}", params={**WINDOW, **(params or {})}, headers=HEADERS)
 
     return request
 
@@ -127,9 +128,31 @@ def test_record_metadata_remains_lazy(get, monkeypatch, no_global_reads):
 
 
 @pytest.mark.parametrize(
+    "extra,status",
+    [
+        ({"start": -1}, 422),
+        ({"stop": 0}, 422),
+        ({"stop": 2, "start": 2}, 422),
+        ({"start": "1.5"}, 422),
+        ({"stop": 2001}, 413),
+    ],
+)
+def test_invalid_windows_rejected_before_open(get, registry, monkeypatch, extra, status):
+    opener = MagicMock(side_effect=AssertionError("opened"))
+    monkeypatch.setattr(registry, "open_version", opener)
+    response = get("signal-window", extra)
+    assert response.status_code == status
+    assert response.json()["detail"]["operation"] == "signal-window"
+    opener.assert_not_called()
+
+
+@pytest.mark.parametrize(
     "operation,params,status",
     [
         ("record", {"record_id": "absent"}, 404),
+        ("signal-window", {"record_id": "absent"}, 404),
+        ("signal-window", {"signal_id": "ts-long-1"}, 404),
+        ("signal-window", {"stop": 17}, 422),
         ("record", {"record_id": ""}, 422),
     ],
 )
@@ -146,15 +169,15 @@ def test_authentication_and_direct_isolation(registry, monkeypatch, operation):
         monkeypatch.setattr(registry, name, forbidden)
     client = TestClient(create_app(registry, token="secret", origin="http://testserver", initial_manifest=manifest))
     path = f"/api/v1/{operation}"
-    assert client.get(path, params=RECORD).status_code == 401
-    assert client.get(path, params=RECORD, headers={**HEADERS, "Origin": "https://foreign.test"}).status_code == 403
+    assert client.get(path, params=WINDOW).status_code == 401
+    assert client.get(path, params=WINDOW, headers={**HEADERS, "Origin": "https://foreign.test"}).status_code == 403
     for extra, status in [
         ({"version": "1.1.0"}, 404),
         ({"dataset_id": "other/name"}, 404),
         ({"version": "latest"}, 422),
         ({"dataset_id": "../escape"}, 422),
     ]:
-        assert client.get(path, params={**RECORD, **extra}, headers=HEADERS).status_code == status
+        assert client.get(path, params={**WINDOW, **extra}, headers=HEADERS).status_code == status
     forbidden.assert_not_called()
 
 
@@ -165,7 +188,7 @@ def test_collection_and_response_caps(get, reads, operation, field, limit):
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "operation_limit"
     assert response.json()["detail"]["limit"] == limit
-    assert reads == []
+    assert reads == ([("ts-shared", 0, 4)] if operation == "signal-window" and field == "response_bytes" else [])
 
 
 @pytest.mark.parametrize(
@@ -219,7 +242,11 @@ def test_same_worker_cleanup(get, monkeypatch, operation, failure, expected):
 
     monkeypatch.setattr(routes, "TimeFReader", TrackingReader)
     if failure == "projection":
-        monkeypatch.setattr(routes, "_signal", MagicMock(side_effect=TimeFFormatError("private")))
+        monkeypatch.setattr(
+            routes,
+            "_signal" if operation == "record" else "_window",
+            MagicMock(side_effect=TimeFFormatError("private")),
+        )
     response = get(
         operation,
         {"record_id": "absent" if failure == "missing" else "record-0"},
@@ -230,6 +257,55 @@ def test_same_worker_cleanup(get, monkeypatch, operation, failure, expected):
     assert len({thread for _, thread in events}) == 1
 
 
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("int32", (), [2**31 - 1, None], None),
+        ("bool", (), [True], "unsupported_plot"),
+        ("str", (), ["a"], "unsupported_plot"),
+        ("enum", (), ["a"], "unsupported_plot"),
+        ("float32", (2,), [[1, 2]], "unsupported_plot"),
+        ("float64", (), [], "invalid_parameters"),
+    ],
+)
+def test_plot_eligibility(get, select_record, reads, case):
+    dtype, shape, values, code = case
+    spec = _spec(dtype=dtype, value_shape=shape, categories=("a",) if dtype == "enum" else ())
+    data = pa.array(values, type=pa.list_(pa.float32(), 2)) if shape else values or [1.0]
+    signal = Signal(id="test", name="Test", spec=spec, time_axis=OrdinalAxis(), data=data)
+    if not values:
+        object.__setattr__(signal, "n_values", 0)  # Current TimeF forbids empty signals.
+    select_record(Record(record_id="test-record", sources=(Source(name="source", signals=(signal,)),)))
+    response = get("signal-window", {"record_id": "test-record", "signal_id": "test", "stop": max(1, len(values))})
+    assert response.status_code == (422 if code else 200)
+    if code:
+        assert response.json()["detail"]["code"] == code
+        assert reads == []
+    else:
+        assert response.json()["values"] == values
+        assert reads == [("test", 0, len(values))]
+
+
+@pytest.mark.parametrize(
+    "values,status,code",
+    [
+        ([None, float("nan"), float("inf"), -float("inf")], 200, None),
+        ([2**53 - 1, None, 1, 2], 200, None),
+        ([2**53, 1, 2, 3], 422, "unsupported_plot"),
+        ([1.0], 500, "corrupt_artifact"),
+    ],
+)
+def test_window_value_validation(get, monkeypatch, *, values, status, code):
+    monkeypatch.setattr(Signal, "read_steps", lambda *args: pa.array(values))
+    response = get("signal-window", {"start": 4, "stop": 8})
+    assert response.status_code == status
+    if code:
+        assert response.json()["detail"]["code"] == code
+    else:
+        assert response.json()["values"] == ([None] * 4 if isinstance(values[1], float) else values)
+        assert response.json()["nonfinite_steps"] == ([5, 6, 7] if isinstance(values[1], float) else [])
+
+
 def test_large_metadata_rejected_before_projection(get, select_record, monkeypatch):
     record = make_dataset().records[0]
     record.metadata["large"] = "😺" * 10000
@@ -237,6 +313,26 @@ def test_large_metadata_rejected_before_projection(get, select_record, monkeypat
     monkeypatch.setattr(routes, "_signal", MagicMock(side_effect=AssertionError("projected before byte guard")))
     response = get(record_limits=RecordLimits(response_bytes=100))
     assert response.status_code == 413
+
+
+def test_real_window_across_storage_chunks(tmp_path, reads, no_global_reads, monkeypatch):
+    dataset = make_dataset()
+    signal = next(s for s in dataset.records[1].walk_signals() if s.id == "ts-long-1")
+    expected = signal.to_arrow().slice(5, 20).to_pylist()
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path / "registry", dataset, chunk_max_bytes=32) as writer:
+        writer.write()
+    monkeypatch.setattr(Signal, "time_offsets_us", MagicMock(side_effect=AssertionError("loaded offsets")))
+    client = TestClient(create_app(LocalRegistry(tmp_path / "registry"), token="secret", origin="http://testserver"))
+    response = client.get(
+        "/api/v1/signal-window",
+        params={**WINDOW, "record_id": "record-1", "signal_id": "ts-long-1", "start": 5, "stop": 25},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["values"] == expected
+    assert response.json()["nonfinite_steps"] == []
+    assert reads == [("ts-long-1", 5, 25)]
 
 
 def test_explicit_catalog_version(get, registry):
