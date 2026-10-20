@@ -14,6 +14,7 @@ from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.types import AnswerTask, InputModality, Split, TimeSeriesSpec
+from timenet.types.text import read_value
 from timenet_connectors.datasets.bash_lab.sensorcaps import SensorCapsConnector, connector as module
 from timenet_connectors.datasets.bash_lab.sensorcaps.connector import (
     DECLARED_SAMPLING_RATE_HZ,
@@ -110,7 +111,7 @@ def _refs(tmp_path):
 
 
 def _annotations(owner):
-    return {annotation.key: annotation.value for annotation in owner.annotations}
+    return {annotation.key: read_value(annotation.value) for annotation in owner.annotations}
 
 
 def _write_row(tmp_path, row):
@@ -167,8 +168,8 @@ def _assert_records_and_tasks(records, tasks):
             assert type(task) is AnswerTask
             assert task.id == f"{record_id}-caption"
             assert len(task.inputs) == 1 and task.inputs[0] is record
-            assert task.targets == (row["messages"][2]["content"],)
-            assert task.prompt == row["messages"][0]["content"] + "\n\n" + _FEATURES
+            assert tuple(map(read_value, task.targets)) == (row["messages"][2]["content"],)
+            assert read_value(task.prompt) == row["messages"][0]["content"] + "\n\n" + _FEATURES
             assert task.metadata == {}
             assert task.split is Split.TRAIN
             expected_context = {
@@ -176,7 +177,9 @@ def _assert_records_and_tasks(records, tasks):
             }
             if partition == "pamap2_v2":
                 expected_context["sensor_location"] = "ankle"
-            assert {annotation.key: annotation.value for annotation in task.input_annotations} == expected_context
+            assert {
+                annotation.key: read_value(annotation.value) for annotation in task.input_annotations
+            } == expected_context
             for annotation in task.input_annotations:
                 assert any(annotation is attached for attached in record.annotations)
             assert task.resolved_input_modalities == frozenset({InputModality.TEXT, InputModality.TIME_SERIES})

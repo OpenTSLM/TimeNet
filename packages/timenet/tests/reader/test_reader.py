@@ -24,10 +24,12 @@ from timenet.types import (
     License,
     ScalarPredictionTask,
     Split,
+    TextValue,
     TimeSeriesSpec,
     Version,
     ureg,
 )
+from timenet.types.text import read_value
 from timenet.writer import TimeFWriter
 
 
@@ -47,8 +49,28 @@ def _read(version_dir: Path) -> TimeFDataset:
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_full_round_trip(tmp_path, backend):
     original = make_dataset()
-    restored = _read(_write(tmp_path, dataset=make_dataset(), values_backend=backend))
+    answer = next(task for task in original.tasks if isinstance(task, AnswerTask))
+    text = "A detailed clinical report with café notes. " * 300
+    answer.prompt = text
+    answer.rationale = text + "Explanation."
+    answer.targets = (text + "Answer.", "short answer")
+    record = answer.inputs[0]
+    record.annotate(Annotation(key="report", value=text))
+    record.annotate(Annotation(key="reports", value=[text, "short report"]))
+
+    restored = _read(_write(tmp_path, dataset=original, values_backend=backend))
     assert_datasets_equal(original, restored)
+    restored_answer = next(task for task in restored.tasks if task.id == answer.id)
+    assert restored_answer.prompt is not None
+    assert restored_answer.prompt.read() == text
+    assert restored_answer.rationale is not None
+    assert restored_answer.rationale.read() == text + "Explanation."
+    assert restored_answer.targets is not None
+    large_target, small_target = restored_answer.targets
+    assert isinstance(large_target, TextValue)
+    assert isinstance(small_target, TextValue)
+    assert large_target.read() == text + "Answer."
+    assert small_target.read() == "short answer"
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -65,7 +87,7 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
         (selected,) = reader.iter_records((record.id,))
 
     for back in (restored.records[0], selected):
-        values = [annotation.value for annotation in back.annotations if annotation.key == "subject_ids"]
+        values = [read_value(annotation.value) for annotation in back.annotations if annotation.key == "subject_ids"]
         assert values == ([list(subjects)] if subjects else [])
     with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
         matches = connection.execute(
@@ -154,8 +176,10 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
 def test_streamed_tasks_round_trip_and_back_populate_records(tmp_path):
     restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)))
     task = next(task for task in restored.tasks if task.id == "qa-3")
-    assert task.prompt == "Question 3?"
-    assert task.rationale == "reason 3"
+    assert task.prompt is not None
+    assert task.prompt.read() == "Question 3?"
+    assert task.rationale is not None
+    assert task.rationale.read() == "reason 3"
     assert task.inputs == (restored.records[0],)
     assert {task.id for task in restored.tasks_for(restored.records[0])} == {task.id for task in restored.tasks}
 

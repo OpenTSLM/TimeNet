@@ -17,12 +17,14 @@ from timenet.types import (
     License,
     LocalizationMode,
     ScalarPredictionTask,
+    Task,
     TemporalLocalizationTask,
     TimeInterval,
     TimeOrigin,
     TimePoint,
     TimeSeriesSpec,
     Version,
+    read_value,
     ureg,
 )
 
@@ -228,9 +230,9 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
         assert exp.start_time.timestamp == act.start_time.timestamp, f"start_time differs for {record_id}"
         assert tuple(sorted(exp.task_ids)) == tuple(sorted(act.task_ids)), f"task_ids differ for {record_id}"
         assert exp.metadata == act.metadata, f"metadata differs for {record_id}"
-        assert sorted(exp.annotations, key=lambda a: a.id) == sorted(act.annotations, key=lambda a: a.id), (
-            f"annotations differ for {record_id}"
-        )
+        assert sorted(_read_annotations(exp.annotations), key=lambda a: a.id) == sorted(
+            _read_annotations(act.annotations), key=lambda a: a.id
+        ), f"annotations differ for {record_id}"
         _assert_sources_equal(record_id, exp.sources, act.sources)
         _assert_series_equal(record_id, exp.signals, act.signals)
 
@@ -239,9 +241,33 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     assert exp_tasks.keys() == act_tasks.keys(), "task ids differ"
     for task_id, exp_task in exp_tasks.items():
         act_task = act_tasks[task_id]
-        assert replace(exp_task, input_modalities=exp_task.resolved_input_modalities) == replace(
-            act_task, input_modalities=act_task.resolved_input_modalities
-        ), f"task {task_id} differs"
+        assert _read_task(exp_task) == _read_task(act_task), f"task {task_id} differs"
+
+
+def _read_annotations(annotations: tuple[Annotation, ...]) -> tuple[Annotation, ...]:
+    """Materialize annotation text for comparison.
+
+    Returns:
+        Annotations whose text values are held in memory.
+    """
+    return tuple(replace(annotation, value=read_value(annotation.value)) for annotation in annotations)
+
+
+def _read_task(task: Task) -> Task:
+    """Materialize task text for comparison.
+
+    Returns:
+        A task whose text values are held in memory.
+    """
+    return replace(
+        task,
+        input_modalities=task.resolved_input_modalities,
+        prompt=read_value(task.prompt),
+        rationale=read_value(task.rationale),
+        annotations=_read_annotations(task.annotations),
+        input_annotations=_read_annotations(task.input_annotations),
+        target_annotations=_read_annotations(task.target_annotations),
+    )
 
 
 def _assert_sources_equal(record_id: str, expected: tuple[Source, ...], actual: tuple[Source, ...]) -> None:
@@ -253,7 +279,9 @@ def _assert_sources_equal(record_id: str, expected: tuple[Source, ...], actual: 
         act_source = act[source_id]
         assert exp_source.name == act_source.name, f"source name differs for {source_id}"
         assert exp_source.metadata == act_source.metadata, f"source metadata differs for {source_id}"
-        assert exp_source.annotations == act_source.annotations, f"source annotations differ for {source_id}"
+        assert _read_annotations(exp_source.annotations) == _read_annotations(act_source.annotations), (
+            f"source annotations differ for {source_id}"
+        )
         assert {source.id for source in exp_source.sources} == {source.id for source in act_source.sources}, (
             f"child sources differ for {source_id}"
         )
@@ -273,7 +301,9 @@ def _assert_series_equal(record_id: str, expected: tuple[Signal, ...], actual: t
         assert exp_ts.name == act_ts.name, f"signal differs for {series_id}"
         assert exp_ts.time_axis == act_ts.time_axis, f"time axis differs for {series_id}"
         assert exp_ts.metadata == act_ts.metadata, f"metadata differs for {series_id}"
-        assert exp_ts.annotations == act_ts.annotations, f"annotations differ for {series_id}"
+        assert _read_annotations(exp_ts.annotations) == _read_annotations(act_ts.annotations), (
+            f"annotations differ for {series_id}"
+        )
         assert exp_ts.n_values == act_ts.n_values, f"n_values differs for {series_id}"
         assert exp_ts.to_arrow().equals(act_ts.to_arrow()), f"values differ for {series_id}"
         # An irregular axis carries only its endpoints, so two streams differing in the middle compare

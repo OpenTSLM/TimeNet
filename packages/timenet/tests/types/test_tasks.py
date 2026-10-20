@@ -24,6 +24,7 @@ from timenet.types import (
     ureg,
 )
 from timenet.types.tasks import _build_task_registry
+from timenet.types.text import read_value
 
 
 NO_INPUT = frozenset({InputModality.NO_INPUT})
@@ -57,7 +58,7 @@ def test_every_task_type_accepts_ordered_mixed_targets(task_type):
 
     task = task_type(targets=["answer", record, 0.98, point])
 
-    assert task.targets == ("answer", record, 0.98, point)
+    assert tuple(map(read_value, task.targets)) == ("answer", record, 0.98, point)
 
 
 def test_none_and_an_explicit_empty_target_remain_distinct():

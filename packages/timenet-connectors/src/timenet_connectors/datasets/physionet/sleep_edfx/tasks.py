@@ -26,6 +26,7 @@ from timenet.types import (
     TemporalLocalizationTask,
     TimeInterval,
 )
+from timenet.types.text import read_value
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey, Condition, Question
 
 
@@ -135,9 +136,10 @@ def build_epoch_tasks(
         if stage.span is None:
             raise TimeFFormatError(f"{record_id}: the scored entry {stage.id!r} states no span, so it holds no epoch")
 
-        if stage.value not in STAGE_LABELS:
+        label = read_value(stage.value)
+        if not isinstance(label, str) or label not in STAGE_LABELS:
             raise TimeFFormatError(
-                f"{record_id}: the scored entry {stage.id!r} states {stage.value!r}, "
+                f"{record_id}: the scored entry {stage.id!r} states {read_value(stage.value)!r}, "
                 f"which is not a label this release writes"
             )
 
@@ -161,7 +163,7 @@ def build_epoch_tasks(
             yield ClassificationTask(
                 # The label the technician wrote. Merging stage 3 with stage 4 is a decision
                 # for whoever trains.
-                targets=(stage.value,),
+                targets=(label,),
                 target_schema=schema,
                 scope=TimeInterval.micros(onset, onset + EPOCH_MICROSECONDS),
             )
@@ -200,7 +202,7 @@ def build_record_tasks(
         if one.key in stated:
             raise TimeFFormatError(f"{record_id}: states {one.key!r} twice, so it has no one answer for it")
 
-        stated[one.key] = one.value
+        stated[one.key] = read_value(one.value)
 
     yield ScalarPredictionTask(
         # A float with a unit keeps the type a regression metric needs. As a string, a
@@ -247,7 +249,7 @@ def find_sleep_period(span_annotations: Sequence[Annotation]) -> TimeInterval | 
         The interval, or ``None`` where the scoring holds no sleep. TimeF refuses an interval of
         zero length, so a recording with no sleep carries no question about its night.
     """
-    spans = [one.span for one in span_annotations if one.value in ASLEEP_LABELS and one.span is not None]
+    spans = [one.span for one in span_annotations if read_value(one.value) in ASLEEP_LABELS and one.span is not None]
     if not spans:
         return None
 
