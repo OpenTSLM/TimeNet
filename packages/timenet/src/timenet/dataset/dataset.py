@@ -101,6 +101,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         records: Iterable[str] = (),
         sources: Iterable[str] = (),
         signals: Iterable[str] = (),
+        tasks: Iterable[str] = (),
         annotations: Iterable[str] = (),
     ) -> "ImportedDataset":
         """Return editable copies of selected parent objects and their required dependencies."""
@@ -111,6 +112,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             records=records,
             sources=sources,
             signals=signals,
+            tasks=tasks,
             annotations=annotations,
         )
 
