@@ -13,9 +13,7 @@ from timenet.manifest import Manifest
 from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, open_registry
 from timenet.viewer.app import create_app
-
-
-_LOOPBACK = "127.0.0.1"
+from timenet.viewer.security import normalize_origin
 
 
 def open_viewer(reference: str | None = None, registry: str | None = None) -> tuple[BaseRegistry, Manifest | None]:
@@ -36,33 +34,45 @@ def open_viewer(reference: str | None = None, registry: str | None = None) -> tu
     return backend, backend.get_manifest(dataset_id, version)
 
 
-def serve(
+def serve(  # noqa: PLR0913 - launch options map to CLI flags
     registry: BaseRegistry,
     *,
     initial_manifest: Manifest | None = None,
+    host: str = "127.0.0.1",
     port: int = 0,
+    public_origin: str | None = None,
     open_browser: bool = True,
 ) -> None:
-    """Bind the authenticated viewer to loopback until the process is interrupted.
+    """Bind the authenticated viewer until the process is interrupted.
 
     Args:
         registry: Registry to browse.
         initial_manifest: Pinned manifest for a direct dataset launch, if any.
-        port: TCP port on 127.0.0.1, with zero choosing an available port.
+        host: IPv4 address to bind, defaulting to loopback.
+        port: TCP port, with zero choosing an available port.
+        public_origin: HTTPS origin of a remote reverse proxy, when used.
         open_browser: Whether to open the printed URL locally.
 
     Raises:
-        TimeFValidationError: If the port cannot be bound.
+        TimeFValidationError: If a non-loopback bind lacks a public HTTPS origin, or the host and
+            port cannot be bound.
     """
+    if host != "127.0.0.1" and public_origin is None:
+        raise TimeFValidationError("a non-loopback viewer bind requires --public-origin")
+    if public_origin is not None:
+        public_origin = normalize_origin(public_origin)
+        if not public_origin.startswith("https://"):
+            raise TimeFValidationError("--public-origin must be an HTTPS origin")
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
         sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         try:
-            sock.bind((_LOOPBACK, port))
+            sock.bind((host, port))
         except OSError as exc:
-            raise TimeFValidationError(f"cannot bind the viewer to {_LOOPBACK}:{port}: {exc}") from exc
+            # Covers ports in use and hosts that are not IPv4 addresses (the socket is IPv4-only).
+            raise TimeFValidationError(f"cannot bind the viewer to {host}:{port}: {exc}") from exc
         sock.listen()
         actual_port = sock.getsockname()[1]
-        origin = f"http://{_LOOPBACK}:{actual_port}"
+        origin = public_origin or f"http://127.0.0.1:{actual_port}"
         token = secrets.token_urlsafe(48)
         app = create_app(registry, token=token, origin=origin, initial_manifest=initial_manifest)
         query = ""

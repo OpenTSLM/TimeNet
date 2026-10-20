@@ -175,10 +175,12 @@ def download(
 
 
 @app.command()
-def view(
+def view(  # noqa: PLR0913, PLR0917 - CLI exposes one parameter per option
     dataset_ref: str | None = typer.Argument(None, help="Optional dataset id, pinned with @version if desired."),
     registry: str | None = _registry_option,
-    port: int = typer.Option(0, "--port", min=0, max=65535, help="Port on 127.0.0.1 (0 chooses one)."),
+    host: str = typer.Option("127.0.0.1", "--host", help="IPv4 address to bind."),
+    port: int = typer.Option(0, "--port", min=0, max=65535, help="Port (0 chooses one)."),
+    public_origin: str | None = typer.Option(None, "--public-origin", help="HTTPS origin of a remote proxy."),
     no_browser: bool = typer.Option(False, "--no-browser", help="Print the URL without opening it."),
 ) -> None:
     """Browse a registry or open one committed TimeF version in a browser.
@@ -197,7 +199,9 @@ def view(
     serve(
         backend,
         initial_manifest=initial_manifest,
+        host=host,
         port=port,
+        public_origin=public_origin,
         open_browser=not no_browser,
     )
 

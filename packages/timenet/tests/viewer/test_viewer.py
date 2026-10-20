@@ -212,20 +212,41 @@ def test_request_boundary_and_packaged_assets(registry):
     assert client.get("/static/unknown.js").status_code == 404
 
 
+@pytest.mark.parametrize("header", ["Host", "Origin"])
+def test_request_boundary_rejects_same_host_on_a_different_port(registry, header):
+    client = TestClient(
+        create_app(registry, token="secret", origin="https://viewer.example.test:443"),
+        base_url="https://viewer.example.test",
+    )
+    foreign = "viewer.example.test:8443" if header == "Host" else "https://viewer.example.test:8443"
+    response = client.get("/api/v1/catalog", headers={"Authorization": "Bearer secret", header: foreign})
+    assert response.status_code == 403
+
+
 @pytest.mark.parametrize(
-    ("header", "foreign"),
-    [("Host", "127.0.0.1:8766"), ("Host", "localhost:8765"), ("Origin", "http://127.0.0.1:8766")],
+    ("configured_origin", "browser_origin"),
+    [
+        ("https://viewer.example.test", "https://viewer.example.test"),
+        ("https://VIEWER.example.test:443", "https://viewer.example.test"),
+        ("http://VIEWER.example.test:80", "http://viewer.example.test"),
+        ("https://viewer.example.test:8443", "https://viewer.example.test:8443"),
+        ("https://[::1]:443", "https://[::1]"),
+    ],
 )
-def test_request_boundary_rejects_other_loopback_hosts_and_ports(registry, header, foreign):
-    origin = "http://127.0.0.1:8765"
-    client = TestClient(create_app(registry, token="secret", origin=origin), base_url=origin)
-    headers = {"Authorization": "Bearer secret"}
-    assert client.get("/api/v1/catalog", headers=headers).status_code == 200
-    assert client.get("/api/v1/catalog", headers={**headers, header: foreign}).status_code == 403
+def test_browser_normalized_origin_is_accepted(registry, configured_origin, browser_origin):
+    client = TestClient(
+        create_app(registry, token="secret", origin=configured_origin),
+        base_url=browser_origin,
+    )
+    response = client.get(
+        "/api/v1/catalog",
+        headers={"Authorization": "Bearer secret", "Origin": browser_origin},
+    )
+    assert response.status_code == 200
 
 
-@pytest.mark.parametrize("direct_launch", [False, True])
-def test_serve_prints_bare_authenticated_url(registry, monkeypatch, capsys, direct_launch):
+@pytest.mark.parametrize(("direct_launch", "public_origin"), [(False, None), (True, "https://VIEWER.example.test:443")])
+def test_serve_prints_bare_authenticated_url(registry, monkeypatch, capsys, direct_launch, public_origin):
     socket_factory = MagicMock()
     socket_factory.return_value.__enter__.return_value.getsockname.return_value = ("127.0.0.1", 12345)
     apps = []
@@ -240,12 +261,14 @@ def test_serve_prints_bare_authenticated_url(registry, monkeypatch, capsys, dire
 
     with monkeypatch.context() as socket_patch:
         socket_patch.setattr(launch.socket, "socket", socket_factory)
-        serve(registry, initial_manifest=manifest, open_browser=False)
+        serve(registry, initial_manifest=manifest, public_origin=public_origin, open_browser=False)
 
     output = capsys.readouterr()
     url = output.out.strip()
     parsed = urlsplit(url)
-    assert f"{parsed.scheme}://{parsed.netloc}" == "http://127.0.0.1:12345"
+    assert f"{parsed.scheme}://{parsed.netloc}" == (
+        "https://viewer.example.test" if public_origin else "http://127.0.0.1:12345"
+    )
     assert parsed.path == "/"
     token = parse_qs(parsed.fragment)["token"][0]
     assert parse_qs(parsed.query) == (
@@ -266,13 +289,22 @@ def test_serve_prints_bare_authenticated_url(registry, monkeypatch, capsys, dire
         assert response.json()["items"][0]["metadata"]["dataset_id"] == "timenet/hello-world"
 
 
-def test_port_in_use_reports_a_validation_error(registry):
+def test_remote_bind_requires_https_origin(registry):
+    with pytest.raises(TimeFValidationError, match="requires --public-origin"):
+        serve(registry, host="192.0.2.1", open_browser=False)
+    with pytest.raises(TimeFValidationError, match="HTTPS origin"):
+        serve(registry, public_origin="http://example.test", open_browser=False)
+
+
+def test_unbindable_address_reports_a_validation_error(registry):
     with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
         taken.bind(("127.0.0.1", 0))
         taken.listen()
         port = taken.getsockname()[1]
         with pytest.raises(TimeFValidationError, match="cannot bind the viewer"):
             serve(registry, port=port, open_browser=False)
+    with pytest.raises(TimeFValidationError, match="cannot bind the viewer"):
+        serve(registry, host="::1", public_origin="https://viewer.example.test", open_browser=False)
 
 
 def test_cli_view_passes_registry_and_optional_manifest(registry, monkeypatch):
