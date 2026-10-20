@@ -76,11 +76,14 @@ timenet view --registry .timenet-registry
 timenet view timenet/hello-world --registry .timenet-registry
 ```
 
-The command binds to `127.0.0.1` and opens a browser by default. It prints a URL containing a
+The command binds to loopback and opens a browser by default. It prints a URL containing a
 process-local access token; treat that URL as a secret. Open that URL as printed: the viewer
 accepts only the `127.0.0.1` host, so the same port under `localhost` is rejected. `--port`
-selects a fixed port, and `--no-browser` only prints the URL. The viewer serves only the local
-machine; remote access is not supported yet.
+selects a fixed port, and `--no-browser` only prints the URL. To serve through an authenticated
+HTTPS reverse proxy, set `--public-origin https://viewer.example.org` and point the proxy at the
+viewer's loopback port. The proxy must forward the original `Host` header (for nginx,
+`proxy_set_header Host $host;`); the viewer rejects any other host. `--host` allows an explicit
+non-loopback IPv4 bind only with `--public-origin`.
 
 The catalog shows the latest version of each dataset and lets you open its full
 manifest. The S3 backend does not provide a catalog; use a dataset ID for direct
