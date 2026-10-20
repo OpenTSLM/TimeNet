@@ -22,6 +22,7 @@ from timenet.types import (
     TSGenerationTask,
     ureg,
 )
+from timenet.types.object_kind import ObjectKind
 
 from .test_control_writer import _dataset
 
@@ -441,6 +442,10 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
 
 def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
     dataset = make_dataset()
+    answer_task = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
+    (classification_task,) = answer_task.from_tasks
+    (record,) = answer_task.inputs
+    age_annotation = next(annotation for annotation in record.annotations if annotation.key == "age")
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
@@ -448,21 +453,28 @@ def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
         tasks = {task.id: task for task in reader.read_tasks(reader.read_records())}
         table = reader.task_table().to_pylist()
         targets = reader.target_table().to_pylist()
-        subset = reader.task_table(record_ids=("record-0",)).to_pylist()
-        annotations = reader.annotation_table(object_type="Record").to_pylist()
+        subset = reader.task_table(record_ids=(record.id,)).to_pylist()
+        annotations = reader.annotation_table(object_type=ObjectKind.RECORD).to_pylist()
 
     assert [row["task_id"] for row in table] == sorted(tasks)
-    answer = next(row for row in table if row["task_id"] == "task-answer-0")
-    assert answer["task_type"] == "answer"
-    assert answer["input_record_ids"] == [record.id for record in tasks["task-answer-0"].inputs]
-    assert answer["from_task_ids"] == ["task-cls-0"]
+    answer = next(row for row in table if row["task_id"] == answer_task.id)
+    assert answer["task_type"] == str(answer_task.task_type)
+    assert answer["input_record_ids"] == [item.id for item in answer_task.inputs]
+    assert answer["from_task_ids"] == [task.id for task in answer_task.from_tasks]
     assert answer["scope_type"] is None
-    assert {row["task_id"] for row in subset} == {task.id for task in tasks.values() if task.inputs[0].id == "record-0"}
-    assert sum(1 for row in targets if row["task_id"] == "task-cls-0") == len(tasks["task-cls-0"].targets or ())
-    text_targets = {row["task_id"]: row["text_value"] for row in targets if row["target_kind"] == "text"}
-    assert text_targets["task-cls-0"] == "normal"
-    age = next(row for row in annotations if row["key"] == "age" and row["object_id"] == "record-0")
-    assert (age["value_kind"], age["integer_value"], age["unit"]) == ("integer", 64, "years")
+    assert {row["task_id"] for row in subset} == {
+        task.id for task in tasks.values() if any(item.id == record.id for item in task.inputs)
+    }
+    assert classification_task.targets is not None
+    assert [(row["target_kind"], row["text_value"]) for row in targets if row["task_id"] == classification_task.id] == [
+        ("text", target) for target in classification_task.targets
+    ]
+    age = next(row for row in annotations if row["content_id"] == age_annotation.id and row["object_id"] == record.id)
+    assert (age["value_kind"], age["integer_value"], age["unit"]) == (
+        "integer",
+        age_annotation.value,
+        age_annotation.unit,
+    )
 
 
 def test_split_round_trips_and_filters_before_hydration(tmp_path, monkeypatch):
