@@ -45,7 +45,8 @@ Large text fields and annotation string lists return `ValueHandle` objects. Call
 handle to obtain the native value. Small fields remain ordinary Python values. The Arrow
 `create_task_table()`, `create_target_table()`, and `create_annotation_table()` APIs resolve external
 text automatically.
-The reader caches up to eight payload files.
+Irregular timestamp loaders read and validate their packed arrays on first access. The reader
+caches up to eight payload files.
 
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
 `TimeFDataset`.
