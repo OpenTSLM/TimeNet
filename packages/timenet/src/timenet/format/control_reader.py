@@ -36,6 +36,7 @@ from timenet.types import (
     TimeSeriesSpec,
     ureg,
 )
+from timenet.types.object_kind import ObjectKind
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
@@ -302,6 +303,7 @@ class _TaskFacts(NamedTuple):
 
 
 _HierarchyRow = TypeVar("_HierarchyRow", _RecordRow, _SourceRow, _SignalRow)
+_HierarchyKey = TypeVar("_HierarchyKey", int, str)
 _Row = TypeVar("_Row", bound=tuple[Any, ...])
 _Ref = TypeVar("_Ref", Record, Annotation)
 _T = TypeVar("_T")
@@ -479,38 +481,31 @@ class DuckDBControlReader:
         """
         requested = None if record_ids is None else tuple(record_ids)
         read_all = requested is None
-        rows = self._read_rows(_RecordRow, requested)
-        by_id = self._index_rows(rows, "record", key=lambda row: row.record_id, id_of=lambda row: row.record_id)
-        self._record_keys.update((row.record_id, row.record_key) for row in rows)
-        order = tuple(by_id) if requested is None else requested
-        missing = [record_id for record_id in order if record_id not in by_id]
+        records_by_id = self._query_records_by_id(record_ids=requested)
+        self._record_keys.update((row.record_id, row.record_key) for row in records_by_id.values())
+        order = tuple(records_by_id) if requested is None else requested
+        missing = [record_id for record_id in order if record_id not in records_by_id]
         if missing:
             raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
 
-        record_keys = [row.record_key for row in rows]
-        source_rows = self._read_rows(_SourceRow, None if read_all else record_keys)
-        source_data = self._index_rows(
-            source_rows, "source", key=lambda row: row.source_key, id_of=lambda row: row.source_id
-        )
-        source_keys = [row.source_key for row in source_rows]
-        signal_rows = self._read_rows(_SignalRow, None if read_all else source_keys)
-        signal_data = self._index_rows(
-            signal_rows, "signal", key=lambda row: row.signal_key, id_of=lambda row: row.signal_id
-        )
-        signal_keys = [row.signal_key for row in signal_rows]
-        for signal_row in signal_data.values():
-            if signal_row.source_key not in source_data:
+        record_keys = [row.record_key for row in records_by_id.values()]
+        sources_by_key = self._query_sources_by_key(record_keys=None if read_all else record_keys)
+        source_keys = list(sources_by_key)
+        signals_by_key = self._query_signals_by_key(source_keys=None if read_all else source_keys)
+        signal_keys = list(signals_by_key)
+        for signal_row in signals_by_key.values():
+            if signal_row.source_key not in sources_by_key:
                 raise TimeFFormatError(
                     f"signal {signal_row.signal_id!r} refers to missing source key {signal_row.source_key!r}"
                 )
         object_keys = [*record_keys, *source_keys, *signal_keys]
         annotation_keys = None if read_all else object_keys
         annotations = self._read_annotations(annotation_keys) if with_annotations else {}
-        axes = self._read_axes({row.axis_key for row in signal_rows})
+        axes = self._read_axes({row.axis_key for row in signals_by_key.values()})
 
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
         specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
-        for signal_row in signal_rows:
+        for signal_row in signals_by_key.values():
             loaded_axis = axes.get(signal_row.axis_key)
             if loaded_axis is None:
                 raise TimeFFormatError(
@@ -548,7 +543,7 @@ class DuckDBControlReader:
                 )
             )
 
-        missing_clocks = {row.clock_id for row in rows} - self._clock_cache.keys()
+        missing_clocks = {row.clock_id for row in records_by_id.values()} - self._clock_cache.keys()
         if missing_clocks:
             for clock_id, timestamp in self.connection.execute(
                 "SELECT clock_id, start_time_us FROM clocks WHERE clock_id IN (SELECT unnest(?))",
@@ -560,11 +555,11 @@ class DuckDBControlReader:
                 f"records reference missing clocks {sorted(missing_clocks - self._clock_cache.keys())}"
             )
 
-        children, roots_by_record = self._group_sources(source_rows)
+        children, roots_by_record = self._group_sources(sources_by_key.values())
         hydrated_sources: set[int] = set()
 
         def hydrate_source(source_key: int, record_key: int) -> Source:
-            source_row = source_data[source_key]
+            source_row = sources_by_key[source_key]
             if source_row.record_key != record_key:
                 raise TimeFFormatError(f"source {source_row.source_id!r} crosses record boundaries")
             hydrated_sources.add(source_key)
@@ -579,7 +574,7 @@ class DuckDBControlReader:
 
         records: list[Record] = []
         for record_id in order:
-            record_row = by_id[record_id]
+            record_row = records_by_id[record_id]
             span = None
             if record_row.time_span_start_us is not None:
                 span = TimeInterval(
@@ -599,12 +594,51 @@ class DuckDBControlReader:
                 metadata=_decode_json(record_row.metadata, default={}),
             )
             records.append(record)
-        unreachable = source_data.keys() - hydrated_sources
+        unreachable = sources_by_key.keys() - hydrated_sources
         if unreachable:
             raise TimeFFormatError(
                 f"source hierarchy contains a missing record, missing parent, or cycle: {sorted(unreachable)}"
             )
         return tuple(records)
+
+    def _query_records_by_id(self, record_ids: Iterable[str] | None) -> dict[str, _RecordRow]:
+        """Read matching Record rows indexed by public ID.
+
+        Returns:
+            Record rows in public-ID order, with duplicate IDs rejected.
+        """
+        return self._index_rows(
+            self._read_rows(_RecordRow, record_ids),
+            ObjectKind.RECORD,
+            key=lambda row: row.record_id,
+            id_of=lambda row: row.record_id,
+        )
+
+    def _query_sources_by_key(self, record_keys: Iterable[int] | None) -> dict[int, _SourceRow]:
+        """Read Source rows for the supplied Record keys, indexed by internal Source key.
+
+        Returns:
+            Source rows in public-ID order, with duplicate keys and IDs rejected.
+        """
+        return self._index_rows(
+            self._read_rows(_SourceRow, record_keys),
+            ObjectKind.SOURCE,
+            key=lambda row: row.source_key,
+            id_of=lambda row: row.source_id,
+        )
+
+    def _query_signals_by_key(self, source_keys: Iterable[int] | None) -> dict[int, _SignalRow]:
+        """Read Signal rows for the supplied Source keys, indexed by internal Signal key.
+
+        Returns:
+            Signal rows in public-ID order, with duplicate keys and IDs rejected.
+        """
+        return self._index_rows(
+            self._read_rows(_SignalRow, source_keys),
+            ObjectKind.SIGNAL,
+            key=lambda row: row.signal_key,
+            id_of=lambda row: row.signal_id,
+        )
 
     def _read_rows(
         self,
@@ -632,11 +666,11 @@ class DuckDBControlReader:
     @staticmethod
     def _index_rows(
         rows: list[_HierarchyRow],
-        kind: str,
+        kind: ObjectKind,
         *,
-        key: Callable[[_HierarchyRow], Any],
+        key: Callable[[_HierarchyRow], _HierarchyKey],
         id_of: Callable[[_HierarchyRow], str],
-    ) -> dict[Any, _HierarchyRow]:
+    ) -> dict[_HierarchyKey, _HierarchyRow]:
         """Return rows by key and reject duplicate keys or public IDs.
 
         Args:
@@ -650,12 +684,12 @@ class DuckDBControlReader:
         """
         indexed = {key(row): row for row in rows}
         if len(indexed) != len(rows) or len({id_of(row) for row in rows}) != len(rows):
-            raise TimeFFormatError(f"control.duckdb contains duplicate {kind} IDs or keys")
+            raise TimeFFormatError(f"control.duckdb contains duplicate {kind.value.lower()} IDs or keys")
         return indexed
 
     @staticmethod
     def _group_sources(
-        rows: list[_SourceRow],
+        rows: Iterable[_SourceRow],
     ) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
         """Group child and root Source keys.
 
