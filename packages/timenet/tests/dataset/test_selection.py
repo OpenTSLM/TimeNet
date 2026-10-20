@@ -10,9 +10,8 @@ from timenet.types import Annotation, TimePoint, TimeSeriesSpec, ureg
 SPEC = TimeSeriesSpec(spec_type="ecg", name="ECG", unit_value=ureg.millivolt)
 
 
-def _signal(signal_id: str, name: str) -> Signal:
+def _signal(name: str) -> Signal:
     return Signal(
-        id=signal_id,
         name=name,
         data=[1.0],
         spec=SPEC,
@@ -21,10 +20,10 @@ def _signal(signal_id: str, name: str) -> Signal:
 
 
 def test_source_selection_attaches_shared_timed_content_only_to_selected_signals():
-    lead_i = _signal("lead-i", "I")
-    lead_ii = _signal("lead-ii", "II")
-    temperature = _signal("temperature", "temperature")
-    source = Source(id="ecg", name="ECG", signals=(lead_i, lead_ii, temperature))
+    lead_i = _signal("I")
+    lead_ii = _signal("II")
+    temperature = _signal("temperature")
+    source = Source(name="ECG", signals=(lead_i, lead_ii, temperature))
 
     occurrences = source.select(signals=(lead_i, lead_ii)).annotate(
         Annotation(key="status", value="off", span=TimePoint.micros(500))
@@ -38,9 +37,9 @@ def test_source_selection_attaches_shared_timed_content_only_to_selected_signals
 
 
 def test_source_selection_resolves_signal_names():
-    lead_i = _signal("lead-i", "I")
-    lead_ii = _signal("lead-ii", "II")
-    source = Source(id="ecg", name="ECG", signals=(lead_i, lead_ii))
+    lead_i = _signal("I")
+    lead_ii = _signal("II")
+    source = Source(name="ECG", signals=(lead_i, lead_ii))
     annotation = Annotation(key="quality", value="reviewed")
 
     occurrences = source.select(signal_names=("II", "I")).annotate(annotation)
