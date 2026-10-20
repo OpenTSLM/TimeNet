@@ -42,10 +42,10 @@ Task lists read a page of summary fields without loading record hierarchies. Ope
 that task and its referenced records and dependencies. Opening a remote version may download the
 full dataset. Signal values remain lazy.
 
-Opening a record hydrates the entire record hierarchy and annotations; signal windows repeat that
-hydration. Selecting a signal loads its first window; values and irregular offsets are read only
-when a window is requested. Windows return at most `RecordLimits.window` steps (2,000 by
-default), but storage may read entire intersecting chunks.
+Opening a record loads its hierarchy and annotations. Signal windows look up only the requested
+signal, without rebuilding its record. Selecting a signal loads its first window; values are read
+only when a window is requested, and irregular offsets remain lazy. Windows return at most
+`RecordLimits.window` steps (2,000 by default), but storage may read entire intersecting chunks.
 
 ## Remote access
 
