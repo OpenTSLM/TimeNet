@@ -1,0 +1,184 @@
+"""The viewer serves authenticated catalog and pinned-manifest facts."""
+
+from unittest.mock import MagicMock
+
+from fastapi.testclient import TestClient
+import pytest
+
+from timenet.errors import TimeFFormatError, TimeNetAccessError, TimeNetDatasetNotFoundError, TimeNetDownloadError
+from timenet.registry import LocalRegistry, S3Registry
+from timenet.testing import make_dataset
+from timenet.types import ClassificationTask, Domain, License, Version
+from timenet.viewer.app import create_app
+
+
+def _with_metadata(dataset, **update):
+    # The only private write in these tests: they store several versions of one dataset.
+    dataset._metadata = dataset.metadata.model_copy(update=update)
+
+
+@pytest.fixture
+def registry(tmp_path):
+    registry = LocalRegistry(tmp_path / "registry")
+    registry.store(make_dataset())
+    return registry
+
+
+@pytest.fixture
+def catalog_registry(registry):
+    other = make_dataset()
+    _with_metadata(
+        other,
+        dataset_id="demo/other",
+        dataset_version=Version(2, 0, 0),
+        name="Other Dataset",
+        domains=(Domain.FINANCE,),
+        license=License.APACHE_2_0,
+    )
+    registry.store(other)
+    _with_metadata(other, dataset_version=Version(2, 1, 0))
+    other.add_tasks(tasks=[ClassificationTask(inputs=(other.records[0],), targets=("finance",), id="finance-extra")])
+    registry.store(other)
+    return registry
+
+
+def test_direct_manifest_api_returns_only_the_selected_version(registry):
+    manifest = registry.get_manifest("timenet/hello-world")
+    newer = make_dataset()
+    _with_metadata(newer, dataset_version=Version(1, 1, 0))
+    registry.store(newer)
+    client = TestClient(create_app(registry, token="secret", origin="http://testserver", initial_manifest=manifest))
+
+    response = client.get(
+        "/api/v1/manifest",
+        params={"dataset_id": "timenet/hello-world", "version": "1.0.0"},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 200
+    assert response.json() == manifest.to_dict()
+    assert client.get("/api/v1/catalog", headers={"Authorization": "Bearer secret"}).status_code == 404
+    other_version = client.get(
+        "/api/v1/manifest",
+        params={"dataset_id": "timenet/hello-world", "version": "1.1.0"},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert other_version.status_code == 404
+
+
+def test_catalog_pages_and_enriches_latest_manifests(catalog_registry):
+    client = TestClient(create_app(catalog_registry, token="secret", origin="http://testserver"))
+    headers = {"Authorization": "Bearer secret"}
+
+    first = client.get("/api/v1/catalog", params={"limit": 1}, headers=headers)
+    assert first.status_code == 200
+    assert first.json()["total"] == 2
+    assert len(first.json()["items"]) == 1
+    expected = catalog_registry.get_manifest("demo/other", "2.1.0")
+    item = first.json()["items"][0]
+    assert item["metadata"] == expected.to_dict()["metadata"]
+    assert first.json()["domains"] == ["finance", "general"]
+    assert first.json()["licenses"] == ["Apache-2.0", "CC-BY-4.0"]
+    assert item["counts"] == {
+        "records": expected.counts.records,
+        "sources": expected.counts.sources,
+        "signals": expected.counts.signals,
+        "tasks": expected.counts.tasks,
+        "annotation_occurrences": expected.counts.annotation_occurrences,
+    }
+    assert set(item["task_types"]) == {"classification", "answer", "scalar_prediction", "temporal_localization"}
+    assert set(item["signal_types"]) == {"sine", "cosine"}
+    assert set(item["annotation_types"]) == {"age", "cohort", "stimulus", "artifact"}
+    second = client.get("/api/v1/catalog", params={"offset": 1, "limit": 1}, headers=headers)
+    assert second.json()["items"][0]["metadata"]["dataset_id"] == "timenet/hello-world"
+    assert len(second.json()["items"]) == 1
+    assert client.get("/api/v1/catalog", params={"limit": 51}, headers=headers).status_code == 422
+
+
+# TODO: No test pins that `domains` and `licenses` list the values of every dataset, not only of
+# the filtered matches; building them from the matches would hide the other filter options.
+@pytest.mark.parametrize(
+    ("filters", "expected_ids"),
+    [
+        ({"query": "OTHER"}, ["demo/other"]),
+        ({"query": "Hello"}, ["timenet/hello-world"]),
+        ({"domain": "finance"}, ["demo/other"]),
+        ({"license": "Apache-2.0"}, ["demo/other"]),
+        ({"query": "Hello", "domain": "finance"}, []),
+    ],
+)
+def test_catalog_filters_independently_and_intersects_them(catalog_registry, filters, expected_ids):
+    client = TestClient(create_app(catalog_registry, token="secret", origin="http://testserver"))
+    response = client.get("/api/v1/catalog", params=filters, headers={"Authorization": "Bearer secret"})
+    assert response.status_code == 200
+    assert response.json()["total"] == len(expected_ids)
+    assert [item["metadata"]["dataset_id"] for item in response.json()["items"]] == expected_ids
+
+
+@pytest.mark.parametrize("direct_launch", [False, True])
+def test_manifest_api_uses_the_canonical_version(registry, direct_launch):
+    manifest = registry.get_manifest("timenet/hello-world")
+    get_manifest = MagicMock(wraps=registry.get_manifest)
+    registry.get_manifest = get_manifest
+    app = create_app(
+        registry, token="secret", origin="http://testserver", initial_manifest=manifest if direct_launch else None
+    )
+    response = TestClient(app).get(
+        "/api/v1/manifest",
+        params={"dataset_id": "timenet/hello-world", "version": "01.0.0"},
+        headers={"Authorization": "Bearer secret"},
+    )
+    assert response.status_code == 200
+    assert response.json() == manifest.to_dict()
+    if not direct_launch:
+        get_manifest.assert_called_once_with("timenet/hello-world", "1.0.0")
+
+
+def test_s3_catalog_reports_unsupported_backend():
+    # S3 can open a known dataset directly, but it has no catalog index for
+    # list_datasets(). The viewer must turn that limitation into a clear 501.
+    client = TestClient(create_app(S3Registry("s3://test-bucket"), token="secret", origin="http://testserver"))
+    response = client.get("/api/v1/catalog", headers={"Authorization": "Bearer secret"})
+    assert response.status_code == 501
+    assert response.json()["detail"] == {
+        "code": "unsupported_operation",
+        "message": "This registry has no catalog to browse.",
+        "operation": "catalog",
+        "limit": None,
+    }
+
+
+@pytest.mark.parametrize(
+    ("failure", "status", "code"),
+    [
+        (TimeNetDatasetNotFoundError("private /server/path"), 404, "not_found"),
+        (TimeNetAccessError("private /server/path"), 403, "restricted_access"),
+        (TimeNetDownloadError("private /server/path"), 503, "temporarily_unavailable"),
+        (TimeFFormatError("private /server/path"), 500, "corrupt_artifact"),
+    ],
+)
+def test_registry_failures_map_to_structured_errors(registry, monkeypatch, failure, status, code):
+    monkeypatch.setattr(registry, "get_manifest", MagicMock(side_effect=failure))
+    client = TestClient(create_app(registry, token="secret", origin="http://testserver"))
+    headers = {"Authorization": "Bearer secret"}
+    for operation, params in [("catalog", {}), ("manifest", {"dataset_id": "timenet/hello-world", "version": "1.0.0"})]:
+        response = client.get(f"/api/v1/{operation}", params=params, headers=headers)
+        assert response.status_code == status
+        assert response.json()["detail"]["code"] == code
+        assert response.json()["detail"]["operation"] == operation
+        assert "/server/path" not in response.text
+
+
+def test_invalid_parameters_use_the_structured_error(registry):
+    client = TestClient(create_app(registry, token="secret", origin="http://testserver"))
+    headers = {"Authorization": "Bearer secret"}
+    missing = client.get("/api/v1/manifest", headers=headers)
+    assert missing.status_code == 422
+    assert missing.json()["detail"] == {
+        "code": "invalid_parameters",
+        "message": "Invalid or missing request parameters.",
+        "operation": "manifest",
+        "limit": None,
+    }
+    invalid = client.get("/api/v1/manifest", params={"dataset_id": "../x", "version": "1.0.0"}, headers=headers)
+    assert invalid.status_code == 422
+    assert invalid.json()["detail"]["code"] == "invalid_parameters"
