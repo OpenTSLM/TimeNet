@@ -44,6 +44,12 @@ Records load with their Sources, Signals, axes, and annotations. Signal values s
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
 `TimeFDataset`.
 
+`read_signal(record_id, signal_id)` returns one signal's specification, axis, metadata, and lazy
+value/offset loaders without building its Record, Sources, or sibling Signals. Annotations are
+omitted; use `iter_records()` when they are needed. Missing or incorrectly owned IDs raise
+`TimeFValidationError`; corrupt selected structure raises `TimeFFormatError`. Keep the reader open
+while reading values or irregular offsets from the returned signal.
+
 Tasks have these read paths:
 
 - `tasks` loads and caches every task.

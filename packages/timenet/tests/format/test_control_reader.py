@@ -595,3 +595,34 @@ def test_task_lookup_reports_corrupt_dependencies(tmp_path, parent, message):
             connection.execute("UPDATE task_dependencies SET parent_task_key = ?", [int(parent)])
     with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match=message):
         reader.get_task("task-answer-0")
+
+
+@pytest.mark.parametrize(
+    "record_id,signal_id",
+    [("record-0", "ts-long-1"), ("missing", "ts-shared"), ("record-0", "missing"), ("record-0", "' OR 1=1 --")],
+)
+def test_signal_lookup_checks_ownership_before_hydration(tmp_path, monkeypatch, record_id, signal_id):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    with DuckDBControlReader(path) as reader:
+        forbidden = MagicMock(side_effect=AssertionError("hydrated before ownership check"))
+        monkeypatch.setattr(reader, "_read_axes", forbidden)
+        with pytest.raises(TimeFValidationError, match="has no signal"):
+            reader.read_signal(record_id, signal_id)
+        forbidden.assert_not_called()
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE signals SET axis_key = 999999 WHERE signal_id = 'ts-shared'",
+        "UPDATE signals SET dtype = 'broken' WHERE signal_id = 'ts-shared'",
+    ],
+)
+def test_signal_lookup_rejects_corrupt_selected_structure(tmp_path, statement):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    with connect_control(path) as connection:
+        connection.execute(statement)
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError):
+        reader.read_signal("record-0", "ts-shared")

@@ -11,7 +11,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from timenet.dataset import IrregularAxis, Record, TimeFDataset
+from timenet.dataset import IrregularAxis, Record, Signal, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
@@ -190,6 +190,25 @@ class TimeFReader:
                 split=split,
                 cached_records=cached_records,
             )
+
+    def read_signal(self, record_id: str, signal_id: str) -> Signal:
+        """Read one signal without hydrating its record or siblings.
+
+        Annotations are omitted. Use :meth:`iter_records` for those facts.
+        The returned signal's values and irregular offsets stay lazy and require this reader.
+
+        Args:
+            record_id: ID of the signal's owning record.
+            signal_id: ID of the signal to read.
+
+        Returns:
+            A signal supporting bounded :meth:`Signal.read_steps` reads.
+
+        Raises:
+            TimeFValidationError: If the signal is absent from the selected record.
+        """  # noqa: DOC502 - raised by the control reader
+        with self._as_format_error(preserve_validation=True):
+            return self._control_reader().read_signal(record_id, signal_id)
 
     def get_task(self, task_id: str) -> Task | None:
         """Return one task and its dependencies without hydrating unrelated tasks.
