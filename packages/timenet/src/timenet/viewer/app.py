@@ -12,6 +12,7 @@ from timenet.manifest import Manifest
 from timenet.registry import BaseRegistry
 from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
+from timenet.viewer.records import RecordLimits, install_record_routes
 from timenet.viewer.security import install_security
 from timenet.viewer.tasks import install_task_routes
 
@@ -90,6 +91,7 @@ def create_app(
     token: str,
     origin: str,
     initial_manifest: Manifest | None = None,
+    record_limits: RecordLimits | None = None,
 ) -> FastAPI:
     """Create a read-only app for a registry and optional direct-launch manifest.
 
@@ -98,6 +100,7 @@ def create_app(
         token: Secret required by all API routes.
         origin: Exact browser origin accepted by the request boundary.
         initial_manifest: Already resolved manifest for a direct dataset launch.
+        record_limits: Optional record and signal operation caps.
 
     Returns:
         The configured FastAPI application.
@@ -165,6 +168,7 @@ def create_app(
             raise HTTPException(status_code=404, detail=str(exc)) from exc
 
     install_task_routes(app, registry, initial_manifest)
+    install_record_routes(app, registry, initial_manifest, record_limits or RecordLimits())
 
     @app.get("/", response_class=HTMLResponse)
     def shell() -> str:
