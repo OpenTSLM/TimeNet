@@ -98,12 +98,10 @@ def _referenced_annotation_dataset() -> TimeFDataset:
         name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         data=[0.0, 1.0, 2.0],
-        id="ecg-rec-0-I",
     )
     record = dataset.add_record(
         record=Record(
             sources=(Source(name="Source", signals=(signal,)),),
-            id="rec-0",
         )
     )
     options = record.annotate(Annotation(key="answer_options", value=["yes", "no"]))
@@ -113,7 +111,6 @@ def _referenced_annotation_dataset() -> TimeFDataset:
             targets=("yes",),
             inputs=(record,),
             input_annotations=(options,),
-            id="qa-0",
         )
     )
     return dataset
@@ -130,7 +127,7 @@ def test_annotation_occurrence_and_task_object_references_round_trip(tmp_path):
 def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
     dataset = _referenced_annotation_dataset()
     dataset._tasks.clear()
-    dataset._task_ids.clear()
+    dataset._tasks_by_id.clear()
     record = dataset.records[0]
     options = record.annotations[0]
     tasks = [
@@ -140,7 +137,6 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
             rationale=f"reason {index}",
             inputs=(record,),
             input_annotations=(options,),
-            id=f"qa-{index}",
         )
         for index in range(5)
     ]
@@ -153,8 +149,7 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
 
 def test_streamed_tasks_round_trip_and_back_populate_records(tmp_path):
     restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)))
-    task = next(task for task in restored.tasks if task.id == "qa-3")
-    assert task.prompt == "Question 3?"
+    task = next(task for task in restored.tasks if task.prompt == "Question 3?")
     assert task.rationale == "reason 3"
     assert task.inputs == (restored.records[0],)
     assert {task.id for task in restored.tasks_for(restored.records[0])} == {task.id for task in restored.tasks}
@@ -273,7 +268,7 @@ def test_iter_records_rejects_an_unknown_id_before_yielding(tmp_path):
         TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader,
         pytest.raises(TimeFValidationError, match="no such record"),
     ):
-        next(reader.iter_records(record_ids=(dataset.records[0].id, "record-nope")))
+        next(reader.iter_records(record_ids=(dataset.records[0].id, 99)))
 
 
 def test_iter_records_can_skip_annotations_without_losing_values(tmp_path):
@@ -354,3 +349,12 @@ def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
         train.id: Split.TRAIN,
         test.id: Split.TEST,
     }
+
+
+def test_task_views_reject_a_non_int_record_id(tmp_path):
+    dataset = make_dataset()
+    record0 = dataset.records[0]
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+        for view in (reader.task_table, reader.target_table):
+            with pytest.raises(TimeFValidationError, match="positive int64 id"):
+                view(record_ids=(str(record0.id),))  # ty: ignore[invalid-argument-type]

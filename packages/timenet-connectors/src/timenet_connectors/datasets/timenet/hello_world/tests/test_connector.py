@@ -46,7 +46,7 @@ def test_schema_covers_every_feature():
 
 def test_each_signal_has_one_owner():
     dataset = _convert()
-    series_by_id: dict[str, int] = {}
+    series_by_id: dict[int, int] = {}
     for record in dataset.records:
         for signal in record.signals:
             series_by_id[signal.id] = series_by_id.get(signal.id, 0) + 1
@@ -55,7 +55,7 @@ def test_each_signal_has_one_owner():
 
 def test_shares_an_annotation_across_records_by_object():
     dataset = _convert()
-    contents: dict[tuple[str, str | int], int] = {}
+    contents: dict[tuple[str, int], int] = {}
     for record in dataset.records:
         for ann in record.annotations:
             contents[ann._content_identity] = contents.get(ann._content_identity, 0) + 1

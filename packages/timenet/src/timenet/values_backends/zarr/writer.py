@@ -286,7 +286,7 @@ class ZarrValuesBackend(BaseValuesBackend):
         )
 
         partitions: dict[str, _Partition] = {}
-        placements: dict[tuple[str, int], ChunkPlacement] = {}
+        placements: dict[tuple[int, int], ChunkPlacement] = {}
         closed = 0
         active: str | None = None
         total = len(unique_series)

@@ -3,7 +3,7 @@ from dataclasses import replace
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source
+from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.control_audit import audit_control_database
 import timenet.format.control_reader as control_reader_module
@@ -15,15 +15,18 @@ from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
+    IdKind,
     InputModality,
+    ScalarPredictionTask,
     Split,
+    TemporalLocalizationTask,
     TimePoint,
     TimeSeriesSpec,
     TSGenerationTask,
     ureg,
 )
 
-from .test_control_writer import _dataset
+from .test_control_writer import ECG_ID, LEAD_I_ID, LEAD_II_ID, MONITOR_ID, RECORD_ID, SEX_MALE_ID, TASK_ID, _dataset
 
 
 def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
@@ -41,46 +44,44 @@ def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
         time_axis=OrdinalAxis(),
         data=pa.FixedSizeListArray.from_arrays(pa.array(range(12), type=pa.uint8()), 12),
     )
-    image_record = Record(id="image", sources=(Source(name="image", signals=(signal,)),))
+    image_record = Record(sources=(Source(name="image", signals=(signal,)),))
     dataset.add_record(record=image_record)
-    dataset.add_task(
-        task=AnswerTask(id="image-task", inputs=(image_record,), prompt="Describe this image.", targets=("A chart.",))
-    )
-    dataset.add_task(task=TSGenerationTask(id="generation", prompt="Make an ECG.", targets=(dataset.records[0],)))
+    dataset.add_task(task=AnswerTask(inputs=(image_record,), prompt="Describe this image.", targets=("A chart.",)))
+    dataset.add_task(task=TSGenerationTask(prompt="Make an ECG.", targets=(dataset.records[0],)))
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
-        assert reader.task_table(required_modalities=[InputModality.TIME_SERIES])["task_id"].to_pylist() == ["task-1"]
-        assert reader.task_table(required_modalities=[InputModality.IMAGE])["task_id"].to_pylist() == ["image-task"]
+        assert reader.task_table(required_modalities=[InputModality.TIME_SERIES])["task_id"].to_pylist() == [TASK_ID]
+        assert reader.task_table(required_modalities=[InputModality.IMAGE])["task_id"].to_pylist() == [2]
         assert reader.task_table(supported_modalities=[InputModality.TEXT, InputModality.NO_INPUT])[
             "task_id"
-        ].to_pylist() == ["generation"]
+        ].to_pylist() == [3]
         records = reader.read_records()
         tasks = {task.id: task for task in reader.read_tasks(records)}
 
-    assert tasks["image-task"].inputs[0].signals[0].spec.modality is InputModality.IMAGE
-    assert tasks["task-1"].inputs[0].signals[0].spec.modality is InputModality.TIME_SERIES
-    assert tasks["image-task"].input_modalities == frozenset({InputModality.IMAGE, InputModality.TEXT})
-    tasks["image-task"].input_modalities = None
-    assert tasks["image-task"].resolved_input_modalities == frozenset({InputModality.IMAGE, InputModality.TEXT})
+    assert tasks[2].inputs[0].signals[0].spec.modality is InputModality.IMAGE
+    assert tasks[TASK_ID].inputs[0].signals[0].spec.modality is InputModality.TIME_SERIES
+    assert tasks[2].input_modalities == frozenset({InputModality.IMAGE, InputModality.TEXT})
+    tasks[2].input_modalities = None
+    assert tasks[2].resolved_input_modalities == frozenset({InputModality.IMAGE, InputModality.TEXT})
 
 
 def test_shifted_regular_axis_round_trip(tmp_path):
-    dataset = _dataset()
-    source = dataset.records[0].sources[0].sources[0]
-    axis = RegularAxis.from_rate_hz(44100, offset_us=250_003).at_index(1026)
-    source.signals = tuple(
+    template = _dataset()
+    axis = replace(RegularAxis.from_rate_hz(44100, offset_us=250_003).at_index(1026))
+    signals = tuple(
         Signal.from_loader(
-            id=signal.id,
             name=signal.name,
             spec=signal.spec,
             time_axis=axis,
             n_values=signal.n_values,
             loader=signal.loader,
         )
-        for signal in source.signals
+        for signal in template.records[0].signals
     )
+    dataset = TimeFDataset(metadata=template.metadata)
+    dataset.add_record(record=Record(sources=(Source(name="ECG", signals=signals),)))
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(dataset)
     with DuckDBControlReader(path) as reader:
@@ -95,29 +96,26 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
     DuckDBControlWriter(path).write_hierarchy(dataset)
-    with connect_control(path, read_only=True) as connection:
-        source_ids = dict(connection.execute("SELECT name, source_id FROM sources").fetchall())
-        content_ids = dict(connection.execute("SELECT name, content_id FROM annotation_contents").fetchall())
     values = {
-        "lead-i": pa.array([1.0, 2.0], type=pa.float32()),
-        "lead-ii": pa.array([3.0, 4.0], type=pa.float32()),
+        LEAD_I_ID: pa.array([1.0, 2.0], type=pa.float32()),
+        LEAD_II_ID: pa.array([3.0, 4.0], type=pa.float32()),
     }
 
     with DuckDBControlReader(path, value_loader=lambda signal_id, _spec: values[signal_id]) as reader:
         (record,) = reader.read_records()
         (task,) = reader.read_tasks((record,))
 
-    assert record.id == "record-1"
-    assert record.sources[0]._stored_id == source_ids["Monitor"]
-    assert record.sources[0].sources[0]._stored_id == source_ids["ECG"]
+    assert record.id == RECORD_ID
+    assert record.sources[0]._stored_id == MONITOR_ID
+    assert record.sources[0].sources[0]._stored_id == ECG_ID
     lead_i, lead_ii = record.signals
     assert lead_i.time_axis is lead_ii.time_axis
     assert lead_i.spec is lead_ii.spec
     assert lead_i.metadata == lead_ii.metadata == {}
     assert lead_i.metadata is not lead_ii.metadata
     assert lead_i.to_arrow().to_pylist() == [1.0, 2.0]
-    assert record.annotations[0]._content_id == content_ids["patient_sex"]
-    assert record.annotations[0]._occurrence_id is not None
+    assert record.annotations[0]._content_id == SEX_MALE_ID
+    assert type(record.annotations[0]._occurrence_id) is int
     assert task.inputs[0] is record
     assert task.prompt == "Alive?"
     assert task.targets == ("Yes",)
@@ -127,12 +125,13 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
 def test_reader_and_audit_reject_ambiguous_stored_task_time_span(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
-    second = dataset.add_record(record=Record(id="other", sources=(Source(name="other"),)))
+    second = dataset.add_record(record=Record(sources=(Source(name="other"),)))
     dataset.tasks[0].inputs = (*dataset.tasks[0].inputs, second)
     DuckDBControlWriter(path).write_hierarchy(dataset)
     with connect_control(path) as connection:
         connection.execute(
-            "UPDATE tasks SET scope_type = 'time_interval', scope_start = 0, scope_end = 2000 WHERE task_id = 'task-1'"
+            "UPDATE tasks SET scope_type = 'time_interval', scope_start = 0, scope_end = 2000 WHERE task_id = ?",
+            [TASK_ID],
         )
         with pytest.raises(TimeFFormatError, match="Record"):
             audit_control_database(connection, require_chunks=False)
@@ -141,13 +140,10 @@ def test_reader_and_audit_reject_ambiguous_stored_task_time_span(tmp_path):
 
 
 def test_unknown_unit_round_trips_distinct_from_dimensionless(tmp_path):
-    dataset = _dataset()
-    source = dataset.records[0].sources[0].sources[0]
+    template = _dataset()
     unknown = TimeSeriesSpec(spec_type="unknown", name="Unknown", unit_value=None)
-    old_signals = source.signals
-    source.signals = tuple(
+    signals = tuple(
         Signal.from_loader(
-            id=signal.id,
             name=signal.name,
             spec=spec,
             time_axis=signal.time_axis,
@@ -155,11 +151,13 @@ def test_unknown_unit_round_trips_distinct_from_dimensionless(tmp_path):
             loader=signal.loader,
         )
         for signal, spec in zip(
-            old_signals,
+            template.records[0].signals,
             (unknown, unknown.model_copy(update={"spec_type": "ratio", "unit_value": ureg.dimensionless})),
             strict=True,
         )
     )
+    dataset = TimeFDataset(metadata=template.metadata)
+    dataset.add_record(record=Record(sources=(Source(name="ECG", signals=signals),)))
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
@@ -191,21 +189,18 @@ def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path, mo
     dataset.add_tasks(
         tasks=(
             AnswerTask(
-                id="task-image",
                 inputs=(record,),
                 prompt="Read chart",
                 targets=("image answer",),
                 input_modalities=frozenset({InputModality.TEXT, InputModality.IMAGE}),
             ),
             AnswerTask(
-                id="task-mixed",
                 inputs=(record,),
                 prompt="Read chart and series",
                 targets=("mixed answer",),
                 input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES, InputModality.IMAGE}),
             ),
             AnswerTask(
-                id="task-unknown",
                 targets=("unknown",),
             ),
         )
@@ -213,14 +208,13 @@ def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path, mo
     dataset.add_tasks(
         tasks=(
             AnswerTask(
-                id=f"task-series-{index}",
                 inputs=(record,),
                 targets=("series answer",),
             )
             for index in range(4)
         )
     )
-    expected = ["task-1", "task-series-0", "task-series-1", "task-series-2", "task-series-3"]
+    expected = [TASK_ID, 5, 6, 7, 8]
     required = frozenset({InputModality.TIME_SERIES})
     supported = frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
     path = tmp_path / "control.duckdb"
@@ -320,27 +314,27 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
     ("statement", "message"),
     [
         (
-            "DELETE FROM annotation_contents WHERE name = 'patient_sex'",
+            "DELETE FROM annotation_contents WHERE content_id = 1",
             "missing content",
         ),
         (
-            "UPDATE sources SET parent_source_key = 999 WHERE name = 'ECG'",
+            "UPDATE sources SET parent_source_key = 999 WHERE source_id = 2",
             "missing parent",
         ),
         (
-            "UPDATE signals SET source_key = 999 WHERE signal_id = 'lead-i'",
+            "UPDATE signals SET source_key = 999 WHERE signal_id = 1",
             "missing source",
         ),
         (
             "UPDATE annotation_occurrences SET object_key = 999 "
             "WHERE content_key IN ("
-            "SELECT content_key FROM annotation_contents WHERE name = 'patient_sex')",
+            "SELECT content_key FROM annotation_contents WHERE content_id = 1)",
             "missing Record",
         ),
         (
             "UPDATE annotation_occurrences SET object_type = 'Unknown' "
             "WHERE content_key IN ("
-            "SELECT content_key FROM annotation_contents WHERE name = 'patient_sex')",
+            "SELECT content_key FROM annotation_contents WHERE content_id = 1)",
             "unknown object type",
         ),
     ],
@@ -369,6 +363,12 @@ def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tm
         tasks = list(reader.iter_tasks((record0,)))
 
     assert [task.id for task in tasks] == expected
+    assert [type(task) for task in tasks] == [
+        ClassificationTask,
+        AnswerTask,
+        ScalarPredictionTask,
+        TemporalLocalizationTask,
+    ]
     assert all(task.inputs[0] is record0 for task in tasks)
     answer = next(task for task in tasks if isinstance(task, AnswerTask))
     classification = next(task for task in tasks if isinstance(task, ClassificationTask))
@@ -379,16 +379,22 @@ def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tm
 @pytest.mark.parametrize("materialize", [False, True])
 def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, monkeypatch, materialize):
     monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 1)
+    dataset = _dataset()
+    record = dataset.records[0]
+    parent = AnswerTask(inputs=(record,), targets=("parent",))
+    child = AnswerTask(inputs=(record,), targets=("child",), from_tasks=(parent,))
+    dataset.add_tasks(tasks=(child, parent))
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(make_dataset())
+    DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
-        record = next(record for record in reader.read_records() if record.id == "record-0")
+        (record,) = reader.read_records()
         tasks = reader.read_tasks((record,)) if materialize else list(reader.iter_tasks((record,)))
 
     by_id = {task.id: task for task in tasks}
-    assert set(by_id) == {"task-answer-0", "task-cls-0", "task-localize-0", "task-scalar-0"}
-    assert by_id["task-answer-0"].from_tasks[0] is by_id["task-cls-0"]
+    assert set(by_id) == {TASK_ID, child.id, parent.id}
+    assert child.id < parent.id
+    assert by_id[child.id].from_tasks[0] is by_id[parent.id]
     assert tuple(sorted(by_id)) == tuple(task.id for task in tasks)
 
 
@@ -396,8 +402,11 @@ def test_read_tasks_rejects_records_the_database_does_not_store(tmp_path):
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(_dataset())
 
+    other = TimeFDataset(metadata=_dataset().metadata)
+    for _ in range(2):
+        unstored = other.add_record(record=Record())
     with DuckDBControlReader(path) as reader, pytest.raises(TimeFValidationError, match="no such record"):
-        reader.read_tasks((Record(id="ghost"),))
+        reader.read_tasks((unstored,))
 
 
 def test_typed_scope_and_payload_columns_round_trip(tmp_path):
@@ -485,11 +494,8 @@ def test_split_round_trips_and_filters_before_hydration(tmp_path, monkeypatch):
     record = dataset.records[0]
     dataset.add_tasks(
         tasks=(
-            *(
-                AnswerTask(id=f"task-train-{index}", inputs=(record,), targets=("train answer",), split=Split.TRAIN)
-                for index in range(3)
-            ),
-            AnswerTask(id="task-test", inputs=(record,), targets=("test answer",), split=Split.TEST),
+            *(AnswerTask(inputs=(record,), targets=("train answer",), split=Split.TRAIN) for index in range(3)),
+            AnswerTask(inputs=(record,), targets=("test answer",), split=Split.TEST),
         )
     )
     path = tmp_path / "control.duckdb"
@@ -503,14 +509,68 @@ def test_split_round_trips_and_filters_before_hydration(tmp_path, monkeypatch):
         with pytest.raises(TimeFValidationError, match="unknown split 'holdout'"):
             reader.task_table(split="holdout")
 
-    assert [task.id for task in train] == ["task-train-0", "task-train-1", "task-train-2"]
+    assert [task.id for task in train] == [2, 3, 4]
     assert all(task.split is Split.TRAIN for task in train)
-    assert [row["task_id"] for row in test_rows] == ["task-test"]
-    assert [row["task_id"] for row in train_targets] == ["task-train-0", "task-train-1", "task-train-2"]
+    assert [row["task_id"] for row in test_rows] == [5]
+    assert [row["task_id"] for row in train_targets] == [2, 3, 4]
     assert {row["task_id"]: row["split"] for row in every} == {
-        "task-1": None,
-        "task-test": "test",
-        "task-train-0": "train",
-        "task-train-1": "train",
-        "task-train-2": "train",
+        TASK_ID: None,
+        5: "test",
+        2: "train",
+        3: "train",
+        4: "train",
     }
+
+
+def test_full_range_int_ids_round_trip_as_python_ints(tmp_path):
+    base = _dataset()
+    largest = 2**63 - 1
+    dataset = TimeFDataset.from_parts(
+        metadata=base.metadata,
+        records=base.records,
+        tasks=base.tasks,
+        schema=base.derive_schema(),
+        last_ids={**base.last_ids, IdKind.RECORD: largest - 2},
+    )
+    generated = dataset.add_record(record=Record(sources=(Source(name="generated"),)))
+    dataset.add_record(record=Record(sources=(Source(name="largest"),)))
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        records = reader.read_records()
+        (task,) = reader.read_tasks(records)
+        task_rows = reader.task_table().to_pylist()
+
+    assert [record.id for record in records] == sorted([RECORD_ID, largest, generated.id])
+    annotation = records[0].annotations[0]
+    ids = [record.id for record in records] + [source._stored_id for record in records for source in record.sources]
+    ids = [*ids, task.id, annotation._content_id, annotation._occurrence_id]
+    assert all(type(value) is int for value in ids)
+    assert type(task_rows[0]["task_id"]) is int
+    assert task_rows[0]["input_record_ids"] == [RECORD_ID]
+
+
+def test_read_records_rejects_a_non_int_id(tmp_path):
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(_dataset())
+
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFValidationError, match="positive int64 id"):
+        reader.read_records((str(RECORD_ID),))  # ty: ignore[invalid-argument-type]
+
+
+def test_annotation_table_gives_dataset_annotations_a_null_int64_object_id(tmp_path):
+    dataset = _dataset()
+    dataset.annotate(Annotation(key="site", value="clinic"))
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        (annotation,) = reader.read_dataset_annotations(dataset.metadata.dataset_id)
+        table = reader.annotation_table()
+        rows = {row["object_type"]: row for row in table.to_pylist()}
+
+    assert annotation.value == "clinic"
+    assert table.schema.field("object_id").type == pa.int64()
+    assert rows["Dataset"]["object_id"] is None
+    assert rows["Record"]["object_id"] == RECORD_ID

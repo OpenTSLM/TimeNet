@@ -32,10 +32,33 @@ assert version > Version(1, 2, 0)
 
 ## IDs
 
+Records, Signals, and Tasks have a public ID: a read-only, positive int64 `id` (`EntityId`). The
+dataset ID is the exception and stays an `org/name` string.
+
+You cannot pass an ID. The dataset sets it when you add the object, and the reader sets it when it
+reads the object back. Each kind has its own counter, so the first Record and the first Signal
+both get ID 1.
+
+- `add_record()` numbers the Record and its Signals.
+- `add_task()` and `add_tasks()` number the Tasks.
+- A streamed Task gets its ID as the writer reads it from the stream.
+
+Reading `id` on an object that is not in a dataset raises `TimeFValidationError`.
+
+```python
+record = dataset.add_record(record=record)
+signal_id = record.signals[0].id
+```
+
 Sources, axes, annotation contents, and annotation occurrences have no public ID. Share them by
 object: attach the same Annotation object, or give Signals the same axis object. The writer gives
 each of them a storage ID when it writes their rows. An object read back from storage keeps its
 storage ID, so an edited version writes it to the same row.
+
+The writer stores the last ID of each kind, so an edited version continues from them and never
+reuses the ID of a removed object. IDs are unique per kind within one dataset and stay the same
+across edits. They do not follow storage order, and two datasets can use the same ID. IDs carry no
+meaning. Store upstream identifiers in `metadata` or in an annotation.
 
 ## Units
 

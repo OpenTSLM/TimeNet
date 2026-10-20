@@ -128,7 +128,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             spec=_SINE,
             name="a",
             time_axis=_AXIS,
-            id="ts-shared",
         )
         # An annotation shared across two records. Both attach the same instance, so they share its
         # content.
@@ -140,10 +139,8 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             spec=_COSINE,
             name="b",
             time_axis=_AXIS,
-            id="ts-cos-0",
         )
         record0 = Record(
-            id="record-0",
             sources=(
                 Source(
                     name="Synthetic generator",
@@ -166,7 +163,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         classification = ClassificationTask(
             inputs=(record0,),
             targets=("normal",),
-            id="task-cls-0",
         )
         dataset.add_tasks(
             tasks=[
@@ -182,14 +178,12 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                     # produce this annotation.
                     input_annotations=(record0_cohort,),
                     from_tasks=(classification,),
-                    id="task-answer-0",
                 ),
                 ScalarPredictionTask(
                     inputs=(record0,),
                     targets=(60.0,),
                     unit="bpm",
                     target_name="mean_rate",
-                    id="task-scalar-0",
                 ),
                 # Localization works backward from a normal task. The query is the input, and the
                 # regions are the output. Here, the task stores the answer by reference, so the target
@@ -199,7 +193,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                     prompt="Locate the stimulus and the artifact.",
                     mode=LocalizationMode.SPARSE,
                     target_annotations=(stimulus, artifact),
-                    id="task-localize-0",
                 ),
             ],
         )
@@ -211,11 +204,9 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             name="a",
             time_axis=_AXIS,
             loader=_wave(np.sin, raw_refs[1].n_values, phase=1.0),
-            id="ts-long-1",
             n_values=raw_refs[1].n_values,
         )
         record1 = Record(
-            id="record-1",
             sources=(
                 Source(
                     name="Synthetic generator",
@@ -225,7 +216,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                             spec=_SINE,
                             name="a",
                             time_axis=_AXIS,
-                            id="ts-short-1",
                         ),
                         long_series,
                     ),
@@ -237,8 +227,8 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
 
         # Record 2: a windowed slice with a scoped classification task. This window covers the second
         # half of rec-0. This makes the window a genuine offset window, not a byte-identical prefix of
-        # `ts-shared`. The phase offset continues the same wave, so the values match rec-0 over the
-        # window.
+        # the shared sine signal. The phase offset continues the same wave, so the values match rec-0
+        # over the window.
         window_start = raw_refs[0].n_values // 2
         window = Signal.from_values(
             _wave_values(
@@ -249,10 +239,8 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             spec=_SINE,
             name="a",
             time_axis=_AXIS.at_index(window_start),
-            id="ts-window-2",
         )
         record2 = Record(
-            id="record-2",
             sources=(
                 Source(
                     name="Synthetic generator",
@@ -268,7 +256,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             task=ClassificationTask(
                 inputs=(record2,),
                 targets=("onset",),
-                id="task-cls-2",
                 scope=TimeInterval.seconds(0.5, 0.75, time_series=(window,)),
             ),
         )

@@ -120,7 +120,7 @@ class Annotation:
         return (self.key, self.value, self.unit, self.description, self.metadata)
 
     @property
-    def _content_identity(self) -> tuple[str, EntityId | int]:
+    def _content_identity(self) -> tuple[str, int]:
         """Return what decides which occurrences share one stored content row.
 
         An occurrence read from storage keeps its stored content id. Any other occurrence shares

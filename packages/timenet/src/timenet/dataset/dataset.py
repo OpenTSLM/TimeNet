@@ -1,7 +1,6 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
-from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 import sys
 from typing import Literal, TextIO, TypeVar, cast, overload
@@ -11,7 +10,6 @@ import pyarrow as pa
 
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record
-from timenet.dataset.source import Source
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
@@ -20,6 +18,8 @@ from timenet.types import (
     AnnotationDescriptor,
     DatasetMetadata,
     DatasetSchema,
+    EntityId,
+    IdKind,
     InputModality,
     StepSpan,
     SupportsAnnotate,
@@ -28,6 +28,7 @@ from timenet.types import (
     annotation_type_of,
     value_type_of,
 )
+from timenet.types.ids import IdCounters
 from timenet.types.splits import Split, parse_split, parse_splits
 from timenet.values_backends import ValuesBackend
 
@@ -66,12 +67,14 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """
         self._metadata = metadata
         self._records: list[Record] = []
-        self._records_by_id: dict[str, Record] = {}
-        self._signals_by_id: dict[str, Signal] = {}
+        self._records_by_id: dict[int, Record] = {}
+        self._signals_by_id: dict[int, Signal] = {}
         self._sources: set[int] = set()
-        self._signals_by_record_id: dict[str, tuple[Signal, ...]] = {}
+        self._signals_by_record_id: dict[int, tuple[Signal, ...]] = {}
         self._tasks: list[Task] = []
-        self._task_ids: set[str] = set()
+        self._tasks_by_id: dict[int, Task] = {}
+        self._ids = IdCounters()
+        self._streamed_task_base = 0
         self._annotations: list[Annotation] = []
         # An optional re-iterable task source. When set, tasks stream past the dataset instead of
         # accumulating in _tasks, so a dataset with millions of tasks over few records still fits.
@@ -82,66 +85,71 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     def add_record(self, *, record: Record) -> Record:
         """Register and return a complete record.
 
+        The record and each of its signals get the next id of their kind.
+
         Args:
             record: The complete record hierarchy to register.
 
         Returns:
-            The same :class:`Record` instance.
-
-        Raises:
-            TimeFValidationError: If the record repeats an object ID or an ID is already registered.
+            The same :class:`Record` instance, with its id and its signals' ids set.
         """
-        if record.id in self._records_by_id:
-            raise TimeFValidationError(f"record id {record.id!r} is already registered")
-        record_sources, record_signals = self._index_record_hierarchy(record)
-        shared = [source.name for identity, source in record_sources.items() if identity in self._sources]
-        if shared:
-            raise TimeFValidationError(f"Sources {shared} already belong to another record; each Source has one owner")
-        repeated_signals = sorted(self._signals_by_id.keys() & record_signals.keys())
-        if repeated_signals:
-            raise TimeFValidationError(
-                f"signal id(s) {repeated_signals} already belong to another Source; each Signal has one owner"
-            )
-        self._records.append(record)
-        self._records_by_id[record.id] = record
-        self._sources.update(record_sources)
-        self._signals_by_id.update(record_signals)
-        self._signals_by_record_id[record.id] = tuple(record_signals.values())
-        return record
+        return self._register_record(record, keep_ids=False)
 
-    @staticmethod
-    def _duplicate_ids(ids: Iterable[str]) -> list[str]:
-        """Return repeated IDs in sorted order without repeatedly scanning the input."""
-        seen: set[str] = set()
-        duplicates: set[str] = set()
-        for item_id in ids:
-            if item_id in seen:
-                duplicates.add(item_id)
-            else:
-                seen.add(item_id)
-        return sorted(duplicates)
+    def _register_record(self, record: Record, *, keep_ids: bool) -> Record:
+        """Register a record, numbering it and its signals or keeping the ids they have.
 
-    @classmethod
-    def _index_record_hierarchy(cls, record: Record) -> tuple[dict[int, Source], dict[str, Signal]]:
-        """Collect one record's hierarchy and reject Signal IDs repeated inside it.
+        Args:
+            record: The record to register.
+            keep_ids: Keep the ids the reader gave the record and its signals, instead of numbering
+                them. :meth:`from_parts` uses this so an edited version keeps every id.
 
         Returns:
-            Sources keyed by object identity and Signals keyed by their stable public IDs.
+            The same record.
 
         Raises:
-            TimeFValidationError: If two Signals in the record share an ID.
+            TimeFValidationError: If the record is already in this dataset, attaches one Signal or
+                annotation occurrence twice, or holds a Source or Signal that belongs to another
+                record.
         """
-        sources = tuple(record.walk_sources())
-        signals = tuple(
-            signal for source in sources for signal in sorted(source.signals, key=lambda item: (item.name, item.id))
-        )
-        signal_duplicates = cls._duplicate_ids(signal.id for signal in signals)
-        if signal_duplicates:
-            raise TimeFValidationError(f"record {record.id!r} contains duplicate signal IDs {signal_duplicates}")
-        return (
-            {id(source): source for source in sources},
-            {signal.id: signal for signal in signals},
-        )
+        if record._id is not None and self._records_by_id.get(record._id) is record:
+            raise TimeFValidationError(f"{record._label} is already in this dataset")
+        signals = record.signals
+        if len({id(signal) for signal in signals}) != len(signals):
+            raise TimeFValidationError(f"{record._label} attaches one Signal more than once")
+        sources = {id(source): source for source in record.walk_sources()}
+        shared = [source.name for identity, source in sources.items() if identity in self._sources]
+        if shared:
+            raise TimeFValidationError(f"Sources {shared} already belong to another record; each Source has one owner")
+        owned = [
+            signal.name
+            for signal in signals
+            if signal._id is not None and self._signals_by_id.get(signal._id) is signal
+        ]
+        if owned:
+            raise TimeFValidationError(f"Signals {owned} already belong to another record; each Signal has one owner")
+        annotations = tuple(record.walk_annotations())
+        if len({id(annotation) for annotation in annotations}) != len(annotations):
+            raise TimeFValidationError(f"{record._label} attaches one annotation occurrence more than once")
+
+        set_field = object.__setattr__
+        record._id = self._take_id(IdKind.RECORD, record._id, keep=keep_ids)
+        for signal in signals:
+            set_field(signal, "_id", self._take_id(IdKind.SIGNAL, signal._id, keep=keep_ids))
+            self._signals_by_id[signal.id] = signal
+        self._sources.update(sources)
+        self._records.append(record)
+        self._records_by_id[record.id] = record
+        self._signals_by_record_id[record.id] = signals
+        return record
+
+    def _take_id(self, kind: IdKind, value: EntityId | None, *, keep: bool) -> EntityId:
+        """Return ``value`` after recording it when ``keep`` is set, else the next id of ``kind``."""
+        return self._ids.claim(kind, value) if keep else self._ids.next(kind)
+
+    @property
+    def last_ids(self) -> dict[IdKind, EntityId]:
+        """The last id used per kind. A written version stores it, so later edits never reuse an id."""
+        return self._ids.last()
 
     def write(
         self,
@@ -187,7 +195,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """Validate and register one fully constructed task.
 
         The Task owns its input and target object references. Registration verifies those objects
-        against this dataset before changing either the dataset or its Records.
+        against this dataset before changing either the dataset or its Records. The task gets the
+        next task id.
 
         Args:
             task: The concrete task to register.
@@ -263,6 +272,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             )
         self._streamed_task_types = tuple(task_types)
         self._task_stream = source
+        self._streamed_task_base = self._ids.last()[IdKind.TASK]
 
     def iter_tasks(
         self,
@@ -302,11 +312,14 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     def iter_streamed_tasks_validated(self) -> Iterator[Task]:
         """Yield the streamed tasks, validating each against the dataset before it is written.
 
+        A streamed task gets the task id counter's value at :meth:`set_task_stream` plus its
+        position in the stream, so every pass over the stream gives it the same id.
+
         Streamed tasks skip :meth:`add_task`'s checks, so validate each here as it passes through: an
         undeclared type, an attachment to an unknown record, a dangling reference, a bad answer, or an
         out-of-window span raises before the task reaches disk. The dataset holds no task list, so the
-        cross-task checks (duplicate ids, ``from_tasks`` derivations) that need every task at once do
-        not run for a stream.
+        cross-task checks (``from_tasks`` derivations) that need every task at once do not run for a
+        stream.
 
         Yields:
             Each validated task, in the source's order.
@@ -316,7 +329,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """  # noqa: DOC502 (raised by _validate_streamed_task, not directly here)
         index = _TaskValidationIndex(self)
         declared = set(self._streamed_task_types)
-        for task in self.iter_tasks():
+        for position, task in enumerate(self.iter_tasks(), start=1):
+            task._id = self._ids.claim(IdKind.TASK, self._streamed_task_base + position)
             self._validate_streamed_task(task, index, declared)
             yield task
 
@@ -342,14 +356,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 f"streamed task {task.id!r} has type {type(task).__name__}, not one of the declared "
                 f"{sorted(t.__name__ for t in declared)}"
             )
-        referenced = self._task_records(task)
-        for record in referenced:
-            registered = index.records_by_id.get(record.id)
-            if registered is not record:
-                raise TimeFValidationError(
-                    f"{type(task).__name__} {task.id!r} refers to Record {record.id!r}, which is not "
-                    "registered in this dataset"
-                )
+        self._check_record_refs(task, index)
         task.check_against_scope()
         self._check_task_answer(task)
         self._check_signal_refs(task, index)
@@ -378,19 +385,36 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             raise TimeFValidationError(
                 "add_task/add_tasks cannot be used on a streamed dataset: set_task_stream already provides its tasks"
             )
-        self._validate_task_batch(batch)
+        if len({id(task) for task in batch}) != len(batch):
+            raise TimeFValidationError("the batch lists one task more than once")
+        if any(self._is_registered(task) for task in batch):
+            raise TimeFValidationError("a task in the batch is already in this dataset")
+        previous = [task._id for task in batch]
+        first = self._ids.last()[IdKind.TASK] + 1
+        for offset, task in enumerate(batch):
+            task._id = first + offset
+        try:
+            self._validate_task_batch(batch)
+        except BaseException:
+            for task, task_id in zip(batch, previous, strict=True):
+                task._id = task_id
+            raise
         for task in batch:
+            self._ids.claim(IdKind.TASK, task.id)
             self._tasks.append(task)
-            self._task_ids.add(task.id)
+            self._tasks_by_id[task.id] = task
         return batch
+
+    def _is_registered(self, task: Task) -> bool:
+        """Return whether this exact task object is in the dataset."""
+        return task._id is not None and self._tasks_by_id.get(task._id) is task
 
     def _validate_task_batch(self, batch: tuple[Task, ...]) -> None:
         """Run every check that the batch must pass, without attaching anything.
 
         This method checks the cross-task rules that only a batch makes possible, in addition to
-        the per-task checks. The ids must stay unique against the batch and the dataset. Each
-        ``from_tasks`` parent must already be registered or be in the batch. No task can derive
-        from itself or close a cycle.
+        the per-task checks. Each ``from_tasks`` parent must already be registered or be in the
+        batch. No task can derive from itself or close a cycle.
 
         Args:
             batch: The tasks to register together.
@@ -399,23 +423,15 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: This error occurs under the conditions documented on
                 :meth:`add_tasks`.
         """
-        batch_ids = [task.id for task in batch]
-        duplicated = sorted(task_id for task_id, count in Counter(batch_ids).items() if count > 1)
-        if duplicated:
-            raise TimeFValidationError(f"tasks in the batch share an id: {duplicated}")
-        reused = sorted(self._task_ids.intersection(batch_ids))
-        if reused:
-            raise TimeFValidationError(f"task id(s) already registered in this dataset: {reused}")
-        known_task_ids = self._task_ids | set(batch_ids)
+        in_batch = {id(task) for task in batch}
         for task in batch:
             for parent in task.from_tasks:
-                parent_id = parent.id
-                if parent_id == task.id:
+                if parent is task:
                     raise TimeFValidationError(f"{type(task).__name__} {task.id!r} lists itself in from_tasks")
-                if parent_id not in known_task_ids:
+                if id(parent) not in in_batch and not self._is_registered(parent):
                     raise TimeFValidationError(
-                        f"{type(task).__name__} {task.id!r} derives from task {parent_id!r}, which is not "
-                        f"registered in this dataset or part of the batch"
+                        f"{type(task).__name__} {task.id!r} derives from a task that is not registered in "
+                        f"this dataset or part of the batch"
                     )
         self._check_no_derivation_cycle(batch)
         index = _TaskValidationIndex(self)
@@ -443,7 +459,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                         label,
                         span,
                         index.signals_by_record_id[record.id],
-                        f"record {record.id!r}",
+                        record._label,
                         record.time_span,
                     )
 
@@ -488,11 +504,11 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Raises:
             TimeFValidationError: If the batch's derivations contain a cycle.
         """
-        batch_ids = {task.id for task in batch}
-        parents = {task.id: {parent.id for parent in task.from_tasks if parent.id in batch_ids} for task in batch}
+        batch_ids = {id(task) for task in batch}
+        parents = {task.id: {parent.id for parent in task.from_tasks if id(parent) in batch_ids} for task in batch}
         # Kahn's algorithm: the loop peels off tasks whose parents in the batch are all resolved.
         # A task that remains when the loop can peel off no more tasks sits on a cycle.
-        resolved: set[str] = set()
+        resolved: set[EntityId] = set()
         progressed = True
         while progressed:
             progressed = False
@@ -560,7 +576,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return self._schema
 
     @classmethod
-    def from_parts(
+    def from_parts(  # noqa: PLR0913 - every part of a stored dataset
         cls,
         *,
         metadata: DatasetMetadata,
@@ -568,6 +584,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         tasks: Iterable[Task],
         schema: DatasetSchema,
         annotations: Iterable[Annotation] = (),
+        last_ids: Mapping[IdKind, EntityId] | None = None,
     ) -> "TimeFDataset":
         """Build a dataset from parts that are already constructed.
 
@@ -579,15 +596,20 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             tasks: Fully built tasks, with their ``from_tasks`` references resolved.
             schema: The schema reconstructed from the manifest.
             annotations: Annotations attached directly to the dataset.
+            last_ids: The id counters of the dataset these parts come from, so new objects never
+                reuse the id of a removed one.
 
         Returns:
-            The dataset, built from these parts.
+            The dataset, built from these parts. The records, signals, and tasks keep the ids they
+            have.
         """
         dataset = cls(metadata=metadata)
+        dataset._ids = IdCounters(last_ids)
         for record in records:
-            dataset.add_record(record=record)
+            dataset._register_record(record, keep_ids=True)
         dataset._tasks = list(tasks)
-        dataset._task_ids = {task.id for task in dataset._tasks}
+        for task in dataset._tasks:
+            dataset._tasks_by_id[dataset._ids.claim(IdKind.TASK, task.id)] = task
         dataset._annotations = list(annotations)
         dataset._schema = schema
         return dataset
@@ -652,9 +674,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: If a task references an unknown or replacement Record object.
         """
         for record in TimeFDataset._task_records(task):
-            if index.records_by_id.get(record.id) is not record:
+            if record._id is None or index.records_by_id.get(record._id) is not record:
                 raise TimeFValidationError(
-                    f"{type(task).__name__} references Record {record.id!r}, which is not registered in this dataset"
+                    f"{type(task).__name__} references a Record that is not registered in this dataset"
                 )
 
     @staticmethod
@@ -669,9 +691,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: If a Signal target is unknown or is a replacement object.
         """
         for signal in TimeFDataset._task_signals(task):
-            if index.signals_by_id.get(signal.id) is not signal:
+            if signal._id is None or index.signals_by_id.get(signal._id) is not signal:
                 raise TimeFValidationError(
-                    f"{type(task).__name__} references Signal {signal.id!r}, which is not registered in this dataset"
+                    f"{type(task).__name__} references Signal {signal.name!r}, which is not registered in this dataset"
                 )
 
     @staticmethod
@@ -828,9 +850,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Raises:
             TimeFValidationError: If ``record`` is not registered in this dataset.
         """
-        registered_ids = {registered.id for registered in self._records}
-        if record.id not in registered_ids:
-            raise TimeFValidationError(f"record {record.id!r} is not registered in this dataset")
+        if record._id is None or self._records_by_id.get(record._id) is not record:
+            raise TimeFValidationError(f"{record._label} is not registered in this dataset")
         return tuple(
             task
             for task in self._tasks
@@ -958,16 +979,16 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 also occurs if no record is matched, or if any record does not carry exactly one
                 task of ``resolved``, in ``split`` when one is given.
         """
-        matched_by_record: dict[str, list[Task]] = {}
+        matched_by_record: dict[int, list[Task]] = {}
         for candidate in self.tasks_of(resolved):
             if split is not None and candidate.split is not split:
                 continue
             for record in candidate.inputs:
-                matched_by_record.setdefault(record.id, []).append(candidate)
+                matched_by_record.setdefault(id(record), []).append(candidate)
         rows: list[pa.Array] = []
         targets: list[object] = []
         for record in self._records:
-            matched = matched_by_record.get(record.id) or []
+            matched = matched_by_record.get(id(record)) or []
             if not matched and split is not None:
                 continue
             if len(matched) != 1:

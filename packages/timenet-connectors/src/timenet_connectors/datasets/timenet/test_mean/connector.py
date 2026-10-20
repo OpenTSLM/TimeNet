@@ -22,7 +22,7 @@ _N_RECORDS = 1000
 _LENGTH = 64
 _SAMPLING_RATE_HZ = 16.0
 _NOISE_STD = 0.5
-_SEED = 20260715  # fixed base seed keeps every build byte-for-byte identical
+_SEED = 20260715  # fixed base seed keeps every build's values identical
 
 _SIGNAL = TimeSeriesSpec(
     spec_type="signal",
@@ -67,19 +67,14 @@ class TestMeanConnector(BaseConnector[None]):
                 spec=_SIGNAL,
                 name="signal",
                 time_axis=RegularAxis.from_rate_hz(16),
-                id=f"ts-{index}",
             )
-            record = Record(
-                id=f"record-{index}",
-                sources=(Source(name="Synthetic generator", signals=(series,)),),
-            )
+            record = Record(sources=(Source(name="Synthetic generator", signals=(series,)),))
             dataset.add_record(record=record)
             label = "above_zero" if offset > 0 else "below_zero"
             dataset.add_task(
                 task=ClassificationTask(
                     inputs=(record,),
                     targets=(label,),
-                    id=f"task-{index}",
                 )
             )
         return dataset
