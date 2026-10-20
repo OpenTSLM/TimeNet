@@ -111,12 +111,12 @@ def test_task_time_span_requires_one_input_record(make_series, scope_ids):
     second = make_series(signal="second")
     left = dataset.add_record(record=Record(start_time=origin, sources=(Source(name="left", signals=(first,)),)))
     right = dataset.add_record(record=Record(start_time=origin, sources=(Source(name="right", signals=(second,)),)))
-    ids = None if scope_ids is None else (first.id, second.id) if scope_ids == "both" else (first.id,)
+    scope = None if scope_ids is None else (first, second) if scope_ids == "both" else (first,)
     task = ClassificationTask(
         input_modalities=frozenset({InputModality.TIME_SERIES}),
         inputs=(left, right),
         targets=("event",),
-        scope=TimeInterval.seconds(0, 0.004, time_series_ids=ids),
+        scope=TimeInterval.seconds(0, 0.004, time_series=scope),
     )
     if scope_ids == "first":
         assert dataset.add_task(task=task) is task
@@ -125,7 +125,7 @@ def test_task_time_span_requires_one_input_record(make_series, scope_ids):
             dataset.add_task(task=task)
 
 
-def test_scope_series_id_resolution(make_series):
+def test_a_scope_must_name_signals_of_the_inputs(make_series):
     ds = _dataset()
     ts = make_series()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
@@ -133,15 +133,15 @@ def test_scope_series_id_resolution(make_series):
         task=ClassificationTask(
             inputs=(record,),
             targets=("beat",),
-            scope=TimePoint.seconds(0.0, time_series_ids=(ts.id,)),
+            scope=TimePoint.seconds(0.0, time_series=(ts,)),
         )
     )
-    with pytest.raises(ValueError, match="unknown time_series_id"):
+    with pytest.raises(ValueError, match="not in its inputs"):
         ds.add_task(
             task=ClassificationTask(
                 inputs=(record,),
                 targets=("beat",),
-                scope=TimePoint.seconds(0.0, time_series_ids=("nope",)),
+                scope=TimePoint.seconds(0.0, time_series=(make_series(),)),
             )
         )
 
@@ -699,7 +699,7 @@ def test_add_tasks_rejects_the_whole_batch_when_one_is_invalid(make_series):
     bad = ClassificationTask(
         inputs=(record,),
         targets=("b",),
-        scope=TimePoint.seconds(1.0, time_series_ids=("nope",)),
+        scope=TimePoint.seconds(1.0, time_series=(make_series(),)),
     )
     with pytest.raises(TimeFValidationError):
         ds.add_tasks(tasks=[good, bad])

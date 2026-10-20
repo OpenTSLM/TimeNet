@@ -51,7 +51,10 @@ class Source(SupportsAnnotate):
         for annotation in self.annotations:
             if annotation.span is not None:
                 check_span_within_window(
-                    f"annotation {annotation.key!r}", annotation.span, tuple(self.walk_signals()), self.id
+                    f"annotation {annotation.key!r}",
+                    annotation.span,
+                    tuple(self.walk_signals()),
+                    f"source {self.name!r}",
                 )
 
     def walk_sources(self) -> Iterator["Source"]:
@@ -98,7 +101,9 @@ class Source(SupportsAnnotate):
         """
         if annotation.span is not None:
             signals = tuple(self.walk_signals())
-            check_span_within_window(f"annotation {annotation.key!r}", annotation.span, signals, self.id)
+            check_span_within_window(
+                f"annotation {annotation.key!r}", annotation.span, signals, f"source {self.name!r}"
+            )
         attached = annotation._new_occurrence()
         self.annotations = (*self.annotations, attached)
         return attached
