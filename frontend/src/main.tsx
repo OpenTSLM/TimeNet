@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { createRoot } from "react-dom/client";
 import "./styles.css";
+import { TasksBrowser } from "./tasks";
 
 type Metadata = {
   dataset_id: string;
@@ -100,6 +101,7 @@ function taskTotal(counts: Counts): number {
 }
 
 function App() {
+  const [search, setSearch] = useState(location.search);
   const [selection, setSelection] = useState<Selection | null>(selectionFromUrl);
   const [manifest, setManifest] = useState<Manifest | null>(null);
   const [catalog, setCatalog] = useState<CatalogPage | null>(null);
@@ -109,7 +111,7 @@ function App() {
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    const onBack = () => setSelection(selectionFromUrl());
+    const onBack = () => { setSelection(selectionFromUrl()); setSearch(location.search); };
     addEventListener("popstate", onBack);
     return () => removeEventListener("popstate", onBack);
   }, []);
@@ -157,11 +159,13 @@ function App() {
     };
     const query = new URLSearchParams({ dataset: next.dataset_id, version: next.version, from: "catalog" });
     history.pushState(null, "", `/?${query}`);
+    setSearch(location.search);
     setSelection(next);
   }
 
   function openCatalog() {
     history.pushState(null, "", "/");
+    setSearch(location.search);
     setSelection(null);
   }
 
@@ -169,6 +173,16 @@ function App() {
     event.preventDefault();
     setOffset(0);
     setApplied(filters);
+  }
+
+  function navigateDataset(params: URLSearchParams) {
+    history.pushState(null, "", `/?${params}`);
+    setSearch(location.search);
+  }
+
+  if (selection && new URLSearchParams(search).get("view") === "tasks") {
+    return <TasksBrowser dataset={selection.dataset_id} version={selection.version}
+      search={search} navigate={navigateDataset} getJson={getJson} />;
   }
 
   if (error) return (
@@ -193,6 +207,15 @@ function App() {
           <p className="description">{metadata.description}</p>
           {sourceUrl && <a href={sourceUrl} target="_blank" rel="noreferrer">Original source ↗</a>}
         </header>
+
+        <section className="raw">
+          <h2>Tasks</h2>
+          <button className="task-link" onClick={() => {
+            const params = new URLSearchParams(search);
+            params.set("view", "tasks");
+            navigateDataset(params);
+          }}>Browse tasks →</button>
+        </section>
 
         <section className="metrics" aria-label="Dataset counts">
           {[
