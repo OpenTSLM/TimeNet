@@ -33,9 +33,9 @@ Reusable content includes these fields:
 - `metadata`, which stores JSON-compatible content details
 
 Each occurrence adds its own source, confidence, and metadata. This design lets several objects
-share one long description without sharing occurrence details. Occurrences made from the same
-Annotation object share its content. Neither the content nor an occurrence has a public ID. The
-writer gives each one a storage ID.
+share one long description without sharing occurrence details. The writer stores equal content
+once, so occurrences with equal content share one content row. Neither the content nor an
+occurrence has a public ID. The writer gives each one a storage ID.
 
 ## Static context
 

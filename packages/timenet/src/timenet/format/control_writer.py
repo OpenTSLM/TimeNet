@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Container, Iterable, Iterator
+from collections.abc import Callable, Container, Hashable, Iterable, Iterator
 from dataclasses import replace
 from hashlib import sha256
 from itertools import islice
@@ -87,17 +87,20 @@ def _task_batches(tasks: Iterable[Task]) -> Iterator[tuple[Task, ...]]:
         yield batch
 
 
-def _axis_identity(axis: TimeAxis) -> tuple[str, int]:
+def _axis_identity(axis: TimeAxis) -> tuple[str, Hashable]:
     """Return what decides which Signals share one stored axis row.
 
-    An axis read from storage keeps its stored id. Any other axis is shared by object.
+    An axis read from storage keeps its stored id. Equal regular or ordinal axes share one row. An
+    irregular axis is shared only by object, because equal endpoints do not mean equal time offsets.
 
     Returns:
         A hashable identity for the axis row.
     """
     if axis._stored_id is not None:
         return ("stored", axis._stored_id)
-    return ("object", id(axis))
+    if isinstance(axis, IrregularAxis):
+        return ("object", id(axis))
+    return ("value", axis)
 
 
 def _insert_rows(connection: duckdb.DuckDBPyConnection, table: Table, rows: list[dict[str, object]]) -> None:
@@ -269,7 +272,7 @@ class DuckDBControlWriter:
             Signal by id.
         """
         batches = _HierarchyBatches(connection)
-        axes: dict[tuple[str, int], _StoredAxis] = {}
+        axes: dict[tuple[str, Hashable], _StoredAxis] = {}
         source_ids: set[int] = set()
         clock_keys: dict[int, int] = {}
         signal_values: dict[int, int] = {}
@@ -550,7 +553,7 @@ class DuckDBControlWriter:
     def _write_record_sources(  # noqa: PLR0913, PLR0917 - hierarchy maps stay explicit
         self,
         record: Record,
-        axes: dict[tuple[str, int], _StoredAxis],
+        axes: dict[tuple[str, Hashable], _StoredAxis],
         source_ids: set[int],
         signal_values: dict[int, int],
         annotations: list[tuple[ObjectKind, int | None, Annotation]],
@@ -598,7 +601,7 @@ class DuckDBControlWriter:
         self,
         signal: Signal,
         source_id: int,
-        axes: dict[tuple[str, int], _StoredAxis],
+        axes: dict[tuple[str, Hashable], _StoredAxis],
         batches: _HierarchyBatches,
     ) -> None:
         """Insert one signal and its shared axis.
@@ -614,6 +617,9 @@ class DuckDBControlWriter:
             axis_id = axis._stored_id or self._ids.next(IdKind.AXIS)
             offsets = self._write_axis(signal, axis_id, batches)
             axes[identity] = _StoredAxis(axis, axis_id, offsets, signal.time_offsets_loader)
+            if not isinstance(axis, IrregularAxis):
+                # An axis read back keeps its row, and a new equal axis shares that row.
+                axes.setdefault(("value", axis), axes[identity])
         elif existing.axis != axis:
             raise TimeFValidationError(f"axis id {existing.axis_id!r} is reused with different definitions")
         else:
@@ -732,7 +738,7 @@ class DuckDBControlWriter:
             TimeFValidationError: If one occurrence is attached twice, or one stored content id has
                 two payloads.
         """
-        contents: dict[tuple[str, int], tuple[EntityId, tuple[object, ...]]] = {}
+        contents: dict[tuple[str, Hashable], tuple[EntityId, tuple[Hashable, ...]]] = {}
         written: set[int] = set()
         written_ids: set[int] = set()
         content_batch = _TableBatch(connection, TABLES["annotation_contents"])
@@ -747,13 +753,16 @@ class DuckDBControlWriter:
             if occurrence_id in written_ids:
                 raise TimeFValidationError(f"annotation occurrence id {occurrence_id!r} is not unique")
             written_ids.add(occurrence_id)
-            content = annotation._content_fields
-            known = contents.get(annotation._content_identity)
+            content = annotation._content_key
+            identity = annotation._content_identity
+            known = contents.get(identity)
             if known is not None and known[1] != content:
                 raise TimeFValidationError(f"annotation content id {known[0]!r} is reused with different content")
             if known is None:
                 known = (annotation._content_id or self._ids.next(IdKind.CONTENT), content)
-                contents[annotation._content_identity] = known
+                contents[identity] = known
+                # A content read back keeps its row, and new equal content shares that row.
+                contents.setdefault(("value", content), known)
                 content_batch.add(
                     {
                         "content_id": known[0],

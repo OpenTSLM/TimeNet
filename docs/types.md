@@ -50,10 +50,14 @@ record = dataset.add_record(record=record)
 signal_id = record.signals[0].id
 ```
 
-Sources, axes, annotation contents, and annotation occurrences have no public ID. Share them by
-object: attach the same Annotation object, or give Signals the same axis object. The writer gives
+Sources, axes, annotation contents, and annotation occurrences have no public ID. The writer gives
 each of them a storage ID when it writes their rows. An object read back from storage keeps its
 storage ID, so an edited version writes it to the same row.
+
+The writer stores equal annotation contents once, and equal regular or ordinal axes once.
+Contents are equal if the name, the value and its type, the unit, the description, and the
+metadata are equal. `0.0` and `-0.0` are equal, but `True`, `1`, and `1.0` are not. Irregular axes
+are shared only by object, because equal endpoints do not mean equal time offsets.
 
 The writer stores the last ID of each kind, so an edited version continues from them and never
 reuses the ID of a removed object. IDs are unique per kind within one dataset and stay the same

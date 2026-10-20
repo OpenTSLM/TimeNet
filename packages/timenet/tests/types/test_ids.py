@@ -144,19 +144,6 @@ def _storage_ids(version_dir):
     return {(row["object_id"], row["key"]): (row["content_id"], row["occurrence_id"]) for row in table}
 
 
-def test_the_writer_shares_annotation_content_by_object(tmp_path):
-    dataset = _dataset()
-    cohort = Annotation(key="cohort", value="A")
-    for _ in range(2):
-        dataset.add_record(record=_record()).annotate(cohort)
-    dataset.add_record(record=_record()).annotate(Annotation(key="cohort", value="A"))
-
-    ids = _storage_ids(dataset.write(path=tmp_path))
-
-    assert ids[1, "cohort"][0] == ids[2, "cohort"][0] != ids[3, "cohort"][0]
-    assert len({occurrence_id for _, occurrence_id in ids.values()}) == 3
-
-
 def test_an_edit_keeps_storage_ids_and_numbers_new_rows_above_them(tmp_path):
     dataset = _dataset()
     for key in ("first", "second"):

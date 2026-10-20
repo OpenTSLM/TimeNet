@@ -11,8 +11,10 @@ class synthesis. :class:`AnnotationDescriptor` is the type-level projection stor
 manifest.
 """
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
+import json
 from typing import Annotated, Any, Protocol
 
 import pint
@@ -74,7 +76,6 @@ class Annotation:
     """Optional confidence for this particular application."""
     occurrence_metadata: JsonMapping = field(default_factory=dict, compare=False)
     """Optional metadata for this particular application."""
-    _template: "Annotation | None" = field(default=None, init=False, repr=False, compare=False)
     _content_id: EntityId | None = field(default=None, init=False, repr=False, compare=False)
     _occurrence_id: EntityId | None = field(default=None, init=False, repr=False, compare=False)
 
@@ -115,20 +116,31 @@ class Annotation:
             )
 
     @property
-    def _content_fields(self) -> tuple[object, ...]:
-        """Return the reusable payload, without occurrence-specific fields."""
-        return (self.key, self.value, self.unit, self.description, self.metadata)
+    def _content_key(self) -> tuple[Hashable, ...]:
+        """Return the reusable payload, without occurrence-specific fields, as a hashable key.
+
+        Two annotations with equal keys share one stored content row. The value type is part of the key,
+        so ``True``, ``1`` and ``1.0`` differ. A float compares by its bits after adding ``0.0``,
+        so ``0.0`` and ``-0.0`` are equal, and so is every NaN.
+        """
+        value = self.value
+        if isinstance(value, float):
+            value = float.hex(value + 0.0)
+        elif isinstance(value, list):
+            value = tuple(value)
+        metadata = json.dumps(self.metadata, sort_keys=True)
+        return (self.key, value_type_of(self.value), value, self.unit, self.description, metadata)
 
     @property
-    def _content_identity(self) -> tuple[str, int]:
+    def _content_identity(self) -> tuple[str, Hashable]:
         """Return what decides which occurrences share one stored content row.
 
         An occurrence read from storage keeps its stored content id. Any other occurrence shares
-        content with the occurrences made from the same annotation object.
+        content with every occurrence whose :attr:`_content_key` is equal.
         """
         if self._content_id is not None:
             return ("stored", self._content_id)
-        return ("object", id(self._template or self))
+        return ("value", self._content_key)
 
     @property
     def name(self) -> str:
@@ -142,9 +154,7 @@ class Annotation:
             The new occurrence. It shares this annotation's content.
         """
         occurrence = replace(self)
-        set_field = object.__setattr__
-        set_field(occurrence, "_template", self._template or self)
-        set_field(occurrence, "_content_id", self._content_id)
+        object.__setattr__(occurrence, "_content_id", self._content_id)  # noqa: PLC2801
         return occurrence
 
 

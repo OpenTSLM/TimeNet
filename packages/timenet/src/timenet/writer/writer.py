@@ -1,6 +1,6 @@
 """Write a TimeF DuckDB control plane and a sharded Parquet or Zarr values plane."""
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Hashable, Iterable
 from pathlib import Path
 import shutil
 import types as _types
@@ -380,10 +380,10 @@ class TimeFWriter:
         Raises:
             TimeFValidationError: If one content ID has different payloads.
         """
-        seen: dict[tuple[str, int], tuple[object, ...]] = {}
+        seen: dict[tuple[str, Hashable], tuple[Hashable, ...]] = {}
         record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
         for ann in record_annotations:
-            content = ann._content_fields
+            content = ann._content_key
             identity = ann._content_identity
             if identity in seen and seen[identity] != content:
                 raise TimeFValidationError(f"annotation content {identity!r} is reused with different content")
