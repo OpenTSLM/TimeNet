@@ -61,7 +61,6 @@ def _answer_reads_context_via_record1():
     dataset = make_dataset()
     answer = _answer(dataset)
     answer.inputs = (dataset.records[0], dataset.records[1])
-    dataset.records[1].task_ids = (*dataset.records[1].task_ids, answer.id)
     record0 = dataset.records[0]
     record0.annotations = tuple(a for a in record0.annotations if a.key != "cohort")
     answer.input_annotations = tuple(a for a in dataset.records[1].annotations if a.key == "cohort")
@@ -149,7 +148,6 @@ def test_target_annotation_refs_are_required():
     localize.target_annotations = tuple(
         annotation for annotation in dataset.records[0].annotations if annotation.key in {"stimulus", "artifact"}
     )
-    dataset.records[2].task_ids = (*dataset.records[2].task_ids, localize.id)
     dataset.derive_schema()
 
     with pytest.raises(TimeFEditError, match=rf"dangle tasks \[[^\]]*\b{localize.id}\b"):

@@ -104,6 +104,7 @@ def _preview(dataset: TimeFDataset, rows: int) -> str:
     if not records:
         return ""
     header = ("record_id", "signals", "length", "tasks", "annotations")
+    tasks_per_record = Counter(id(record) for task in dataset.tasks for record in task.inputs)
     table_rows = []
     for record in records[:rows]:
         length = point_count(record.signals[0]) if record.signals else None
@@ -112,7 +113,7 @@ def _preview(dataset: TimeFDataset, rows: int) -> str:
                 record.id,
                 str(len(record.signals)),
                 "?" if length is None else str(length),
-                str(len(record.task_ids)),
+                str(tasks_per_record[id(record)]),
                 str(len(record.annotations)),
             )
         )

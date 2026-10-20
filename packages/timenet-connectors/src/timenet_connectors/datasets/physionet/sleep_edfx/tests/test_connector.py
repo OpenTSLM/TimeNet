@@ -315,9 +315,9 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
 
 def test_the_tasks_stream_and_are_not_materialized(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
-    # A streamed task never reaches Record.task_ids. This difference separates a streamed task
-    # from a materialized one.
-    assert all(not record.task_ids for record in dataset.records)
+    # The dataset holds no streamed task. This difference separates a streamed task from a
+    # materialized one.
+    assert dataset.tasks == ()
     assert dataset._task_stream is not None
 
 
