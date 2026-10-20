@@ -30,6 +30,7 @@ from timenet.types import (
     TimeInterval,
     TimePoint,
 )
+from timenet.types.object_kind import ObjectKind
 
 
 _T = TypeVar("_T")
@@ -216,9 +217,9 @@ def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding b
     if kind == TaskTargetKind.BOOLEAN:
         return _required(values.boolean_value, kind, "boolean_value")
     if kind == TaskTargetKind.RECORD:
-        return _resolve(records, _required(values.record_id, kind, "record_id"), "Record")
+        return _resolve(records, _required(values.record_id, kind, "record_id"), ObjectKind.RECORD)
     if kind == TaskTargetKind.SIGNAL:
-        return _resolve(signals, _required(values.signal_id, kind, "signal_id"), "Signal")
+        return _resolve(signals, _required(values.signal_id, kind, "signal_id"), ObjectKind.SIGNAL)
     start = _required(values.span_start, kind, "span_start")
     signal_ids = values.span_signal_ids
     if kind == TaskTargetKind.TIME_POINT:
@@ -241,7 +242,7 @@ def _required(value: _T | None, kind: TaskTargetKind, name: str) -> _T:
     return value
 
 
-def _resolve(objects: dict[str, _T], public_id: str, label: str) -> _T:
+def _resolve(objects: dict[str, _T], public_id: str, label: ObjectKind) -> _T:
     try:
         return objects[public_id]
     except KeyError as exc:
