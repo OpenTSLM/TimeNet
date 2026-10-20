@@ -17,6 +17,7 @@ from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.signal_loader import StoredSignalLoader
 from timenet.format.stored_values import PackedValueReader, materialize_table
+from timenet.reader.handles import DatasetHandle, _materialize_record
 from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.object_kind import ObjectKind
 from timenet.types.reference_keys import OwnerKey
@@ -170,9 +171,11 @@ class TimeFReader:
             Concrete tasks in stable ID order.
         """
         with self._as_format_error(preserve_validation=True):
-            return self._control_reader().read_tasks(
-                records, cached_records=self._all_records() if records is None else ()
-            )
+            selected = None if records is None else tuple(records)
+            tasks = self._control_reader().read_tasks(selected, eager=True)
+            for record in selected or ():
+                _materialize_record(record)
+            return tasks
 
     def iter_tasks(
         self,
@@ -278,6 +281,10 @@ class TimeFReader:
     def values_backend(self) -> str:
         """Return the values-plane backend named by the manifest."""
         return self._manifest.values_backend
+
+    def get_handle(self) -> DatasetHandle:
+        """Return a lazy dataset handle without reading the catalog or payloads."""
+        return DatasetHandle(self)
 
     def read(self) -> TimeFDataset:
         """Hydrate the dataset while keeping every Signal's values lazy.
