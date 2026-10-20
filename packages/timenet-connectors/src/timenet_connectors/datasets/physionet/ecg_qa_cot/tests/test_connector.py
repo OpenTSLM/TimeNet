@@ -11,7 +11,7 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.engine import store_dataset
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.types import AnswerTask
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import EcgQaCotConnector, EcgQaCotSource
@@ -213,7 +213,7 @@ def test_convert_round_trips_through_the_writer(tmp_path, records_dir):
     dataset = _convert(tmp_path / "src", records_dir)
     dataset.derive_schema()
     version_dir = store_dataset(dataset, tmp_path / "out")
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         restored = reader.read()
     assert {record.record_id for record in restored.records} == {"ptbxl-1", "ptbxl-2"}
     assert len(restored.tasks) == 3  # streamed to disk and back
