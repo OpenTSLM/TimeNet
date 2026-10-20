@@ -77,6 +77,15 @@ The connector imports `huggingface_hub` lazily and declares it in its `requireme
 import keeps `--no-isolation` usable while you write the connector. `HF_TOKEN` is read from the
 environment, so gated datasets work. Fully private repos have no auto-parquet ref and aren't supported.
 
+### `BaseHubSnapshotConnector` (`bases/huggingface.py`)
+`BaseHubSnapshotConnector(BaseConnector[HubFileRef])`. Set `HF_REPO`, `SOURCE_REVISION` (an immutable
+commit), and `SOURCE_FILES` (part -> repository-relative filename), and implement `convert`. The
+inherited `download` fetches those files through `hub_snapshot` and returns one
+`HubFileRef(path, part, filename, expected_rows)` per part, with `filename` the declared
+repository-relative name and `expected_rows` taken from the optional `SOURCE_ROWS`. Use it when the source has no parquet ref, or when `convert` reads the files lazily
+(by byte offset, say) instead of holding every row. `hub_snapshot` reports a missing
+`huggingface_hub` itself, so the connector needs no import guard.
+
 ### `BasePhysioNetConnector` (`bases/physionet.py`)
 `BasePhysioNetConnector(BaseConnector[TRaw])`. Implement `download` and `convert`. Its two helpers read
 records through `wfdb`, which the base imports lazily so that `--no-isolation` stays usable while you
