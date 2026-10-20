@@ -125,6 +125,7 @@ def test_unknown_spec_unit_is_null_in_manifest():
         "transport",
         "observability",
         "audio",
+        "industrial",
     ],
 )
 def test_manifest_round_trips_benchmark_domain(domain):

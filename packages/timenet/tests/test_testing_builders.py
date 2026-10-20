@@ -1,3 +1,5 @@
+import re
+
 import numpy as np
 import pytest
 
@@ -35,11 +37,12 @@ def test_make_dataset_builds_a_valid_dataset():
 def test_assert_datasets_equal_compares_resolved_modalities():
     expected = make_dataset()
     actual = make_dataset()
-    actual.tasks[0].input_modalities = frozenset({InputModality.TIME_SERIES})
+    task = actual.tasks[0]
+    task.input_modalities = frozenset({InputModality.TIME_SERIES})
     assert_datasets_equal(expected, actual)
 
-    actual.tasks[0].input_modalities = frozenset({InputModality.IMAGE})
-    with pytest.raises(AssertionError, match="task task-cls-0 differs"):
+    task.input_modalities = frozenset({InputModality.IMAGE})
+    with pytest.raises(AssertionError, match=rf"task {re.escape(task.id)} differs"):
         assert_datasets_equal(expected, actual)
 
 
