@@ -1,7 +1,7 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
 from collections import Counter
-from collections.abc import Callable, Iterable, Iterator, Sequence
+from collections.abc import Callable, Iterable, Iterator
 from pathlib import Path
 import sys
 from typing import Literal, TextIO, TypeVar, cast, overload
@@ -80,6 +80,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         # An optional re-iterable task source. When set, tasks stream past the dataset instead of
         # accumulating in _tasks, so a dataset with millions of tasks over few records still fits.
         self._task_stream: Callable[[], Iterator[Task]] | None = None
+        # The task types a complete validated pass over the stream yielded, in first-seen order.
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
 
@@ -247,7 +248,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._annotations.append(attached)
         return attached
 
-    def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
+    def set_task_stream(self, source: Callable[[], Iterator[Task]]) -> None:
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
 
         For a dataset with far more tasks than records (many questions over few recordings), holding
@@ -255,12 +256,13 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         hands the tasks over through ``source``; the writer streams them to disk without a list. Streamed
         tasks do not populate ``Record.task_ids``.
 
+        The schema learns the stream's task types as the writer drains it (see
+        :meth:`iter_streamed_tasks_validated`), so ``schema.tasks`` stays empty until the first write.
+
         Args:
-            task_types: The task classes the stream yields, so :meth:`derive_schema` records them.
-                Every yielded task must be one of these types.
-            source: A callable returning a fresh iterator over the tasks each time it is called. The
-                writer calls it more than once (a peek for id storage, then the write), so it must
-                re-read its source rather than exhaust a one-shot generator.
+            source: A callable returning a fresh iterator over the tasks each time it is called.
+                :meth:`iter_tasks` calls it on every pass, so it must re-read its source rather than
+                exhaust a one-shot generator.
 
         Raises:
             TimeFValidationError: If tasks were already added with :meth:`add_task`. A dataset either
@@ -271,7 +273,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 "set_task_stream cannot follow add_task/add_tasks: a dataset either streams its tasks or "
                 "materializes them, not both"
             )
-        self._streamed_task_types = tuple(task_types)
+        self._streamed_task_types = ()
         self._task_stream = source
 
     def iter_tasks(
@@ -318,6 +320,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         cross-task checks (duplicate ids, ``from_tasks`` derivations) that need every task at once do
         not run for a stream.
 
+        Once the stream is exhausted, the task types it yielded are recorded in the schema, so the
+        manifest written after the tasks names them without a separate pass over the stream.
+
         Yields:
             Each validated task, in the source's order.
 
@@ -325,33 +330,35 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: If a streamed task fails one of the per-task checks.
         """  # noqa: DOC502 (raised by _validate_streamed_task, not directly here)
         index = _TaskValidationIndex(self)
-        declared = set(self._streamed_task_types)
+        seen: dict[type[Task], None] = {}
         for task in self.iter_tasks():
-            self._validate_streamed_task(task, index, declared)
+            self._validate_streamed_task(task, index)
+            seen.setdefault(type(task))
             yield task
+        # Only a complete pass knows every type; an aborted write leaves the schema unchanged.
+        self._streamed_task_types = tuple(seen)
+        if self._schema is not None:
+            self._schema = DatasetSchema(
+                time_series_specs=self._schema.time_series_specs,
+                annotations=self._schema.annotations,
+                tasks=self._streamed_task_types,
+            )
 
     def _validate_streamed_task(
         self,
         task: Task,
         index: _TaskValidationIndex,
-        declared: set[type[Task]],
     ) -> None:
         """Run the per-task checks a streamed task must pass, without cross-task state.
 
         Args:
             task: The streamed task.
             index: Reusable dataset identity and annotation lookups.
-            declared: The task types :meth:`set_task_stream` declared.
 
         Raises:
-            TimeFValidationError: If the task's type, record attachment, references, answer, or spans
-                are invalid.
+            TimeFValidationError: If the task's record attachment, references, answer, or spans are
+                invalid.
         """
-        if type(task) not in declared:
-            raise TimeFValidationError(
-                f"streamed task {task.id!r} has type {type(task).__name__}, not one of the declared "
-                f"{sorted(t.__name__ for t in declared)}"
-            )
         referenced = self._task_records(task)
         for record in referenced:
             registered = index.records_by_id.get(record.id)
@@ -565,8 +572,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                     f"{existing!r} and {descriptor!r}"
                 )
             by_key[descriptor.key] = descriptor
-        # A streamed dataset declares its task types up front, so the schema records them without
-        # draining the stream just to collect them.
+        # A streamed dataset knows its task types only after a validated pass over the stream (the
+        # write), so they stay empty before then rather than draining the stream just to collect them.
         streamed = self._ordered_unique(self._streamed_task_types)
         tasks = streamed if self._task_stream is not None else self._ordered_unique(type(task) for task in self._tasks)
         self._schema = DatasetSchema(

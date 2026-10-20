@@ -431,7 +431,7 @@ class SensorCapsConnector(BaseConnector[SensorCapsFileRef]):
                 raise TimeFValidationError(
                     f"{file.path} ({file.partition}): expected {file.expected_rows} rows, found {count}"
                 )
-        dataset.set_task_stream([AnswerTask], partial(_iter_tasks, tuple(raw_refs), records))
+        dataset.set_task_stream(lambda: _iter_tasks(tuple(raw_refs), records))
         return dataset
 
 
