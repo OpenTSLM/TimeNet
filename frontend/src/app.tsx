@@ -1,5 +1,6 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { TasksBrowser } from "./tasks";
+import { RecordsBrowser } from "./records";
 
 type Metadata = {
   dataset_id: string;
@@ -176,13 +177,19 @@ export function App() {
     setApplied(filters);
   }
 
-  function navigateDataset(params: URLSearchParams) {
-    history.pushState(null, "", `/?${params}`);
+  function navigateDataset(params: URLSearchParams, options?: { replace?: boolean }) {
+    if (options?.replace) history.replaceState(null, "", `/?${params}`);
+    else history.pushState(null, "", `/?${params}`);
     setSearch(location.search);
   }
 
+  if (selection && new URLSearchParams(search).get("view") === "records") {
+    return <RecordsBrowser key={`${selection.dataset_id}@${selection.version}`} dataset={selection.dataset_id} version={selection.version}
+      search={search} navigate={navigateDataset} getJson={getJson} />;
+  }
+
   if (selection && new URLSearchParams(search).get("view") === "tasks") {
-    return <TasksBrowser dataset={selection.dataset_id} version={selection.version}
+    return <TasksBrowser key={`${selection.dataset_id}@${selection.version}`} dataset={selection.dataset_id} version={selection.version}
       search={search} navigate={navigateDataset} getJson={getJson} />;
   }
 
