@@ -12,6 +12,27 @@
       "title": "Access",
       "type": "string"
     },
+    "DatasetRef": {
+      "additionalProperties": false,
+      "description": "An exact release, independent of its registry location.",
+      "properties": {
+        "dataset_id": {
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "version": {
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "version"
+      ],
+      "title": "DatasetRef",
+      "type": "object"
+    },
     "Domain": {
       "description": "Describes what kind of data a dataset contains. A dataset may declare more than one.",
       "enum": [
@@ -66,6 +87,32 @@
     "dataset_version": {
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "type": "string"
+    },
+    "inputs": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/DatasetRef"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "title": "Inputs",
+      "type": "object"
+    },
+    "source_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Revision"
     },
     "name": {
       "minLength": 1,
