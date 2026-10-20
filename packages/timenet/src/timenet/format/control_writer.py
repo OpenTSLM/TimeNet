@@ -296,6 +296,7 @@ class DuckDBControlWriter:
                         dataset.iter_tasks() if tasks is None else tasks,
                     )
                     self._write_chunks(connection, placements)
+                    self._write_namespaces(connection, dataset)
                     self._check_source_tree(connection)
                     if self.external is not None:
                         self.external.finish(connection)
@@ -307,6 +308,43 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
         return task_counts
+
+    @staticmethod
+    def _write_namespaces(connection: duckdb.DuckDBPyConnection, dataset: TimeFDataset) -> None:
+        """Store import lookup information outside the ordinary read path."""
+        aliases = dict(connection.execute("SELECT alias, namespace_key FROM namespaces").fetchall())
+        first_key = max(aliases.values(), default=0) + 1
+        present = (
+            {
+                kind: {row[0] for row in connection.execute(query).fetchall()}
+                for kind, query in (
+                    (ObjectKind.RECORD, "SELECT record_id FROM records"),
+                    (ObjectKind.SOURCE, "SELECT source_id FROM sources"),
+                    (ObjectKind.SIGNAL, "SELECT signal_id FROM signals"),
+                    (ObjectKind.TASK, "SELECT task_id FROM tasks"),
+                    (ObjectKind.ANNOTATION, "SELECT occurrence_id FROM annotation_occurrences"),
+                )
+            }
+            if dataset._imports
+            else {}
+        )
+        for candidate, (alias, imported) in enumerate(dataset._imports.items(), first_key):
+            key = aliases.get(alias, candidate)
+            if alias not in aliases:
+                insert_rows(
+                    connection,
+                    TABLES["namespaces"],
+                    [{"namespace_key": key, "namespace": str(imported.source), "alias": alias}],
+                )
+            insert_rows(
+                connection,
+                TABLES["imported_objects"],
+                [
+                    {"namespace_key": key, "object_kind": kind.value, "source_id": original, "object_id": identity}
+                    for kind, original, identity in imported.rows()
+                    if identity in present[kind]
+                ],
+            )
 
     def _pack(self, kind: ObjectKind, identity: str, field: PackedField, value: Any, position: int = 0) -> Any:
         """Construct a catalog value from the explicit packing result.
