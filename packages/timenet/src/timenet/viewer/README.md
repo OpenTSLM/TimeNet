@@ -1,9 +1,12 @@
 # TimeNet viewer
 
-A read-only browser view of a TimeNet registry, or of one dataset version.
+A read-only browser view of a TimeNet registry, or of one dataset version. Start it with
+`timenet view`. [The CLI docs](../../../../../docs/cli/timenet.md) explain the options.
 
 ## Files
 
+- `launch.py` opens the registry, binds `127.0.0.1`, makes a new access token for each launch,
+  and opens the browser.
 - `security.py` checks every request: the Host, the Origin, and the token. It also adds browser
   security headers.
 - `errors.py` holds the structured error every API route returns, the mapping of registry and
@@ -28,6 +31,14 @@ you commit frontend changes.
 
 ## TODO
 
+- **Remote access through an HTTPS reverse proxy.** v0 accepts only the `127.0.0.1` origin.
+  Serving through a proxy on the same machine needs:
+  - `--public-origin`, checked to be HTTPS and normalized as browsers do (lowercase host, no
+    default port, IDNA). It becomes the only accepted Host and Origin, and the base of the
+    printed URL, while the viewer keeps binding `127.0.0.1`.
+  - Docs that say the proxy must forward the original `Host` header (for nginx,
+    `proxy_set_header Host $host;`), and a threat model for using the token beyond loopback.
+  - Tests for origin normalization and port mismatches.
 - **Catalog scale.** Each catalog request lists the whole registry, then reads the manifests on
   one page. Large registries will need filtering and paging in the registry itself.
 - **Catalog errors.** A dataset that is listed but whose manifest cannot be read makes the whole

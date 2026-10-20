@@ -1,15 +1,27 @@
 """The viewer serves authenticated catalog and pinned-manifest facts."""
 
+import socket
 from unittest.mock import MagicMock
+from urllib.parse import parse_qs, urlsplit
 
 from fastapi.testclient import TestClient
 import pytest
+from typer.testing import CliRunner
 
-from timenet.errors import TimeFFormatError, TimeNetAccessError, TimeNetDatasetNotFoundError, TimeNetDownloadError
+from timenet.cli.app import app as cli_app
+from timenet.errors import (
+    TimeFFormatError,
+    TimeFValidationError,
+    TimeNetAccessError,
+    TimeNetDatasetNotFoundError,
+    TimeNetDownloadError,
+)
 from timenet.registry import LocalRegistry, S3Registry
 from timenet.testing import make_dataset
 from timenet.types import ClassificationTask, Domain, License, Version
+from timenet.viewer import launch
 from timenet.viewer.app import create_app
+from timenet.viewer.launch import open_viewer, serve
 
 
 def _with_metadata(dataset, **update):
@@ -40,6 +52,23 @@ def catalog_registry(registry):
     other.add_tasks(tasks=[ClassificationTask(inputs=(other.records[0],), targets=("finance",), id="finance-extra")])
     registry.store(other)
     return registry
+
+
+def test_open_viewer_can_open_catalog_or_pin_a_dataset(registry):
+    original = registry.get_manifest("timenet/hello-world")
+    newer = make_dataset()
+    _with_metadata(newer, dataset_version=Version(1, 1, 0))
+    registry.store(newer)
+    backend, selected = open_viewer(registry=str(registry.root))
+    assert backend.list_datasets()[0].dataset_id == "timenet/hello-world"
+    assert selected is None
+
+    backend, manifest = open_viewer("timenet/hello-world", str(registry.root))
+    assert manifest is not None
+    assert manifest.metadata.dataset_id == "timenet/hello-world"
+    assert str(manifest.metadata.dataset_version) == "1.1.0"
+    _, pinned = open_viewer("timenet/hello-world@1.0.0", str(registry.root))
+    assert pinned == original
 
 
 def test_direct_manifest_api_returns_only_the_selected_version(registry):
@@ -217,3 +246,89 @@ def test_shell_and_packaged_assets(registry):
     assert client.get("/static/app.js").status_code == 200
     assert "MIT License" in client.get("/static/REACT-LICENSE").text
     assert client.get("/static/unknown.js").status_code == 404
+
+
+@pytest.mark.parametrize("direct_launch", [False, True])
+def test_serve_prints_bare_authenticated_url(registry, monkeypatch, capsys, direct_launch):
+    socket_factory = MagicMock()
+    socket_factory.return_value.__enter__.return_value.getsockname.return_value = ("127.0.0.1", 12345)
+    apps = []
+
+    def skip_serving(server, **options):
+        apps.append(server.config.app)
+
+    monkeypatch.setattr(launch.uvicorn.Server, "run", skip_serving)
+    browser = MagicMock()
+    monkeypatch.setattr(launch.webbrowser, "open", browser)
+    manifest = registry.get_manifest("timenet/hello-world") if direct_launch else None
+
+    with monkeypatch.context() as socket_patch:
+        socket_patch.setattr(launch.socket, "socket", socket_factory)
+        serve(registry, initial_manifest=manifest, open_browser=False)
+
+    output = capsys.readouterr()
+    url = output.out.strip()
+    parsed = urlsplit(url)
+    assert f"{parsed.scheme}://{parsed.netloc}" == "http://127.0.0.1:12345"
+    assert parsed.path == "/"
+    token = parse_qs(parsed.fragment)["token"][0]
+    assert parse_qs(parsed.query) == (
+        {"dataset": ["timenet/hello-world"], "version": ["1.0.0"]} if direct_launch else {}
+    )
+    assert output.out == url + "\n"
+    assert output.err == ""
+    browser.assert_not_called()
+    client = TestClient(apps[0], base_url=f"{parsed.scheme}://{parsed.netloc}")
+    path = "/api/v1/manifest" if direct_launch else "/api/v1/catalog"
+    params = {"dataset_id": "timenet/hello-world", "version": "1.0.0"} if direct_launch else {}
+    response = client.get(path, params=params, headers={"Authorization": f"Bearer {token}"})
+    assert response.status_code == 200
+    if direct_launch:
+        assert manifest is not None
+        assert response.json() == manifest.to_dict()
+    else:
+        assert response.json()["items"][0]["metadata"]["dataset_id"] == "timenet/hello-world"
+
+
+def test_port_in_use_reports_a_validation_error(registry):
+    with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as taken:
+        taken.bind(("127.0.0.1", 0))
+        taken.listen()
+        port = taken.getsockname()[1]
+        with pytest.raises(TimeFValidationError, match="cannot bind the viewer"):
+            serve(registry, port=port, open_browser=False)
+
+
+def test_cli_view_passes_registry_and_optional_manifest(registry, monkeypatch):
+    pinned = registry.get_manifest("timenet/hello-world")
+    newer = make_dataset()
+    _with_metadata(newer, dataset_version=Version(1, 1, 0))
+    registry.store(newer)
+    received = []
+
+    def fake_serve(backend, **options):
+        received.append((backend, options))
+
+    monkeypatch.setattr(launch, "serve", fake_serve)
+    result = CliRunner().invoke(
+        cli_app,
+        ["view", "timenet/hello-world@1.0.0", "--registry", str(registry.root), "--no-browser"],
+    )
+    assert result.exit_code == 0, result.output
+    assert received[0][0].root == registry.root
+    assert received[0][1]["initial_manifest"] == pinned
+    assert received[0][1]["open_browser"] is False
+    assert received[0][1]["quiet"] is False
+    result = CliRunner().invoke(cli_app, ["--quiet", "view", "--registry", str(registry.root), "--no-browser"])
+    assert result.exit_code == 0, result.output
+    assert received[1][0].root == registry.root
+    assert received[1][1]["initial_manifest"] is None
+    assert received[1][1]["quiet"] is True
+
+
+@pytest.mark.parametrize(("quiet", "log_level"), [(False, "info"), (True, "warning")])
+def test_quiet_serve_hides_server_status_logs(registry, monkeypatch, quiet, log_level):
+    levels = []
+    monkeypatch.setattr(launch.uvicorn.Server, "run", lambda server, **_: levels.append(server.config.log_level))
+    serve(registry, open_browser=False, quiet=quiet)
+    assert levels == [log_level]
