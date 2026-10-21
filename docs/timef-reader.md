@@ -54,6 +54,8 @@ Use `read_value(value)` from `timenet.types` when a value may be a text handle o
 The Arrow `create_task_table()`, `create_target_table()`, and `create_annotation_table()` APIs return
 native values. The reader caches up to eight payload files.
 
+Irregular timestamp loaders read and validate their packed arrays on first access.
+
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
 `TimeFDataset`.
 
