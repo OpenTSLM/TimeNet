@@ -21,7 +21,8 @@ def store(root, dataset, **kwargs):
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
-def test_prepared_shared_payloads_do_not_open_parent_catalogs(tmp_path, monkeypatch, backend):
+@pytest.mark.parametrize("read_mode", ["eager", "scan"])
+def test_prepared_shared_payloads_do_not_open_parent_catalogs(tmp_path, monkeypatch, backend, read_mode):
     original = make_dataset()
     text = "A detailed clinical report. " * 300
     original.tasks[0].prompt = text
@@ -57,7 +58,13 @@ def test_prepared_shared_payloads_do_not_open_parent_catalogs(tmp_path, monkeypa
     (parent_dir / "control.duckdb").rename(parent_dir / "unavailable.duckdb")
     (parent_dir / "manifest.json").unlink()
     with TimeFReader(prepared) as child_reader:
-        assert child_reader.read().read().records[0].signals[0].to_arrow().equals(expected)
+        if read_mode == "scan":
+            with child_reader.get_handle().scan() as dataset:
+                assert dataset.records[0].signals[0].to_arrow().equals(expected)
+                assert isinstance(dataset.tasks[0].prompt, ValueHandle)
+                assert dataset.tasks[0].prompt.read() == text
+        else:
+            assert child_reader.read().read().records[0].signals[0].to_arrow().equals(expected)
         assert child_reader.create_task_table()["prompt"].to_pylist() == [text]
         assert child_reader.create_target_table()["text_value"].to_pylist() == [text]
         assert text in child_reader.create_annotation_table()["text_value"].to_pylist()
