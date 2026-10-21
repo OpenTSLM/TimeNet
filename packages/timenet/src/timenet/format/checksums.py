@@ -1,4 +1,4 @@
-"""File checksums recorded in the manifest and verified on read.
+"""SHA-256 checksums for manifest files and encoded values.
 
 The reader must hash files the same way the writer did, or :meth:`~timenet.reader.TimeFReader.verify`
 means nothing. The algorithm and the block size live here so both sides call the same code.
@@ -23,6 +23,15 @@ class _Readable(Protocol):
     def read(self, size: int = ..., /) -> bytes:
         """Read up to ``size`` bytes, or the rest of the stream."""
         ...
+
+
+def buffer_checksum(data: bytes | memoryview) -> str:
+    """Hash encoded bytes with the shared checksum algorithm and prefix.
+
+    Returns:
+        The checksum as ``"sha256:<hex>"``.
+    """
+    return CHECKSUM_PREFIX + hashlib.sha256(data).hexdigest()
 
 
 def file_checksum(path: Path) -> str:
