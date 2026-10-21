@@ -11,6 +11,7 @@ from timenet.errors import TimeFValidationError
 from timenet.types import ClassificationTask, Split
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.time_ra.rats40k import RATS40KConnector, _json, connector as module
+from timenet_connectors.sources import json_stream
 
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -50,7 +51,7 @@ def test_conversion_preserves_signals_and_published_labels(monkeypatch, tmp_path
         path = tmp_path / ref.path.name
         path.write_bytes(ref.path.read_bytes().replace(b"\n", b"\r\n"))
         refs.append(HubFileRef(path, ref.part, ref.filename))
-    monkeypatch.setattr(_json, "_CHUNK_SIZE", 17)
+    monkeypatch.setattr(json_stream, "_CHUNK_SIZE", 17)
     dataset = RATS40KConnector().convert(refs)
     # A partial preview must not consume the connector's task stream.
     next(dataset.iter_tasks())
