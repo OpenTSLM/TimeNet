@@ -16,12 +16,14 @@ Source contains Signals.
 ```python
 from timenet.client import TimeNet
 
-dataset = TimeNet(".timenet-registry").load("timenet/hello-world")
+with TimeNet(".timenet-registry").load("timenet/hello-world") as handle:
+    dataset = handle.read()
 record = dataset.records[0]
 signal = record.signals[0]
 ```
 
-The hierarchy loads first. Signal values load only when an array method reads them.
+`load()` returns a lazy handle. The explicit `handle.read()` call loads the hierarchy and all values.
+The returned dataset remains usable after the handle closes.
 
 ## Arrow and NumPy
 
@@ -122,7 +124,8 @@ import timenet_connectors
 
 registry = Path(".timenet-registry")
 timenet_connectors.build("timenet/test-mean", out=registry)
-dataset = TimeNet(registry).load("timenet/test-mean")
+with TimeNet(registry).load("timenet/test-mean") as handle:
+    dataset = handle.read()
 
 x, y = dataset.to_features_and_targets(output="numpy")
 x_train, x_test, y_train, y_test = train_test_split(

@@ -190,7 +190,8 @@ def test_load_full_round_trips(version_dir, tmp_path):
     with registry_server(directory) as server:
         registry = RemoteRegistry(server.url, cache_dir=tmp_path / "cache")
         client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
-        loaded = client.load(manifest.metadata.dataset_id)
+        with client.load(manifest.metadata.dataset_id) as handle:
+            loaded = handle.read()
         assert_datasets_equal(make_dataset(), loaded)
 
 

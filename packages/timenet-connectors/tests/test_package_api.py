@@ -28,7 +28,9 @@ def test_build_then_load_round_trip(monkeypatch, tmp_path):
     version_dir = timenet_connectors.build("timenet/test-mean")
     assert (version_dir / "manifest.json").exists()
 
-    dataset = timenet_connectors.load("timenet/test-mean")
+    with timenet_connectors.load("timenet/test-mean") as handle:
+        assert handle.reader._control is None
+        dataset = handle.read()
     assert len(dataset.records) == 1000
 
     x, y = dataset.to_features_and_targets(task=ClassificationTask)
