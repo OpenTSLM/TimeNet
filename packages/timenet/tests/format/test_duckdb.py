@@ -11,7 +11,7 @@ from timenet.format.duckdb import (
 )
 
 
-def test_control_schema_is_version_one_and_has_no_stored_relationship_constraints(tmp_path):
+def test_control_schema_stores_its_version_and_no_constraints(tmp_path):
     path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:
         create_control_schema(connection)
@@ -20,8 +20,7 @@ def test_control_schema_is_version_one_and_has_no_stored_relationship_constraint
             "SELECT constraint_type FROM duckdb_constraints() WHERE constraint_type <> 'NOT NULL'"
         ).fetchall()
 
-    assert CONTROL_SCHEMA_VERSION == 1
-    assert version == ("1",)
+    assert version == (str(CONTROL_SCHEMA_VERSION),)
     assert stored_constraints == []
 
 
