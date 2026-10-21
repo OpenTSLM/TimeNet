@@ -886,6 +886,77 @@ class DuckDBControlReader:
             grouped[row.signal_key].append(row.stored_chunk)
         return grouped
 
+    def read_task(self, identity: str, *, eager: bool = False) -> Task:
+        """Hydrate one task and its dependencies without constructing unrelated records.
+
+        Args:
+            identity: The stored task ID.
+            eager: Load values on the task and its referenced objects.
+
+        Returns:
+            The requested task.
+
+        Raises:
+            TimeFValidationError: If the requested task is absent.
+        """  # noqa: DOC502 - read_tasks_by_id raises TimeFValidationError
+        return self.read_tasks_by_id((identity,), eager=eager)[0]
+
+    def read_tasks_by_id(self, identities: Iterable[str], *, eager: bool = False) -> tuple[Task, ...]:
+        """Read selected tasks in one hydration batch, sharing their dependencies.
+
+        Args:
+            identities: Task IDs in result order.
+            eager: Load values while constructing tasks and their referenced objects.
+
+        Returns:
+            Tasks in the requested order, with shared object references restored.
+
+        Raises:
+            TimeFValidationError: If a requested task is absent.
+        """
+        requested = tuple(identities)
+        if not requested:
+            return ()
+        keys = dict(
+            self.connection.execute(
+                "SELECT task_id, task_key FROM tasks WHERE task_id IN (SELECT unnest(?))", [list(requested)]
+            ).fetchall()
+        )
+        for identity in requested:
+            if identity not in keys:
+                raise TimeFValidationError(f"no Task {identity!r}")
+        return tuple(_TaskHydration(self, None, eager=eager)._hydrate([keys[identity] for identity in requested]))
+
+    def read_annotation(self, identity: str, *, eager: bool = False) -> Annotation:
+        """Hydrate one annotation occurrence without constructing its owning object.
+
+        Args:
+            identity: The stored occurrence ID.
+            eager: Resolve the occurrence's value before constructing its annotation.
+
+        Returns:
+            The requested annotation.
+
+        Raises:
+            TimeFValidationError: If the requested occurrence is absent.
+            TimeFFormatError: If the stored object type is unknown.
+        """
+        row = self.connection.execute(
+            "SELECT occurrence_key, object_key, object_type FROM annotation_occurrences WHERE occurrence_id = ?",
+            [identity],
+        ).fetchone()
+        if row is None:
+            raise TimeFValidationError(f"no Annotation {identity!r}")
+        try:
+            object_type = ObjectKind(row[2])
+        except ValueError as exc:
+            raise TimeFFormatError(f"annotation occurrence {identity!r} has unknown object type {row[2]!r}") from exc
+        occurrences: dict[int, Annotation] = {}
+        self._read_annotations(
+            [row[1]], object_type=object_type, annotations_by_occurrence=occurrences, eager=eager, occurrence_key=row[0]
+        )
+        return occurrences[row[0]]
+
     def read_tasks(
         self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = (), eager: bool = False
     ) -> tuple[Task, ...]:
@@ -1492,6 +1563,7 @@ class DuckDBControlReader:
         object_type: ObjectKind | None = None,
         annotations_by_occurrence: dict[int, Annotation] | None = None,
         eager: bool = False,
+        occurrence_key: int | None = None,
     ) -> dict[tuple[ObjectKind, str], tuple[Annotation, ...]]:
         """Hydrate annotation content and occurrences for hierarchy objects.
 
@@ -1501,6 +1573,7 @@ class DuckDBControlReader:
                 the object lookup to that type's table.
             annotations_by_occurrence: Filled with every hydrated occurrence by its internal key.
             eager: Resolve stored values before constructing annotations.
+            occurrence_key: Keep only this occurrence, or ``None`` for every matching occurrence.
 
         Returns:
             Attached occurrences keyed by object type and object ID.
@@ -1536,6 +1609,8 @@ class DuckDBControlReader:
             ObjectKind.ANNOTATION, (_required(row.content_id, "annotation content") for row in rows)
         )
         for row in rows:
+            if occurrence_key is not None and row.occurrence_key != occurrence_key:
+                continue
             span = _occurrence_span(row)
             # The first pass over ``rows`` already rejected NULL content and object columns.
             content_id = _required(row.content_id, "annotation content")
