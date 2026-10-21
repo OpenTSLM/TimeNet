@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections import OrderedDict
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 import types as _types
 from typing import TYPE_CHECKING
@@ -22,6 +23,7 @@ from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, T
 from timenet.types.object_kind import ObjectKind
 from timenet.types.reference_keys import OwnerKey
 from timenet.types.splits import Split
+from timenet.values_backends.parquet.reader import ParquetValuesReader
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
@@ -297,8 +299,39 @@ class TimeFReader:
     def _read_dataset(self) -> TimeFDataset:
         """Return the cached dataset with every value materialized in memory."""
         if self._dataset is None:
-            self._dataset = self._read_catalog(eager=True)
+            with self._as_format_error():
+                try:
+                    self._prepare_scan()
+                    self._dataset = self._read_catalog(eager=True)
+                finally:
+                    for backend in (self._values, *self._owner_readers.values()):
+                        if isinstance(backend, ParquetValuesReader):
+                            backend.finish_scan()
         return self._dataset
+
+    def _prepare_scan(self) -> None:
+        """Use the write-time group plan for bounded parallel Parquet decoding."""
+        groups: dict[OwnerKey | None, list[tuple[str, int]]] = {}
+        for owner, path, group in (
+            self._control_reader()
+            .connection.execute("SELECT * FROM payload_scan_groups ORDER BY owner_key, value_path, chunk_major_index")
+            .fetchall()
+        ):
+            groups.setdefault(owner, []).append((path, group))
+        executor = None
+        for owner, locations in groups.items():
+            version = self._version.resolve_payload_source(owner)
+            if owner is None:
+                backend = self._values_reader()
+            else:
+                backend = self._owner_readers.get(owner)
+                if backend is None:
+                    backend = make_values_reader(version.manifest.values_backend)
+                    self._owner_readers[owner] = backend
+            if isinstance(backend, ParquetValuesReader):
+                if executor is None:
+                    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="timef-scan")
+                backend.prepare_scan(version, locations, executor)
 
     def _read_catalog(self, *, eager: bool = False) -> TimeFDataset:
         """Hydrate the dataset with native values for eager reads and handles otherwise.
