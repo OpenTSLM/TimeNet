@@ -68,13 +68,20 @@ def make_values_reader(name: str) -> BaseValuesReader:
 
     Raises:
         TimeFValidationError: If ``name`` is not a known backend.
+        ImportError: If the selected optional backend is not installed.
+        ModuleNotFoundError: If another dependency of the backend is missing.
     """
     if name == ValuesBackend.PARQUET:
         from timenet.values_backends.parquet.reader import ParquetValuesReader  # noqa: PLC0415
 
         return ParquetValuesReader()
     if name == ValuesBackend.ZARR:
-        from timenet.values_backends.zarr.reader import ZarrValuesReader  # noqa: PLC0415
+        try:
+            from timenet.values_backends.zarr.reader import ZarrValuesReader  # noqa: PLC0415
+        except ModuleNotFoundError as error:
+            if error.name != "zarr":
+                raise
+            raise ImportError("Zarr values require the 'timenet[zarr]' extra") from error
 
         return ZarrValuesReader()
     raise TimeFValidationError(

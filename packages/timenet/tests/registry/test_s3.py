@@ -37,13 +37,16 @@ def s3_root(monkeypatch):
     server.stop()
 
 
-def test_store_and_lazy_load_round_trip(s3_root, tmp_path):
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_store_and_remote_load_round_trip(s3_root, tmp_path, backend):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    version = registry.store(make_dataset())
+    version = registry.store(make_dataset(), values_backend=backend)
     assert version == str(make_dataset().metadata.dataset_version)
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
-    loaded = client.load(make_dataset().metadata.dataset_id)  # lazy S3 range reads
+    loaded = client.load(make_dataset().metadata.dataset_id)
     assert_datasets_equal(make_dataset(), loaded)
+    assert isinstance(registry.open_version(make_dataset().metadata.dataset_id).filesystem, pafs.S3FileSystem)
+    assert not (tmp_path / "cache" / make_dataset().metadata.dataset_id).exists()
 
 
 def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
