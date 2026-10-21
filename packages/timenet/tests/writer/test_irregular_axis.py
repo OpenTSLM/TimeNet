@@ -130,7 +130,7 @@ def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypat
     with duckdb.connect(str(version / "control.duckdb"), read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM axes").fetchone() == (1,)
         assert connection.execute("SELECT count(*) FROM axis_offsets").fetchone() == (len(shared_us),)
-        assert connection.execute("SELECT count(DISTINCT axis_key) FROM signals").fetchone() == (1,)
+        assert connection.execute("SELECT count(DISTINCT axis_id) FROM signals").fetchone() == (1,)
     for shard in (version / "time_series").glob("*.parquet"):
         column = pq.read_table(shard, columns=["time_offsets_us"]).column(0)
         assert column.null_count == len(column)
@@ -139,15 +139,15 @@ def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypat
     with TimeFReader(DatasetVersion.open_local(version)) as reader:
         back = next(iter(reader.iter_records())).signals
         control = reader._control_reader()
-        original = control.load_axis_offsets_by_key
+        original = control.load_axis_offsets
         read_calls = 0
 
-        def count_reads(axis_key, loaded_axis, n_values):
+        def count_reads(axis_id, loaded_axis, n_values):
             nonlocal read_calls
             read_calls += 1
-            return original(axis_key, loaded_axis, n_values)
+            return original(axis_id, loaded_axis, n_values)
 
-        monkeypatch.setattr(control, "load_axis_offsets_by_key", count_reads)
+        monkeypatch.setattr(control, "load_axis_offsets", count_reads)
         assert [signal.time_offsets_us().tolist() for signal in back] == [shared_us, shared_us]
         assert read_calls == 1
         assert len(reader._axis_offsets_cache) == 1
