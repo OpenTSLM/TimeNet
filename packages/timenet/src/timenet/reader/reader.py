@@ -307,13 +307,18 @@ class TimeFReader:
                 record = by_id.get(referenced.id)
                 if record is not None and task.id not in record.task_ids:
                     record.task_ids = (*record.task_ids, task.id)
-        return TimeFDataset.from_parts(
+        dataset = TimeFDataset.from_parts(
             metadata=self.metadata,
             records=records,
             tasks=tasks,
             schema=self.schema,
             annotations=control.read_dataset_annotations(self._manifest.dataset_id, eager=eager),
         )
+
+        dataset.input_locks = dict(self._manifest.input_locks)
+        dataset.lineage = {str(lock.source): lock for lock in self._manifest.lineage}
+        dataset._imports_source = self._version
+        return dataset
 
     def iter_records(
         self,

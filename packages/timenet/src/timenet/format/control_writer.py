@@ -19,6 +19,7 @@ from timenet.dataset.axis import to_time_offsets_us
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
+from timenet.format.control_cache import materialize_control
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
 from timenet.format.signal_loader import MemoryArray
@@ -320,7 +321,27 @@ class DuckDBControlWriter:
         Raises:
             TimeFValidationError: If an import differs from its locked parent release.
         """
+        if dataset._imports_source is not None:
+            with connect_control(materialize_control(dataset._imports_source), read_only=True) as stored:
+                for name in ("imports", "imported_objects"):
+                    rows = stored.execute(f"SELECT * FROM {name}").to_arrow_table().to_pylist()  # noqa: S608
+                    insert_rows(connection, TABLES[name], rows)
+            for kind, table, column in (
+                (ObjectKind.RECORD, "records", "record_id"),
+                (ObjectKind.SOURCE, "sources", "source_id"),
+                (ObjectKind.SIGNAL, "signals", "signal_id"),
+                (ObjectKind.TASK, "tasks", "task_id"),
+                (ObjectKind.ANNOTATION, "annotation_occurrences", "occurrence_id"),
+            ):
+                connection.execute(
+                    f"DELETE FROM imported_objects WHERE object_kind = ? AND object_id NOT IN (SELECT {column} FROM {table})",  # noqa: S608
+                    [kind],
+                )
         aliases = dict(connection.execute("SELECT alias, parent_ref FROM imports").fetchall())
+        for alias, parent_ref in aliases.items():
+            lock = dataset.input_locks.get(alias)
+            if lock is None or str(lock.source) != parent_ref:
+                raise TimeFValidationError(f"stored import alias {alias!r} differs from its manifest input lock")
         present = (
             {
                 kind: {row[0] for row in connection.execute(query).fetchall()}
