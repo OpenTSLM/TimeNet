@@ -237,6 +237,7 @@ SIGNAL_CHUNKS = Table(
         _key("signal_key"),
         _key("chunk_index"),
         _required("value_path"),
+        Column("owner_key", ColumnType.VARCHAR),
         _key("chunk_major_index"),
         Column("chunk_minor_index", ColumnType.BIGINT),
         _key("n_values"),
@@ -380,9 +381,26 @@ EXTERNAL_VALUES = Table(
     unique=(("object_kind", "object_id", "field", "position"),),
 )
 
+IMPORTS = Table(
+    "imports",
+    (_required("alias"), _required("parent_ref")),
+    unique=(("alias",), ("parent_ref",)),
+)
+"""Catalog lookup projection of the aliases and exact releases in ``Manifest.input_locks``."""
+
+IMPORTED_OBJECTS = Table(
+    "imported_objects",
+    (_required("alias"), _required("object_kind"), _required("parent_id"), _required("object_id")),
+    unique=(("alias", "object_kind", "parent_id"),),
+    foreign_keys=(ForeignKey("alias", "imports", "alias"),),
+)
+"""Local object IDs indexed by input alias, object kind, and original parent ID."""
+
 CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
+    IMPORTS,
     EXTERNAL_VALUES,
+    IMPORTED_OBJECTS,
     DATASETS,
     RECORDS,
     CLOCKS,
