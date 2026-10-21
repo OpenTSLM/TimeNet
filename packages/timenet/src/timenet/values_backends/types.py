@@ -3,6 +3,8 @@
 from dataclasses import dataclass
 from enum import StrEnum
 
+from timenet.types.reference_keys import OwnerKey
+
 
 class ValuesBackend(StrEnum):
     """Storage backend for the time-series values plane, recorded as the manifest ``values_backend`` tag.
@@ -52,3 +54,5 @@ class StoredChunk:
     """Backend coordinates within the file."""
     n_values: int
     """Number of values in the chunk."""
+    owner_key: OwnerKey | None = None
+    """Physical source in the manifest, or None when this release owns the values."""

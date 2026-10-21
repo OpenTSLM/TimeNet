@@ -137,10 +137,20 @@ class Annotation:
         """Return the identity of the reusable annotation content."""
         return self.id
 
-    @property
-    def _content_fields(self) -> tuple[object, ...]:
-        """Return the reusable payload, without occurrence-specific fields."""
-        return (self.key, read_value(self.value), self.unit, self.description, self.metadata)
+    def _has_same_content(self, other: "Annotation") -> bool:
+        """Compare reusable content, reading distinct text handles only when needed.
+
+        Returns:
+            Whether the reusable metadata and values agree.
+        """
+        if (self.key, self.unit, self.description, self.metadata) != (
+            other.key,
+            other.unit,
+            other.description,
+            other.metadata,
+        ):
+            return False
+        return self.value is other.value or read_value(self.value) == read_value(other.value)
 
     @property
     def name(self) -> str:

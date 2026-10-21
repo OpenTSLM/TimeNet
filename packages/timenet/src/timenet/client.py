@@ -153,7 +153,9 @@ class TimeNet:
         force: bool = False,
         progress_cb: ProgressCallback | None = None,
     ) -> Path:
-        """Fetch a dataset version's files into local storage. Return its directory.
+        """Fetch a version and its physical payload sources into local storage.
+
+        Build-only inputs remain recorded in the manifest and are not downloaded.
 
         Args:
             dataset_id: The dataset id.
@@ -179,9 +181,8 @@ class TimeNet:
     def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
         """Read the dataset into memory through the registry's storage handle.
 
-        Series values stay lazy per-series once the handle is open. A local or S3 registry reads them in
-        place; a remote registry materializes the version to local storage first (see
-        :meth:`~timenet.registry.BaseRegistry.open_version`), so a remote load fetches the whole version.
+        Series values stay lazy once the handle is open. Remote backends resolve physical source
+        manifests upfront and read payload ranges on demand, reusing complete cached releases.
 
         Against a local registry, a dataset the registry does not have is built first, if some
         installed package registers a connector for its id. Set ``auto_build`` false to fail fast

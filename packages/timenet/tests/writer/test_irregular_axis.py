@@ -13,7 +13,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 from timenet.writer import TimeFWriter
 
@@ -56,7 +56,7 @@ def test_an_irregular_series_round_trips(tmp_path, values_backend):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
 
-    reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset, values_backend=values_backend)))
+    reader = TimeFReader(open_local_version(_written(tmp_path, dataset, values_backend=values_backend)))
     back = next(iter(reader.iter_records())).signals[0]
     assert back.time_axis == IrregularAxis(first_us=0, last_us=6_527_881_000)
     assert back.time_offsets_us().tolist() == _HATCH_US
@@ -88,7 +88,7 @@ def test_a_mixed_record_keeps_each_series_on_its_own_axis(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=series),)))
     dataset.derive_schema()
 
-    reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset)))
+    reader = TimeFReader(open_local_version(_written(tmp_path, dataset)))
     back = {ts.name: ts for ts in next(iter(reader.iter_records())).signals}
     assert back["temp"].time_offsets_us().tolist() == shared_us
     assert back["humidity"].time_offsets_us().tolist() == shared_us
@@ -147,7 +147,7 @@ def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypat
         column = pq.read_table(shard, columns=["time_offsets_us"]).column(0)
         assert column.null_count == len(column)
 
-    with TimeFReader(DatasetVersion.open_local(version)) as reader:
+    with TimeFReader(open_local_version(version)) as reader:
         back = next(iter(reader.iter_records())).signals
         original = pq.ParquetFile.read
         read_calls = 0
@@ -176,7 +176,7 @@ def test_value_chunking_does_not_affect_shared_time_offsets(tmp_path):
     dataset.derive_schema()
 
     # The values split into small chunks while the axis remains one control-plane object.
-    reader = TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset, chunk_max_bytes=480)))
+    reader = TimeFReader(open_local_version(_written(tmp_path, dataset, chunk_max_bytes=480)))
     back = next(iter(reader.iter_records())).signals[0]
     assert back.time_offsets_us().tolist() == time_offsets
     assert back.to_numpy().tolist() == list(range(4000))
@@ -259,7 +259,7 @@ def test_zarr_shared_time_offsets_survive_a_tuned_chunk_size(tmp_path, chunk_max
     dataset.derive_schema()
 
     version = _written(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=chunk_max_bytes)
-    back = next(iter(TimeFReader(DatasetVersion.open_local(version)).iter_records())).signals[0]
+    back = next(iter(TimeFReader(open_local_version(version)).iter_records())).signals[0]
     assert back.time_offsets_us().tolist() == _HATCH_US
 
 
@@ -291,7 +291,7 @@ def test_zarr_keeps_only_values_in_the_values_plane(tmp_path):
     assert not (store / "_irregular").exists()
     assert not (store / "_time_offsets").exists()
 
-    back = {ts.name: ts for ts in next(iter(TimeFReader(DatasetVersion.open_local(version)).iter_records())).signals}
+    back = {ts.name: ts for ts in next(iter(TimeFReader(open_local_version(version)).iter_records())).signals}
     assert back["hatch"].time_offsets_us().tolist() == _HATCH_US
     assert back["steady"].to_numpy().tolist() == list(range(8))
     assert back["steady"].time_offsets_loader is None
@@ -312,7 +312,7 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
-    version = DatasetVersion.open_local(version_dir)
+    version = open_local_version(version_dir)
     with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
         connection.execute("UPDATE axes SET last_us = last_us + 1000 WHERE axis_type = 'irregular'")
     back = next(iter(TimeFReader(version).iter_records())).signals[0]
@@ -338,7 +338,7 @@ def test_reader_rejects_different_signal_lengths_on_one_irregular_axis(tmp_path)
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=signals),)))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
-    version = DatasetVersion.open_local(version_dir)
+    version = open_local_version(version_dir)
     with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
         connection.execute("UPDATE signals SET n_values = 4 WHERE name = 'humidity'")
 
@@ -355,7 +355,7 @@ def test_reader_rejects_decreasing_stored_time_offsets(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
-    version = DatasetVersion.open_local(version_dir)
+    version = open_local_version(version_dir)
     path = next((version_dir / "payloads").glob("*.parquet"))
     table = pq.read_table(path)
     rows = table.to_pylist()
