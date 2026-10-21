@@ -149,7 +149,7 @@ class S3Registry(WritableRegistry):
             A handle that prefers complete cached releases and otherwise uses S3 range reads.
         """
         manifest = None
-        if version in {None, "", "latest"}:
+        if version in {None, "", LATEST_VERSION}:
             manifest = self.get_manifest(dataset_id, version)
             version = str(manifest.metadata.dataset_version)
         return resolve_read_dependency_graph(
