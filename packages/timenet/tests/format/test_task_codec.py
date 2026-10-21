@@ -1,11 +1,14 @@
-from timenet.dataset import OrdinalAxis, RegularAxis, Signal
+from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.format.task_codec import decode_span, encode_span, encode_target, encode_task_payload
 from timenet.types import (
     AnswerTask,
+    DatasetMetadata,
+    License,
     StepInterval,
     TemporalLocalizationTask,
     TimePoint,
     TimeSeriesSpec,
+    Version,
     ureg,
 )
 
@@ -20,6 +23,14 @@ def _signals():
     spec = TimeSeriesSpec(spec_type="s", name="S", unit_value=ureg.dimensionless)
     timed = Signal.from_values([0.0] * 4, spec=spec, name="timed", time_axis=RegularAxis.from_rate_hz(1))
     ordinal = Signal.from_values([0.0] * 8, spec=spec, name="ordinal", time_axis=OrdinalAxis())
+    metadata = DatasetMetadata(
+        dataset_id="timenet/codec",
+        dataset_version=Version(1, 0, 0),
+        name="Codec",
+        description="test",
+        license=License.CC_BY_4_0,
+    )
+    TimeFDataset(metadata=metadata).add_record(record=Record(sources=(Source(name="s", signals=(timed, ordinal)),)))
     return timed, ordinal
 
 

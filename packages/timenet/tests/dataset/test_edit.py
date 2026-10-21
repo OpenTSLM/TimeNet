@@ -85,7 +85,7 @@ def test_remove_unknown_record_raises():
     dataset = make_dataset()
     dataset.derive_schema()
     with pytest.raises(TimeFEditError, match="unknown record ids"):
-        remove_records(dataset, ["nope"])
+        remove_records(dataset, [999])
 
 
 def test_remove_record_with_task_rejects_without_cascade():
@@ -179,27 +179,25 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
 def test_target_and_candidate_records_are_required_whatever_the_task_type():
     dataset = make_dataset()
     edited_record = dataset.records[1]
-    dataset.add_task(
+    editing = dataset.add_task(
         task=TSEditingTask(
             inputs=(dataset.records[0],),
             prompt="Denoise it.",
             targets=(edited_record,),
-            id="task-edit-0",
         )
     )
-    dataset.add_task(
+    correspondence = dataset.add_task(
         task=TSCorrespondenceTask(
             inputs=(dataset.records[0],),
             prompt="Which trace matches?",
             candidate_records=(dataset.records[1], dataset.records[2]),
             targets=(dataset.records[2],),
-            id="task-corr-0",
         )
     )
     dataset.derive_schema()
-    with pytest.raises(TimeFEditError, match="task-edit-0"):
+    with pytest.raises(TimeFEditError, match=rf"dangle tasks \[[^\]]*\b{editing.id}\b"):
         remove_records(dataset, [dataset.records[1].id])  # the edit's produced record
-    with pytest.raises(TimeFEditError, match="task-corr-0"):
+    with pytest.raises(TimeFEditError, match=rf"dangle tasks \[[^\]]*\b{correspondence.id}\b"):
         remove_records(dataset, [dataset.records[2].id])  # a candidate the correspondence answer names
 
 

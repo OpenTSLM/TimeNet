@@ -27,8 +27,6 @@ def _series(**overrides):
         "loader": lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
         **overrides,
     }
-    if "time_series_id" in overrides:
-        fields["id"] = fields.pop("time_series_id")
     if "signal" in overrides:
         fields["name"] = fields.pop("signal")
     return Signal.from_loader(**fields)
@@ -75,21 +73,14 @@ def test_frozen():
         ts.name = "V1"
 
 
-def test_default_id_unique_explicit_id_kept():
-    assert _series().id != _series().id
-    assert _series(time_series_id="fixed").id == "fixed"
-
-
 def test_signal_accepts_declarative_eager_data():
     signal = Signal(
-        id="lead-i",
         name="I",
         data=[1.0, 2.0],
         spec=_spec(),
         time_axis=RegularAxis.from_rate_hz(500),
     )
 
-    assert signal.id == "lead-i"
     assert signal.name == "I"
     assert signal.n_values == 2
     assert signal.to_arrow().to_pylist() == [1.0, 2.0]
@@ -134,14 +125,6 @@ def test_from_values_counts_the_array_it_was_given():
     assert ts.span_us == (1_000_000, 1_500_000)  # starts 4 values into a 4 Hz axis
 
 
-def test_from_values_generates_unique_id_unless_given():
-    a = Signal.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1))
-    b = Signal.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1))
-    assert a.id != b.id
-    fixed = Signal.from_values([1.0], spec=_spec(), name="II", time_axis=RegularAxis.from_rate_hz(1), id="x")
-    assert fixed.id == "x"
-
-
 def test_from_values_casts_to_the_specified_numpy_dtype():
     spec = _spec().model_copy(update={"dtype": "int16"})
     arr = Signal.from_values([1, 2, 3], spec=spec, name="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
@@ -156,10 +139,9 @@ def test_from_values_str_spec_keeps_string_labels():
     assert arr.to_pylist() == ["normal", "afib"]
 
 
-def _counting(n, tsid="s", axis=None):
+def _counting(n, axis=None):
     return _series(
         n_values=n,
-        time_series_id=tsid,
         time_axis=axis or RegularAxis.from_rate_hz(500),
         loader=lambda: pa.array([float(i) for i in range(n)], type=pa.float32()),
     )

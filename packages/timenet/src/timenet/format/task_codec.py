@@ -131,9 +131,9 @@ def decode_span(
     span_type: str | None,
     span_start: int | None,
     span_end: int | None,
-    signal_ids: Iterable[str] | None,
+    signal_ids: Iterable[int] | None,
     *,
-    signals: Mapping[str, Signal],
+    signals: Mapping[int, Signal],
 ) -> Span | None:
     """Decode the four span columns.
 
@@ -257,8 +257,8 @@ def encode_target(target: object) -> dict[str, object | None]:
 def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding branch
     row: dict[str, object],
     *,
-    records: Mapping[str, Record],
-    signals: Mapping[str, Signal],
+    records: Mapping[int, Record],
+    signals: Mapping[int, Signal],
 ) -> object:
     """Decode one typed target row and resolve stored object references.
 
@@ -304,7 +304,7 @@ def _required(row: dict[str, object], name: str) -> Any:
     return value
 
 
-def _resolve(objects: Mapping[str, Any], row: dict[str, object], name: str, label: str) -> Any:
+def _resolve(objects: Mapping[int, Any], row: dict[str, object], name: str, label: str) -> Any:
     public_id = _required(row, name)
     try:
         return objects[public_id]
@@ -312,12 +312,12 @@ def _resolve(objects: Mapping[str, Any], row: dict[str, object], name: str, labe
         raise TimeFFormatError(f"task target refers to missing {label} {public_id!r}") from exc
 
 
-def _signal_ids(series: tuple[Signal, ...] | None) -> tuple[str, ...] | None:
+def _signal_ids(series: tuple[Signal, ...] | None) -> tuple[int, ...] | None:
     """Return the ids of a time span's Signals, or ``None`` for a span over the whole record."""
     return None if series is None else tuple(signal.id for signal in series)
 
 
-def _signals(signal_ids: object, signals: Mapping[str, Signal]) -> tuple[Signal, ...] | None:
+def _signals(signal_ids: object, signals: Mapping[int, Signal]) -> tuple[Signal, ...] | None:
     """Resolve a stored Signal id sequence to the read-back Signals.
 
     Returns:
@@ -329,7 +329,7 @@ def _signals(signal_ids: object, signals: Mapping[str, Signal]) -> tuple[Signal,
     if signal_ids is None:
         return None
     resolved: list[Signal] = []
-    for signal_id in cast("Iterable[str]", signal_ids):
+    for signal_id in cast("Iterable[int]", signal_ids):
         signal = signals.get(signal_id)
         if signal is None:
             raise TimeFFormatError(f"stored span refers to missing Signal {signal_id!r}")

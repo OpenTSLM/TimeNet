@@ -1,7 +1,13 @@
+import re
+
 from timenet.dataset import TimeFDataset
 from timenet.dataset.describe import describe_text
 from timenet.testing import make_dataset
 from timenet.types import DatasetMetadata, License, Version
+
+
+def _previews(text: str, record_id: int) -> bool:
+    return re.search(rf"^  {record_id}\s", text, re.MULTILINE) is not None
 
 
 def test_describe_text_has_all_sections():
@@ -17,7 +23,7 @@ def test_describe_text_has_all_sections():
     assert "sine=" in text  # series-by-spec histogram
     assert "specs" in text
     assert "sine" in text
-    assert "record-0" in text  # record preview
+    assert _previews(text, dataset.records[0].id)  # record preview
 
 
 def test_describe_works_without_derived_schema():
@@ -25,14 +31,15 @@ def test_describe_works_without_derived_schema():
     assert dataset.schema is None
     text = describe_text(dataset, rows=5)
     assert "timenet/hello-world @ 1.0.0" in text
-    assert "record-0" in text
+    assert _previews(text, dataset.records[0].id)
 
 
 def test_describe_rows_limits_preview():
-    text = describe_text(make_dataset(), rows=1)
+    dataset = make_dataset()
+    text = describe_text(dataset, rows=1)
     assert "first 1 of " in text
-    assert "record-0" in text
-    assert "record-1" not in text
+    assert _previews(text, dataset.records[0].id)
+    assert not _previews(text, dataset.records[1].id)
 
 
 def test_describe_prints_to_stdout(capsys):

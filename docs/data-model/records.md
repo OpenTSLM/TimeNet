@@ -47,17 +47,20 @@ imu = Source(
     sources=(accelerometer,),
 )
 record = Record(
-    id="run-001",
     sources=(imu,),
-    metadata={"site": "lab-a"},
+    metadata={"site": "lab-a", "run": "run-001"},
 )
 ```
+
+The dataset gives the Record and each of its Signals a read-only int64 `id` when you add the
+Record. A Source has no ID. Keep upstream identifiers, such as the run name above, in `metadata`
+or an annotation.
 
 `record.signals` returns every Signal in deterministic hierarchy order. Use `walk_sources()` or
 `walk_signals()` when you need an iterator.
 
-Each Source and Signal has one owner. TimeNet rejects cycles, duplicate IDs, and objects attached in
-more than one place.
+Each Source and Signal has one owner. TimeNet rejects cycles and objects attached in more than one
+place.
 
 ## Store context
 
@@ -87,7 +90,6 @@ from timenet.types import TimeOrigin
 
 origin = TimeOrigin(datetime(2026, 1, 1, tzinfo=timezone.utc))
 record = Record(
-    id="run-001",
     start_time=origin,
     sources=(
         Source(name="sensor A", signals=(signal_a,)),

@@ -129,7 +129,7 @@ name alone tells a consumer nothing about what is in the set.
 **The tasks stream, and the connector does not hold them in memory.** `set_task_stream` exists for
 a dataset with far more tasks than records. This release has about 2450 tasks for each recording.
 The writer validates each streamed task against the dataset. Checks that need the complete task set,
-such as duplicate IDs and cross-task derivations, do not run. Each task carries its own `inputs`.
+such as cross-task derivations, do not run. Each task carries its own `inputs`.
 
 **The stream reads no file.** It expands the sleep-stage annotations that the records already
 carry. A second read of the hypnograms can let the tasks and the annotations disagree.

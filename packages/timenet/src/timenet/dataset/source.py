@@ -31,17 +31,14 @@ class Source(SupportsAnnotate):
     """Optional JSON-compatible source metadata."""
 
     def __post_init__(self) -> None:
-        """Validate the source's name, its direct signals, and the spans of its annotations.
+        """Validate the source's name and the spans of its annotations.
 
         Raises:
-            TimeFValidationError: If the source has no name or repeats a direct signal ID.
+            TimeFValidationError: If the source has no name.
         """
         if not self.name:
             raise TimeFValidationError("Source.name must be non-empty")
         self.metadata = validate_json_mapping(self.metadata)
-        signal_ids = [signal.id for signal in self.signals]
-        if len(signal_ids) != len(set(signal_ids)):
-            raise TimeFValidationError(f"source {self.name!r} contains duplicate signal IDs")
 
         for annotation in self.annotations:
             if annotation.span is not None:
@@ -86,7 +83,7 @@ class Source(SupportsAnnotate):
             Signals from this source and every descendant source.
         """
         for source in self.walk_sources():
-            yield from sorted(source.signals, key=lambda signal: (signal.name, signal.id))
+            yield from sorted(source.signals, key=lambda signal: signal.name)
 
     def annotate(self, annotation: Annotation) -> Annotation:
         """Attach one annotation and return it.

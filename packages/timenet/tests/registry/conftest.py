@@ -48,12 +48,11 @@ def _ecg_dataset() -> TimeFDataset:
         name="II",
         time_axis=RegularAxis.from_rate_hz(16),
         loader=sine_loader(n=16, sampling_rate_hz=16.0),
-        id="ecg-ts-0",
         n_values=16,
     )
-    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), id="ecg-record-0"))
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
     record.annotate(Annotation(key="age", value=70, unit="years"))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",), id="ecg-task-0"))
+    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",)))
     return dataset
 
 
