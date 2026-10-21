@@ -54,7 +54,6 @@ Signals can reference the same immutable `TimeAxis`.
 | `sources` | Recursive sources, linked to their record and parent source by internal keys. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
-| `external_values` | File and row locations for external text and irregular offsets. |
 | `tasks` | Concrete task type, typed scope columns, and subclass configuration columns. |
 | `task_targets` | Ordered inline targets, one typed row each. |
 | `task_record_refs` | Ordered task-to-record object relationships. |
@@ -62,7 +61,10 @@ Signals can reference the same immutable `TimeAxis`.
 | `task_dependencies` | Ordered task derivation relationships. |
 | `annotation_contents` | Reusable annotation content with one typed value column per value shape. |
 | `annotation_occurrences` | One attachment of content to an object, with its span. |
-| `signal_chunks` | Locations of Signal values in Parquet or Zarr. |
+| `signal_chunks` | Physical owner and locations of Signal values in Parquet or Zarr. |
+| `external_values` | Locations of large text, string lists, and irregular timestamps. |
+| `payload_scan_groups` | Required physical groups for bounded decoding during eager scans. |
+| `imports` / `imported_objects` | Parent-qualified ID lookup within the child catalog. |
 
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
 in either direction, so TimeF does not store duplicate reverse-index tables.
@@ -171,5 +173,20 @@ constraints. The writer then checkpoints and closes the database, records final 
 `timenet.format.control_audit` re-checks every relational invariant of a finished database with
 SQL scans, for tests and tooling.
 
-`TimeFReader.verify()` hashes every listed artifact. Normal reads stay lazy and verify the cached
-remote `control.duckdb` before opening it read-only.
+`TimeFReader.verify()` hashes every listed artifact. Downloads verify file sizes and checksums before
+publishing a complete cache entry. Preparation checks cached file presence and size without hashing
+payload bytes again. Normal reads use prepared local files or remote filesystems with byte ranges.
+
+## External values and inheritance
+
+The writer stores large task text, annotation text, and string lists under `payloads/` in packed
+Parquet files. Values with a serialized size of at most 4 KiB stay in native DuckDB columns.
+Irregular timestamps always use packed payloads. Reader table APIs resolve external text to native values.
+Direct SQL queries expose catalog placeholders for external fields.
+
+An inherited dataset owns every catalog row it needs. `payload_sources` in its manifest pins each
+physical source by dataset ID and version. A locator points directly to that owner, including
+when the imported parent is itself a child. Unchanged payloads require no decoding during import.
+
+Namespace tables support explicit lookup only. Normal reads use local integer keys and direct file
+locations. The writer precomputes `records.read_order` to preserve locality across renamed objects.
