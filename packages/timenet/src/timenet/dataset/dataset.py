@@ -38,6 +38,7 @@ from timenet.values_backends import ValuesBackend
 
 if TYPE_CHECKING:
     from timenet.reader.handles import DatasetHandle
+    from timenet.registry.version import DatasetVersion
 
 
 T = TypeVar("T")
@@ -78,6 +79,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """
         self._metadata = metadata
         self._imports: dict[InputAlias, ImportedDataset] = {}
+        self._imports_source: DatasetVersion | None = None
         self.input_locks: dict[InputAlias, InputLock] = {}
         self.lineage: dict[str, InputLock] = {}
         self._records: list[Record] = []
