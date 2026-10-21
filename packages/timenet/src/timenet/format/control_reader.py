@@ -17,7 +17,13 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
-from timenet.format.stored_values import ExternalObjectFieldKey, PackedField, PackedValueReader, ValueHandle
+from timenet.format.stored_values import (
+    ExternalObjectFieldKey,
+    OffsetHandle,
+    PackedField,
+    PackedValueReader,
+    ValueHandle,
+)
 from timenet.format.task_codec import (
     decode_input_modalities,
     decode_span,
@@ -518,6 +524,7 @@ class DuckDBControlReader:
         annotation_keys = None if read_all else object_keys
         annotations = self._read_annotations(annotation_keys) if with_annotations else {}
         axes = self._read_axes({row.axis_key for row in signals_by_key.values()})
+        external_offsets = self._external_values(ObjectKind.AXIS, (loaded.axis.axis_id for loaded in axes.values()))
 
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
         specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
@@ -541,6 +548,13 @@ class DuckDBControlReader:
                     if self._offsets_loader is not None
                     else partial(self.load_axis_offsets_by_key, signal_row.axis_key, axis, loaded_axis.n_values)
                 )
+            offset_key = ExternalObjectFieldKey(
+                object_kind=ObjectKind.AXIS, object_id=axis.axis_id, field=PackedField.OFFSETS
+            )
+            if (stored_offsets := external_offsets.get(offset_key)) is not None:
+                if not isinstance(axis, IrregularAxis) or stored_offsets.length != signal_row.n_values:
+                    raise TimeFFormatError(f"external offsets disagree with signal {signal_row.signal_id!r}")
+                offsets_loader = OffsetHandle(**vars(stored_offsets), first=axis.first_us, last=axis.last_us)
             signals_by_source[signal_row.source_key].append(
                 Signal.from_loader(
                     id=signal_row.signal_id,
