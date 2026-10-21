@@ -301,6 +301,7 @@ class DuckDBControlWriter:
                         dataset.iter_tasks() if tasks is None else tasks,
                     )
                     self._write_chunks(connection, placements)
+                    self._write_imports(connection, dataset)
                     self._check_source_tree(connection)
                     self.external.finish(connection)
                 connection.execute("CHECKPOINT")
@@ -311,6 +312,51 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
         return task_counts
+
+    @staticmethod
+    def _write_imports(connection: duckdb.DuckDBPyConnection, dataset: TimeFDataset) -> None:
+        """Store import lookup information outside the ordinary read path.
+
+        Raises:
+            TimeFValidationError: If an import differs from its locked parent release.
+        """
+        aliases = dict(connection.execute("SELECT alias, parent_ref FROM imports").fetchall())
+        present = (
+            {
+                kind: {row[0] for row in connection.execute(query).fetchall()}
+                for kind, query in (
+                    (ObjectKind.RECORD, "SELECT record_id FROM records"),
+                    (ObjectKind.SOURCE, "SELECT source_id FROM sources"),
+                    (ObjectKind.SIGNAL, "SELECT signal_id FROM signals"),
+                    (ObjectKind.TASK, "SELECT task_id FROM tasks"),
+                    (ObjectKind.ANNOTATION, "SELECT occurrence_id FROM annotation_occurrences"),
+                )
+            }
+            if dataset._imports
+            else {}
+        )
+        for alias, imported in dataset._imports.items():
+            card = dataset.parent_cards.get(alias)
+            if card is None or card.source != imported.source:
+                raise TimeFValidationError(f"import alias {alias!r} differs from its manifest parent card")
+            parent_ref = str(card.source)
+            if alias in aliases and aliases[alias] != parent_ref:
+                raise TimeFValidationError(f"stored import alias {alias!r} names a different parent release")
+            if alias not in aliases:
+                insert_rows(
+                    connection,
+                    TABLES["imports"],
+                    [{"alias": alias, "parent_ref": parent_ref}],
+                )
+            insert_rows(
+                connection,
+                TABLES["imported_objects"],
+                [
+                    {"alias": alias, "object_kind": kind.value, "parent_id": original, "object_id": identity}
+                    for kind, original, identity in imported.rows()
+                    if identity in present[kind]
+                ],
+            )
 
     def _pack(self, kind: ObjectKind, identity: str, field: PackedField, value: Any, position: int = 0) -> Any:
         """Construct a catalog value from the explicit packing result.
