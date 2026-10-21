@@ -43,6 +43,7 @@ from timenet.types import (
     ureg,
 )
 from timenet.types.object_kind import ObjectKind
+from timenet.types.reference_keys import OwnerKey
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
@@ -126,6 +127,7 @@ class _ChunkRow(NamedTuple):
     chunk_major_index: int
     chunk_minor_index: int | None
     n_values: int
+    owner_key: OwnerKey | None
 
     @property
     def stored_chunk(self) -> StoredChunk:
@@ -135,6 +137,7 @@ class _ChunkRow(NamedTuple):
             chunk_file=self.value_path,
             data_index=ChunkDataIndex(self.chunk_major_index, self.chunk_minor_index),
             n_values=self.n_values,
+            owner_key=self.owner_key,
         )
 
 
@@ -559,6 +562,7 @@ class DuckDBControlReader:
                     raise TimeFFormatError(f"external offsets disagree with signal {signal_row.signal_id!r}")
                 offsets_loader = OffsetHandle(
                     store=stored_offsets.store,
+                    owner=stored_offsets.owner,
                     path=stored_offsets.path,
                     row=stored_offsets.row,
                     kind=stored_offsets.kind,

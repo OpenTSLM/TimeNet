@@ -5,7 +5,7 @@ import pytest
 
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet_connectors.builder import backend as backend_module
 from timenet_connectors.builder.backend import ConnectorBuilder
 
@@ -62,7 +62,7 @@ def test_build_in_process_round_trips_the_connector_default_zarr_backend(tmp_pat
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     version_dir = ConnectorBuilder().build("timenet/hello-world", tmp_path / "registry")
     assert Manifest.model_validate_json((version_dir / "manifest.json").read_text()).values_backend == "zarr"
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         dataset = reader.read()
         assert len(dataset.records) == 3
         assert len(dataset.records[0].signals[0].to_numpy()) == 16

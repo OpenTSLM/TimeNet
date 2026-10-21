@@ -5,17 +5,16 @@ from pathlib import Path
 import shutil
 from typing import BinaryIO
 
-import pyarrow.fs as pafs
-
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
+from timenet.registry.dataset_graph_dependency_tools import prepare_dependency_graph
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
-from timenet.types.references import LATEST_VERSION
+from timenet.types.references import LATEST_VERSION, DatasetRef
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -36,6 +35,11 @@ class LocalRegistry(WritableRegistry):
     @property
     def root(self) -> Path:
         """The directory this registry reads from and writes to."""
+        return self._root
+
+    @property
+    def local_root(self) -> Path:
+        """The directory that holds complete local releases."""
         return self._root
 
     def list_datasets(self) -> list[DatasetMetadata]:
@@ -182,8 +186,7 @@ class LocalRegistry(WritableRegistry):
         """
         manifest = self.get_manifest(dataset_id, version)
         resolved = str(manifest.metadata.dataset_version)
-        root = self._dataset_dir(dataset_id) / resolved
-        return DatasetVersion(manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root))
+        return prepare_dependency_graph(self._root, DatasetRef.parse(f"{dataset_id}@{resolved}"), manifest=manifest)
 
     def _dataset_dir(self, dataset_id: str) -> Path:
         """Return the directory holding a dataset's versions.
