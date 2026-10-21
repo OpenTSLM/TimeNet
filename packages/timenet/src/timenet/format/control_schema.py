@@ -375,6 +375,7 @@ EXTERNAL_VALUES = Table(
         _key("row_index"),
         _required("value_kind"),
         _key("n_values"),
+        Column("value_digest", ColumnType.VARCHAR),
     ),
     unique=(("object_kind", "object_id", "field", "position"),),
 )
