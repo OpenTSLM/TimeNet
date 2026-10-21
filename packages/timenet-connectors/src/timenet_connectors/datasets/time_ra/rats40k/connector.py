@@ -23,6 +23,7 @@ from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, ClassificationTask, Split, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHubSnapshotConnector, HubFileRef
 from timenet_connectors.datasets.time_ra.rats40k._json import iter_entries
+from timenet_connectors.sources.json_stream import read_entry
 
 
 _VARIANTS = ("uni", "multi")
@@ -162,10 +163,7 @@ class _ValueLoader:
     def __call__(self, ref: _RowRef, name: str) -> pa.Array:
         cached = self.cached
         if cached is None or cached[0] != ref:
-            with ref.path.open("rb") as handle:
-                handle.seek(ref.offset)
-                row = json.loads(handle.read(ref.length))
-            channels = _parse_row(row, ref)
+            channels = _parse_row(read_entry(ref.path, ref.offset, ref.length), ref)
             self.cached = ref, channels
         else:
             channels = cached[1]
