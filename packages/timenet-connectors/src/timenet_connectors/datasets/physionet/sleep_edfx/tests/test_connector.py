@@ -292,7 +292,7 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
     dataset.derive_schema()
     version_dir = store_dataset(dataset, tmp_path / "out")
     with TimeFReader(open_local_version(version_dir)) as reader:
-        restored = reader.read()
+        restored = reader.read().read()
     assert {record.record_id for record in restored.records} == {"sleep-edfx-SC4901E0", "sleep-edfx-SC4902E0"}
     record = next(one for one in restored.records if one.record_id == "sleep-edfx-SC4901E0")
     assert len(record.signals) == len(_SIGNALS)
