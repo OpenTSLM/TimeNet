@@ -22,10 +22,12 @@ from timenet.format.table_writer import ModelTable
 from timenet.storage.parquet import PayloadTableCache
 from timenet.types._model import TimeFModel
 from timenet.types.object_kind import ObjectKind
+from timenet.types.reference_keys import OwnerKey
 from timenet.types.text import TextValue
 
 
 if TYPE_CHECKING:
+    from timenet.format.storage import StorageSources
     from timenet.registry.version import DatasetVersion
 
 
@@ -98,6 +100,7 @@ class PackedValueLocator(TimeFModel):
     object_id: str = Field(strict=True, min_length=1)
     field: PackedField
     position: int = Field(strict=True, ge=0)
+    owner_key: OwnerKey | None = Field(default=None, strict=True, min_length=1)
     value_path: str = Field(strict=True, min_length=1)
     row_index: int = Field(strict=True, ge=0)
     value_kind: PackedValueKind
@@ -180,6 +183,7 @@ class ValueHandle:
     """A locator for one external value; constructing it performs no payload I/O."""
 
     store: "PackedValueReader"
+    owner: OwnerKey | None
     path: str
     row: int
     kind: PackedValueKind
@@ -205,6 +209,10 @@ class ValueHandle:
 
     def __deepcopy__(self, memo: dict) -> "ValueHandle":
         return self
+
+    def physical_version(self) -> "DatasetVersion":
+        """Return the direct physical source without reading payload data."""
+        return self.store.version.resolve_payload_source(self.owner)
 
 
 @dataclass(frozen=True)
@@ -250,7 +258,7 @@ class PackedValueReader:
         Raises:
             TimeFFormatError: If the locator or stored value is invalid.
         """
-        table = self._parquet.read_table(self.version, handle.path)
+        table = self._parquet.read_table(handle.physical_version(), handle.path)
         location = f"{handle.path}:{handle.row}"
         if handle.kind.value not in table.column_names:
             raise TimeFFormatError(f"unknown external value kind at {location}")
@@ -296,7 +304,13 @@ class PackedValueReader:
             if key in handles:
                 raise TimeFFormatError(f"duplicate external locator for {key}")
             handles[key] = ValueHandle(
-                self, locator.value_path, locator.row_index, locator.value_kind, locator.n_values, locator.value_digest
+                self,
+                locator.owner_key,
+                locator.value_path,
+                locator.row_index,
+                locator.value_kind,
+                locator.n_values,
+                locator.value_digest,
             )
         return handles
 
@@ -357,10 +371,11 @@ def materialize_table(
 
 
 class PackedValueWriter:
-    """Pack large local values into Parquet files and record their catalog locations."""
+    """Pack new values and preserve direct physical locations for inherited values."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, sources: "StorageSources") -> None:
         self.root = root
+        self.sources = sources
         self.files: list[str] = []
         self.rows: list[dict] = []
         self.locators: list[PackedValueLocator] = []
@@ -379,30 +394,38 @@ class PackedValueWriter:
             TimeFValidationError: If the external locator is invalid for this field.
         """
         ExternalObjectFieldKey(object_kind=kind, object_id=identity, field=field, position=position)
-        classified = _classify_value(value)
-        if isinstance(classified, InlineValue):
-            return classified
-        value = classified.value
-        value_kind = classified.kind
-        encoded = (
-            value.to_numpy().tobytes()
-            if isinstance(value, pa.Array)
-            else json.dumps(value, ensure_ascii=False).encode()
-        )
-        if value_kind != PackedValueKind.OFFSETS and len(encoded) <= INLINE_LIMIT:
-            return InlineValue(value)
-        path = part_path(PAYLOAD_TEMPLATE, len(self.files))
-        row = len(self.rows)
-        length = len(value)
-        digest = (
-            CHECKSUM_PREFIX + hashlib.sha256(encoded).hexdigest() if value_kind == PackedValueKind.OFFSETS else None
-        )
+        if isinstance(value, ValueHandle):
+            owner = self.sources.add(value.physical_version(), {value.path})
+            path, row, value_kind, length, digest = value.path, value.row, value.kind, value.length, value.digest
+        else:
+            classified = _classify_value(value)
+            if isinstance(classified, InlineValue):
+                return classified
+            value = classified.value
+            value_kind = classified.kind
+            encoded = (
+                value.to_numpy().tobytes()
+                if isinstance(value, pa.Array)
+                else json.dumps(value, ensure_ascii=False).encode()
+            )
+            if value_kind != PackedValueKind.OFFSETS and len(encoded) <= INLINE_LIMIT:
+                return InlineValue(value)
+            path = part_path(PAYLOAD_TEMPLATE, len(self.files))
+            row = len(self.rows)
+            owner = None
+            length = len(value)
+            digest = (
+                CHECKSUM_PREFIX + hashlib.sha256(encoded).hexdigest() if value_kind == PackedValueKind.OFFSETS else None
+            )
+            self.rows.append({value_kind.value: value.to_pylist() if isinstance(value, pa.Array) else value})
+            self.bytes += len(encoded)
         try:
             locator = PackedValueLocator(
                 object_kind=kind,
                 object_id=identity,
                 field=field,
                 position=position,
+                owner_key=owner,
                 value_path=path,
                 row_index=row,
                 value_kind=value_kind,
@@ -411,8 +434,6 @@ class PackedValueWriter:
             )
         except ValidationError as exc:
             raise TimeFValidationError(f"invalid external locator for {kind.value} {identity!r}: {exc}") from exc
-        self.rows.append({value_kind.value: value.to_pylist() if isinstance(value, pa.Array) else value})
-        self.bytes += len(encoded)
         self.locators.append(locator)
         if self.bytes >= _PACK_BYTES:
             self.flush()
