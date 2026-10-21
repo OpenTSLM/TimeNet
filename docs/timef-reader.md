@@ -26,8 +26,10 @@ version = open_registry("~/timenet/registry").open_version(
 local_version = open_local_version(version_dir)
 
 with TimeFReader(version) as reader:
-    dataset = reader.read()
-    values = dataset.records[0].signals[0].to_arrow()
+    handle = reader.read()
+    dataset = handle.read()
+
+values = dataset.records[0].signals[0].to_arrow()
 ```
 
 Use the reader as a context manager when possible. `close()` releases open value files and decoded
@@ -35,11 +37,16 @@ chunk caches.
 
 ## What loads when
 
-Creating the reader does not open the control database. The first request for records, tasks, or
-annotations opens `control.duckdb` in read-only mode.
+Creating the reader does not open the control database. `reader.read()` and `reader.get_handle()`
+return lazy dataset handles. The first structural read opens `control.duckdb` in read-only mode.
 
-Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy. A call to
-`to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from Parquet or Zarr.
+Calling `read()` on a dataset handle loads the complete dataset into memory. Calling `read()` on an
+entity handle loads the requested object and its dependencies. Field handles read selected fields.
+Full reads reuse the completed dataset until the reader closes.
+
+With `iter_records()`, Records load with their Sources, Signals, axes, and annotations. Signal values
+stay lazy. A call to `to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from
+Parquet or Zarr.
 
 Text fields return `TextValue` handles, regardless of their size or storage location. Call
 `task.prompt.read()`, `task.rationale.read()`, or a text target's `read()` method to obtain a string.
@@ -96,7 +103,8 @@ and decoded Zarr chunks until it closes.
 
 | Member | Description |
 | --- | --- |
-| `read()` | Create the complete `TimeFDataset`. |
+| `read()` / `get_handle()` | Return a lazy dataset handle. |
+| `DatasetHandle.read()` | Load the complete `TimeFDataset` and all its values. |
 | `iter_records()` | Yield Records without building a dataset. |
 | `iter_tasks(records, split=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
 | `create_task_table()` | Return the task table with public IDs. |

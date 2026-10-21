@@ -110,7 +110,8 @@ The local check keeps build and load paths explicit:
 ```python
 from timenet.client import TimeNet
 
-dataset = TimeNet(".timenet-registry").load("org/name")
+with TimeNet(".timenet-registry").load("org/name") as handle:
+    dataset = handle.read()
 dataset.describe()
 ```
 
