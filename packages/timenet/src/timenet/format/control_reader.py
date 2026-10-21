@@ -522,7 +522,7 @@ class DuckDBControlReader:
                     f"signal {signal_row.signal_id!r} refers to missing source key {signal_row.source_key!r}"
                 )
         if eager:
-            # Construct native arrays in Record scan order, which may differ from namespaced IDs.
+            # Construct native arrays in Record scan order, which may differ from imported IDs.
             record_order = {row.record_key: index for index, row in enumerate(record_rows)}
             signal_rows.sort(key=lambda row: record_order[sources_by_key[row.source_key].record_key])
         annotation_keys = None
