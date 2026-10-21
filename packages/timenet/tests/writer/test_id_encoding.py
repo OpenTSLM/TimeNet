@@ -8,7 +8,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.testing import assert_datasets_equal
 from timenet.types import (
     Annotation,
@@ -90,7 +90,7 @@ def test_manifest_has_no_id_encoding(tmp_path):
 def test_uuid_ids_round_trip_as_canonical_strings(tmp_path):
     dataset = _uuid_dataset()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         restored = reader.read()
     assert_datasets_equal(dataset, restored)
     sid = restored.records[0].record_id
@@ -116,7 +116,7 @@ def test_forecasting_target_span_round_trips(tmp_path):
     dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, ForecastingTask)
     assert task.targets == (span,)
@@ -142,7 +142,7 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
     dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, ForecastingTask)
     assert task.targets == (span,)
@@ -167,7 +167,7 @@ def test_span_series_ids_round_trip(tmp_path):
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         (task,) = reader.tasks
     assert task.scope == scope
 
@@ -196,7 +196,7 @@ def test_correspondence_record_targets_round_trip(tmp_path):
     )
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, TSCorrespondenceTask)
     assert task.targets is not None and isinstance(read_value(task.targets[0]), Record)
@@ -226,7 +226,7 @@ def test_editing_and_generation_record_targets_round_trip(tmp_path):
     dataset.add_task(task=TSGenerationTask(prompt="10 s of sinus rhythm.", targets=(edited,)))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         tasks = {type(t): t for t in reader.tasks}
     edit = tasks[TSEditingTask]
     assert isinstance(edit, TSEditingTask)
@@ -254,7 +254,7 @@ def test_time_span_round_trips(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),), time_span=time_span))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         record = next(reader.iter_records())
     assert record.time_span == time_span
     assert isinstance(record.time_span, TimeInterval)

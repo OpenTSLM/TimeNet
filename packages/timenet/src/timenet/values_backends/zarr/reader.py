@@ -16,9 +16,11 @@ from __future__ import annotations
 from collections import OrderedDict
 from typing import TYPE_CHECKING, Any
 
+from fsspec.implementations.arrow import ArrowFSWrapper
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
+import pyarrow.fs as pafs
 
 from timenet.values_backends.reader import BaseValuesReader
 
@@ -208,12 +210,24 @@ class ZarrValuesReader(BaseValuesReader):
         if rel_path not in self._array_cache:
             try:
                 import zarr  # noqa: PLC0415
+                import zarr.storage  # noqa: PLC0415 - optional Zarr dependency
             except ImportError as exc:  # pragma: no cover - exercised only without the extra
                 raise ImportError(
                     "this dataset version stores values in Zarr; install the extra: pip install 'timenet[zarr]'"
                 ) from exc
 
-            self._array_cache[rel_path] = zarr.open_array(store=version.store_uri(rel_path), mode="r")
+            store = version.store_uri(rel_path)
+            if not isinstance(version.filesystem, pafs.LocalFileSystem):
+                filesystem = (
+                    version.filesystem.handler.fs
+                    if isinstance(version.filesystem, pafs.PyFileSystem)
+                    and isinstance(version.filesystem.handler, pafs.FSSpecHandler)
+                    else ArrowFSWrapper(version.filesystem)
+                )
+                store = zarr.storage.FsspecStore.from_mapper(
+                    filesystem.get_mapper(version.resolve_file_path(rel_path)), read_only=True
+                )
+            self._array_cache[rel_path] = zarr.open_array(store=store, mode="r")
         return self._array_cache[rel_path]
 
 
