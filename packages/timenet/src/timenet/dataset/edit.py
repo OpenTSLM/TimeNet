@@ -107,6 +107,10 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
         schema=DatasetSchema(),
         annotations=dataset.annotations,
     )
+    edited.parent_cards = dict(dataset.parent_cards)
+    edited.lineage = dict(dataset.lineage)
+    edited._imports_source = dataset._imports_source
+    edited._imports = dict(dataset._imports)
     edited.derive_schema()
     return edited
 
@@ -334,6 +338,9 @@ def edit_version(
             schema=DatasetSchema(),
             annotations=edited.annotations,
         )
+        edited.parent_cards = dict(base.parent_cards)
+        edited.lineage = dict(base.lineage)
+        edited._imports_source = base._imports_source
         edited.derive_schema()
 
         with TimeFWriter(out_root, edited, **writer_kwargs) as writer:  # ty: ignore[invalid-argument-type]
