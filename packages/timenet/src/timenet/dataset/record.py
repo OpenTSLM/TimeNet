@@ -106,17 +106,17 @@ class Record(SupportsAnnotate):
         def walk(source: Source) -> Iterable[Source]:
             identity = id(source)
             if identity in active:
-                raise TimeFValidationError(f"source hierarchy contains a cycle at source {source.id!r}")
+                raise TimeFValidationError(f"source hierarchy contains a cycle at source {source.name!r}")
             if identity in seen:
-                raise TimeFValidationError(f"source {source.id!r} is attached more than once")
+                raise TimeFValidationError(f"source {source.name!r} is attached more than once")
             seen.add(identity)
             active.add(identity)
             yield source
-            for child in sorted(source.sources, key=lambda item: (item.name, item.id)):
+            for child in sorted(source.sources, key=lambda item: item.name):
                 yield from walk(child)
             active.remove(identity)
 
-        for root in sorted(self.sources, key=lambda item: (item.name, item.id)):
+        for root in sorted(self.sources, key=lambda item: item.name):
             yield from walk(root)
 
     def walk_signals(self) -> Iterable[Signal]:

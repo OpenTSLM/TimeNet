@@ -29,8 +29,8 @@ def test_source_selection_attaches_shared_timed_content_only_to_selected_signals
         Annotation(key="status", value="off", span=TimePoint.micros(500))
     )
 
-    assert occurrences[0].id == occurrences[1].id
-    assert occurrences[0].occurrence_id != occurrences[1].occurrence_id
+    assert occurrences[0] == occurrences[1]
+    assert occurrences[0] is not occurrences[1]
     assert lead_i.annotations == (occurrences[0],)
     assert lead_ii.annotations == (occurrences[1],)
     assert source.annotations == temperature.annotations == ()
@@ -44,7 +44,7 @@ def test_source_selection_resolves_signal_names():
 
     occurrences = source.select(signal_names=("II", "I")).annotate(annotation)
 
-    assert [occurrence.id for occurrence in occurrences] == [annotation.id] * 2
+    assert list(occurrences) == [annotation] * 2
     assert lead_ii.annotations == (occurrences[0],)
     assert lead_i.annotations == (occurrences[1],)
 

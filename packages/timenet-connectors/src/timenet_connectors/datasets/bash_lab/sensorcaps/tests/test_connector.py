@@ -130,7 +130,6 @@ def _assert_records_and_tasks(records, tasks):
             assert record.start_time.timestamp is None
             assert len(record.sources) == 1
             source = record.sources[0]
-            assert source.id == f"{record_id}-imu"
             assert source.name == "IMU"
             assert source.sources == ()
             assert len(source.signals) == len(record.signals) == 6

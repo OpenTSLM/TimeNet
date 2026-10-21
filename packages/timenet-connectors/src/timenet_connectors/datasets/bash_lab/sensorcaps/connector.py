@@ -319,7 +319,7 @@ def _make_record(ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
     )
     record = Record(
         id=ref.id,
-        sources=(Source(id=f"{ref.id}-imu", name="IMU", signals=signals),),
+        sources=(Source(name="IMU", signals=signals),),
     )
     source = ref.file.partition.rsplit("_", 1)[0]
     metadata: dict[str, str | int] = {
@@ -332,7 +332,7 @@ def _make_record(ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
     if row.location is not None:
         metadata["sensor_location"] = row.location
     for key, value in metadata.items():
-        record.annotate(Annotation(key=key, value=value, id=f"{ref.id}-{key}"))
+        record.annotate(Annotation(key=key, value=value))
     return record
 
 
@@ -415,7 +415,7 @@ class SensorCapsConnector(BaseConnector[SensorCapsFileRef]):
             ("source_window_samples", _SOURCE_WINDOW_SAMPLES),
             ("time_axis_reconstruction", "round(linspace(0, 119, 60)) / 20 seconds relative to window start"),
         ):
-            dataset.annotate(Annotation(key=key, value=value, id=f"sensorcaps-{key}"))
+            dataset.annotate(Annotation(key=key, value=value))
         records: dict[str, Record] = {}
         loader = _ValueLoader()
         for file in raw_refs:

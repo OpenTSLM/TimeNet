@@ -30,6 +30,17 @@ assert str(version) == "1.2.3"
 assert version > Version(1, 2, 0)
 ```
 
+## IDs
+
+Sources, axes, annotation contents, and annotation occurrences have no ID in Python. The writer
+numbers their rows each time it writes a version. It stores equal annotation contents once, and
+equal regular or ordinal axes once. An irregular axis is shared only by Signals that use the same
+axis object.
+
+Two annotation contents are equal if the name, the value and its type, the unit, the description,
+and the metadata are equal. `0.0` and `-0.0` are equal, and so are all NaN values, but `True`, `1`,
+and `1.0` are not.
+
 ## Units
 
 TimeNet uses one [pint](https://pint.readthedocs.io) registry named `ureg`. Use this registry for
