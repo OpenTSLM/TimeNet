@@ -59,6 +59,7 @@ class TimeFReader:
         self._control: DuckDBControlReader | None = None
         self._records: tuple[Record, ...] | None = None
         self._dataset: TimeFDataset | None = None
+        self._scan_active = False
         self._values: BaseValuesReader | None = None
         self._owner_readers: dict[OwnerKey, BaseValuesReader] = {}
         self._chunk_locator_batches: list[list[int]] = []
@@ -74,6 +75,7 @@ class TimeFReader:
         state["_control"] = None
         state["_records"] = None
         state["_dataset"] = None
+        state["_scan_active"] = False
         state["_values"] = None
         state["_owner_readers"] = {}
         state["_chunk_rows_cache"] = {}
@@ -305,15 +307,42 @@ class TimeFReader:
     def _read_dataset(self) -> TimeFDataset:
         """Return the cached dataset with every value materialized in memory."""
         if self._dataset is None:
-            with self._as_format_error():
-                try:
-                    self._prepare_scan()
-                    self._dataset = self._read_catalog(eager=True)
-                finally:
-                    for backend in (self._values, *self._owner_readers.values()):
-                        if isinstance(backend, ParquetValuesReader):
-                            backend.finish_scan()
+            with self._as_format_error(), self._parallel_scan():
+                self._dataset = self._read_catalog(eager=True)
         return self._dataset
+
+    @contextmanager
+    def scan(self) -> Iterator[TimeFDataset]:
+        """Reconstruct a lazy dataset and prefetch Parquet signal groups with four workers.
+
+        Use this context for sequential reads of many signals. Values remain lazy, and decoded
+        groups use the existing bounded cache. Leaving the context releases scan workers, including
+        after an early exit or error. Nested scans share the outer context's workers.
+
+        Yields:
+            The reconstructed dataset with lazy signal arrays and stored fields.
+        """
+        with self._parallel_scan():
+            with self._as_format_error():
+                dataset = self._read_catalog()
+            yield dataset  # noqa: RUF070 - consumer errors must stay outside the format-error wrapper
+
+    @contextmanager
+    def _parallel_scan(self) -> Iterator[None]:
+        """Share bounded Parquet decoding across eager reads and lazy scan contexts."""
+        if self._scan_active:
+            yield
+            return
+        self._scan_active = True
+        try:
+            with self._as_format_error():
+                self._prepare_scan()
+            yield
+        finally:
+            self._scan_active = False
+            for backend in (self._values, *self._owner_readers.values()):
+                if isinstance(backend, ParquetValuesReader):
+                    backend.finish_scan()
 
     def _prepare_scan(self) -> None:
         """Use the write-time group plan for bounded parallel Parquet decoding."""
