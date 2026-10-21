@@ -20,7 +20,9 @@ from timenet.types import (
     InputModality,
     ScalarPredictionTask,
     Split,
+    StepPoint,
     TemporalLocalizationTask,
+    TimeInterval,
     TimePoint,
     TimeSeriesSpec,
     TSGenerationTask,
@@ -66,6 +68,23 @@ def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
     assert tasks[2].input_modalities == frozenset({InputModality.IMAGE, InputModality.TEXT})
     tasks[2].input_modalities = None
     assert tasks[2].resolved_input_modalities == frozenset({InputModality.IMAGE, InputModality.TEXT})
+
+
+def test_annotations_keep_their_order_when_a_task_refers_to_a_later_one(tmp_path):
+    dataset = _dataset()
+    (record,) = dataset.records
+    (task,) = dataset.tasks
+    record.annotate(Annotation(key="age", value=70))
+    task.input_annotations = (record.annotations[1],)
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with DuckDBControlReader(path) as reader:
+        (stored_record,) = reader.read_records()
+        (stored_task,) = reader.read_tasks((stored_record,))
+
+    assert [annotation.key for annotation in stored_record.annotations] == ["patient_sex", "age"]
+    assert stored_task.input_annotations[0] is stored_record.annotations[1]
 
 
 def test_shifted_regular_axis_round_trip(tmp_path):
@@ -239,19 +258,33 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
     record = dataset.records[0]
     signal = record.signals[0]
     point = TimePoint.seconds(0.001, time_series=(signal,))
-    dataset.tasks[0].targets = ("Yes", 7, 0.5, True, record, signal, point)
+    step = StepPoint(start=1, time_series=record.signals[1])
+    interval = TimeInterval(start_us=0, end_us=2_000, time_series=(signal,))
+    dataset.tasks[0].targets = ("Yes", 7, 0.5, True, record, signal, point, step, interval)
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
         (task,) = reader.read_tasks(records)
+        rows = reader.target_table().to_pylist()
 
     assert task.targets is not None
-    text, integer, floating, boolean, target_record, target_signal, target_point = task.targets
-    assert (text, integer, floating, boolean) == ("Yes", 7, 0.5, True)
-    assert target_record is records[0]
-    assert target_signal is records[0].signals[0]
-    assert target_point == replace(point, time_series=(target_signal,))
+    assert task.targets[:4] == ("Yes", 7, 0.5, True)
+    assert task.targets[4] is records[0]
+    lead_i, lead_ii = records[0].signals
+    assert task.targets[5] is lead_i
+    assert task.targets[6:] == (
+        replace(point, time_series=(lead_i,)),
+        replace(step, time_series=lead_ii),
+        replace(interval, time_series=(lead_i,)),
+    )
+    assert [
+        (row["target_kind"], row["signal_id"], row["span_start"], row["span_end"], row["span_signal_ids"])
+        for row in rows[-2:]
+    ] == [
+        ("step_point", LEAD_II_ID, 1, None, None),
+        ("time_interval", None, 0, 2_000, [LEAD_I_ID]),
+    ]
 
 
 def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
@@ -454,6 +487,39 @@ def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, m
     assert child.id < parent.id
     assert by_id[child.id].from_tasks[0] is by_id[parent.id]
     assert tuple(sorted(by_id)) == tuple(task.id for task in tasks)
+
+
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("UPDATE task_targets SET signal_id = 999 WHERE target_kind = 'step_point'", "missing signal 999"),
+        ("UPDATE tasks SET scope_signal_ids = [999] WHERE task_id = 4", "missing signal 999"),
+        ("UPDATE task_record_refs SET record_id = 999", "missing record"),
+        ("UPDATE task_targets SET record_id = 999 WHERE target_kind = 'record'", "missing record"),
+        ("UPDATE task_targets SET signal_id = 999 WHERE target_kind = 'signal'", "outside the hydrated set"),
+        ("UPDATE task_dependencies SET parent_task_id = 999", "missing task 999"),
+        ("UPDATE task_record_refs SET field = 'outputs'", r"task_record_refs has unknown fields \['outputs'\]"),
+    ],
+)
+def test_read_tasks_rejects_corrupt_task_references(tmp_path, statement, message):
+    dataset = _dataset()
+    record = dataset.records[0]
+    step = StepPoint(start=1, time_series=record.signals[1])
+    dataset.tasks[0].targets = (step, record, record.signals[0])
+    steps = Signal(name="steps", spec=SPEC, time_axis=OrdinalAxis(), data=pa.array([1.0, 2.0], pa.float32()))
+    step_record = Record(sources=(Source(name="steps", signals=(steps,)),))
+    dataset.add_record(record=step_record)
+    parent = AnswerTask(inputs=(record,), targets=("parent",))
+    scoped = AnswerTask(inputs=(step_record,), targets=("scoped",), scope=StepPoint(start=1, time_series=steps))
+    dataset.add_tasks(tasks=(parent, AnswerTask(inputs=(record,), targets=("child",), from_tasks=(parent,)), scoped))
+    assert scoped.id == 4
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+    with connect_control(path) as connection:
+        connection.execute(statement)
+
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match=message):
+        reader.read_tasks(cached_records=reader.read_records())
 
 
 def test_read_tasks_rejects_records_the_database_does_not_store(tmp_path):

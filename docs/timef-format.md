@@ -64,15 +64,15 @@ Signals can reference the same immutable `TimeAxis`.
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
 in either direction, so TimeF does not store duplicate reverse-index tables.
 
-Hierarchy and task tables carry a `BIGINT` internal key drawn from a sequence, and relationships
-between them refer to those keys. The annotation tables have no internal keys. They are keyed by
-the writer's storage IDs, and `task_annotation_refs` points at an occurrence by its
-`occurrence_id`. Public IDs (`record_id`, `signal_id`, and `task_id`) and the writer's storage IDs
-(`source_id`, `axis_id`, `content_id`, and `occurrence_id`) are positive int64 values stored once,
-as `BIGINT`, on the row that owns them. The writer numbers storage IDs from 1 on every write.
-The `dataset_id` is the exception: it is the `org/name` string and is stored as `VARCHAR`.
-Fixed-shape fields are typed columns, so spans, task configuration, target values, and annotation
-values can be filtered in SQL. Only the free-form `metadata` dictionaries are JSON.
+Hierarchy tables carry a `BIGINT` internal key drawn from a sequence, and relationships between them
+refer to those keys. The task and annotation tables have no internal keys. Task tables are keyed by
+public IDs, annotation tables by the writer's storage IDs, and `task_annotation_refs` points at an
+occurrence by its `occurrence_id`. Public IDs (`record_id`, `signal_id`, and `task_id`) and the
+writer's storage IDs (`source_id`, `axis_id`, `content_id`, and `occurrence_id`) are positive int64
+values stored once, as `BIGINT`, on the row that owns them. The writer numbers storage IDs from 1 on
+every write. The `dataset_id` is the exception: it is the `org/name` string and is stored as
+`VARCHAR`. Fixed-shape fields are typed columns, so spans, task configuration, target values, and
+annotation values can be filtered in SQL. Only the free-form `metadata` dictionaries are JSON.
 
 The `control_metadata` table stores the last public ID used for each kind, under
 `last_id.record`, `last_id.signal`, and `last_id.task`. A version edited from this one continues
@@ -135,16 +135,17 @@ Each attachment still has its own `occurrence_id` and temporal placement.
 
 `Task` is abstract. Each concrete task gets one row in `tasks`; `task_type` selects the Python
 subclass. The scope is stored as four typed columns (`scope_type`, `scope_start`, `scope_end`,
-`scope_signal_keys`), and subclass configuration as one nullable column per field
+`scope_signal_ids`), and subclass configuration as one nullable column per field
 (`target_schema`, `unit`, `target_name`, `mode`), so tasks can be filtered in SQL without parsing
 JSON. Inline targets are one row each in `task_targets`, with `target_kind` naming which typed value
-column is set. References to Records, Signals, annotation occurrences, and parent Tasks live in the
-relationship tables.
+column is set. A target stores public IDs directly: `record_id` for a Record, `signal_id` for a
+Signal or the series of a step target, and `span_signal_ids` for a time point or time interval.
+References to Records, annotation occurrences, and parent Tasks live in the relationship tables.
 
 The `field` column distinguishes relationships such as `inputs` and `candidate_records`.
 `position` preserves tuple order. On read, TimeNet hydrates each object once and restores ordinary
-Python object references, or hands the same rows back as Arrow tables with public IDs in place of
-keys. See [TimeFReader](timef-reader.md).
+Python object references, or hands the same rows back as Arrow tables of public IDs. See
+[TimeFReader](timef-reader.md).
 
 ## Values plane
 
