@@ -22,6 +22,8 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.types.parent_dataset_card import ParentDatasetCard
+from timenet.types.references import DatasetRef
 from timenet.values_backends import ValuesBackend
 
 
@@ -211,7 +213,22 @@ def test_dict_roundtrip(modality):
 
 def test_json_roundtrip():
     m = _manifest()
+    parent = _replace(m.metadata, dataset_id="parent/ecg")
+    ref = DatasetRef(dataset_id=parent.dataset_id, version=parent.dataset_version)
+    card = ParentDatasetCard(source=ref, metadata=parent)
+    m = _replace(
+        m,
+        metadata=_replace(m.metadata, inputs={"parent": ref}),
+        parent_cards={"parent": card},
+        lineage=(card,),
+    )
     assert Manifest.model_validate_json(m.to_json()) == m
+
+
+@pytest.mark.parametrize("reference", ["other/ecg@1.2.0", "demo/ecg@1.2.1"])
+def test_parent_dataset_card_rejects_metadata_from_a_different_release(reference):
+    with pytest.raises(ValidationError, match="does not match metadata release"):
+        ParentDatasetCard(source=DatasetRef.parse(reference), metadata=_manifest().metadata)
 
 
 def test_model_validate_json_exposes_pydantic_json_error():
