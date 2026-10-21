@@ -102,7 +102,7 @@ def test_values_shard_and_the_dataset_round_trips(tmp_path, n_records, series_le
     for rel in files.all_parts():
         assert (version_dir / rel).exists()
     with TimeFReader(open_local_version(version_dir)) as reader:
-        restored = reader.read()
+        restored = reader.read().read()
     assert_datasets_equal(original, restored)
 
 

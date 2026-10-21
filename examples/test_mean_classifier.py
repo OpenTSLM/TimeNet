@@ -24,7 +24,8 @@ import timenet_connectors
 # Build and load through the same explicit local registry.
 registry = Path(".timenet-registry")
 timenet_connectors.build("timenet/test-mean", out=registry)
-dataset = TimeNet(registry).load("timenet/test-mean")
+with TimeNet(registry).load("timenet/test-mean") as handle:
+    dataset = handle.read()
 
 # A quick tour of what we loaded: identity, counts, specs, and a record preview.
 dataset.describe()
