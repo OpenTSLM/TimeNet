@@ -106,8 +106,8 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
         assert connection.execute(
             """SELECT contents.content_id, occurrences.object_type, records.record_id
                FROM annotation_occurrences occurrences
-               JOIN annotation_contents contents USING (content_key)
-               JOIN records ON records.record_key = occurrences.object_key
+               JOIN annotation_contents contents USING (content_id)
+               JOIN records ON records.record_id = occurrences.object_id
                WHERE contents.content_id = ? AND occurrences.object_type = 'Record'""",
             [SEX_MALE_ID],
         ).fetchone() == (SEX_MALE_ID, "Record", RECORD_ID)
@@ -122,8 +122,8 @@ def test_control_relationships_use_integer_keys(tmp_path):
         ("sources", "parent_source_key"),
         ("signals", "source_key"),
         ("signals", "axis_key"),
-        ("annotation_occurrences", "content_key"),
-        ("annotation_occurrences", "object_key"),
+        ("annotation_occurrences", "content_id"),
+        ("annotation_occurrences", "object_id"),
         ("task_targets", "task_key"),
         ("task_targets", "record_key"),
         ("task_targets", "signal_key"),
