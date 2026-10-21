@@ -8,6 +8,7 @@ from timenet.errors import TimeFFormatError
 from timenet.format.control_audit import audit_control_database
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
+from timenet.format.stored_values import PackedValueWriter
 from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 
 
@@ -45,7 +46,7 @@ def _dataset() -> TimeFDataset:
 @pytest.fixture
 def control_path(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
     return path
 
 
@@ -92,7 +93,9 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
             "contains a cycle",
         ),
         (
-            "INSERT INTO axis_offsets SELECT axis_key, 0, 0 FROM axes",
+            "INSERT INTO external_values "
+            "SELECT 'Axis', axis_id, 'offsets', 0, 'payloads/part-00000000.parquet', 0, 'offsets', 2, "
+            "'sha256:' || repeat('0', 64) FROM axes",
             "axis length that does not match",
         ),
     ],

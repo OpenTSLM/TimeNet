@@ -63,6 +63,8 @@ Text handles reject `==` and `!=` comparisons. Compare their contents explicitly
 to compare text handles. The `assert_datasets_equal` testing helper reads text before comparing
 dataset contents.
 
+Irregular timestamp loaders read and validate their packed arrays on first access.
+
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
 `TimeFDataset`.
 

@@ -10,6 +10,7 @@ from timenet.format.control_audit import audit_control_database
 import timenet.format.control_writer as control_writer_module
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
+from timenet.format.stored_values import PackedValueWriter
 from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 
 
@@ -68,7 +69,7 @@ def _dataset() -> TimeFDataset:
 def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path, monkeypatch):
     monkeypatch.setattr(control_writer_module, "_ROW_BATCH_SIZE", 2)
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
 
     with connect_control(path, read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM records").fetchone() == (1,)
@@ -106,7 +107,7 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
 
 def test_control_relationships_use_integer_keys(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
 
     relationship_columns = (
         ("sources", "record_key"),
@@ -153,7 +154,7 @@ def test_control_writer_preserves_relationships_across_task_batches(tmp_path, mo
     monkeypatch.setattr(control_writer_module, "_TASK_BATCH_SIZE", 2)
     path = tmp_path / "control.duckdb"
 
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with connect_control(path, read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM tasks").fetchone() == (6,)
@@ -183,14 +184,14 @@ def test_control_writer_removes_database_after_validation_failure(tmp_path):
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match="reused with different content"):
-        DuckDBControlWriter(path).write_hierarchy(dataset)
+        DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     assert not path.exists()
 
 
 def test_control_writer_output_passes_the_relational_audit(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
 
     with connect_control(path, read_only=True) as connection:
         audit_control_database(connection, require_chunks=False)
@@ -211,7 +212,7 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match="belong to different records"):
-        DuckDBControlWriter(path).write_hierarchy(_dataset())
+        DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
 
     assert not path.exists()
 
@@ -240,7 +241,7 @@ def test_control_writer_rejects_ids_reused_across_records(tmp_path):
     )
 
     with pytest.raises(TimeFValidationError, match="source id 'ecg' is not unique"):
-        DuckDBControlWriter(tmp_path / "control.duckdb").write_hierarchy(dataset)  # ty: ignore[invalid-argument-type]
+        DuckDBControlWriter(tmp_path / "control.duckdb", external=PackedValueWriter(tmp_path)).write_hierarchy(dataset)  # ty: ignore[invalid-argument-type]
 
 
 def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path):
@@ -262,7 +263,7 @@ def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path
     )
 
     with pytest.raises(TimeFValidationError, match="returned 3 time offsets but it declares n_values=2"):
-        DuckDBControlWriter(tmp_path / "control.duckdb").write_hierarchy(dataset)  # ty: ignore[invalid-argument-type]
+        DuckDBControlWriter(tmp_path / "control.duckdb", external=PackedValueWriter(tmp_path)).write_hierarchy(dataset)  # ty: ignore[invalid-argument-type]
 
 
 @pytest.mark.parametrize(
@@ -281,7 +282,7 @@ def test_control_writer_rejects_chunks_that_do_not_cover_each_signal(tmp_path, p
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match=message):
-        DuckDBControlWriter(path).write_hierarchy(_dataset(), placements)
+        DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset(), placements)
 
     assert not path.exists()
 
@@ -306,7 +307,7 @@ def test_control_writer_stores_value_chunk_locations(tmp_path):
         ),
     }
 
-    DuckDBControlWriter(path).write_hierarchy(_dataset(), placements)  # ty: ignore[invalid-argument-type]
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset(), placements)  # ty: ignore[invalid-argument-type]
 
     with connect_control(path, read_only=True) as connection:
         assert connection.execute(
