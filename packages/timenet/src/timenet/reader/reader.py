@@ -41,8 +41,8 @@ class TimeFReader:
     def __init__(self, version: DatasetVersion) -> None:
         """Configure a lazy reader for an opened dataset version.
 
-        Opening a reader does not download or query ``control.duckdb``. The first structural read
-        materializes the control database locally, verifies it, and opens it read-only.
+        The version is already prepared, including its dependencies. Opening a reader does not
+        query ``control.duckdb``. The first structural read opens the local catalog read-only.
 
         Args:
             version: Opened dataset version containing a parsed manifest and filesystem handle.
@@ -55,6 +55,7 @@ class TimeFReader:
         self._tasks: tuple[Task, ...] | None = None
         self._control: DuckDBControlReader | None = None
         self._records: tuple[Record, ...] | None = None
+        self._dataset: TimeFDataset | None = None
         self._values: BaseValuesReader | None = None
         self._owner_readers: dict[OwnerKey, BaseValuesReader] = {}
         self._chunk_locator_batches: list[list[int]] = []
@@ -69,6 +70,7 @@ class TimeFReader:
         state["_tasks"] = None
         state["_control"] = None
         state["_records"] = None
+        state["_dataset"] = None
         state["_values"] = None
         state["_owner_readers"] = {}
         state["_chunk_rows_cache"] = {}
@@ -101,6 +103,7 @@ class TimeFReader:
             backend.close()
         self._owner_readers.clear()
         self._records = None
+        self._dataset = None
         self._tasks = None
         self._packed_value_reader.close()
         self._chunk_rows_cache.clear()
@@ -280,10 +283,25 @@ class TimeFReader:
         """Hydrate the dataset while keeping every Signal's values lazy.
 
         Returns:
+            The reconstructed dataset with lazy values.
+        """
+        return self._read_catalog()
+
+    def _read_dataset(self) -> TimeFDataset:
+        """Return the cached dataset with every value materialized in memory."""
+        if self._dataset is None:
+            self._dataset = self._read_catalog(eager=True)
+        return self._dataset
+
+    def _read_catalog(self, *, eager: bool = False) -> TimeFDataset:
+        """Hydrate the dataset with native values for eager reads and handles otherwise.
+
+        Returns:
             The reconstructed dataset.
         """
-        records = list(self._all_records())
-        tasks = self.tasks
+        control = self._control_reader()
+        records = list(control.read_records(eager=True) if eager else self._all_records())
+        tasks = control.read_tasks(cached_records=records, eager=True) if eager else self.tasks
         by_id = {record.record_id: record for record in records}
         for task in tasks:
             for referenced in task.inputs:
@@ -295,7 +313,7 @@ class TimeFReader:
             records=records,
             tasks=tasks,
             schema=self.schema,
-            annotations=self._control_reader().read_dataset_annotations(self._manifest.dataset_id),
+            annotations=control.read_dataset_annotations(self._manifest.dataset_id, eager=eager),
         )
 
     def iter_records(
