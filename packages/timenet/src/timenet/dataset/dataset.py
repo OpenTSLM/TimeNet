@@ -24,6 +24,7 @@ from timenet.types import (
     StepSpan,
     SupportsAnnotate,
     Task,
+    TextValue,
     TimeSpan,
     annotation_type_of,
     value_type_of,
@@ -1001,12 +1002,13 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                     "to_features_and_targets needs exactly one per record"
                 )
             inline = matched[0].targets
-            if inline is None or len(inline) != 1 or not isinstance(inline[0], (str, int, float, bool)):
+            if inline is None or len(inline) != 1 or not isinstance(inline[0], (TextValue, int, float, bool)):
                 raise TimeFValidationError(
                     f"{resolved.__name__} {matched[0].id!r} needs exactly one scalar target to use as y"
                 )
             rows.append(record.to_arrow())  # Arrow straight from the loader, no NumPy copy
-            targets.append(inline[0])
+            target = inline[0]
+            targets.append(target.read() if isinstance(target, TextValue) else target)
         if not rows:
             what = (
                 f"{resolved.__name__} features"
@@ -1031,7 +1033,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             for task in self._tasks
             if task.targets is not None
             and len(task.targets) == 1
-            and isinstance(task.targets[0], (str, int, float, bool))
+            and isinstance(task.targets[0], (TextValue, int, float, bool))
         }
         if len(kinds) == 1:
             return kinds.pop()

@@ -9,6 +9,7 @@ from timenet.types import (
     Annotation,
     AnnotationDescriptor,
     AnnotationType,
+    TextValue,
     TimeInterval,
     TimePoint,
     annotation_type_of,
@@ -86,8 +87,8 @@ def test_sequence_value_canonicalized_to_list():
     # value_type is "list" for any sequence, and the manifest stores it as a JSON array that decodes
     # back to a list; normalizing at construction keeps an annotation equal to its read-back form.
     ann = Annotation(key="labels", value=("a", "b"))
-    assert ann.value == ["a", "b"]
-    assert isinstance(ann.value, list)
+    assert isinstance(ann.value, TextValue)
+    assert ann.value.read() == ["a", "b"]
 
 
 def test_frozen():

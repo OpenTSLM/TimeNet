@@ -41,6 +41,20 @@ annotations opens `control.duckdb` in read-only mode.
 Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy. A call to
 `to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from Parquet or Zarr.
 
+Task prompts, rationales, text targets, and annotation strings or string lists use `TextValue`
+handles. Call `read()` on a handle to obtain its native string or list. Constructors accept ordinary
+strings and wrap them in memory. Optional prompts and rationales remain `None` when absent; numeric
+and boolean values remain native Python scalars. Use `read_value(value)` from `timenet.types` when a
+value may be a text handle or a native scalar.
+
+Empty text handles are false in truth tests. An empty prompt remains a handle whose `read()` returns
+`""`. An absent prompt remains `None`. Truth tests use the handle's length without reading its value.
+
+Text handles compare by content, with each other and with native strings or string lists, so a task
+equals its read-back copy regardless of where its text is stored. Handles of different lengths
+compare unequal without a read. Comparing handles of equal length reads both values. Text handles
+are not hashable.
+
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
 `TimeFDataset`.
 
