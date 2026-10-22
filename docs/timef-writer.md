@@ -90,14 +90,13 @@ The writer fails before publication when it finds an invalid state, including:
 - chunk rows that do not cover a Signal exactly.
 
 These failures raise TimeNet validation errors with object IDs and relationship fields where
-possible. The writer checks most of them while it streams rows, from the ID sets and key
-sequences it owns, rather than by scanning the finished tables. Annotation references go in
-after the occurrences get their ids, so an annotation that is not attached in the dataset fails
-there. Dependencies go in after the last task batch. Each parent must be the same Task object that
-the write stored under that ID, so a parent from another dataset fails even when its ID is in use
-here. The same invariants exist in SQL form in
-`timenet.format.control_audit.audit_control_database()`, which scans every table of a
-`control.duckdb` and is what the test suite runs after each round trip.
+possible. The writer checks most of them while it streams rows, from the ID sets it owns, rather
+than by scanning the finished tables. Annotation references go in after the occurrences get their
+ids, so an annotation that is not attached in the dataset fails there. Dependencies go in after
+the last task batch. Each parent must be the same Task object that the write stored under that ID,
+so a parent from another dataset fails even when its ID is in use here. The same invariants exist
+in SQL form in `timenet.format.control_audit.audit_control_database()`, which scans every table of
+a `control.duckdb` and is what the test suite runs after each round trip.
 
 ## Task streams
 
