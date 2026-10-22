@@ -19,12 +19,12 @@ Every dataset ships a card (`dataset.yaml`) with fields that tell you what appli
   schema limits this field to a fixed set of values, kept in sync with `timenet.types.License`. Most
   are license identifiers you can look up on [SPDX](https://spdx.org/licenses/). Two are escape
   hatches:
-    - `other`: a known license outside the SPDX list, such as a Hippocratic License 3.0 build with
+    - `OTHER`: a known license outside the SPDX list, such as a Hippocratic License 3.0 build with
       modules. Pair it with a `license_url`.
     - `NONE`: SPDX's value for a source whose publisher states no license at all. It does not mean
       the data is free of restrictions: its terms of use are unknown, so check with the publisher
       before you use or redistribute it.
-- `license_url`: where to read the full license text. Required when `license` is `other`.
+- `license_url`: where to read the full license text. Required when `license` is `OTHER`.
 - `source_url`: where the data comes from. Open it to read the upstream terms in full. This field is
   optional, so a purely synthetic dataset may leave it out.
 
