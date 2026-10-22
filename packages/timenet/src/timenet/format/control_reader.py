@@ -592,7 +592,7 @@ class DuckDBControlReader:
                 raise TimeFFormatError(f"signal {row.signal_id!r} refers to missing source key {row.source_key!r}")
         children, roots = self._group_sources(sources_by_key, {row.record_key for row in record_rows})
         if eager:
-            # Construct native arrays in Record scan order, which may differ from namespaced IDs.
+            # Construct native arrays in Record scan order, which may differ from imported IDs.
             record_order = {row.record_key: index for index, row in enumerate(record_rows)}
             signal_rows.sort(key=lambda row: record_order[sources_by_key[row.source_key].record_key])
         self._cache_record_clocks(record_rows)

@@ -90,6 +90,10 @@ with client.load("timenet/hello-world") as dataset:
     window = signal.read_steps(0, 100)
 ```
 
+`alias=` uses the name in the input declaration. `parent=` accepts a `DatasetRef` for one exact
+release. These selectors are mutually exclusive. Without either selector, the lookup uses a local
+object ID.
+
 Call `read()` on an entity handle to load that object and its dependencies. Call `read()` on the
 dataset handle to load the complete `TimeFDataset`. Materialized results remain usable after the
 handle closes:
@@ -111,20 +115,57 @@ dataset = TimeNet(".timenet-registry").load(
 )
 ```
 
-Set `auto_build=False` to report a missing local version without starting a build. Remote registries
-never run connector code.
+Set `auto_build=False` to report a missing local version without starting a build.
+The separate `build_parents` option permits parent builds during preparation, including for remote reads.
 
-For an HTTP registry, `load()` downloads the complete version into `TIMENET_STORAGE` first. A later
-load reuses that committed copy. An S3 registry reads in place unless the storage directory already
-contains a complete copy.
+HTTP and S3 reads resolve physical source manifests before returning a handle.
+They reuse complete cached releases and otherwise read remote payload ranges on demand.
+The first structural read downloads and verifies the child's catalog. Parent catalogs stay unopened.
+Build-only inputs remain recorded as provenance and are not fetched for reading.
 
-`download()` always copies the complete version into local storage:
+A local registry requires complete copies of the release and its physical sources.
+To fetch missing physical sources, supply a registry URI through `fetch_parents`.
+To build sources that fetching cannot find, set `build_parents=True`.
+
+```python
+with TimeNet(".timenet-registry").get_handle(
+    "physionet/ecg-qa-cot@1.0.0",
+    fetch_parents="timenet://",
+    build_parents=True,
+) as dataset:
+    records = dataset.read().records
+```
+
+These options also apply to `load()` and `load_torch()`. Parent builds require an installed connector
+that declares the requested version.
+
+```python
+from timenet.types import ObjectKind
+from timenet.types.reference_keys import InputAlias
+
+with client.get_handle("physionet/ecg-qa-cot@1.0.0") as dataset:
+    signal = dataset.get_handle(
+        ObjectKind.SIGNAL, "ecg-1-I", alias=InputAlias("ptbxl")
+    )
+    window = signal.read_steps(0, 100)
+```
+
+`alias=` uses the name in the input declaration. `parent=` accepts a `DatasetRef` for one exact
+release. These selectors are mutually exclusive. Without either selector, the lookup uses a local
+object ID.
+
+`download()` copies the complete child release and its physical source releases for offline use:
 
 ```python
 path = client.download("chengsenwang/tsqa@1.0.0")
 ```
 
 Use `force=True` to replace an existing local copy.
+To preload files, call `download()` before `load()`; the later read reuses the complete cached releases.
+Remote clients still request manifests. For offline reads, point `TimeNet` at the storage directory
+and set `auto_build=False`. Payload ranges are cached in memory; `download()` creates persistent copies.
+
+Reads with `build_parents=True` prepare complete local physical releases before returning a handle.
 
 ## Pin a version
 
