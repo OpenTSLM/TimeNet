@@ -387,8 +387,8 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         """Build one six-channel IMU Record with its source provenance.
 
         Returns:
-            A Record with lazy sensor values, and its provenance, task context, and derived features as
-            annotations.
+            A Record with lazy sensor values, provenance metadata, the row's task context, and its
+            derived features as annotations.
         """
         channels = _PAMAP2_CHANNELS if ref.file.part == "pamap2_v2" else _CHANNELS
         signals = tuple(
@@ -402,18 +402,20 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
             )
             for spec, name, sensor, dimension in channels
         )
-        record = Record(sources=(Source(name="IMU", signals=signals),))
-        source = ref.file.part.rsplit("_", 1)[0]
-        metadata: dict[str, str | int] = {
-            "source_dataset": source,
-            "source_partition": ref.file.part,
-            "source_file": self.SOURCE_FILES[ref.file.part],
-            "source_row": ref.index,
-            "activity_summary": row.summary,
-        }
+        record = Record(
+            sources=(Source(name="IMU", signals=signals),),
+            # Provenance only. The task context and the features below are annotations.
+            metadata={
+                "source_dataset": ref.file.part.rsplit("_", 1)[0],
+                "source_partition": ref.file.part,
+                "source_file": self.SOURCE_FILES[ref.file.part],
+                "source_row": ref.index,
+            },
+        )
+        context: dict[str, str] = {"activity_summary": row.summary}
         if row.location is not None:
-            metadata["sensor_location"] = row.location
-        for key, value in metadata.items():
+            context["sensor_location"] = row.location
+        for key, value in context.items():
             record.annotate(Annotation(key=key, value=value))
         # The derived features are Record annotations only. They are not task inputs, because they are long
         # NumPy text that the generator computed from the 120-reading source window, not from the 60 stored

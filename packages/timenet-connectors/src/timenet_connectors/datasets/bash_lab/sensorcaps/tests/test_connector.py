@@ -153,7 +153,7 @@ def _write_row(tmp_path, row):
 def _assert_records_and_tasks(records, tasks):
     assert len(records) == len(tasks) == 10
     records_by_row = {
-        (_annotations(record)["source_partition"], _annotations(record)["source_row"]): record for record in records
+        (record.metadata["source_partition"], record.metadata["source_row"]): record for record in records
     }
     tasks_by_record = {task.inputs[0].id: task for task in tasks}
     for partition_index, partition in enumerate(_PARTITIONS):
@@ -166,7 +166,7 @@ def _assert_records_and_tasks(records, tasks):
             assert source.name == "IMU"
             assert source.sources == ()
             assert len(source.signals) == len(record.signals) == 6
-            provenance = {
+            assert record.metadata == {
                 "source_dataset": partition.removesuffix("_v2"),
                 "source_partition": partition,
                 "source_file": f"data/{partition}-00000-of-00001.jsonl",
@@ -178,7 +178,7 @@ def _assert_records_and_tasks(records, tasks):
             # Each feature's text, without its heading or surrounding whitespace, stays on the record
             # and is not a task input.
             features = {_FEATURE_KEYS[heading]: text for heading, text in _FEATURE_TEXT.items()}
-            assert _annotations(record) == provenance | expected_context | features
+            assert _annotations(record) == expected_context | features
             identities = (
                 _PAMAP2_CHANNELS if partition == "pamap2_v2" else tuple((sensor, axis) for sensor, axis, _ in _CHANNELS)
             )

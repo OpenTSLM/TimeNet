@@ -10,9 +10,9 @@ source partitions identify the contributing datasets, not train/test folds.
 
 ## Records and captioning tasks
 
-Each record contains one source named `IMU` with six signals. Record annotations identify the source
-dataset, partition, file, and row, along with the activity summary, the sensor location when
-available, and the 12 derived features. The captioning task uses only the activity summary and
+Each record contains one source named `IMU` with six signals. `Record.metadata` identifies the source
+dataset, partition, file, and row. Record annotations carry the activity summary, the sensor location
+when available, and the 12 derived features. The captioning task uses only the activity summary and
 the sensor location as input annotations.
 
 | Content | TimeF access |
