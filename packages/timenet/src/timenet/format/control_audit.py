@@ -20,6 +20,22 @@ _TARGET_KINDS = ", ".join(f"'{kind.value}'" for kind in TaskTargetKind)
 _ANNOTATION_VALUE_KINDS = ", ".join(f"'{kind.value}'" for kind in AnnotationValueKind)
 _TIME_TARGET_KINDS = ", ".join(f"'{kind.value}'" for kind in (TaskTargetKind.TIME_POINT, TaskTargetKind.TIME_INTERVAL))
 
+_ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
+    ("records", "record_id"),
+    ("sources", "source_id"),
+    ("axes", "axis_id"),
+    ("signals", "signal_id"),
+    ("annotation_contents", "content_id"),
+    ("annotation_occurrences", "occurrence_id"),
+    ("tasks", "task_id"),
+)
+"""The primary id column of each entity table."""
+
+_ENTITY_ID_CHECKS = " UNION ALL ".join(
+    f"SELECT '{table}.{column}' FROM {table} WHERE {column} <= 0"  # noqa: S608 - fixed table names
+    for table, column in _ENTITY_ID_COLUMNS
+)
+
 _DOMAIN_CHECKS = f"""
     SELECT 'sources.parent_source_key' AS field
     FROM sources WHERE parent_source_key = source_key
@@ -47,8 +63,10 @@ _DOMAIN_CHECKS = f"""
     UNION ALL
     SELECT 'tasks.scope_type' FROM tasks
     WHERE scope_type NOT IN ('time_point', 'time_interval', 'step_point', 'step_interval')
+    UNION ALL
+    {_ENTITY_ID_CHECKS}
     LIMIT 1
-"""  # noqa: S608 - tags come only from internal enum values
+"""  # noqa: S608 - tags come only from internal enum values and fixed table names
 
 _CROSS_RECORD_PARENT = """
     SELECT child.source_id

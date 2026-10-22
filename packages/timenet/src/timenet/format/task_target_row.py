@@ -65,9 +65,9 @@ class _TargetValues(TimeFModel):
 class TargetValueRow(_TargetValues):
     """Represent a public target with validated values and public object IDs."""
 
-    record_id: StrictStr | None = None
-    signal_id: StrictStr | None = None
-    span_signal_ids: tuple[StrictStr, ...] | None = None
+    record_id: StrictInt | None = None
+    signal_id: StrictInt | None = None
+    span_signal_ids: tuple[StrictInt, ...] | None = None
 
     _scope_column = "span_signal_ids"
     _required_columns = _required_columns("record_id", "signal_id", _scope_column)
@@ -139,6 +139,6 @@ class TaskTargetRow(_TargetValues):
     _payload_columns = frozenset().union(*_required_columns.values())
 
 
-def signal_ids(series: tuple[Signal, ...] | None) -> tuple[str, ...] | None:
+def signal_ids(series: tuple[Signal, ...] | None) -> tuple[int, ...] | None:
     """Return the ids of a time span's Signals, or ``None`` for a span over the whole record."""
     return None if series is None else tuple(signal.id for signal in series)

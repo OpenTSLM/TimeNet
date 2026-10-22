@@ -31,7 +31,7 @@ Every Task supports these fields:
 
 | Field | Purpose |
 | --- | --- |
-| `id` | Stable Task identity. |
+| `id` | Read-only int64 Task identity. `add_task()` sets it. |
 | `inputs` | Ordered input Records. |
 | `targets` | Ordered inline values or stored objects. |
 | `prompt` | Optional instruction or question. |

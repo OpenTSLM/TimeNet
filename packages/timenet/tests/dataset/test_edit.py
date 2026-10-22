@@ -1,7 +1,5 @@
 """Copy-on-write edits: remove_records validate-and-cascade, and the edit_version round trip."""
 
-import re
-
 import duckdb
 import pytest
 
@@ -77,7 +75,7 @@ def test_remove_unknown_record_raises():
     dataset = make_dataset()
     dataset.derive_schema()
     with pytest.raises(TimeFEditError, match="unknown record ids"):
-        remove_records(dataset, ["nope"])
+        remove_records(dataset, [999])
 
 
 def test_remove_record_with_task_rejects_without_cascade():
@@ -149,7 +147,7 @@ def test_target_annotation_refs_are_required():
     localize.target_annotations = (target_annotation,)
     dataset.derive_schema()
 
-    with pytest.raises(TimeFEditError, match=re.escape(localize.id)):
+    with pytest.raises(TimeFEditError, match=rf"dangle tasks \[[^\]]*\b{localize.id}\b"):
         remove_records(dataset, [removed_record.id])
 
     edited = remove_records(dataset, [removed_record.id], cascade=True)
@@ -184,7 +182,6 @@ def test_target_and_candidate_records_are_required_whatever_the_task_type():
             inputs=(dataset.records[0],),
             prompt="Denoise it.",
             targets=(edited_record,),
-            id="task-edit-0",
         )
     )
     correspondence_task = dataset.add_task(
@@ -193,13 +190,12 @@ def test_target_and_candidate_records_are_required_whatever_the_task_type():
             prompt="Which trace matches?",
             candidate_records=(edited_record, candidate_record),
             targets=(candidate_record,),
-            id="task-corr-0",
         )
     )
     dataset.derive_schema()
-    with pytest.raises(TimeFEditError, match=re.escape(edit_task.id)):
+    with pytest.raises(TimeFEditError, match=rf"dangle tasks \[[^\]]*\b{edit_task.id}\b"):
         remove_records(dataset, [edited_record.id])
-    with pytest.raises(TimeFEditError, match=re.escape(correspondence_task.id)):
+    with pytest.raises(TimeFEditError, match=rf"dangle tasks \[[^\]]*\b{correspondence_task.id}\b"):
         remove_records(dataset, [candidate_record.id])
 
 

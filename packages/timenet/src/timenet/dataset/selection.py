@@ -36,10 +36,10 @@ class SignalSelection:
         if (signals is None) == (signal_names is None):
             raise TimeFValidationError("select() requires exactly one of signals= or signal_names=")
         available = tuple(source.walk_signals())
-        by_id = {signal.id: signal for signal in available}
         if signals is not None:
             selected = tuple(signals)
-            unknown = [signal.id for signal in selected if by_id.get(signal.id) is not signal]
+            available_ids = {id(signal) for signal in available}
+            unknown = [signal.name for signal in selected if id(signal) not in available_ids]
             if unknown:
                 raise TimeFValidationError(f"signals {unknown} do not belong to source {source.name!r}")
         else:
@@ -56,10 +56,9 @@ class SignalSelection:
             if unknown:
                 raise TimeFValidationError(f"signal_names {unknown} do not exist below source {source.name!r}")
             selected = tuple(matches[name][0] for name in names)
-        ids = [signal.id for signal in selected]
-        if not ids:
+        if not selected:
             raise TimeFValidationError("select() requires at least one signal")
-        if len(ids) != len(set(ids)):
+        if len({id(signal) for signal in selected}) != len(selected):
             raise TimeFValidationError("select() does not accept duplicate signals")
         return cls(source=source, signals=selected)
 

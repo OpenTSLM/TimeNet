@@ -45,7 +45,7 @@ class ChunkPlacement:
 class ValuesWriteResult:
     """The outcome of writing every series' values with a backend."""
 
-    placements: dict[tuple[str, int], ChunkPlacement]
+    placements: dict[tuple[int, int], ChunkPlacement]
     """``(time_series_id, chunk_idx)`` -> its on-disk placement."""
     files: list[str] = field(default_factory=list)
     """Value files produced, relative to the staging directory, for ``manifest.files.time_series``."""

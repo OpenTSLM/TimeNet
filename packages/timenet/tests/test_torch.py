@@ -36,7 +36,7 @@ def test_len_matches_records():
 
 def test_getitem_structure():
     item = _ds()[0]
-    assert isinstance(item["record_id"], str)
+    assert isinstance(item["record_id"], int)
     assert item["series"]
     assert all(isinstance(t, torch.Tensor) and t.dtype == torch.float32 for t in item["series"])
 
@@ -76,7 +76,7 @@ def _typed_dataset(dtype, values):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     return dataset
 
 
