@@ -321,6 +321,7 @@ class DuckDBControlWriter:
                         dataset.iter_tasks() if tasks is None else tasks,
                     )
                     self._write_chunks(connection, placements)
+                    self._write_scan_order(connection)
                     self._write_imports(connection, dataset)
                     self._check_source_tree(connection)
                     self.external.finish(connection)
@@ -332,6 +333,26 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
         return task_counts
+
+    @staticmethod
+    def _write_scan_order(connection: duckdb.DuckDBPyConnection) -> None:
+        """Precompute physical scan order so inherited IDs do not scatter payload reads."""
+        if not connection.execute("SELECT 1 FROM signal_chunks WHERE owner_key IS NOT NULL LIMIT 1").fetchone():
+            return
+        connection.execute(
+            """UPDATE records SET read_order = ordered.position FROM (
+                SELECT record_key, row_number() OVER (ORDER BY location, record_key) AS position
+                FROM (
+                    SELECT record_key, min(struct_pack(
+                        owner := coalesce(owner_key, ''), path := value_path,
+                        major := chunk_major_index, minor := chunk_minor_index
+                    )) AS location
+                    FROM sources JOIN signals USING (source_key)
+                    JOIN signal_chunks USING (signal_key)
+                    GROUP BY record_key
+                )
+            ) ordered WHERE records.record_key = ordered.record_key"""
+        )
 
     @staticmethod
     def _write_imports(connection: duckdb.DuckDBPyConnection, dataset: TimeFDataset) -> None:
@@ -424,6 +445,7 @@ class DuckDBControlWriter:
             TimeFValidationError: If two records share an ID.
         """
         records = dataset.records
+        read_order = {identity: index for index, identity in enumerate(sorted(record.id for record in records))}
         object_keys, axis_keys = _reserve_hierarchy_keys(connection, records)
         batches = _HierarchyBatches(connection)
         axes: dict[str, _StoredAxis] = {}
@@ -453,6 +475,7 @@ class DuckDBControlWriter:
                 {
                     "record_key": record_key,
                     "record_id": record.record_id,
+                    "read_order": read_order[record.id],
                     "clock_id": clock_keys[identity],
                     "time_span_start_us": None if span is None else span.start_us,
                     "time_span_end_us": None if span is None else span.end_us,
