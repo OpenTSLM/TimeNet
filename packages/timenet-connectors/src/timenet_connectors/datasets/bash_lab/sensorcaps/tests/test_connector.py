@@ -1,5 +1,7 @@
 import json
 from pathlib import Path
+import sys
+from types import SimpleNamespace
 
 import numpy as np
 import pytest
@@ -14,14 +16,9 @@ from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.types import AnswerTask, InputModality, Split, TimeSeriesSpec
+from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.bash_lab.sensorcaps import SensorCapsConnector, connector as module
-from timenet_connectors.datasets.bash_lab.sensorcaps.connector import (
-    DECLARED_SAMPLING_RATE_HZ,
-    HF_REPO,
-    SOURCE_REVISION,
-    SOURCE_ROWS,
-    SensorCapsFileRef,
-)
+from timenet_connectors.datasets.bash_lab.sensorcaps.connector import DECLARED_SAMPLING_RATE_HZ
 
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -48,8 +45,8 @@ _PAMAP2_CHANNELS = (
     ("magnetometer", "x"),
 )
 _DATASET_ANNOTATIONS = {
-    "source_repository": HF_REPO,
-    "source_revision": SOURCE_REVISION,
+    "source_repository": SensorCapsConnector.HF_REPO,
+    "source_revision": SensorCapsConnector.SOURCE_REVISION,
     "declared_sampling_rate_hz": DECLARED_SAMPLING_RATE_HZ,
     "source_sampling_rate_hz": 20,
     "source_window_samples": 120,
@@ -105,7 +102,7 @@ def _refs(tmp_path):
         path.write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in _rows(partition)), encoding="utf-8"
         )
-        refs.append(SensorCapsFileRef(path, partition))
+        refs.append(HubFileRef(path, partition))
     return refs
 
 
@@ -116,7 +113,7 @@ def _annotations(owner):
 def _write_row(tmp_path, row):
     path = tmp_path / "row.jsonl"
     path.write_text(json.dumps(row) + "\n", encoding="utf-8")
-    return SensorCapsFileRef(path, "hhar_v2")
+    return HubFileRef(path, "hhar_v2")
 
 
 def _assert_records_and_tasks(records, tasks):
@@ -134,13 +131,13 @@ def _assert_records_and_tasks(records, tasks):
             assert source.name == "IMU"
             assert source.sources == ()
             assert len(source.signals) == len(record.signals) == 6
-            expected_annotations = {
+            assert record.metadata == {
                 "source_dataset": partition.removesuffix("_v2"),
                 "source_partition": partition,
                 "source_file": f"data/{partition}-00000-of-00001.jsonl",
                 "source_row": row_index,
-                "activity_summary": f"synthetic café {partition} movement {row_index}",
             }
+            expected_annotations = {"activity_summary": f"synthetic café {partition} movement {row_index}"}
             if partition == "pamap2_v2":
                 expected_annotations["sensor_location"] = "ankle"
             # Feature text is streamed with tasks, never retained on the record graph.
@@ -189,6 +186,13 @@ def test_conversion_preserves_source_semantics_and_reiterable_tasks(tmp_path):
     # Verify complete content on both passes, including row-to-record associations.
     for _ in range(2):
         _assert_records_and_tasks(dataset.records, list(dataset.iter_tasks()))
+
+
+def test_source_file_metadata_uses_declared_repository_filename(tmp_path):
+    ref = _write_row(tmp_path, _rows()[0])
+    dataset = SensorCapsConnector().convert([ref])
+
+    assert dataset.records[0].metadata["source_file"] == "data/hhar_v2-00000-of-00001.jsonl"
 
 
 def test_channel_reads_reuse_rows_and_reread_offsets(monkeypatch, tmp_path):
@@ -279,10 +283,32 @@ def test_integer_and_float_sensor_readings_are_accepted(tmp_path):
         np.testing.assert_array_equal(signal.to_numpy(), np.full(60, expected, dtype=np.float32))
 
 
+def test_download_pins_each_partition_file_and_count(monkeypatch, tmp_path):
+    requested = []
+
+    def hf_hub_download(repo, filename, *, revision, **kwargs):
+        requested.append((repo, revision, filename))
+        return str(tmp_path / filename)
+
+    monkeypatch.setitem(sys.modules, "huggingface_hub", SimpleNamespace(hf_hub_download=hf_hub_download))
+    refs = SensorCapsConnector().download(tmp_path / "cache")
+
+    filenames = [f"data/{partition}-00000-of-00001.jsonl" for partition in SensorCapsConnector.SOURCE_ROWS]
+    assert requested == [
+        ("BASH-Lab/SensorCaps", SensorCapsConnector.SOURCE_REVISION, filename) for filename in filenames
+    ]
+    assert refs == [
+        HubFileRef(tmp_path / filename, partition, count)
+        for filename, (partition, count) in zip(filenames, SensorCapsConnector.SOURCE_ROWS.items(), strict=True)
+    ]
+
+
 def test_pinned_downloads_enforce_partition_counts():
-    fixture = SensorCapsFileRef(_FIXTURES / "captions.jsonl", "hhar_v2")
+    fixture = HubFileRef(_FIXTURES / "captions.jsonl", "hhar_v2")
     with pytest.raises(TimeFValidationError, match=r"hhar_v2.*expected 9166 rows, found 2"):
-        SensorCapsConnector().convert([SensorCapsFileRef(fixture.path, fixture.partition, SOURCE_ROWS["hhar_v2"])])
+        SensorCapsConnector().convert(
+            [HubFileRef(fixture.path, fixture.part, SensorCapsConnector.SOURCE_ROWS["hhar_v2"])]
+        )
 
 
 @pytest.mark.parametrize("n_readings", [1, 59, 61])
