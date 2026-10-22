@@ -131,13 +131,13 @@ def _assert_records_and_tasks(records, tasks):
             assert source.name == "IMU"
             assert source.sources == ()
             assert len(source.signals) == len(record.signals) == 6
-            expected_annotations = {
+            assert record.metadata == {
                 "source_dataset": partition.removesuffix("_v2"),
                 "source_partition": partition,
                 "source_file": f"data/{partition}-00000-of-00001.jsonl",
                 "source_row": row_index,
-                "activity_summary": f"synthetic café {partition} movement {row_index}",
             }
+            expected_annotations = {"activity_summary": f"synthetic café {partition} movement {row_index}"}
             if partition == "pamap2_v2":
                 expected_annotations["sensor_location"] = "ankle"
             # Feature text is streamed with tasks, never retained on the record graph.
@@ -193,7 +193,7 @@ def test_source_file_metadata_uses_repository_filename_from_ref(tmp_path):
     filename = "original/captions.jsonl"
     dataset = SensorCapsConnector().convert([HubFileRef(ref.path, ref.part, filename)])
 
-    assert _annotations(dataset.records[0])["source_file"] == filename
+    assert dataset.records[0].metadata["source_file"] == filename
 
 
 def test_channel_reads_reuse_rows_and_reread_offsets(monkeypatch, tmp_path):
