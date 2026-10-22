@@ -10,8 +10,8 @@ tags:
 
 `TimeFReader` opens a committed TimeF version and reconstructs a
 [`TimeFDataset`](timef-dataset.md). It reads through a [`DatasetVersion`](registry.md) handle. The
-handle contains the parsed manifest and access to the version files. The reader never imports or
-runs connector code.
+handle contains the parsed manifest and local or remote filesystems for the version and its physical sources.
+The reader never imports or runs connector code.
 
 ```python
 from timenet.reader import TimeFReader
@@ -37,12 +37,14 @@ chunk caches.
 
 ## What loads when
 
+Preparation finishes before the reader receives its version handle.
 Creating the reader does not open the control database. `reader.read()` and `reader.get_handle()`
 return lazy dataset handles. The first structural read opens `control.duckdb` in read-only mode.
 
 Calling `read()` on a dataset handle loads the complete dataset into memory. Calling `read()` on an
 entity handle loads the requested object and its dependencies. Field handles read selected fields.
-Full reads reuse the completed dataset until the reader closes.
+Full reads reuse the completed dataset until the reader closes. The returned dataset remains usable
+after the reader closes.
 
 With `iter_records()`, Records load with their Sources, Signals, axes, and annotations. Signal values
 stay lazy. A call to `to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from
@@ -71,8 +73,24 @@ are not hashable.
 
 Irregular timestamp loaders read and validate their packed arrays on first access.
 
-`iter_records(record_ids=...)` yields records one at a time. It does not create a complete
-`TimeFDataset`.
+Entity handles support `read()` and field handles through `get_handle(field)`. A Signal handle also
+supports `to_arrow()`, `to_numpy()`, and `read_steps()`. A lookup by input alias or exact parent
+release resolves the original parent ID through the local catalog.
+
+```python
+from timenet.types import ObjectKind
+
+with TimeFReader(version) as reader:
+    dataset = reader.read()
+    task = dataset.get_handle(ObjectKind.TASK, "question-1")
+    prompt = task.get_handle("prompt").read()
+```
+
+`iter_records(record_ids=...)` yields records one at a time. Its Signal values remain lazy.
+It does not create a complete `TimeFDataset`.
+
+The Arrow table APIs resolve external text automatically. The reader caches up to eight packed
+payload files. Timestamp payload reads validate their length, endpoints, ordering, and nulls.
 
 Tasks have three useful read paths:
 
@@ -83,8 +101,8 @@ Tasks have three useful read paths:
 - `read_task_table()`, `read_target_table()`, and `read_annotation_table()` return Arrow tables
   without creating Python task objects.
 
-Objects keep their identity within one reader. For example, a task input is the same `Record`
-instance that `iter_records()` returned.
+Tasks reuse the Record objects supplied to `read_tasks(records)` or `iter_tasks(records)`.
+Separate entity-handle reads can construct separate Python objects.
 
 ## Type reconstruction
 
@@ -129,9 +147,9 @@ and decoded Zarr chunks until it closes.
 `open_local_version()` and `open_version()` require a valid `manifest.json`. They raise
 `TimeFFormatError` for an invalid or unsupported manifest.
 
-Other files remain lazy. A missing `control.duckdb` therefore fails on the first control-plane
-request. A missing values file fails when a Signal reads the affected chunk. Errors include the
-relevant file or table context.
+Local preparation requires complete releases. Remote files remain lazy: a missing `control.duckdb`
+fails on the first structural read, and a missing values file fails when a Signal reads its chunk.
+Errors include the relevant file or table context.
 
 Call `verify()` to check all files before reading data. It raises `TimeFFormatError` when a file is
 missing or does not match the manifest.
@@ -143,3 +161,15 @@ also restores task relationships and Signal values with their original dtype and
 are the durable references. Python object identity from the writer process is not preserved.
 
 See the [API reference for `timenet.reader`](api/reader.md) for all members.
+
+## Inherited storage
+
+Each child owns a complete catalog. Its chunk and external-value locators name the ultimate physical
+owner directly. Reads never attach parent databases or traverse inheritance chains.
+
+The writer computes record scan order from physical chunk locations. This keeps full scans close to
+storage order, even when imported IDs differ from parent IDs. Requested Record IDs retain the
+caller's order. `verify()` checks both child files and referenced payload files.
+
+Eager full reads use a stored list of required Parquet groups. Four workers decode a bounded window
+in parallel. This list is computed during the write. Lazy handles and range reads do not prefetch.
