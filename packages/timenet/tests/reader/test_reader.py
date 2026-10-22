@@ -25,7 +25,6 @@ from timenet.types import (
     DatasetMetadata,
     Domain,
     License,
-    ObjectKind,
     ScalarPredictionTask,
     Split,
     TextValue,
@@ -33,6 +32,7 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.types.object_kind import ObjectKind
 from timenet.types.text import read_value
 from timenet.writer import TimeFWriter
 
@@ -325,9 +325,10 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         return original_open(*args, **kwargs)
 
     with TimeFReader(open_local_version(version_dir)) as reader:
-        dataset = reader.read()
         monkeypatch.setattr(pq, "ParquetFile", counting_open)
-        signal = dataset.records[0].signals[0]
+        handle = reader.get_handle()
+        signal_id = next(reader.iter_records()).signals[0].id
+        signal = handle.get_handle(ObjectKind.SIGNAL, signal_id)
         assert opens == 0
         signal.to_arrow()
         assert opens >= 1
