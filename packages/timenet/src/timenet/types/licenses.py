@@ -26,3 +26,5 @@ class License(StrEnum):
     ODBL_1_0 = "ODbL-1.0"
     OTHER = "other"
     """Escape hatch for a license outside this list; requires a ``license_url`` on the card."""
+    UNSPECIFIED = "unspecified"
+    """The publisher states no license, so the terms of use are unknown until they clarify them."""
