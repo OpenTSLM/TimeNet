@@ -271,7 +271,7 @@ def _make_record(ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
     """Build one six-channel IMU Record with its source provenance.
 
     Returns:
-        A Record with lazy sensor values and annotations from the original row.
+        A Record with lazy sensor values, provenance metadata, and the row's task context annotations.
     """
     channels = _PAMAP2_CHANNELS if ref.file.part == "pamap2_v2" else _CHANNELS
     signals = tuple(
@@ -289,18 +289,18 @@ def _make_record(ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
     record = Record(
         record_id=ref.id,
         sources=(Source(id=f"{ref.id}-imu", name="IMU", signals=signals),),
+        # Provenance only; the task context below stays as annotations its task can reference.
+        metadata={
+            "source_dataset": ref.file.part.rsplit("_", 1)[0],
+            "source_partition": ref.file.part,
+            "source_file": SensorCapsConnector.SOURCE_FILES[ref.file.part],
+            "source_row": ref.index,
+        },
     )
-    source = ref.file.part.rsplit("_", 1)[0]
-    metadata: dict[str, str | int] = {
-        "source_dataset": source,
-        "source_partition": ref.file.part,
-        "source_file": SensorCapsConnector.SOURCE_FILES[ref.file.part],
-        "source_row": ref.index,
-        "activity_summary": row.summary,
-    }
+    context: dict[str, str] = {"activity_summary": row.summary}
     if row.location is not None:
-        metadata["sensor_location"] = row.location
-    for key, value in metadata.items():
+        context["sensor_location"] = row.location
+    for key, value in context.items():
         record.annotate(Annotation(key=key, value=value, id=f"{ref.id}-{key}"))
     return record
 
@@ -314,17 +314,13 @@ def _iter_tasks(files: tuple[HubFileRef, ...], records: Mapping[str, Record]) ->
     for file in files:
         for ref, row in _iter_rows(file):
             record = records[ref.id]
-            context = [
-                annotation
-                for annotation in record.annotations
-                if annotation.key in {"activity_summary", "sensor_location"}
-            ]
             yield AnswerTask(
                 id=f"{ref.id}-caption",
                 inputs=(record,),
                 targets=(row.caption,),
                 prompt=f"{row.system}\n\n{row.features}" if row.features.strip() else row.system,
-                input_annotations=tuple(context),
+                # The record's annotations are exactly the row's task context.
+                input_annotations=record.annotations,
                 split=Split.TRAIN,
             )
 
