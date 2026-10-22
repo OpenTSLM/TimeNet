@@ -10,7 +10,8 @@ A connector fetches a dataset's raw source and converts it into a `TimeFDataset`
 it `download -> convert -> derive_schema -> store`; `timenet-build build <id>` runs that pipeline and
 writes the result into a registry.
 
-Reuse a base connector wherever the source allows: `BaseHuggingFaceConnector` for Hub datasets,
+Reuse a base connector wherever the source allows: `BaseHuggingFaceConnector` for Hub datasets with
+a parquet ref, `BaseHubSnapshotConnector` for original Hub files at a pinned revision,
 `BasePhysioNetConnector` for PhysioNet/WFDB records. Write a raw `BaseConnector` subclass only when
 neither fits.
 
@@ -42,6 +43,9 @@ layout and a WFDB header (`fs`, `sig_len`, `sig_name`).
 ### 3. Pick the base connector
 - Hub dataset: subclass `BaseHuggingFaceConnector`, set `HF_REPO`, inherit `download`, implement only
   `convert`.
+- Hub dataset with no parquet ref, or one too large to hold as rows: subclass
+  `BaseHubSnapshotConnector`, set `HF_REPO`, `SOURCE_REVISION`, and `SOURCE_FILES`, inherit
+  `download`, and implement `convert` over the `HubFileRef` list.
 - PhysioNet/WFDB: subclass `BasePhysioNetConnector`, implement `download` (use `ensure_archive` /
   `download_files` from `timenet_connectors.download`) and `convert` (use `_read_header` / `_lead_loader`).
 - Neither: subclass `BaseConnector[TRaw]` and implement `download` + `convert` yourself.
