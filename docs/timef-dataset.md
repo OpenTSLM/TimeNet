@@ -69,13 +69,11 @@ Sources:
 from timenet.dataset import Source
 
 accelerometer = Source(
-    id="accelerometer",
     name="Accelerometer",
     signals=(acceleration_x, acceleration_y, acceleration_z),
 )
 
 imu = Source(
-    id="imu",
     name="IMU",
     sources=(accelerometer, gyroscope, magnetometer),
 )
@@ -83,7 +81,6 @@ imu = Source(
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `id` | `str` | Stable identity. The default is a UUIDv7. |
 | `name` | `str` | Human-readable Source name. |
 | `sources` | `tuple[Source, ...]` | Direct child Sources. |
 | `signals` | `tuple[Signal, ...]` | Signals produced directly by this Source. |

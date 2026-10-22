@@ -30,11 +30,11 @@ content object.
 Reusable content includes these fields:
 
 - `key`, `value`, `unit`, and `description`
-- `id`, which identifies the reusable content
 - `metadata`, which stores JSON-compatible content details
 
-Each occurrence adds its own identity, source, confidence, and metadata. This design lets several
-objects share one long description without sharing occurrence details.
+Each occurrence adds its own source, confidence, and metadata. This design lets several objects
+share one long description without sharing occurrence details. The writer stores equal content
+once. Neither the content nor an occurrence has an ID in Python.
 
 ## Static context
 

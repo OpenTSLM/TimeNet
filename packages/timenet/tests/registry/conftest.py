@@ -52,7 +52,7 @@ def _ecg_dataset() -> TimeFDataset:
         n_values=16,
     )
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), id="ecg-record-0"))
-    record.annotate(Annotation(key="age", value=70, unit="years", id="ecg-age-0"))
+    record.annotate(Annotation(key="age", value=70, unit="years"))
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",), id="ecg-task-0"))
     return dataset
 

@@ -1,10 +1,11 @@
 from fractions import Fraction
+import math
 from types import SimpleNamespace
 
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import IrregularAxis, Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.control_audit import audit_control_database
 import timenet.format.control_writer as control_writer_module
@@ -22,7 +23,7 @@ SPEC = TimeSeriesSpec(
 
 
 def _dataset() -> TimeFDataset:
-    axis = RegularAxis(axis_id="axis-1", period_us=Fraction(2_000))
+    axis = RegularAxis(period_us=Fraction(2_000))
     lead_i = Signal.from_loader(
         id="lead-i",
         name="I",
@@ -39,10 +40,10 @@ def _dataset() -> TimeFDataset:
         n_values=2,
         loader=lambda: pa.array([3.0, 4.0], type=pa.float32()),
     )
-    ecg = Source(id="ecg", name="ECG", signals=(lead_i, lead_ii))
-    monitor = Source(id="monitor", name="Monitor", sources=(ecg,))
+    ecg = Source(name="ECG", signals=(lead_i, lead_ii))
+    monitor = Source(name="Monitor", sources=(ecg,))
     record = Record(id="record-1", sources=(monitor,))
-    record.annotate(Annotation(id="sex-male", key="patient_sex", value="male"))
+    record.annotate(Annotation(key="patient_sex", value="male"))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="org/control-writer",
@@ -60,7 +61,7 @@ def _dataset() -> TimeFDataset:
         targets=("Yes",),
         input_annotations=(record.annotations[0],),
     )
-    task.annotate(Annotation(id="task-kind", key="task_kind", value="diagnosis"))
+    task.annotate(Annotation(key="task_kind", value="diagnosis"))
     dataset.add_task(task=task)
     return dataset
 
@@ -90,18 +91,18 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
         )
         assert connection.execute("SELECT typeof(record_key) FROM task_record_refs").fetchone() == ("BIGINT",)
         assert connection.execute(
-            """SELECT parent.source_id
+            """SELECT parent.name
                FROM sources child
                JOIN sources parent ON parent.source_key = child.parent_source_key
-               WHERE child.source_id = 'ecg'"""
-        ).fetchone() == ("monitor",)
+               WHERE child.name = 'ECG'"""
+        ).fetchone() == ("Monitor",)
         assert connection.execute(
-            """SELECT contents.content_id, occurrences.object_type, records.record_id
+            """SELECT contents.name, occurrences.object_type, records.record_id
                FROM annotation_occurrences occurrences
                JOIN annotation_contents contents USING (content_key)
                JOIN records ON records.record_key = occurrences.object_key
-               WHERE contents.content_id = 'sex-male' AND occurrences.object_type = 'Record'"""
-        ).fetchone() == ("sex-male", "Record", "record-1")
+               WHERE contents.name = 'patient_sex' AND occurrences.object_type = 'Record'"""
+        ).fetchone() == ("patient_sex", "Record", "record-1")
 
 
 def test_control_relationships_use_integer_keys(tmp_path):
@@ -170,24 +171,6 @@ def test_control_writer_preserves_relationships_across_task_batches(tmp_path, mo
         ).fetchone() == ("task-2", "task-3")
 
 
-def test_control_writer_removes_database_after_validation_failure(tmp_path):
-    dataset = _dataset()
-    annotation = dataset.records[0].annotations[0]
-    dataset.records[0].annotate(
-        Annotation(
-            id=annotation.id,
-            key="patient_sex",
-            value="female",
-        )
-    )
-    path = tmp_path / "control.duckdb"
-
-    with pytest.raises(TimeFValidationError, match="reused with different content"):
-        DuckDBControlWriter(path).write_hierarchy(dataset)
-
-    assert not path.exists()
-
-
 def test_control_writer_output_passes_the_relational_audit(tmp_path):
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path).write_hierarchy(_dataset())
@@ -204,7 +187,7 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
         connection.execute(
             "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 'ghost', 1, '{}')"
         )
-        connection.execute("UPDATE sources SET record_key = -1 WHERE source_id = 'monitor'")
+        connection.execute("UPDATE sources SET record_key = -1 WHERE name = 'Monitor'")
         return task_counts
 
     monkeypatch.setattr(DuckDBControlWriter, "_write_objects", write_corrupt_relationship)
@@ -216,35 +199,8 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
     assert not path.exists()
 
 
-def test_control_writer_rejects_ids_reused_across_records(tmp_path):
-    axis = RegularAxis(axis_id="axis-1", period_us=Fraction(2_000))
-
-    def signal(signal_id: str) -> Signal:
-        return Signal.from_loader(
-            id=signal_id,
-            name="I",
-            spec=SPEC,
-            time_axis=axis,
-            n_values=2,
-            loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
-        )
-
-    dataset = SimpleNamespace(
-        metadata=SimpleNamespace(dataset_id="org/dupes"),
-        annotations=(),
-        records=(
-            Record(id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-i"),)),)),
-            Record(id="record-2", sources=(Source(id="ecg", name="ECG", signals=(signal("lead-ii"),)),)),
-        ),
-        iter_tasks=lambda: iter(()),
-    )
-
-    with pytest.raises(TimeFValidationError, match="source id 'ecg' is not unique"):
-        DuckDBControlWriter(tmp_path / "control.duckdb").write_hierarchy(dataset)  # ty: ignore[invalid-argument-type]
-
-
 def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path):
-    axis = IrregularAxis(axis_id="axis-irregular", first_us=0, last_us=2_000)
+    axis = IrregularAxis(first_us=0, last_us=2_000)
     signal = Signal.from_loader(
         id="lead-i",
         name="I",
@@ -257,7 +213,7 @@ def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path
     dataset = SimpleNamespace(
         metadata=SimpleNamespace(dataset_id="org/irregular"),
         annotations=(),
-        records=(Record(id="record-1", sources=(Source(id="ecg", name="ECG", signals=(signal,)),)),),
+        records=(Record(id="record-1", sources=(Source(name="ECG", signals=(signal,)),)),),
         iter_tasks=lambda: iter(()),
     )
 
@@ -314,3 +270,42 @@ def test_control_writer_stores_value_chunk_locations(tmp_path):
                FROM signal_chunks JOIN signals USING (signal_key)
                WHERE signal_id = 'lead-i'"""
         ).fetchone() == ("values/part-00000000.parquet", 2, 3, 2)
+
+
+def test_control_writer_stores_equal_contents_and_regular_and_ordinal_axes_once(tmp_path):
+    dataset = _dataset()
+    for value in (0.0, -0.0, 1, True, float("nan"), -math.nan):
+        dataset.records[0].annotate(Annotation(key="probe", value=value))
+    irregular = tuple(
+        Signal.from_irregular([1.0, 2.0, 3.0], time_offsets_us=offsets, spec=SPEC, name="x", id=f"irregular-{n}")
+        for n, offsets in enumerate(([0, 100, 1_000], [0, 900, 1_000]))
+    )
+    regular = Signal.from_loader(
+        id="lead-iii",
+        name="III",
+        spec=SPEC,
+        time_axis=RegularAxis(period_us=Fraction(2_000)),
+        n_values=2,
+        loader=lambda: pa.array([5.0, 6.0], type=pa.float32()),
+    )
+    ordinal = tuple(
+        Signal.from_values([1.0, 2.0], spec=SPEC, name="o", time_axis=OrdinalAxis(), id=f"ordinal-{n}")
+        for n in range(2)
+    )
+    other = Record(id="record-2", sources=(Source(name="ECG", signals=(regular, *irregular, *ordinal)),))
+    other.annotate(Annotation(key="patient_sex", value="male"))
+    dataset.add_record(record=other)
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with connect_control(path, read_only=True) as connection:
+        contents = connection.execute(
+            "SELECT name, count(*) FROM annotation_contents GROUP BY name ORDER BY name"
+        ).fetchall()
+        axes = connection.execute(
+            "SELECT axis_type, count(*) FROM axes GROUP BY axis_type ORDER BY axis_type"
+        ).fetchall()
+    # 0.0 and -0.0 share a row, and so do the two NaNs. True and 1 do not, or one would read back as the other.
+    assert contents == [("patient_sex", 1), ("probe", 4), ("task_kind", 1)]
+    # Equal endpoints do not mean equal offsets, so the two irregular axes keep their own rows.
+    assert axes == [("irregular", 2), ("ordinal", 1), ("regular", 1)]

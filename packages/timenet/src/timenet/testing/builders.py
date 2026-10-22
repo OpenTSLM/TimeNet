@@ -117,7 +117,6 @@ def make_dataset() -> TimeFDataset:
         )
     )
     shared = _series(_SINE, "a", 16, "ts-shared")
-    cohort = Annotation(key="cohort", value="A", id="cohort-shared")
 
     record0 = dataset.add_record(
         record=Record(
@@ -125,7 +124,6 @@ def make_dataset() -> TimeFDataset:
             start_time=TimeOrigin(9_007_199_254_740_993),
             sources=(
                 Source(
-                    id="source-record-0",
                     name="Synthetic monitor",
                     signals=(shared, _series(_COSINE, "b", 16, "ts-cos-0")),
                 ),
@@ -134,12 +132,12 @@ def make_dataset() -> TimeFDataset:
     )
     _, record0_cohort, _ = record0.add_annotations(
         [
-            Annotation(key="age", value=64, unit="years", id="age-0"),
-            cohort,
-            Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0"),
+            Annotation(key="age", value=64, unit="years"),
+            Annotation(key="cohort", value="A"),
+            Annotation(key="stimulus", span=TimePoint.seconds(0.5)),
         ]
     )
-    shared.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25), id="art-0"))
+    shared.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25)))
     classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
     dataset.add_tasks(
         tasks=[
@@ -178,7 +176,6 @@ def make_dataset() -> TimeFDataset:
             id="record-1",
             sources=(
                 Source(
-                    id="source-record-1",
                     name="Synthetic monitor",
                     signals=(
                         _series(_SINE, "a", 16, "ts-short-1"),
@@ -188,13 +185,13 @@ def make_dataset() -> TimeFDataset:
             ),
         )
     )
-    record1.annotate(cohort)  # A new occurrence shares the cohort content across both records.
+    record1.annotate(record0_cohort)  # A new occurrence shares the cohort content across both records.
 
     window = _series(_SINE, "a", 8, "ts-window-2")
     record2 = dataset.add_record(
         record=Record(
             id="record-2",
-            sources=(Source(id="source-record-2", name="Synthetic monitor", signals=(window,)),),
+            sources=(Source(name="Synthetic monitor", signals=(window,)),),
         )
     )
     dataset.add_task(
@@ -229,10 +226,10 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
         act = act_records[record_id]
         assert exp.start_time.timestamp == act.start_time.timestamp, f"start_time differs for {record_id}"
         assert exp.metadata == act.metadata, f"metadata differs for {record_id}"
-        assert sorted(exp.annotations, key=lambda a: a.id) == sorted(act.annotations, key=lambda a: a.id), (
+        assert sorted(exp.annotations, key=repr) == sorted(act.annotations, key=repr), (
             f"annotations differ for {record_id}"
         )
-        _assert_sources_equal(record_id, exp.sources, act.sources)
+        _assert_sources_equal(record_id, exp, act)
         _assert_series_equal(record_id, exp.signals, act.signals)
 
     exp_tasks = {t.id: t for t in expected.tasks}
@@ -249,21 +246,20 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
         ), f"task {task_id} differs"
 
 
-def _assert_sources_equal(record_id: str, expected: tuple[Source, ...], actual: tuple[Source, ...]) -> None:
-    """Assert two recursive source hierarchies are logically equal."""
-    exp = {source.id: source for root in expected for source in root.walk_sources()}
-    act = {source.id: source for root in actual for source in root.walk_sources()}
-    assert exp.keys() == act.keys(), f"source ids differ for {record_id}"
-    for source_id, exp_source in exp.items():
-        act_source = act[source_id]
-        assert exp_source.name == act_source.name, f"source name differs for {source_id}"
-        assert exp_source.metadata == act_source.metadata, f"source metadata differs for {source_id}"
-        assert exp_source.annotations == act_source.annotations, f"source annotations differ for {source_id}"
-        assert {source.id for source in exp_source.sources} == {source.id for source in act_source.sources}, (
-            f"child sources differ for {source_id}"
-        )
+def _assert_sources_equal(record_id: str, expected: Record, actual: Record) -> None:
+    """Assert two recursive source hierarchies are logically equal, walked in the same order."""
+    exp, act = list(expected.walk_sources()), list(actual.walk_sources())
+    assert len(exp) == len(act), f"sources differ for {record_id}"
+    for exp_source, act_source in zip(exp, act, strict=True):
+        name = exp_source.name
+        assert name == act_source.name, f"source name differs for {record_id}"
+        assert exp_source.metadata == act_source.metadata, f"source metadata differs for {name}"
+        assert exp_source.annotations == act_source.annotations, f"source annotations differ for {name}"
+        assert sorted(source.name for source in exp_source.sources) == sorted(
+            source.name for source in act_source.sources
+        ), f"child sources differ for {name}"
         assert {signal.id for signal in exp_source.signals} == {signal.id for signal in act_source.signals}, (
-            f"source signals differ for {source_id}"
+            f"source signals differ for {name}"
         )
 
 

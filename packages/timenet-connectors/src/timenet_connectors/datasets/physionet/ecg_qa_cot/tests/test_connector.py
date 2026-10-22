@@ -183,9 +183,9 @@ def test_question_metadata_is_deduped_dataset_annotations(tmp_path, records_dir)
 
 def test_task_annotation_refs_all_resolve_to_registered(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
-    registered = {annotation.occurrence_id for annotation in dataset.annotations}
+    registered = {id(annotation) for annotation in dataset.annotations}
     for task in dataset.iter_tasks():
-        assert {annotation.occurrence_id for annotation in task.input_annotations} <= registered
+        assert {id(annotation) for annotation in task.input_annotations} <= registered
 
 
 def test_answer_options_come_from_template(tmp_path, records_dir):
