@@ -1,5 +1,7 @@
 """Round-trips for a series whose time offsets are stored rather than computed (TimeF cases 3 and 4)."""
 
+import re
+
 import duckdb
 import numpy as np
 import pyarrow as pa
@@ -10,10 +12,10 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.stored_values import OffsetHandle, PackedValueReader, offsets_digest
 from timenet.reader import TimeFReader
-import timenet.reader.reader as reader_module
 from timenet.registry import DatasetVersion
-from timenet.types import DatasetMetadata, License, TimeSeriesSpec, Version, ureg
+from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 from timenet.writer import TimeFWriter
 
 
@@ -121,7 +123,11 @@ def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypat
         )
         for name, values in (("temp", [1.0, 2.0, 3.0]), ("humidity", [4.0, 5.0, 6.0]))
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=signals),)))
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=signals),)))
+    text = "A detailed clinical report. " * 300
+    labels = [f"diagnosis-{index:04d}" for index in range(512)]
+    record.annotate(Annotation(key="labels", value=labels))
+    dataset.add_task(task=AnswerTask(id="report", inputs=(record,), prompt=text, targets=(text,)))
     dataset.derive_schema()
 
     version = _written(tmp_path, dataset)
@@ -129,30 +135,32 @@ def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypat
 
     with duckdb.connect(str(version / "control.duckdb"), read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM axes").fetchone() == (1,)
-        assert connection.execute("SELECT count(*) FROM axis_offsets").fetchone() == (len(shared_us),)
+        assert connection.execute("SELECT count(*) FROM external_values WHERE object_kind = 'Axis'").fetchone() == (1,)
+        assert connection.execute(
+            "SELECT count(*) FROM external_values WHERE (value_kind = 'offsets') != (value_digest IS NOT NULL)"
+        ).fetchone() == (0,)
         assert connection.execute("SELECT count(DISTINCT axis_key) FROM signals").fetchone() == (1,)
     for shard in (version / "time_series").glob("*.parquet"):
         column = pq.read_table(shard, columns=["time_offsets_us"]).column(0)
         assert column.null_count == len(column)
 
-    monkeypatch.setattr(reader_module, "_AXIS_OFFSETS_CACHE_TARGET_BYTES", offsets.nbytes - 1)
     with TimeFReader(DatasetVersion.open_local(version)) as reader:
         back = next(iter(reader.iter_records())).signals
-        control = reader._control_reader()
-        original = control.load_axis_offsets_by_key
+        original = pq.ParquetFile.read
         read_calls = 0
 
-        def count_reads(axis_key, loaded_axis, n_values):
+        def count_reads(*args, **kwargs):
             nonlocal read_calls
             read_calls += 1
-            return original(axis_key, loaded_axis, n_values)
+            return original(*args, **kwargs)
 
-        monkeypatch.setattr(control, "load_axis_offsets_by_key", count_reads)
+        monkeypatch.setattr(pq.ParquetFile, "read", count_reads)
         assert [signal.time_offsets_us().tolist() for signal in back] == [shared_us, shared_us]
+        assert reader.tasks[0].prompt.read() == text
+        assert reader.read_annotation_table()["text_list_value"].to_pylist() == [labels]
+        assert reader.read_task_table()["prompt"].to_pylist() == [text]
+        assert reader.read_target_table()["text_value"].to_pylist() == [text]
         assert read_calls == 1
-        assert len(reader._axis_offsets_cache) == 1
-        assert reader._axis_offsets_cache_bytes == next(iter(reader._axis_offsets_cache.values())).nbytes
-        assert reader._axis_offsets_cache_bytes > reader_module._AXIS_OFFSETS_CACHE_TARGET_BYTES
 
 
 def test_value_chunking_does_not_affect_shared_time_offsets(tmp_path):
@@ -301,10 +309,12 @@ def test_reader_rejects_time_offsets_disagreeing_with_the_stored_axis(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
+    version = DatasetVersion.open_local(version_dir)
     with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
         connection.execute("UPDATE axes SET last_us = last_us + 1000 WHERE axis_type = 'irregular'")
-    back = next(iter(TimeFReader(DatasetVersion.open_local(version_dir)).iter_records())).signals[0]
-    with pytest.raises(TimeFFormatError, match="disagreeing with its axis endpoints"):
+    back = next(iter(TimeFReader(version).iter_records())).signals[0]
+    axis_id = re.escape(repr(ts.time_axis.axis_id))
+    with pytest.raises(TimeFFormatError, match=rf"axis {axis_id} has offsets disagreeing with its axis endpoints"):
         back.time_offsets_us()
 
 
@@ -326,11 +336,12 @@ def test_reader_rejects_different_signal_lengths_on_one_irregular_axis(tmp_path)
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=signals),)))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
+    version = DatasetVersion.open_local(version_dir)
     with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
         connection.execute("UPDATE signals SET n_values = 4 WHERE name = 'humidity'")
 
     with (
-        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        TimeFReader(version) as reader,
         pytest.raises(TimeFFormatError, match="shared by Signals with different lengths"),
     ):
         next(reader.iter_records())
@@ -342,14 +353,67 @@ def test_reader_rejects_decreasing_stored_time_offsets(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     dataset.derive_schema()
     version_dir = _written(tmp_path, dataset)
-    with duckdb.connect(str(version_dir / "control.duckdb")) as connection:
-        connection.execute("UPDATE axis_offsets SET offset_us = -1 WHERE position = 1")
-    back = next(iter(TimeFReader(DatasetVersion.open_local(version_dir)).iter_records())).signals[0]
-    with pytest.raises(TimeFFormatError, match="decreasing offsets"):
+    version = DatasetVersion.open_local(version_dir)
+    path = next((version_dir / "payloads").glob("*.parquet"))
+    table = pq.read_table(path)
+    rows = table.to_pylist()
+    rows[0]["offsets"][1] = -1
+    pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), path)
+    back = next(iter(TimeFReader(version).iter_records())).signals[0]
+    with pytest.raises(TimeFFormatError, match=rf"axis {re.escape(repr(ts.time_axis.axis_id))} has decreasing offsets"):
         back.time_offsets_us()
 
 
-def test_zarr_time_offsets_live_in_the_control_plane(tmp_path):
+def test_signals_sharing_an_axis_share_one_validated_offsets_loader(tmp_path, monkeypatch):
+    dataset = _dataset()
+    shared_us = [0, 5_000, 9_000]
+    axis = IrregularAxis.spanning(shared_us)
+    signals = tuple(
+        Signal.from_loader(
+            name=name,
+            spec=_spec(),
+            time_axis=axis,
+            loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
+            n_values=3,
+            time_offsets_loader=lambda: pa.array(shared_us, type=pa.int64()),
+        )
+        for name in ("temp", "humidity")
+    )
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=signals),)))
+    dataset.derive_schema()
+    version = DatasetVersion.open_local(_written(tmp_path, dataset))
+    reads = []
+    original = PackedValueReader.read_offsets
+
+    def counting_read(self, handle):
+        reads.append(handle.axis_id)
+        return original(self, handle)
+
+    monkeypatch.setattr(PackedValueReader, "read_offsets", counting_read)
+    with TimeFReader(version) as reader:
+        temp, humidity = next(reader.iter_records()).signals
+        assert temp.time_offsets_loader is humidity.time_offsets_loader
+        for signal in (temp, humidity, temp):
+            assert signal.time_offsets_us().tolist() == shared_us
+    assert reads == [axis.axis_id]
+
+
+def test_stored_offsets_digest_is_the_content_id_writers_compare(tmp_path):
+    # Writers compare a stored axis with in-memory timestamps by digest instead of reading it, so the
+    # stored digest must equal offsets_digest() of the same timestamps from either array type.
+    dataset = _dataset()
+    ts = Signal.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch")
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
+    dataset.derive_schema()
+    version = DatasetVersion.open_local(_written(tmp_path, dataset))
+    with TimeFReader(version) as reader:
+        loader = next(reader.iter_records()).signals[0].time_offsets_loader
+        assert isinstance(loader, OffsetHandle)
+        assert loader.digest == offsets_digest(np.asarray(_HATCH_US, dtype=np.int64))
+        assert loader.digest == offsets_digest(loader())
+
+
+def test_zarr_time_offsets_live_in_packed_parquet(tmp_path):
     dataset = _dataset()
     ts = Signal.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch")
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
@@ -357,7 +421,5 @@ def test_zarr_time_offsets_live_in_the_control_plane(tmp_path):
     version = _written(tmp_path, dataset, values_backend="zarr")
 
     assert not (version / "time_series.zarr" / "_time_offsets").exists()
-    with duckdb.connect(str(version / "control.duckdb"), read_only=True) as connection:
-        assert connection.execute("SELECT offset_us FROM axis_offsets ORDER BY position").fetchall() == [
-            (value,) for value in _HATCH_US
-        ]
+    payload = pq.read_table(next((version / "payloads").glob("*.parquet")))
+    assert payload["offsets"][0].as_py() == _HATCH_US

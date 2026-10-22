@@ -1,18 +1,24 @@
-"""Read and write text and string lists stored in Parquet payloads."""
+"""Read and write text, string lists, and timestamps stored in Parquet payloads."""
 
+from abc import ABC, abstractmethod
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass
 from enum import StrEnum, unique
+from functools import cached_property
+import hashlib
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Literal, Self, cast
+from typing import TYPE_CHECKING, Generic, Literal, Self, TypeVar
 
 import duckdb
+import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from pydantic import Field, ValidationError, field_validator, model_validator
 
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.constants import DEFAULT_COMPRESSION, PAYLOAD_TEMPLATE, check_relative_path, part_path
 from timenet.format.control_schema import EXTERNAL_VALUES
 from timenet.format.table_writer import ModelTable
@@ -41,7 +47,8 @@ This bounds writer memory and keeps payload files few enough to list in the mani
 
 _CACHE_FILES = 8
 """Payload files a reader keeps decoded, about 32 MiB of text at the packing target."""
-_SCHEMA = pa.schema([("text", pa.string()), ("texts", pa.list_(pa.string()))])
+
+_SCHEMA = pa.schema([("text", pa.string()), ("texts", pa.list_(pa.string())), ("offsets", pa.list_(pa.int64()))])
 
 
 @unique
@@ -50,6 +57,7 @@ class PackedValueKind(StrEnum):
 
     TEXT = "text"
     TEXT_LIST = "texts"
+    OFFSETS = "offsets"
 
 
 @unique
@@ -60,6 +68,7 @@ class PackedField(StrEnum):
     RATIONALE = "rationale"
     TARGETS = "targets"
     VALUE = "value"
+    OFFSETS = "offsets"
 
 
 _FIELD_OWNERS = {
@@ -67,6 +76,7 @@ _FIELD_OWNERS = {
     PackedField.RATIONALE: ObjectKind.TASK,
     PackedField.TARGETS: ObjectKind.TASK,
     PackedField.VALUE: ObjectKind.ANNOTATION,
+    PackedField.OFFSETS: ObjectKind.AXIS,
 }
 
 
@@ -75,6 +85,7 @@ _FIELD_VALUE_KINDS = {
     PackedField.RATIONALE: (PackedValueKind.TEXT,),
     PackedField.TARGETS: (PackedValueKind.TEXT,),
     PackedField.VALUE: (PackedValueKind.TEXT, PackedValueKind.TEXT_LIST),
+    PackedField.OFFSETS: (PackedValueKind.OFFSETS,),
 }
 
 
@@ -107,6 +118,7 @@ class PackedValueLocator(TimeFModel):
     row_index: int = Field(strict=True, ge=0)
     value_kind: PackedValueKind
     n_values: int = Field(strict=True, ge=0)
+    value_digest: str | None = Field(default=None, pattern=rf"^{CHECKSUM_PREFIX}[0-9a-f]{{64}}$", strict=True)
 
     @property
     def key(self) -> ExternalObjectFieldKey:
@@ -125,6 +137,8 @@ class PackedValueLocator(TimeFModel):
         key = self.key
         if self.value_kind not in _FIELD_VALUE_KINDS[key.field]:
             raise TimeFValidationError(f"external field {key.field.value} cannot store {self.value_kind.value}")
+        if (self.value_kind == PackedValueKind.OFFSETS) != (self.value_digest is not None):
+            raise TimeFValidationError("external timestamp arrays require a digest; text values must not store one")
         return self
 
 
@@ -142,7 +156,7 @@ class InlineValue:
 class _PackableValue:
     """Pair a supported payload value with its storage kind before deciding where it fits."""
 
-    value: str | list[str]
+    value: str | list[str] | pa.Array
     kind: PackedValueKind
 
 
@@ -153,7 +167,7 @@ def _classify_value(value: object) -> InlineValue | _PackableValue:
         A typed payload candidate or an inline value, including an absent value.
 
     Raises:
-        TimeFValidationError: If a string list has an unsupported element type.
+        TimeFValidationError: If a string list or timestamp array has an unsupported element type.
     """
     if isinstance(value, TextValue):
         value = value.read()
@@ -162,7 +176,11 @@ def _classify_value(value: object) -> InlineValue | _PackableValue:
     if isinstance(value, list):
         if not all(isinstance(item, str) for item in value):
             raise TimeFValidationError("packed string lists must contain only strings")
-        return _PackableValue(cast("list[str]", value), PackedValueKind.TEXT_LIST)
+        return _PackableValue(value, PackedValueKind.TEXT_LIST)
+    if isinstance(value, pa.Array):
+        if value.type != pa.int64() or value.null_count:
+            raise TimeFValidationError("packed offsets must be non-null int64 timestamps")
+        return _PackableValue(value, PackedValueKind.OFFSETS)
     return InlineValue(value)
 
 
@@ -173,15 +191,44 @@ class ExternalValue:
     locator: PackedValueLocator
 
 
+def offsets_digest(offsets: np.ndarray | pa.Array) -> str:
+    """Return the content ID of an irregular axis's timestamps.
+
+    Writers compare a stored axis with in-memory timestamps by this digest instead of reading the
+    stored array, so every caller hashes the same bytes: contiguous little-endian int64.
+
+    Returns:
+        The algorithm-qualified SHA-256 digest.
+    """
+    values = offsets.to_numpy(zero_copy_only=False) if isinstance(offsets, pa.Array) else offsets
+    canonical = np.ascontiguousarray(values, dtype="<i8")
+    return CHECKSUM_PREFIX + hashlib.sha256(memoryview(canonical)).hexdigest()
+
+
+_Native_co = TypeVar("_Native_co", covariant=True)
+
+
 @dataclass(frozen=True, slots=True, eq=False)
-class ValueHandle(TextValue[str | list[str]]):
-    """A locator for one external value; constructing it performs no payload I/O."""
+class ValueHandle(ABC, Generic[_Native_co]):
+    """Locate one value in a payload file; constructing a handle performs no payload I/O."""
 
     store: "PackedValueReader"
     path: str
     row: int
     kind: PackedValueKind
-    length: int = dataclass_field()
+    length: int
+
+    @abstractmethod
+    def read(self) -> _Native_co:
+        """Return the stored value."""
+
+    def __deepcopy__(self, memo: dict) -> Self:
+        return self
+
+
+@dataclass(frozen=True, slots=True, eq=False)
+class TextHandle(ValueHandle[str | list[str]], TextValue[str | list[str]]):
+    """Locate packed text or a string list, which compares by content like any text value."""
 
     @property
     def value_type(self) -> Literal["str", "list"]:
@@ -196,8 +243,56 @@ class ValueHandle(TextValue[str | list[str]]):
         """
         return self.store.read(self)
 
-    def __deepcopy__(self, memo: dict) -> "ValueHandle":
-        return self
+
+@dataclass(frozen=True, eq=False)
+class OffsetHandle(ValueHandle[pa.Array]):
+    """Locate one irregular axis's timestamps and serve them as its Signals' offsets loader.
+
+    One handle exists per axis, shared by the Signals on it. The first read validates the
+    timestamps against the axis and keeps them, so later reads do no I/O. The digest identifies the
+    stored array, so writers can compare and reuse it without reading it.
+    """
+
+    axis_id: str
+    first: int
+    last: int
+    digest: str
+
+    def read(self) -> pa.Array:
+        """Return the axis timestamps.
+
+        Returns:
+            Validated integer timestamps.
+        """
+        return self._validated
+
+    def __call__(self) -> pa.Array:
+        """Return the validated timestamps, so the handle serves as a Signal's offsets loader."""
+        return self.read()
+
+    @cached_property
+    def _validated(self) -> pa.Array:
+        """Read the timestamps once and check them against the axis.
+
+        Returns:
+            Validated integer timestamps.
+
+        Raises:
+            TimeFFormatError: If the timestamps disagree with the axis.
+        """
+        offsets = self.store.read_offsets(self)
+        if len(offsets) != self.length:
+            raise TimeFFormatError(
+                f"axis {self.axis_id!r} stores {len(offsets)} offsets but its Signals declare length {self.length}"
+            )
+        if offsets.null_count:
+            raise TimeFFormatError(f"axis {self.axis_id!r} stores null offsets")
+        endpoints = (self.first, self.last)
+        if not len(offsets) or (offsets[0].as_py(), offsets[-1].as_py()) != endpoints:
+            raise TimeFFormatError(f"axis {self.axis_id!r} has offsets disagreeing with its axis endpoints {endpoints}")
+        if len(offsets) > 1 and pc.any(pc.less(offsets.slice(1), offsets.slice(0, len(offsets) - 1))).as_py():  # ty: ignore[unresolved-attribute]
+            raise TimeFFormatError(f"axis {self.axis_id!r} has decreasing offsets")
+        return offsets
 
 
 class PackedValueReader:
@@ -207,11 +302,27 @@ class PackedValueReader:
         self.version = version
         self._parquet = PayloadTableCache(_CACHE_FILES)
 
-    def read(self, handle: ValueHandle) -> str | list[str]:
-        """Read a packed value from its physical file.
+    def read(self, handle: TextHandle) -> str | list[str]:
+        """Read packed text from its physical file.
 
         Returns:
             Native text or a string list.
+        """
+        return self._stored_value(handle).as_py()
+
+    def read_offsets(self, handle: OffsetHandle) -> pa.Array:
+        """Read a packed timestamp array from its physical file.
+
+        Returns:
+            The stored integer timestamps.
+        """
+        return self._stored_value(handle).values
+
+    def _stored_value(self, handle: ValueHandle[object]) -> pa.Scalar:
+        """Return the Arrow scalar a locator addresses.
+
+        Returns:
+            The list or string scalar at the handle's file and row.
 
         Raises:
             TimeFFormatError: If the locator or stored value is invalid.
@@ -225,19 +336,20 @@ class PackedValueReader:
         value = table[handle.kind.value][handle.row]
         if not value.is_valid:
             raise TimeFFormatError(f"missing external {handle.kind} at {location}")
-        return value.as_py()
+        return value
 
     def close(self) -> None:
         """Release cached payload tables."""
         self._parquet.close()
 
+    @staticmethod
     def locators(
-        self, connection: duckdb.DuckDBPyConnection, kind: ObjectKind, object_ids: Iterable[str]
-    ) -> dict[ExternalObjectFieldKey, ValueHandle]:
+        connection: duckdb.DuckDBPyConnection, kind: ObjectKind, object_ids: Iterable[str]
+    ) -> dict[ExternalObjectFieldKey, PackedValueLocator]:
         """Read locators for one batch of objects without opening payload files.
 
         Returns:
-            Handles keyed by entity kind, public ID, field, and position.
+            Validated locators keyed by entity kind, public ID, field, and position.
 
         Raises:
             TimeFFormatError: If a catalog locator is invalid or duplicated.
@@ -252,19 +364,25 @@ class PackedValueReader:
             "WHERE object_kind = ? AND object_id IN (SELECT unnest(?))",
             [kind.value, identities],
         ).fetchall()
-        handles: dict[ExternalObjectFieldKey, ValueHandle] = {}
+        locators: dict[ExternalObjectFieldKey, PackedValueLocator] = {}
         for row in rows:
             try:
                 locator = PackedValueLocator.model_validate(dict(zip(EXTERNAL_VALUES.column_names, row, strict=True)))
             except ValueError as exc:
                 raise TimeFFormatError(f"invalid external locator: {exc}") from exc
             key = locator.key
-            if key in handles:
+            if key in locators:
                 raise TimeFFormatError(f"duplicate external locator for {key}")
-            handles[key] = ValueHandle(
-                self, locator.value_path, locator.row_index, locator.value_kind, locator.n_values
-            )
-        return handles
+            locators[key] = locator
+        return locators
+
+    def text_handle(self, locator: PackedValueLocator) -> TextHandle:
+        """Return a handle that reads the packed text a locator addresses.
+
+        Returns:
+            A text handle that performs no payload I/O until read.
+        """
+        return TextHandle(self, locator.value_path, locator.row_index, locator.value_kind, locator.n_values)
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -318,7 +436,10 @@ def materialize_table(
     if not len(table):
         return table
     identities = table[columns.identity].to_pylist()
-    handles = reader.locators(connection, columns.kind, identities)
+    handles = {
+        key: reader.text_handle(locator)
+        for key, locator in reader.locators(connection, columns.kind, identities).items()
+    }
     if not handles:
         return table
     positions = [0] * len(table) if columns.position is None else table[columns.position].to_pylist()
@@ -372,12 +493,17 @@ class PackedValueWriter:
             return classified
         value = classified.value
         value_kind = classified.kind
-        encoded = json.dumps(value, ensure_ascii=False).encode()
-        if len(encoded) <= INLINE_LIMIT:
+        encoded = (
+            value.to_numpy().tobytes()
+            if isinstance(value, pa.Array)
+            else json.dumps(value, ensure_ascii=False).encode()
+        )
+        if value_kind != PackedValueKind.OFFSETS and len(encoded) <= INLINE_LIMIT:
             return InlineValue(value)
         path = part_path(PAYLOAD_TEMPLATE, len(self.files))
         row = len(self.rows)
         length = len(value)
+        digest = offsets_digest(value) if isinstance(value, pa.Array) else None
         try:
             locator = PackedValueLocator(
                 object_kind=kind,
@@ -388,10 +514,11 @@ class PackedValueWriter:
                 row_index=row,
                 value_kind=value_kind,
                 n_values=length,
+                value_digest=digest,
             )
         except ValidationError as exc:
             raise TimeFValidationError(f"invalid external locator for {kind.value} {identity!r}: {exc}") from exc
-        self.rows.append({value_kind.value: value})
+        self.rows.append({value_kind.value: value.to_pylist() if isinstance(value, pa.Array) else value})
         self.bytes += len(encoded)
         self.locators.append(locator)
         if self.bytes >= _PACK_BYTES:

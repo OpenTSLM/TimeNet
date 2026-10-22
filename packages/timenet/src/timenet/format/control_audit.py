@@ -1,7 +1,7 @@
 """Audit a finished ``control.duckdb`` for relational integrity.
 
-The control database carries no persisted constraints: ART indexes on the large ``axis_offsets`` and
-``signal_chunks`` tables would slow every write and bloat the file. The writer instead keeps the
+The control database carries no persisted constraints: indexes on large catalog tables would slow
+every write and bloat the file. The writer instead keeps the
 invariants while it streams rows, from key sequences it owns and from ID sets it checks in Python.
 This module holds the SQL form of the same invariants. It scans every table, so it is not part of
 the write path. Tests run it after each round trip, and tooling can run it over a published version.
@@ -76,11 +76,10 @@ _AXIS_LENGTH = """
     SELECT signals.signal_id
     FROM signals
     JOIN axes USING (axis_key)
-    LEFT JOIN (
-        SELECT axis_key, count(*) AS offset_count FROM axis_offsets GROUP BY axis_key
-    ) offsets USING (axis_key)
-    WHERE (axes.axis_type = 'irregular' AND coalesce(offset_count, 0) <> signals.n_values)
-       OR (axes.axis_type <> 'irregular' AND coalesce(offset_count, 0) <> 0)
+    LEFT JOIN external_values external
+      ON external.object_kind = 'Axis' AND external.object_id = axes.axis_id AND external.field = 'offsets'
+    WHERE (axes.axis_type = 'irregular' AND (external.n_values IS NULL OR external.n_values <> signals.n_values))
+       OR (axes.axis_type <> 'irregular' AND external.object_id IS NOT NULL)
     LIMIT 1
 """
 

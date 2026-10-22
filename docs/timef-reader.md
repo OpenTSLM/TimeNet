@@ -62,6 +62,8 @@ equals its read-back copy regardless of where its text is stored. Handles of dif
 compare unequal without a read. Comparing handles of equal length reads both values. Text handles
 are not hashable.
 
+Irregular timestamp loaders read and validate their packed arrays on first access.
+
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
 `TimeFDataset`.
 
