@@ -29,7 +29,7 @@ from timenet.format.schemas import (
     IdCodec,
     IdTypes,
 )
-from timenet.format.signal_loader import StoredSignalLoader
+from timenet.format.signal_loader import StoredSignalLoader, resolve_storage_loader
 from timenet.format.storage import StorageSources
 from timenet.format.stored_values import PackedValueWriter
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
@@ -351,7 +351,8 @@ class TimeFWriter:
         """Separate existing payload locations from signals that need new value files.
 
         New signals use array-backed or connector-provided loaders and need new files.
-        StoredSignalLoader identifies values read from a release whose chunks can be reused.
+        StoredSignalLoader identifies values read from a release whose chunks can be reused, also
+        behind the in-memory copy of an eager read.
 
         Args:
             unique_series: The deduplicated signals to serialize.
@@ -365,11 +366,12 @@ class TimeFWriter:
         shared: dict[tuple[str, int], ChunkPlacement] = {}
         owned: list[Signal] = []
         for signal in unique_series:
-            if not isinstance(signal.loader, StoredSignalLoader):
+            loader = resolve_storage_loader(signal.loader)
+            if not isinstance(loader, StoredSignalLoader):
                 owned.append(signal)
                 continue
-            version, rows = signal.loader.stored_chunks()
-            if signal.spec != signal.loader.spec or signal.n_values != sum(row.n_values for row in rows):
+            version, rows = loader.stored_chunks()
+            if signal.spec != loader.spec or signal.n_values != sum(row.n_values for row in rows):
                 raise TimeFValidationError(f"shared signal {signal.id!r} changed its storage shape")
             owner = self._storage_sources.add(version, {row.chunk_file for row in rows})
             for row in rows:

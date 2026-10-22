@@ -1,3 +1,5 @@
+from functools import partial
+
 import pyarrow as pa
 import pytest
 
@@ -108,7 +110,9 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
         "lead-ii": pa.array([3.0, 4.0], type=pa.float32()),
     }
 
-    with DuckDBControlReader(path, value_loader=lambda signal_id, _spec: values[signal_id]) as reader:
+    with DuckDBControlReader(
+        path, value_loader_factory=lambda _key, signal_id, _spec: partial(values.__getitem__, signal_id)
+    ) as reader:
         (record,) = reader.read_records()
         (task,) = reader.read_tasks((record,))
 

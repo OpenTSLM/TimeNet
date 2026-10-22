@@ -75,3 +75,20 @@ def test_shared_payloads_cannot_reference_the_output_release(tmp_path):
     assert (path / "manifest.json").read_bytes() == original_manifest
     with TimeFReader(open_local_version(path)) as reader:
         assert reader.read().records
+
+
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_eagerly_read_signals_reuse_stored_chunks(tmp_path, backend):
+    original = make_dataset()
+    parent_dir = store(tmp_path, original, values_backend=backend)
+    with TimeFReader(open_local_version(parent_dir)) as reader:
+        parent = reader._read_dataset()
+        child = TimeFDataset(metadata=original.metadata.model_copy(update={"dataset_id": "test/child"}))
+        child.add_record(record=deepcopy(parent.records[0]))
+        child_dir = store(tmp_path, child)
+    manifest = Manifest.model_validate_json((child_dir / "manifest.json").read_text())
+    # The in-memory values still point at their stored chunks, so the child writes no value files.
+    assert manifest.files.time_series == ()
+    assert [str(ref) for ref in manifest.payload_sources.values()] == [
+        f"{original.metadata.dataset_id}@{original.metadata.dataset_version}"
+    ]
