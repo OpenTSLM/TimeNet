@@ -10,7 +10,7 @@ def test_domain_values():
     assert Domain.GENERAL == "general"
 
 
-@pytest.mark.parametrize("license", [lic for lic in License if lic is not License.OTHER])
+@pytest.mark.parametrize("license", [lic for lic in License if lic not in {License.OTHER, License.UNSPECIFIED}])
 def test_license_values_are_canonical_spdx_ids(license):
     # A known SPDX ID in its canonical spelling, not a display string like "CC BY 4.0".
     assert canonicalize_license_expression(license.value) == license.value
