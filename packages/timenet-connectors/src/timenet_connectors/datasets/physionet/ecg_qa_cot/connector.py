@@ -220,7 +220,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         for ecg_id, split in sorted(split_of_ecg.items()):
             record_base = _record_base(source.records_root, ecg_id)
             record = Record(
-                record_id=f"ptbxl-{ecg_id}",
+                id=f"ptbxl-{ecg_id}",
                 sources=(
                     Source(
                         id=f"ptbxl-{ecg_id}-source",

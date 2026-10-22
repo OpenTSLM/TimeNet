@@ -30,10 +30,10 @@ def test_record_walks_recursive_sources_and_signals():
     )
     gyroscope = Source(id="gyroscope", name="Gyroscope", signals=(_signal("gx", "GX"),))
     imu = Source(id="imu", name="IMU", sources=(gyroscope, accelerometer))
-    record = Record(record_id="record", sources=(imu,))
+    record = Record(id="record", sources=(imu,))
 
-    assert [source.id for source in record.walk_sources()] == ["imu", "accelerometer", "gyroscope"]
-    assert [signal.id for signal in record.walk_signals()] == ["x", "y", "z", "gx"]
+    assert [source.name for source in record.walk_sources()] == ["IMU", "Accelerometer", "Gyroscope"]
+    assert [signal.name for signal in record.walk_signals()] == ["X", "Y", "Z", "GX"]
 
 
 def test_record_rejects_source_reused_under_two_parents():
@@ -42,7 +42,7 @@ def test_record_rejects_source_reused_under_two_parents():
     right = Source(id="right", name="Right", sources=(shared,))
 
     with pytest.raises(TimeFValidationError, match="attached more than once"):
-        Record(record_id="record", sources=(Source(id="root", name="Root", sources=(left, right)),))
+        Record(id="record", sources=(Source(id="root", name="Root", sources=(left, right)),))
 
 
 def test_record_rejects_source_cycle():
@@ -51,4 +51,4 @@ def test_record_rejects_source_cycle():
     root.sources = (child,)
 
     with pytest.raises(TimeFValidationError, match="cycle"):
-        Record(record_id="record", sources=(root,))
+        Record(id="record", sources=(root,))

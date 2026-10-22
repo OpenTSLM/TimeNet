@@ -189,7 +189,7 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
                     ),
                 ),
             ),
-            record_id="record-camera",
+            id="record-camera",
         )
     )
     dataset.derive_schema()
@@ -260,7 +260,7 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
                     ),
                 ),
             ),
-            record_id="record-0",
+            id="record-0",
         )
     )
     dataset.derive_schema()
@@ -307,7 +307,7 @@ def test_str_round_trip(tmp_path):
                     ),
                 ),
             ),
-            record_id="record-0",
+            id="record-0",
         )
     )
     dataset.derive_schema()
@@ -318,45 +318,6 @@ def test_str_round_trip(tmp_path):
         restored = next(iter(reader.iter_records())).signals[0]
         assert restored.to_arrow().type == pa.string()
         assert restored.to_arrow().to_pylist() == labels
-
-
-def test_str_empty_range_read(tmp_path):
-    spec = TimeSeriesSpec(
-        spec_type="stage",
-        name="Stage",
-        unit_value=ureg.dimensionless,
-        dtype="str",
-    )
-    labels = ["a", "b", "c"]
-    dataset = TimeFDataset(
-        metadata=DatasetMetadata(
-            dataset_id="t/str-empty",
-            dataset_version=Version(1, 0, 0),
-            name="Str empty range",
-            description="Empty range read for str.",
-            license=License.CC_BY_4_0,
-            domains=(Domain.GENERAL,),
-        )
-    )
-    dataset.add_record(
-        record=Record(
-            sources=(
-                Source(
-                    name="Source",
-                    signals=(
-                        Signal.from_values(labels, spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1)),
-                    ),
-                ),
-            ),
-            record_id="record-0",
-        )
-    )
-    dataset.derive_schema()
-    with TimeFWriter(tmp_path, dataset, values_backend="zarr") as writer:
-        writer.write()
-    version_dir = tmp_path / "t/str-empty/1.0.0"
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        ts = next(iter(reader.iter_records())).signals[0]
-        empty = ts.read_steps(3, 3)
+        empty = restored.read_steps(len(labels), len(labels))
         assert len(empty) == 0
         assert empty.type == pa.string()
