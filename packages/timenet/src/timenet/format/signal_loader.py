@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -48,3 +49,19 @@ class StoredSignalLoader:
             The requested canonical Arrow values.
         """
         return self.reader._load_signal_range(self.signal_key, self.signal_id, self.spec, start, stop)
+
+
+@dataclass(frozen=True)
+class MemoryArray:
+    """Keep loaded values behind Signal's callable loader interface.
+
+    The named wrapper is picklable and returns its retained array without storage access.
+    The original loader preserves storage provenance, allowing writers to reuse stored offsets.
+    """
+
+    array: pa.Array
+    source: Callable[[], pa.Array] | None = None
+
+    def __call__(self) -> pa.Array:
+        """Return the retained array without storage access."""
+        return self.array
