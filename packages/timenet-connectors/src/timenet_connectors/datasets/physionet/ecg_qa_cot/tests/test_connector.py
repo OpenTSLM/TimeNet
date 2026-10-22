@@ -220,7 +220,7 @@ def test_convert_round_trips_through_the_writer(tmp_path, records_dir):
     dataset.derive_schema()
     version_dir = store_dataset(dataset, tmp_path / "out")
     with TimeFReader(open_local_version(version_dir)) as reader:
-        restored = reader.read()
+        restored = reader.read().read()
     assert {record.record_id for record in restored.records} == {"ptbxl-1", "ptbxl-2"}
     assert len(restored.tasks) == 3  # streamed to disk and back
     assert {ann.key for ann in restored.annotations} >= {

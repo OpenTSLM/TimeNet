@@ -326,7 +326,7 @@ def edit_version(
         if str(dataset_version) == base_version:
             raise TimeFEditError(f"derived version {dataset_version} must differ from the base version {base_version}")
 
-        base = reader.read()
+        base = reader._read_catalog()
         writer_kwargs.setdefault("values_backend", reader.values_backend)  # an edit keeps the base dataset's backend
         edited = remove_records(base, remove_record_ids, cascade=cascade)
         edited = TimeFDataset.from_parts(
