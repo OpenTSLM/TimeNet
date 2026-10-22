@@ -19,6 +19,8 @@ from typing import TYPE_CHECKING, Any
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
+import zarr
+import zarr.storage
 
 from timenet.values_backends.reader import BaseValuesReader
 
@@ -202,18 +204,10 @@ class ZarrValuesReader(BaseValuesReader):
         Returns:
             The opened read-only Zarr array.
 
-        Raises:
-            ImportError: If the ``zarr`` extra is not installed.
         """
         if rel_path not in self._array_cache:
-            try:
-                import zarr  # noqa: PLC0415
-            except ImportError as exc:  # pragma: no cover - exercised only without the extra
-                raise ImportError(
-                    "this dataset version stores values in Zarr; install the extra: pip install 'timenet[zarr]'"
-                ) from exc
-
-            self._array_cache[rel_path] = zarr.open_array(store=version.store_uri(rel_path), mode="r")
+            store = zarr.storage.FsspecStore.from_mapper(version.fsspec_mapper(rel_path), read_only=True)
+            self._array_cache[rel_path] = zarr.open_array(store=store, mode="r")
         return self._array_cache[rel_path]
 
 

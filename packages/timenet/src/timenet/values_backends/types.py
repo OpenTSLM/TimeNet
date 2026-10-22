@@ -1,7 +1,11 @@
 """Storage backend identifiers and chunk locations shared by readers and writers."""
 
+from collections.abc import Sequence
 from dataclasses import dataclass
 from enum import StrEnum
+
+from timenet.errors import TimeFFormatError
+from timenet.types.reference_keys import OwnerKey
 
 
 class ValuesBackend(StrEnum):
@@ -52,3 +56,26 @@ class StoredChunk:
     """Backend coordinates within the file."""
     n_values: int
     """Number of values in the chunk."""
+    owner_key: OwnerKey | None = None
+    """Physical source in the manifest, or None when this release owns the values."""
+
+
+def physical_owner(chunks: Sequence[StoredChunk], signal_id: str) -> OwnerKey | None:
+    """Return the one physical owner that stores a Signal's chunks.
+
+    The writer stores or reuses a Signal's chunks as a unit, so all chunks share one owner.
+
+    Args:
+        chunks: The Signal's stored chunks.
+        signal_id: The Signal, for the error message.
+
+    Returns:
+        The owner key, or ``None`` when this release stores the values itself.
+
+    Raises:
+        TimeFFormatError: If the chunks come from more than one owner.
+    """
+    owners = {chunk.owner_key for chunk in chunks}
+    if len(owners) != 1:
+        raise TimeFFormatError(f"signal {signal_id!r} has chunks from {len(owners)} physical owners, expected one")
+    return owners.pop()

@@ -19,7 +19,15 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
-from timenet.format.stored_values import InlineValue, PackedField, PackedValueKind, PackedValueWriter, offsets_digest
+from timenet.format.signal_chunk_row import SIGNAL_CHUNK_TABLE, SignalChunkRow
+from timenet.format.stored_values import (
+    InlineValue,
+    OffsetHandle,
+    PackedField,
+    PackedValueKind,
+    PackedValueWriter,
+    offsets_digest,
+)
 from timenet.format.table_writer import insert_rows
 from timenet.format.task_codec import encode_span, encode_task_payload
 from timenet.format.task_target_row import TargetValueRow, TaskTargetRow
@@ -314,7 +322,7 @@ class DuckDBControlWriter:
                     self._check_source_tree(connection)
                     self.external.finish(connection)
                 connection.execute("CHECKPOINT")
-        except duckdb.Error as exc:
+        except (duckdb.Error, ValidationError) as exc:
             self.path.unlink(missing_ok=True)
             raise TimeFValidationError(f"could not write TimeF control database: {exc}") from exc
         except BaseException:
@@ -443,19 +451,23 @@ class DuckDBControlWriter:
                 raise TimeFValidationError(
                     f"signal {signal_id!r} declares {n_values} values but its chunks store {stored_values[signal_id]}"
                 )
-        chunks = _TableBatch(connection, TABLES["signal_chunks"])
+        chunks: list[SignalChunkRow] = []
         for (signal_id, chunk_index), placement in sorted(placements.items()):
-            chunks.add(
-                {
-                    "signal_key": signals[signal_id][0],
-                    "chunk_index": chunk_index,
-                    "value_path": placement.chunk_file,
-                    "chunk_major_index": placement.data_index.major_idx,
-                    "chunk_minor_index": placement.data_index.minor_idx,
-                    "n_values": placement.n_values,
-                }
+            chunks.append(
+                SignalChunkRow(
+                    signal_key=signals[signal_id][0],
+                    chunk_index=chunk_index,
+                    value_path=placement.chunk_file,
+                    owner_key=placement.owner_key,
+                    chunk_major_index=placement.data_index.major_idx,
+                    chunk_minor_index=placement.data_index.minor_idx,
+                    n_values=placement.n_values,
+                )
             )
-        chunks.flush()
+            if len(chunks) >= _ROW_BATCH_SIZE:
+                SIGNAL_CHUNK_TABLE.write(connection, chunks)
+                chunks.clear()
+        SIGNAL_CHUNK_TABLE.write(connection, chunks)
 
     def _write_tasks(  # noqa: PLR0912 - task rows and their relationship rows stay together
         self,
@@ -763,7 +775,12 @@ class DuckDBControlWriter:
             if stored_offsets is None:
                 raise TimeFValidationError(f"irregular axis {axis.axis_id!r} stores no time offsets")
             if signal.time_offsets_loader is not existing.offsets_loader:
-                candidate_signature = _offset_signature(_validated_irregular_offsets(signal))
+                if isinstance(signal.time_offsets_loader, OffsetHandle):
+                    candidate_signature = _OffsetSignature(
+                        signal.time_offsets_loader.length, signal.time_offsets_loader.digest
+                    )
+                else:
+                    candidate_signature = _offset_signature(_validated_irregular_offsets(signal))
                 if candidate_signature != stored_offsets:
                     raise TimeFValidationError(
                         f"axis id {axis.axis_id!r} is shared by signals with different time offsets"
@@ -839,6 +856,10 @@ class DuckDBControlWriter:
             )
             if signal.time_offsets_loader is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
+            loader = signal.time_offsets_loader
+            if isinstance(loader, OffsetHandle):
+                self._pack(ObjectKind.AXIS, axis.axis_id, PackedField.OFFSETS, loader)
+                return _OffsetSignature(loader.length, loader.digest)
             offsets = _validated_irregular_offsets(signal)
             self.external.pack(ObjectKind.AXIS, axis.axis_id, PackedField.OFFSETS, pa.array(offsets, type=pa.int64()))
             return _offset_signature(offsets)
@@ -876,7 +897,7 @@ class DuckDBControlWriter:
             TimeFValidationError: If an annotation is unbound, one occurrence ID is attached twice,
                 or one content ID has two payloads.
         """
-        contents: dict[str, tuple[object, ...]] = {}
+        contents: dict[str, Annotation] = {}
         content_keys: dict[str, int] = {}
         occurrence_keys: dict[str, int] = {}
         content_batch = _TableBatch(connection, TABLES["annotation_contents"])
@@ -891,14 +912,13 @@ class DuckDBControlWriter:
                 )
             if annotation.occurrence_id in occurrence_keys:
                 raise TimeFValidationError(f"annotation occurrence id {annotation.occurrence_id!r} is not unique")
-            content = annotation._content_fields
             previous = contents.get(annotation.content_id)
-            if previous is not None and previous != content:
+            if previous is not None and not previous._has_same_content(annotation):
                 raise TimeFValidationError(
                     f"annotation content id {annotation.content_id!r} is reused with different content"
                 )
             if previous is None:
-                contents[annotation.content_id] = content
+                contents[annotation.content_id] = annotation
                 content_key = content_key_source.next()
                 content_keys[annotation.content_id] = content_key
                 content_batch.add(

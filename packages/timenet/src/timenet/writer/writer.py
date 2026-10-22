@@ -4,7 +4,7 @@ from collections.abc import Callable, Iterable
 from pathlib import Path
 import shutil
 import types as _types
-from typing import Any, cast
+from typing import cast
 import uuid
 
 import numpy as np
@@ -29,18 +29,24 @@ from timenet.format.schemas import (
     IdCodec,
     IdTypes,
 )
+from timenet.format.signal_loader import StoredSignalLoader
+from timenet.format.storage import StorageSources
 from timenet.format.stored_values import PackedValueWriter
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
+from timenet.types import Annotation
 from timenet.types.ids import is_canonical_uuid
+from timenet.types.references import DatasetRef
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
+from timenet.values_backends.parquet.config import DEFAULT_PARQUET_COMPRESSION_LEVEL
 from timenet.values_backends.writer import (
     ChunkPlacement,
     ParquetValuesConfig,
     ZarrValuesConfig,
     make_values_backend,
 )
+from timenet.values_backends.zarr.config import DEFAULT_ZARR_COMPRESSION_LEVEL
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet.writer.value_encoding import AUTO, SUPPORTED_VALUE_ENCODINGS, ValueEncoding
 
@@ -122,8 +128,11 @@ class TimeFWriter:
         self._final_dir = self._root / dataset.metadata.dataset_id / version
         self._staging_dir = self._root / dataset.metadata.dataset_id / f"{version}.tmp-{uuid.uuid4().hex}"
 
-        self._external = PackedValueWriter(self._staging_dir)
         self._written = False
+        self._storage_sources = StorageSources(
+            DatasetRef(dataset_id=dataset.metadata.dataset_id, version=dataset.metadata.dataset_version)
+        )
+        self._external = PackedValueWriter(self._staging_dir, self._storage_sources)
 
     # ---- context manager -----------------------------------------------------------------------
 
@@ -300,40 +309,79 @@ class TimeFWriter:
             A mapping from ``(time_series_id, chunk_idx)`` to its on-disk placement.
         """
         if self._values_backend_name == ValuesBackend.PARQUET:
-            parquet_kwargs: dict[str, Any] = {
-                "staging_dir": self._staging_dir,
-                "id_types": self._id_types,
-                "codec": self._codec,
-                "shard_target_bytes": self._shard_target_bytes,
-                "row_group_target_bytes": self._row_group_target_bytes,
-                "chunk_max_bytes": self._chunk_max_bytes,
-                "compression": self._compression,
-                "data_page_size": self._data_page_size,
-                "value_encoding": self._forced_value_encoding,
-            }
-            if self._compression_level is not None:
-                parquet_kwargs["compression_level"] = self._compression_level
-            config = ParquetValuesConfig(**parquet_kwargs)
+            config = ParquetValuesConfig(
+                staging_dir=self._staging_dir,
+                id_types=self._id_types,
+                codec=self._codec,
+                shard_target_bytes=self._shard_target_bytes,
+                row_group_target_bytes=self._row_group_target_bytes,
+                chunk_max_bytes=self._chunk_max_bytes,
+                compression=self._compression,
+                data_page_size=self._data_page_size,
+                value_encoding=self._forced_value_encoding,
+                compression_level=DEFAULT_PARQUET_COMPRESSION_LEVEL
+                if self._compression_level is None
+                else self._compression_level,
+            )
         else:
-            zarr_kwargs: dict[str, Any] = {
-                "staging_dir": self._staging_dir,
-                "shard_target_bytes": self._shard_target_bytes,
-                "chunk_max_bytes": self._chunk_max_bytes,
-                "compression": self._compression,
-            }
-            if self._compression_level is not None:
-                zarr_kwargs["compression_level"] = self._compression_level
-            config = ZarrValuesConfig(**zarr_kwargs)
+            config = ZarrValuesConfig(
+                staging_dir=self._staging_dir,
+                shard_target_bytes=self._shard_target_bytes,
+                chunk_max_bytes=self._chunk_max_bytes,
+                compression=self._compression,
+                compression_level=DEFAULT_ZARR_COMPRESSION_LEVEL
+                if self._compression_level is None
+                else self._compression_level,
+            )
+        shared, owned = self._split_shared_and_owned_signals(unique_series)
         values_backend = make_values_backend(config)
         result = values_backend.write_series(
-            unique_series,
+            owned,
             read_and_validate=self._read_and_validate,
             on_series_done=lambda completed, total: self._emit(ProgressStage.TIME_SERIES, completed, total),
             on_file_done=lambda count: self._emit(ProgressStage.SHARD_FINALIZED, count, None),
         )
         self._value_files = result.files
         self._value_encoding = cast("dict[str, ManifestValueEncoding]", dict(result.value_encoding))
-        return result.placements
+        return {**result.placements, **shared}
+
+    def _split_shared_and_owned_signals(
+        self, unique_series: list[Signal]
+    ) -> tuple[dict[tuple[str, int], ChunkPlacement], list[Signal]]:
+        """Separate existing payload locations from signals that need new value files.
+
+        New signals use array-backed or connector-provided loaders and need new files.
+        StoredSignalLoader identifies values read from a release whose chunks can be reused.
+
+        Args:
+            unique_series: The deduplicated signals to serialize.
+
+        Returns:
+            Shared chunk placements and the signals whose values must be written.
+
+        Raises:
+            TimeFValidationError: If a shared signal no longer matches its stored values.
+        """
+        shared: dict[tuple[str, int], ChunkPlacement] = {}
+        owned: list[Signal] = []
+        for signal in unique_series:
+            if not isinstance(signal.loader, StoredSignalLoader):
+                owned.append(signal)
+                continue
+            version, rows = signal.loader.stored_chunks()
+            if signal.spec != signal.loader.spec or signal.n_values != sum(row.n_values for row in rows):
+                raise TimeFValidationError(f"shared signal {signal.id!r} changed its storage shape")
+            owner = self._storage_sources.add(version, {row.chunk_file for row in rows})
+            for row in rows:
+                shared[signal.id, row.chunk_idx] = ChunkPlacement(
+                    row.chunk_file,
+                    row.data_index,
+                    signal.spec.spec_type,
+                    signal.name,
+                    row.n_values,
+                    owner,
+                )
+        return shared, owned
 
     def _read_and_validate(self, ts: Signal) -> pa.Array:  # noqa: PLR6301
         """Read a series' values and enforce the per-series array contract.
@@ -404,6 +452,7 @@ class TimeFWriter:
             ),
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
+            payload_sources=self._storage_sources.sources,
             build_env=build_env(),
             timef_format_version=1,
         )
@@ -417,13 +466,13 @@ class TimeFWriter:
         Raises:
             TimeFValidationError: If one content ID has different payloads.
         """
-        seen: dict[str, tuple[object, ...]] = {}
+        seen: dict[str, Annotation] = {}
         record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
         for ann in record_annotations:
-            content = ann._content_fields
-            if ann.content_id in seen and seen[ann.content_id] != content:
+            previous = seen.get(ann.content_id)
+            if previous is not None and not previous._has_same_content(ann):
                 raise TimeFValidationError(f"annotation content id {ann.content_id!r} is reused with different content")
-            seen[ann.content_id] = content
+            seen[ann.content_id] = ann
 
     def _build_counts(self) -> ManifestCounts:
         """Read exact entity counts from the completed control database.
