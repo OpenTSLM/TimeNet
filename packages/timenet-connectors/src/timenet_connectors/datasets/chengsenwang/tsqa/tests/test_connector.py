@@ -192,7 +192,7 @@ def test_splits_survive_storage_round_trip(tmp_path):
     registry = LocalRegistry(tmp_path / "registry")
     registry.store(original)
     with TimeFReader(registry.open_version("chengsenwang/tsqa", "1.2.0")) as reader:
-        restored = reader.read()
+        restored = reader.read().read()
     assert {task.id: task.split for task in restored.tasks} == {task.id: task.split for task in original.tasks}
 
 

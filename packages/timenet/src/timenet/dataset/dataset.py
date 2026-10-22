@@ -4,7 +4,7 @@ from collections import Counter
 from collections.abc import Callable, Iterable, Iterator, Sequence
 from pathlib import Path
 import sys
-from typing import Literal, TextIO, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Literal, TextIO, TypeVar, cast, overload
 
 import numpy as np
 import pyarrow as pa
@@ -31,6 +31,10 @@ from timenet.types import (
 )
 from timenet.types.splits import Split, parse_split, parse_splits
 from timenet.values_backends import ValuesBackend
+
+
+if TYPE_CHECKING:
+    from timenet.reader.handles import DatasetHandle
 
 
 T = TypeVar("T")
@@ -178,20 +182,19 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return root / self.metadata.dataset_id / str(self.metadata.dataset_version)
 
     @classmethod
-    def open(cls, *, path: str | Path) -> "TimeFDataset":
-        """Open one local TimeF version directory.
+    def open(cls, *, path: str | Path) -> "DatasetHandle":
+        """Return a lazy handle for one local TimeF version directory.
 
         Args:
             path: Directory containing ``manifest.json`` and ``control.duckdb``.
 
         Returns:
-            The hydrated dataset with lazy Signal values.
+            A dataset handle. Call ``read()`` to load all values, then close the handle after use.
         """
         from timenet.reader import TimeFReader  # noqa: PLC0415
         from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
 
-        with TimeFReader(open_local_version(path)) as reader:
-            return reader.read()
+        return TimeFReader(open_local_version(path)).read()
 
     def add_task(self, *, task: Task) -> Task:
         """Validate and register one fully constructed task.

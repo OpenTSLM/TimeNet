@@ -30,7 +30,7 @@ def test_prepared_shared_payloads_do_not_open_parent_catalogs(tmp_path, monkeypa
     expected = original.records[0].signals[0].to_arrow()
     parent_dir = store(tmp_path, original, values_backend=backend)
     reader = TimeFReader(open_local_version(parent_dir))
-    parent = reader.read()
+    parent = reader.get_handle().reader._read_catalog()
     child = TimeFDataset(metadata=original.metadata.model_copy(update={"dataset_id": "test/child"}))
     child.add_record(record=deepcopy(parent.records[0]))
     prompt = next(task.prompt for task in parent.tasks if task.id == original.tasks[0].id)
@@ -59,7 +59,7 @@ def test_prepared_shared_payloads_do_not_open_parent_catalogs(tmp_path, monkeypa
     (parent_dir / "control.duckdb").rename(parent_dir / "unavailable.duckdb")
     (parent_dir / "manifest.json").unlink()
     with TimeFReader(prepared) as child_reader:
-        assert child_reader.read().records[0].signals[0].to_arrow().equals(expected)
+        assert child_reader.read().read().records[0].signals[0].to_arrow().equals(expected)
         assert child_reader.read_task_table()["prompt"].to_pylist() == [text]
         assert child_reader.read_target_table()["text_value"].to_pylist() == [text]
         assert text in child_reader.read_annotation_table()["text_value"].to_pylist()
@@ -69,12 +69,12 @@ def test_shared_payloads_cannot_reference_the_output_release(tmp_path):
     path = store(tmp_path, make_dataset())
     original_manifest = (path / "manifest.json").read_bytes()
     with TimeFReader(open_local_version(path)) as reader:
-        loaded = reader.read()
+        loaded = reader._read_catalog()
         with pytest.raises(TimeFValidationError, match="also the output release"):
             store(tmp_path / "copy", loaded)
     assert (path / "manifest.json").read_bytes() == original_manifest
     with TimeFReader(open_local_version(path)) as reader:
-        assert reader.read().records
+        assert reader.read().read().records
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])

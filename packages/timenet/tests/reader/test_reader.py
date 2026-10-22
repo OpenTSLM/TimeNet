@@ -8,6 +8,7 @@ import pyarrow.parquet as pq
 from pydantic import ValidationError
 import pytest
 
+from timenet.client import TimeNet
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
@@ -15,7 +16,7 @@ import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
 from timenet.format.stored_values import PackedValueLocator
-from timenet.reader import TimeFReader
+from timenet.reader import DatasetHandle, TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
@@ -45,7 +46,7 @@ def _write(tmp_path, dataset=None, **kwargs) -> Path:
 
 def _read(version_dir: Path) -> TimeFDataset:
     with TimeFReader(open_local_version(version_dir)) as reader:
-        return reader._read_dataset()
+        return reader.read().read()
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -170,7 +171,7 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
     version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
 
     with TimeFReader(open_local_version(version_dir)) as reader:
-        restored = reader.read()
+        restored = reader.read().read()
         (selected,) = reader.iter_records((record.id,))
 
     for back in (restored.records[0], selected):
@@ -298,11 +299,12 @@ def test_iter_records_matches_full_read(tmp_path):
     with TimeFReader(open_local_version(version_dir)) as reader:
         streamed = {record.record_id for record in reader.iter_records()}
     with TimeFReader(open_local_version(version_dir)) as reader:
-        materialized = {record.record_id for record in reader.read().records}
+        materialized = {record.record_id for record in reader.read().read().records}
     assert streamed == materialized
 
 
-def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
+@pytest.mark.parametrize("entry_point", ["reader", "client", "dataset"])
+def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch, entry_point):
     version_dir = _write(tmp_path)
     original_open = pq.ParquetFile
     opens = 0
@@ -312,10 +314,18 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         opens += 1
         return original_open(*args, **kwargs)
 
-    with TimeFReader(open_local_version(version_dir)) as reader:
-        monkeypatch.setattr(pq, "ParquetFile", counting_open)
-        handle = reader.get_handle()
-        signal_id = next(reader.iter_records()).signals[0].id
+    monkeypatch.setattr(pq, "ParquetFile", counting_open)
+    if entry_point == "reader":
+        handle = TimeFReader(open_local_version(version_dir)).read()
+    elif entry_point == "client":
+        handle = TimeNet(tmp_path).load("timenet/hello-world")
+    else:
+        handle = TimeFDataset.open(path=version_dir)
+    with handle:
+        assert isinstance(handle, DatasetHandle)
+        assert handle.reader._control is None
+        assert handle.metadata.dataset_id == "timenet/hello-world"
+        signal_id = make_dataset().records[0].signals[0].id
         signal = handle.get_handle(ObjectKind.SIGNAL, signal_id)
         assert opens == 0
         signal.to_arrow()
@@ -334,9 +344,9 @@ def test_signal_values_batch_chunk_locator_queries(tmp_path, monkeypatch, eager)
 
     monkeypatch.setattr(DuckDBControlReader, "chunk_rows_by_keys", counting_batch)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        records = reader._read_dataset().records if eager else tuple(reader.iter_records())
+        records = reader.read().read().records if eager else tuple(reader.iter_records())
         if eager:
-            assert reader._read_dataset().records[0] is records[0]
+            assert reader.read().read().records[0] is records[0]
         signals = tuple(signal for record in records for signal in record.signals)
         if not eager:
             assert calls == []
@@ -352,7 +362,7 @@ def test_signal_values_batch_chunk_locator_queries(tmp_path, monkeypatch, eager)
 @pytest.mark.parametrize("eager", [False, True])
 def test_eager_and_lazy_datasets_are_picklable(tmp_path, monkeypatch, backend, eager):
     with TimeFReader(open_local_version(_write(tmp_path, values_backend=backend))) as reader:
-        dataset = reader._read_dataset() if eager else reader.read()
+        dataset = reader.read().read() if eager else reader._read_catalog()
         expected = [signal.to_arrow() for record in dataset.records for signal in record.signals]
     original = DuckDBControlReader.chunk_rows_by_keys
     calls = []
@@ -391,7 +401,7 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
             return original(*args, **kwargs)
 
         monkeypatch.setattr(pq.ParquetFile, "read", count_reads)
-        loaded = reader.read()
+        loaded = reader._read_catalog()
         loaded.derive_schema()
         task = next(task for task in loaded.tasks if task.id == dataset.tasks[0].id)
         assert task.prompt is not None
@@ -527,7 +537,7 @@ def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
         assert [task.id for task in reader.iter_tasks(split="train")] == [train_task.id]
         assert reader.read_task_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
         assert reader.read_target_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
-        loaded = reader.read()
+        loaded = reader.read().read()
 
     assert {task.id: task.split for task in loaded.tasks if task.split is not None} == {
         train_task.id: Split.TRAIN,
