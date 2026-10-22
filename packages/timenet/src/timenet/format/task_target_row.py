@@ -125,18 +125,11 @@ class TargetValueRow(_TargetValues):
             raise TimeFFormatError(f"cannot encode unsupported target type {type(target).__name__}")
 
 
-class TaskTargetRow(_TargetValues):
-    """Represent a validated task_targets catalog row with internal object keys."""
+class TaskTargetRow(TargetValueRow):
+    """Represent a validated task_targets catalog row."""
 
-    task_key: StrictInt
+    task_id: StrictInt
     position: StrictInt = Field(ge=0)
-    record_key: StrictInt | None = None
-    signal_key: StrictInt | None = None
-    signal_keys: tuple[StrictInt, ...] | None = None
-
-    _scope_column = "signal_keys"
-    _required_columns = _required_columns("record_key", "signal_key", _scope_column)
-    _payload_columns = frozenset().union(*_required_columns.values())
 
 
 def signal_ids(series: tuple[Signal, ...] | None) -> tuple[int, ...] | None:

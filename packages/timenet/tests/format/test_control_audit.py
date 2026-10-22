@@ -98,9 +98,58 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
             "INSERT INTO axis_offsets SELECT axis_key, 0, 0 FROM axes",
             "axis length that does not match",
         ),
-        ("UPDATE records SET record_id = 0", r"invalid records\.record_id value"),
+        (
+            "UPDATE records SET record_id = 0; UPDATE task_record_refs SET record_id = 0",
+            r"invalid records\.record_id value",
+        ),
         ("UPDATE signals SET signal_id = -1", r"invalid signals\.signal_id value"),
-        ("UPDATE tasks SET task_id = 0", r"invalid tasks\.task_id value"),
+        (
+            "UPDATE tasks SET task_id = 0; UPDATE task_targets SET task_id = 0; "
+            "UPDATE task_record_refs SET task_id = 0",
+            r"invalid tasks\.task_id value",
+        ),
+        ("INSERT INTO tasks SELECT * FROM tasks", "tasks contains duplicate values for task_id"),
+        ("UPDATE task_record_refs SET field = 'outputs'", r"invalid task_record_refs\.field value"),
+        (
+            "INSERT INTO task_dependencies VALUES (1, 0, 1)",
+            r"invalid task_dependencies\.parent_task_id value",
+        ),
+        (
+            "INSERT INTO task_dependencies VALUES (1, 0, 999)",
+            r"task_dependencies\.parent_task_id refers to missing tasks\.task_id value 999",
+        ),
+        (
+            "UPDATE tasks SET input_modalities = ['text', 'no_input']",
+            "task 1 has invalid input_modalities",
+        ),
+        (
+            "UPDATE tasks SET scope_type = 'time_interval', scope_start = 0, scope_end = 2000, "
+            "scope_signal_ids = [999]",
+            r"tasks\.scope_signal_ids refers to missing signals\.signal_id value 999",
+        ),
+        (
+            "UPDATE task_targets SET target_kind = 'time_interval', text_value = NULL, span_start = 0, "
+            "span_end = 2000, span_signal_ids = [999]",
+            r"task_targets\.span_signal_ids refers to missing signals\.signal_id value 999",
+        ),
+        (
+            "UPDATE task_targets SET target_kind = 'step_point', text_value = NULL, span_start = 0, signal_id = 999",
+            r"task_targets\.signal_id refers to missing signals\.signal_id value 999",
+        ),
+        (
+            "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 99, 1, '{}'); "
+            "UPDATE tasks SET scope_type = 'time_interval', scope_start = 0, scope_end = 2000, "
+            "scope_signal_ids = [1]; "
+            "UPDATE task_record_refs SET record_id = 99",
+            "task 1 time span must resolve to exactly one input Record",
+        ),
+        (
+            "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 99, 1, '{}'); "
+            "UPDATE task_targets SET target_kind = 'time_interval', text_value = NULL, span_start = 0, "
+            "span_end = 2000, span_signal_ids = [1]; "
+            "UPDATE task_record_refs SET record_id = 99",
+            "task 1 time span must resolve to exactly one input Record",
+        ),
         (
             "UPDATE annotation_occurrences SET object_id = 999",
             "annotation occurrence .* refers to missing Record 999",
