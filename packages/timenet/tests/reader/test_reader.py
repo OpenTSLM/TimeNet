@@ -1,3 +1,4 @@
+import copy
 from fractions import Fraction
 import json
 from pathlib import Path
@@ -47,7 +48,7 @@ def _read(version_dir: Path) -> TimeFDataset:
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_full_round_trip(tmp_path, backend):
     original = make_dataset()
-    restored = _read(_write(tmp_path, dataset=make_dataset(), values_backend=backend))
+    restored = _read(_write(tmp_path, dataset=copy.deepcopy(original), values_backend=backend))
     assert_datasets_equal(original, restored)
 
 

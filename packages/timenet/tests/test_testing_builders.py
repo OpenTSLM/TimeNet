@@ -1,3 +1,4 @@
+import copy
 import re
 
 import numpy as np
@@ -48,7 +49,7 @@ def test_assert_datasets_equal_compares_resolved_modalities():
 
 def test_assert_datasets_equal_detects_difference():
     ds = make_dataset()
-    other = make_dataset()
+    other = copy.deepcopy(ds)
     other.records[0].annotate(Annotation(key="extra", value=1))
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="annotations differ"):
         assert_datasets_equal(ds, other)
