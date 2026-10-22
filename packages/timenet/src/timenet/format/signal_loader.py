@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Callable
 from dataclasses import dataclass
 from typing import TYPE_CHECKING
 
@@ -50,3 +51,33 @@ class StoredSignalLoader:
             The requested canonical Arrow values.
         """
         return self.reader._load_signal_range(self.signal_key, self.signal_id, self.spec, start, stop)
+
+
+@dataclass(frozen=True)
+class MemoryArray:
+    """Keep loaded values behind Signal's callable loader interface.
+
+    The named wrapper is picklable and returns its retained array without storage access.
+    The original loader preserves storage provenance, allowing writers to reuse stored offsets.
+    """
+
+    array: pa.Array
+    source: Callable[[], pa.Array] | None = None
+
+    def __call__(self) -> pa.Array:
+        """Return the retained array without storage access."""
+        return self.array
+
+
+def resolve_storage_loader(loader: Callable[[], pa.Array] | None) -> Callable[[], pa.Array] | None:
+    """Return the loader that reads from storage, behind any in-memory copies of its values.
+
+    Eager reads keep values in :class:`MemoryArray` but remember the stored loader they came from.
+    Writers follow that link to reuse stored chunks and timestamps instead of copying them.
+
+    Returns:
+        The innermost loader, or the given loader if it holds no stored source.
+    """
+    while isinstance(loader, MemoryArray) and loader.source is not None:
+        loader = loader.source
+    return loader

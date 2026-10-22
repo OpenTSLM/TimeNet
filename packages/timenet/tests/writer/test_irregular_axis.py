@@ -364,7 +364,8 @@ def test_reader_rejects_decreasing_stored_time_offsets(tmp_path):
         back.time_offsets_us()
 
 
-def test_signals_sharing_an_axis_share_one_validated_offsets_loader(tmp_path, monkeypatch):
+def _shared_axis_release(tmp_path, monkeypatch):
+    """Write two Signals on one irregular axis and count payload reads of its timestamps."""
     dataset = _dataset()
     shared_us = [0, 5_000, 9_000]
     axis = IrregularAxis.spanning(shared_us)
@@ -390,11 +391,25 @@ def test_signals_sharing_an_axis_share_one_validated_offsets_loader(tmp_path, mo
         return original(self, handle)
 
     monkeypatch.setattr(PackedValueReader, "read_offsets", counting_read)
+    return version, axis, shared_us, reads
+
+
+def test_signals_sharing_an_axis_share_one_validated_offsets_loader(tmp_path, monkeypatch):
+    version, axis, shared_us, reads = _shared_axis_release(tmp_path, monkeypatch)
     with TimeFReader(version) as reader:
         temp, humidity = next(reader.iter_records()).signals
         assert temp.time_offsets_loader is humidity.time_offsets_loader
         for signal in (temp, humidity, temp):
             assert signal.time_offsets_us().tolist() == shared_us
+    assert reads == [axis.axis_id]
+
+
+def test_eager_signals_sharing_an_axis_share_one_offsets_array(tmp_path, monkeypatch):
+    version, axis, shared_us, reads = _shared_axis_release(tmp_path, monkeypatch)
+    with TimeFReader(version) as reader:
+        temp, humidity = reader._read_dataset().records[0].signals
+        assert temp.time_offsets_loader is humidity.time_offsets_loader
+        assert [signal.time_offsets_us().tolist() for signal in (temp, humidity)] == [shared_us, shared_us]
     assert reads == [axis.axis_id]
 
 
