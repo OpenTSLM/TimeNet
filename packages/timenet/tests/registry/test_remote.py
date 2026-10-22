@@ -1,17 +1,24 @@
 import json
 from pathlib import Path
+import pickle
 
-from _fake_registry import build_fake, build_publish_fake, registry_server
+from _fake_registry import build_fake, build_publish_fake, range_server, read_file, registry_server
 import httpx
+import numpy as np
 from pydantic import ValidationError
 import pytest
 
 from timenet.client import TimeNet
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeNetRegistryError
 from timenet.manifest import Manifest
-from timenet.registry import RemoteRegistry
+from timenet.reader import TimeFReader
+from timenet.registry import LocalRegistry, RemoteRegistry, open_local_version
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, Domain, License
+from timenet.types.object_kind import ObjectKind
+from timenet.types.parent_dataset_card import ParentDatasetCard
+from timenet.types.reference_keys import InputAlias
 from timenet.writer import TimeFWriter
 
 
@@ -185,14 +192,74 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
     assert (dest / "manifest.json").exists()
 
 
-def test_load_full_round_trips(version_dir, tmp_path):
+@pytest.mark.parametrize("expire_urls", [False, True])
+def test_load_full_round_trips_after_pickling_and_url_expiry(version_dir, tmp_path, expire_urls):
     directory, manifest = version_dir
-    with registry_server(directory) as server:
+    used_urls: set[str] = set()
+
+    def single_use_download(request):
+        url = str(request.url)
+        if url in used_urls:
+            return httpx.Response(403, text="expired signed URL")
+        used_urls.add(url)
+        return read_file(directory, request)
+
+    with registry_server(directory, serve_file=single_use_download if expire_urls else None) as server:
         registry = RemoteRegistry(server.url, cache_dir=tmp_path / "cache")
         client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
         with client.load(manifest.metadata.dataset_id) as handle:
-            loaded = handle.read()
-        assert_datasets_equal(make_dataset(), loaded)
+            # A worker must reopen its own clients, including after the main process has read values.
+            handle.get_handle(ObjectKind.SIGNAL, make_dataset().records[0].signals[0].id).to_arrow()
+            with pickle.loads(pickle.dumps(handle)) as restored:
+                loaded = restored.read()
+    assert_datasets_equal(make_dataset(), loaded)
+
+
+@pytest.mark.parametrize("support_ranges", [True, False])
+def test_small_signal_read_fetches_ranges_and_keeps_registry_token_private(tmp_path, support_ranges):
+    values = np.random.default_rng(7).normal(size=2**21).astype("float32")
+    template = make_dataset()
+    signal = Signal.from_values(
+        values,
+        spec=template.records[0].signals[0].spec,
+        name="large",
+        time_axis=RegularAxis.from_rate_hz(100),
+        id="large-signal",
+    )
+    dataset = TimeFDataset(metadata=template.metadata)
+    dataset.add_record(record=Record(record_id="large-record", sources=(Source(name="Monitor", signals=(signal,)),)))
+    with TimeFWriter(
+        tmp_path / "origin", dataset, chunk_max_bytes=2**18, row_group_target_bytes=2**18, compression="none"
+    ) as writer:
+        writer.write()
+    directory = tmp_path / "origin" / dataset.metadata.dataset_id / "1.0.0"
+
+    def serve_file(request):
+        if support_ranges:
+            return read_file(directory, request)
+        return httpx.Response(200, content=(directory / request.url.path.lstrip("/")).read_bytes())
+
+    with registry_server(directory, serve_file=serve_file) as server:
+        remote = RemoteRegistry(server.url, token="private-token", cache_dir=tmp_path / "cache")
+        with TimeNet(remote).get_handle(dataset.metadata.dataset_id, "1.0.0") as handle:
+            assert all(response.request.url.path.startswith("/api/v1/") for response in server.responses)
+            selected = handle.get_handle(ObjectKind.SIGNAL, signal.id)
+            if not support_ranges:
+                with pytest.raises(TimeNetRegistryError, match="range requests"):
+                    selected.read_steps(100, 120)
+                return
+            np.testing.assert_array_equal(selected.read_steps(100, 120).to_numpy(), values[100:120])
+            downloads = [
+                response for response in server.responses if not response.request.url.path.startswith("/api/v1/")
+            ]
+            payloads = [response for response in downloads if response.request.url.path.endswith(".parquet")]
+            assert payloads
+            assert sum(len(response.content) for response in payloads) < values.nbytes // 4
+            assert all("Range" in response.request.headers for response in payloads)
+            assert all("Authorization" not in response.request.headers for response in downloads)
+            transferred = len(server.responses)
+            np.testing.assert_array_equal(selected.read_steps(100, 120).to_numpy(), values[100:120])
+            assert len(server.responses) == transferred
 
 
 def test_store_publishes_uploads_and_finalizes(tmp_path):
@@ -276,3 +343,59 @@ def test_store_without_write_token_is_rejected(tmp_path):
     registry = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path)  # anonymous
     with pytest.raises(TimeNetRegistryError):
         registry.store(make_dataset())
+
+
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_child_streams_physical_sources_and_downloads_for_offline_reads(tmp_path, backend):
+    origin = tmp_path / "origin"
+    local = LocalRegistry(origin)
+    parent = make_dataset()
+    build_only = parent.metadata.model_copy(update={"dataset_id": "test/build-only"})
+    parent.parent_cards[InputAlias("build-only")] = ParentDatasetCard(metadata=build_only)
+    local.store(parent, values_backend=backend)
+    parent_id = parent.metadata.dataset_id
+    with TimeFReader(local.open_version(parent_id, "1.0.0")) as reader:
+        child = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}))
+        imported = child.import_from(reader.get_handle(), alias=InputAlias("parent"), records=[parent.records[0].id])
+        expected = parent.records[0].signals[0].to_arrow()
+        signal_id = next(iter(imported.signals.values())).id
+        local.store(child)
+    requests = []
+
+    def handler(request):
+        path = request.url.path
+        requests.append(path)
+        if request.url.host == "127.0.0.1":
+            return httpx.Response(200, content=(origin / path.lstrip("/")).read_bytes())
+        relative = path.removeprefix("/api/v1/datasets/")
+        if relative.endswith("/manifest"):
+            return httpx.Response(
+                200, content=(origin / relative.removesuffix("manifest") / "manifest.json").read_bytes()
+            )
+        if "/download/" in relative:
+            return httpx.Response(307, headers={"location": blob_url + "/" + relative.replace("/download/", "/")})
+        return httpx.Response(404)
+
+    cache = tmp_path / "cache"
+    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=cache)
+    with range_server(origin) as blob_url:
+        with TimeNet(remote).get_handle("test/child", "1.0.0") as dataset:
+            assert all("/download/" not in path for path in requests)
+            handle = dataset.get_handle(ObjectKind.SIGNAL, signal_id)
+            assert handle.to_arrow().equals(expected)
+            assert any(parent_id + "/1.0.0/download/" in path for path in requests)
+            assert not any(parent_id + "/1.0.0/download/control.duckdb" in path for path in requests)
+            assert not (cache / parent_id / "1.0.0").exists()
+        remote.download_version("test/child", "1.0.0", cache / "test/child/1.0.0")
+    with TimeNet(remote).get_handle("test/child", "1.0.0", build_parents=True) as dataset:
+        assert dataset.get_handle(ObjectKind.SIGNAL, signal_id).to_arrow().equals(expected)
+    assert not any("test/build-only" in path for path in requests)
+    assert (cache / parent_id / "1.0.0/control.duckdb").exists()
+    with TimeFReader(open_local_version(cache / "test/child/1.0.0")) as reader:
+        reader.verify()
+        assert reader.get_handle().get_handle(ObjectKind.SIGNAL, signal_id).to_arrow().equals(expected)
+    # The parent is already complete: preparing it again requires no network requests.
+    prepared_requests = list(requests)
+    remote.download_version(parent_id, "1.0.0", cache / parent_id / "1.0.0")
+    assert (cache / parent_id / "1.0.0/control.duckdb").is_file()
+    assert requests == prepared_requests
