@@ -73,9 +73,24 @@ tags:
 `BaseHuggingFaceConnector(BaseConnector[dict[str, Any]])`. Set `HF_REPO` to the external Hub repo id
 and implement `convert`. `download` is inherited: it reads the Hub's auto-converted parquet on
 `refs/convert/parquet` and returns one dict per row, so any source format is handled uniformly.
-The connector imports `huggingface_hub` lazily and declares it in its `requirements.txt`. The lazy
-import keeps `--no-isolation` usable while you write the connector. `HF_TOKEN` is read from the
+The connector declares `huggingface_hub` in its `requirements.txt`, and the helpers in
+`sources/huggingface_hub.py` import it lazily. The lazy import keeps `--no-isolation` usable while you
+write the connector. `HF_TOKEN` is read from the
 environment, so gated datasets work. Fully private repos have no auto-parquet ref and aren't supported.
+
+### `BaseHubSnapshotConnector` (`bases/huggingface.py`)
+`BaseHubSnapshotConnector(BaseConnector[HubFileRef])`. Set `HF_REPO`, `SOURCE_REVISION` (an immutable
+commit), and `SOURCE_FILES` (part -> repository-relative filename), and implement `convert`. The
+inherited `download` fetches each file through `hub_file` and returns one
+`HubFileRef(path, part, expected_rows)` per part, with `expected_rows` taken from the optional
+`SOURCE_ROWS`; `convert` looks up a file's repository-relative name as `SOURCE_FILES[ref.part]` and
+passes the rows it read from each file to `ref.check_rows(count)`. Use it when the source has no parquet ref,
+or when `convert` reads the files lazily (by byte offset, say) instead of holding every row.
+`hub_file` reports a missing `huggingface_hub` itself, so the connector needs no import guard, and
+`download` raises `TimeNetDownloadError` naming the file and `repo@revision` when a declared file is
+absent from the revision. Defining the subclass raises `TimeFValidationError` when `SOURCE_REVISION` is
+not a 40-character commit or `SOURCE_ROWS` names a part `SOURCE_FILES` lacks, so even a fixture-only
+test catches a bad declaration.
 
 ### `BasePhysioNetConnector` (`bases/physionet.py`)
 `BasePhysioNetConnector(BaseConnector[TRaw])`. Implement `download` and `convert`. Its two helpers read
