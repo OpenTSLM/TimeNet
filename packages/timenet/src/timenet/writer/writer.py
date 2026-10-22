@@ -455,6 +455,8 @@ class TimeFWriter:
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             payload_sources=self._storage_sources.sources,
+            parent_cards=self._dataset.parent_cards,
+            lineage=tuple(self._dataset.lineage.values()),
             build_env=build_env(),
             timef_format_version=1,
         )
