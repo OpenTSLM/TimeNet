@@ -9,6 +9,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
+from timenet.reader import DatasetHandle
 from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, DatasetMetadata, Domain, License, Version
@@ -123,7 +124,10 @@ def test_download_leaves_sibling_staging_dirs_untouched(registry_root, tmp_path)
 
 def test_load_round_trips(registry_root, tmp_path):
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
-    restored = client.load("timenet/hello-world")
+    with client.load("timenet/hello-world") as handle:
+        assert isinstance(handle, DatasetHandle)
+        assert handle.reader._control is None
+        restored = handle.read()
     assert isinstance(restored, TimeFDataset)
     assert_datasets_equal(make_dataset(), restored)
 

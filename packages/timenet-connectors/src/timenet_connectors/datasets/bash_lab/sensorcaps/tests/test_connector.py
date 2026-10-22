@@ -231,7 +231,7 @@ def test_pipeline_preserves_source_semantics_after_source_removal(monkeypatch, t
     with TimeFReader(open_local_version(version_dir)) as reader:
         assert reader.metadata == connector.metadata()
         assert reader.schema.tasks == (AnswerTask,)
-        restored = reader.read()
+        restored = reader.read().read()
         _assert_records_and_tasks(restored.records, restored.tasks)
         records = list(reader.iter_records())
         _assert_records_and_tasks(records, list(reader.iter_tasks(records)))

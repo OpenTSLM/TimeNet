@@ -96,7 +96,7 @@ def test_shard_aligned_appends_round_trip(tmp_path):
     # Tiny chunks and shards force many mid-stream shard flushes plus trailing partial shards.
     version_dir = _write(tmp_path, chunk_max_bytes=64, shard_target_bytes=128)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        assert_datasets_equal(make_dataset(), reader.read())
+        assert_datasets_equal(make_dataset(), reader.read().read())
 
 
 def test_high_compression_level_is_rejected_for_blosc(tmp_path):

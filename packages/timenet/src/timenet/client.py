@@ -16,10 +16,10 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from timenet.builders import find_builder
 from timenet.config import settings
-from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
+from timenet.reader.handles import DatasetHandle
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry._paths import release_dir
 from timenet.registry.base import ProgressCallback
@@ -179,11 +179,25 @@ class TimeNet:
         )
         return target
 
-    def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
-        """Read the dataset into memory through the registry's storage handle.
+    def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> DatasetHandle:
+        """Return a lazy dataset handle. Call its ``read()`` method to load all values.
 
-        Series values stay lazy once the handle is open. Remote backends resolve physical source
-        manifests upfront and read payload ranges on demand, reusing complete cached releases.
+        Args:
+            dataset_id: The dataset ID, optionally followed by ``@<version>``.
+            version: The version string, or ``None`` for the latest.
+            auto_build: Build a missing local dataset from its connector.
+
+        Returns:
+            A dataset handle that owns its reader. Close it after use, or use a context manager.
+        """
+        return self.get_handle(dataset_id, version, auto_build=auto_build)
+
+    def get_handle(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> DatasetHandle:
+        """Return a lazy dataset handle without opening its catalog or payload files.
+
+        Preparation resolves physical source manifests before this method returns. Remote reads
+        use complete cached releases or fetch payload ranges on demand. Catalog queries and
+        value decoding wait until an explicit read.
 
         Against a local registry, a dataset the registry does not have is built first, if some
         installed package registers a connector for its id. Set ``auto_build`` false to fail fast
@@ -195,7 +209,7 @@ class TimeNet:
             auto_build: Build a missing local dataset from its connector. Set false to raise instead.
 
         Returns:
-            The dataset with lazy, per-series loaders that use the registry handle.
+            A handle for explicit dataset, entity, and field reads.
 
         Raises:
             TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
@@ -223,7 +237,7 @@ class TimeNet:
                     ) from miss
             builder.build(dataset_id, self._registry.root)
             handle = self._registry.open_version(dataset_id, version)
-        return TimeFReader(handle).read()
+        return TimeFReader(handle).get_handle()
 
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
         """Raise for a non-open dataset read from a registry that does not host its data.
@@ -264,4 +278,4 @@ class TimeNet:
         """
         from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
-        return TimeFTorchDataset(self.load(dataset_id, version))
+        return TimeFTorchDataset.from_reader(self.get_handle(dataset_id, version).reader)

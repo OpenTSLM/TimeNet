@@ -90,7 +90,7 @@ def test_uuid_ids_round_trip_as_canonical_strings(tmp_path):
     dataset = _uuid_dataset()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        restored = reader.read()
+        restored = reader.read().read()
     assert_datasets_equal(dataset, restored)
     sid = restored.records[0].record_id
     assert str(uuid.UUID(sid)) == sid
