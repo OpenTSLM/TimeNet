@@ -440,7 +440,8 @@ def test_eager_read_rejects_invalid_hierarchy_before_opening_payloads(tmp_path, 
         (version_dir / part.path).unlink()
 
     with TimeFReader(version) as reader, pytest.raises(TimeFFormatError, match=message):
-        reader._read_dataset()
+        # Dataset scans may prefetch payloads before entering catalog reconstruction.
+        reader._control_reader().read_records(eager=True)
 
 
 def test_iter_records_preserves_requested_order(tmp_path):
