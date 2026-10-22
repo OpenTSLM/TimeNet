@@ -10,6 +10,7 @@ from typing import Any
 
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_value_kind import AnnotationValueKind
+from timenet.types.text import read_value
 
 
 VALUE_COLUMNS = ("value_kind", "text_value", "integer_value", "float_value", "boolean_value", "text_list_value")
@@ -32,6 +33,7 @@ def encode_annotation_value(value: object, *, label: str) -> dict[str, Any]:
     Raises:
         TimeFValidationError: If the value is not one of the supported shapes.
     """
+    value = read_value(value)
     columns: dict[str, Any] = dict.fromkeys(VALUE_COLUMNS)
     if value is None:
         return columns

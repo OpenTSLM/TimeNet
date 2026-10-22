@@ -41,6 +41,27 @@ annotations opens `control.duckdb` in read-only mode.
 Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy. A call to
 `to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from Parquet or Zarr.
 
+Text fields return `TextValue` handles, regardless of their size or storage location. Call
+`task.prompt.read()`, `task.rationale.read()`, or a text target's `read()` method to obtain a string.
+An absent prompt or rationale remains `None`. Annotation strings and string lists also use handles;
+numeric and boolean annotation values remain native Python values.
+
+Constructors still accept strings, such as `AnswerTask(prompt="Question?", targets=("Answer.",))`.
+They wrap the text in memory. Loaded objects use the same interface, with packed text read only when
+`read()` is called. Schema derivation and modality inference do not read packed text.
+
+Use `read_value(value)` from `timenet.types` when a value may be a text handle or a native scalar.
+The Arrow `read_task_table()`, `read_target_table()`, and `read_annotation_table()` APIs return
+native values. The reader caches up to eight payload files.
+
+Empty text handles are false in truth tests. An empty prompt remains a handle whose `read()` returns
+`""`. An absent prompt remains `None`. Truth tests use the handle's length without reading its value.
+
+Text handles compare by content, with each other and with native strings or string lists, so a task
+equals its read-back copy regardless of where its text is stored. Handles of different lengths
+compare unequal without a read. Comparing handles of equal length reads both values. Text handles
+are not hashable.
+
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
 `TimeFDataset`.
 
@@ -49,9 +70,9 @@ Tasks have three useful read paths:
 - `tasks` loads and caches every task.
 - `iter_tasks(records)` yields tasks for selected Records in bounded batches. Its `split`,
   `required_modalities`, and `supported_modalities` arguments filter in DuckDB before any task is
-  built, as they do on `task_table()` and `target_table()`.
-- `task_table()`, `target_table()`, and `annotation_table()` return Arrow tables without creating
-  Python task objects.
+  built, as they do on `read_task_table()` and `read_target_table()`.
+- `read_task_table()`, `read_target_table()`, and `read_annotation_table()` return Arrow tables
+  without creating Python task objects.
 
 Objects keep their identity within one reader. For example, a task input is the same `Record`
 instance that `iter_records()` returned.
@@ -62,8 +83,9 @@ The manifest describes the dataset schema and its files. The DuckDB control data
 object hierarchy and relationships. The reader combines both sources to rebuild standard TimeNet
 types.
 
-Annotation values return with their stored types. Spans return as `TimePoint`, `TimeInterval`,
-`StepPoint`, or `StepInterval`. The task type selects a built-in task class, and `from_tasks`
+Reading an annotation text handle returns its stored string or string list. Scalar annotation
+values retain their native types. Spans return as `TimePoint`, `TimeInterval`, `StepPoint`, or
+`StepInterval`. The task type selects a built-in task class, and `from_tasks`
 contains resolved Task objects.
 
 ## Value reads
@@ -83,9 +105,9 @@ and decoded Zarr chunks until it closes.
 | `read()` | Create the complete `TimeFDataset`. |
 | `iter_records()` | Yield Records without building a dataset. |
 | `iter_tasks(records, split=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
-| `task_table()` | Return the task table with public IDs. |
-| `target_table()` | Return ordered task targets with public IDs. |
-| `annotation_table()` | Return annotation occurrences with public IDs. |
+| `read_task_table()` | Return the task table with public IDs. |
+| `read_target_table()` | Return ordered task targets with public IDs. |
+| `read_annotation_table()` | Return annotation occurrences with public IDs. |
 | `verify()` | Check every manifest-listed file against its size and checksum. |
 | `metadata` | Return the dataset metadata. |
 | `schema` | Return the dataset schema. |

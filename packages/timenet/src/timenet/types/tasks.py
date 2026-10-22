@@ -10,11 +10,13 @@ import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
+from timenet.types._fields import ValueField
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import new_id
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
+from timenet.types.text import InlineText, TextValue, optional_text
 from timenet.types.units import normalize_unit
 
 
@@ -23,9 +25,11 @@ if TYPE_CHECKING:
     from timenet.dataset.record import Record
     from timenet.dataset.time_series import Signal
 
-    TargetItem: TypeAlias = str | int | float | bool | Record | Signal | Span
+    TargetItem: TypeAlias = TextValue[str] | int | float | bool | Record | Signal | Span
+    TargetInput: TypeAlias = str | TargetItem
 else:
     TargetItem = object
+    TargetInput = object
 
 
 @unique
@@ -46,7 +50,7 @@ def validate_input_modalities(
     modalities: Iterable[InputModality] | None,
     *,
     task_id: str,
-    prompt: str | None,
+    prompt: str | TextValue[str] | None,
     has_record_inputs: bool,
 ) -> frozenset[InputModality]:
     """Normalize and validate the input kinds declared by a task.
@@ -89,6 +93,17 @@ class LocalizationMode(StrEnum):
     EXHAUSTIVE = "exhaustive"
 
 
+def _target_values(values: Iterable[TargetInput] | None) -> tuple[TargetItem, ...] | None:
+    """Wrap string targets while preserving native scalar and object targets.
+
+    Returns:
+        Ordered targets with text handles, or ``None`` for annotation-based answers.
+    """
+    if values is None:
+        return None
+    return tuple(InlineText(value) if isinstance(value, str) else value for value in values)
+
+
 @dataclass(kw_only=True)
 class Task(SupportsAnnotate, ABC):
     """One modelling problem with ordered inputs and ordered output items.
@@ -108,10 +123,14 @@ class Task(SupportsAnnotate, ABC):
     """Unique public task identifier."""
     inputs: tuple["Record", ...] = field(default=(), compare=False)
     """Records supplied to the model, in semantic order."""
-    targets: tuple[TargetItem, ...] | None = field(default=None, compare=False)
+    targets: ValueField[Iterable[TargetInput] | None, tuple[TargetItem, ...] | None] = field(
+        default=ValueField(_target_values, None), compare=False
+    )
     """Ordered native values and stored objects that form the expected output."""
-    prompt: str | None = None
-    """What the model is asked, or None for an unprompted task."""
+    prompt: ValueField[str | TextValue[str] | None, TextValue[str] | None] = field(
+        default=ValueField(optional_text, None)
+    )
+    """Call ``read()`` for the prompt; ``None`` identifies an unprompted task."""
     split: Split | None = None
     """The partition the task belongs to: train, validation, or test. None when the dataset does not
     partition its tasks."""
@@ -123,8 +142,10 @@ class Task(SupportsAnnotate, ABC):
     """Existing annotation occurrences supplied to the model as context."""
     target_annotations: tuple[Annotation, ...] = field(default=(), compare=False)
     """Existing annotation occurrences that form the expected output."""
-    rationale: str | None = None
-    """Optional explanation associated with the answer."""
+    rationale: ValueField[str | TextValue[str] | None, TextValue[str] | None] = field(
+        default=ValueField(optional_text, None)
+    )
+    """Call ``read()`` for the explanation; ``None`` means no rationale is present."""
     from_tasks: tuple["Task", ...] = field(default=(), compare=False)
     """Tasks from which this task was derived."""
     annotations: tuple[Annotation, ...] = ()
@@ -320,11 +341,13 @@ def _is_record(value: object) -> TypeGuard["Record"]:
 
 
 def _is_target_item(value: object) -> bool:
-    """Return whether value is supported in the public mixed target collection."""
+    """Return whether value can form one item in a task's expected answer."""
     from timenet.dataset.record import Record  # noqa: PLC0415
     from timenet.dataset.time_series import Signal  # noqa: PLC0415
 
-    return isinstance(value, (str, int, float, bool, Record, Signal, Span))
+    return isinstance(value, int | float | bool | Record | Signal | Span) or (
+        isinstance(value, TextValue) and value.value_type == "str"
+    )
 
 
 def _concrete_task_classes() -> list[type[Task]]:

@@ -7,6 +7,7 @@ MANIFEST_FILE = "manifest.json"
 
 SHARD_DIR = "time_series"
 SHARD_TEMPLATE = "time_series/part-{:08d}.parquet"
+PAYLOAD_TEMPLATE = "payloads/part-{:08d}.parquet"
 
 # part_path() caps the part number at PART_INDEX_DIGITS so the zero-padded names stay lexically sortable.
 
