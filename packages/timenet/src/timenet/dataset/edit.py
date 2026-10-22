@@ -79,12 +79,7 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
         cascade=cascade,
     )
 
-    surviving_task_ids = {task.id for task in dataset.tasks if task.id not in removed_task_ids}
-    records = [
-        replace(record, task_ids=tuple(tid for tid in record.task_ids if tid in surviving_task_ids))
-        for record in dataset.records
-        if record.id not in remove
-    ]
+    records = [record for record in dataset.records if record.id not in remove]
     records_by_id = {record.id: record for record in records}
     tasks = _rebuild_tasks(
         dataset,
