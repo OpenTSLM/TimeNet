@@ -172,14 +172,7 @@ def _assert_records_and_tasks(records, tasks):
             assert task.prompt == row["messages"][0]["content"] + "\n\n" + _FEATURES
             assert task.metadata == {}
             assert task.split is Split.TRAIN
-            expected_context = {
-                "activity_summary": f"synthetic café {partition} movement {row_index}",
-            }
-            if partition == "pamap2_v2":
-                expected_context["sensor_location"] = "ankle"
-            assert {annotation.key: annotation.value for annotation in task.input_annotations} == expected_context
-            for annotation in task.input_annotations:
-                assert any(annotation is attached for attached in record.annotations)
+            assert task.input_annotations == record.annotations
             assert task.resolved_input_modalities == frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
 
 

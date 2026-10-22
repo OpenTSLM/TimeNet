@@ -314,17 +314,13 @@ def _iter_tasks(files: tuple[HubFileRef, ...], records: Mapping[str, Record]) ->
     for file in files:
         for ref, row in _iter_rows(file):
             record = records[ref.id]
-            context = [
-                annotation
-                for annotation in record.annotations
-                if annotation.key in {"activity_summary", "sensor_location"}
-            ]
             yield AnswerTask(
                 id=f"{ref.id}-caption",
                 inputs=(record,),
                 targets=(row.caption,),
                 prompt=f"{row.system}\n\n{row.features}" if row.features.strip() else row.system,
-                input_annotations=tuple(context),
+                # The record's annotations are exactly the row's task context.
+                input_annotations=record.annotations,
                 split=Split.TRAIN,
             )
 
