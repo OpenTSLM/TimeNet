@@ -270,7 +270,7 @@ def test_lights_off_is_placed_on_the_timeline_and_names_no_series(release, monke
     annotation = _annotations(dataset, "SC4901E0", "lights_off")[0]
     assert annotation.value == "22:30:00"
     assert annotation.span.start_us == 1800 * US_PER_S
-    assert annotation.span.time_series_ids is None
+    assert annotation.span.time_series is None
 
 
 def test_a_cassette_record_carries_no_condition(release, monkeypatch):

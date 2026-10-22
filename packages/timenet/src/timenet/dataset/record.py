@@ -44,7 +44,7 @@ class Record(SupportsAnnotate):
     """The session's overall span on the source recording timeline: an :class:`~timenet.types.TimeInterval`
     covering the whole record, or ``None``. Declare it when the series have gaps and an event may fall in
     one, for example a note taken while every sensor was briefly off. This checks an unscoped span
-    against it, rather than against the union of the series' windows. Its ``time_series_ids`` must be
+    against it, rather than against the union of the series' windows. Its ``time_series`` must be
     ``None``, and it must contain every series' window."""
 
     def __post_init__(self) -> None:  # noqa: PLR0912 - hierarchy, timing, and annotation invariants
@@ -75,10 +75,8 @@ class Record(SupportsAnnotate):
                 raise TimeFValidationError(
                     f"Record.time_span must be a TimeInterval covering the whole record, got {self.time_span!r}"
                 )
-            if self.time_span.time_series_ids is not None:
-                raise TimeFValidationError(
-                    "Record.time_span covers the whole record, so its time_series_ids must be None"
-                )
+            if self.time_span.time_series is not None:
+                raise TimeFValidationError("Record.time_span covers the whole record, so its time_series must be None")
             for ts in self.signals:
                 window = ts.span_us
                 if window is not None and (window[0] < self.time_span.start_us or window[1] > self.time_span.end_us):
@@ -141,22 +139,22 @@ class Record(SupportsAnnotate):
         """Whether this record's relative timeline has a Unix-time anchor."""
         return self.start_time.timestamp is not None
 
-    def time_point(self, at: datetime, *, time_series_ids: tuple[str, ...] | None = None) -> TimePoint:
+    def time_point(self, at: datetime, *, time_series: tuple[Signal, ...] | None = None) -> TimePoint:
         """Build a :class:`~timenet.types.TimePoint` at a wall-clock moment on this record's timeline.
 
         The Record must have a known absolute timestamp.
 
         Args:
             at: The wall-clock moment, timezone-aware.
-            time_series_ids: Series the point is scoped to. ``None`` covers every series.
+            time_series: Series the point is scoped to. ``None`` covers every series.
 
         Returns:
             The point, in microseconds from this record's relative zero.
         """
-        return TimePoint(start_us=offset_us(at, self.start_time.timestamp), time_series_ids=time_series_ids)
+        return TimePoint(start_us=offset_us(at, self.start_time.timestamp), time_series=time_series)
 
     def time_interval(
-        self, start: datetime, end: datetime, *, time_series_ids: tuple[str, ...] | None = None
+        self, start: datetime, end: datetime, *, time_series: tuple[Signal, ...] | None = None
     ) -> TimeInterval:
         """Build a :class:`~timenet.types.TimeInterval` between two wall-clock moments on this timeline.
 
@@ -165,7 +163,7 @@ class Record(SupportsAnnotate):
         Args:
             start: Wall-clock start, timezone-aware.
             end: Wall-clock end, exclusive and timezone-aware.
-            time_series_ids: Series the interval is scoped to. ``None`` covers every series.
+            time_series: Series the interval is scoped to. ``None`` covers every series.
 
         Returns:
             The half-open interval, in microseconds from this record's relative zero.
@@ -173,7 +171,7 @@ class Record(SupportsAnnotate):
         return TimeInterval(
             start_us=offset_us(start, self.start_time.timestamp),
             end_us=offset_us(end, self.start_time.timestamp),
-            time_series_ids=time_series_ids,
+            time_series=time_series,
         )
 
     def annotate(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:
@@ -241,7 +239,7 @@ class Record(SupportsAnnotate):
                 f"annotation {annotation.key!r}",
                 annotation.span,
                 self.signals,
-                self.id,
+                f"record {self.id!r}",
                 self.time_span,
                 warn_when_outside=warn_when_outside,
             )

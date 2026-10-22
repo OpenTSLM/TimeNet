@@ -99,27 +99,27 @@ class TargetValueRow(_TargetValues):
             return cls(
                 target_kind=TaskTargetKind.TIME_POINT,
                 span_start=target.start_us,
-                span_signal_ids=target.time_series_ids,
+                span_signal_ids=signal_ids(target.time_series),
             )
         elif isinstance(target, TimeInterval):
             return cls(
                 target_kind=TaskTargetKind.TIME_INTERVAL,
                 span_start=target.start_us,
                 span_end=target.end_us,
-                span_signal_ids=target.time_series_ids,
+                span_signal_ids=signal_ids(target.time_series),
             )
         elif isinstance(target, StepPoint):
             return cls(
                 target_kind=TaskTargetKind.STEP_POINT,
                 span_start=target.start,
-                span_signal_ids=(target.time_series_id,),
+                span_signal_ids=(target.time_series.id,),
             )
         elif isinstance(target, StepInterval):
             return cls(
                 target_kind=TaskTargetKind.STEP_INTERVAL,
                 span_start=target.start,
                 span_end=target.stop,
-                span_signal_ids=(target.time_series_id,),
+                span_signal_ids=(target.time_series.id,),
             )
         else:
             raise TimeFFormatError(f"cannot encode unsupported target type {type(target).__name__}")
@@ -137,3 +137,8 @@ class TaskTargetRow(_TargetValues):
     _scope_column = "signal_keys"
     _required_columns = _required_columns("record_key", "signal_key", _scope_column)
     _payload_columns = frozenset().union(*_required_columns.values())
+
+
+def signal_ids(series: tuple[Signal, ...] | None) -> tuple[str, ...] | None:
+    """Return the ids of a time span's Signals, or ``None`` for a span over the whole record."""
+    return None if series is None else tuple(signal.id for signal in series)

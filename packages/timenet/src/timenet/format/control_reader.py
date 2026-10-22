@@ -1624,10 +1624,10 @@ class _TaskHydration:
             {key for refs in record_refs.values() for keys in refs.values() for key in keys}
             | {row.record_key for row in target_rows if row.record_key is not None}
         )
-        signals_by_key = self._signals_by_key({row.signal_key for row in target_rows if row.signal_key is not None})
-        signal_ids_by_key = reader._signal_ids_by_key(
-            [key for row in target_rows for key in (row.signal_keys or ())]
-            + [key for row in task_rows for key in (row.scope_signal_keys or ())]
+        signals_by_key = self._signals_by_key(
+            {row.signal_key for row in target_rows if row.signal_key is not None}
+            | {key for row in target_rows for key in (row.signal_keys or ())}
+            | {key for row in task_rows for key in (row.scope_signal_keys or ())}
         )
         annotations_by_occurrence = self._annotations_by_occurrence(
             {key for refs in annotation_refs.values() for keys in refs.values() for key in keys}
@@ -1636,7 +1636,7 @@ class _TaskHydration:
         targets_by_task: dict[int, list[object]] = defaultdict(list)
         for target in target_rows:
             span_signal_ids = (
-                None if target.signal_keys is None else tuple(signal_ids_by_key[key] for key in target.signal_keys)
+                None if target.signal_keys is None else tuple(signals_by_key[key].id for key in target.signal_keys)
             )
             signal_id = None if target.signal_key is None else signals_by_key[target.signal_key].id
             target_values: dict[str, object] = {
@@ -1674,7 +1674,8 @@ class _TaskHydration:
                     row.scope_type,
                     row.scope_start,
                     row.scope_end,
-                    None if row.scope_signal_keys is None else [signal_ids_by_key[k] for k in row.scope_signal_keys],
+                    None if row.scope_signal_keys is None else [signals_by_key[k].id for k in row.scope_signal_keys],
+                    signals=self.signals_by_id,
                 ),
                 "rationale": row.rationale,
                 "annotations": task_annotations.get(("Task", row.task_id), ()),
@@ -1745,7 +1746,7 @@ class _TaskHydration:
             self._index_record(record_key, record)
 
     def _signals_by_key(self, signal_keys: set[int]) -> dict[int, Signal]:
-        """Resolve the Signals one batch's targets refer to.
+        """Resolve the Signals that one batch's targets and scopes refer to.
 
         Returns:
             Signals by internal key.
@@ -1763,9 +1764,7 @@ class _TaskHydration:
         for signal_key, signal_id in self.reader._signal_ids_by_key(signal_keys).items():
             signal = self.signals_by_id.get(signal_id)
             if signal is None:
-                raise TimeFFormatError(
-                    f"task target refers to Signal {signal_id!r} on a Record outside the hydrated set"
-                )
+                raise TimeFFormatError(f"task refers to Signal {signal_id!r} on a Record outside the hydrated set")
             resolved[signal_key] = signal
         return resolved
 

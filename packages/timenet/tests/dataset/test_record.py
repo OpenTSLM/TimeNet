@@ -50,10 +50,11 @@ def test_signal_level_point_resolves_series_id(make_series):
     assert record.annotations == ()
 
 
-def test_signal_level_annotation_unknown_id_rejected(make_series):
-    record = _record((make_series(),))
+def test_an_annotation_span_cannot_name_its_own_signals(make_series):
+    series = make_series()
+    record = _record((series,))
     with pytest.raises(TimeFValidationError, match="scope comes from its owner"):
-        record.annotate(Annotation(key="stimulus", span=TimePoint.seconds(1.0, time_series_ids=("nope",))))
+        record.annotate(Annotation(key="stimulus", span=TimePoint.seconds(1.0, time_series=(series,))))
 
 
 def test_trial_level_interval_over_differing_windows_is_accepted(make_series):
@@ -73,10 +74,10 @@ def test_trial_level_interval_common_span_ok(make_series):
     record.annotate(Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0)))
 
 
-def test_empty_time_series_ids_rejected():
+def test_an_empty_time_series_is_rejected():
     # The annotation itself rejects `()`, so annotate never sees one.
     with pytest.raises(ValueError, match="must be None"):
-        Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0, time_series_ids=()))
+        Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0, time_series=()))
 
 
 def test_trial_level_point_needs_no_common_span(make_series):
@@ -252,17 +253,15 @@ def test_a_scoped_span_must_lie_within_the_intersection(make_series):
         signal="b", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=2_500)
     )  # [5, 15) s
     record = _record((early, late))
-    ids = (early.id, late.id)
-    check_span_within_window(
-        "task scope", TimeInterval.seconds(6.0, 8.0, time_series_ids=ids), record.signals, record.id
-    )
+    both = (early, late)
+    check_span_within_window("task scope", TimeInterval.seconds(6.0, 8.0, time_series=both), record.signals, "record")
     # 3 s is inside `early` but not `late`, so it is outside the intersection [5, 10) s.
     with pytest.raises(TimeFValidationError, match="falls outside record"):
         check_span_within_window(
             "task scope",
-            TimePoint.seconds(3.0, time_series_ids=ids),
+            TimePoint.seconds(3.0, time_series=both),
             record.signals,
-            record.id,
+            "record",
             warn_when_outside=False,
         )
 
@@ -273,13 +272,12 @@ def test_a_scoped_span_over_non_overlapping_series_is_rejected(make_series):
         signal="b", values=(0.0,) * 5000, time_axis=RegularAxis(period_us=Fraction(2000), start_index=10_000)
     )  # [20, 30) s
     record = _record((early, late))
-    ids = (early.id, late.id)
     with pytest.raises(TimeFValidationError, match="do not overlap"):
         check_span_within_window(
             "task scope",
-            TimePoint.seconds(5.0, time_series_ids=ids),
+            TimePoint.seconds(5.0, time_series=(early, late)),
             record.signals,
-            record.id,
+            "record",
             warn_when_outside=False,
         )
 
@@ -290,9 +288,10 @@ def test_time_span_must_contain_every_series_window(make_series):
         _record((series,), time_span=TimeInterval.seconds(0.0, 5.0))  # too short
 
 
-def test_time_span_time_series_ids_must_be_none(make_series):
-    with pytest.raises(TimeFValidationError, match="time_series_ids must be None"):
-        _record((make_series(),), time_span=TimeInterval.seconds(0.0, 10.0, time_series_ids=("x",)))
+def test_time_span_time_series_must_be_none(make_series):
+    series = make_series()
+    with pytest.raises(TimeFValidationError, match="time_series must be None"):
+        _record((series,), time_span=TimeInterval.seconds(0.0, 10.0, time_series=(series,)))
 
 
 def test_time_span_must_be_an_interval(make_series):
@@ -300,37 +299,38 @@ def test_time_span_must_be_an_interval(make_series):
         _record((make_series(),), time_span=TimePoint.seconds(5.0))
 
 
-def _ordinal(spec, n, tsid):
-    return Signal.from_values([float(i) for i in range(n)], spec=spec, name="c", time_axis=OrdinalAxis(), id=tsid)
+def _ordinal(spec, n):
+    return Signal.from_values([float(i) for i in range(n)], spec=spec, name="c", time_axis=OrdinalAxis())
 
 
 def test_a_steps_span_is_accepted_on_an_ordinal_series(make_series):
     # An ordinal series has no timeline, so a steps span is the only way to name a region of it.
-    ts = _ordinal(make_series().spec, 3, "ord")
-    check_span_within_window("scope", StepInterval(time_series_id="ord", start=0, stop=3), (ts,), "s")
+    ts = _ordinal(make_series().spec, 3)
+    check_span_within_window("scope", StepInterval(time_series=ts, start=0, stop=3), (ts,), "record")
 
 
 def test_a_steps_interval_past_the_series_length_is_rejected(make_series):
-    ts = _ordinal(make_series().spec, 3, "ord")
+    ts = _ordinal(make_series().spec, 3)
     with pytest.raises(TimeFValidationError, match="runs past"):
-        check_span_within_window("scope", StepInterval(time_series_id="ord", start=0, stop=4), (ts,), "s")
+        check_span_within_window("scope", StepInterval(time_series=ts, start=0, stop=4), (ts,), "record")
 
 
 def test_a_steps_point_on_the_last_step_is_accepted(make_series):
-    ts = _ordinal(make_series().spec, 3, "ord")
-    check_span_within_window("scope", StepPoint(time_series_id="ord", start=2), (ts,), "s")
+    ts = _ordinal(make_series().spec, 3)
+    check_span_within_window("scope", StepPoint(time_series=ts, start=2), (ts,), "record")
 
 
 def test_a_steps_point_past_the_last_step_is_rejected(make_series):
-    ts = _ordinal(make_series().spec, 3, "ord")
+    ts = _ordinal(make_series().spec, 3)
     with pytest.raises(TimeFValidationError, match="runs past"):
-        check_span_within_window("scope", StepPoint(time_series_id="ord", start=3), (ts,), "s")
+        check_span_within_window("scope", StepPoint(time_series=ts, start=3), (ts,), "record")
 
 
 def test_a_steps_span_on_an_unknown_series_is_rejected(make_series):
-    ts = _ordinal(make_series().spec, 3, "ord")
-    with pytest.raises(TimeFValidationError, match="unknown"):
-        check_span_within_window("scope", StepInterval(time_series_id="nope", start=0, stop=2), (ts,), "s")
+    ts = _ordinal(make_series().spec, 3)
+    other = _ordinal(make_series().spec, 3)
+    with pytest.raises(TimeFValidationError, match="which is not on record"):
+        check_span_within_window("scope", StepInterval(time_series=other, start=0, stop=2), (ts,), "record")
 
 
 def test_a_steps_span_on_a_timeline_series_is_rejected(make_series):
@@ -338,12 +338,12 @@ def test_a_steps_span_on_a_timeline_series_is_rejected(make_series):
     # its steps is refused rather than bounded by length.
     ts = make_series(values=(0.0,) * 5000)
     with pytest.raises(TimeFValidationError, match="has a timeline"):
-        check_span_within_window("scope", StepInterval(time_series_id=ts.id, start=0, stop=5001), (ts,), "s")
+        check_span_within_window("scope", StepInterval(time_series=ts, start=0, stop=5001), (ts,), "record")
 
 
 def test_a_time_span_on_an_ordinal_series_is_rejected(make_series):
     # The other direction of the axis-fit rule: an ordinal series has no timeline, so a time-valued
     # span means nothing on it.
-    ts = _ordinal(make_series().spec, 3, "ord")
+    ts = _ordinal(make_series().spec, 3)
     with pytest.raises(TimeFValidationError, match="no timeline"):
-        check_span_within_window("scope", TimeInterval.seconds(0.0, 1.0, time_series_ids=("ord",)), (ts,), "s")
+        check_span_within_window("scope", TimeInterval.seconds(0.0, 1.0, time_series=(ts,)), (ts,), "record")

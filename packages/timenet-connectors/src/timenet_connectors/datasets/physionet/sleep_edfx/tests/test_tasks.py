@@ -90,7 +90,7 @@ def test_the_scope_covers_the_epoch_and_names_no_series():
     first, second = tasks.build_epoch_tasks(_RECORDING_ID, [_stage("Sleep stage 1", 60, 120)])
     assert (_scope(first).start_us, _scope(first).end_us) == (60 * US_PER_S, 90 * US_PER_S)
     assert (_scope(second).start_us, _scope(second).end_us) == (90 * US_PER_S, 120 * US_PER_S)
-    assert _scope(first).time_series_ids is None
+    assert _scope(first).time_series is None
 
 
 def test_the_epoch_grid_counts_from_the_start_of_the_recording():
