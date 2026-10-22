@@ -26,3 +26,5 @@ class License(StrEnum):
     ODBL_1_0 = "ODbL-1.0"
     OTHER = "other"
     """Escape hatch for a license outside this list; requires a ``license_url`` on the card."""
+    NONE = "NONE"
+    """SPDX's value for a source that states no license; its terms are unknown, not unrestricted."""
