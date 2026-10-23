@@ -168,7 +168,9 @@ def _render_catalog_row(metadata: DatasetMetadata, manifest: Manifest | None) ->
     )
     tag_badges = "".join(f'<span class="ds-tag">{html.escape(t)}</span>' for t in tags) or "n/a"
     snippet = (
-        f'from timenet.client import TimeNet\n\ndataset = TimeNet().load("{metadata.dataset_id}")\ndataset.describe()'
+        "from timenet.client import TimeNet\n\n"
+        f'with TimeNet().load("{metadata.dataset_id}") as handle:\n'
+        "    dataset = handle.read()\n\ndataset.describe()"
     )
     source = _source_link(metadata.source_url)
     return (

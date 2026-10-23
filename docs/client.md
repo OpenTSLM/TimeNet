@@ -13,15 +13,16 @@ tags:
 
 ```python
 from timenet.client import TimeNet
-from timenet.types import Domain
+from timenet.types import Domain, ObjectKind
 
 client = TimeNet(".timenet-registry")
 
 for metadata in client.search(domain=Domain.CARDIOLOGY):
     print(metadata.dataset_id)
 
-dataset = client.load("timenet/hello-world")
-values = dataset.records[0].signals[0].to_numpy()
+with client.load("timenet/hello-world") as dataset:
+    signal = dataset.get_handle(ObjectKind.SIGNAL, "ts-shared")
+    values = signal.to_numpy()
 ```
 
 ## Choose a registry
@@ -79,13 +80,25 @@ dataset IDs, and tags. See [Registry search](registry.md#search) for their match
 
 ## Load or download
 
-`load()` returns a `TimeFDataset`. The hierarchy is in memory, but each Signal keeps a lazy values
-loader.
+`load()` returns a lazy `DatasetHandle`, as does `get_handle()`. Neither method opens the catalog
+or decodes payloads after the registry prepares the version. A handle owns its reader. Use a context
+manager to close it after use.
 
 ```python
-dataset = client.load("timenet/hello-world")
-signal = dataset.records[0].signals[0]
-window = signal.read_steps(0, 100)
+with client.load("timenet/hello-world") as dataset:
+    signal = dataset.get_handle(ObjectKind.SIGNAL, "ts-shared")
+    window = signal.read_steps(0, 100)
+```
+
+Call `read()` on an entity handle to load that object and its dependencies. Call `read()` on the
+dataset handle to load the complete `TimeFDataset`. Materialized results remain usable after the
+handle closes:
+
+```python
+with client.load("timenet/hello-world") as handle:
+    dataset = handle.read()
+
+dataset.describe()
 ```
 
 For a local registry, the reader opens the version in place. If the version is missing, `load()` can
