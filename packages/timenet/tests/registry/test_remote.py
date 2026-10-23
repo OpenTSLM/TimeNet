@@ -71,7 +71,7 @@ def test_list_datasets_preserves_optional_license_and_access_fields(tmp_path):
         "version": "1.0.0",
         "name": "Restricted",
         "description": "A restricted dataset.",
-        "license": "other",
+        "license": "OTHER",
         "license_url": "https://example.org/license",
         "domains": ["general"],
         "tags": [],
@@ -99,8 +99,8 @@ def test_list_datasets_preserves_optional_license_and_access_fields(tmp_path):
     ("manifest_updates", "summary_updates"),
     [
         (
-            {"license": "other", "license_url": "https://example.org/license"},
-            {"license": "other"},
+            {"license": "OTHER", "license_url": "https://example.org/license"},
+            {"license": "OTHER"},
         ),
         (
             {"access": "credentialed", "access_url": "https://example.org/credentials"},

@@ -143,7 +143,7 @@ Record's known origin. Relative spans also work when its absolute timestamp is u
 | `dataset_version` | yes | Semantic version of the source dataset. |
 | `name` | yes | Display name. |
 | `description` | yes | Short dataset description. |
-| `license` | yes | Known SPDX-style license value. |
+| `license` | yes | Known SPDX-style license value, `OTHER`, or `NONE`. |
 | `domains` | no | Searchable application domains. See [Domains](#domains). |
 | `tags` | no | Searchable free-form labels. |
 | `source_url` | no | Canonical source location. |
