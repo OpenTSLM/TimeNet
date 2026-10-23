@@ -117,3 +117,29 @@ def test_registry_rejects_a_task_type_collision():
 
     with pytest.raises(TimeFValidationError, match="claim task_type"):
         _build_task_registry([AnswerTask, DuplicateAnswer])
+
+
+_TIME_SERIES = frozenset({InputModality.TIME_SERIES})
+
+
+@pytest.mark.parametrize(
+    ("with_record", "prompt", "modalities", "message"),
+    [
+        (True, None, frozenset(), "must declare an input modality"),
+        (True, "Question?", _TIME_SERIES, "has a prompt but does not declare text input"),
+        (True, None, NO_INPUT, "cannot combine no_input with record or media inputs"),
+        (False, "Question?", frozenset({InputModality.TEXT}), "needs no_input when it has only a text prompt"),
+    ],
+)
+def test_an_inconsistent_input_declaration_names_the_task(with_record, prompt, modalities, message):
+    inputs = (Record(record_id="input-record"),) if with_record else ()
+    with pytest.raises(TimeFValidationError, match=f"task 'task-invalid': {message}"):
+        AnswerTask(id="task-invalid", inputs=inputs, prompt=prompt, input_modalities=modalities)
+
+
+def test_a_cached_valid_declaration_does_not_hide_a_later_error():
+    record = Record(record_id="input-record")
+    AnswerTask(id="task-valid", inputs=(record,), input_modalities=_TIME_SERIES)
+    # Same modalities, now with a prompt: the cache key includes the prompt, so this still fails.
+    with pytest.raises(TimeFValidationError, match="task 'task-prompted'"):
+        AnswerTask(id="task-prompted", inputs=(record,), prompt="Question?", input_modalities=_TIME_SERIES)
