@@ -49,6 +49,7 @@
         "transport",
         "observability",
         "audio",
+        "industrial",
         "general"
       ],
       "title": "Domain",

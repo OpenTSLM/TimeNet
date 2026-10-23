@@ -186,7 +186,7 @@ class RegularAxis:
         return math.ceil((time_offset_us - self.offset_us) / self.period_us) - self.start_index
 
 
-def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarray:
+def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int], *, validate_order: bool = True) -> np.ndarray:
     """Normalize a stream of per-value time offsets to int64 microseconds.
 
     Every irregular stream passes through this strict gate. It refuses the two inputs that are wrong
@@ -199,6 +199,8 @@ def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarra
 
     Args:
         time_offsets_us: The per-value time offsets, in microseconds from the record's relative zero.
+        validate_order: Check every offset for non-decreasing order. Disable only for previously
+            validated data; type, shape, and integer range checks still apply.
 
     Returns:
         A C-contiguous int64 array.
@@ -234,7 +236,7 @@ def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int]) -> np.ndarra
             f"above 2**63 would wrap to a negative int64"
         )
     time_offsets = np.ascontiguousarray(array, dtype=np.int64)
-    if np.any(np.diff(time_offsets) < 0):
+    if validate_order and np.any(np.diff(time_offsets) < 0):
         first = int(np.argmax(np.diff(time_offsets) < 0))
         raise TimeFValidationError(
             f"time offsets must be non-decreasing; time offset {first + 1} ({time_offsets[first + 1]}) precedes "

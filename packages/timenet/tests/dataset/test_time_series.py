@@ -5,7 +5,7 @@ import pyarrow as pa
 import pytest
 
 from timenet.dataset import Signal
-from timenet.dataset.axis import OrdinalAxis, RegularAxis
+from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.types import StepInterval, StepPoint, TimeInterval, TimeSeriesSpec, ureg
 
@@ -182,6 +182,39 @@ def test_step_range_of_a_seconds_span_on_an_irregular_axis():
     )
     # [1 s, 5 s) picks the values at 1 s and 2 s, not the one at 5 s (exclusive end).
     assert ts.step_range(TimeInterval.seconds(1.0, 5.0)) == (1, 3)
+
+
+def test_irregular_full_validation_rejects_unordered_offsets():
+    with pytest.raises(TimeFValidationError, match="non-decreasing"):
+        Signal.from_irregular([1.0, 2.0, 3.0], time_offsets_us=[0, 10, 9], spec=_spec(), name="events")
+
+
+def test_irregular_basic_validation_shares_buffers_without_scanning(monkeypatch: pytest.MonkeyPatch):
+    values = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    offsets = np.array([0, 2, 9], dtype=np.int64)
+
+    def reject_scan(*_args, **_kwargs):
+        raise AssertionError("basic validation must not scan timestamp ordering")
+
+    monkeypatch.setattr("timenet.dataset.axis.np.diff", reject_scan)
+    signal = Signal.from_irregular(values, time_offsets_us=offsets, spec=_spec(), name="events", full_validation=False)
+    assert np.shares_memory(signal.to_numpy(), values)
+    assert np.shares_memory(signal.time_offsets_us(), offsets)
+    assert isinstance(signal.time_axis, IrregularAxis)
+    assert signal.time_axis.first_us == 0
+    assert signal.time_axis.last_us == 9
+    assert signal.time_offsets_us().tolist() == [0, 2, 9]
+
+
+@pytest.mark.parametrize(
+    ("offsets", "message"),
+    [([0, 9], "one time offset per value"), ([0.0, 2.0, 9.0], "whole microseconds")],
+)
+def test_irregular_basic_validation_rejects_invalid_offsets(offsets, message):
+    with pytest.raises(TimeFValidationError, match=message):
+        Signal.from_irregular(
+            [1.0, 2.0, 3.0], time_offsets_us=offsets, spec=_spec(), name="events", full_validation=False
+        )
 
 
 def test_step_range_horizon_matches_n_steps():

@@ -309,7 +309,7 @@ class Signal(SupportsAnnotate):
         )
 
     @classmethod
-    def from_irregular(
+    def from_irregular(  # noqa: PLR0913 - construction includes an explicit validation policy
         cls,
         values: np.ndarray | Sequence[bool | int | float | str | None],
         *,
@@ -317,6 +317,7 @@ class Signal(SupportsAnnotate):
         spec: TimeSeriesSpec,
         name: str,
         id: str | None = None,
+        full_validation: bool = True,
     ) -> "Signal":
         """Build an irregular series from materialized values and their time offsets.
 
@@ -332,6 +333,9 @@ class Signal(SupportsAnnotate):
             spec: The series' measurement-modality spec.
             name: The signal name.
             id: Explicit id, or ``None`` for an auto-generated UUIDv7.
+            full_validation: Check timestamp ordering by default. Set to ``False`` only for previously
+                validated timestamps to skip that scan. Both modes check type, shape, integer range,
+                endpoints, and one timestamp per value. Conversion can still allocate when needed.
 
         Returns:
             The constructed :class:`Signal`.
@@ -340,8 +344,10 @@ class Signal(SupportsAnnotate):
             TimeFValidationError: If the time offsets are unusable, or there is not exactly one per
                 value.
         """
+        if not isinstance(full_validation, bool):
+            raise TimeFValidationError("full_validation must be a bool")
         array = _array_from_values(spec, values)
-        time_offsets = to_time_offsets_us(time_offsets_us)
+        time_offsets = to_time_offsets_us(time_offsets_us, validate_order=full_validation)
         if len(time_offsets) != len(array):
             raise TimeFValidationError(
                 f"an irregular series needs one time offset per value, got {len(time_offsets)} time offsets for {len(array)} values"
@@ -350,7 +356,7 @@ class Signal(SupportsAnnotate):
         return cls.from_loader(
             spec=spec,
             name=name,
-            time_axis=IrregularAxis.spanning(time_offsets),
+            time_axis=IrregularAxis(first_us=int(time_offsets[0]), last_us=int(time_offsets[-1])),
             loader=lambda: array,
             time_offsets_loader=lambda: time_offset_array,
             id=id,
