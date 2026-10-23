@@ -80,6 +80,21 @@ Irregular time offsets are packed as well, one array per axis. The first `time_o
 on a Signal reads its axis's array and checks it against the axis. Within one read, the Signals on
 one axis share the checked array, so later calls on any of them read nothing.
 
+Use `scan()` for sequential reads of many signals with parallel Parquet decoding:
+
+```python
+with TimeFReader(version) as reader:
+    with reader.scan() as dataset:
+        for record in dataset.records:
+            for signal in record.signals:
+                values = signal.to_arrow()
+```
+
+Entering the context reconstructs the catalog and starts bounded prefetch with four workers.
+Signal arrays and stored text remain lazy. The cache keeps a bounded number of decoded groups;
+the reader does not retain every signal array. Leaving the context releases its workers, including
+after an early exit or error. A dataset handle also provides `scan()`.
+
 Entity handles support `read()` and field handles through `get_handle(field)`. A Signal handle also
 supports `to_arrow()`, `to_numpy()`, and `read_steps()`. A lookup by input alias or exact parent
 release resolves the original parent ID through the local catalog.
@@ -138,6 +153,7 @@ and decoded Zarr chunks until it closes.
 | --- | --- |
 | `read()` / `get_handle()` | Return a lazy dataset handle. |
 | `DatasetHandle.read()` | Load the complete `TimeFDataset` and all its values. |
+| `scan()` / `DatasetHandle.scan()` | Reconstruct a lazy dataset and prefetch Parquet signal groups with four workers. |
 | `iter_records()` | Yield Records without building a dataset. |
 | `iter_tasks(records, split=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
 | `read_task_table()` | Return the task table with public IDs. |
@@ -178,5 +194,6 @@ The writer computes record scan order from physical chunk locations. This keeps 
 storage order, even when imported IDs differ from parent IDs. Requested Record IDs retain the
 caller's order. `verify()` checks both child files and referenced payload files.
 
-Eager full reads use a stored list of required Parquet groups. Four workers decode a bounded window
-in parallel. This list is computed during the write. Lazy handles and range reads do not prefetch.
+Eager full reads and explicit `scan()` contexts use a stored list of required Parquet groups.
+Four workers decode a bounded window in parallel. This list is computed during the write.
+Lazy handles and range reads outside a scan context do not prefetch.
