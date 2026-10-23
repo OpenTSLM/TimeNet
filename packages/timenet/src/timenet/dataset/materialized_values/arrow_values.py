@@ -36,9 +36,6 @@ def _scalar_values_to_arrow(
     arrow_type = pa.string() if spec.dtype in {"str", "enum"} else pa.from_numpy_dtype(np.dtype(spec.dtype))
     if isinstance(values, pa.Array):
         return values.cast(arrow_type)
-    if isinstance(values, np.ndarray) and values.dtype.kind != "O" and spec.dtype not in {"str", "enum"}:
-        # Preserve NumPy casting rules until dense arrays get their own loader.
-        return pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
     if spec.dtype == "bool":
         # Preserve None while keeping NumPy's boolean conversion rules for present values.
         values = [None if value is None else bool(value) for value in values]

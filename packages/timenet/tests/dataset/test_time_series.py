@@ -6,7 +6,7 @@ import pytest
 
 from timenet.dataset import Signal
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
-from timenet.dataset.materialized_values import PyArrowMaterializedValues, ValuesLoader
+from timenet.dataset.materialized_values import NumpyMaterializedValues, ValuesLoader
 from timenet.errors import TimeFValidationError
 from timenet.types import StepInterval, StepPoint, TimeInterval, TimeSeriesSpec, ureg
 
@@ -91,7 +91,7 @@ def test_signal_delegates_to_explicit_values_methods():
         time_axis=IrregularAxis(first_us=0, last_us=9),
         n_values=len(values),
         loader=loader,
-        time_offsets_loader=PyArrowMaterializedValues(pa.array(offsets)),
+        time_offsets_loader=NumpyMaterializedValues(offsets),
     )
     assert calls == []
     assert signal.loader is loader
@@ -217,6 +217,17 @@ def test_from_values_str_spec_keeps_string_labels():
     arr = Signal.from_values(["normal", "afib"], spec=spec, name="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
     assert arr.type == pa.string()
     assert arr.to_pylist() == ["normal", "afib"]
+
+
+def test_numpy_backing_keeps_dtype_conversion_and_arrow_output_consistent():
+    values = np.array([1.9, 2.9, 3.9, 4.9, 5.9, 6.9], dtype=np.float64)[::2]
+    spec = _spec().model_copy(update={"dtype": "int16"})
+    signal = Signal.from_values(values, spec=spec, name="events", time_axis=OrdinalAxis())
+    assert signal.to_numpy().dtype == np.int16
+    assert signal.to_numpy().tolist() == [1, 3, 5]
+    assert not np.shares_memory(signal.to_numpy(), values)
+    assert signal.to_arrow().type == pa.int16()
+    assert signal.to_arrow().to_pylist() == [1, 3, 5]
 
 
 def _counting(n, tsid="s", axis=None):
