@@ -9,3 +9,4 @@ from timenet.dataset.materialized_values.factory import (
     as_values_loader as as_values_loader,
     materialized_values as materialized_values,
 )
+from timenet.dataset.materialized_values.numpy_values import NumpyMaterializedValues as NumpyMaterializedValues

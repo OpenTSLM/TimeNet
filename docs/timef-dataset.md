@@ -53,6 +53,8 @@ lead_i = Signal(
 | `metadata` | `dict[str, object]` | Optional JSON-compatible metadata. |
 
 `Signal` delegates `to_arrow()`, `to_numpy()`, and `read_steps()` to its values loader.
+NumPy and Arrow storage implement the same interface. Each implementation converts
+values only when the requested format requires conversion.
 
 `Signal.from_loader()` also accepts existing Arrow callables. It wraps each callable without a
 read and preserves its optional `read_steps()` method. The TimeF reader supplies a lazy storage
