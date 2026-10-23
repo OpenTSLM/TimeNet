@@ -10,7 +10,7 @@ from typing import TYPE_CHECKING
 
 
 if TYPE_CHECKING:
-    from timenet.dataset import TimeFDataset
+    from timenet.reader import DatasetHandle
 
 
 def build(
@@ -93,8 +93,8 @@ def _check_version(dataset_id: str, version: str) -> None:
         )
 
 
-def load(dataset_id: str, version: str | None = None) -> "TimeFDataset":
-    """Build a dataset if needed, then load it into memory.
+def load(dataset_id: str, version: str | None = None) -> "DatasetHandle":
+    """Build a dataset if needed, then return a lazy handle.
 
     This is the one-call sugar over :func:`build` plus :meth:`timenet.client.TimeNet.load`. For a
     clear producer and consumer split, call :func:`build` and ``TimeNet().load`` yourself.
@@ -105,7 +105,7 @@ def load(dataset_id: str, version: str | None = None) -> "TimeFDataset":
             against the connector's declared version and rejects a mismatch.
 
     Returns:
-        The loaded dataset.
+        A lazy dataset handle. Call ``read()`` to load all values, then close it after use.
     """
     from timenet.client import TimeNet  # noqa: PLC0415
 

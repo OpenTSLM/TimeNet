@@ -329,7 +329,7 @@ def test_round_trip_is_bit_exact(tmp_path, forced):
     values = quantized()
     version_dir = _write(tmp_path, _dataset({("ecg", "I"): values}), value_encoding=forced)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        restored = reader.read().records[0].signals[0].to_arrow().to_numpy(zero_copy_only=False)
+        restored = reader.read().read().records[0].signals[0].to_arrow().to_numpy(zero_copy_only=False)
     assert np.array_equal(restored.view(np.uint32), values.view(np.uint32))
 
 
@@ -345,7 +345,7 @@ def test_reader_needs_no_encoding_hint(tmp_path):
 
     assert Manifest.model_validate_json(manifest_path.read_text()).value_encoding == {}
     with TimeFReader(open_local_version(version_dir)) as reader:
-        restored = reader.read().records[0].signals[0].to_arrow().to_numpy(zero_copy_only=False)
+        restored = reader.read().read().records[0].signals[0].to_arrow().to_numpy(zero_copy_only=False)
     assert np.array_equal(restored.view(np.uint32), values.view(np.uint32))
 
 

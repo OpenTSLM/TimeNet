@@ -37,7 +37,7 @@ def test_prepared_shared_payloads_do_not_open_parent_catalogs(tmp_path, monkeypa
     expected = original.records[0].signals[0].to_arrow()
     parent_dir = store(tmp_path, original, values_backend=backend)
     reader = TimeFReader(open_local_version(parent_dir))
-    parent = reader.read()
+    parent = reader.get_handle().reader._read_catalog()
     child = TimeFDataset(metadata=original.metadata.model_copy(update={"dataset_id": "test/child"}))
     child.add_record(record=deepcopy(parent.records[0]))
     prompt = next(task.prompt for task in parent.tasks if task.id == original.tasks[0].id)
@@ -69,7 +69,7 @@ def test_prepared_shared_payloads_do_not_open_parent_catalogs(tmp_path, monkeypa
     (parent_dir / "control.duckdb").rename(parent_dir / "unavailable.duckdb")
     (parent_dir / "manifest.json").unlink()
     with TimeFReader(prepared) as child_reader:
-        assert child_reader.read().records[0].signals[0].to_arrow().equals(expected)
+        assert child_reader.read().read().records[0].signals[0].to_arrow().equals(expected)
         assert child_reader.read_task_table()["prompt"].to_pylist() == [text]
         assert child_reader.read_target_table()["text_value"].to_pylist() == [text]
         assert text in child_reader.read_annotation_table()["text_value"].to_pylist()
@@ -79,7 +79,7 @@ def test_prepared_shared_payloads_do_not_open_parent_catalogs(tmp_path, monkeypa
 def test_a_child_reads_inherited_chunks_through_the_release_that_stores_them(tmp_path, backend):
     parent_dir = store(tmp_path, make_dataset(), values_backend=backend)
     with TimeFReader(open_local_version(parent_dir)) as reader:
-        parent = reader.read()
+        parent = reader._read_catalog()
         parent_values = parent.records[0].signals[0]._values
         assert isinstance(parent_values, StoredArray)
         child = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}))
@@ -89,7 +89,7 @@ def test_a_child_reads_inherited_chunks_through_the_release_that_stores_them(tmp
     owner = OwnerKey(f"{parent.metadata.dataset_id}@{parent.metadata.dataset_version}")
 
     with TimeFReader(open_local_version(child_dir)) as reader:
-        values = reader.read().records[0].signals[0]._values
+        values = reader._read_catalog().records[0].signals[0]._values
         assert isinstance(values, StoredArray)
         assert values._location == ChunkLocation(owner=owner, chunks=parent_values._location.chunks)
         assert values.read().equals(expected)
@@ -100,12 +100,12 @@ def test_shared_payloads_cannot_reference_the_output_release(tmp_path):
     path = store(tmp_path, make_dataset())
     original_manifest = (path / "manifest.json").read_bytes()
     with TimeFReader(open_local_version(path)) as reader:
-        loaded = reader.read()
+        loaded = reader._read_catalog()
         with pytest.raises(TimeFValidationError, match="also the output release"):
             store(tmp_path / "copy", loaded)
     assert (path / "manifest.json").read_bytes() == original_manifest
     with TimeFReader(open_local_version(path)) as reader:
-        assert reader.read().records
+        assert reader.read().read().records
 
 
 _SPEC = TimeSeriesSpec(spec_type="env", name="env", unit_value=ureg.dimensionless)
@@ -144,12 +144,12 @@ def test_a_grandchild_names_the_release_that_stores_each_payload(tmp_path, backe
         tmp_path, _release("test/a", [_record_in_memory("a", text["a"], offsets["a"])]), values_backend=backend
     )
     with TimeFReader(open_local_version(a_dir)) as reader:
-        (a,) = reader.read().records
+        (a,) = reader._read_catalog().records
         b = _release("test/b", [deepcopy(a), _record_in_memory("b", text["b"], offsets["b"])])
         b_dir = store(tmp_path, b, values_backend=backend)
     with TimeFReader(open_local_version(b_dir)) as reader:
         # C writes with the default backend; reused Zarr chunks keep their own encoding.
-        c_dir = store(tmp_path, _release("test/c", [deepcopy(record) for record in reader.read().records]))
+        c_dir = store(tmp_path, _release("test/c", [deepcopy(record) for record in reader._read_catalog().records]))
 
     manifest = Manifest.model_validate_json((c_dir / "manifest.json").read_text())
     refs = {name: DatasetRef(dataset_id=f"test/{name}", version=Version(1, 0, 0)) for name in "ab"}
@@ -157,7 +157,7 @@ def test_a_grandchild_names_the_release_that_stores_each_payload(tmp_path, backe
     assert not manifest.files.time_series
     assert not manifest.files.payloads
     with TimeFReader(open_local_version(c_dir)) as reader:
-        records = reader.read().records
+        records = reader._read_catalog().records
         assert sorted(record.id for record in records) == ["a", "b"]
         for record in records:
             (signal,) = record.signals
@@ -179,7 +179,7 @@ def test_a_registry_refuses_a_release_whose_payload_sources_it_does_not_hold(tmp
     parent_dir = store(tmp_path / "parents", make_dataset())
     elsewhere = LocalRegistry(tmp_path / "children")
     with TimeFReader(open_local_version(parent_dir)) as reader:
-        parent = reader.read()
+        parent = reader._read_catalog()
         child = TimeFDataset(metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}))
         child.add_record(record=deepcopy(parent.records[0]))
         with pytest.raises(
@@ -194,7 +194,7 @@ def test_a_registry_refuses_a_release_whose_payload_sources_it_does_not_hold(tmp
         LocalRegistry(tmp_path / "parents").store(child)
         expected = parent.records[0].signals[0].to_arrow()
     with TimeFReader(open_local_version(tmp_path / "parents/test/child/1.0.0")) as reader:
-        assert reader.read().records[0].signals[0].to_arrow().equals(expected)
+        assert reader.read().read().records[0].signals[0].to_arrow().equals(expected)
 
 
 def test_a_reused_payload_must_be_listed_by_the_release_that_stores_it(tmp_path):
@@ -216,7 +216,7 @@ def test_a_reused_nullable_zarr_signal_keeps_its_validity_arrays(tmp_path):
     parent = _release("test/a", [Record(record_id="a", sources=(Source(name="env", signals=(signal,)),))])
     version = open_local_version(store(tmp_path, parent, values_backend="zarr"))
     with TimeFReader(version) as reader:
-        (record,) = reader.read().records
+        (record,) = reader._read_catalog().records
         values = record.signals[0]._values
         assert isinstance(values, StoredArray)
         child_dir = store(tmp_path, _release("test/child", [deepcopy(record)]))
@@ -233,12 +233,12 @@ def test_a_reused_nullable_zarr_signal_keeps_its_validity_arrays(tmp_path):
         with pytest.raises(TimeFValidationError, match=r"payload 'time_series\.zarr/_validity/.+' is absent"):
             StorageSources().add(without_validity, values._location, nullable=True)
     with TimeFReader(open_local_version(child_dir)) as reader:
-        assert reader.read().records[0].signals[0].to_arrow().to_pylist() == [1.0, None, 3.0]
+        assert reader.read().read().records[0].signals[0].to_arrow().to_pylist() == [1.0, None, 3.0]
 
 
 def test_a_reused_signal_must_keep_its_stored_shape(tmp_path):
     with TimeFReader(open_local_version(store(tmp_path, make_dataset()))) as reader:
-        stored = reader.read().records[0].signals[0]
+        stored = reader._read_catalog().records[0].signals[0]
         shorter = Signal.from_loader(
             name=stored.name,
             spec=stored.spec,

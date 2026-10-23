@@ -66,7 +66,7 @@ def _write(root, prompt=_TEXT):
 
 
 def _stored(reader):
-    dataset = reader.read()
+    dataset = reader._read_catalog()
     (prompt,) = [task.prompt for task in dataset.tasks if isinstance(task.prompt, StoredText)]
     (reports,) = [
         annotation.value
@@ -235,7 +235,7 @@ def test_a_deep_copy_shares_the_stored_handle(reader):
 def test_writing_stored_text_reuses_its_payload_row_without_reading_it(tmp_path, payload_reads):
     source = _write(tmp_path)
     with TimeFReader(open_local_version(source)) as reader:
-        dataset = reader.read()
+        dataset = reader._read_catalog()
         prompt, reports = _stored(reader)
         (record,) = [record for record in dataset.records if any(a.key == "reports" for a in record.annotations)]
         child = TimeFDataset(metadata=dataset.metadata.model_copy(update={"dataset_version": Version(1, 1, 0)}))

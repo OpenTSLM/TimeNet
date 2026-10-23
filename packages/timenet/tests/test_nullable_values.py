@@ -169,7 +169,7 @@ def _write_read(tmp_path, series, *, values_backend, leading_series=None, **writ
         writer.write()
     version_dir = tmp_path / "timenet/nullable/1.0.0"
     with TimeFReader(open_local_version(version_dir)) as reader:
-        return reader.read().records[0].signals[-1]
+        return next(reader.iter_records()).signals[-1]
 
 
 @pytest.mark.parametrize("values_backend", ["parquet", "zarr"])

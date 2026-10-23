@@ -85,7 +85,8 @@ Or load it in Python:
 ```python
 from timenet.client import TimeNet
 
-dataset = TimeNet(".timenet-registry").load("timenet/hello-world")
+with TimeNet(".timenet-registry").load("timenet/hello-world") as handle:
+    dataset = handle.read()
 ```
 
 See [Build and publish](../build.md) for the pipeline and [Connectors](../connectors.md) for the

@@ -114,7 +114,7 @@ def test_reader_backed_view_hydrates_a_batch_with_the_same_items(tmp_path):
     with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
     version_dir = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
-    materialized = TimeFTorchDataset(TimeFReader(open_local_version(version_dir)).read())
+    materialized = TimeFTorchDataset(TimeFReader(open_local_version(version_dir)).read().read())
     with TimeFReader(open_local_version(version_dir)) as reader:
         lazy = TimeFTorchDataset.from_reader(reader)
         assert len(lazy) == len(materialized) == len(dataset.records)
