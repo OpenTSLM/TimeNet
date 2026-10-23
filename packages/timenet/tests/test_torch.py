@@ -1,3 +1,4 @@
+import numpy as np
 import pytest
 
 from timenet.dataset import Record, Source
@@ -65,12 +66,13 @@ def test_dangling_task_id_raises():
         TimeFTorchDataset(dataset)[0]
 
 
-def _typed_dataset(dtype, values):
+def _typed_dataset(dtype, values, *, nullable=False):
     spec = TimeSeriesSpec(
         spec_type=f"chan_{dtype}",
         name=dtype,
         unit_value=ureg.dimensionless,
         dtype=dtype,
+        nullable=nullable,
     )
     ts = Signal.from_values(values, spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1))
     dataset = TimeFDataset(
@@ -96,6 +98,19 @@ def test_bool_series_stays_a_bool_tensor():
 def test_int16_series_stays_an_int16_tensor():
     item = TimeFTorchDataset(_typed_dataset("int16", [1, 2, 3]))[0]
     assert item["series"][0].dtype == torch.int16
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+def test_numpy_values_use_numpy_reads_without_arrow_conversion(monkeypatch, nullable):
+    dataset = _typed_dataset("float32", np.array([1.0, 0.0], dtype=np.float32), nullable=nullable)
+
+    def reject_arrow(*args, **kwargs):
+        raise AssertionError("numeric values must use the normal NumPy read")
+
+    monkeypatch.setattr(Signal, "to_arrow", reject_arrow)
+    item = TimeFTorchDataset(dataset)[0]
+    assert item["series"][0].tolist() == [1.0, 0.0]
+    assert item["series_masks"][0].tolist() == [True, True]
 
 
 def test_str_series_has_no_tensor_representation():
