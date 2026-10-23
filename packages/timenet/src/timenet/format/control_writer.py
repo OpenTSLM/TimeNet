@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Iterable, Iterator, Mapping, Sequence
 from hashlib import sha256
 from itertools import islice
 import json
@@ -16,6 +16,7 @@ from pydantic import ValidationError
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeAxis, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
+from timenet.dataset.materialized_values import ValuesLoader
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
@@ -61,7 +62,7 @@ def _validated_irregular_offsets(signal: Signal) -> np.ndarray:
     axis = signal.time_axis
     if loader is None or not isinstance(axis, IrregularAxis):
         raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
-    offsets = to_time_offsets_us(loader().to_numpy(zero_copy_only=False))
+    offsets = to_time_offsets_us(loader.to_numpy())
     if len(offsets) != signal.n_values:
         raise TimeFValidationError(
             f"series {signal.id!r}: its time_offsets_loader returned {len(offsets)} time offsets "
@@ -228,7 +229,7 @@ class _StoredAxis(NamedTuple):
     axis: TimeAxis
     key: int
     offsets: _OffsetSignature | None
-    offsets_loader: Callable[[], pa.Array] | None
+    offsets_loader: ValuesLoader | None
 
 
 class _HierarchyBatches:
@@ -740,7 +741,7 @@ class DuckDBControlWriter:
             stored_offsets = existing.offsets
             if stored_offsets is None:
                 raise TimeFValidationError(f"irregular axis {axis.axis_id!r} stores no time offsets")
-            if signal.time_offsets_loader is not existing.offsets_loader:
+            if signal.time_offsets_loader != existing.offsets_loader:
                 candidate = _validated_irregular_offsets(signal)
                 candidate_signature = _offset_signature(candidate)
                 if candidate_signature != stored_offsets:

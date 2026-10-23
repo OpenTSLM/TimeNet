@@ -11,7 +11,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.dataset import Signal, TimeFDataset
-from timenet.dataset.time_series import _validate_enum_values
+from timenet.dataset.materialized_values.arrow_values import validate_enum_values
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
@@ -377,7 +377,7 @@ class TimeFWriter:
         if ts.spec.dtype == "enum":
             # Compare each distinct label with the allowed categories.
             # This avoids creating a Python object for every value in the series.
-            _validate_enum_values(ts.spec, values.dictionary.to_pylist())
+            validate_enum_values(ts.spec, values.dictionary.to_pylist())
         if len(values) != ts.n_values:
             raise TimeFValidationError(
                 f"series {ts.id!r}: its loader returned {len(values)} values but it declares n_values={ts.n_values}"

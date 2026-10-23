@@ -283,4 +283,6 @@ def _assert_series_equal(record_id: str, expected: tuple[Signal, ...], actual: t
             f"one side stores time offsets and the other does not for {series_id}"
         )
         if exp_time_offsets is not None and act_time_offsets is not None:
-            assert exp_time_offsets().equals(act_time_offsets()), f"time offsets differ for {series_id}"
+            assert exp_time_offsets.to_arrow().equals(act_time_offsets.to_arrow()), (
+                f"time offsets differ for {series_id}"
+            )
