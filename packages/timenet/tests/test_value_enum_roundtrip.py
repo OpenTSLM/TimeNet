@@ -294,7 +294,7 @@ def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
     the torch bridge produces stable integer codes from the codebook order.
     """
     pytest.importorskip("torch")
-    from timenet.torch import _series_tensor  # noqa: PLC0415
+    from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
     spec = _spec(categories=("a", "b", "c", "d", "e"))
     dataset = TimeFDataset(
@@ -320,13 +320,14 @@ def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
     s0 = loaded.records[0].signals[0]
     s1 = loaded.records[1].signals[0]
 
-    arr0 = s0.to_arrow()
-    arr1 = s1.to_arrow()
-    assert arr0.cast(pa.string()).to_pylist() == ["a", "b", "c"]
-    assert arr1.cast(pa.string()).to_pylist() == ["c", "d", "e"]
+    assert s0.to_arrow().cast(pa.string()).to_pylist() == ["a", "b", "c"]
+    assert s1.to_arrow().cast(pa.string()).to_pylist() == ["c", "d", "e"]
 
-    codes0 = _series_tensor(s0)
-    codes1 = _series_tensor(s1)
+    torch_dataset = TimeFTorchDataset(loaded)
+    item0, item1 = torch_dataset[0], torch_dataset[1]
+    codes0, codes1 = item0["series"][0], item1["series"][0]
+    assert item0["series_masks"][0].all()
+    assert item1["series_masks"][0].all()
 
     idx_c_in_s0 = codes0[2].item()
     idx_c_in_s1 = codes1[0].item()
@@ -336,7 +337,7 @@ def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
 def test_enum_zarr_indices_consistent_across_shards(tmp_path):
     """Same cross-shard consistency test as above, but on the Zarr backend."""
     pytest.importorskip("torch")
-    from timenet.torch import _series_tensor  # noqa: PLC0415
+    from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
     spec = _spec(categories=("a", "b", "c", "d", "e"))
     dataset = TimeFDataset(
@@ -365,8 +366,11 @@ def test_enum_zarr_indices_consistent_across_shards(tmp_path):
     assert s0.to_arrow().cast(pa.string()).to_pylist() == ["a", "b", "c"]
     assert s1.to_arrow().cast(pa.string()).to_pylist() == ["c", "d", "e"]
 
-    codes0 = _series_tensor(s0)
-    codes1 = _series_tensor(s1)
+    torch_dataset = TimeFTorchDataset(loaded)
+    item0, item1 = torch_dataset[0], torch_dataset[1]
+    codes0, codes1 = item0["series"][0], item1["series"][0]
+    assert item0["series_masks"][0].all()
+    assert item1["series_masks"][0].all()
     idx_c_in_s0 = codes0[2].item()
     idx_c_in_s1 = codes1[0].item()
     assert idx_c_in_s0 == idx_c_in_s1, f"'c' has index {idx_c_in_s0} in record 0 but {idx_c_in_s1} in record 1"

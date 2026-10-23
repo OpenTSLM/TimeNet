@@ -268,9 +268,18 @@ class Record(SupportsAnnotate):
         return self.signals[0].to_arrow()
 
     def to_numpy(self) -> np.ndarray:
-        """Read the sole signal's values as a NumPy array (materializes :meth:`to_arrow`).
+        """Read the sole signal's values through its NumPy loader.
 
         Returns:
-            The single :class:`Signal`' values as a 1-D ``np.ndarray``.
+            The single :class:`Signal`' values as an ``np.ndarray``.
+
+        Raises:
+            TimeFValidationError: If the record does not have exactly one signal.
         """
-        return self.to_arrow().to_numpy(zero_copy_only=False)
+        signals = self.signals
+        if len(signals) != 1:
+            raise TimeFValidationError(
+                f"Record.to_numpy() needs a single-signal record, but this one has "
+                f"{len(signals)} signals; read record.signals[i].to_numpy() instead"
+            )
+        return signals[0].to_numpy()
