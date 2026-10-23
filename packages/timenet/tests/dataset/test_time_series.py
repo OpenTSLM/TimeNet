@@ -156,6 +156,61 @@ def test_from_values_str_spec_keeps_string_labels():
     assert arr.to_pylist() == ["normal", "afib"]
 
 
+@pytest.mark.parametrize("dtype", ["bool", "float32"])
+@pytest.mark.parametrize("irregular", [False, True])
+def test_numpy_buffers_stay_shared_until_arrow_is_requested(dtype, irregular, monkeypatch: pytest.MonkeyPatch):
+    values = np.array([1, 0, 3], dtype=dtype)
+    offsets = np.array([0, 2, 9], dtype=np.int64)
+    spec = _spec().model_copy(update={"dtype": dtype})
+    arrow_calls = []
+    original_array = pa.array
+
+    def record_array(*args, **kwargs):
+        arrow_calls.append(args[0])
+        return original_array(*args, **kwargs)
+
+    monkeypatch.setattr("timenet.dataset.time_series.pa.array", record_array)
+    if irregular:
+        signal = Signal.from_irregular(values, time_offsets_us=offsets, spec=spec, name="events")
+        assert np.shares_memory(signal.time_offsets_us(), offsets)
+    else:
+        signal = Signal.from_values(values, spec=spec, name="events", time_axis=OrdinalAxis())
+    restored = Signal.from_loader(
+        spec=spec,
+        name=signal.name,
+        time_axis=signal.time_axis,
+        loader=signal.loader,
+        time_offsets_loader=signal.time_offsets_loader,
+        n_values=signal.n_values,
+    )
+    assert np.shares_memory(restored.to_numpy(), values)
+    assert np.shares_memory(restored.to_numpy(), restored.to_numpy())
+    assert not restored.to_numpy().flags.writeable
+    dense, valid = restored.to_numpy_and_mask()
+    assert np.shares_memory(dense, values)
+    assert valid.tolist() == [True, True, True]
+    assert not arrow_calls
+
+    arrow = restored.to_arrow()
+    assert arrow.to_pylist() == values.tolist()
+    assert restored.to_arrow() is arrow
+    assert len(arrow_calls) == 1
+    if irregular:
+        assert restored.time_offsets_loader is not None
+        assert restored.time_offsets_loader().to_pylist() == offsets.tolist()
+
+
+def test_numpy_backing_keeps_dtype_conversion_and_arrow_output_consistent():
+    values = np.array([1.9, 2.9, 3.9, 4.9, 5.9, 6.9], dtype=np.float64)[::2]
+    spec = _spec().model_copy(update={"dtype": "int16"})
+    signal = Signal.from_values(values, spec=spec, name="events", time_axis=OrdinalAxis())
+    assert signal.to_numpy().dtype == np.int16
+    assert signal.to_numpy().tolist() == [1, 3, 5]
+    assert not np.shares_memory(signal.to_numpy(), values)
+    assert signal.to_arrow().type == pa.int16()
+    assert signal.to_arrow().to_pylist() == [1, 3, 5]
+
+
 def _counting(n, tsid="s", axis=None):
     return _series(
         n_values=n,
