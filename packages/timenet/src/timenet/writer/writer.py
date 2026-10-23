@@ -11,7 +11,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.dataset import Signal, TimeFDataset
-from timenet.dataset.time_series import _validate_enum_values
+from timenet.dataset.materialized_values.arrow_values import validate_enum_values
 from timenet.errors import TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
@@ -161,6 +161,7 @@ class TimeFWriter:
         tb: _types.TracebackType | None,
     ) -> None:
         """Commit on success, abort on any failure."""
+        del exc_type, tb
         if exc is not None:
             self.abort()
             return
@@ -179,7 +180,7 @@ class TimeFWriter:
         self._validate_shared_annotations()
         self._resolve_id_types()
 
-        unique_series, _series_to_records = self._dedupe_series()
+        unique_series = self._dedupe_series()
         placements = self._write_values(unique_series)
         tasks = (
             self._dataset.iter_streamed_tasks_validated()
@@ -243,8 +244,8 @@ class TimeFWriter:
 
     # ---- values --------------------------------------------------------------------------------
 
-    def _dedupe_series(self) -> tuple[list[Signal], dict[str, list[str]]]:
-        """Return unique series (sorted for stable output) and the series-id -> record-ids map.
+    def _dedupe_series(self) -> list[Signal]:
+        """Return unique series, sorted for stable output.
 
         Sharing one series across records is the supported dedupe path. Two different series that
         claim one ``time_series_id`` is a contradiction. The writer can write only one of them, so
@@ -252,8 +253,7 @@ class TimeFWriter:
         same signal. The writer rejects a disagreement instead of keeping the first series.
 
         Returns:
-            The sorted unique series and a mapping from ``time_series_id`` to the ids of the records
-            that reference it (first-seen order).
+            The sorted unique series.
 
         Raises:
             TimeFValidationError: If two series share a ``time_series_id`` but describe different
@@ -281,10 +281,7 @@ class TimeFWriter:
         # contiguous: the writer reads the record's source once, and a reader pulls a record's series
         # from one place instead of scattered across signal-ordered shards. A series shared by several
         # records sorts under the first record that references it.
-        ordered = sorted(
-            unique.values(), key=lambda ts: (ts.spec.spec_type, series_to_records[ts.id][0], ts.name, ts.id)
-        )
-        return ordered, series_to_records
+        return sorted(unique.values(), key=lambda ts: (ts.spec.spec_type, series_to_records[ts.id][0], ts.name, ts.id))
 
     def _write_values(self, unique_series: list[Signal]) -> dict[tuple[str, int], ChunkPlacement]:
         """Write all series' values through the configured backend.
@@ -377,7 +374,7 @@ class TimeFWriter:
         if ts.spec.dtype == "enum":
             # Compare each distinct label with the allowed categories.
             # This avoids creating a Python object for every value in the series.
-            _validate_enum_values(ts.spec, values.dictionary.to_pylist())
+            validate_enum_values(ts.spec, values.dictionary.to_pylist())
         if len(values) != ts.n_values:
             raise TimeFValidationError(
                 f"series {ts.id!r}: its loader returned {len(values)} values but it declares n_values={ts.n_values}"
@@ -493,7 +490,3 @@ def _series_identity(ts: Signal) -> tuple:
         The identifying fields, suitable for equality comparison and for error messages.
     """
     return (ts.spec.spec_type, ts.name, ts.time_axis, ts.n_values)
-
-
-def _ordered_unique(items: Iterable[str]) -> list[str]:
-    return list(dict.fromkeys(items))

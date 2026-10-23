@@ -6,6 +6,7 @@ import pytest
 
 from timenet.dataset import Signal
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
+from timenet.dataset.materialized_values import PyArrowMaterializedValues, ValuesLoader
 from timenet.errors import TimeFValidationError
 from timenet.types import StepInterval, StepPoint, TimeInterval, TimeSeriesSpec, ureg
 
@@ -60,6 +61,67 @@ def test_loader_is_lazy():
     assert calls["n"] == 0
     ts.to_arrow()
     assert calls["n"] == 1
+
+
+def test_signal_delegates_to_explicit_values_methods():
+    values = np.array([1.0, 2.0, 3.0], dtype=np.float32)
+    offsets = np.array([0, 2, 9], dtype=np.int64)
+    calls = []
+
+    class ExplicitLoader(ValuesLoader):
+        def __call__(self):
+            raise AssertionError("Signal must use the explicit methods")
+
+        def to_arrow(self):
+            calls.append("arrow")
+            return pa.array(values)
+
+        def to_numpy(self):
+            calls.append("numpy")
+            return values
+
+        def read_steps(self, start, stop):
+            calls.append((start, stop))
+            return pa.array(values[start:stop])
+
+    loader = ExplicitLoader()
+    signal = Signal.from_loader(
+        spec=_spec(),
+        name="events",
+        time_axis=IrregularAxis(first_us=0, last_us=9),
+        n_values=len(values),
+        loader=loader,
+        time_offsets_loader=PyArrowMaterializedValues(pa.array(offsets)),
+    )
+    assert calls == []
+    assert signal.loader is loader
+    assert signal.to_arrow().to_pylist() == values.tolist()
+    assert signal.to_numpy() is values
+    assert signal.read_steps(1, 3).to_pylist() == [2.0, 3.0]
+    assert calls == ["arrow", "numpy", (1, 3)]
+    assert np.shares_memory(signal.time_offsets_us(), offsets)
+
+
+def test_callable_adapter_keeps_range_reads_lazy():
+    values = pa.array([1.0, 2.0, 3.0], type=pa.float32())
+    calls = []
+
+    class RangeLoader:
+        def __call__(self):
+            calls.append("full")
+            return values
+
+        def read_steps(self, start, stop):
+            calls.append((start, stop))
+            return values.slice(start, stop - start)
+
+    signal = _series(loader=RangeLoader())
+    assert calls == []
+    assert signal.read_steps(1, 3).to_pylist() == [2.0, 3.0]
+    assert calls == [(1, 3)]
+    assert signal.to_arrow() is values
+    assert signal.to_numpy().tolist() == [1.0, 2.0, 3.0]
+    assert calls == [(1, 3), "full", "full"]
 
 
 def test_identity_equality():
@@ -142,9 +204,10 @@ def test_from_values_generates_unique_id_unless_given():
     assert fixed.id == "x"
 
 
-def test_from_values_casts_to_the_specified_numpy_dtype():
+@pytest.mark.parametrize("values", [[1, 2, 3], np.array([1.9, 2.9, 3.9])], ids=["list", "numpy"])
+def test_from_values_casts_to_the_specified_numpy_dtype(values):
     spec = _spec().model_copy(update={"dtype": "int16"})
-    arr = Signal.from_values([1, 2, 3], spec=spec, name="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
+    arr = Signal.from_values(values, spec=spec, name="II", time_axis=RegularAxis.from_rate_hz(2)).to_arrow()
     assert arr.type == pa.int16()
     assert arr.to_pylist() == [1, 2, 3]
 

@@ -47,13 +47,16 @@ lead_i = Signal(
 | `spec` | `TimeSeriesSpec` | Unit, dtype, shape, and modality contract. |
 | `time_axis` | `TimeAxis` | Regular, irregular, or ordinal placement of values. |
 | `data` | array-like | Eager values. Mutually exclusive with `loader`. |
-| `loader` | callable | Lazy Arrow value loader created by `Signal.from_loader()`. |
+| `loader` | `ValuesLoader` | Common interface for Arrow, NumPy, and step-range access. |
 | `n_values` | `int` | Required for a lazy Signal and inferred from eager data. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Signal. |
 | `metadata` | `dict[str, object]` | Optional JSON-compatible metadata. |
 
-`to_arrow()`, `to_numpy()`, and `read_steps()` materialize values. The TimeF reader supplies a lazy
-storage loader, so reading the hierarchy does not load the arrays.
+`Signal` delegates `to_arrow()`, `to_numpy()`, and `read_steps()` to its values loader.
+
+`Signal.from_loader()` also accepts existing Arrow callables. It wraps each callable without a
+read and preserves its optional `read_steps()` method. The TimeF reader supplies a lazy storage
+loader. Reads of the hierarchy do not load the arrays.
 
 Irregular Signals also provide `time_offsets_loader`. Regular axes calculate their offsets from
 their cadence, and ordinal axes describe order without a clock.
