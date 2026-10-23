@@ -120,6 +120,8 @@ run every `gh stack` command non-interactively (always pass branch names to `ini
 
 ## Implementation Guidelines
 - Prefer small, reviewable changes.
+- Never write code that fills in missing data or synthetically repairs data issues. Always raise an
+  appropriate TimeNet exception on data issues so the user can explicitly correct their data.
 - Don't delete user-owned files unless explicitly asked.
 - Match the existing style instead of reformatting adjacent code.
 - Add type hints; both packages ship `py.typed`, so `ty` must stay green.
