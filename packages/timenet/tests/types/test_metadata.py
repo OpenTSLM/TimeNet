@@ -84,6 +84,10 @@ def test_license_other_requires_a_nonblank_license_url(license_url):
     assert _metadata(license=License.OTHER, license_url="https://l.example").license is License.OTHER
 
 
+def test_license_none_needs_no_license_url():
+    assert _metadata(license=License.NONE).license is License.NONE
+
+
 def test_non_open_access_requires_an_access_url():
     with pytest.raises(ValidationError, match="access_url is required"):
         _metadata(access=Access.CREDENTIALED)
