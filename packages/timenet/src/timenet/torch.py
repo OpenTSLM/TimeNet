@@ -27,6 +27,10 @@ if TYPE_CHECKING:
     from timenet.reader import TimeFReader
 
 
+# NumPy counterpart of torch.long for enum category indices.
+_ENUM_INDEX_DTYPE = np.int64
+
+
 class _ItemSource(Protocol):
     """Where a :class:`TimeFTorchDataset` gets records and their tasks."""
 
@@ -42,8 +46,8 @@ class TimeFTorchDataset(Dataset):
 
     ``__getitem__`` returns a dict. Its ``series`` field holds tensors with the original dtype and
     shape ``(n_steps, *value_shape)``. Its ``series_masks`` field holds one boolean tensor per series.
-    Each mask is ``True`` where the timestep is present. A series that cannot hold nulls has an
-    all-true mask. Missing positions hold zero or false, so a model must use the mask to identify them.
+    Each mask is all true. Missing values raise ``TimeFValidationError``, including when the Signal
+    spec permits nulls. Consumers must handle missing data before conversion to PyTorch.
 
     The dict also contains ``record_id``, resolved ``tasks``, and ``annotations``.
     Use ``transform`` to reshape items for a model. A ``collate_fn`` combines records into a batch.
@@ -188,20 +192,6 @@ class _ReaderItems:
         return [(record, tuple(tasks_by_record[record.record_id])) for record in records]
 
 
-def _series_tensor(ts: Signal) -> Shaped[Tensor, " time *value"]:
-    """Convert one series to a tensor with its time and per-step dimensions.
-
-    Args:
-        ts: The series to load. Free-form strings have no tensor representation.
-            See :func:`_series_tensor_and_mask` for the errors this method raises.
-
-    Returns:
-        The values with shape ``(n_steps, *spec.value_shape)``. Missing positions hold zero or false.
-        Use :func:`_series_tensor_and_mask` to distinguish them from observations.
-    """
-    return _series_tensor_and_mask(ts)[0]
-
-
 def _series_tensor_and_mask(ts: Signal) -> tuple[Shaped[Tensor, " time *value"], Tensor]:
     """Convert one series to a tensor plus its validity mask.
 
@@ -209,13 +199,12 @@ def _series_tensor_and_mask(ts: Signal) -> tuple[Shaped[Tensor, " time *value"],
         ts: The series to load.
 
     Returns:
-        The values with shape ``(n_steps, *spec.value_shape)`` and a boolean tensor shaped
-        ``(n_steps,)`` that is ``True`` where the timestep is present. A series that cannot hold
-        nulls returns an all-true mask.
+        The values with shape ``(n_steps, *spec.value_shape)`` and an all-true boolean tensor shaped
+        ``(n_steps,)``.
 
     Raises:
         TimeFValidationError: If the series holds free-form string values, unknown enum labels,
-            or null enum values with a non-nullable spec.
+            null values, or partially missing tensor timesteps.
     """
     if ts.spec.dtype == "str":
         raise TimeFValidationError(
@@ -225,18 +214,16 @@ def _series_tensor_and_mask(ts: Signal) -> tuple[Shaped[Tensor, " time *value"],
         # index_in finds each label's position in the categories using C code.
         # This avoids a Python lookup for every value.
         arrow = ts.to_arrow()
-        if arrow.null_count and not ts.spec.nullable:
-            raise TimeFValidationError(f"series for {ts.spec.spec_type!r} has null values but nullable=False")
+        if arrow.null_count:
+            raise TimeFValidationError(
+                f"series {ts.id!r} contains null values. Handle missing data before conversion to PyTorch"
+            )
         categories = pa.array(ts.spec.categories, type=arrow.type.value_type)
         codes = pc.index_in(arrow, value_set=categories)  # ty: ignore[unresolved-attribute]
-        if pc.any(pc.and_(arrow.is_valid(), codes.is_null())).as_py():  # ty: ignore[unresolved-attribute]
+        if pc.any(codes.is_null()).as_py():  # ty: ignore[unresolved-attribute]
             raise TimeFValidationError(f"enum series for {ts.spec.spec_type!r} has values outside its categories")
-        valid = arrow.is_valid().to_numpy(zero_copy_only=False)
-        values: Tensor = torch.from_numpy(codes.fill_null(0).to_numpy(zero_copy_only=False).astype(np.int64))
+        dense = codes.to_numpy(zero_copy_only=False).astype(_ENUM_INDEX_DTYPE, copy=False)
     else:
-        # Reuse the mask from the same read. copy() gives an array with writable, contiguous memory.
-        # Arrow's view is read-only, which causes a warning from torch.from_numpy.
-        dense, valid = ts.to_numpy_and_mask()
-        values = torch.from_numpy(dense.copy())
-    mask = torch.from_numpy(valid.copy())
-    return values, mask
+        dense = ts.to_numpy()
+    # Give PyTorch writable, contiguous buffers without changing the signal's data.
+    return torch.from_numpy(dense.copy()), torch.ones(len(dense), dtype=torch.bool, device="cpu")

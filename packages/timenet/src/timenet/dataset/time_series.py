@@ -7,7 +7,6 @@ from typing import assert_never
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
-import pyarrow.compute as pc
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.dataset.span_validation import check_span_within_window
@@ -397,50 +396,24 @@ class Signal(SupportsAnnotate):
             The series' values with shape ``(n_steps, *spec.value_shape)``.
 
         Raises:
-            TimeFValidationError: If the loaded values contain nulls. Use :meth:`to_numpy_and_mask`
-                or :meth:`to_arrow` to preserve missingness. A nullable spec without actual nulls
+            TimeFValidationError: If a timestep is missing or only partially present. Use
+                :meth:`to_arrow` to preserve missingness. A nullable spec without actual nulls
                 remains supported, as do NaN and infinity values.
         """
         values = self.to_arrow()
         if values.null_count:
-            raise TimeFValidationError(
-                "series contains null values. Use to_numpy_and_mask() or to_arrow() to preserve missingness"
-            )
+            raise TimeFValidationError("series contains null values. Use to_arrow() to preserve missingness")
         if isinstance(values, pa.FixedShapeTensorArray):
-            return values.to_numpy_ndarray()
-        return values.to_numpy(zero_copy_only=False)
-
-    def to_numpy_and_mask(self) -> tuple[np.ndarray, np.ndarray]:
-        """Read values and an aligned boolean mask of observed timesteps.
-
-        Missing positions contain zero, false, or empty strings. Use the mask to identify missing
-        timesteps. These fill values are not observations. The method keeps numeric and boolean
-        dtypes, even when every timestep is missing.
-
-        Returns:
-            Values shaped ``(n_steps, *spec.value_shape)`` and validity shaped ``(n_steps,)``.
-        """
-        values = self.to_arrow()
-        # If no values are missing, NumPy creates the all-true mask without an Arrow call.
-        if values.null_count:
-            valid = values.is_valid().to_numpy(zero_copy_only=False)
-        else:
-            valid = np.ones(len(values), dtype=bool)
-        if isinstance(values, pa.FixedShapeTensorArray):
-            if values.null_count:
-                scalar_fill = False if pa.types.is_boolean(values.type.value_type) else 0
-                fill = pa.scalar([scalar_fill] * values.storage.type.list_size, type=values.storage.type)
-                values = pa.ExtensionArray.from_storage(values.type, pc.fill_null(values.storage, fill))
-            dense = values.storage.flatten().to_numpy(zero_copy_only=False).reshape((len(values), *values.type.shape))
+            flat = values.storage.flatten()
+            if flat.null_count:
+                raise TimeFValidationError("series may have nulls only for whole timesteps")
+            dense = flat.to_numpy(zero_copy_only=False).reshape((len(values), *values.type.shape))
             if values.type.permutation:
-                dense = dense.transpose((0, *(axis + 1 for axis in values.type.permutation)))
-            return dense, valid
-        if values.null_count:
-            if isinstance(values, pa.DictionaryArray):
-                values = values.dictionary_decode()
-            fill_value = "" if pa.types.is_string(values.type) else False if pa.types.is_boolean(values.type) else 0
-            values = pc.fill_null(values, pa.scalar(fill_value, type=values.type))
-        return values.to_numpy(zero_copy_only=False), valid
+                time_axis, *value_axes = range(dense.ndim)
+                permuted_value_axes = [value_axes[axis] for axis in values.type.permutation]
+                dense = dense.transpose(time_axis, *permuted_value_axes)
+            return dense
+        return values.to_numpy(zero_copy_only=False)
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Read a half-open temporal step range as Arrow without forcing a NumPy conversion.
