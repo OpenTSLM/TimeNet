@@ -20,6 +20,8 @@ from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from timenet.registry.version import DatasetVersion
     from timenet.types import TimeSeriesSpec
     from timenet.values_backends.types import StoredChunk
@@ -29,7 +31,7 @@ class BaseValuesReader(ABC):
     """Reads a series' values from a storage handle given its index rows."""
 
     @abstractmethod
-    def load(self, version: DatasetVersion, rows: list[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
+    def load(self, version: DatasetVersion, rows: Sequence[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
         """Read and concatenate one series' chunk values.
 
         Args:
@@ -44,7 +46,7 @@ class BaseValuesReader(ABC):
 
     @abstractmethod
     def load_range(
-        self, version: DatasetVersion, rows: list[StoredChunk], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, rows: Sequence[StoredChunk], start: int, stop: int, spec: TimeSeriesSpec
     ) -> pa.Array:
         """Read only the steps of one series in the half-open step range ``[start, stop)``.
 
@@ -68,13 +70,20 @@ def make_values_reader(name: str) -> BaseValuesReader:
 
     Raises:
         TimeFValidationError: If ``name`` is not a known backend.
+        ImportError: If the selected optional backend is not installed.
+        ModuleNotFoundError: If another dependency of the backend is missing.
     """
     if name == ValuesBackend.PARQUET:
         from timenet.values_backends.parquet.reader import ParquetValuesReader  # noqa: PLC0415
 
         return ParquetValuesReader()
     if name == ValuesBackend.ZARR:
-        from timenet.values_backends.zarr.reader import ZarrValuesReader  # noqa: PLC0415
+        try:
+            from timenet.values_backends.zarr.reader import ZarrValuesReader  # noqa: PLC0415
+        except ModuleNotFoundError as error:
+            if error.name != "zarr":
+                raise
+            raise ImportError("Zarr values require the 'timenet[zarr]' extra") from error
 
         return ZarrValuesReader()
     raise TimeFValidationError(

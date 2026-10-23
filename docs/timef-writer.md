@@ -49,14 +49,23 @@ The writer performs these operations:
 
 1. Derive the dataset schema when the caller has not done so.
 2. Validate hierarchy ownership and reusable annotation content.
-3. Read and validate each Signal, then write its values to Parquet or Zarr.
+3. Read and validate each Signal, then write its values to Parquet or Zarr. A Signal read from a
+   stored release keeps that release's chunks instead, without a read.
 4. Create `control.duckdb`, store each shared axis once, and insert hierarchy, annotation, task, and
-   chunk rows in one transaction.
+   chunk rows in one transaction. Packed text and time offsets read from a stored release keep
+   their payload rows there.
 5. Confirm the stored Source tree, checkpoint DuckDB, and close it.
 6. Calculate artifact sizes and SHA-256 checksums.
 7. Write `manifest.json` and atomically publish the version directory.
 
 A failed operation publishes nothing.
+
+Values read from a stored release are reused, not copied. The new catalog names the chunks and
+payload rows where they are, and the manifest's `payload_sources` names each release that stores
+them, so the values settings below do not re-encode them. The new release therefore needs a
+different dataset ID or version than those releases, and its readers must find them: write it into
+the registry that holds them. `LocalRegistry.store()` refuses to publish a release whose payload
+sources its registry does not hold.
 
 ## Values settings
 
@@ -87,7 +96,9 @@ The writer fails before publication when it finds an invalid state, including:
 - an annotation occurrence without an owning object;
 - task relationships pointing outside the dataset;
 - value arrays that disagree with their specification or declared length;
-- irregular offsets that disagree with their axis; or
+- irregular time offsets that disagree with their axis or their Signal's length;
+- reused values whose storing release is the output release or does not list their files, or a
+  reused Signal whose spec or length has changed; or
 - chunk rows that do not cover a Signal exactly.
 
 These failures raise TimeNet validation errors with object IDs and relationship fields where

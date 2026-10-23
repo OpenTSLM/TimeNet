@@ -1,5 +1,7 @@
 """On-disk filenames and layout templates for the TimeF format."""
 
+from pathlib import PureWindowsPath
+
 from timenet.errors import TimeFValidationError
 
 
@@ -29,7 +31,8 @@ def check_relative_path(name: str, path: str) -> str:
     Callers join a manifest file entry and a registry handle's ``relpath`` onto a root directory
     (or filesystem prefix) as-is. An absolute path or a ``..`` segment would escape that root instead
     of raising. This would let a crafted manifest or caller read or write outside the intended
-    directory.
+    directory. Stored paths use forward slashes on every platform; Windows drive paths and
+    backslashes are rejected even when validation runs on another operating system.
 
     Args:
         name: The name of the field to check. It appears in the error message.
@@ -39,9 +42,15 @@ def check_relative_path(name: str, path: str) -> str:
         The validated path.
 
     Raises:
-        TimeFValidationError: If ``path`` is absolute, or has a ``..`` segment.
+        TimeFValidationError: If ``path`` is absolute, names a Windows drive, contains backslashes,
+            or has a ``..`` segment.
     """
-    if path.startswith("/") or any(segment == ".." for segment in path.split("/")):
+    if (
+        path.startswith("/")
+        or "\\" in path
+        or PureWindowsPath(path).drive
+        or any(segment == ".." for segment in path.split("/"))
+    ):
         raise TimeFValidationError(f"{name} must stay within the dataset root, got {path!r}")
     return path
 

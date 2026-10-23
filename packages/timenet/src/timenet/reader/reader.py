@@ -4,7 +4,6 @@ from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
 from contextlib import contextmanager
-from dataclasses import dataclass
 import types as _types
 from typing import TYPE_CHECKING
 
@@ -15,6 +14,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
+from timenet.format.stored_array import ChunkLocation, StoredArray
 from timenet.format.stored_values import (
     ANNOTATION_COLUMNS,
     TARGET_COLUMNS,
@@ -22,15 +22,15 @@ from timenet.format.stored_values import (
     PackedValueReader,
     materialize_table,
 )
-from timenet.types import ArrayHandle, DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
+from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.object_kind import ObjectKind
+from timenet.types.reference_keys import OwnerKey
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
-    from timenet.values_backends.types import StoredChunk
 
 
 _CHUNK_LOCATOR_BATCH_SIZE = 1_024
@@ -57,9 +57,10 @@ class TimeFReader:
         self._control: DuckDBControlReader | None = None
         self._records: tuple[Record, ...] | None = None
         self._values: BaseValuesReader | None = None
+        self._owner_readers: dict[OwnerKey, BaseValuesReader] = {}
         self._chunk_locator_batches: list[list[int]] = []
         self._chunk_locator_batch_by_key: dict[int, int] = {}
-        self._chunk_rows_cache: dict[int, list[StoredChunk]] = {}
+        self._chunk_locations: dict[int, ChunkLocation | None] = {}
 
     def __getstate__(self) -> dict:
         """Return picklable state without open connections or decoded object caches."""
@@ -68,7 +69,8 @@ class TimeFReader:
         state["_control"] = None
         state["_records"] = None
         state["_values"] = None
-        state["_chunk_rows_cache"] = {}
+        state["_owner_readers"] = {}
+        state["_chunk_locations"] = {}
         return state
 
     def __enter__(self) -> TimeFReader:
@@ -92,10 +94,13 @@ class TimeFReader:
         if self._control is not None:
             self._control.close()
             self._control = None
+        for backend in self._owner_readers.values():
+            backend.close()
+        self._owner_readers.clear()
         self._records = None
         self._tasks = None
         self._packed_value_reader.close()
-        self._chunk_rows_cache.clear()
+        self._chunk_locations.clear()
 
     def verify(self) -> None:
         """Verify the size and checksum of every artifact in the manifest.
@@ -105,7 +110,7 @@ class TimeFReader:
         """
         for part in sorted(self._manifest.files.all_files(), key=lambda item: item.path):
             try:
-                handle = self._fs.open_input_file(self._version.path(part.path))
+                handle = self._fs.open_input_file(self._version.resolve_file_path(part.path))
             except FileNotFoundError as exc:
                 raise TimeFFormatError(f"manifest lists a missing file: {part.path}") from exc
             with handle:
@@ -339,53 +344,61 @@ class TimeFReader:
             self._values = make_values_reader(self._manifest.values_backend)
         return self._values
 
-    def _load_signal(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> pa.Array:
-        """Load all values for one Signal.
+    def _read_array(self, location: ChunkLocation, spec: TimeSeriesSpec) -> pa.Array:
+        """Read every chunk of one Signal from the release that stores it.
 
         Returns:
             The complete canonical Arrow array.
         """
-        rows = self._chunk_rows(signal_key, signal_id)
-        return self._values_reader().load(self._version, rows, spec)
+        version, backend = self._storage_reader(location.owner)
+        return backend.load(version, location.chunks, spec)
 
-    def _load_signal_range(
+    def _read_array_steps(
         self,
-        signal_key: int,
-        signal_id: str,
+        location: ChunkLocation,
         spec: TimeSeriesSpec,
         start: int,
         stop: int,
     ) -> pa.Array:
-        """Load a half-open step range for one Signal.
+        """Read a half-open step range of one Signal from the release that stores it.
 
         Returns:
             The requested canonical Arrow values.
         """
-        rows = self._chunk_rows(signal_key, signal_id)
-        return self._values_reader().load_range(self._version, rows, start, stop, spec)
+        version, backend = self._storage_reader(location.owner)
+        return backend.load_range(version, location.chunks, start, stop, spec)
 
-    def _chunk_rows(self, signal_key: int, signal_id: str) -> list[StoredChunk]:
-        """Return cached chunk locators after loading the Signal's bounded batch.
+    def _storage_reader(self, owner: OwnerKey | None) -> tuple[DatasetVersion, BaseValuesReader]:
+        """Return the release that an owner key names, or this release for ``None``, and its values reader.
+
+        Returns:
+            The version handle and its backend.
+        """
+        if owner is None:
+            return self._version, self._values_reader()
+        version = self._version.resolve_payload_source(owner)
+        if owner not in self._owner_readers:
+            self._owner_readers[owner] = make_values_reader(version.manifest.values_backend)
+        return version, self._owner_readers[owner]
+
+    def _chunk_location(self, signal_key: int, signal_id: str) -> ChunkLocation:
+        """Return where one Signal's chunks are stored, finding them for its batch on first use.
 
         Raises:
             TimeFFormatError: If the Signal has no stored chunks.
         """
-        cached = self._chunk_rows_cache.get(signal_key)
-        if cached is not None:
-            if not cached:
-                raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
-            return cached
-        batch_index = self._chunk_locator_batch_by_key.get(signal_key)
-        if batch_index is None:
-            return self._control_reader().chunk_rows_by_key(signal_key, signal_id)
-        batch = self._chunk_locator_batches[batch_index]
-        self._chunk_rows_cache.update(self._control_reader().chunk_rows_by_keys(batch))
-        rows = self._chunk_rows_cache[signal_key]
-        if not rows:
+        if signal_key not in self._chunk_locations:
+            batch_index = self._chunk_locator_batch_by_key.get(signal_key)
+            if batch_index is None:
+                return self._control_reader().chunk_location_by_key(signal_key, signal_id)
+            batch = self._chunk_locator_batches[batch_index]
+            self._chunk_locations.update(self._control_reader().chunk_locations_by_keys(batch))
+        location = self._chunk_locations[signal_key]
+        if location is None:
             raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
-        return rows
+        return location
 
-    def _make_signal_loader(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> _SignalLoader:
+    def _make_signal_loader(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> StoredArray:
         """Return a picklable, range-aware handle to one Signal's stored values."""
         if signal_key not in self._chunk_locator_batch_by_key:
             if not self._chunk_locator_batches or len(self._chunk_locator_batches[-1]) >= _CHUNK_LOCATOR_BATCH_SIZE:
@@ -393,7 +406,7 @@ class TimeFReader:
             batch_index = len(self._chunk_locator_batches) - 1
             self._chunk_locator_batches[batch_index].append(signal_key)
             self._chunk_locator_batch_by_key[signal_key] = batch_index
-        return _SignalLoader(self, signal_key, signal_id, spec)
+        return StoredArray(self, signal_key, signal_id, spec)
 
     @contextmanager
     def _as_format_error(self, *, preserve_validation: bool = False) -> Iterator[None]:
@@ -417,34 +430,3 @@ class TimeFReader:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
         except (ValueError, KeyError, TypeError, AttributeError, OSError, pa.ArrowException) as exc:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
-
-
-@dataclass(frozen=True)
-class _SignalLoader(ArrayHandle):
-    """Picklable handle to the stored values of one DuckDB-indexed Signal, read through on access."""
-
-    reader: TimeFReader
-    signal_key: int
-    signal_id: str
-    spec: TimeSeriesSpec
-
-    @property
-    def is_loaded(self) -> bool:
-        """Return False, since every read goes through the reader."""
-        return False
-
-    def read(self) -> pa.Array:
-        """Load all Signal values.
-
-        Returns:
-            The complete canonical Arrow array.
-        """
-        return self.reader._load_signal(self.signal_key, self.signal_id, self.spec)
-
-    def read_steps(self, start: int, stop: int) -> pa.Array:
-        """Load a half-open Signal step range.
-
-        Returns:
-            The requested canonical Arrow values.
-        """
-        return self.reader._load_signal_range(self.signal_key, self.signal_id, self.spec, start, stop)
