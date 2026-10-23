@@ -10,7 +10,7 @@ import pyarrow as pa
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.dataset.materialized_values import (
-    PyArrowMaterializedValues,
+    NumpyMaterializedValues,
     ValuesLoader,
     as_values_loader,
     materialized_values,
@@ -235,9 +235,11 @@ class Signal(SupportsAnnotate):
     ) -> "Signal":
         """Build a series from already-materialized values and wrap them in a loader for the spec's dtype.
 
-        Use this constructor for values already in memory. It converts them once to an Arrow array
-        with the spec's dtype. Repeated reads return that same array. The array length sets
-        ``n_values``.
+        Numeric NumPy arrays retain their buffers when dtype and layout already match the spec.
+        NumPy reads return fresh read-only views; treat the input buffers as read-only while in use.
+        Boolean inputs are copied, and NumPy reads return writable copies to keep Arrow reads consistent.
+        Arrow conversion happens only on an Arrow read. Other inputs become Arrow arrays immediately.
+        The array length sets ``n_values``.
 
         For files or remote sources, use :meth:`from_loader` and supply the length. That constructor
         does not read the values immediately.
@@ -277,7 +279,9 @@ class Signal(SupportsAnnotate):
         The axis endpoints come from the stream itself, so the two cannot disagree. You cannot state a
         first or last time offset that the time offsets do not have. To convert wall-clock moments, use
         :func:`~timenet.dataset.axis.time_offsets_from_datetimes` before you call.
-        Conversion happens once. Repeated reads return the retained Arrow arrays for values and offsets.
+        Numeric NumPy values and normalized time offsets retain their buffers for NumPy reads.
+        Arrow conversion happens only on an Arrow read. Treat retained input buffers as read-only.
+        Boolean inputs are copied, and NumPy reads return writable copies.
 
         Args:
             values: The signal values to convert to the spec's dtype. Text and enum specs take
@@ -310,7 +314,7 @@ class Signal(SupportsAnnotate):
             name=name,
             time_axis=IrregularAxis(first_us=int(time_offsets[0]), last_us=int(time_offsets[-1])),
             loader=loader,
-            time_offsets_loader=PyArrowMaterializedValues(pa.array(time_offsets)),
+            time_offsets_loader=NumpyMaterializedValues(time_offsets),
             id=id,
             n_values=len(loader),
         )

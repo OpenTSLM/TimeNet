@@ -46,9 +46,6 @@ class PyArrowMaterializedValues(MaterializedValues):
         dtype = pa.string() if spec.dtype in {"str", "enum"} else pa.from_numpy_dtype(np.dtype(spec.dtype))
         if isinstance(values, pa.Array):
             array = values.cast(dtype)
-        elif isinstance(values, np.ndarray) and values.dtype.kind != "O" and spec.dtype not in {"str", "enum"}:
-            # Preserve NumPy casting rules until dense arrays get their own loader.
-            array = pa.array(np.asarray(values, dtype=np.dtype(spec.dtype)))
         elif spec.dtype == "bool":
             # Preserve None while keeping NumPy's boolean conversion rules for present values.
             array = pa.array([None if value is None else bool(value) for value in values], type=dtype)
