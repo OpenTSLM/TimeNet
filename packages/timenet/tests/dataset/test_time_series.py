@@ -156,6 +156,17 @@ def test_from_values_str_spec_keeps_string_labels():
     assert arr.to_pylist() == ["normal", "afib"]
 
 
+def test_numpy_backing_keeps_dtype_conversion_and_arrow_output_consistent():
+    values = np.array([1.9, 2.9, 3.9, 4.9, 5.9, 6.9], dtype=np.float64)[::2]
+    spec = _spec().model_copy(update={"dtype": "int16"})
+    signal = Signal.from_values(values, spec=spec, name="events", time_axis=OrdinalAxis())
+    assert signal.to_numpy().dtype == np.int16
+    assert signal.to_numpy().tolist() == [1, 3, 5]
+    assert not np.shares_memory(signal.to_numpy(), values)
+    assert signal.to_arrow().type == pa.int16()
+    assert signal.to_arrow().to_pylist() == [1, 3, 5]
+
+
 def _counting(n, tsid="s", axis=None):
     return _series(
         n_values=n,

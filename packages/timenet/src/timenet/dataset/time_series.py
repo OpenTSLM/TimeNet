@@ -1,4 +1,4 @@
-"""The :class:`Signal` leaf type: one logical stream with a lazy Arrow loader."""
+"""The :class:`Signal` leaf type: one logical stream with a lazy values loader."""
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
@@ -73,6 +73,44 @@ def _array_from_values(
     return array
 
 
+@dataclass
+class _MaterializedValues:
+    """Retain in-memory values and convert NumPy buffers to Arrow only on request."""
+
+    values: np.ndarray | pa.Array
+    _arrow: pa.Array | None = field(default=None, init=False, repr=False)
+
+    def __post_init__(self) -> None:
+        if isinstance(self.values, np.ndarray):
+            self.values = self.values.view()
+            self.values.flags.writeable = False
+
+    def __len__(self) -> int:
+        return len(self.values)
+
+    def __call__(self) -> pa.Array:
+        if isinstance(self.values, pa.Array):
+            return self.values
+        if self._arrow is None:
+            self._arrow = pa.array(self.values)
+        return self._arrow
+
+
+def _materialized_values(
+    spec: TimeSeriesSpec, values: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array
+) -> _MaterializedValues:
+    if isinstance(values, pa.Array):
+        return _MaterializedValues(values)
+    if (
+        isinstance(values, np.ndarray)
+        and values.ndim == 1
+        and values.dtype.kind != "O"
+        and spec.dtype not in {"str", "enum"}
+    ):
+        return _MaterializedValues(np.ascontiguousarray(values, dtype=np.dtype(spec.dtype)))
+    return _MaterializedValues(_array_from_values(spec, values))
+
+
 @dataclass(frozen=True, eq=False, init=False, kw_only=True)
 class Signal(SupportsAnnotate):
     """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
@@ -123,14 +161,14 @@ class Signal(SupportsAnnotate):
         metadata: JsonMapping | None = None,
     ) -> None:
         """Build a signal from values that are already in memory."""
-        array = data if isinstance(data, pa.Array) else _array_from_values(spec, data)
+        loader = _materialized_values(spec, data)
         self._initialize(
             spec=spec,
             time_axis=time_axis,
             id=id or new_id(),
             name=name,
-            loader=lambda: array,
-            n_values=len(array),
+            loader=loader,
+            n_values=len(loader),
             annotations=annotations,
             metadata=metadata,
         )
@@ -282,9 +320,10 @@ class Signal(SupportsAnnotate):
     ) -> "Signal":
         """Build a series from already-materialized values and wrap them in a loader for the spec's dtype.
 
-        Use this constructor for values already in memory. It converts them once to an Arrow array
-        with the spec's dtype. Repeated reads return that same array. The array length sets
-        ``n_values``.
+        Numeric NumPy arrays retain their buffers when dtype and layout already match the spec.
+        NumPy reads return read-only views; treat the input buffers as read-only while in use.
+        Arrow conversion happens only on an Arrow read. Other inputs become Arrow arrays immediately.
+        The array length sets ``n_values``.
 
         For files or remote sources, use :meth:`from_loader` and supply the length. That constructor
         does not read the values immediately.
@@ -324,7 +363,8 @@ class Signal(SupportsAnnotate):
         The axis endpoints come from the stream itself, so the two cannot disagree. You cannot state a
         first or last time offset that the time offsets do not have. To convert wall-clock moments, use
         :func:`~timenet.dataset.axis.time_offsets_from_datetimes` before you call.
-        Conversion happens once. Repeated reads return the retained Arrow arrays for values and offsets.
+        Numeric NumPy values and normalized time offsets retain their buffers for NumPy reads.
+        Arrow conversion happens only on an Arrow read. Treat retained input buffers as read-only.
 
         Args:
             values: The signal values to convert to the spec's dtype. Text and enum specs take
@@ -346,21 +386,20 @@ class Signal(SupportsAnnotate):
         """
         if not isinstance(full_validation, bool):
             raise TimeFValidationError("full_validation must be a bool")
-        array = _array_from_values(spec, values)
+        loader = _materialized_values(spec, values)
         time_offsets = to_time_offsets_us(time_offsets_us, validate_order=full_validation)
-        if len(time_offsets) != len(array):
+        if len(time_offsets) != len(loader):
             raise TimeFValidationError(
-                f"an irregular series needs one time offset per value, got {len(time_offsets)} time offsets for {len(array)} values"
+                f"an irregular series needs one time offset per value, got {len(time_offsets)} time offsets for {len(loader)} values"
             )
-        time_offset_array = pa.array(time_offsets)
         return cls.from_loader(
             spec=spec,
             name=name,
             time_axis=IrregularAxis(first_us=int(time_offsets[0]), last_us=int(time_offsets[-1])),
-            loader=lambda: array,
-            time_offsets_loader=lambda: time_offset_array,
+            loader=loader,
+            time_offsets_loader=_MaterializedValues(time_offsets),
             id=id,
-            n_values=len(array),
+            n_values=len(loader),
         )
 
     def time_offsets_us(self) -> np.ndarray:
@@ -380,6 +419,10 @@ class Signal(SupportsAnnotate):
             raise TimeFValidationError(
                 f"only an IrregularAxis series stores time offsets, and this one has {type(self.time_axis).__name__}"
             )
+        if isinstance(self.time_offsets_loader, _MaterializedValues) and isinstance(
+            self.time_offsets_loader.values, np.ndarray
+        ):
+            return self.time_offsets_loader.values
         return self.time_offsets_loader().to_numpy(zero_copy_only=False)
 
     def to_arrow(self) -> pa.Array:
@@ -401,6 +444,8 @@ class Signal(SupportsAnnotate):
                 or :meth:`to_arrow` to preserve missingness. A nullable spec without actual nulls
                 remains supported, as do NaN and infinity values.
         """
+        if isinstance(self.loader, _MaterializedValues) and isinstance(self.loader.values, np.ndarray):
+            return self.loader.values
         values = self.to_arrow()
         if values.null_count:
             raise TimeFValidationError(
@@ -420,6 +465,8 @@ class Signal(SupportsAnnotate):
         Returns:
             Values shaped ``(n_steps, *spec.value_shape)`` and validity shaped ``(n_steps,)``.
         """
+        if isinstance(self.loader, _MaterializedValues) and isinstance(self.loader.values, np.ndarray):
+            return self.loader.values, np.ones(self.n_values, dtype=bool)
         values = self.to_arrow()
         # If no values are missing, NumPy creates the all-true mask without an Arrow call.
         if values.null_count:
