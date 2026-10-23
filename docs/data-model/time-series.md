@@ -75,13 +75,15 @@ window = temperature.read_steps(0, 2)
 `to_arrow()` preserves nulls. `to_numpy()` raises `TimeFValidationError` when the loaded values
 contain nulls.
 
-Use `to_numpy_and_mask()` for nullable values:
+For data with nulls, Arrow provides the validity mask:
 
 ```python
-values, present = temperature.to_numpy_and_mask()
+values = temperature.to_arrow()
+present = values.is_valid()
 ```
 
-The mask marks present timesteps. A placeholder at a missing position is not an observation.
+The mask marks present timesteps. The PyTorch adapter raises `TimeFValidationError` for actual nulls,
+even when `nullable=True`. Consumers must handle missing data before tensor conversion.
 
 ## Lazy values
 

@@ -95,8 +95,8 @@ Pass `None` for a missing timestep when `nullable=True`. Arrow stores missingnes
 bitmap. This keeps a missing value distinct from a valid floating-point NaN.
 
 `Signal.to_arrow()` preserves nulls. `Signal.to_numpy()` rejects an array that contains nulls.
-Use `Signal.to_numpy_and_mask()` when NumPy code needs nullable data. It returns filled values and a
-boolean validity mask.
+The PyTorch adapter also rejects actual nulls, even when `nullable=True`. Consumers must handle
+missing data before tensor conversion.
 
 Nullability applies to the complete timestep. TimeF rejects a partially missing multidimensional
 value.

@@ -49,14 +49,16 @@ def test_scalar_constructors_preserve_nulls_and_declared_dtype(irregular, dtype,
         series = Signal.from_irregular(observations, time_offsets_us=[0, 2, 4], spec=spec, name="x")
     else:
         series = Signal.from_values(observations, spec=spec, name="x", time_axis=OrdinalAxis())
-    assert series.to_arrow().to_pylist() == observations
-    values, valid = series.to_numpy_and_mask()
-    assert valid.dtype == np.bool_
-    assert valid.tolist() == [True, False, True]
-    assert values.shape == (3,)
-    assert values[valid].tolist() == [observations[0], observations[2]]
-    if dtype not in {"str", "enum"}:
-        assert values.dtype == np.dtype(dtype)
+    values = series.to_arrow()
+    assert values.to_pylist() == observations
+    assert values.is_valid().to_pylist() == [True, False, True]
+    if dtype == "enum":
+        assert isinstance(values, pa.DictionaryArray)
+        assert values.type.value_type == pa.string()
+    else:
+        assert values.type == (pa.string() if dtype == "str" else pa.from_numpy_dtype(np.dtype(dtype)))
+    with pytest.raises(TimeFValidationError, match="null"):
+        series.to_numpy()
 
 
 @pytest.mark.parametrize("irregular", [False, True])
@@ -116,17 +118,16 @@ def test_nullable_enum_still_rejects_unknown_observations(tmp_path):
     ("dtype", "observations"),
     [("float32", [[1.0, 2.0], None, [3.0, 4.0]]), ("bool", [[True, False], None, [False, True]])],
 )
-def test_tensor_mask_marks_whole_timesteps_and_preserves_shape(tmp_path, dtype, observations):
+def test_torch_rejects_missing_tensor_timesteps_while_storage_preserves_them(tmp_path, dtype, observations):
     spec = _spec(dtype, value_shape=(2,), nullable=True)
     value_type = pa.from_numpy_dtype(np.dtype(dtype))
     storage = pa.array(observations, type=pa.list_(value_type, 2))
     array = pa.ExtensionArray.from_storage(pa.fixed_shape_tensor(value_type, (2,)), storage)
     series = _lazy_series(spec, array)
-    values, valid = series.to_numpy_and_mask()
-    assert values.shape == (3, 2)
-    assert values.dtype == np.dtype(dtype)
-    assert valid.tolist() == [True, False, True]
-    assert values[valid].tolist() == [observations[0], observations[2]]
+    dataset = TimeFDataset(metadata=make_dataset().metadata)
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
+    with pytest.raises(TimeFValidationError, match="null"):
+        TimeFTorchDataset(dataset)[0]
     assert TimeFWriter(tmp_path, make_dataset())._read_and_validate(series).equals(array)
 
 
@@ -229,7 +230,7 @@ def test_nonnullable_zarr_writes_no_validity_array(tmp_path):
     assert not [path.as_posix() for path in store.rglob("*") if "_validity" in path.as_posix()]
 
 
-def test_torch_exposes_values_and_mask():
+def test_torch_rejects_missing_timesteps_in_nullable_signals():
     series = Signal.from_values([1.0, None, 3.0], spec=_spec(nullable=True), name="x", time_axis=OrdinalAxis())
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
@@ -242,11 +243,9 @@ def test_torch_exposes_values_and_mask():
     )
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="record-0"))
     dataset.derive_schema()
-    item = TimeFTorchDataset(dataset)[0]
-
-    values, mask = item["series"][0], item["series_masks"][0]
-    assert values.tolist() == [1.0, 0.0, 3.0]  # the null slot holds a placeholder, not an observation
-    assert mask.tolist() == [True, False, True]
+    with pytest.raises(TimeFValidationError, match="null"):
+        TimeFTorchDataset(dataset)[0]
+    assert series.to_arrow().to_pylist() == [1.0, None, 3.0]
 
 
 def test_torch_returns_an_all_true_mask_for_a_series_that_cannot_be_null():
@@ -363,7 +362,7 @@ def test_to_numpy_rejects_actual_nulls(tensor):
         array = pa.ExtensionArray.from_storage(pa.fixed_shape_tensor(pa.float32(), (2,)), storage)
     else:
         array = pa.array([0.0, None], type=pa.float32())
-    with pytest.raises(TimeFValidationError, match=r"to_numpy_and_mask.*to_arrow"):
+    with pytest.raises(TimeFValidationError, match=r"null.*to_arrow"):
         _lazy_series(spec, array).to_numpy()
 
 
@@ -373,19 +372,49 @@ def test_to_numpy_allows_nullable_without_nulls_and_preserves_special_floats():
     np.testing.assert_array_equal(series.to_numpy(), observations)
 
 
+@pytest.mark.parametrize("dtype", ["uint8", "float32", "bool"])
+@pytest.mark.parametrize("start", [0, 1])
+def test_to_numpy_permutes_value_axes_without_moving_time_axis(dtype, start):
+    frames = np.arange(72).reshape(3, 2, 3, 4)
+    if dtype == "bool":
+        frames = frames % 3 == 0
+    frames = frames.astype(dtype)
+    value_type = pa.from_numpy_dtype(frames.dtype)
+    storage = pa.array(frames.reshape(3, 24).tolist(), type=pa.list_(value_type, 24))
+    array = pa.ExtensionArray.from_storage(
+        pa.fixed_shape_tensor(value_type, (2, 3, 4), permutation=(2, 0, 1)), storage
+    ).slice(start)
+    series = _lazy_series(_spec(dtype, value_shape=(4, 2, 3)), array)
+
+    values = series.to_numpy()
+
+    assert values.shape == (3 - start, 4, 2, 3)
+    assert values.dtype == frames.dtype
+    for step, channel, height, width in np.ndindex(3 - start, 2, 3, 4):
+        assert values[step, width, channel, height] == frames[step + start, channel, height, width]
+
+
 @pytest.mark.parametrize("batch_size", [1, 2])
-def test_torch_default_batches_mixed_nullable_series(batch_size):
+@pytest.mark.parametrize("missing", [False, True])
+def test_torch_default_batches_mixed_nullable_series(batch_size, missing):
     dataset = TimeFDataset(metadata=make_dataset().metadata)
     for index in range(2):
-        nullable = Signal.from_values([0.0, None], spec=_spec(nullable=True), name="missing", time_axis=OrdinalAxis())
+        nullable = Signal.from_values(
+            [0.0, None if missing else 1.0], spec=_spec(nullable=True), name="nullable", time_axis=OrdinalAxis()
+        )
         present = Signal.from_values([0.0, 1.0], spec=_spec(), name="present", time_axis=OrdinalAxis())
         dataset.add_record(
             record=Record(sources=(Source(name="Source", signals=(nullable, present)),), record_id=f"record-{index}")
         )
-    batch = next(iter(DataLoader(TimeFTorchDataset(dataset), batch_size=batch_size)))
-    assert batch["series_masks"][0].tolist() == [[True, False]] * batch_size
+    loader = DataLoader(TimeFTorchDataset(dataset), batch_size=batch_size)
+    if missing:
+        with pytest.raises(TimeFValidationError, match="null"):
+            next(iter(loader))
+        return
+    batch = next(iter(loader))
+    assert batch["series_masks"][0].tolist() == [[True, True]] * batch_size
     assert batch["series_masks"][1].tolist() == [[True, True]] * batch_size
-    assert batch["series"][0].tolist() == [[0.0, 0.0]] * batch_size
+    assert batch["series"][0].tolist() == [[0.0, 1.0]] * batch_size
 
 
 @pytest.mark.parametrize("nullable", [False, True])
@@ -401,20 +430,24 @@ def test_torch_enum_direct_loader_rejects_unknown_labels(nullable):
 
 
 @pytest.mark.parametrize("nullable", [False, True])
-def test_torch_enum_direct_loader_distinguishes_category_zero_from_null(nullable):
+def test_torch_enum_direct_loader_rejects_nulls(nullable):
     series = _lazy_series(
         _spec("enum", categories=("a", "b"), nullable=nullable),
         pa.array(["a", None, "b"]).dictionary_encode(),
     )
     dataset = TimeFDataset(metadata=make_dataset().metadata)
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="record-0"))
-    if not nullable:
-        with pytest.raises(TimeFValidationError, match="null"):
-            TimeFTorchDataset(dataset)[0]
-    else:
-        item = TimeFTorchDataset(dataset)[0]
-        assert item["series"][0].tolist() == [0, 0, 1]
-        assert item["series_masks"][0].tolist() == [True, False, True]
+    with pytest.raises(TimeFValidationError, match="null"):
+        TimeFTorchDataset(dataset)[0]
+
+
+def test_torch_nullable_enum_preserves_category_zero_without_nulls():
+    series = _lazy_series(_spec("enum", categories=("a", "b"), nullable=True), pa.array(["a", "b"]).dictionary_encode())
+    dataset = TimeFDataset(metadata=make_dataset().metadata)
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
+    item = TimeFTorchDataset(dataset)[0]
+    assert item["series"][0].tolist() == [0, 1]
+    assert item["series_masks"][0].tolist() == [True, True]
 
 
 @pytest.mark.parametrize("irregular", [False, True])
@@ -449,7 +482,7 @@ def test_bool_constructors_preserve_none_separately_from_false(irregular, contai
     if nullable:
         series = construct()
         assert series.to_arrow().to_pylist() == expected
-        assert series.to_numpy_and_mask()[0].dtype == np.bool_
+        assert series.to_arrow().type == pa.bool_()
     else:
         with pytest.raises(TimeFValidationError, match="null"):
             construct()

@@ -37,11 +37,11 @@ Use `to_numpy()` when the Signal has no null values:
 numpy_values = signal.to_numpy()
 ```
 
-For nullable data, use `to_numpy_and_mask()`. The mask is true for present timesteps.
+For data with nulls, use `to_arrow()` to preserve missing values:
 
 ```python
-values, present = signal.to_numpy_and_mask()
-observed = values[present]
+values = signal.to_arrow()
+present = values.is_valid()
 ```
 
 Use `read_steps()` to read one half-open range:
@@ -100,8 +100,9 @@ present = item["series_masks"][0]
 targets = item["tasks"][0].targets
 ```
 
-The adapter preserves the Signal dtype and per-timestep shape. Each mask has one Boolean value per
-timestep.
+The adapter preserves the Signal dtype and per-timestep shape. It raises `TimeFValidationError`
+when values contain nulls, even when `nullable=True`. Consumers must handle missing data before
+conversion to PyTorch. Each mask in `series_masks` contains only true values.
 
 Tasks and annotations remain Python objects. Signal lengths can also vary. Supply a model-specific
 `transform` or `collate_fn` when the default PyTorch batching cannot combine them.
