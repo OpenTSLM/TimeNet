@@ -47,8 +47,22 @@ def _read(version_dir: Path) -> TimeFDataset:
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_full_round_trip(tmp_path, backend):
     original = make_dataset()
-    restored = _read(_write(tmp_path, dataset=make_dataset(), values_backend=backend))
+    answer = next(task for task in original.tasks if isinstance(task, AnswerTask))
+    text = "A detailed clinical report with café notes. " * 300
+    answer.prompt = text
+    answer.rationale = text + "Explanation."
+    answer.targets = (text + "Answer.", "short answer")
+    record = answer.inputs[0]
+    record.annotate(Annotation(key="report", value=text))
+    record.annotate(Annotation(key="reports", value=[text, "short report"]))
+
+    restored = _read(_write(tmp_path, dataset=original, values_backend=backend))
     assert_datasets_equal(original, restored)
+    restored_answer = next(task for task in restored.tasks if task.id == answer.id)
+    assert restored_answer.prompt == text
+    assert restored_answer.rationale == text + "Explanation."
+    # Targets are excluded from task equality, so compare them directly.
+    assert restored_answer.targets == (text + "Answer.", "short answer")
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
