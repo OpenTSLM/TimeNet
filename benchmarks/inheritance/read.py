@@ -1,0 +1,63 @@
+"""Measure equivalent full reads in a fresh process on main or the inheritance stack.
+
+Run with ``uv run benchmarks/inheritance/read.py /path/to/dataset/version``.
+Retain all arrays to compare eager reads against main's lazy signal readers fairly.
+"""
+
+import argparse
+import hashlib
+import json
+from pathlib import Path
+import resource
+from time import perf_counter
+
+from timenet.dataset import TimeFDataset
+from timenet.reader import TimeFReader
+from timenet.registry.dependencies import open_local_version
+from timenet.types.text import read_value
+
+
+def benchmark(root: Path) -> dict[str, object]:
+    """Read all catalog objects and payloads, returning timings and content fingerprints.
+
+    Returns:
+        Timings, counts, memory use, and content hashes.
+    """
+    start = perf_counter()
+    reader = TimeFReader(open_local_version(root))
+    opened = reader.read()
+    dataset = opened if isinstance(opened, TimeFDataset) else opened.read()
+    catalog_done = perf_counter()
+    arrays = [signal.to_arrow() for record in dataset.records for signal in record.signals]
+    materialized = perf_counter()
+    digest = hashlib.sha256()
+    for array in arrays:
+        digest.update(str(array.type).encode())
+        for buffer in array.buffers():
+            if buffer is not None:
+                digest.update(buffer)
+    text_digest = hashlib.sha256()
+    for task in dataset.tasks:
+        targets = None if task.targets is None else [read_value(value) for value in task.targets]
+        text = [read_value(task.prompt), targets, read_value(task.rationale)]
+        text_digest.update(json.dumps(text, default=str).encode())
+    result: dict[str, object] = {
+        "read_seconds": catalog_done - start,
+        "materialization_seconds": materialized - catalog_done,
+        "full_read_seconds": materialized - start,
+        "records": len(dataset.records),
+        "signals": len(arrays),
+        "values": sum(map(len, arrays)),
+        "tasks": len(dataset.tasks),
+        "payload_sha256": digest.hexdigest(),
+        "text_sha256": text_digest.hexdigest(),
+        "peak_rss_platform_units": resource.getrusage(resource.RUSAGE_SELF).ru_maxrss,
+    }
+    reader.close()
+    return result
+
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("root", type=Path)
+    print(json.dumps(benchmark(parser.parse_args().root), indent=2))
