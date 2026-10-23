@@ -2,6 +2,7 @@ from fractions import Fraction
 import json
 from pathlib import Path
 import pickle
+import shutil
 
 import pyarrow.parquet as pq
 from pydantic import ValidationError
@@ -44,7 +45,7 @@ def _write(tmp_path, dataset=None, **kwargs) -> Path:
 
 def _read(version_dir: Path) -> TimeFDataset:
     with TimeFReader(open_local_version(version_dir)) as reader:
-        return reader.read()
+        return reader._read_dataset()
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -59,7 +60,16 @@ def test_full_round_trip(tmp_path, backend):
     record.annotate(Annotation(key="report", value=text))
     record.annotate(Annotation(key="reports", value=[text, "short report"]))
 
-    restored = _read(_write(tmp_path, dataset=original, values_backend=backend))
+    irregular = Signal.from_irregular(
+        [1.0, 2.0, 3.0],
+        time_offsets_us=[0, 2, 5],
+        spec=record.signals[0].spec,
+        name="irregular",
+    )
+    original.add_record(record=Record(sources=(Source(name="irregular", signals=(irregular,)),)))
+    version_dir = _write(tmp_path, dataset=original, values_backend=backend)
+    restored = _read(version_dir)
+    shutil.rmtree(version_dir)
     assert_datasets_equal(original, restored)
     restored_answer = next(task for task in restored.tasks if task.id == answer.id)
     assert restored_answer.prompt == text
@@ -311,7 +321,8 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         assert opens >= 1
 
 
-def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
+@pytest.mark.parametrize("eager", [False, True])
+def test_signal_values_batch_chunk_locator_queries(tmp_path, monkeypatch, eager):
     version_dir = _write(tmp_path)
     original = DuckDBControlReader.chunk_locations_by_keys
     calls = []
@@ -322,9 +333,12 @@ def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
 
     monkeypatch.setattr(DuckDBControlReader, "chunk_locations_by_keys", counting_batch)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        records = tuple(reader.iter_records())
+        records = reader._read_dataset().records if eager else tuple(reader.iter_records())
+        if eager:
+            assert reader._read_dataset().records[0] is records[0]
         signals = tuple(signal for record in records for signal in record.signals)
-        assert calls == []
+        if not eager:
+            assert calls == []
 
         for signal in signals:
             signal.to_arrow()
@@ -334,11 +348,24 @@ def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
-def test_read_dataset_and_lazy_loaders_are_picklable(tmp_path, backend):
-    dataset = TimeFReader(open_local_version(_write(tmp_path, values_backend=backend))).read()
-    expected = dataset.records[0].signals[0].to_arrow()
+@pytest.mark.parametrize("eager", [False, True])
+def test_eager_and_lazy_datasets_are_picklable(tmp_path, monkeypatch, backend, eager):
+    with TimeFReader(open_local_version(_write(tmp_path, values_backend=backend))) as reader:
+        dataset = reader._read_dataset() if eager else reader.read()
+        expected = [signal.to_arrow() for record in dataset.records for signal in record.signals]
+    original = DuckDBControlReader.chunk_locations_by_keys
+    calls = []
+
+    def counting_batch(reader, keys):
+        calls.append(tuple(keys))
+        return original(reader, keys)
+
+    monkeypatch.setattr(DuckDBControlReader, "chunk_locations_by_keys", counting_batch)
     restored = pickle.loads(pickle.dumps(dataset))
-    assert restored.records[0].signals[0].to_arrow().equals(expected)
+    actual = [signal.to_arrow() for record in restored.records for signal in record.signals]
+    assert len(actual) == len(expected)
+    assert all(left.equals(right) for left, right in zip(actual, expected, strict=True))
+    assert len(calls) == (0 if eager else 1)
 
 
 def test_tasks_are_cached_after_first_access(tmp_path):
@@ -374,25 +401,43 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
         loaded.records[0].signals[0].to_arrow()
         assert text in reader.read_task_table()["prompt"].to_pylist()
         assert read_calls == 1
-        state = reader.__getstate__()
-        with pickle.loads(pickle.dumps(reader)) as restored:
+        restored, prompt = pickle.loads(pickle.dumps((reader, task.prompt)))
+        with restored:
+            assert prompt.read() == text
             assert text in restored.read_task_table()["prompt"].to_pylist()
         assert read_calls == 2
     with reader:
         assert text in reader.read_task_table()["prompt"].to_pylist()
     assert read_calls == 3
-    assert state["_tasks"] is None
-    assert state["_control"] is None
-    assert state["_records"] is None
-    assert state["_values"] is None
+
+
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("UPDATE records SET clock_id = -1", "missing clocks"),
+        ("UPDATE sources SET parent_source_key = source_key", "source hierarchy contains a cycle"),
+    ],
+)
+def test_eager_read_rejects_invalid_hierarchy_before_opening_payloads(tmp_path, statement, message):
+    dataset = make_dataset()
+    dataset.records[0].annotate(Annotation(key="report", value="A detailed clinical report. " * 300))
+    version_dir = _write(tmp_path, dataset)
+    version = open_local_version(version_dir)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        connection.execute(statement)
+    for part in (*version.manifest.files.time_series, *version.manifest.files.payloads):
+        (version_dir / part.path).unlink()
+
+    with TimeFReader(version) as reader, pytest.raises(TimeFFormatError, match=message):
+        reader._read_dataset()
 
 
 def test_iter_records_preserves_requested_order(tmp_path):
     dataset = make_dataset()
     ordered_records = sorted(dataset.records, key=lambda record: record.id)
-    requested = (ordered_records[-1].id, ordered_records[0].id)
+    requested = (ordered_records[-1].id, ordered_records[0].id, ordered_records[-1].id)
     with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
-        selected = tuple(reader.iter_records(record_ids=requested))
+        selected = tuple(reader.iter_records(record_ids=iter(requested)))
     assert tuple(record.id for record in selected) == requested
 
 
@@ -508,3 +553,10 @@ def test_invalid_external_locator_is_rejected_before_exposing_placeholders(tmp_p
         pytest.raises(TimeFFormatError, match="invalid external locator"),
     ):
         reader.read_task_table()
+
+
+def test_an_eager_task_read_rejects_lazily_read_records(tmp_path):
+    with TimeFReader(open_local_version(_write(tmp_path))) as reader:
+        lazy_records = reader._read_catalog().records
+        with pytest.raises(TimeFValidationError, match="eager task read needs eagerly read records"):
+            reader._control_reader().read_tasks(cached_records=lazy_records, eager=True)
