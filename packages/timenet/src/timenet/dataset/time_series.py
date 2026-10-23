@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import Literal, assert_never
+from typing import assert_never
 
 from jaxtyping import Shaped
 import numpy as np
@@ -317,7 +317,7 @@ class Signal(SupportsAnnotate):
         spec: TimeSeriesSpec,
         name: str,
         id: str | None = None,
-        validation: Literal["full", "basic"] = "full",
+        full_validation: bool = True,
     ) -> "Signal":
         """Build an irregular series from materialized values and their time offsets.
 
@@ -333,7 +333,7 @@ class Signal(SupportsAnnotate):
             spec: The series' measurement-modality spec.
             name: The signal name.
             id: Explicit id, or ``None`` for an auto-generated UUIDv7.
-            validation: ``"full"`` checks timestamp ordering. Use ``"basic"`` only for previously
+            full_validation: Check timestamp ordering by default. Set to ``False`` only for previously
                 validated timestamps to skip that scan. Both modes check type, shape, integer range,
                 endpoints, and one timestamp per value. Conversion can still allocate when needed.
 
@@ -344,10 +344,10 @@ class Signal(SupportsAnnotate):
             TimeFValidationError: If the time offsets are unusable, or there is not exactly one per
                 value.
         """
-        if validation not in {"full", "basic"}:
-            raise TimeFValidationError(f"unknown irregular validation mode: {validation!r}")
+        if not isinstance(full_validation, bool):
+            raise TimeFValidationError("full_validation must be a bool")
         array = _array_from_values(spec, values)
-        time_offsets = to_time_offsets_us(time_offsets_us, validate_order=validation == "full")
+        time_offsets = to_time_offsets_us(time_offsets_us, validate_order=full_validation)
         if len(time_offsets) != len(array):
             raise TimeFValidationError(
                 f"an irregular series needs one time offset per value, got {len(time_offsets)} time offsets for {len(array)} values"

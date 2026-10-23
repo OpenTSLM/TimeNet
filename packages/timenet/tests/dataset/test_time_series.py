@@ -197,7 +197,7 @@ def test_irregular_basic_validation_shares_buffers_without_scanning(monkeypatch:
         raise AssertionError("basic validation must not scan timestamp ordering")
 
     monkeypatch.setattr("timenet.dataset.axis.np.diff", reject_scan)
-    signal = Signal.from_irregular(values, time_offsets_us=offsets, spec=_spec(), name="events", validation="basic")
+    signal = Signal.from_irregular(values, time_offsets_us=offsets, spec=_spec(), name="events", full_validation=False)
     assert np.shares_memory(signal.to_numpy(), values)
     assert np.shares_memory(signal.time_offsets_us(), offsets)
     assert isinstance(signal.time_axis, IrregularAxis)
@@ -212,7 +212,9 @@ def test_irregular_basic_validation_shares_buffers_without_scanning(monkeypatch:
 )
 def test_irregular_basic_validation_rejects_invalid_offsets(offsets, message):
     with pytest.raises(TimeFValidationError, match=message):
-        Signal.from_irregular([1.0, 2.0, 3.0], time_offsets_us=offsets, spec=_spec(), name="events", validation="basic")
+        Signal.from_irregular(
+            [1.0, 2.0, 3.0], time_offsets_us=offsets, spec=_spec(), name="events", full_validation=False
+        )
 
 
 def test_step_range_horizon_matches_n_steps():
