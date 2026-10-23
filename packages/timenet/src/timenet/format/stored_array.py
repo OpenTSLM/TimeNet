@@ -100,3 +100,38 @@ class StoredArray(ArrayHandle):
 
     def __deepcopy__(self, memo: dict) -> Self:
         return self
+
+
+@dataclass(frozen=True, eq=False, slots=True)
+class MemoryArray(ArrayHandle):
+    """Hold an eagerly read array in memory, with the handle it was read from.
+
+    The handle is picklable and returns its retained array without storage access. The source
+    handle preserves storage provenance, allowing writers to reuse stored chunks and time offsets.
+    """
+
+    array: pa.Array
+    source: ArrayHandle | None = None
+
+    @property
+    def is_loaded(self) -> bool:
+        """Return True, since the array is held in memory."""
+        return True
+
+    def read(self) -> pa.Array:
+        """Return the retained array without storage access."""
+        return self.array
+
+
+def resolve_storage_loader(handle: ArrayHandle | None) -> ArrayHandle | None:
+    """Return the handle that reads from storage, behind any in-memory copies of its values.
+
+    Eager reads keep values in :class:`MemoryArray` but remember the stored handle they came from.
+    Writers follow that link to reuse stored chunks and time offsets instead of copying them.
+
+    Returns:
+        The innermost handle, or the given handle if it holds no stored source.
+    """
+    while isinstance(handle, MemoryArray) and handle.source is not None:
+        handle = handle.source
+    return handle

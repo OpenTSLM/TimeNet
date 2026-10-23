@@ -30,7 +30,7 @@ from timenet.format.schemas import (
     IdTypes,
 )
 from timenet.format.storage import StorageSources
-from timenet.format.stored_array import StoredArray
+from timenet.format.stored_array import StoredArray, resolve_storage_loader
 from timenet.format.stored_values import PackedValueWriter
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
@@ -360,8 +360,9 @@ class TimeFWriter:
         """Separate signals whose stored chunks the new release reuses from signals it writes out.
 
         A signal read from a release holds a ``StoredArray``, whose location names its chunks and
-        the release that stores them, so the new catalog names the same chunks. Values built in
-        memory or read through a connector's function are written to new value files.
+        the release that stores them, so the new catalog names the same chunks. An eager read keeps
+        the ``StoredArray`` behind its in-memory copy. Values built in memory or read through a
+        connector's function are written to new value files.
 
         Args:
             unique_series: The deduplicated signals to serialize.
@@ -375,7 +376,7 @@ class TimeFWriter:
         shared: dict[tuple[str, int], ChunkPlacement] = {}
         owned: list[Signal] = []
         for signal in unique_series:
-            values = signal._values
+            values = resolve_storage_loader(signal._values)
             if not isinstance(values, StoredArray):
                 owned.append(signal)
                 continue

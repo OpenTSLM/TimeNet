@@ -15,6 +15,7 @@ from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.control_reader import DuckDBControlReader
 import timenet.format.control_writer as control_writer_module
+from timenet.format.stored_array import MemoryArray
 import timenet.format.stored_values as stored_values_module
 from timenet.format.stored_values import PackedValueReader, StoredOffsets, offsets_digest
 from timenet.manifest import Manifest
@@ -423,7 +424,8 @@ def test_a_control_reader_without_a_payload_reader_refuses_packed_offsets(tmp_pa
         reader.read_records()
 
 
-def test_signals_sharing_an_axis_share_one_stored_offsets_handle(tmp_path, monkeypatch):
+def _shared_axis_release(tmp_path, monkeypatch):
+    """Write two Signals on one irregular axis and count payload reads of its time offsets."""
     dataset = _dataset()
     shared_us = [0, 5_000, 9_000]
     axis = IrregularAxis.spanning(shared_us)
@@ -449,6 +451,11 @@ def test_signals_sharing_an_axis_share_one_stored_offsets_handle(tmp_path, monke
         return original(self, location)
 
     monkeypatch.setattr(PackedValueReader, "read_scalar", counting_read)
+    return version, axis, shared_us, reads
+
+
+def test_signals_sharing_an_axis_share_one_stored_offsets_handle(tmp_path, monkeypatch):
+    version, axis, shared_us, reads = _shared_axis_release(tmp_path, monkeypatch)
     with TimeFReader(version) as reader:
         temp, humidity = next(reader.iter_records()).signals
         handle = temp._time_offsets
@@ -458,6 +465,20 @@ def test_signals_sharing_an_axis_share_one_stored_offsets_handle(tmp_path, monke
         for signal in (temp, humidity, temp):
             assert signal.time_offsets_us().tolist() == shared_us
     assert reads == [handle._location]
+
+
+def test_eager_signals_sharing_an_axis_share_one_offsets_array(tmp_path, monkeypatch):
+    version, axis, shared_us, reads = _shared_axis_release(tmp_path, monkeypatch)
+    with TimeFReader(version) as reader:
+        temp, humidity = reader._read_dataset().records[0].signals
+        handle = temp._time_offsets
+        assert isinstance(handle, MemoryArray)
+        assert handle is humidity._time_offsets
+        stored = handle.source
+        assert isinstance(stored, StoredOffsets)
+        assert stored.axis_id == axis.axis_id
+        assert [signal.time_offsets_us().tolist() for signal in (temp, humidity)] == [shared_us, shared_us]
+    assert reads == [stored._location]
 
 
 def test_stored_offsets_digest_is_the_content_id_writers_compare(tmp_path):

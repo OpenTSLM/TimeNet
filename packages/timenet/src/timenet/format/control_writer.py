@@ -20,6 +20,7 @@ from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
 from timenet.format.signal_chunk_row import SIGNAL_CHUNK_TABLE, SignalChunkRow
+from timenet.format.stored_array import resolve_storage_loader
 from timenet.format.stored_values import (
     CatalogValue,
     PackedField,
@@ -875,7 +876,7 @@ class DuckDBControlWriter:
                     "last_us": axis.last_us,
                 }
             )
-            time_offsets = signal._time_offsets
+            time_offsets = resolve_storage_loader(signal._time_offsets)
             if time_offsets is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time offsets")
             if isinstance(time_offsets, StoredOffsets):

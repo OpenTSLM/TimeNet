@@ -249,3 +249,20 @@ def test_a_reused_signal_must_keep_its_stored_shape(tmp_path):
         child = _release("test/child", [Record(record_id="r", sources=(Source(name="s", signals=(shorter,)),))])
         with pytest.raises(TimeFValidationError, match=rf"shared signal '{shorter.id}' changed its storage shape"):
             store(tmp_path, child)
+
+
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_eagerly_read_signals_reuse_stored_chunks(tmp_path, backend):
+    original = make_dataset()
+    parent_dir = store(tmp_path, original, values_backend=backend)
+    with TimeFReader(open_local_version(parent_dir)) as reader:
+        parent = reader._read_dataset()
+        child = TimeFDataset(metadata=original.metadata.model_copy(update={"dataset_id": "test/child"}))
+        child.add_record(record=deepcopy(parent.records[0]))
+        child_dir = store(tmp_path, child)
+    manifest = Manifest.model_validate_json((child_dir / "manifest.json").read_text())
+    # The in-memory values still point at their stored chunks, so the child writes no value files.
+    assert manifest.files.time_series == ()
+    assert [str(ref) for ref in manifest.payload_sources.values()] == [
+        f"{original.metadata.dataset_id}@{original.metadata.dataset_version}"
+    ]
