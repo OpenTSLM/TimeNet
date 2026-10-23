@@ -88,8 +88,8 @@ The mask marks present timesteps. A placeholder at a missing position is not an 
 A connector can construct a Signal from in-memory `data`. It can also use `Signal.from_loader()` for
 a source that must remain lazy.
 
-The TimeF reader always supplies lazy storage loaders. Reading a dataset therefore does not load
-every Signal array.
+The TimeF reader always supplies lazy handles to the stored values. Reading a dataset therefore
+does not load every Signal array.
 
 ## Ownership and reuse
 

@@ -62,7 +62,7 @@ def _canonical(value: Any) -> Any:  # noqa: PLR0911, RUF100 - explicit type case
     if isinstance(value, type):
         return f"{value.__module__}.{value.__qualname__}"
     if is_dataclass(value):
-        unstable_or_executable = {"axis_id", "occurrence_id", "loader", "time_offsets_loader"}
+        unstable_or_executable = {"axis_id", "occurrence_id", "_values", "_time_offsets"}
         return {
             field.name: _canonical(getattr(value, field.name))
             for field in fields(value)

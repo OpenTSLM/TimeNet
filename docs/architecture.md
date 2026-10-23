@@ -99,9 +99,9 @@ can read it directly.
   annotation content are typed [descriptors](types.md), so they pickle and round-trip through the
   reader with no runtime class synthesis. That keeps multiprocessing `DataLoader` workers safe.
 - Values are Arrow in, Arrow out. A [`Signal`](timef-dataset.md#signal) exposes `to_arrow()`,
-  `to_numpy()`, and `read_steps()` over a private lazy loader. Its spec declares the scalar dtype and
-  per-timestep shape. The writer stores typed scalar values in Parquet by default and uses Zarr for
-  dtype-preserving multidimensional values.
+  `to_numpy()`, and `read_steps()` over a private array handle. Its spec declares the scalar dtype
+  and per-timestep shape. The writer stores typed scalar values in Parquet by default and uses Zarr
+  for dtype-preserving multidimensional values.
 - Units go through [pint](https://pint.readthedocs.io). One shared registry owns every definition
   and conversion.
 - Commits are atomic. The writer stages a version into a temp directory and publishes it with a

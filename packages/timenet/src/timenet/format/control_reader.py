@@ -27,6 +27,7 @@ from timenet.format.task_codec import (
 from timenet.types import (
     TASKS,
     Annotation,
+    ArrayHandle,
     InputModality,
     Task,
     TaskType,
@@ -43,7 +44,7 @@ from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 
 
 ValueLoader = Callable[[str, TimeSeriesSpec], pa.Array]
-ValueLoaderFactory = Callable[[int, str, TimeSeriesSpec], Callable[[], pa.Array]]
+ValueLoaderFactory = Callable[[int, str, TimeSeriesSpec], ArrayHandle]
 OffsetsLoader = Callable[[int, IrregularAxis, int], pa.Array]
 
 
@@ -414,7 +415,7 @@ class DuckDBControlReader:
         Args:
             path: Local path to ``control.duckdb``.
             value_loader: Lazy values-plane resolver keyed by signal ID.
-            value_loader_factory: Factory for range-aware per-Signal loaders.
+            value_loader_factory: Factory for range-aware per-Signal value handles.
             offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
 
         Raises:

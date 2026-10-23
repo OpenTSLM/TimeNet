@@ -284,7 +284,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
                 spec=signal.spec,
                 name=signal.name,
                 time_axis=signal.time_axis,
-                loader=signal.loader,
+                loader=signal._values,
                 id=f"{signal.id}-question-{index:03d}",
                 n_values=signal.n_values,
             )
