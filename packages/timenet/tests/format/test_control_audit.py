@@ -3,11 +3,12 @@ from fractions import Fraction
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.dataset import IrregularAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError
 from timenet.format.control_audit import audit_control_database
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
+from timenet.format.stored_values import PackedValueWriter
 from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 
 
@@ -24,7 +25,16 @@ def _dataset() -> TimeFDataset:
         n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
     )
-    ecg = Source(id="ecg", name="ECG", signals=(lead_i,))
+    pulse = Signal.from_loader(
+        id="pulse",
+        name="Pulse",
+        spec=SPEC,
+        time_axis=IrregularAxis(axis_id="axis-2", first_us=0, last_us=5_000),
+        n_values=2,
+        loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
+        time_offsets_loader=lambda: pa.array([0, 5_000], type=pa.int64()),
+    )
+    ecg = Source(id="ecg", name="ECG", signals=(lead_i, pulse))
     monitor = Source(id="monitor", name="Monitor", sources=(ecg,))
     record = Record(record_id="record-1", sources=(monitor,))
     record.annotate(Annotation(id="sex-male", key="patient_sex", value="male"))
@@ -45,7 +55,7 @@ def _dataset() -> TimeFDataset:
 @pytest.fixture
 def control_path(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
     return path
 
 
@@ -92,8 +102,18 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
             "contains a cycle",
         ),
         (
-            "INSERT INTO axis_offsets SELECT axis_key, 0, 0 FROM axes",
-            "axis length that does not match",
+            "INSERT INTO external_values "
+            "SELECT 'Axis', axis_id, 'time_offsets', 0, 'payloads/part-00000000.parquet', 0, 'time_offsets', 2, "
+            "'sha256:' || repeat('0', 64) FROM axes WHERE axis_type = 'regular'",
+            "signal 'lead-i' has an axis length that does not match",
+        ),
+        (
+            "DELETE FROM external_values WHERE object_kind = 'Axis'",
+            "signal 'pulse' has an axis length that does not match",
+        ),
+        (
+            "UPDATE external_values SET n_values = 3 WHERE object_kind = 'Axis'",
+            "signal 'pulse' has an axis length that does not match",
         ),
     ],
 )

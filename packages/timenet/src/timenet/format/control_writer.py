@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
-from hashlib import sha256
 from itertools import islice
 import json
 from pathlib import Path
@@ -11,16 +10,23 @@ from typing import TYPE_CHECKING, Any, NamedTuple, assert_never
 
 import duckdb
 import numpy as np
+import pyarrow as pa
 from pydantic import ValidationError
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, RegularAxis, Signal, TimeAxis, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
-from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.control_schema import TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
-from timenet.format.stored_values import CatalogValue, PackedField, PackedValueKind, PackedValueWriter
+from timenet.format.stored_values import (
+    CatalogValue,
+    PackedField,
+    PackedValueKind,
+    PackedValueWriter,
+    StoredOffsets,
+    offsets_digest,
+)
 from timenet.format.table_writer import insert_rows
 from timenet.format.task_codec import encode_span, encode_task_payload
 from timenet.format.task_target_row import TargetValueRow, TaskTargetRow
@@ -34,7 +40,6 @@ from timenet.types import (
 )
 from timenet.types.object_kind import ObjectKind
 from timenet.types.splits import parse_split
-from timenet.types.text import read_value
 
 
 if TYPE_CHECKING:
@@ -53,12 +58,18 @@ def _packed_placeholder(kind: PackedValueKind) -> str | list[str]:
 
     Returns:
         The empty value of the packed value's catalog type.
+
+    Raises:
+        TimeFValidationError: If the value kind has no catalog column, as for axis offsets.
     """
     match kind:
         case PackedValueKind.TEXT:
             return ""
         case PackedValueKind.TEXT_LIST:
             return []
+        case PackedValueKind.TIME_OFFSETS:
+            # Axis offsets are packed directly and have no catalog column to hold a placeholder.
+            raise TimeFValidationError("packed offsets have no catalog placeholder")
         case _:
             assert_never(kind)
 
@@ -216,17 +227,16 @@ class _OffsetSignature(NamedTuple):
     """Bounded identity for one validated irregular offset stream."""
 
     n_values: int
-    checksum: str
+    digest: bytes
 
 
 def _offset_signature(offsets: np.ndarray) -> _OffsetSignature:
-    """Return the length and algorithm-qualified digest of canonical offsets.
+    """Return the length and digest of canonical offsets.
 
     Returns:
         A bounded identity for the offset stream.
     """
-    checksum = CHECKSUM_PREFIX + sha256(memoryview(offsets)).hexdigest()
-    return _OffsetSignature(len(offsets), checksum)
+    return _OffsetSignature(len(offsets), offsets_digest(offsets))
 
 
 class _StoredAxis(NamedTuple):
@@ -246,7 +256,6 @@ class _HierarchyBatches:
         self.clocks = _TableBatch(connection, TABLES["clocks"])
         self.sources = _TableBatch(connection, TABLES["sources"])
         self.axes = _TableBatch(connection, TABLES["axes"])
-        self.axis_offsets = _TableBatch(connection, TABLES["axis_offsets"])
         self.signals = _TableBatch(connection, TABLES["signals"])
 
     def flush(self) -> None:
@@ -255,18 +264,18 @@ class _HierarchyBatches:
         self.clocks.flush()
         self.sources.flush()
         self.axes.flush()
-        self.axis_offsets.flush()
         self.signals.flush()
 
 
 class DuckDBControlWriter:
     """Serialize the relational part of one immutable TimeF version."""
 
-    def __init__(self, path: Path, *, external: PackedValueWriter | None = None) -> None:
+    def __init__(self, path: Path, *, external: PackedValueWriter) -> None:
         """Configure a new local control database.
 
         Args:
             path: Destination path. It must not already exist.
+            external: Writer for packed text and irregular time offsets beside the catalog.
 
         Raises:
             FileExistsError: If ``path`` already exists.
@@ -311,8 +320,7 @@ class DuckDBControlWriter:
                     )
                     self._write_chunks(connection, placements)
                     self._check_source_tree(connection)
-                    if self.external is not None:
-                        self.external.finish(connection)
+                    self.external.finish(connection)
                 connection.execute("CHECKPOINT")
         except duckdb.Error as exc:
             self.path.unlink(missing_ok=True)
@@ -328,8 +336,6 @@ class DuckDBControlWriter:
         Returns:
             The original inline value, or the placeholder of a packed value's kind.
         """
-        if self.external is None:
-            return read_value(value)
         result = self.external.pack(kind, identity, field, value, position)
         if isinstance(result, CatalogValue):
             return result.value
@@ -766,8 +772,12 @@ class DuckDBControlWriter:
                 raise TimeFValidationError(f"irregular axis {axis.axis_id!r} stores no time offsets")
             # Handles over one callable compare equal, so offsets shared through it are read once.
             if signal._time_offsets != existing.offsets_handle:
-                candidate = _validated_irregular_offsets(signal)
-                candidate_signature = _offset_signature(candidate)
+                time_offsets = signal._time_offsets
+                # Stored offsets record their length and digest, so comparing them reads and hashes nothing.
+                if isinstance(time_offsets, StoredOffsets):
+                    candidate_signature = _OffsetSignature(time_offsets.length, time_offsets.digest)
+                else:
+                    candidate_signature = _offset_signature(_validated_irregular_offsets(signal))
                 if candidate_signature != stored_offsets:
                     raise TimeFValidationError(
                         f"axis id {axis.axis_id!r} is shared by signals with different time offsets"
@@ -802,8 +812,7 @@ class DuckDBControlWriter:
         )
         return signal_key
 
-    @staticmethod
-    def _write_axis(signal: Signal, axis_key: int, batches: _HierarchyBatches) -> _OffsetSignature | None:
+    def _write_axis(self, signal: Signal, axis_key: int, batches: _HierarchyBatches) -> _OffsetSignature | None:
         """Buffer an axis and any irregular offsets.
 
         Returns:
@@ -845,9 +854,15 @@ class DuckDBControlWriter:
             if signal._time_offsets is None:
                 raise TimeFValidationError(f"irregular signal {signal.id!r} has no time offsets")
             offsets = _validated_irregular_offsets(signal)
-            for position, offset in enumerate(offsets):
-                batches.axis_offsets.add({"axis_key": axis_key, "position": position, "offset_us": int(offset)})
-            return _offset_signature(offsets)
+            signature = _offset_signature(offsets)
+            self.external.pack(
+                ObjectKind.AXIS,
+                axis.axis_id,
+                PackedField.TIME_OFFSETS,
+                pa.array(offsets, type=pa.int64()),
+                digest=signature.digest,
+            )
+            return signature
         if isinstance(axis, OrdinalAxis):
             batches.axes.add(
                 {
