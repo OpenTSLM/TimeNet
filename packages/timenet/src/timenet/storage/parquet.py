@@ -1,4 +1,4 @@
-"""Bounded caches for Signal values row groups and shard file handles."""
+"""Bounded caches for packed payload tables and Signal values row groups."""
 
 from typing import TYPE_CHECKING, Self
 
@@ -11,6 +11,42 @@ from timenet.errors import TimeFFormatError
 
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
+
+
+class PayloadTableCache:
+    """Cache complete packed payload files without retaining file handles."""
+
+    def __init__(self, max_entries: int) -> None:
+        self._tables: LRUCache[tuple[str, str], pa.Table] = LRUCache(max_entries)
+
+    def __reduce__(self) -> tuple[type[Self], tuple[int]]:
+        # Recreate an empty cache in the receiving process.
+        return type(self), (int(self._tables.maxsize),)
+
+    def read_table(self, version: "DatasetVersion", path: str) -> pa.Table:
+        """Read a payload file once while it remains in the cache.
+
+        Returns:
+            The cached payload table.
+
+        Raises:
+            TimeFFormatError: If the payload file cannot be read.
+        """
+        key = (version.root, path)
+        cached = self._tables.get(key)
+        if cached is not None:
+            return cached
+        try:
+            with pq.ParquetFile(version.path(path), filesystem=version.filesystem, pre_buffer=True) as source:
+                table = source.read(use_threads=False)
+        except (OSError, pa.ArrowException) as exc:
+            raise TimeFFormatError(f"cannot read Parquet file {version.path(path)}: {exc}") from exc
+        self._tables[key] = table
+        return table
+
+    def close(self) -> None:
+        """Release decoded payloads, keeping the cache reusable."""
+        self._tables.clear()
 
 
 class _OpenParquetFiles(LRUCache[tuple[str, str], pq.ParquetFile]):

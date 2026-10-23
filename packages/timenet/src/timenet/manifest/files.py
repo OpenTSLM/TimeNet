@@ -44,6 +44,9 @@ class ManifestFiles(TimeFModel):
     time_series: tuple[FilePart, ...] = ()
     """Parquet shards or files inside the Zarr values store."""
 
+    payloads: tuple[FilePart, ...] = ()
+    """Packed large text and string lists."""
+
     def all_files(self) -> tuple[FilePart, ...]:
         """Return every file descriptor across all artifacts, in a stable order.
 
@@ -53,6 +56,7 @@ class ManifestFiles(TimeFModel):
         return (
             *self.control,
             *self.time_series,
+            *self.payloads,
         )
 
     def all_parts(self) -> tuple[str, ...]:

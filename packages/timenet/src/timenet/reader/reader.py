@@ -16,7 +16,15 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
+from timenet.format.stored_values import (
+    ANNOTATION_COLUMNS,
+    TARGET_COLUMNS,
+    TASK_COLUMNS,
+    PackedValueReader,
+    materialize_table,
+)
 from timenet.types import ArrayHandle, DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
+from timenet.types.object_kind import ObjectKind
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
@@ -45,6 +53,7 @@ class TimeFReader:
             version: Opened dataset version containing a parsed manifest and filesystem handle.
         """
         self._version = version
+        self._packed_value_reader = PackedValueReader(version)
         self._fs = version.filesystem
         self._root = version.root
         self._manifest = version.manifest
@@ -93,6 +102,7 @@ class TimeFReader:
             self._control = None
         self._records = None
         self._tasks = None
+        self._packed_value_reader.close()
         self._chunk_rows_cache.clear()
         self._axis_offsets_cache.clear()
         self._axis_offsets_cache_bytes = 0
@@ -191,7 +201,7 @@ class TimeFReader:
                 cached_records=cached_records,
             )
 
-    def task_table(
+    def read_task_table(
         self,
         record_ids: Iterable[str] | None = None,
         *,
@@ -207,17 +217,19 @@ class TimeFReader:
 
         Returns:
             One row per task with public IDs in place of object references. Targets are in
-            :meth:`target_table`.
+            :meth:`read_target_table`.
         """
         with self._as_format_error():
-            return self._control_reader().task_table(
+            table = self._control_reader().read_task_table(
                 record_ids,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
                 split=split,
             )
 
-    def target_table(
+            return materialize_table(table, self._packed_value_reader, self._control_reader().connection, TASK_COLUMNS)
+
+    def read_target_table(
         self,
         record_ids: Iterable[str] | None = None,
         *,
@@ -235,24 +247,33 @@ class TimeFReader:
             Targets in task ID and position order.
         """
         with self._as_format_error():
-            return self._control_reader().target_table(
+            table = self._control_reader().read_target_table(
                 record_ids,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
                 split=split,
             )
 
-    def annotation_table(self, object_type: str | None = None) -> pa.Table:
+            return materialize_table(
+                table, self._packed_value_reader, self._control_reader().connection, TARGET_COLUMNS
+            )
+
+    def read_annotation_table(self, object_type: ObjectKind | None = None) -> pa.Table:
         """Return every annotation occurrence with its content as an Arrow table.
 
         Args:
-            object_type: Keep only occurrences on ``"Record"``, ``"Signal"``, and so on, or ``None`` for all.
+            object_type: Keep occurrences on this object kind, such as ``ObjectKind.RECORD``,
+                or ``None`` for all annotated objects.
 
         Returns:
             One row per occurrence.
         """
         with self._as_format_error():
-            return self._control_reader().annotation_table(object_type)
+            table = self._control_reader().read_annotation_table(object_type)
+
+            return materialize_table(
+                table, self._packed_value_reader, self._control_reader().connection, ANNOTATION_COLUMNS
+            )
 
     @property
     def values_backend(self) -> str:
@@ -313,6 +334,7 @@ class TimeFReader:
                 materialize_control(self._version),
                 value_loader_factory=self._make_signal_loader,
                 offsets_loader=self._load_offsets,
+                external=self._packed_value_reader,
             )
         return self._control
 
