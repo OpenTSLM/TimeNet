@@ -13,6 +13,7 @@ from timenet.engine import store_dataset
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.types import AnswerTask
+from timenet.types.text import read_value
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import EcgQaCotConnector, EcgQaCotSource
 
@@ -157,8 +158,10 @@ def test_each_question_is_an_answer_task_on_its_recording(tmp_path, records_dir)
     tasks = list(dataset.iter_tasks())
     assert len(tasks) == len(rows)
     assert all(isinstance(task, AnswerTask) for task in tasks)
-    assert {task.targets[0] for task in tasks if task.targets is not None} == {row["answer"] for row in rows}
-    assert {task.rationale for task in tasks} == {row["rationale"] for row in rows}
+    assert {read_value(task.targets[0]) for task in tasks if task.targets is not None} == {
+        row["answer"] for row in rows
+    }
+    assert {read_value(task.rationale) for task in tasks} == {row["rationale"] for row in rows}
     assert {task.inputs[0].id for task in tasks} == {"ptbxl-1", "ptbxl-2"}
     # The answer is the short label, not the chain of thought.
     assert all(task.targets != (task.rationale,) for task in tasks)
