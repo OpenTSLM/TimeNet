@@ -74,6 +74,7 @@ class _RecordRow(NamedTuple):
     time_span_start_us: int | None
     time_span_end_us: int | None
     metadata: str
+    read_order: int
 
 
 class _SourceRow(NamedTuple):
@@ -361,7 +362,7 @@ _Ref = TypeVar("_Ref", Record, Annotation)
 _T = TypeVar("_T")
 
 _HIERARCHY_TABLES: dict[type[tuple[Any, ...]], tuple[str, str, str]] = {
-    _RecordRow: ("records", "record_id", "record_id"),
+    _RecordRow: ("records", "record_id", "read_order"),
     _SourceRow: ("sources", "record_key", "source_id"),
     _SignalRow: ("signals", "source_key", "signal_id"),
 }
@@ -598,7 +599,7 @@ class DuckDBControlReader:
             The Record IDs sorted by ID.
         """
         return tuple(
-            row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY record_id").fetchall()
+            row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY read_order").fetchall()
         )
 
     def read_records(
@@ -625,7 +626,7 @@ class DuckDBControlReader:
             TimeFValidationError: If a requested record is absent.
             TimeFFormatError: If the stored hierarchy is inconsistent.
         """  # noqa: DOC502 - row selection and hierarchy helpers validate the stored data
-        hierarchy = self._read_record_hierarchy(None if record_ids is None else tuple(record_ids))
+        hierarchy = self._read_record_hierarchy(None if record_ids is None else tuple(record_ids), eager=eager)
         annotations = self._read_annotations(hierarchy.annotation_keys, eager=eager) if with_annotations else {}
         prepared = hierarchy.signals
         if eager:
@@ -634,7 +635,7 @@ class DuckDBControlReader:
         signals_by_source = self._read_signals(prepared, annotations)
         return self._assemble_records(hierarchy, signals_by_source, annotations)
 
-    def _read_record_hierarchy(self, requested: tuple[str, ...] | None) -> _RecordHierarchy:
+    def _read_record_hierarchy(self, requested: tuple[str, ...] | None, *, eager: bool) -> _RecordHierarchy:
         """Read and validate the catalog rows without opening payload files.
 
         Returns:
@@ -654,6 +655,10 @@ class DuckDBControlReader:
             if row.source_key not in sources_by_key:
                 raise TimeFFormatError(f"signal {row.signal_id!r} refers to missing source key {row.source_key!r}")
         children, roots = self._group_sources(sources_by_key, {row.record_key for row in record_rows})
+        if eager:
+            # Construct native arrays in Record scan order, which may differ from namespaced IDs.
+            record_order = {row.record_key: index for index, row in enumerate(record_rows)}
+            signal_rows.sort(key=lambda row: record_order[sources_by_key[row.source_key].record_key])
         self._cache_record_clocks(record_rows)
         return _RecordHierarchy(
             records=record_rows,
