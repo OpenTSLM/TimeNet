@@ -1,7 +1,7 @@
 import pytest
 
 from timenet.errors import TimeFValidationError
-from timenet.refs import split_ref
+from timenet.types.references import split_ref
 
 
 @pytest.mark.parametrize(
