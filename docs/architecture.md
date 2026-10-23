@@ -48,7 +48,7 @@ CONSUME  SDK ─► open_version ─► TimeFReader ─► Arrow
 
 The compiled `manifest.json` is the entry point and commit marker. It contains the card metadata,
 derived schema, counts, and file list. `open_version` returns a handle to the manifest and version
-files. `TimeFReader` uses the handle to read the DuckDB hierarchy and lazy Signal values. The SDK
+files. `TimeFReader` offers eager reads and explicit lazy handles. The SDK
 never imports connector code.
 
 ---
@@ -117,4 +117,16 @@ can read it directly.
 2. **Build**: `timenet-build build <org>/<name>` runs the engine, compiles the manifest, and writes a TimeF version.
 3. **Verify** locally: point the SDK at the output directory (itself a valid local registry).
 4. **Publish** the complete TimeF version to a registry.
-5. **Consume**: use `TimeNet.load()` for lazy access or `timenet download` for a local copy.
+5. **Consume**: use `TimeNet.get_handle()` for lazy access or `timenet download` for a local copy.
+
+## Independent child catalogs
+
+A child copies selected parent metadata into its own DuckDB catalog during the build. It references
+unchanged payload files through dataset ID/version references.
+Preparation resolves physical payload sources upfront. Reads use complete local copies or remote
+byte ranges without opening parent catalogs. Local reads can fetch or build missing physical sources
+when enabled. Build-only inputs are prepared when a connector runs.
+
+The writer resolves dependencies, remaps IDs, flattens storage ownership, and computes physical scan
+order. Namespace tables support lookup by parent ID without adding work to ordinary object reads.
+See [connector composition](connectors.md#compose-a-child-dataset) for the build API.
