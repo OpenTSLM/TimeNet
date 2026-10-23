@@ -104,10 +104,11 @@ value, and records its value kind and length. An irregular axis's time offsets u
 value kind `time_offsets` and sit in the payload column of that name. For them, `value_digest` also
 records the SHA-256 digest of the time offsets as contiguous little-endian int64 values, stored as
 `sha256:<hex>`, so a writer can compare a stored axis with other time offsets without reading it.
-The inline column keeps a placeholder: an empty string for text and an empty list for a string
-list. An empty inline value alone therefore does not mean empty text; readers look up
-`external_values` first. Direct SQL queries over inline columns do not resolve external values.
-The public Arrow table APIs return the complete text.
+`owner_key` is `NULL` when this release stores the payload file, and otherwise names the release
+that does; see [Shared payloads](#shared-payloads). The inline column keeps a placeholder: an
+empty string for text and an empty list for a string list. An empty inline value alone therefore
+does not mean empty text; readers look up `external_values` first. Direct SQL queries over inline
+columns do not resolve external values. The public Arrow table APIs return the complete text.
 
 ## Annotations
 
@@ -158,7 +159,7 @@ keys. See [TimeFReader](timef-reader.md).
 Signal arrays remain outside DuckDB. A `signal_chunks` row contains:
 
 ```text
-signal_id, chunk_index, value_path, chunk_major_index,
+signal_key, chunk_index, value_path, owner_key, chunk_major_index,
 chunk_minor_index, n_values
 ```
 
@@ -166,7 +167,19 @@ For Parquet, the locator identifies a shard row group and row. For Zarr, it iden
 element range. The reader resolves only the requested Signal's rows and keeps its values lazy. Range
 reads load only intersecting chunks. The values plane does not duplicate irregular time offsets.
 Within one read, the Signals on one axis share one handle to its packed time offsets, which checks
-them against the axis on its first read and keeps them.
+them against the axis on its first read and keeps them. All chunks of one Signal have the same
+`owner_key`: `NULL` when this release stores them, or the release that does.
+
+## Shared payloads
+
+A release can reuse the Signal chunks, packed text, and time offsets that other releases store,
+instead of copying them. The rows that locate such a payload in `signal_chunks` and
+`external_values` carry an owner key, which names the release that stores its file as
+`org/name@version`. The manifest's `payload_sources` maps each owner key to that exact dataset ID
+and version, so a reader resolves the key through the manifest and opens the file in that release,
+from a complete local copy or with remote byte ranges, without opening its catalog. An owner key
+always names the release that stores the file, even when the value came through a release that
+reused it in turn. A reader therefore resolves every payload in one step.
 
 ## Integrity
 

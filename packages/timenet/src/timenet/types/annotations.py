@@ -24,7 +24,7 @@ from timenet.types._fields import ValueField
 from timenet.types._model import TimeFModel
 from timenet.types.ids import new_id
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
-from timenet.types.text import InlineText, InlineTextList, TextHandle, TextListHandle, read_value
+from timenet.types.text import InlineText, InlineTextList, TextHandle, TextListHandle
 from timenet.types.units import normalize_unit
 from timenet.types.wire import ValueType
 
@@ -137,10 +137,23 @@ class Annotation:
         """Return the identity of the reusable annotation content."""
         return self.id
 
-    @property
-    def _content_fields(self) -> tuple[object, ...]:
-        """Return the reusable payload, without occurrence-specific fields."""
-        return (self.key, read_value(self.value), self.unit, self.description, self.metadata)
+    def _has_same_content(self, other: "Annotation") -> bool:
+        """Compare reusable content, without occurrence-specific fields.
+
+        The value comes last, so differing metadata spares a read of stored text. Text values
+        compare as text handles do: one handle, or two at one stored location, compare without a
+        read.
+
+        Returns:
+            Whether the reusable metadata and values agree.
+        """
+        return (self.key, self.unit, self.description, self.metadata, self.value) == (
+            other.key,
+            other.unit,
+            other.description,
+            other.metadata,
+            other.value,
+        )
 
     @property
     def name(self) -> str:

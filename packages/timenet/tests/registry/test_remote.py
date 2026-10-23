@@ -1,7 +1,7 @@
 import json
 from pathlib import Path
 
-from _fake_registry import build_fake, build_publish_fake
+from _fake_registry import build_fake, build_publish_fake, registry_server
 import httpx
 from pydantic import ValidationError
 import pytest
@@ -186,11 +186,12 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
 
 
 def test_load_full_round_trips(version_dir, tmp_path):
-    registry, _ = _remote(version_dir, tmp_path)
-    _, manifest = version_dir
-    client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
-    loaded = client.load(manifest.metadata.dataset_id)  # a remote load materializes then reads locally
-    assert_datasets_equal(make_dataset(), loaded)
+    directory, manifest = version_dir
+    with registry_server(directory) as server:
+        registry = RemoteRegistry(server.url, cache_dir=tmp_path / "cache")
+        client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
+        loaded = client.load(manifest.metadata.dataset_id)
+        assert_datasets_equal(make_dataset(), loaded)
 
 
 def test_store_publishes_uploads_and_finalizes(tmp_path):
