@@ -71,6 +71,8 @@ Create `packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>
   `description`, `license`, `domains`, `tags`.
 - `connector.py`, the `BaseConnector` subclass, ending with a module-level `CONNECTOR = <YourClass>`.
 - `__init__.py`, re-exporting `CONNECTOR` (and the class) from `connector.py`.
+- `VERIFICATION.md`, the verification record, copied from `docs/connector-verification-template.md`
+  and filled in during step 7.
 - `requirements.txt`, when the connector needs a library outside `timenet-connectors`' core
   dependencies. Import it lazily inside the connector. If it is missing, raise a clear error. A build
   installs it into the environment that the build runs in. The lazy import keeps `--no-isolation`
@@ -90,6 +92,26 @@ with lazy value loaders (never materialize arrays in `convert`). See the worked 
 - Round-trip end to end: `uv run timenet-build build <id> --out <tmp-dir>`, then
   `TimeNet(registry="<tmp-dir>").load("<id>").describe()`.
 - Run `make check` and `make test`, and state which checks you ran (per AGENTS.md).
+
+### 8. Write the verification record
+Fill in `VERIFICATION.md` from the template. `docs/connector-verification.md` explains every item
+and how to check it.
+- Answer each item as ✅ Done, ☑️ Done once, ⚠️ Open or ⚪ N/A, with evidence, following
+  "Choosing a status" in the guide. ✅ Done means a test or build check enforces it on every
+  build: name it in backticks. Mark what you checked once against the real data as ☑️ Done once,
+  with what you compared and the numbers that came out.
+- Never mark an item ✅ Done because the code looks right or a check "would catch it". If nothing
+  ran, it is ⚠️ Open. If its check relies on an open item, it is ⚠️ Open too. When in doubt, pick
+  the weaker status.
+- List the independent copies of the data under References, rank the open items, and sketch the
+  checks that would close them.
+- Name no people in the record. The connector's PR reviewer checks it.
+
+### 9. HARD GATE: review the open items with the user
+
+**STOP before calling the connector done.** Present the ⚠️ Open items, most important first, and
+every decision they need. The user decides which to close now and which to leave open. Then run
+`make test` again, so the record test passes.
 
 ## Further reading
 

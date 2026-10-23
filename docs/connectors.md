@@ -177,9 +177,19 @@ previously published splits or change a benchmark's pinned dataset version impli
 
 The system finds connectors lazily, by dataset id. There is no central registry to maintain. A
 concrete connector lives under `timenet_connectors/datasets/<org>/<name>/`. Use lowercase Python
-package names. The package's `__init__.py` exposes `CONNECTOR`. Put `dataset.yaml` and an optional
-`requirements.txt` beside it. The build tool imports only the requested connector package. Reusable
-bases live under `timenet_connectors/bases/`.
+package names. The package's `__init__.py` exposes `CONNECTOR`. Put `dataset.yaml`, a
+`VERIFICATION.md`, and an optional `requirements.txt` beside it. The build tool imports only the
+requested connector package. Reusable bases live under `timenet_connectors/bases/`.
+
+## Verifying a connector
+
+Every connector ships a `VERIFICATION.md` that answers the
+[verification checklist](connector-verification.md#verification-checklist): how the author
+knows the source is right, complete, and correctly mapped into TimeF, and what is still open.
+Start from the [template](connector-verification-template.md) and add it in the same commit as
+the connector. A test in `timenet-connectors` fails for a connector without a complete record.
+See [Verifying a connector](connector-verification.md) for what each item means and how to
+check it.
 
 ## Dependencies and credentials
 
