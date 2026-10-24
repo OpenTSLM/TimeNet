@@ -192,12 +192,10 @@ def test_nd_uint8_round_trip_and_range_read(tmp_path):
                             loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
                                 frames, dim_names=spec.dimension_names
                             ),
-                            id="camera-1",
                         ),
                     ),
                 ),
             ),
-            id="record-camera",
         )
     )
     dataset.derive_schema()
@@ -251,7 +249,6 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
                             spec=nd_spec,
                             name="rgb",
                             time_axis=RegularAxis.from_rate_hz(10),
-                            id="cam-1",
                             n_values=len(frames),
                             loader=lambda: pa.FixedShapeTensorArray.from_numpy_ndarray(
                                 frames, dim_names=nd_spec.dimension_names
@@ -261,14 +258,12 @@ def test_zarr_empty_range_read_returns_typed_empty_arrays(tmp_path):
                             spec=scalar_spec,
                             name="i",
                             time_axis=RegularAxis.from_rate_hz(10),
-                            id="sig-1",
                             n_values=6,
                             loader=lambda: pa.array(np.arange(6, dtype=np.float32)),
                         ),
                     ),
                 ),
             ),
-            id="record-0",
         )
     )
     dataset.derive_schema()
@@ -315,7 +310,6 @@ def test_str_round_trip(tmp_path):
                     ),
                 ),
             ),
-            id="record-0",
         )
     )
     dataset.derive_schema()

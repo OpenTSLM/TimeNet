@@ -1,5 +1,3 @@
-import re
-
 import numpy as np
 import pytest
 
@@ -42,7 +40,7 @@ def test_assert_datasets_equal_compares_resolved_modalities():
     assert_datasets_equal(expected, actual)
 
     task.input_modalities = frozenset({InputModality.IMAGE})
-    with pytest.raises(AssertionError, match=rf"task {re.escape(task.id)} differs"):
+    with pytest.raises(AssertionError, match=f"task {task.id} differs"):
         assert_datasets_equal(expected, actual)
 
 

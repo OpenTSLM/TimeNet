@@ -106,10 +106,6 @@ def test_correspondence_record_targets_must_come_from_a_bounded_pool():
         TSCorrespondenceTask(candidate_records=(candidate,), targets=(outside,))
 
 
-def test_task_ids_are_unique_by_default():
-    assert AnswerTask(targets=("a",)).id != AnswerTask(targets=("a",)).id
-
-
 def test_registry_rejects_a_task_type_collision():
     @dataclass(kw_only=True)
     class DuplicateAnswer(Task):

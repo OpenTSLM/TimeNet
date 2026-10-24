@@ -15,6 +15,7 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     Domain,
+    EntityId,
     License,
     LocalizationMode,
     ScalarPredictionTask,
@@ -81,13 +82,12 @@ _COSINE = TimeSeriesSpec(
 )
 
 
-def _series(spec, signal, n, time_series_id, phase=0.0):
+def _series(spec, signal, n, phase=0.0):
     return Signal.from_loader(
         spec=spec,
         name=signal,
         time_axis=RegularAxis.from_rate_hz(int(_RATE_HZ)),
         loader=sine_loader(n=n, freq_hz=1.0, sampling_rate_hz=_RATE_HZ, phase=phase),
-        id=time_series_id,
         n_values=n,
     )
 
@@ -100,8 +100,8 @@ def make_dataset() -> TimeFDataset:
     annotation shapes, and one annotation appears in two records. It chains a classification task
     to an answer task, and the answer carries a rationale and an input annotation. It also adds a
     scoped classification, a scalar prediction, and a temporal localization whose target is a point
-    and an interval. The ids never change, so two calls produce equal datasets. This is the canonical
-    writer and reader round-trip fixture.
+    and an interval. The dataset numbers every id, so two calls build equal datasets. This is the
+    canonical writer and reader round-trip fixture.
 
     Returns:
         The populated :class:`TimeFDataset`.
@@ -116,16 +116,15 @@ def make_dataset() -> TimeFDataset:
             domains=(Domain.GENERAL,),
         )
     )
-    shared = _series(_SINE, "a", 16, "ts-shared")
+    shared = _series(_SINE, "a", 16)
 
     record0 = dataset.add_record(
         record=Record(
-            id="record-0",
             start_time=TimeOrigin(9_007_199_254_740_993),
             sources=(
                 Source(
                     name="Synthetic monitor",
-                    signals=(shared, _series(_COSINE, "b", 16, "ts-cos-0")),
+                    signals=(shared, _series(_COSINE, "b", 16)),
                 ),
             ),
         )
@@ -138,7 +137,7 @@ def make_dataset() -> TimeFDataset:
         ]
     )
     shared.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25)))
-    classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
+    classification = ClassificationTask(inputs=(record0,), targets=("normal",))
     dataset.add_tasks(
         tasks=[
             classification,
@@ -149,14 +148,12 @@ def make_dataset() -> TimeFDataset:
                 rationale="Regular intervals with one peak per cycle.",
                 input_annotations=(record0_cohort,),
                 from_tasks=(classification,),
-                id="task-answer-0",
             ),
             ScalarPredictionTask(
                 inputs=(record0,),
                 targets=(62.0,),
                 unit="bpm",
                 target_name="mean_rate",
-                id="task-scalar-0",
             ),
             TemporalLocalizationTask(
                 inputs=(record0,),
@@ -166,20 +163,18 @@ def make_dataset() -> TimeFDataset:
                     TimePoint.seconds(0.5),
                     TimeInterval.seconds(0.0, 0.25, time_series=(shared,)),
                 ),
-                id="task-localize-0",
             ),
         ],
     )
 
     record1 = dataset.add_record(
         record=Record(
-            id="record-1",
             sources=(
                 Source(
                     name="Synthetic monitor",
                     signals=(
-                        _series(_SINE, "a", 16, "ts-short-1"),
-                        _series(_SINE, "a", 512, "ts-long-1", phase=1.0),
+                        _series(_SINE, "a", 16),
+                        _series(_SINE, "a", 512, phase=1.0),
                     ),
                 ),
             ),
@@ -187,10 +182,9 @@ def make_dataset() -> TimeFDataset:
     )
     record1.annotate(record0_cohort)  # A new occurrence shares the cohort content across both records.
 
-    window = _series(_SINE, "a", 8, "ts-window-2")
+    window = _series(_SINE, "a", 8)
     record2 = dataset.add_record(
         record=Record(
-            id="record-2",
             sources=(Source(name="Synthetic monitor", signals=(window,)),),
         )
     )
@@ -198,7 +192,6 @@ def make_dataset() -> TimeFDataset:
         task=ClassificationTask(
             inputs=(record2,),
             targets=("onset",),
-            id="task-cls-2",
             scope=TimeInterval.seconds(0.0, 0.25, time_series=(window,)),
         ),
     )
@@ -246,7 +239,7 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
         ), f"task {task_id} differs"
 
 
-def _assert_sources_equal(record_id: str, expected: Record, actual: Record) -> None:
+def _assert_sources_equal(record_id: EntityId, expected: Record, actual: Record) -> None:
     """Assert two recursive source hierarchies are logically equal, walked in the same order."""
     exp, act = list(expected.walk_sources()), list(actual.walk_sources())
     assert len(exp) == len(act), f"sources differ for {record_id}"
@@ -263,7 +256,7 @@ def _assert_sources_equal(record_id: str, expected: Record, actual: Record) -> N
         )
 
 
-def _assert_series_equal(record_id: str, expected: tuple[Signal, ...], actual: tuple[Signal, ...]) -> None:
+def _assert_series_equal(record_id: EntityId, expected: tuple[Signal, ...], actual: tuple[Signal, ...]) -> None:
     """Assert two tuples of series (matched by ``time_series_id``) are equal, values included."""
     exp = {ts.id: ts for ts in expected}
     act = {ts.id: ts for ts in actual}

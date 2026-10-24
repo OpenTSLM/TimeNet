@@ -46,7 +46,7 @@ def test_schema_covers_every_feature():
 
 def test_each_signal_has_one_owner():
     dataset = _convert()
-    series_by_id: dict[str, int] = {}
+    series_by_id: dict[int, int] = {}
     for record in dataset.records:
         for signal in record.signals:
             series_by_id[signal.id] = series_by_id.get(signal.id, 0) + 1

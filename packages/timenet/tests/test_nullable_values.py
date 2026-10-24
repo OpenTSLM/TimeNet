@@ -72,8 +72,16 @@ def test_nonnullable_constructors_reject_none(irregular, dtype):
             Signal.from_values([None], spec=spec, name="x", time_axis=OrdinalAxis())
 
 
-def _lazy_series(spec, array):
+def _loader_series(spec, array):
     return Signal.from_loader(spec=spec, name="x", time_axis=OrdinalAxis(), loader=lambda: array, n_values=len(array))
+
+
+def _lazy_series(spec, array):
+    """Build a lazy series in a dataset, so the writer's messages can name its id."""
+    series = _loader_series(spec, array)
+    dataset = TimeFDataset(metadata=make_dataset().metadata)
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
+    return series
 
 
 @pytest.mark.parametrize("dtype", ["float32", "int16", "bool", "str", "enum"])
@@ -123,7 +131,7 @@ def test_torch_rejects_missing_tensor_timesteps_while_storage_preserves_them(tmp
     value_type = pa.from_numpy_dtype(np.dtype(dtype))
     storage = pa.array(observations, type=pa.list_(value_type, 2))
     array = pa.ExtensionArray.from_storage(pa.fixed_shape_tensor(value_type, (2,)), storage)
-    series = _lazy_series(spec, array)
+    series = _loader_series(spec, array)
     dataset = TimeFDataset(metadata=make_dataset().metadata)
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
     with pytest.raises(TimeFValidationError, match="null"):
@@ -164,7 +172,7 @@ def _write_read(tmp_path, series, *, values_backend, leading_series=None, **writ
         )
     )
     time_series = (series,) if leading_series is None else (leading_series, series)
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=time_series),), id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=time_series),)))
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend=values_backend, **writer_kwargs) as writer:
         writer.write()
@@ -241,7 +249,7 @@ def test_torch_rejects_missing_timesteps_in_nullable_signals():
             license=License.CC_BY_4_0,
         )
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
     dataset.derive_schema()
     with pytest.raises(TimeFValidationError, match="null"):
         TimeFTorchDataset(dataset)[0]
@@ -259,7 +267,7 @@ def test_torch_returns_an_all_true_mask_for_a_series_that_cannot_be_null():
             license=License.CC_BY_4_0,
         )
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
     dataset.derive_schema()
     item = TimeFTorchDataset(dataset)[0]
 
@@ -397,14 +405,12 @@ def test_to_numpy_permutes_value_axes_without_moving_time_axis(dtype, start):
 @pytest.mark.parametrize("missing", [False, True])
 def test_torch_default_batches_mixed_nullable_series(batch_size, missing):
     dataset = TimeFDataset(metadata=make_dataset().metadata)
-    for index in range(2):
+    for _ in range(2):
         nullable = Signal.from_values(
             [0.0, None if missing else 1.0], spec=_spec(nullable=True), name="nullable", time_axis=OrdinalAxis()
         )
         present = Signal.from_values([0.0, 1.0], spec=_spec(), name="present", time_axis=OrdinalAxis())
-        dataset.add_record(
-            record=Record(sources=(Source(name="Source", signals=(nullable, present)),), id=f"record-{index}")
-        )
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(nullable, present)),)))
     loader = DataLoader(TimeFTorchDataset(dataset), batch_size=batch_size)
     if missing:
         with pytest.raises(TimeFValidationError, match="null"):
@@ -418,30 +424,32 @@ def test_torch_default_batches_mixed_nullable_series(batch_size, missing):
 
 @pytest.mark.parametrize("nullable", [False, True])
 def test_torch_enum_direct_loader_rejects_unknown_labels(nullable):
-    series = _lazy_series(
+    series = _loader_series(
         _spec("enum", categories=("a", "b"), nullable=nullable),
         pa.array(["a", "unknown"]).dictionary_encode(),
     )
     dataset = TimeFDataset(metadata=make_dataset().metadata)
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
     with pytest.raises(TimeFValidationError, match="categories"):
         TimeFTorchDataset(dataset)[0]
 
 
 @pytest.mark.parametrize("nullable", [False, True])
 def test_torch_enum_direct_loader_rejects_nulls(nullable):
-    series = _lazy_series(
+    series = _loader_series(
         _spec("enum", categories=("a", "b"), nullable=nullable),
         pa.array(["a", None, "b"]).dictionary_encode(),
     )
     dataset = TimeFDataset(metadata=make_dataset().metadata)
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
     with pytest.raises(TimeFValidationError, match="null"):
         TimeFTorchDataset(dataset)[0]
 
 
 def test_torch_nullable_enum_preserves_category_zero_without_nulls():
-    series = _lazy_series(_spec("enum", categories=("a", "b"), nullable=True), pa.array(["a", "b"]).dictionary_encode())
+    series = _loader_series(
+        _spec("enum", categories=("a", "b"), nullable=True), pa.array(["a", "b"]).dictionary_encode()
+    )
     dataset = TimeFDataset(metadata=make_dataset().metadata)
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
     item = TimeFTorchDataset(dataset)[0]
