@@ -20,7 +20,7 @@ from torch.utils.data import Dataset
 
 from timenet.dataset import Record, Signal, TimeFDataset
 from timenet.errors import TimeFValidationError
-from timenet.types import Task
+from timenet.types import EntityId, Task
 
 
 if TYPE_CHECKING:
@@ -159,9 +159,9 @@ class _ReaderItems:
 
     def __init__(self, reader: TimeFReader) -> None:
         self._reader = reader
-        self._record_ids: tuple[str, ...] | None = None
+        self._record_ids: tuple[EntityId, ...] | None = None
 
-    def _ids(self) -> tuple[str, ...]:
+    def _ids(self) -> tuple[EntityId, ...]:
         if self._record_ids is None:
             self._record_ids = self._reader.record_ids()
         return self._record_ids
@@ -173,7 +173,7 @@ class _ReaderItems:
         """Return the records at ``indices`` with their tasks, in order."""
         ids = self._ids()
         records = tuple(self._reader.iter_records([ids[index] for index in indices]))
-        tasks_by_record: dict[str, list[Task]] = {record.id: [] for record in records}
+        tasks_by_record: dict[EntityId, list[Task]] = {record.id: [] for record in records}
         for task in self._reader.read_tasks(records):
             for record in task.inputs:
                 attached = tasks_by_record.get(record.id)

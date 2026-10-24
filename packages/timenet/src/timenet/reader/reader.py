@@ -16,7 +16,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
-from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
+from timenet.types import DatasetMetadata, DatasetSchema, EntityId, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
@@ -138,7 +138,7 @@ class TimeFReader:
                 self._tasks = self._control_reader().read_tasks(cached_records=self._all_records())
         return self._tasks
 
-    def record_ids(self) -> tuple[str, ...]:
+    def record_ids(self) -> tuple[EntityId, ...]:
         """Return every Record ID without hydrating a Record.
 
         Returns:
@@ -193,7 +193,7 @@ class TimeFReader:
 
     def task_table(
         self,
-        record_ids: Iterable[str] | None = None,
+        record_ids: Iterable[EntityId] | None = None,
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
@@ -209,7 +209,7 @@ class TimeFReader:
             One row per task with public IDs in place of object references. Targets are in
             :meth:`target_table`.
         """
-        with self._as_format_error():
+        with self._as_format_error(preserve_validation=True):
             return self._control_reader().task_table(
                 record_ids,
                 required_modalities=required_modalities,
@@ -219,7 +219,7 @@ class TimeFReader:
 
     def target_table(
         self,
-        record_ids: Iterable[str] | None = None,
+        record_ids: Iterable[EntityId] | None = None,
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
@@ -234,7 +234,7 @@ class TimeFReader:
         Returns:
             Targets in task ID and position order.
         """
-        with self._as_format_error():
+        with self._as_format_error(preserve_validation=True):
             return self._control_reader().target_table(
                 record_ids,
                 required_modalities=required_modalities,
@@ -271,11 +271,12 @@ class TimeFReader:
             tasks=self.tasks,
             schema=self.schema,
             annotations=self._control_reader().read_dataset_annotations(self._manifest.dataset_id),
+            last_ids=self._control_reader().read_last_ids(),
         )
 
     def iter_records(
         self,
-        record_ids: Iterable[str] | None = None,
+        record_ids: Iterable[EntityId] | None = None,
         *,
         with_annotations: bool = True,
     ) -> Iterator[Record]:
@@ -320,7 +321,7 @@ class TimeFReader:
             self._values = make_values_reader(self._manifest.values_backend)
         return self._values
 
-    def _load_signal(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> pa.Array:
+    def _load_signal(self, signal_key: int, signal_id: EntityId, spec: TimeSeriesSpec) -> pa.Array:
         """Load all values for one Signal.
 
         Returns:
@@ -332,7 +333,7 @@ class TimeFReader:
     def _load_signal_range(
         self,
         signal_key: int,
-        signal_id: str,
+        signal_id: EntityId,
         spec: TimeSeriesSpec,
         start: int,
         stop: int,
@@ -345,7 +346,7 @@ class TimeFReader:
         rows = self._chunk_rows(signal_key, signal_id)
         return self._values_reader().load_range(self._version, rows, start, stop, spec)
 
-    def _chunk_rows(self, signal_key: int, signal_id: str) -> list[StoredChunk]:
+    def _chunk_rows(self, signal_key: int, signal_id: EntityId) -> list[StoredChunk]:
         """Return cached chunk locators after loading the Signal's bounded batch.
 
         Raises:
@@ -366,7 +367,7 @@ class TimeFReader:
             raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
         return rows
 
-    def _make_signal_loader(self, signal_key: int, signal_id: str, spec: TimeSeriesSpec) -> _SignalLoader:
+    def _make_signal_loader(self, signal_key: int, signal_id: EntityId, spec: TimeSeriesSpec) -> _SignalLoader:
         """Return a picklable, range-aware Signal loader."""
         if signal_key not in self._chunk_locator_batch_by_key:
             if not self._chunk_locator_batches or len(self._chunk_locator_batches[-1]) >= _CHUNK_LOCATOR_BATCH_SIZE:
@@ -429,7 +430,7 @@ class _SignalLoader:
 
     reader: TimeFReader
     signal_key: int
-    signal_id: str
+    signal_id: EntityId
     spec: TimeSeriesSpec
 
     def __call__(self) -> pa.Array:

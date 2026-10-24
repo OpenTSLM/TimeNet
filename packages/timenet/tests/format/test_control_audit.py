@@ -12,12 +12,14 @@ from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, Time
 
 
 SPEC = TimeSeriesSpec(spec_type="voltage", name="Voltage", unit_value=ureg.millivolt, dtype="float32")
+# The writer numbers Sources in the order it writes them: the root first, then its child.
+MONITOR_ID = 1
+ECG_ID = 2
 
 
 def _dataset() -> TimeFDataset:
     axis = RegularAxis(period_us=Fraction(2_000))
     lead_i = Signal.from_loader(
-        id="lead-i",
         name="I",
         spec=SPEC,
         time_axis=axis,
@@ -26,7 +28,7 @@ def _dataset() -> TimeFDataset:
     )
     ecg = Source(name="ECG", signals=(lead_i,))
     monitor = Source(name="Monitor", sources=(ecg,))
-    record = Record(id="record-1", sources=(monitor,))
+    record = Record(sources=(monitor,))
     record.annotate(Annotation(key="patient_sex", value="male"))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
@@ -38,7 +40,7 @@ def _dataset() -> TimeFDataset:
         )
     )
     dataset.add_record(record=record)
-    dataset.add_task(task=AnswerTask(id="task-1", inputs=(record,), prompt="Alive?", targets=("Yes",)))
+    dataset.add_task(task=AnswerTask(inputs=(record,), prompt="Alive?", targets=("Yes",)))
     return dataset
 
 
@@ -70,11 +72,11 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
             "records contains duplicate values for record_key",
         ),
         (
-            "UPDATE sources SET record_key = -1 WHERE name = 'Monitor'",
+            "UPDATE sources SET record_key = -1 WHERE source_id = 1",
             r"sources\.record_key refers to missing records\.record_key",
         ),
         (
-            "UPDATE sources SET parent_source_key = source_key WHERE name = 'ECG'",
+            "UPDATE sources SET parent_source_key = source_key WHERE source_id = 2",
             r"invalid sources\.parent_source_key value",
         ),
         (
@@ -82,19 +84,22 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
             r"invalid signals\.n_values value",
         ),
         (
-            "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 'ghost', 1, '{}'); "
-            "UPDATE sources SET record_key = -1 WHERE name = 'ECG'",
+            "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 99, 1, '{}'); "
+            "UPDATE sources SET record_key = -1 WHERE source_id = 2",
             "belong to different records",
         ),
         (
-            "UPDATE sources SET parent_source_key = (SELECT source_key FROM sources WHERE name = 'ECG') "
-            "WHERE name = 'Monitor'",
+            "UPDATE sources SET parent_source_key = (SELECT source_key FROM sources WHERE source_id = 2) "
+            "WHERE source_id = 1",
             "contains a cycle",
         ),
         (
             "INSERT INTO axis_offsets SELECT axis_key, 0, 0 FROM axes",
             "axis length that does not match",
         ),
+        ("UPDATE records SET record_id = 0", r"invalid records\.record_id value"),
+        ("UPDATE signals SET signal_id = -1", r"invalid signals\.signal_id value"),
+        ("UPDATE tasks SET task_id = 0", r"invalid tasks\.task_id value"),
     ],
 )
 def test_audit_names_the_first_violated_invariant(control_path, statement, message):

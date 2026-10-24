@@ -31,7 +31,7 @@ import pyarrow.compute as pc
 
 from timenet.dataset import Signal
 from timenet.errors import TimeFValidationError
-from timenet.types import TimeSeriesSpec
+from timenet.types import EntityId, TimeSeriesSpec
 from timenet.values_backends import ValuesBackend
 from timenet.values_backends.writer import (
     BaseValuesBackend,
@@ -286,7 +286,7 @@ class ZarrValuesBackend(BaseValuesBackend):
         )
 
         partitions: dict[str, _Partition] = {}
-        placements: dict[tuple[str, int], ChunkPlacement] = {}
+        placements: dict[tuple[EntityId, int], ChunkPlacement] = {}
         closed = 0
         active: str | None = None
         total = len(unique_series)

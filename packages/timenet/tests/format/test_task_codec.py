@@ -1,7 +1,7 @@
 from pydantic import ValidationError
 import pytest
 
-from timenet.dataset import OrdinalAxis, RegularAxis, Signal
+from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError
 from timenet.format.task_codec import (
     decode_span,
@@ -13,10 +13,13 @@ from timenet.format.task_target_kind import TaskTargetKind
 from timenet.format.task_target_row import TargetValueRow, TaskTargetRow
 from timenet.types import (
     AnswerTask,
+    DatasetMetadata,
+    License,
     StepInterval,
     TemporalLocalizationTask,
     TimePoint,
     TimeSeriesSpec,
+    Version,
     ureg,
 )
 
@@ -31,6 +34,14 @@ def _signals():
     spec = TimeSeriesSpec(spec_type="s", name="S", unit_value=ureg.dimensionless)
     timed = Signal.from_values([0.0] * 4, spec=spec, name="timed", time_axis=RegularAxis.from_rate_hz(1))
     ordinal = Signal.from_values([0.0] * 8, spec=spec, name="ordinal", time_axis=OrdinalAxis())
+    metadata = DatasetMetadata(
+        dataset_id="timenet/codec",
+        dataset_version=Version(1, 0, 0),
+        name="Codec",
+        description="test",
+        license=License.CC_BY_4_0,
+    )
+    TimeFDataset(metadata=metadata).add_record(record=Record(sources=(Source(name="s", signals=(timed, ordinal)),)))
     return timed, ordinal
 
 
@@ -66,12 +77,12 @@ def test_target_codec_keeps_boolean_and_integer_rows_distinct():
         ({"target_kind": "text"}, "requires text_value"),
         ({"target_kind": "signal"}, "requires signal_id"),
         (
-            {"target_kind": "text", "text_value": "yes", "signal_id": "ecg"},
+            {"target_kind": "text", "text_value": "yes", "signal_id": 1},
             "does not allow signal_id",
         ),
         ({"target_kind": "step_point", "span_start": 0}, "requires exactly one span Signal"),
         (
-            {"target_kind": "step_point", "span_start": 0, "span_signal_ids": ("ecg", "eeg")},
+            {"target_kind": "step_point", "span_start": 0, "span_signal_ids": (1, 2)},
             "requires exactly one span Signal",
         ),
     ],
@@ -89,6 +100,6 @@ def test_stored_signal_target_requires_a_signal_key():
 
 
 def test_target_decoder_rejects_a_missing_record_reference():
-    row = TargetValueRow(target_kind=TaskTargetKind.RECORD, record_id="missing")
-    with pytest.raises(TimeFFormatError, match="missing Record 'missing'"):
+    row = TargetValueRow(target_kind=TaskTargetKind.RECORD, record_id=99)
+    with pytest.raises(TimeFFormatError, match="missing Record 99"):
         decode_target(row, records={}, signals={})

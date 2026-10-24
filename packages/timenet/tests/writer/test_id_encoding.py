@@ -1,18 +1,14 @@
-"""IDs use canonical strings in DuckDB and round-trip without changing their values."""
+"""Task spans and record references keep their entity ids through a write and read."""
 
 from dataclasses import replace
-import uuid
 
 import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
-from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
-from timenet.testing import assert_datasets_equal
 from timenet.types import (
-    Annotation,
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
@@ -47,62 +43,17 @@ def _series():
     )
 
 
-def _uuid_dataset(*, record_id=None):
-    """Build a dataset whose ids default to uuid7 (unless an explicit record_id is passed)."""
-    dataset = TimeFDataset(
-        metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
-            dataset_version=Version(1, 0, 0),
-            name="U",
-            description="d",
-            license=License.MIT,
-        )
-    )
-    series = (_series(),)
-    sources = (Source(name="Source", signals=series),)
-    record = Record(sources=sources) if record_id is None else Record(sources=sources, id=record_id)
-    dataset.add_record(record=record)
-    record.annotate(Annotation(key="k", value=1))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",)))
-    dataset.derive_schema()
-    return dataset
-
-
 def _write(tmp_path, dataset):
     with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
     return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
 
 
-def test_default_ids_are_uuid7():
-    dataset = _uuid_dataset()
-    sid = dataset.records[0].id
-    assert uuid.UUID(sid).version == 7
-    assert str(uuid.UUID(sid)) == sid  # canonical
-
-
-def test_manifest_has_no_id_encoding(tmp_path):
-    version_dir = _write(tmp_path, _uuid_dataset())
-    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
-    assert not hasattr(manifest, "id_encoding") or "id_encoding" not in manifest.to_dict()
-
-
-def test_uuid_ids_round_trip_as_canonical_strings(tmp_path):
-    dataset = _uuid_dataset()
-    version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        restored = reader.read()
-    assert_datasets_equal(dataset, restored)
-    sid = restored.records[0].id
-    assert str(uuid.UUID(sid)) == sid
-    assert uuid.UUID(sid).version == 7
-
-
 def test_forecasting_target_span_round_trips(tmp_path):
     """target_span is the only single-Span payload column; exercise its encode/decode branch."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",
@@ -127,7 +78,7 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
     """A steps target_span carries its frame and bounds through the writer and reader."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",
@@ -153,7 +104,7 @@ def test_a_span_reads_back_the_signals_of_its_record(tmp_path):
     """A task scope refers to the Signal objects that the reader returns for its input, not to copies."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",
@@ -181,7 +132,7 @@ def test_correspondence_record_targets_round_trip(tmp_path):
     """Correspondence Record targets and candidates return as hydrated objects."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",
@@ -212,7 +163,7 @@ def test_correspondence_record_targets_round_trip(tmp_path):
 def test_editing_and_generation_record_targets_round_trip(tmp_path):
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",
@@ -248,7 +199,7 @@ def test_editing_and_generation_record_targets_round_trip(tmp_path):
 def test_time_span_round_trips(tmp_path):
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",

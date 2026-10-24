@@ -4,7 +4,8 @@ This directory contains a deterministic offline corpus and two commit-to-commit 
 
 - `noop.py` fails if the logical TimeF dataset changes at all. It compares metadata, schema, tasks,
   records, annotations, series contracts, dtypes, shapes, and exact value bytes while deliberately
-  ignoring backend-specific physical layouts.
+  ignoring backend-specific physical layouts and raw entity ids. A task names its records and signals
+  by their read position instead.
 - `benchmark.py` fails if the median conversion, write, read, total, or stored-size measurement gets
   worse. Its default permitted regression is zero; use `--max-regression-percent` when a noisy shared
   runner needs an explicit budget.

@@ -46,20 +46,9 @@ def test_add_record_registers_and_returns(make_series):
     ds = _dataset()
     record = Record(sources=(Source(name="Source", signals=(make_series(),)),))
     record.annotate(Annotation(key="subject_ids", value=["p1"]))
-    ds.add_record(record=record)
-    assert isinstance(record, Record)
+    assert ds.add_record(record=record) is record
     assert ds.records == (record,)
     assert record.annotations[0].value == ["p1"]
-
-
-def test_add_record_accepts_a_complete_hierarchy(make_series):
-    signal = make_series(id="signal")
-    source = Source(name="Device", signals=(signal,))
-    record = Record(id="record", sources=(source,))
-    dataset = _dataset()
-
-    assert dataset.add_record(record=record) is record
-    assert dataset.records == (record,)
 
 
 def test_records_property_is_read_only_copy(make_series):
@@ -150,7 +139,7 @@ def test_add_task_rejects_a_from_tasks_parent_that_is_not_registered(make_series
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     orphan = ClassificationTask(targets=("a",))  # never added to the dataset
     qa = AnswerTask(inputs=(record,), prompt="q", targets=("a",), from_tasks=(orphan,))
-    with pytest.raises(TimeFValidationError, match="derives from task"):
+    with pytest.raises(TimeFValidationError, match="derives from a task that is not registered"):
         ds.add_task(task=qa)
 
 
@@ -240,11 +229,9 @@ def test_no_loader_calls_during_build():
     assert calls["n"] == 0  # building/deriving never reads values
 
 
-def test_add_record_rejects_duplicate_time_series_ids(make_series):
-    # Signal uses identity equality with an auto-uuid id, so the same instance twice would
-    # silently collapse to one series on write.
+def test_add_record_rejects_the_same_signal_twice(make_series):
     ts = make_series()
-    with pytest.raises(TimeFValidationError, match="duplicate signal IDs"):
+    with pytest.raises(TimeFValidationError, match="attaches one Signal more than once"):
         _dataset().add_record(record=Record(sources=(Source(name="Source", signals=(ts, ts)),)))
 
 
@@ -257,15 +244,15 @@ def test_add_record_rejects_a_signal_owned_by_two_records(make_series):
     with pytest.raises(TimeFValidationError, match="each Signal has one owner"):
         dataset.add_record(
             record=Record(
-                id="record-b",
                 sources=(Source(name="B", signals=(signal,)),),
             )
         )
 
     assert dataset.records == (first,)
-    retry = Record(id="record-b", sources=(Source(name="B", signals=(make_series(),)),))
+    retry = Record(sources=(Source(name="B", signals=(make_series(),)),))
     dataset.add_record(record=retry)
     assert dataset.records == (first, retry)
+    assert retry.id == first.id + 1
 
 
 def test_add_record_rejects_a_source_owned_by_two_records(make_series):
@@ -275,6 +262,35 @@ def test_add_record_rejects_a_source_owned_by_two_records(make_series):
 
     with pytest.raises(TimeFValidationError, match="each Source has one owner"):
         dataset.add_record(record=Record(sources=(source,)))
+
+
+def test_add_record_rejects_a_record_from_another_dataset(make_series):
+    record = _dataset().add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+
+    with pytest.raises(TimeFValidationError, match="id from another dataset"):
+        _dataset().add_record(record=record)
+    assert record.id == 1
+
+
+def test_add_record_rejects_a_signal_from_another_dataset(make_series):
+    signal = make_series()
+    _dataset().add_record(record=Record(sources=(Source(name="A", signals=(signal,)),)))
+    other = _dataset()
+
+    with pytest.raises(TimeFValidationError, match="ids from another dataset"):
+        other.add_record(record=Record(sources=(Source(name="B", signals=(signal,)),)))
+    assert other.records == ()
+    assert signal.id == 1
+
+
+def test_add_task_rejects_a_task_from_another_dataset():
+    task = _dataset().add_task(task=AnswerTask(prompt="Ready?", targets=("yes",)))
+    other = _dataset()
+
+    with pytest.raises(TimeFValidationError, match="id from another dataset"):
+        other.add_task(task=task)
+    assert other.tasks == ()
+    assert task.id == 1
 
 
 def test_add_task_warns_for_a_scope_outside_record_span(make_series):
@@ -688,25 +704,22 @@ def test_add_tasks_allows_deriving_from_another_task_in_the_same_batch(make_seri
     assert derived.from_tasks == (base,)
 
 
-def test_add_tasks_rejects_duplicate_ids_within_the_batch(make_series):
+def test_add_tasks_rejects_one_task_listed_twice(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    with pytest.raises(TimeFValidationError, match="share an id"):
-        ds.add_tasks(
-            tasks=[
-                ClassificationTask(inputs=(record,), targets=("a",), id="dup"),
-                ClassificationTask(inputs=(record,), targets=("b",), id="dup"),
-            ]
-        )
+    task = ClassificationTask(inputs=(record,), targets=("a",))
+    with pytest.raises(TimeFValidationError, match="lists one task more than once"):
+        ds.add_tasks(tasks=[task, task])
     assert ds.tasks == ()
 
 
-def test_add_tasks_rejects_an_id_already_registered(make_series):
+def test_add_tasks_rejects_a_task_already_registered(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), id="task-0"))
-    with pytest.raises(TimeFValidationError, match="already registered"):
-        ds.add_tasks(tasks=[ClassificationTask(inputs=(record,), targets=("b",), id="task-0")])
+    task = ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
+    with pytest.raises(TimeFValidationError, match="already in this dataset"):
+        ds.add_tasks(tasks=[task])
+    assert task.id == 1
 
 
 def test_add_tasks_rejects_a_self_dependency(make_series):
@@ -766,10 +779,8 @@ def test_add_task_accepts_mixed_targets(make_series):
     assert task.targets == (record, signal, "match")
 
 
-def _record(dataset, make_series, record_id=None):
-    sources = (Source(name="Source", signals=(make_series(),)),)
-    record = Record(sources=sources) if record_id is None else Record(id=record_id, sources=sources)
-    return dataset.add_record(record=record)
+def _record(dataset, make_series):
+    return dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
 
 
 def test_get_split_accessors_select_tasks_by_split(make_series):
@@ -821,7 +832,7 @@ def test_get_splits_preserves_order_identity_and_assignments(split_dataset):
 
     selected = dataset.get_splits(Split.TRAIN, "validation", Split.TRAIN)
 
-    assert tuple(task.id for task in selected) == (tasks[0].id, tasks[1].id, tasks[4].id)
+    assert [id(task) for task in selected] == [id(tasks[0]), id(tasks[1]), id(tasks[4])]
     assert selected[0] is tasks[0]
     assert tuple(task.split for task in tasks) == original_splits
     assert dataset.get_test() == (tasks[2],)
@@ -850,18 +861,18 @@ def test_multi_split_selection_reads_stream_once_and_iteration_is_lazy(make_seri
 
     def stream():
         for task in (train, validation):
-            visited.append(task.id)
+            visited.append(task)
             yield task
 
     dataset.set_task_stream(task_types=(ClassificationTask,), source=stream)
     selected = dataset.iter_tasks(split=(Split.TRAIN, Split.VALIDATION))
     assert visited == []
     assert next(selected) is train
-    assert visited == [train.id]
+    assert visited == [train]
 
     visited.clear()
     assert dataset.get_splits(Split.TRAIN, Split.VALIDATION) == (train, validation)
-    assert visited == [train.id, validation.id]
+    assert visited == [train, validation]
 
 
 @pytest.mark.parametrize("splits", [(), ("holdout",)])
@@ -899,7 +910,7 @@ def test_get_splits_handles_missing_partitions_and_unpartitioned_datasets(make_s
 
 def test_to_features_and_targets_can_take_one_split(make_series):
     dataset = _dataset()
-    records = [_record(dataset, make_series, f"record-{index}") for index in range(3)]
+    records = [_record(dataset, make_series) for _ in range(3)]
     dataset.add_tasks(
         tasks=(
             ClassificationTask(inputs=(records[0],), targets=("a",), split=Split.TRAIN),

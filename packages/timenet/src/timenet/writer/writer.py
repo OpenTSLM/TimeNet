@@ -25,6 +25,7 @@ from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import CONTROL_FILE, connect_control
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
+from timenet.types.ids import EntityId
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -212,45 +213,22 @@ class TimeFWriter:
     # ---- values --------------------------------------------------------------------------------
 
     def _dedupe_series(self) -> list[Signal]:
-        """Return unique series, sorted for stable output.
+        """Return every series once, sorted for stable output.
 
-        Sharing one series across records is the supported dedupe path. Two different series that
-        claim one ``time_series_id`` is a contradiction. The writer can write only one of them, so
-        the other's records read back the wrong data. Two series that share an id must describe the
-        same signal. The writer rejects a disagreement instead of keeping the first series.
+        A dataset gives each Signal its own id and lets one record own it, so the series need no
+        merging.
 
         Returns:
-            The sorted unique series.
-
-        Raises:
-            TimeFValidationError: If two series share a ``time_series_id`` but describe different
-                signals.
+            The sorted series.
         """
-        unique: dict[str, Signal] = {}
-        series_to_records: dict[str, list[str]] = {}
-        seen_pairs: set[tuple[str, str]] = set()
-        for record in self._dataset.records:
-            for ts in record.signals:
-                existing = unique.get(ts.id)
-                if existing is None:
-                    unique[ts.id] = ts
-                elif existing is not ts and _series_identity(existing) != _series_identity(ts):
-                    raise TimeFValidationError(
-                        f"time_series_id {ts.id!r} is claimed by two different series: "
-                        f"{_series_identity(existing)} and {_series_identity(ts)}; ids must be unique "
-                        f"per signal, or reuse the same series instance to share it across records"
-                    )
-                pair = (ts.id, record.id)
-                if pair not in seen_pairs:
-                    seen_pairs.add(pair)
-                    series_to_records.setdefault(ts.id, []).append(record.id)
+        owned = [(record.id, ts) for record in self._dataset.records for ts in record.signals]
         # Group a record's series together before splitting by signal, so all leads of one record are
         # contiguous: the writer reads the record's source once, and a reader pulls a record's series
-        # from one place instead of scattered across signal-ordered shards. A series shared by several
-        # records sorts under the first record that references it.
-        return sorted(unique.values(), key=lambda ts: (ts.spec.spec_type, series_to_records[ts.id][0], ts.name, ts.id))
+        # from one place instead of scattered across signal-ordered shards.
+        owned.sort(key=lambda pair: (pair[1].spec.spec_type, pair[0], pair[1].name, pair[1].id))
+        return [ts for _, ts in owned]
 
-    def _write_values(self, unique_series: list[Signal]) -> dict[tuple[str, int], ChunkPlacement]:
+    def _write_values(self, unique_series: list[Signal]) -> dict[tuple[EntityId, int], ChunkPlacement]:
         """Write all series' values through the configured backend.
 
         Args:
@@ -425,19 +403,3 @@ class TimeFWriter:
     def _emit(self, stage: ProgressStage, completed: int, total: int | None) -> None:
         if self._progress_cb is not None:
             self._progress_cb(WriteProgressEvent(stage=stage, completed=completed, total=total))
-
-
-def _series_identity(ts: Signal) -> tuple:
-    """Return the fields that must agree for two series to be the same signal.
-
-    This compares the descriptive fields that the writer persists, not the values. The ``loader`` is a
-    callable, so two equal series built separately compare unequal. Reading every shared series
-    only to compare it defeats the lazy read path on the largest datasets.
-
-    Args:
-        ts: The series to describe.
-
-    Returns:
-        The identifying fields, suitable for equality comparison and for error messages.
-    """
-    return (ts.spec.spec_type, ts.name, ts.time_axis, ts.n_values)

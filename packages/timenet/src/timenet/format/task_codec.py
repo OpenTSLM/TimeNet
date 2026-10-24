@@ -18,6 +18,7 @@ from timenet.format.task_target_kind import TaskTargetKind
 from timenet.format.task_target_row import TargetValueRow
 from timenet.types import (
     ClassificationTask,
+    EntityId,
     InputModality,
     LocalizationMode,
     ScalarPredictionTask,
@@ -105,9 +106,9 @@ def decode_span(
     span_type: str | None,
     span_start: int | None,
     span_end: int | None,
-    signal_ids: Iterable[str] | None,
+    signal_ids: Iterable[EntityId] | None,
     *,
-    signals: Mapping[str, Signal],
+    signals: Mapping[EntityId, Signal],
 ) -> Span | None:
     """Decode the four span columns.
 
@@ -182,8 +183,8 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
 def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding branch
     row: Mapping[str, object] | TargetValueRow,
     *,
-    records: Mapping[str, Record],
-    signals: Mapping[str, Signal],
+    records: Mapping[EntityId, Record],
+    signals: Mapping[EntityId, Signal],
 ) -> object:
     """Decode one typed target row and resolve stored object references.
 
@@ -234,14 +235,14 @@ def _required(value: _T | None, kind: TaskTargetKind, name: str) -> _T:
     return value
 
 
-def _resolve(objects: Mapping[str, _T], public_id: str, label: str) -> _T:
+def _resolve(objects: Mapping[EntityId, _T], public_id: EntityId, label: str) -> _T:
     try:
         return objects[public_id]
     except KeyError as exc:
         raise TimeFFormatError(f"task target refers to missing {label} {public_id!r}") from exc
 
 
-def _signals(signal_ids: object, signals: Mapping[str, Signal]) -> tuple[Signal, ...] | None:
+def _signals(signal_ids: object, signals: Mapping[EntityId, Signal]) -> tuple[Signal, ...] | None:
     """Resolve a stored Signal id sequence to the read-back Signals.
 
     Returns:
@@ -249,4 +250,4 @@ def _signals(signal_ids: object, signals: Mapping[str, Signal]) -> tuple[Signal,
     """
     if signal_ids is None:
         return None
-    return tuple(_resolve(signals, signal_id, "Signal") for signal_id in cast("Iterable[str]", signal_ids))
+    return tuple(_resolve(signals, signal_id, "Signal") for signal_id in cast("Iterable[EntityId]", signal_ids))

@@ -28,8 +28,6 @@ def make_series(spec):
             "loader": lambda v=tuple(values): pa.array(list(v), type=pa.float32()),
             **overrides,
         }
-        if "time_series_id" in fields:
-            fields["id"] = fields.pop("time_series_id")
         if "signal" in fields:
             fields["name"] = fields.pop("signal")
         return Signal.from_loader(**fields)

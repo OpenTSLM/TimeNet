@@ -65,9 +65,9 @@ class _TargetValues(TimeFModel):
 class TargetValueRow(_TargetValues):
     """Represent a public target with validated values and public object IDs."""
 
-    record_id: StrictStr | None = None
-    signal_id: StrictStr | None = None
-    span_signal_ids: tuple[StrictStr, ...] | None = None
+    record_id: StrictInt | None = None
+    signal_id: StrictInt | None = None
+    span_signal_ids: tuple[StrictInt, ...] | None = None
 
     _scope_column = "span_signal_ids"
     _required_columns = _required_columns("record_id", "signal_id", _scope_column)
