@@ -52,7 +52,7 @@ def test_registry_contains_every_builtin_task_type():
     ),
 )
 def test_every_task_type_accepts_ordered_mixed_targets(task_type):
-    record = Record(record_id="target-record")
+    record = Record(id="target-record")
     point = TimePoint.seconds(5)
 
     task = task_type(targets=["answer", record, 0.98, point])
@@ -99,8 +99,8 @@ def test_localization_mode_is_normalized():
 
 
 def test_correspondence_record_targets_must_come_from_a_bounded_pool():
-    candidate = Record(record_id="candidate")
-    outside = Record(record_id="outside")
+    candidate = Record(id="candidate")
+    outside = Record(id="outside")
 
     with pytest.raises(TimeFValidationError, match="not in candidate_records"):
         TSCorrespondenceTask(candidate_records=(candidate,), targets=(outside,))

@@ -102,7 +102,7 @@ def _referenced_annotation_dataset() -> TimeFDataset:
     record = dataset.add_record(
         record=Record(
             sources=(Source(id="rec-0-source", name="Source", signals=(signal,)),),
-            record_id="rec-0",
+            id="rec-0",
         )
     )
     options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno"))
@@ -187,9 +187,9 @@ def test_metadata_and_schema_come_from_the_manifest_without_opening_control(tmp_
 def test_iter_records_matches_full_read(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        streamed = {record.record_id for record in reader.iter_records()}
+        streamed = {record.id for record in reader.iter_records()}
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        materialized = {record.record_id for record in reader.read().records}
+        materialized = {record.id for record in reader.read().records}
     assert streamed == materialized
 
 

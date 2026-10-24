@@ -164,7 +164,7 @@ def _write_read(tmp_path, series, *, values_backend, leading_series=None, **writ
         )
     )
     time_series = (series,) if leading_series is None else (leading_series, series)
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=time_series),), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=time_series),), id="record-0"))
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend=values_backend, **writer_kwargs) as writer:
         writer.write()
@@ -241,7 +241,7 @@ def test_torch_rejects_missing_timesteps_in_nullable_signals():
             license=License.CC_BY_4_0,
         )
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), id="record-0"))
     dataset.derive_schema()
     with pytest.raises(TimeFValidationError, match="null"):
         TimeFTorchDataset(dataset)[0]
@@ -259,7 +259,7 @@ def test_torch_returns_an_all_true_mask_for_a_series_that_cannot_be_null():
             license=License.CC_BY_4_0,
         )
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), id="record-0"))
     dataset.derive_schema()
     item = TimeFTorchDataset(dataset)[0]
 
@@ -404,7 +404,7 @@ def test_torch_default_batches_mixed_nullable_series(batch_size, missing):
         )
         present = Signal.from_values([0.0, 1.0], spec=_spec(), name="present", time_axis=OrdinalAxis())
         dataset.add_record(
-            record=Record(sources=(Source(name="Source", signals=(nullable, present)),), record_id=f"record-{index}")
+            record=Record(sources=(Source(name="Source", signals=(nullable, present)),), id=f"record-{index}")
         )
     loader = DataLoader(TimeFTorchDataset(dataset), batch_size=batch_size)
     if missing:
@@ -424,7 +424,7 @@ def test_torch_enum_direct_loader_rejects_unknown_labels(nullable):
         pa.array(["a", "unknown"]).dictionary_encode(),
     )
     dataset = TimeFDataset(metadata=make_dataset().metadata)
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), id="record-0"))
     with pytest.raises(TimeFValidationError, match="categories"):
         TimeFTorchDataset(dataset)[0]
 
@@ -436,7 +436,7 @@ def test_torch_enum_direct_loader_rejects_nulls(nullable):
         pa.array(["a", None, "b"]).dictionary_encode(),
     )
     dataset = TimeFDataset(metadata=make_dataset().metadata)
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),), id="record-0"))
     with pytest.raises(TimeFValidationError, match="null"):
         TimeFTorchDataset(dataset)[0]
 

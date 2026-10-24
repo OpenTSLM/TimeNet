@@ -62,7 +62,7 @@ def _dataset(
             name="stage",
             time_axis=RegularAxis.from_rate_hz(1),
         )
-        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id=f"record-{i}"))
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), id=f"record-{i}"))
     dataset.derive_schema()
     return dataset
 
@@ -257,7 +257,7 @@ def test_enum_streaming_write_read(tmp_path):
     spec = _spec(categories=("awake", "light", "deep", "rem", "n1", "n2", "n3"))
     for i, labels in enumerate(records_labels):
         ts = Signal.from_values(labels, spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
-        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id=f"s-{i}"))
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), id=f"s-{i}"))
     dataset.derive_schema()
 
     version_dir = _write(
@@ -289,10 +289,15 @@ def test_torch_maps_enum_to_integer_codes():
     assert codes.tolist() == [0, 2, 3, 0]
 
 
-def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
-    """Shard 1 encodes only ["a", "b", "c"], shard 2 encodes only ["c", "d", "e"]. After reading,
-    the torch bridge produces stable integer codes from the codebook order.
-    """
+@pytest.mark.parametrize(
+    "write_kwargs",
+    [
+        {"shard_target_bytes": 64, "chunk_max_bytes": 32},
+        {"values_backend": "zarr", "chunk_max_bytes": 32},
+    ],
+    ids=["parquet", "zarr"],
+)
+def test_enum_codes_are_stable_across_shards(tmp_path, write_kwargs):
     pytest.importorskip("torch")
     from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
@@ -309,54 +314,11 @@ def test_enum_indices_consistent_across_shards_with_different_subsets(tmp_path):
     )
     ts1 = Signal.from_values(["a", "b", "c"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
     ts2 = Signal.from_values(["c", "d", "e"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts1,)),), record_id="s-0"))
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts2,)),), record_id="s-1"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts1,)),), id="s-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts2,)),), id="s-1"))
     dataset.derive_schema()
 
-    version_dir = _write(tmp_path, dataset, shard_target_bytes=64, chunk_max_bytes=32)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        loaded = reader.read()
-
-    s0 = loaded.records[0].signals[0]
-    s1 = loaded.records[1].signals[0]
-
-    assert s0.to_arrow().cast(pa.string()).to_pylist() == ["a", "b", "c"]
-    assert s1.to_arrow().cast(pa.string()).to_pylist() == ["c", "d", "e"]
-
-    torch_dataset = TimeFTorchDataset(loaded)
-    item0, item1 = torch_dataset[0], torch_dataset[1]
-    codes0, codes1 = item0["series"][0], item1["series"][0]
-    assert item0["series_masks"][0].all()
-    assert item1["series_masks"][0].all()
-
-    idx_c_in_s0 = codes0[2].item()
-    idx_c_in_s1 = codes1[0].item()
-    assert idx_c_in_s0 == idx_c_in_s1, f"'c' has index {idx_c_in_s0} in record 0 but {idx_c_in_s1} in record 1"
-
-
-def test_enum_zarr_indices_consistent_across_shards(tmp_path):
-    """Same cross-shard consistency test as above, but on the Zarr backend."""
-    pytest.importorskip("torch")
-    from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
-
-    spec = _spec(categories=("a", "b", "c", "d", "e"))
-    dataset = TimeFDataset(
-        metadata=DatasetMetadata(
-            dataset_id="timenet/enum-zarr-cross",
-            dataset_version=Version(1, 0, 0),
-            name="Cross-shard enum (Zarr)",
-            description="Tests codebook-based indices across Zarr shards.",
-            license=License.CC_BY_4_0,
-            domains=(Domain.GENERAL,),
-        )
-    )
-    ts1 = Signal.from_values(["a", "b", "c"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
-    ts2 = Signal.from_values(["c", "d", "e"], spec=spec, name="stage", time_axis=RegularAxis.from_rate_hz(1))
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts1,)),), record_id="s-0"))
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts2,)),), record_id="s-1"))
-    dataset.derive_schema()
-
-    version_dir = _write(tmp_path, dataset, values_backend="zarr", chunk_max_bytes=32)
+    version_dir = _write(tmp_path, dataset, **write_kwargs)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         loaded = reader.read()
 

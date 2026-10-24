@@ -142,9 +142,8 @@ def test_metadata():
 
 def test_one_record_per_ecg_not_per_question(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
-    assert isinstance(dataset, TimeFDataset)
     # 3 rows over 2 recordings -> 2 records, not one per question
-    assert {record.record_id for record in dataset.records} == {"ptbxl-1", "ptbxl-2"}
+    assert {record.id for record in dataset.records} == {"ptbxl-1", "ptbxl-2"}
 
 
 def test_twelve_leads_per_record(tmp_path, records_dir):
@@ -194,7 +193,7 @@ def test_answer_options_come_from_template(tmp_path, records_dir):
 def test_series_values_match_fixture_record(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
     signal, _ = wfdb.rdsamp(str(records_dir / "00001_hr"), channels=[0])
-    record = next(r for r in dataset.records if r.record_id == "ptbxl-1")
+    record = next(r for r in dataset.records if r.id == "ptbxl-1")
     got = record.signals[0].to_numpy()
     assert len(got) == len(signal)
     assert float(got[0]) == pytest.approx(float(signal[0, 0]), rel=1e-5)
@@ -215,7 +214,7 @@ def test_convert_round_trips_through_the_writer(tmp_path, records_dir):
     version_dir = store_dataset(dataset, tmp_path / "out")
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
-    assert {record.record_id for record in restored.records} == {"ptbxl-1", "ptbxl-2"}
+    assert {record.id for record in restored.records} == {"ptbxl-1", "ptbxl-2"}
     assert len(restored.tasks) == 3  # streamed to disk and back
     assert {ann.key for ann in restored.annotations} >= {
         "question_type",
