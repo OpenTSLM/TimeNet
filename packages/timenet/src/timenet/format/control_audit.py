@@ -11,14 +11,16 @@ import duckdb
 
 from timenet.errors import TimeFFormatError
 from timenet.format.annotation_value_kind import AnnotationValueKind
-from timenet.format.control_schema import CONTROL_TABLES, Table
+from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, ANNOTATED_OWNER_TABLES, CONTROL_TABLES, Table
 from timenet.format.duckdb import check_control_schema
 from timenet.format.task_target_kind import TaskTargetKind
+from timenet.types import ObjectKind
 
 
 _TARGET_KINDS = ", ".join(f"'{kind.value}'" for kind in TaskTargetKind)
 _ANNOTATION_VALUE_KINDS = ", ".join(f"'{kind.value}'" for kind in AnnotationValueKind)
 _TIME_TARGET_KINDS = ", ".join(f"'{kind.value}'" for kind in (TaskTargetKind.TIME_POINT, TaskTargetKind.TIME_INTERVAL))
+_OBJECT_TYPES_SQL = ", ".join(f"'{name}'" for name in sorted(ANNOTATED_OBJECT_TYPES))
 
 _ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
     ("records", "record_id"),
@@ -47,7 +49,7 @@ _DOMAIN_CHECKS = f"""
     SELECT 'signal_chunks.n_values' FROM signal_chunks WHERE n_values <= 0
     UNION ALL
     SELECT 'annotation_occurrences.object_type' FROM annotation_occurrences
-    WHERE object_type NOT IN ('Dataset', 'Task', 'Record', 'Source', 'Signal')
+    WHERE object_type NOT IN ({_OBJECT_TYPES_SQL})
     UNION ALL
     SELECT 'annotation_occurrences.span_type' FROM annotation_occurrences
     WHERE span_type NOT IN ('static', 'point', 'interval')
@@ -67,6 +69,22 @@ _DOMAIN_CHECKS = f"""
     {_ENTITY_ID_CHECKS}
     LIMIT 1
 """  # noqa: S608 - tags come only from internal enum values and fixed table names
+
+_OWNERLESS = {
+    object_type: (
+        "object_id IS NOT NULL"
+        if owner is None
+        else f"NOT EXISTS (SELECT 1 FROM {owner[0]} WHERE {owner[0]}.{owner[1]} = object_id)"  # noqa: S608
+    )
+    for object_type, owner in ANNOTATED_OWNER_TABLES.items()
+}
+"""Per object type, the predicate of an occurrence whose owner does not exist."""
+
+_OCCURRENCE_OWNER = " UNION ALL ".join(
+    f"SELECT occurrence_id, object_type, object_id FROM annotation_occurrences "  # noqa: S608
+    f"WHERE object_type = '{object_type}' AND {predicate}"
+    for object_type, predicate in _OWNERLESS.items()
+)
 
 _CROSS_RECORD_PARENT = """
     SELECT child.source_id
@@ -176,6 +194,15 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
     ).fetchone()
     if invalid_modality is not None:
         raise TimeFFormatError(f"task {invalid_modality[0]!r} has invalid input_modalities")
+
+    orphan_occurrence = connection.execute(f"{_OCCURRENCE_OWNER} LIMIT 1").fetchone()
+    if orphan_occurrence is not None:
+        occurrence_id, object_type, object_id = orphan_occurrence
+        if object_type == ObjectKind.DATASET:
+            raise TimeFFormatError(
+                f"annotation occurrence {occurrence_id!r} on the Dataset has object id {object_id!r}"
+            )
+        raise TimeFFormatError(f"annotation occurrence {occurrence_id!r} refers to missing {object_type} {object_id!r}")
 
     invalid_clock_scope = connection.execute(_TASK_RECORD_SCOPE).fetchone()
     if invalid_clock_scope is not None:
