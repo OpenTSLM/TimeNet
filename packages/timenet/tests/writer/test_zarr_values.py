@@ -21,8 +21,8 @@ from timenet.values_backends.zarr.writer import _array_name
 from timenet.writer import TimeFWriter
 
 
-def _write(tmp_path, **kwargs) -> Path:
-    dataset = make_dataset()
+def _write(tmp_path, dataset=None, **kwargs) -> Path:
+    dataset = make_dataset() if dataset is None else dataset
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset, values_backend="zarr", **kwargs) as writer:
         writer.write()
@@ -80,7 +80,8 @@ def test_index_locator_resolves_to_values(tmp_path):
 def test_one_index_row_per_series(tmp_path):
     # Zarr chunks the storage itself, so even a tiny chunk_max_bytes must not multiply index rows:
     # each (record, series) pair gets exactly one placement spanning the series' full length.
-    version_dir = _write(tmp_path, chunk_max_bytes=64)
+    dataset = make_dataset()
+    version_dir = _write(tmp_path, dataset, chunk_max_bytes=64)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         index = connection.execute(
             """SELECT signals.signal_id, chunks.n_values
@@ -88,7 +89,8 @@ def test_one_index_row_per_series(tmp_path):
         ).fetchall()
     signal_ids = [row[0] for row in index]
     assert len(signal_ids) == len(set(signal_ids))
-    long_series = next(row for row in index if row[0] == "ts-long-1")
+    long_id = next(s.id for s in dataset.records[1].signals if s.n_values == 512)
+    long_series = next(row for row in index if row[0] == long_id)
     assert long_series[1] == 512  # the fixture's long series, unsplit
 
 
@@ -105,8 +107,14 @@ def test_high_compression_level_is_rejected_for_blosc(tmp_path):
 
 
 def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
-    version_dir = _write(tmp_path)
-    out = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=("record-1",))
+    dataset = make_dataset()
+    version_dir = _write(tmp_path, dataset)
+    out = edit_version(
+        version_dir,
+        tmp_path / "out",
+        dataset_version=Version(1, 0, 1),
+        remove_record_ids=(dataset.records[1].id,),
+    )
     manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
