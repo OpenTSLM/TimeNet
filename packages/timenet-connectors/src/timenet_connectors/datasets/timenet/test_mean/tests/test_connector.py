@@ -13,7 +13,7 @@ def _convert() -> TimeFDataset:
     return TestMeanConnector().convert([])
 
 
-def _labels_by_record(dataset: TimeFDataset) -> dict[str, str | None]:
+def _labels_by_record(dataset: TimeFDataset) -> dict[int | None, str | None]:
     return {
         record.id: cast(str, task.targets[0])
         for task in dataset.tasks
@@ -62,4 +62,4 @@ def test_label_agrees_with_signal_mean():
     for record in dataset.records:
         mean = float(record.signals[0].to_numpy().mean())
         expected = "above_zero" if mean > 0 else "below_zero"
-        assert labels[record.record_id] == expected
+        assert labels[record.id] == expected

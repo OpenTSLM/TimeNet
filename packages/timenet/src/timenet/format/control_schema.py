@@ -3,17 +3,21 @@
 The DDL, the writer's Arrow batch schemas, and the audit's key and relationship checks are all
 derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
 
-Version 1 of the control schema. Every table carries a ``BIGINT`` key drawn from a sequence and
-stores public ids once, on the row that owns them. Fixed-shape fields are typed columns so they can
-be filtered in SQL; only the free-form ``metadata`` dictionaries are JSON. The database carries no
-persisted constraints: :data:`Table.unique` and :data:`Table.foreign_keys` are what the writer keeps
-while streaming and what :func:`timenet.format.control_audit.audit_control_database` re-checks.
+Version 1 of the control schema. Hierarchy tables carry a ``BIGINT`` key drawn from a sequence
+and store their ids once, on the row that owns them. Task tables are keyed by the tasks' public
+ids, and annotation tables by the writer's storage ids. Fixed-shape fields are typed columns so
+they can be filtered in SQL; only the free-form ``metadata`` dictionaries are JSON. The database
+carries no persisted constraints: :data:`Table.unique` and :data:`Table.foreign_keys` are what the
+writer keeps while streaming and what :func:`timenet.format.control_audit.audit_control_database`
+re-checks.
 """
 
 from dataclasses import dataclass
 from enum import Enum
 
 import pyarrow as pa
+
+from timenet.types.object_kind import ObjectKind
 
 
 class ColumnType(Enum):
@@ -70,6 +74,8 @@ class ForeignKey:
     column: str
     table: str
     references: str
+    many: bool = False
+    """Whether ``column`` is a list column whose every element must exist."""
 
 
 @dataclass(frozen=True)
@@ -117,13 +123,25 @@ def _required(name: str, column_type: ColumnType = ColumnType.VARCHAR) -> Column
 
 
 OBJECT_KEYS = "object_key_sequence"
-"""Datasets, records, sources, signals, and tasks share one key space, so an annotation occurrence
-can name any of them with one ``object_key``."""
+"""Datasets, records, sources, and signals draw their keys from one sequence."""
 AXIS_KEYS = "axis_key_sequence"
-CONTENT_KEYS = "content_key_sequence"
-OCCURRENCE_KEYS = "occurrence_key_sequence"
 
-SEQUENCES: tuple[str, ...] = (OBJECT_KEYS, AXIS_KEYS, CONTENT_KEYS, OCCURRENCE_KEYS)
+SEQUENCES: tuple[str, ...] = (OBJECT_KEYS, AXIS_KEYS)
+
+ANNOTATED_OWNER_TABLES: dict[ObjectKind, tuple[str, str] | None] = {
+    ObjectKind.DATASET: None,
+    ObjectKind.RECORD: ("records", "record_id"),
+    ObjectKind.SOURCE: ("sources", "source_id"),
+    ObjectKind.SIGNAL: ("signals", "signal_id"),
+    ObjectKind.TASK: ("tasks", "task_id"),
+}
+"""The owner table and key column of each annotated object type. The Dataset has no owner row."""
+
+ANNOTATED_OBJECT_TYPES: frozenset[ObjectKind] = frozenset(ANNOTATED_OWNER_TABLES)
+"""The values ``annotation_occurrences.object_type`` may hold."""
+
+LAST_ID_PREFIX = "last_id."
+"""Prefix of the ``control_metadata`` keys that store the last id used per entity kind."""
 
 CONTROL_METADATA = Table(
     "control_metadata",
@@ -137,14 +155,13 @@ DATASETS = Table(
     unique=(("dataset_key",), ("dataset_id",)),
     key_sequence=OBJECT_KEYS,
 )
-"""Exactly one row, the dataset the file describes. The row gives dataset-level annotation
-occurrences an ``object_key`` in the shared object key space, like every other annotated object."""
+"""Exactly one row, the dataset the file describes."""
 
 RECORDS = Table(
     "records",
     (
         _key("record_key"),
-        _required("record_id"),
+        _required("record_id", ColumnType.BIGINT),
         _key("clock_id"),
         Column("time_span_start_us", ColumnType.BIGINT),
         Column("time_span_end_us", ColumnType.BIGINT),
@@ -165,7 +182,7 @@ SOURCES = Table(
     "sources",
     (
         _key("source_key"),
-        _required("source_id"),
+        _required("source_id", ColumnType.BIGINT),
         _key("record_key"),
         Column("parent_source_key", ColumnType.BIGINT),
         _required("name"),
@@ -183,7 +200,7 @@ AXES = Table(
     "axes",
     (
         _key("axis_key"),
-        _required("axis_id"),
+        _required("axis_id", ColumnType.BIGINT),
         _required("axis_type"),
         Column("period_numerator_us", ColumnType.BIGINT),
         Column("period_denominator", ColumnType.BIGINT),
@@ -207,7 +224,7 @@ SIGNALS = Table(
     "signals",
     (
         _key("signal_key"),
-        _required("signal_id"),
+        _required("signal_id", ColumnType.BIGINT),
         _key("source_key"),
         _required("name"),
         _key("axis_key"),
@@ -248,8 +265,7 @@ SIGNAL_CHUNKS = Table(
 ANNOTATION_CONTENTS = Table(
     "annotation_contents",
     (
-        _key("content_key"),
-        _required("content_id"),
+        _required("content_id", ColumnType.BIGINT),
         _required("name"),
         Column("value_kind", ColumnType.VARCHAR),
         Column("text_value", ColumnType.VARCHAR),
@@ -261,18 +277,16 @@ ANNOTATION_CONTENTS = Table(
         Column("description", ColumnType.VARCHAR),
         _required("metadata", ColumnType.JSON),
     ),
-    unique=(("content_key",), ("content_id",)),
-    key_sequence=CONTENT_KEYS,
+    unique=(("content_id",),),
 )
 
 ANNOTATION_OCCURRENCES = Table(
     "annotation_occurrences",
     (
-        _key("occurrence_key"),
-        _required("occurrence_id"),
-        _key("content_key"),
+        _required("occurrence_id", ColumnType.BIGINT),
+        _required("content_id", ColumnType.BIGINT),
         _required("object_type"),
-        _key("object_key"),
+        Column("object_id", ColumnType.BIGINT),
         _required("span_type"),
         Column("start_us", ColumnType.BIGINT),
         Column("end_us", ColumnType.BIGINT),
@@ -280,16 +294,17 @@ ANNOTATION_OCCURRENCES = Table(
         Column("confidence", ColumnType.DOUBLE),
         _required("metadata", ColumnType.JSON),
     ),
-    unique=(("occurrence_key",), ("occurrence_id",)),
-    foreign_keys=(ForeignKey("content_key", "annotation_contents", "content_key"),),
-    key_sequence=OCCURRENCE_KEYS,
+    unique=(("occurrence_id",),),
+    foreign_keys=(ForeignKey("content_id", "annotation_contents", "content_id"),),
 )
+"""The owner is ``(object_type, object_id)``. ``object_id`` is the public id of a Record, Signal,
+or Task, or the storage id of a Source. Ids are unique only within one kind, so the type is part of
+the reference. ``object_id`` is NULL exactly when the owner is the Dataset."""
 
 TASKS = Table(
     "tasks",
     (
-        _key("task_key"),
-        _required("task_id"),
+        _required("task_id", ColumnType.BIGINT),
         _required("task_type"),
         Column("prompt", ColumnType.VARCHAR),
         _required("input_modalities", ColumnType.VARCHAR_LIST),
@@ -297,7 +312,7 @@ TASKS = Table(
         Column("scope_type", ColumnType.VARCHAR),
         Column("scope_start", ColumnType.BIGINT),
         Column("scope_end", ColumnType.BIGINT),
-        Column("scope_signal_keys", ColumnType.BIGINT_LIST),
+        Column("scope_signal_ids", ColumnType.BIGINT_LIST),
         _required("has_inline_targets", ColumnType.BOOLEAN),
         Column("target_schema", ColumnType.VARCHAR),
         Column("unit", ColumnType.VARCHAR),
@@ -306,61 +321,64 @@ TASKS = Table(
         Column("rationale", ColumnType.VARCHAR),
         _required("metadata", ColumnType.JSON),
     ),
-    unique=(("task_key",), ("task_id",)),
-    key_sequence=OBJECT_KEYS,
+    unique=(("task_id",),),
+    foreign_keys=(ForeignKey("scope_signal_ids", "signals", "signal_id", many=True),),
 )
 
 TASK_TARGETS = Table(
     "task_targets",
     (
-        _key("task_key"),
+        _key("task_id"),
         _key("position"),
         _required("target_kind"),
         Column("text_value", ColumnType.VARCHAR),
         Column("integer_value", ColumnType.BIGINT),
         Column("float_value", ColumnType.DOUBLE),
         Column("boolean_value", ColumnType.BOOLEAN),
-        Column("record_key", ColumnType.BIGINT),
-        Column("signal_key", ColumnType.BIGINT),
+        Column("record_id", ColumnType.BIGINT),
+        Column("signal_id", ColumnType.BIGINT),
         Column("span_start", ColumnType.BIGINT),
         Column("span_end", ColumnType.BIGINT),
-        Column("signal_keys", ColumnType.BIGINT_LIST),
+        Column("span_signal_ids", ColumnType.BIGINT_LIST),
     ),
-    unique=(("task_key", "position"),),
+    unique=(("task_id", "position"),),
     foreign_keys=(
-        ForeignKey("task_key", "tasks", "task_key"),
-        ForeignKey("record_key", "records", "record_key"),
-        ForeignKey("signal_key", "signals", "signal_key"),
+        ForeignKey("task_id", "tasks", "task_id"),
+        ForeignKey("record_id", "records", "record_id"),
+        ForeignKey("signal_id", "signals", "signal_id"),
+        ForeignKey("span_signal_ids", "signals", "signal_id", many=True),
     ),
 )
+"""The value columns match :class:`timenet.format.task_target_row.TaskTargetRow`. A span names its
+series in ``span_signal_ids``: one Signal for a step span, and any number for a time span."""
 
 TASK_RECORD_REFS = Table(
     "task_record_refs",
-    (_key("task_key"), _required("field"), _key("position"), _key("record_key")),
-    unique=(("task_key", "field", "position"),),
+    (_key("task_id"), _required("field"), _key("position"), _key("record_id")),
+    unique=(("task_id", "field", "position"),),
     foreign_keys=(
-        ForeignKey("task_key", "tasks", "task_key"),
-        ForeignKey("record_key", "records", "record_key"),
+        ForeignKey("task_id", "tasks", "task_id"),
+        ForeignKey("record_id", "records", "record_id"),
     ),
 )
 
 TASK_ANNOTATION_REFS = Table(
     "task_annotation_refs",
-    (_key("task_key"), _required("field"), _key("position"), _key("occurrence_key")),
-    unique=(("task_key", "field", "position"),),
+    (_key("task_id"), _required("field"), _key("position"), _key("occurrence_id")),
+    unique=(("task_id", "field", "position"),),
     foreign_keys=(
-        ForeignKey("task_key", "tasks", "task_key"),
-        ForeignKey("occurrence_key", "annotation_occurrences", "occurrence_key"),
+        ForeignKey("task_id", "tasks", "task_id"),
+        ForeignKey("occurrence_id", "annotation_occurrences", "occurrence_id"),
     ),
 )
 
 TASK_DEPENDENCIES = Table(
     "task_dependencies",
-    (_key("task_key"), _key("position"), _key("parent_task_key")),
-    unique=(("task_key", "position"),),
+    (_key("task_id"), _key("position"), _key("parent_task_id")),
+    unique=(("task_id", "position"),),
     foreign_keys=(
-        ForeignKey("task_key", "tasks", "task_key"),
-        ForeignKey("parent_task_key", "tasks", "task_key"),
+        ForeignKey("task_id", "tasks", "task_id"),
+        ForeignKey("parent_task_id", "tasks", "task_id"),
     ),
 )
 

@@ -92,48 +92,55 @@ through boto3, so it names `boto3` too.
 
 ## Building the dataset in `convert`
 
-Populate a `TimeFDataset` (`from timenet.dataset import TimeFDataset, TimeSeries`):
+Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, TimeFDataset`):
 
-- `TimeSeries.from_values(values, *, spec, signal, time_axis, time_series_id=None)`
-  is the shortcut when you already hold the values in memory: it wraps them in a **float32** loader and
-  takes `n_values` from the array's own length. When the source has one arbitrary time offset per point,
-  use `TimeSeries.from_irregular(values, *, time_offsets_us, spec, signal, ...)` instead, which derives
-  the axis from the stream. Use the raw `TimeSeries(..., loader=<Callable[[], pa.Array]>, ...)`
-  constructor only for genuinely lazy sources (files, remote shards). `time_series_id` is the dedupe key:
-  reuse the same id (and the same `TimeSeries`) to share one series across records.
+- `Signal.from_values(values, *, spec, name, time_axis)`
+  is the shortcut when you already hold the values in memory: it wraps them in a loader for the
+  spec's dtype and takes `n_values` from the array's own length. When the source has one arbitrary
+  time offset per point, use `Signal.from_irregular(values, *, time_offsets_us, spec, name)` instead,
+  which derives the axis from the stream. Use `Signal.from_loader(..., loader=<Callable[[], pa.Array]>,
+  n_values=...)` only for genuinely lazy sources (files, remote shards).
 - `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_value=ureg.<unit>, data_source=...)`.
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
-- `record = dataset.add_record(time_series=<tuple of TimeSeries>, record_id=...)`. A windowed record
-  says so through its axis: `RegularAxis.at_index(...)` moves the origin into the recording.
-- `record.add_annotation(Annotation(key=..., value=..., id=...))` attaches one and returns it;
+- Group signals under a `Source(name=..., signals=...)`, then
+  `dataset.add_record(record=Record(sources=(source,)))` registers the record and returns it. A
+  windowed record says so through its axis: `RegularAxis.at_index(...)` moves the origin into the
+  recording.
+- `record.annotate(Annotation(key=..., value=...))` attaches one and returns it;
   `record.add_annotations([...])` takes an iterable and returns a tuple. One class: its shape comes from
   its `span`. No span means whole-record; `span=TimePoint.seconds(...)` a time offset;
   `span=TimeInterval.seconds(...)` a region.
-- `dataset.add_task(record, <Task>(...))` registers one and returns it; `dataset.add_tasks(record, [...])`
-  takes an iterable and registers the batch all-or-nothing. Set `scope` and `from_tasks` on the task
-  itself, not the call; a batch may derive from its own members in any order.
-- Name any annotation or task you reference later and read its `id` off it. Never repeat an id literal in
-  `input_annotation_ids`, `target_annotation_ids`, or `from_tasks`.
+- `dataset.add_task(task=<Task>(inputs=(record,), ...))` registers one and returns it;
+  `dataset.add_tasks(tasks=[...])` takes an iterable and registers the batch all-or-nothing. The task
+  names its input records itself. Set `scope` and `from_tasks` on the task too; a batch may derive
+  from its own members in any order.
+- You cannot pass ids. The dataset gives every record, signal, and task a read-only int `id` when
+  you add it. Sources, axes, and annotations have no id. Put upstream identifiers (a recording
+  name, an `ecg_id`) in `Record.metadata` or in an annotation, for example
+  `metadata={"ecg_id": 17}`. A span takes Signal objects in `time_series`, not ids.
+- Keep a Python reference to any annotation or task you reference later and pass that object. When
+  you look objects up by an upstream key, keep a local dict keyed by that key, not by a derived id
+  string.
 
 ## Task types (`timenet.types.tasks`)
 
 The task **class** is the type tag (used by `search(task=...)`); the instance carries the payload.
 
-Every task shares one frame on the `Task` base — `record_ids`, `prompt`, `scope` (a `Span` narrowing the
-input), `input_annotation_ids`, `target` / `target_annotation_ids`, `rationale`, `from_tasks` — so the
+Every task shares one frame on the `Task` base — `inputs`, `prompt`, `scope` (a `Span` narrowing the
+input), `input_annotations`, `targets` / `target_annotations`, `rationale`, `from_tasks` — so the
 type only says what *kind* of answer it is.
 
 | Task | Answer | Extra payload |
 | --- | --- | --- |
 | `ClassificationTask` | `target: str` (a label) | optional `target_schema` |
-| `AnswerTask` | `target: str` (free text; a caption when there is no `prompt`) | — |
+| `AnswerTask` | `targets: tuple[str, ...]` (free text; a caption when there is no `prompt`) | — |
 | `ScalarPredictionTask` | `target: float` | optional `unit`, `target_name` |
 | `TemporalLocalizationTask` | `target: tuple[Span, ...]` | `mode` (`SPARSE` / `EXHAUSTIVE`) |
 | `ForecastingTask` | the produced series | `context_record_ids`, `target_record_id` |
 | `TSEditingTask` | the produced series | `source_record_id`, `target_record_id` |
 | `TSGenerationTask` | the produced series | `target_record_id` |
-| `TSCorrespondenceTask` | `target: tuple[str, ...]` (record ids) | `candidate_record_ids` |
+| `TSCorrespondenceTask` | `targets: tuple[Record, ...]` | `candidate_records` |
 
 The three series-output tasks set `answer_is_record` and locate their answer by record id instead of
 filling `target`. Every other task needs exactly one of `target` or `target_annotation_ids` (the latter
@@ -148,10 +155,11 @@ the bounds of every `Span` the task carries.
 import json
 from typing import Any
 
-from timenet.dataset import TimeFDataset, TimeSeries
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
+
 
 _SPEC = TimeSeriesSpec(
     spec_type="tsqa_series",
@@ -159,32 +167,48 @@ _SPEC = TimeSeriesSpec(
     unit_value=ureg.dimensionless,
 )
 
-class TSQAConnector(BaseHuggingFaceConnector):
-    """Connector for the TSQA time-series QA dataset."""
 
-    HF_REPO = "ChengsenWang/TSQA"  # external Hub repo id, keeps its own casing
+class TSQAConnector(BaseHuggingFaceConnector):
+    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
+
+    HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
 
     def convert(self, raw_refs: list[dict[str, Any]]) -> TimeFDataset:
+        """Build one record per row: the parsed series plus its question-and-answer task.
+
+        Args:
+            raw_refs: The rows from :meth:`download`.
+
+        Returns:
+            The populated :class:`~timenet.dataset.TimeFDataset`.
+        """
         dataset = TimeFDataset(metadata=self.metadata())
-        for index, row in enumerate(raw_refs):
+        for row in raw_refs:
             series = json.loads(row["Series"])
             signals = series if series and isinstance(series[0], list) else [series]
             time_series = tuple(
-                TimeSeries.from_values(
+                Signal.from_values(
                     values,
                     spec=_SPEC,
-                    signal=f"c{signal}",
+                    name=f"c{signal}",
                     time_axis=OrdinalAxis(),
-                    time_series_id=f"row-{index}-c{signal}",
                 )
                 for signal, values in enumerate(signals)
             )
-            record = dataset.add_record(time_series=time_series, record_id=f"row-{index}")
-            record.add_annotation(Annotation(key="task", value=row["Task"], id=f"task-{index}"))
+            record = Record(sources=(Source(name="TSQA series", signals=time_series),))
+            dataset.add_record(record=record)
+            record.annotate(Annotation(key="task", value=row["Task"]))
             if row.get("Label"):
-                record.add_annotation(Annotation(key="label", value=row["Label"], id=f"label-{index}"))
-            dataset.add_task(record, AnswerTask(prompt=row["Question"], target=row["Answer"], id=f"qa-{index}"))
+                record.annotate(Annotation(key="label", value=row["Label"]))
+            dataset.add_task(
+                task=AnswerTask(
+                    inputs=(record,),
+                    prompt=row["Question"],
+                    targets=(row["Answer"],),
+                )
+            )
         return dataset
+
 
 CONNECTOR = TSQAConnector
 ```
@@ -201,12 +225,13 @@ from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
 ## PhysioNet notes: `physionet/ecg_qa_cot`
 
 Subclasses `BasePhysioNetConnector[EcgQaCotRef]` where `EcgQaCotRef` is a frozen dataclass ref.
-`download` calls `ensure_archive` / `download_files` and returns refs; `convert` shares the 12-lead
-ECG across rows on the same recording (`leads_by_ecg` cache keyed by a stable `time_series_id`), attaches
+`download` calls `ensure_archive` / `download_files` and returns refs; `convert` builds one record per
+recording (a local dict keyed by the PTB-XL `ecg_id`, which it also stores in `Record.metadata`), attaches
 whole-record `Annotation`s (split, question_type, template_id, clinical_context, answer_options), and adds a
-`AnswerTask(prompt=..., rationale=<CoT>, target=<label>)`. `_leads_for` reads the WFDB header for
-`fs`/`sig_len`/`sig_name` and builds one lazy `TimeSeries` per lead. See its `connector.py` for the full
-pattern, including sharing a series across many records.
+`AnswerTask(inputs=(record,), prompt=..., rationale=<CoT>, targets=(<label>,))`. `_leads_for` reads
+the WFDB header for `fs`/`sig_len`/`sig_name` and builds one lazy `Signal` per lead. All tasks for a
+recording point at its one record; no series is shared across records. See its `connector.py` for
+the full pattern.
 
 ## Fixture-based test pattern
 
