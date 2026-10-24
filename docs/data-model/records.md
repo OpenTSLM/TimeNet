@@ -39,17 +39,15 @@ Build the hierarchy from the leaves upward:
 from timenet.dataset import Record, Source
 
 accelerometer = Source(
-    id="accelerometer",
     name="Accelerometer",
     signals=(acceleration_x, acceleration_y, acceleration_z),
 )
 imu = Source(
-    id="imu",
     name="IMU",
     sources=(accelerometer,),
 )
 record = Record(
-    record_id="run-001",
+    id="run-001",
     sources=(imu,),
     metadata={"site": "lab-a"},
 )
@@ -89,7 +87,7 @@ from timenet.types import TimeOrigin
 
 origin = TimeOrigin(datetime(2026, 1, 1, tzinfo=timezone.utc))
 record = Record(
-    record_id="run-001",
+    id="run-001",
     start_time=origin,
     sources=(
         Source(name="sensor A", signals=(signal_a,)),
@@ -112,8 +110,8 @@ events during gaps when every sensor is off.
 
 ## Connect tasks
 
-A [Task](tasks.md) refers directly to its input Records. Registering a Task adds its ID to each input
-Record.
+A [Task](tasks.md) refers directly to its input Records. Registering a Task does not change those
+Records.
 
 ```python
 from timenet.types import ClassificationTask

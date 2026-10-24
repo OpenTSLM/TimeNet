@@ -59,11 +59,11 @@ def _canonical(value: Any) -> Any:  # noqa: PLR0911, RUF100 - explicit type case
     if isinstance(value, type):
         return f"{value.__module__}.{value.__qualname__}"
     if is_dataclass(value):
-        unstable_or_executable = {"axis_id", "occurrence_id", "loader", "time_offsets_loader"}
+        executable = {"loader", "time_offsets_loader"}
         return {
             field.name: _canonical(getattr(value, field.name))
             for field in fields(value)
-            if field.name not in unstable_or_executable
+            if field.name not in executable
         }
     if isinstance(value, dict):
         return {str(key): _canonical(item) for key, item in sorted(value.items(), key=lambda pair: str(pair[0]))}
@@ -125,9 +125,8 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
             digest.update(
                 json.dumps(
                     {
-                        "record_id": record.record_id,
+                        "record_id": record.id,
                         "metadata": record.metadata,
-                        "task_ids": record.task_ids,
                         "annotations": _canonical(record.annotations),
                         "sources": _canonical(record.sources),
                     },

@@ -162,7 +162,9 @@ class Signal(SupportsAnnotate):
     def _validate_annotation(self, annotation: Annotation) -> None:
         """Validate an annotation without changing this Signal."""
         if annotation.span is not None:
-            check_span_within_window(f"annotation {annotation.key!r}", annotation.span, (self,), self.id)
+            check_span_within_window(
+                f"annotation {annotation.key!r}", annotation.span, (self,), f"signal {self.name!r}"
+            )
 
     def _attach_annotation(self, annotation: Annotation) -> Annotation:
         """Attach an already validated annotation as a new occurrence.
@@ -401,9 +403,9 @@ class Signal(SupportsAnnotate):
                 past the series' steps. If the located range is empty.
         """
         if isinstance(span, StepInterval):
-            if span.time_series_id != self.id:
+            if span.time_series is not self:
                 raise TimeFValidationError(
-                    f"a step span counts on {span.time_series_id!r}, not this series {self.id!r}"
+                    f"a step span counts on series {span.time_series.name!r}, not this series {self.name!r}"
                 )
             if span.stop > self.n_values:
                 raise TimeFValidationError(

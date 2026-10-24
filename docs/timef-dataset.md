@@ -74,13 +74,11 @@ Sources:
 from timenet.dataset import Source
 
 accelerometer = Source(
-    id="accelerometer",
     name="Accelerometer",
     signals=(acceleration_x, acceleration_y, acceleration_z),
 )
 
 imu = Source(
-    id="imu",
     name="IMU",
     sources=(accelerometer, gyroscope, magnetometer),
 )
@@ -88,7 +86,6 @@ imu = Source(
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `id` | `str` | Stable identity. The default is a UUIDv7. |
 | `name` | `str` | Human-readable Source name. |
 | `sources` | `tuple[Source, ...]` | Direct child Sources. |
 | `signals` | `tuple[Signal, ...]` | Signals produced directly by this Source. |
@@ -120,7 +117,7 @@ annotations and metadata:
 from timenet.dataset import Record
 
 record = Record(
-    record_id="record-123",
+    id="record-123",
     sources=(imu,),
     metadata={"site": "lab-a"},
 )
@@ -128,7 +125,7 @@ record = Record(
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `record_id` | `str` | Stable identity. `record.id` is the public alias. |
+| `id` | `str` | Stable identity. |
 | `sources` | `tuple[Source, ...]` | Root Sources in the recording hierarchy. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
 | `metadata` | `dict[str, object]` | Optional session metadata. |
