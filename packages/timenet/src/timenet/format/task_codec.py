@@ -1,12 +1,14 @@
 """Canonical codecs between Task fields and the typed columns of the ``tasks`` and ``task_targets`` tables.
 
 Spans, task configuration, and targets are all stored as plain columns rather than JSON, so DuckDB can
-filter on them and the reader builds objects straight from row values. Object references travel as
-public IDs here; the writer and reader swap them for internal keys at the table boundary. A span
-holds Signal objects, so encoding reads their ids and decoding looks the read-back Signals up by id.
+filter on them and the reader builds objects straight from row values. Object references are public
+IDs, and the target rows use the ``task_targets`` column names, so they are stored and read back as
+they are. A span holds Signal objects, so encoding reads their ids and decoding looks the read-back
+Signals up by id.
 """
 
 from collections.abc import Iterable, Mapping
+from enum import StrEnum, unique
 from typing import Any, TypeVar, cast
 
 from pydantic import ValidationError
@@ -14,13 +16,14 @@ from pydantic import ValidationError
 from timenet.dataset.record import Record
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFFormatError
-from timenet.format.task_target_kind import TaskTargetKind
+from timenet.format.task_target_kind import SPAN_KINDS, TaskTargetKind
 from timenet.format.task_target_row import TargetValueRow
 from timenet.types import (
     ClassificationTask,
     EntityId,
     InputModality,
     LocalizationMode,
+    ObjectKind,
     ScalarPredictionTask,
     Span,
     Split,
@@ -35,6 +38,22 @@ from timenet.types import (
 
 
 _T = TypeVar("_T")
+
+
+@unique
+class TaskRelationshipField(StrEnum):
+    """Task field that a ``task_record_refs`` or ``task_annotation_refs`` row belongs to."""
+
+    INPUTS = "inputs"
+    CANDIDATE_RECORDS = "candidate_records"
+    INPUT_ANNOTATIONS = "input_annotations"
+    TARGET_ANNOTATIONS = "target_annotations"
+
+
+RECORD_FIELDS = frozenset({TaskRelationshipField.INPUTS, TaskRelationshipField.CANDIDATE_RECORDS})
+"""The fields stored in ``task_record_refs``."""
+ANNOTATION_FIELDS = frozenset({TaskRelationshipField.INPUT_ANNOTATIONS, TaskRelationshipField.TARGET_ANNOTATIONS})
+"""The fields stored in ``task_annotation_refs``."""
 
 
 PAYLOAD_COLUMNS = ("target_schema", "unit", "target_name", "mode")
@@ -95,7 +114,7 @@ def encode_span(span: Span | None) -> dict[str, Any] | None:
         raise TimeFFormatError(f"cannot encode unsupported span type {type(span).__name__}")
     row = TargetValueRow.from_target(span)
     return {
-        "span_type": row.target_kind.value,
+        "span_type": row.target_kind,
         "span_start": row.span_start,
         "span_end": row.span_end,
         "signal_ids": row.span_signal_ids,
@@ -128,24 +147,15 @@ def decode_span(
     """
     if span_type is None:
         return None
-    if span_start is None:
-        raise TimeFFormatError(f"stored {span_type} span has no start")
-    series = _signals(signal_ids, signals)
-    if span_type == "time_point":
-        return TimePoint(start_us=span_start, time_series=series)
-    if span_type == "time_interval":
-        if span_end is None:
-            raise TimeFFormatError("stored time_interval span has no end")
-        return TimeInterval(start_us=span_start, end_us=span_end, time_series=series)
-    if not series:
-        raise TimeFFormatError(f"stored {span_type} span names no series")
-    if span_type == "step_point":
-        return StepPoint(start=span_start, time_series=series[0])
-    if span_type == "step_interval":
-        if span_end is None:
-            raise TimeFFormatError("stored step_interval span has no stop")
-        return StepInterval(start=span_start, stop=span_end, time_series=series[0])
-    raise TimeFFormatError(f"stored span has unknown type {span_type!r}")
+    if span_type not in SPAN_KINDS:
+        raise TimeFFormatError(f"stored span has unknown type {span_type!r}")
+    row = {
+        "target_kind": span_type,
+        "span_start": span_start,
+        "span_end": span_end,
+        "span_signal_ids": None if signal_ids is None else tuple(signal_ids),
+    }
+    return cast("Span", decode_target(row, records={}, signals=signals))
 
 
 def encode_task_payload(task: Task) -> dict[str, str | None]:
@@ -208,9 +218,9 @@ def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding b
     if kind == TaskTargetKind.BOOLEAN:
         return _required(values.boolean_value, kind, "boolean_value")
     if kind == TaskTargetKind.RECORD:
-        return _resolve(records, _required(values.record_id, kind, "record_id"), "Record")
+        return _resolve(records, _required(values.record_id, kind, "record_id"), ObjectKind.RECORD)
     if kind == TaskTargetKind.SIGNAL:
-        return _resolve(signals, _required(values.signal_id, kind, "signal_id"), "Signal")
+        return _resolve(signals, _required(values.signal_id, kind, "signal_id"), ObjectKind.SIGNAL)
     start = _required(values.span_start, kind, "span_start")
     if kind == TaskTargetKind.TIME_POINT:
         return TimePoint(start_us=start, time_series=_signals(values.span_signal_ids, signals))
@@ -221,7 +231,7 @@ def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding b
             time_series=_signals(values.span_signal_ids, signals),
         )
     (signal_id,) = _required(values.span_signal_ids, kind, "span_signal_ids")
-    signal = _resolve(signals, signal_id, "Signal")
+    signal = _resolve(signals, signal_id, ObjectKind.SIGNAL)
     if kind == TaskTargetKind.STEP_POINT:
         return StepPoint(start=start, time_series=signal)
     if kind == TaskTargetKind.STEP_INTERVAL:
@@ -235,11 +245,11 @@ def _required(value: _T | None, kind: TaskTargetKind, name: str) -> _T:
     return value
 
 
-def _resolve(objects: Mapping[EntityId, _T], public_id: EntityId, label: str) -> _T:
+def _resolve(objects: Mapping[EntityId, _T], public_id: EntityId, kind: ObjectKind) -> _T:
     try:
         return objects[public_id]
     except KeyError as exc:
-        raise TimeFFormatError(f"task target refers to missing {label} {public_id!r}") from exc
+        raise TimeFFormatError(f"task target refers to missing {kind} {public_id!r}") from exc
 
 
 def _signals(signal_ids: object, signals: Mapping[EntityId, Signal]) -> tuple[Signal, ...] | None:
@@ -250,4 +260,6 @@ def _signals(signal_ids: object, signals: Mapping[EntityId, Signal]) -> tuple[Si
     """
     if signal_ids is None:
         return None
-    return tuple(_resolve(signals, signal_id, "Signal") for signal_id in cast("Iterable[EntityId]", signal_ids))
+    return tuple(
+        _resolve(signals, signal_id, ObjectKind.SIGNAL) for signal_id in cast("Iterable[EntityId]", signal_ids)
+    )

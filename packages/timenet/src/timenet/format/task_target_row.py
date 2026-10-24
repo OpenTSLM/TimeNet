@@ -1,8 +1,8 @@
 """Validated target values and catalog rows."""
 
-from typing import ClassVar, Self
+from typing import Self
 
-from pydantic import Field, StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
+from pydantic import StrictBool, StrictFloat, StrictInt, StrictStr, model_validator
 
 from timenet.dataset.record import Record
 from timenet.dataset.time_series import Signal
@@ -12,23 +12,23 @@ from timenet.types import StepInterval, StepPoint, TimeInterval, TimePoint
 from timenet.types._model import TimeFModel
 
 
-def _required_columns(record: str, signal: str, scope: str) -> dict[TaskTargetKind, frozenset[str]]:
-    return {
-        TaskTargetKind.TEXT: frozenset(("text_value",)),
-        TaskTargetKind.INTEGER: frozenset(("integer_value",)),
-        TaskTargetKind.FLOAT: frozenset(("float_value",)),
-        TaskTargetKind.BOOLEAN: frozenset(("boolean_value",)),
-        TaskTargetKind.RECORD: frozenset((record,)),
-        TaskTargetKind.SIGNAL: frozenset((signal,)),
-        TaskTargetKind.TIME_POINT: frozenset(("span_start",)),
-        TaskTargetKind.TIME_INTERVAL: frozenset(("span_start", "span_end")),
-        TaskTargetKind.STEP_POINT: frozenset(("span_start", scope)),
-        TaskTargetKind.STEP_INTERVAL: frozenset(("span_start", "span_end", scope)),
-    }
+_REQUIRED_COLUMNS: dict[TaskTargetKind, frozenset[str]] = {
+    TaskTargetKind.TEXT: frozenset(("text_value",)),
+    TaskTargetKind.INTEGER: frozenset(("integer_value",)),
+    TaskTargetKind.FLOAT: frozenset(("float_value",)),
+    TaskTargetKind.BOOLEAN: frozenset(("boolean_value",)),
+    TaskTargetKind.RECORD: frozenset(("record_id",)),
+    TaskTargetKind.SIGNAL: frozenset(("signal_id",)),
+    TaskTargetKind.TIME_POINT: frozenset(("span_start",)),
+    TaskTargetKind.TIME_INTERVAL: frozenset(("span_start", "span_end")),
+    TaskTargetKind.STEP_POINT: frozenset(("span_start", "span_signal_ids")),
+    TaskTargetKind.STEP_INTERVAL: frozenset(("span_start", "span_end", "span_signal_ids")),
+}
+_PAYLOAD_COLUMNS = frozenset().union(*_REQUIRED_COLUMNS.values())
 
 
-class _TargetValues(TimeFModel):
-    """Validate the shared payload and the fields allowed by its target kind."""
+class TargetValueRow(TimeFModel):
+    """Represent a public target with validated values and public object IDs."""
 
     target_kind: TaskTargetKind
     text_value: StrictStr | None = None
@@ -37,22 +37,21 @@ class _TargetValues(TimeFModel):
     boolean_value: StrictBool | None = None
     span_start: StrictInt | None = None
     span_end: StrictInt | None = None
-
-    _scope_column: ClassVar[str]
-    _required_columns: ClassVar[dict[TaskTargetKind, frozenset[str]]]
-    _payload_columns: ClassVar[frozenset[str]]
+    record_id: StrictInt | None = None
+    signal_id: StrictInt | None = None
+    span_signal_ids: tuple[StrictInt, ...] | None = None
 
     @model_validator(mode="after")
     def _check_kind_columns(self) -> Self:
         kind = self.target_kind
-        scope = getattr(self, self._scope_column)
+        scope = self.span_signal_ids
         if is_step_span(kind) and (scope is None or len(scope) != 1):
             raise TimeFValidationError(f"task target kind {kind.value!r} requires exactly one span Signal")
-        populated = {name for name in self._payload_columns if getattr(self, name) is not None}
-        required = self._required_columns[kind]
+        populated = {name for name in _PAYLOAD_COLUMNS if getattr(self, name) is not None}
+        required = _REQUIRED_COLUMNS[kind]
         allowed = required
         if kind in {TaskTargetKind.TIME_POINT, TaskTargetKind.TIME_INTERVAL}:
-            allowed = required | {self._scope_column}
+            allowed = required | {"span_signal_ids"}
         if missing := required - populated:
             raise TimeFValidationError(f"task target kind {kind.value!r} requires {', '.join(sorted(missing))}")
         if unexpected := populated - allowed:
@@ -60,18 +59,6 @@ class _TargetValues(TimeFModel):
                 f"task target kind {kind.value!r} does not allow {', '.join(sorted(unexpected))}"
             )
         return self
-
-
-class TargetValueRow(_TargetValues):
-    """Represent a public target with validated values and public object IDs."""
-
-    record_id: StrictInt | None = None
-    signal_id: StrictInt | None = None
-    span_signal_ids: tuple[StrictInt, ...] | None = None
-
-    _scope_column = "span_signal_ids"
-    _required_columns = _required_columns("record_id", "signal_id", _scope_column)
-    _payload_columns = frozenset().union(*_required_columns.values())
 
     @classmethod
     def from_target(cls, target: object) -> Self:  # noqa: PLR0911 - one branch per target kind
@@ -123,17 +110,3 @@ class TargetValueRow(_TargetValues):
             )
         else:
             raise TimeFFormatError(f"cannot encode unsupported target type {type(target).__name__}")
-
-
-class TaskTargetRow(_TargetValues):
-    """Represent a validated task_targets catalog row with internal object keys."""
-
-    task_key: StrictInt
-    position: StrictInt = Field(ge=0)
-    record_key: StrictInt | None = None
-    signal_key: StrictInt | None = None
-    signal_keys: tuple[StrictInt, ...] | None = None
-
-    _scope_column = "signal_keys"
-    _required_columns = _required_columns("record_key", "signal_key", _scope_column)
-    _payload_columns = frozenset().union(*_required_columns.values())

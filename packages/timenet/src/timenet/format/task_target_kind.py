@@ -19,6 +19,17 @@ class TaskTargetKind(StrEnum):
     STEP_INTERVAL = "step_interval"
 
 
+SPAN_KINDS = frozenset(
+    {
+        TaskTargetKind.TIME_POINT,
+        TaskTargetKind.TIME_INTERVAL,
+        TaskTargetKind.STEP_POINT,
+        TaskTargetKind.STEP_INTERVAL,
+    }
+)
+"""The kinds that store a span. ``tasks.scope_type`` holds one of these too."""
+
+
 def is_step_span(kind: str) -> bool:
     """Return whether a stored target kind uses a single step-indexed Signal."""
     return kind in {TaskTargetKind.STEP_POINT, TaskTargetKind.STEP_INTERVAL}

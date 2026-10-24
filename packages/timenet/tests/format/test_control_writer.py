@@ -11,7 +11,17 @@ from timenet.format.control_audit import audit_control_database
 import timenet.format.control_writer as control_writer_module
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
-from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
+from timenet.types import (
+    Annotation,
+    AnswerTask,
+    DatasetMetadata,
+    License,
+    StepPoint,
+    TimeInterval,
+    TimeSeriesSpec,
+    Version,
+    ureg,
+)
 
 
 SPEC = TimeSeriesSpec(
@@ -31,7 +41,7 @@ SEX_MALE_ID = 1
 TASK_ID = 1
 
 
-def _dataset() -> TimeFDataset:
+def _dataset(*, with_task: bool = True) -> TimeFDataset:
     axis = RegularAxis(period_us=Fraction(2_000))
     lead_i = Signal.from_loader(
         name="I",
@@ -61,6 +71,8 @@ def _dataset() -> TimeFDataset:
         )
     )
     dataset.add_record(record=record)
+    if not with_task:
+        return dataset
     task = AnswerTask(
         inputs=(record,),
         prompt="Alive?",
@@ -86,16 +98,13 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
             "SELECT task_type, prompt, scope_type, target_schema, unit, target_name, mode FROM tasks"
         ).fetchone() == ("answer", "Alive?", None, None, None, None, None)
         assert connection.execute(
-            "SELECT position, target_kind, text_value, integer_value, record_key FROM task_targets"
+            "SELECT position, target_kind, text_value, integer_value, record_id FROM task_targets"
         ).fetchone() == (0, "text", "Yes", None, None)
-        assert connection.execute(
-            """SELECT refs.field, records.record_id
-               FROM task_record_refs refs JOIN records USING (record_key)"""
-        ).fetchone() == (
+        assert connection.execute("SELECT task_id, field, record_id FROM task_record_refs").fetchone() == (
+            TASK_ID,
             "inputs",
             RECORD_ID,
         )
-        assert connection.execute("SELECT typeof(record_key) FROM task_record_refs").fetchone() == ("BIGINT",)
         assert connection.execute(
             """SELECT parent.source_id
                FROM sources child
@@ -111,36 +120,6 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
                WHERE contents.content_id = ? AND occurrences.object_type = 'Record'""",
             [SEX_MALE_ID],
         ).fetchone() == (SEX_MALE_ID, "Record", RECORD_ID)
-
-
-def test_control_relationships_use_integer_keys(tmp_path):
-    path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
-
-    relationship_columns = (
-        ("sources", "record_key"),
-        ("sources", "parent_source_key"),
-        ("signals", "source_key"),
-        ("signals", "axis_key"),
-        ("annotation_occurrences", "content_id"),
-        ("annotation_occurrences", "object_id"),
-        ("task_targets", "task_key"),
-        ("task_targets", "record_key"),
-        ("task_targets", "signal_key"),
-        ("task_record_refs", "task_key"),
-        ("task_record_refs", "record_key"),
-    )
-    with connect_control(path, read_only=True) as connection:
-        for table, column in relationship_columns:
-            row = connection.execute(
-                """SELECT data_type
-                   FROM information_schema.columns
-                   WHERE table_name = ? AND column_name = ?""",
-                [table, column],
-            ).fetchone()
-            assert row is not None
-            (stored_type,) = row
-            assert stored_type == "BIGINT", f"{table}.{column} stores {stored_type}"
 
 
 def test_control_writer_preserves_relationships_across_task_batches(tmp_path, monkeypatch):
@@ -160,8 +139,9 @@ def test_control_writer_preserves_relationships_across_task_batches(tmp_path, mo
         parent = task
     monkeypatch.setattr(control_writer_module, "_TASK_BATCH_SIZE", 2)
     path = tmp_path / "control.duckdb"
+    first, *rest = dataset.tasks
 
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path).write_hierarchy(dataset, tasks=(*rest, first))
 
     with connect_control(path, read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM tasks").fetchone() == (6,)
@@ -170,12 +150,98 @@ def test_control_writer_preserves_relationships_across_task_batches(tmp_path, mo
         assert connection.execute("SELECT count(*) FROM task_annotation_refs").fetchone() == (6,)
         assert connection.execute("SELECT count(*) FROM task_dependencies").fetchone() == (5,)
         assert connection.execute(
-            """SELECT parent.task_id, child.task_id
-               FROM task_dependencies dependencies
-               JOIN tasks child ON child.task_key = dependencies.task_key
-               JOIN tasks parent ON parent.task_key = dependencies.parent_task_key
-               WHERE child.task_id = 3"""
-        ).fetchone() == (2, 3)
+            "SELECT task_id, parent_task_id FROM task_dependencies WHERE task_id IN (2, 3) ORDER BY task_id"
+        ).fetchall() == [(2, TASK_ID), (3, 2)]
+
+
+def _foreign_dataset() -> TimeFDataset:
+    """Return a dataset whose record 2, signal 3 and task 2 have ids that _dataset() does not use."""
+    foreign = _dataset()
+    signal = Signal(name="III", spec=SPEC, time_axis=RegularAxis(period_us=Fraction(2_000)), data=[1.0])
+    record = foreign.add_record(record=Record(sources=(Source(name="ECG", signals=(signal,)),)))
+    foreign.add_task(task=AnswerTask(inputs=(record,), targets=("No",)))
+    return foreign
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        (
+            "from_tasks",
+            lambda task, foreign: (foreign.tasks[1],),
+            "task 1 depends on a task with id 2 that is not in the dataset",
+        ),
+        (
+            "from_tasks",
+            lambda task, foreign: (foreign.tasks[0],),
+            "task 1 depends on a task with id 1 that is not in the dataset",
+        ),
+        (
+            "from_tasks",
+            lambda task, foreign: (AnswerTask(inputs=task.inputs, targets=("No",)),),
+            "task 1 depends on a task that is not in the dataset",
+        ),
+        ("from_tasks", lambda task, foreign: (task,), "task 1 depends on itself"),
+        (
+            "input_annotations",
+            lambda task, foreign: (Annotation(key="outside", value="x"),),
+            "task 1 field 'input_annotations' refers to an annotation that is not in the dataset",
+        ),
+        ("inputs", lambda task, foreign: (foreign.records[1],), "task 1 field 'inputs' refers to unknown record 2"),
+        ("targets", lambda task, foreign: (foreign.records[1],), "task 1 target 0 refers to unknown Record 2"),
+        (
+            "targets",
+            lambda task, foreign: (StepPoint(start=1, time_series=foreign.records[1].signals[0]),),
+            r"task 1 target 0 refers to unknown Signals \[3\]",
+        ),
+        (
+            "targets",
+            lambda task, foreign: (
+                TimeInterval(start_us=0, end_us=2_000, time_series=(foreign.records[1].signals[0],)),
+            ),
+            r"task 1 target 0 refers to unknown Signals \[3\]",
+        ),
+    ],
+)
+def test_control_writer_rejects_task_references_outside_the_dataset(tmp_path, field, value, message):
+    dataset = _dataset()
+    (task,) = dataset.tasks
+    # add_task checks references when it registers a task, so a later change reaches the writer.
+    setattr(task, field, value(task, _foreign_dataset()))
+    path = tmp_path / "control.duckdb"
+
+    with pytest.raises(TimeFValidationError, match=message):
+        DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    assert not path.exists()
+
+
+def test_a_streamed_parent_from_another_dataset_is_rejected_when_its_id_streams_later(tmp_path):
+    dataset = _dataset(with_task=False)
+    record = dataset.records[0]
+    foreign_parent = _foreign_dataset().tasks[1]
+
+    def stream():
+        yield AnswerTask(inputs=(record,), targets=("Yes",), from_tasks=(foreign_parent,))
+        yield AnswerTask(inputs=(record,), targets=("No",))
+
+    dataset.set_task_stream([AnswerTask], stream)
+
+    with pytest.raises(TimeFValidationError, match="task 1 depends on a task with id 2 that is not in the dataset"):
+        dataset.write(path=tmp_path)
+
+
+def test_a_streamed_parent_that_streams_after_its_child_is_stored(tmp_path):
+    dataset = _dataset(with_task=False)
+    record = dataset.records[0]
+    parent = AnswerTask(inputs=(record,), prompt="Parent?", targets=("No",))
+    child = AnswerTask(inputs=(record,), prompt="Child?", targets=("Yes",), from_tasks=(parent,))
+    dataset.set_task_stream([AnswerTask], lambda: iter((child, parent)))
+
+    restored = TimeFDataset.open(path=dataset.write(path=tmp_path))
+
+    by_prompt = {task.prompt: task for task in restored.tasks}
+    assert by_prompt["Child?"].from_tasks == (by_prompt["Parent?"],)
 
 
 def test_control_writer_output_passes_the_relational_audit(tmp_path):

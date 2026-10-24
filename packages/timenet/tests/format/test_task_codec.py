@@ -10,7 +10,7 @@ from timenet.format.task_codec import (
     encode_task_payload,
 )
 from timenet.format.task_target_kind import TaskTargetKind
-from timenet.format.task_target_row import TargetValueRow, TaskTargetRow
+from timenet.format.task_target_row import TargetValueRow
 from timenet.types import (
     AnswerTask,
     DatasetMetadata,
@@ -94,9 +94,9 @@ def test_target_rows_reject_invalid_layouts_for_writes_and_reads(row, message):
         decode_target(row, records={}, signals={})
 
 
-def test_stored_signal_target_requires_a_signal_key():
-    with pytest.raises(ValidationError, match="requires signal_key"):
-        TaskTargetRow(task_key=1, position=0, target_kind=TaskTargetKind.SIGNAL)
+def test_stored_signal_target_requires_a_signal_id():
+    with pytest.raises(ValidationError, match="requires signal_id"):
+        TargetValueRow(target_kind=TaskTargetKind.SIGNAL)
 
 
 def test_target_decoder_rejects_a_missing_record_reference():
