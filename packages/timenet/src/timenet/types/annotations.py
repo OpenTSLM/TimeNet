@@ -11,8 +11,10 @@ class synthesis. :class:`AnnotationDescriptor` is the type-level projection stor
 manifest.
 """
 
+from collections.abc import Hashable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
+import json
 from typing import Annotated, Any, Protocol
 
 import pint
@@ -21,7 +23,6 @@ from pydantic import BeforeValidator, StrictStr
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._model import TimeFModel
-from timenet.types.ids import new_id
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
 from timenet.types.units import normalize_unit
 from timenet.types.wire import ValueType
@@ -68,10 +69,6 @@ class Annotation:
     """Optional per-instance provenance (the rater, method, or model behind this value). Unlike
     ``description``, which the descriptor holds once per key, ``source`` can differ between
     annotations that share a key."""
-    id: str = field(default_factory=new_id)
-    """Reusable content identifier, a UUIDv7 string by default."""
-    occurrence_id: str | None = field(default=None, compare=False)
-    """Identity of one attachment. It is assigned by ``annotate()``."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional metadata that is part of the reusable content."""
     confidence: float | None = field(default=None, compare=False)
@@ -104,10 +101,10 @@ class Annotation:
             raise TimeFValidationError(
                 f"annotation {self.key!r} span must be a TimePoint or a TimeInterval, got {type(self.span).__name__}"
             )
-        if self.span is not None and self.span.time_series_ids is not None:
+        if self.span is not None and self.span.time_series is not None:
             raise TimeFValidationError(
                 "annotation scope comes from its owner; attach it to each selected Signal "
-                "instead of setting time_series_ids"
+                "instead of setting time_series"
             )
         if self.value is None and self.span is None:
             raise TimeFValidationError(
@@ -116,14 +113,20 @@ class Annotation:
             )
 
     @property
-    def content_id(self) -> str:
-        """Return the identity of the reusable annotation content."""
-        return self.id
+    def _content_key(self) -> tuple[Hashable, ...]:
+        """Return the reusable payload, without occurrence-specific fields, as a hashable key.
 
-    @property
-    def _content_fields(self) -> tuple[object, ...]:
-        """Return the reusable payload, without occurrence-specific fields."""
-        return (self.key, self.value, self.unit, self.description, self.metadata)
+        The writer stores annotations with equal keys as one content row. The value type is part of
+        the key, so ``True``, ``1`` and ``1.0`` differ. A float compares by its bits after adding
+        ``0.0``, so ``0.0`` and ``-0.0`` are equal, and so is every NaN.
+        """
+        value = self.value
+        if isinstance(value, float):
+            value = float.hex(value + 0.0)
+        elif isinstance(value, list):
+            value = tuple(value)
+        metadata = json.dumps(self.metadata, sort_keys=True)
+        return (self.key, value_type_of(self.value), value, self.unit, self.description, metadata)
 
     @property
     def name(self) -> str:
@@ -132,7 +135,7 @@ class Annotation:
 
     def _new_occurrence(self) -> "Annotation":
         """Return an internal copy representing one new attachment occurrence."""
-        return replace(self, occurrence_id=new_id())
+        return replace(self)
 
 
 def annotation_type_of(annotation: Annotation) -> AnnotationType:

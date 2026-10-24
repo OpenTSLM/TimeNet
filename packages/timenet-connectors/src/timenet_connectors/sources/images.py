@@ -36,7 +36,7 @@ def _decode_image(source: Path | bytes) -> np.ndarray:
         ) from exc
 
 
-def image_signal(source: Path | bytes, *, signal_id: str, name: str) -> Signal:
+def image_signal(source: Path | bytes, *, name: str) -> Signal:
     """Create a lazy one-frame RGB or RGBA Signal with a shape-specific spec of the image modality.
 
     Returns:
@@ -55,7 +55,6 @@ def image_signal(source: Path | bytes, *, signal_id: str, name: str) -> Signal:
         modality=InputModality.IMAGE,
     )
     return Signal.from_loader(
-        id=signal_id,
         name=name,
         spec=spec,
         time_axis=OrdinalAxis(),

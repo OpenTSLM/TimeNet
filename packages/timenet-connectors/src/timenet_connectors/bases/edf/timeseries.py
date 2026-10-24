@@ -17,7 +17,6 @@ from timenet_connectors.bases.edf import reader
 
 
 def build(
-    record_id: str,
     file: reader.EdfFile,
     specs: Mapping[str, TimeSeriesSpec],
     *,
@@ -26,8 +25,6 @@ def build(
     """Give one time series for each signal that the header of a recording names.
 
     Args:
-        record_id: The id of the record these signals belong to, from ``connector.py``.
-            Each signal's ``id`` is built from it.
         file: Its open PSG file, from :func:`reader.open_edf`.
         specs: The table of the release, from a signal name to its spec.
         loader: Builds the lazy loader of one signal, from the open file and a signal index.
@@ -54,7 +51,6 @@ def build(
                 # recording that writes records of 60 s need no special case.
                 time_axis=RegularAxis.from_rate_hz(Fraction(samples_per_record) / header.record_duration),
                 loader=loader(file, index),
-                id=f"{record_id}-{signal}",
                 n_values=header.num_records * samples_per_record,
             )
         )
