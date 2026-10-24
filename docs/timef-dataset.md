@@ -120,7 +120,7 @@ annotations and metadata:
 from timenet.dataset import Record
 
 record = Record(
-    record_id="record-123",
+    id="record-123",
     sources=(imu,),
     metadata={"site": "lab-a"},
 )
@@ -128,7 +128,7 @@ record = Record(
 
 | Field | Type | Description |
 | --- | --- | --- |
-| `record_id` | `str` | Stable identity. `record.id` is the public alias. |
+| `id` | `str` | Stable identity. |
 | `sources` | `tuple[Source, ...]` | Root Sources in the recording hierarchy. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
 | `metadata` | `dict[str, object]` | Optional session metadata. |

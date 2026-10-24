@@ -49,7 +49,7 @@ imu = Source(
     sources=(accelerometer,),
 )
 record = Record(
-    record_id="run-001",
+    id="run-001",
     sources=(imu,),
     metadata={"site": "lab-a"},
 )
@@ -89,7 +89,7 @@ from timenet.types import TimeOrigin
 
 origin = TimeOrigin(datetime(2026, 1, 1, tzinfo=timezone.utc))
 record = Record(
-    record_id="run-001",
+    id="run-001",
     start_time=origin,
     sources=(
         Source(name="sensor A", signals=(signal_a,)),

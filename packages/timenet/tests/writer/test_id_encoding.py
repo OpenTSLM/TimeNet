@@ -59,7 +59,7 @@ def _uuid_dataset(*, record_id=None):
     )
     series = (_series(),)
     sources = (Source(name="Source", signals=series),)
-    record = Record(sources=sources) if record_id is None else Record(sources=sources, record_id=record_id)
+    record = Record(sources=sources) if record_id is None else Record(sources=sources, id=record_id)
     dataset.add_record(record=record)
     record.annotate(Annotation(key="k", value=1))
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",)))
@@ -75,7 +75,7 @@ def _write(tmp_path, dataset):
 
 def test_default_ids_are_uuid7():
     dataset = _uuid_dataset()
-    sid = dataset.records[0].record_id
+    sid = dataset.records[0].id
     assert uuid.UUID(sid).version == 7
     assert str(uuid.UUID(sid)) == sid  # canonical
 
@@ -92,7 +92,7 @@ def test_uuid_ids_round_trip_as_canonical_strings(tmp_path):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         restored = reader.read()
     assert_datasets_equal(dataset, restored)
-    sid = restored.records[0].record_id
+    sid = restored.records[0].id
     assert str(uuid.UUID(sid)) == sid
     assert uuid.UUID(sid).version == 7
 

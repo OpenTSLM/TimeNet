@@ -586,7 +586,7 @@ class DuckDBControlReader:
                 for source_key in roots_by_record[record_row.record_key]
             )
             record = Record(
-                record_id=record_id,
+                id=record_id,
                 sources=root_sources,
                 start_time=self._clock_cache[record_row.clock_id],
                 annotations=annotations.get(("Record", record_id), ()),

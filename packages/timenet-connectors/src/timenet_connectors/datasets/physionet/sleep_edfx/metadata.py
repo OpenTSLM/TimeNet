@@ -102,7 +102,7 @@ def build_age(years: int) -> Annotation:
     )
 
 
-def build_recording_start_local(record_id: str, start_time: datetime) -> Annotation:
+def build_recording_start_local(recording_id: str, start_time: datetime) -> Annotation:
     """Give the annotation that carries the start moment of an EDF header.
 
     A record of this connector sets no ``start_time``. Every header of this release states a
@@ -112,7 +112,7 @@ def build_recording_start_local(record_id: str, start_time: datetime) -> Annotat
     the text themselves.
 
     Args:
-        record_id: The id of the record, which the error message names.
+        recording_id: The name of the recording, which the error message names.
         start_time: The start moment the header states, as a local wall clock.
 
     Returns:
@@ -124,7 +124,7 @@ def build_recording_start_local(record_id: str, start_time: datetime) -> Annotat
     """
     if start_time.tzinfo is not None:
         raise TimeFValidationError(
-            f"{record_id}: the header start moment names the zone {start_time.tzinfo}, and this release states none"
+            f"{recording_id}: the header start moment names the zone {start_time.tzinfo}, and this release states none"
         )
 
     return Annotation(
@@ -201,7 +201,6 @@ class SubjectTables:
 
     def build_annotations(
         self,
-        record_id: str,
         metadata_annotation: MetadataAnnotation,
         recording: RecordingIdentity,
         header: reader.EdfHeader,
@@ -212,7 +211,6 @@ class SubjectTables:
         states it carries one instance. A value measured for this recording is built here.
 
         Args:
-            record_id: The record these annotations belong to.
             metadata_annotation: The holder of the annotations whose values are a closed set.
             recording: What the filename of the recording states.
             header: The header of its signal file, which keeps a clock and a second reading.
@@ -234,7 +232,7 @@ class SubjectTables:
             metadata_annotation.get_annotation(AnnotationKey.NIGHT, recording.night),
             metadata_annotation.get_annotation(AnnotationKey.SEX, row.sex),
             build_age(row.age),
-            build_recording_start_local(record_id, header.start_time),
+            build_recording_start_local(recording.recording_id, header.start_time),
         ]
 
         if night.condition is not None:

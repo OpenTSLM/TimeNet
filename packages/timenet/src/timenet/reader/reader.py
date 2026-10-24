@@ -267,7 +267,7 @@ class TimeFReader:
         """
         records = list(self._all_records())
         tasks = self.tasks
-        by_id = {record.record_id: record for record in records}
+        by_id = {record.id: record for record in records}
         for task in tasks:
             for referenced in task.inputs:
                 record = by_id.get(referenced.id)

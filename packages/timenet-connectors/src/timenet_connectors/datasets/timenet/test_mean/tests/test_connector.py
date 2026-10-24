@@ -62,4 +62,4 @@ def test_label_agrees_with_signal_mean():
     for record in dataset.records:
         mean = float(record.signals[0].to_numpy().mean())
         expected = "above_zero" if mean > 0 else "below_zero"
-        assert labels[record.record_id] == expected
+        assert labels[record.id] == expected
