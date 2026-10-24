@@ -45,10 +45,6 @@ from timenet_connectors.download import ensure_archive, find_dir_containing
 # The full release, as one zip on the open S3 bucket of PhysioNet. boto3 reads it anonymously.
 SLEEP_EDFX_ZIP_URL = "s3://physionet-open/sleep-edfx/sleep-edfx-1.0.0.zip"
 
-# The prefix of every id this connector writes.
-_ID_PREFIX = "sleep-edfx"
-
-
 # The two studies of the release. Each writes its own three characters at the front of a
 # recording id, and each numbers its subjects on its own.
 _CASSETTE_STUDY = "sleep-cassette"
@@ -87,7 +83,7 @@ class SleepEdfxRecording:
     """One recording: the file of signals, and the id that its name states.
 
     A recording name has the form ``<SC4|ST7><subject><night><recorder>0``. The name holds the
-    subject and the night. The scoring, the subject table and the record ids all need them.
+    subject and the night. The scoring and the subject table both need them.
 
     A recording is not one night of sleep. It starts before the night and stops after it. A
     ``*-Hypnogram.edf`` file of sleep stages is beside each recording, which
@@ -219,7 +215,7 @@ def _iter_recordings(source: SleepEdfxSource) -> Iterator[SleepEdfxRecording]:
 class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
     """Connector for Sleep-EDF (PhysioNet ``sleep-edfx``)."""
 
-    # Each study with the subject table that describes it. The order keeps record ids stable.
+    # Each study with the subject table that describes it. The order keeps the record order stable.
     _STUDIES: ClassVar[tuple[tuple[str, tables.SheetShape], ...]] = (
         (_CASSETTE_STUDY, tables.CASSETTE_SHEET),
         (_TELEMETRY_STUDY, tables.TELEMETRY_SHEET),
@@ -287,44 +283,33 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             {study: excel.read_table_rows(path) for study, path in source.subject_tables}, dict(self._STUDIES)
         )
         for recording in _iter_recordings(source):
-            # Named and not generated, thus two builds of one archive give one set of ids.
-            record_id = f"{_ID_PREFIX}-{recording.recording_id}"
-
             file = reader.open_edf(recording.psg_path)
-            series = timeseries.build(record_id, file, SPECS, loader=reader.build_signal_loader)
+            series = timeseries.build(file, SPECS, loader=reader.build_signal_loader)
 
             entries = reader.read_annotations(reader.open_edf(recording.hypnogram_path))
             signal_end = reader.compute_signal_end_microseconds(file.header)
             # The session may end after the signals stop, when the scoring reaches past them.
             session_end = signal_end + annotations.measure_overrun_microseconds(entries, signal_end)
 
-            sleep_stages = annotations.build(record_id, entries, series)
+            sleep_stages = annotations.build(entries)
 
-            recording_metadata = subject_tables.build_annotations(
-                record_id, metadata_annotation, recording, file.header
-            )
+            recording_metadata = subject_tables.build_annotations(metadata_annotation, recording, file.header)
 
             record = Record(
-                id=record_id,
-                sources=(
-                    Source(
-                        id=f"{record_id}-source",
-                        name="Sleep-EDF polysomnograph",
-                        signals=series,
-                    ),
-                ),
+                sources=(Source(name="Sleep-EDF polysomnograph", signals=series),),
                 time_span=TimeInterval.micros(0, session_end),
+                metadata={"recording_id": recording.recording_id},
             )
             dataset.add_record(record=record)
-            record.annotate(Annotation(key="subject_ids", value=[recording.subject_id], id=f"{record_id}-subject-ids"))
-            annotations.attach(record_id, series, sleep_stages)
+            record.annotate(Annotation(key="subject_ids", value=[recording.subject_id]))
+            annotations.attach(recording.recording_id, series, sleep_stages)
             record.add_annotations(recording_metadata)
 
-        for vocabulary in tasks.build_vocabularies(_ID_PREFIX):
+        for vocabulary in tasks.build_vocabularies():
             dataset.annotate(vocabulary)
         dataset.set_task_stream(
             [ClassificationTask, TemporalLocalizationTask, ScalarPredictionTask],
-            lambda: tasks.iter_tasks(dataset.records, _ID_PREFIX),
+            lambda: tasks.iter_tasks(dataset.records),
         )
         return dataset
 

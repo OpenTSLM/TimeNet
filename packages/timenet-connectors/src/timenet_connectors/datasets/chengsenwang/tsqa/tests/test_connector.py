@@ -101,7 +101,8 @@ def test_qa_tasks_match_fixture():
 def test_series_values_parsed_from_fixture():
     dataset = _convert()
     expected = json.loads(_fixture_rows()[0]["Series"])
-    record = next(record for record in dataset.records if record.id == "row-0")
+    task = next(task for task in dataset.tasks if task.prompt == _fixture_rows()[0]["Question"])
+    (record,) = task.inputs
     got = record.signals[0].to_numpy()
     assert len(got) == len(expected)
     assert float(got[0]) == pytest.approx(expected[0], rel=1e-5)
@@ -129,6 +130,7 @@ def _balanced_rows():
 
 def test_generated_splits_balance_categories_and_keep_signals_together():
     rows = _balanced_rows()
+    rows_by_question = {row["Question"]: row for row in rows}
     dataset = TSQAConnector().convert(rows)
     partitions = {
         Split.TRAIN: dataset.get_train(),
@@ -146,26 +148,21 @@ def test_generated_splits_balance_categories_and_keep_signals_together():
         signals = set()
         categories = Counter()
         for task in tasks:
-            index = int(task.id.removeprefix("qa-"))
-            signals.add(rows[index]["Series"])
-            categories[rows[index]["Task"]] += 1
+            row = rows_by_question[task.prompt]
+            signals.add(row["Series"])
+            categories[row["Task"]] += 1
             assert task.split == split
         assert seen_signals.isdisjoint(signals)
         seen_signals.update(signals)
         assert categories["Trend"] == categories["Volatility"]
 
 
-def test_split_assignments_are_repeatable_and_preserve_source_ids():
+def test_split_assignments_are_repeatable():
     rows = _balanced_rows()
     first = TSQAConnector().convert(rows)
     second = TSQAConnector().convert(rows)
-    assert [(task.id, task.split) for task in first.tasks] == [(task.id, task.split) for task in second.tasks]
-    assert {task.id for task in first.tasks} == {f"qa-{index}" for index in range(len(rows))}
-    assert {record.id for record in first.records} == {f"row-{index}" for index in range(len(rows))}
-    for task in first.tasks:
-        index = int(task.id.removeprefix("qa-"))
-        assert task.prompt == rows[index]["Question"]
-        assert task.inputs[0].id == f"row-{index}"
+    assert [(task.prompt, task.split) for task in first.tasks] == [(task.prompt, task.split) for task in second.tasks]
+    assert {task.prompt for task in first.tasks} == {row["Question"] for row in rows}
 
 
 @pytest.mark.parametrize(
@@ -192,7 +189,7 @@ def test_splits_survive_storage_round_trip(tmp_path):
     registry.store(original)
     with TimeFReader(registry.open_version("chengsenwang/tsqa", "1.2.0")) as reader:
         restored = reader.read()
-    assert {task.id: task.split for task in restored.tasks} == {task.id: task.split for task in original.tasks}
+    assert {task.prompt: task.split for task in restored.tasks} == {task.prompt: task.split for task in original.tasks}
 
 
 def test_missing_hf_library_raises_helpful_error(monkeypatch):

@@ -1,7 +1,7 @@
 """The ECG-QA CoT connector: PTB-XL 12-lead ECGs with chain-of-thought question answering.
 
 Each record is one PTB-XL recording: 12 leads at 500 Hz in millivolts. Every chain-of-thought row is
-an :class:`~timenet.types.AnswerTask` on that recording, whose ``prompt`` is the question, ``target``
+an :class:`~timenet.types.AnswerTask` on that recording, whose ``prompt`` is the question, ``targets``
 is the short evaluation answer, and ``rationale`` is the reasoning target. So a recording carries many
 QA tasks; there is no record per question. Per-question metadata (question type, template, answer
 options, clinical context) is stored once as value-deduped annotations the tasks reference, and each
@@ -19,7 +19,6 @@ from collections.abc import Iterator, Mapping
 import csv
 from dataclasses import dataclass
 from fractions import Fraction
-import hashlib
 from pathlib import Path
 from typing import ClassVar
 
@@ -29,6 +28,7 @@ from timenet.types import (
     Annotation,
     AnswerTask,
     TimeSeriesSpec,
+    parse_split,
     ureg,
 )
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
@@ -104,22 +104,8 @@ def _clinical_context(row: Mapping[str, str]) -> str:
     return str(row.get("clinical_context") or _DEFAULT_CONTEXT)
 
 
-# Stable, value-derived ids so the annotation a task references is the same object every recording
-# shares. Building the annotation and referencing it from a task both go through these, so they agree.
-def _qtype_id(question_type: str) -> str:
-    return f"ecgqa-qtype-{question_type}"
-
-
-def _template_ann_id(template_id: int) -> str:
-    return f"ecgqa-template-{template_id}"
-
-
-def _options_id(template_id: int) -> str:
-    return f"ecgqa-options-{template_id}"
-
-
-def _context_id(context: str) -> str:
-    return f"ecgqa-context-{hashlib.sha1(context.encode('utf-8')).hexdigest()[:12]}"  # noqa: S324 (id, not security)
+# A metadata annotation is looked up by its key and the upstream value it was built from.
+_AnnotationKey = tuple[str, str | int]
 
 
 def _load_template_answers(path: Path) -> dict[int, tuple[str, ...]]:
@@ -220,22 +206,16 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         for ecg_id, split in sorted(split_of_ecg.items()):
             record_base = _record_base(source.records_root, ecg_id)
             record = Record(
-                id=f"ptbxl-{ecg_id}",
-                sources=(
-                    Source(
-                        id=f"ptbxl-{ecg_id}-source",
-                        name="PTB-XL ECG",
-                        signals=self._leads_for(ecg_id, record_base),
-                    ),
-                ),
+                sources=(Source(name="PTB-XL ECG", signals=self._leads_for(record_base)),),
+                metadata={"ecg_id": ecg_id},
             )
             dataset.add_record(record=record)
-            record.add_annotations([Annotation(key="split", value=split, id=f"ptbxl-{ecg_id}-split")])
+            record.add_annotations([Annotation(key="split", value=split)])
             records[ecg_id] = record
 
         task_annotations = {
-            annotation.id: dataset.annotate(annotation)
-            for annotation in self._metadata_annotations(question_types, template_ids, contexts, answers)
+            key: dataset.annotate(annotation)
+            for key, annotation in self._metadata_annotations(question_types, template_ids, contexts, answers).items()
         }
         dataset.set_task_stream(
             [AnswerTask],
@@ -243,15 +223,14 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         )
         return dataset
 
-    def _leads_for(self, ecg_id: int, record_base: Path) -> tuple[Signal, ...]:
+    def _leads_for(self, record_base: Path) -> tuple[Signal, ...]:
         """Build the 12 lead :class:`Signal` for one recording with lazy per-lead loaders.
 
         Args:
-            ecg_id: The recording id.
             record_base: The record path without the ``.dat`` / ``.hea`` extension.
 
         Returns:
-            One :class:`Signal` per lead, sharing the ECG spec and a per-recording source id.
+            One :class:`Signal` per lead, sharing the ECG spec.
         """
         header = self._read_header(record_base)
         axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
@@ -261,7 +240,6 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
                 name=name,
                 time_axis=axis,
                 loader=self._lead_loader(record_base, header, lead_idx),
-                id=f"ecg-{ecg_id}-{name}",
                 n_values=int(header.sig_len),
             )
             for lead_idx, name in enumerate(header.sig_name)
@@ -273,7 +251,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         template_ids: set[int],
         contexts: set[str],
         answers: dict[int, tuple[str, ...]],
-    ) -> list[Annotation]:
+    ) -> dict[_AnnotationKey, Annotation]:
         """Build the value-deduped annotations the QA tasks reference.
 
         Args:
@@ -283,17 +261,19 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
             answers: Per-template answer options.
 
         Returns:
-            One annotation per distinct value, with the same ids :meth:`_iter_tasks` references.
+            One annotation per distinct value, keyed by its annotation key and the upstream value
+            :meth:`_iter_tasks` looks it up by.
         """
-        annotations = [Annotation(key="question_type", value=qt, id=_qtype_id(qt)) for qt in sorted(question_types)]
+        annotations: dict[_AnnotationKey, Annotation] = {
+            ("question_type", qt): Annotation(key="question_type", value=qt) for qt in sorted(question_types)
+        }
         for template_id in sorted(template_ids):
-            annotations.append(Annotation(key="template_id", value=template_id, id=_template_ann_id(template_id)))
+            annotations["template_id", template_id] = Annotation(key="template_id", value=template_id)
             options = answers.get(template_id)
             if options:
-                annotations.append(Annotation(key="answer_options", value=list(options), id=_options_id(template_id)))
-        annotations.extend(
-            Annotation(key="clinical_context", value=context, id=_context_id(context)) for context in sorted(contexts)
-        )
+                annotations["answer_options", template_id] = Annotation(key="answer_options", value=list(options))
+        for context in sorted(contexts):
+            annotations["clinical_context", context] = Annotation(key="clinical_context", value=context)
         return annotations
 
     @staticmethod
@@ -301,7 +281,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         source: EcgQaCotSource,
         answers: dict[int, tuple[str, ...]],
         records: Mapping[int, Record],
-        annotations: Mapping[str, Annotation],
+        annotations: Mapping[_AnnotationKey, Annotation],
     ) -> Iterator[AnswerTask]:
         """Yield one :class:`AnswerTask` per CoT row, referencing its recording and metadata annotations.
 
@@ -309,26 +289,29 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
             source: The download handle naming the CoT CSVs.
             answers: Per-template answer options (decides whether a task references an options annotation).
             records: Input Records keyed by PTB-XL ECG ID.
-            annotations: Dataset annotation occurrences keyed by content ID.
+            annotations: Dataset annotation occurrences keyed by annotation key and upstream value.
 
         Yields:
             Each question as an answer task, streamed so the whole set never lives in memory.
         """
         for split, csv_path in source.cot_csvs:
-            for index, row in enumerate(_iter_cot_rows(csv_path)):
+            for row in _iter_cot_rows(csv_path):
                 ecg_id = _parse_ecg_id(row["ecg_id"])
                 template_id = int(float(row["template_id"]))
-                input_ids = [_qtype_id(row["question_type"]), _template_ann_id(template_id)]
+                input_keys: list[_AnnotationKey] = [
+                    ("question_type", row["question_type"]),
+                    ("template_id", template_id),
+                ]
                 if answers.get(template_id):
-                    input_ids.append(_options_id(template_id))
-                input_ids.append(_context_id(_clinical_context(row)))
+                    input_keys.append(("answer_options", template_id))
+                input_keys.append(("clinical_context", _clinical_context(row)))
                 yield AnswerTask(
                     inputs=(records[ecg_id],),
                     prompt=str(row["question"]),
                     targets=(str(row["answer"]),),
                     rationale=str(row["rationale"]),
-                    input_annotations=tuple(annotations[annotation_id] for annotation_id in input_ids),
-                    id=f"ecgqa-{split}-{index}",
+                    input_annotations=tuple(annotations[key] for key in input_keys),
+                    split=parse_split(split),
                 )
 
 
