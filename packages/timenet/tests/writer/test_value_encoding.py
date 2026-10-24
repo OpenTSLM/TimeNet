@@ -76,7 +76,7 @@ def _dataset(signals, dataset_id="timenet/encoding", **metadata_kwargs):
         )
         for (spec_type, signal), values in signals.items()
     ]
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=tuple(series)),), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=tuple(series)),), id="record-0"))
     dataset.derive_schema()
     return dataset
 
@@ -372,10 +372,10 @@ def test_self_check_tolerates_the_dictionary_to_plain_fallback():
 def test_a_wrong_column_path_is_caught(tmp_path):
     # Proves the self-check has teeth: ask for BYTE_STREAM_SPLIT on a path that does not exist and
     # pyarrow silently writes its default instead.
-    from timenet.format.schemas import default_id_types, shard_schema  # noqa: PLC0415
+    from timenet.format.schemas import shard_schema  # noqa: PLC0415
     from timenet.writer import encodings  # noqa: PLC0415
 
-    schema = shard_schema(default_id_types())
+    schema = shard_schema()
     path = tmp_path / "typo.parquet"
     kwargs = encodings.parquet_kwargs(
         dictionary_columns=shard_dictionary(ValueEncoding.BYTE_STREAM_SPLIT),
@@ -386,7 +386,6 @@ def test_a_wrong_column_path_is_caught(tmp_path):
     values = pa.ListArray.from_arrays(pa.array([0, _N], type=pa.int32()), pa.array(quantized(), type=pa.float32()))
     table = pa.Table.from_pydict(
         {
-            "time_series_id": ["ts-0"],
             "spec_type": ["ecg"],
             "signal": ["I"],
             "chunk_idx": [0],

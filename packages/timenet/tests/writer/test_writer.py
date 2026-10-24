@@ -105,14 +105,6 @@ def test_manifest_data_files_are_lists_of_parts(tmp_path):
 # ---- shard schema & encodings -----------------------------------------------------------------
 
 
-def test_shard_has_time_series_id_column(tmp_path):
-    version_dir = _written(tmp_path)
-    shard = next(version_dir.glob("time_series/part-*.parquet"))
-    names = set(pq.ParquetFile(shard).schema_arrow.names)
-    assert "time_series_id" in names  # self-describing shards (re-indexable)
-    assert "values" in names
-
-
 def test_values_carry_the_selected_encoding(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
@@ -330,6 +322,6 @@ def test_same_id_different_series_rejected(tmp_path):
         loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
         id="ts-x",
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(a,)),), record_id="s-a"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(a,)),), id="s-a"))
     with pytest.raises(TimeFValidationError, match="already belong to another Source"):
-        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(b,)),), record_id="s-b"))
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(b,)),), id="s-b"))

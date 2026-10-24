@@ -142,7 +142,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             id="ts-cos-0",
         )
         record0 = Record(
-            record_id="record-0",
+            id="record-0",
             sources=(
                 Source(
                     id="source-record-0",
@@ -220,7 +220,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             n_values=raw_refs[1].n_values,
         )
         record1 = Record(
-            record_id="record-1",
+            id="record-1",
             sources=(
                 Source(
                     id="source-record-1",
@@ -258,7 +258,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             id="ts-window-2",
         )
         record2 = Record(
-            record_id="record-2",
+            id="record-2",
             sources=(
                 Source(
                     id="source-record-2",

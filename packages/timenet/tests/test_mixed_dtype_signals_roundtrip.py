@@ -43,7 +43,7 @@ def _dataset(signals) -> TimeFDataset:
         Signal.from_values(values, spec=spec, name=name, time_axis=RegularAxis.from_rate_hz(1))
         for name, spec, values in signals
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=series),), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=series),), id="record-0"))
     dataset.derive_schema()
     return dataset
 

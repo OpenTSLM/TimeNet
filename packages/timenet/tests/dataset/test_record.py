@@ -30,7 +30,7 @@ def test_annotate_binds_a_declarative_annotation(make_series):
 
     occurrence = record.annotate(content)
 
-    assert occurrence.content_id == content.content_id
+    assert occurrence.id == content.id
     assert occurrence.occurrence_id is not None
     assert record.annotations == (occurrence,)
 
