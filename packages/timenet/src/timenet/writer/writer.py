@@ -23,15 +23,8 @@ from timenet.format.constants import (
 )
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import CONTROL_FILE, connect_control
-from timenet.format.schemas import (
-    LOGICAL_IDS,
-    UUID16,
-    IdCodec,
-    IdTypes,
-)
 from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
 from timenet.provenance import build_env
-from timenet.types.ids import is_canonical_uuid
 from timenet.types.wire import ValueEncoding as ManifestValueEncoding
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.values_backends.writer import (
@@ -178,7 +171,6 @@ class TimeFWriter:
         if self._dataset.schema is None:
             self._dataset.derive_schema()
         self._validate_shared_annotations()
-        self._resolve_id_types()
 
         unique_series = self._dedupe_series()
         placements = self._write_values(unique_series)
@@ -217,30 +209,6 @@ class TimeFWriter:
     def abort(self) -> None:
         """Delete the staging directory. Safe to call more than once."""
         shutil.rmtree(self._staging_dir, ignore_errors=True)
-
-    # ---- id storage ----------------------------------------------------------------------------
-
-    def _resolve_id_types(self) -> None:
-        """Pick per-logical-id storage: ``binary(16)`` when every value is a canonical UUID, else string."""
-        values: dict[str, list[str]] = {name: [] for name in LOGICAL_IDS}
-        for record in self._dataset.records:
-            values["record_id"].append(record.record_id)
-            for ts in record.signals:
-                values["time_series_id"].append(ts.id)
-            for ann in record.walk_annotations():
-                values["annotation_id"].append(ann.id)
-        if not self._dataset.has_task_stream:
-            for task in self._dataset.tasks:
-                values["task_id"].append(task.id)
-
-        id_types: IdTypes = {}
-        for name in LOGICAL_IDS:
-            vals = values[name]
-            is_uuid16 = bool(vals) and all(is_canonical_uuid(v) for v in vals)
-            id_types[name] = UUID16 if is_uuid16 else pa.string()
-        self._id_types = id_types
-        self._uuid16 = {name for name in LOGICAL_IDS if id_types[name] == UUID16}
-        self._codec = IdCodec.from_uuid16(self._uuid16)
 
     # ---- values --------------------------------------------------------------------------------
 
@@ -295,8 +263,6 @@ class TimeFWriter:
         if self._values_backend_name == ValuesBackend.PARQUET:
             parquet_kwargs: dict[str, Any] = {
                 "staging_dir": self._staging_dir,
-                "id_types": self._id_types,
-                "codec": self._codec,
                 "shard_target_bytes": self._shard_target_bytes,
                 "row_group_target_bytes": self._row_group_target_bytes,
                 "chunk_max_bytes": self._chunk_max_bytes,

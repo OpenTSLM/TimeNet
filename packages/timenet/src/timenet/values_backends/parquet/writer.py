@@ -17,7 +17,7 @@ import pyarrow as pa
 from timenet.dataset import Signal
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import SHARD_TEMPLATE, part_path
-from timenet.format.schemas import IdCodec, shard_schema
+from timenet.format.schemas import shard_schema
 from timenet.types import TimeSeriesSpec
 from timenet.values_backends import ValuesBackend
 from timenet.values_backends.parquet.config import ParquetValuesConfig
@@ -89,7 +89,8 @@ class ParquetValuesBackend(BaseValuesBackend):
 
     name = ValuesBackend.PARQUET
 
-    def _schema_for(self, dtype: str) -> pa.Schema:
+    @staticmethod
+    def _schema_for(dtype: str) -> pa.Schema:
         """Return the shard schema whose values element matches a spec dtype.
 
         Args:
@@ -100,10 +101,10 @@ class ParquetValuesBackend(BaseValuesBackend):
             dtype stores variable-width text; an ``"enum"`` dtype uses a dictionary leaf.
         """
         if dtype == "str":
-            return shard_schema(self._id_types, pa.string())
+            return shard_schema(pa.string())
         if dtype == "enum":
-            return shard_schema(self._id_types, _ENUM_LEAF)
-        return shard_schema(self._id_types, pa.from_numpy_dtype(np.dtype(dtype)))
+            return shard_schema(_ENUM_LEAF)
+        return shard_schema(pa.from_numpy_dtype(np.dtype(dtype)))
 
     def __init__(self, config: ParquetValuesConfig) -> None:
         """Configure the Parquet values backend.
@@ -112,8 +113,6 @@ class ParquetValuesBackend(BaseValuesBackend):
             config: Typed Parquet backend options.
         """
         self._staging_dir = config.staging_dir
-        self._codec = config.codec
-        self._id_types = config.id_types
         self._shard_target_bytes = config.shard_target_bytes
         self._row_group_target_bytes = config.row_group_target_bytes
         self._chunk_max_bytes = config.chunk_max_bytes
@@ -295,8 +294,8 @@ class _ShardStream:
         """Bind the stream to its backend and to the byte targets that trigger a flush or rotation.
 
         Args:
-            backend: The owning backend. The stream uses it for the shard schema, the codec, the
-                encoding choice, and the self-check.
+            backend: The owning backend. The stream uses it for the shard schema, the encoding
+                choice, and the self-check.
             row_group_target_bytes: If buffered values pass this number of bytes, the stream flushes
                 a row group.
             shard_target_bytes: If a shard's written values pass this number of bytes, the stream
@@ -385,7 +384,7 @@ class _ShardStream:
         if sum(chunk.n_values for chunk in self._buffer) >= MAX_ELEMENTS_PER_ROW_GROUP:
             raise TimeFValidationError("row group would exceed the 2^31 element limit")
         core = self._core if self._core is not None else self._open_modality()
-        table = _shard_table(self._buffer, self._schema, self._backend._codec)
+        table = _shard_table(self._buffer, self._schema)
         shard_path, row_group = core.write(table, self._buffer_bytes)
         for offset, chunk in enumerate(self._buffer):
             self.placements[chunk.time_series_id, chunk.chunk_idx] = ChunkPlacement(
@@ -399,10 +398,9 @@ class _ShardStream:
         self._buffer_bytes = 0
 
 
-def _shard_table(buffer: list[_Chunk], schema: pa.Schema, codec: IdCodec) -> pa.Table:
+def _shard_table(buffer: list[_Chunk], schema: pa.Schema) -> pa.Table:
     return pa.Table.from_pydict(
         {
-            "time_series_id": codec.encode_list("time_series_id", [c.time_series_id for c in buffer]),
             "spec_type": [c.spec_type for c in buffer],
             "signal": [c.signal for c in buffer],
             "chunk_idx": [c.chunk_idx for c in buffer],
