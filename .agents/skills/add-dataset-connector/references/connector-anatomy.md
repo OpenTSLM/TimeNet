@@ -73,9 +73,19 @@ tags:
 `BaseHuggingFaceConnector(BaseConnector[dict[str, Any]])`. Set `HF_REPO` to the external Hub repo id
 and implement `convert`. `download` is inherited: it reads the Hub's auto-converted parquet on
 `refs/convert/parquet` and returns one dict per row, so any source format is handled uniformly.
-The connector imports `huggingface_hub` lazily and declares it in its `requirements.txt`. The lazy
-import keeps `--no-isolation` usable while you write the connector. `HF_TOKEN` is read from the
-environment, so gated datasets work. Fully private repos have no auto-parquet ref and aren't supported.
+The connector declares `huggingface_hub` in its `requirements.txt`; the Hub helpers import it
+lazily, which keeps `--no-isolation` usable while you write the connector. `HF_TOKEN` is read from
+the environment, so gated datasets work. Fully private repos have no auto-parquet ref and aren't
+supported.
+
+### `BaseHubSnapshotConnector` (`bases/huggingface.py`)
+`BaseHubSnapshotConnector(BaseConnector[HubFileRef])`. Use it when the source has no parquet ref, or
+when `convert` reads the original files lazily instead of holding every row. Set `HF_REPO`,
+`SOURCE_REVISION` (a 40-character commit, checked when the class is defined), and `SOURCE_FILES`
+(part -> filename in the repo), and implement `convert`. The inherited `download` returns one
+`HubFileRef(path, part)` per file. Start `convert` with `self.new_dataset(raw_refs, "<prefix>")`: it
+validates the refs against `SOURCE_FILES` and returns a dataset annotated with `source_repository`
+and `source_revision`. Pinned row counts, if any, are the connector's to check.
 
 ### `BasePhysioNetConnector` (`bases/physionet.py`)
 `BasePhysioNetConnector(BaseConnector[TRaw])`. Implement `download` and `convert`. Its two helpers read

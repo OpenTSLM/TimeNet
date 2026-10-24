@@ -14,14 +14,9 @@ from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.types import AnswerTask, InputModality, Split, TimeSeriesSpec
+from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.bash_lab.sensorcaps import SensorCapsConnector, connector as module
-from timenet_connectors.datasets.bash_lab.sensorcaps.connector import (
-    DECLARED_SAMPLING_RATE_HZ,
-    HF_REPO,
-    SOURCE_REVISION,
-    SOURCE_ROWS,
-    SensorCapsFileRef,
-)
+from timenet_connectors.datasets.bash_lab.sensorcaps.connector import DECLARED_SAMPLING_RATE_HZ
 
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -48,8 +43,8 @@ _PAMAP2_CHANNELS = (
     ("magnetometer", "x"),
 )
 _DATASET_ANNOTATIONS = {
-    "source_repository": HF_REPO,
-    "source_revision": SOURCE_REVISION,
+    "source_repository": SensorCapsConnector.HF_REPO,
+    "source_revision": SensorCapsConnector.SOURCE_REVISION,
     "declared_sampling_rate_hz": DECLARED_SAMPLING_RATE_HZ,
     "source_sampling_rate_hz": 20,
     "source_window_samples": 120,
@@ -98,6 +93,12 @@ def _rows(partition="hhar_v2"):
     return rows
 
 
+@pytest.fixture(autouse=True)
+def _fixture_inventory(monkeypatch):
+    """Pin the inventory to the fixtures: two rows per partition."""
+    monkeypatch.setattr(SensorCapsConnector, "SOURCE_ROWS", dict.fromkeys(_PARTITIONS, 2))
+
+
 def _refs(tmp_path):
     refs = []
     for partition in _PARTITIONS:
@@ -105,7 +106,7 @@ def _refs(tmp_path):
         path.write_text(
             "".join(json.dumps(row, ensure_ascii=False) + "\n" for row in _rows(partition)), encoding="utf-8"
         )
-        refs.append(SensorCapsFileRef(path, partition))
+        refs.append(HubFileRef(path, partition))
     return refs
 
 
@@ -116,7 +117,7 @@ def _annotations(owner):
 def _write_row(tmp_path, row):
     path = tmp_path / "row.jsonl"
     path.write_text(json.dumps(row) + "\n", encoding="utf-8")
-    return SensorCapsFileRef(path, "hhar_v2")
+    return HubFileRef(path, "hhar_v2")
 
 
 def _assert_records_and_tasks(records, tasks):
@@ -266,7 +267,8 @@ def test_invalid_sensor_data_has_source_context(tmp_path, sensor, pattern):
     assert "hhar_v2, row 0" in str(error.value)
 
 
-def test_integer_and_float_sensor_readings_are_accepted(tmp_path):
+def test_integer_and_float_sensor_readings_are_accepted(monkeypatch, tmp_path):
+    monkeypatch.setitem(SensorCapsConnector.SOURCE_ROWS, "hhar_v2", 1)
     row = _rows()[0]
     lines = row["messages"][1]["content"].splitlines()
     for index, line in enumerate(lines):
@@ -279,10 +281,10 @@ def test_integer_and_float_sensor_readings_are_accepted(tmp_path):
         np.testing.assert_array_equal(signal.to_numpy(), np.full(60, expected, dtype=np.float32))
 
 
-def test_pinned_downloads_enforce_partition_counts():
-    fixture = SensorCapsFileRef(_FIXTURES / "captions.jsonl", "hhar_v2")
-    with pytest.raises(TimeFValidationError, match=r"hhar_v2.*expected 9166 rows, found 2"):
-        SensorCapsConnector().convert([SensorCapsFileRef(fixture.path, fixture.partition, SOURCE_ROWS["hhar_v2"])])
+def test_pinned_inventory_mismatch_fails(monkeypatch, tmp_path):
+    monkeypatch.setitem(SensorCapsConnector.SOURCE_ROWS, "hhar_v2", 9166)
+    with pytest.raises(TimeFValidationError, match=r"hhar_v2\): expected 9166 rows, found 2"):
+        SensorCapsConnector().convert(_refs(tmp_path)[:1])
 
 
 @pytest.mark.parametrize("n_readings", [1, 59, 61])
