@@ -70,7 +70,7 @@ class TestMeanConnector(BaseConnector[None]):
                 id=f"ts-{index}",
             )
             record = Record(
-                record_id=f"record-{index}",
+                id=f"record-{index}",
                 sources=(
                     Source(
                         id=f"source-{index}",

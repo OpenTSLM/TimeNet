@@ -42,7 +42,7 @@ def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
         time_axis=OrdinalAxis(),
         data=pa.FixedSizeListArray.from_arrays(pa.array(range(12), type=pa.uint8()), 12),
     )
-    image_record = Record(record_id="image", sources=(Source(name="image", signals=(signal,)),))
+    image_record = Record(id="image", sources=(Source(name="image", signals=(signal,)),))
     dataset.add_record(record=image_record)
     dataset.add_task(
         task=AnswerTask(id="image-task", inputs=(image_record,), prompt="Describe this image.", targets=("A chart.",))
@@ -114,7 +114,7 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     assert lead_i.metadata == lead_ii.metadata == {}
     assert lead_i.metadata is not lead_ii.metadata
     assert lead_i.to_arrow().to_pylist() == [1.0, 2.0]
-    assert record.annotations[0].content_id == "sex-male"
+    assert record.annotations[0].id == "sex-male"
     assert record.annotations[0].occurrence_id is not None
     assert task.inputs[0] is record
     assert task.prompt == "Alive?"
@@ -125,7 +125,7 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
 def test_reader_and_audit_reject_ambiguous_stored_task_time_span(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
-    second = dataset.add_record(record=Record(record_id="other", sources=(Source(name="other"),)))
+    second = dataset.add_record(record=Record(id="other", sources=(Source(name="other"),)))
     dataset.tasks[0].inputs = (*dataset.tasks[0].inputs, second)
     DuckDBControlWriter(path).write_hierarchy(dataset)
     with connect_control(path) as connection:
@@ -276,7 +276,7 @@ def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
         (task,) = reader.read_tasks(records)
 
     assert task.inputs == records
-    assert tuple(annotation.content_id for annotation in task.input_annotations) == ("age-65", "sex-male")
+    assert tuple(annotation.id for annotation in task.input_annotations) == ("age-65", "sex-male")
 
 
 def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
@@ -407,7 +407,7 @@ def test_read_tasks_rejects_records_the_database_does_not_store(tmp_path):
     DuckDBControlWriter(path).write_hierarchy(_dataset())
 
     with DuckDBControlReader(path) as reader, pytest.raises(TimeFValidationError, match="no such record"):
-        reader.read_tasks((Record(record_id="ghost"),))
+        reader.read_tasks((Record(id="ghost"),))
 
 
 def test_typed_scope_and_payload_columns_round_trip(tmp_path):
@@ -442,7 +442,7 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
-        (restored,) = reader.read_records((record.record_id,))
+        (restored,) = reader.read_records((record.id,))
     back = next(item for item in restored.annotations if item.id == "probe-content")
     stored = (
         connect_control(path, read_only=True)

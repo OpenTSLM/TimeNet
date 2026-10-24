@@ -50,7 +50,7 @@ def _sharded_dataset(n_records: int, series_len: int) -> TimeFDataset:
         record = dataset.add_record(
             record=Record(
                 sources=(Source(id=f"record-{i:03d}-source", name="Source", signals=(ts,)),),
-                record_id=f"record-{i:03d}",
+                id=f"record-{i:03d}",
             )
         )
         record.annotate(Annotation(key="subject_ids", value=[f"subj-{i}"], id=f"subject-ann-{i:03d}"))

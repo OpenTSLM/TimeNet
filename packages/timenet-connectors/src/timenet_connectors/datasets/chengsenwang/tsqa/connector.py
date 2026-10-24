@@ -77,7 +77,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
             )
             signals.append(signal)
         record = Record(
-            record_id=f"row-{index}",
+            id=f"row-{index}",
             sources=(Source(id=f"row-{index}-source", name="TSQA series", signals=tuple(signals)),),
         )
         record.annotate(Annotation(key="task", value=sample.category, id=f"task-{index}"))
