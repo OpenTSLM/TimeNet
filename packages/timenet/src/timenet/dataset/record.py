@@ -32,7 +32,7 @@ class Record(SupportsAnnotate):
     """The root sources that belong to this recording."""
     start_time: TimeOrigin = field(default_factory=TimeOrigin)
     """The common relative zero, with an optional absolute timestamp."""
-    record_id: str = field(default_factory=new_id)
+    id: str = field(default_factory=new_id)
     """Unique id for the record (default: an auto-generated uuid7)."""
     task_ids: tuple[str, ...] = ()
     """Ids of the tasks attached to this record."""
@@ -46,11 +46,6 @@ class Record(SupportsAnnotate):
     one, for example a note taken while every sensor was briefly off. This checks an unscoped span
     against it, rather than against the union of the series' windows. Its ``time_series_ids`` must be
     ``None``, and it must contain every series' window."""
-
-    @property
-    def id(self) -> str:
-        """Return the record's stable public identifier."""
-        return self.record_id
 
     def __post_init__(self) -> None:  # noqa: PLR0912 - hierarchy, timing, and annotation invariants
         """Validate the record hierarchy and its optional single-clock session span.
@@ -66,7 +61,7 @@ class Record(SupportsAnnotate):
             tuple(self.walk_sources())
             signal_ids = [signal.id for signal in self.walk_signals()]
             if len(signal_ids) != len(set(signal_ids)):
-                raise TimeFValidationError(f"record {self.record_id!r} contains duplicate signal IDs")
+                raise TimeFValidationError(f"record {self.id!r} contains duplicate signal IDs")
         for signal in self.signals:
             if (window := signal.span_us) is not None:
                 for endpoint in window:
@@ -246,7 +241,7 @@ class Record(SupportsAnnotate):
                 f"annotation {annotation.key!r}",
                 annotation.span,
                 self.signals,
-                self.record_id,
+                self.id,
                 self.time_span,
                 warn_when_outside=warn_when_outside,
             )

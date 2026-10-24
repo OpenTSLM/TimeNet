@@ -127,7 +127,7 @@ class TimeFTorchDataset(Dataset):
     def _item(record: Record, tasks: tuple[Task, ...]) -> dict[str, Any]:
         pairs = tuple(_series_tensor_and_mask(signal) for signal in record.signals)
         return {
-            "record_id": record.record_id,
+            "record_id": record.id,
             "series": tuple(values for values, _ in pairs),
             "series_masks": tuple(mask for _, mask in pairs),
             "tasks": tasks,
@@ -158,7 +158,7 @@ class _DatasetItems:
             for task_id in record.task_ids:
                 task = self._tasks_by_id.get(task_id)
                 if task is None:
-                    raise TimeFValidationError(f"record {record.record_id!r} references unknown task id {task_id!r}")
+                    raise TimeFValidationError(f"record {record.id!r} references unknown task id {task_id!r}")
                 tasks.append(task)
             items.append((record, tuple(tasks)))
         return items
@@ -183,13 +183,13 @@ class _ReaderItems:
         """Return the records at ``indices`` with their tasks, in order."""
         ids = self._ids()
         records = tuple(self._reader.iter_records([ids[index] for index in indices]))
-        tasks_by_record: dict[str, list[Task]] = {record.record_id: [] for record in records}
+        tasks_by_record: dict[str, list[Task]] = {record.id: [] for record in records}
         for task in self._reader.read_tasks(records):
             for record in task.inputs:
-                attached = tasks_by_record.get(record.record_id)
+                attached = tasks_by_record.get(record.id)
                 if attached is not None:
                     attached.append(task)
-        return [(record, tuple(tasks_by_record[record.record_id])) for record in records]
+        return [(record, tuple(tasks_by_record[record.id])) for record in records]
 
 
 def _series_tensor_and_mask(ts: Signal) -> tuple[Shaped[Tensor, " time *value"], Tensor]:

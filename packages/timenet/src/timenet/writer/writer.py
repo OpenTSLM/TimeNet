@@ -241,10 +241,10 @@ class TimeFWriter:
                         f"{_series_identity(existing)} and {_series_identity(ts)}; ids must be unique "
                         f"per signal, or reuse the same series instance to share it across records"
                     )
-                pair = (ts.id, record.record_id)
+                pair = (ts.id, record.id)
                 if pair not in seen_pairs:
                     seen_pairs.add(pair)
-                    series_to_records.setdefault(ts.id, []).append(record.record_id)
+                    series_to_records.setdefault(ts.id, []).append(record.id)
         # Group a record's series together before splitting by signal, so all leads of one record are
         # contiguous: the writer reads the record's source once, and a reader pulls a record's series
         # from one place instead of scattered across signal-ordered shards. A series shared by several
@@ -379,9 +379,9 @@ class TimeFWriter:
         record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
         for ann in record_annotations:
             content = ann._content_fields
-            if ann.content_id in seen and seen[ann.content_id] != content:
-                raise TimeFValidationError(f"annotation content id {ann.content_id!r} is reused with different content")
-            seen[ann.content_id] = content
+            if ann.id in seen and seen[ann.id] != content:
+                raise TimeFValidationError(f"annotation content id {ann.id!r} is reused with different content")
+            seen[ann.id] = content
 
     def _build_counts(self) -> ManifestCounts:
         """Read exact entity counts from the completed control database.

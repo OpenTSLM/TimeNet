@@ -101,7 +101,7 @@ def test_qa_tasks_match_fixture():
 def test_series_values_parsed_from_fixture():
     dataset = _convert()
     expected = json.loads(_fixture_rows()[0]["Series"])
-    record = next(record for record in dataset.records if record.record_id == "row-0")
+    record = next(record for record in dataset.records if record.id == "row-0")
     got = record.signals[0].to_numpy()
     assert len(got) == len(expected)
     assert float(got[0]) == pytest.approx(expected[0], rel=1e-5)
@@ -161,11 +161,11 @@ def test_split_assignments_are_repeatable_and_preserve_source_ids():
     second = TSQAConnector().convert(rows)
     assert [(task.id, task.split) for task in first.tasks] == [(task.id, task.split) for task in second.tasks]
     assert {task.id for task in first.tasks} == {f"qa-{index}" for index in range(len(rows))}
-    assert {record.record_id for record in first.records} == {f"row-{index}" for index in range(len(rows))}
+    assert {record.id for record in first.records} == {f"row-{index}" for index in range(len(rows))}
     for task in first.tasks:
         index = int(task.id.removeprefix("qa-"))
         assert task.prompt == rows[index]["Question"]
-        assert task.inputs[0].record_id == f"row-{index}"
+        assert task.inputs[0].id == f"row-{index}"
 
 
 @pytest.mark.parametrize(

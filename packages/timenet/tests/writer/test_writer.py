@@ -322,6 +322,6 @@ def test_same_id_different_series_rejected(tmp_path):
         loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
         id="ts-x",
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(a,)),), record_id="s-a"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(a,)),), id="s-a"))
     with pytest.raises(TimeFValidationError, match="already belong to another Source"):
-        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(b,)),), record_id="s-b"))
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(b,)),), id="s-b"))
