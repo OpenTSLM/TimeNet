@@ -405,13 +405,13 @@ def test_set_task_stream_rejects_after_add_task(make_series):
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
     with pytest.raises(TimeFValidationError, match="either streams its tasks or"):
-        dataset.set_task_stream([ClassificationTask], lambda: iter(()))
+        dataset.set_task_stream(lambda: iter(()))
 
 
 def test_add_task_rejects_on_a_streamed_dataset(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    dataset.set_task_stream([AnswerTask], lambda: iter(()))
+    dataset.set_task_stream(lambda: iter(()))
     with pytest.raises(TimeFValidationError, match="streamed dataset"):
         dataset.add_task(task=AnswerTask(inputs=(record,), prompt="q", targets=("a",)))
 
@@ -424,20 +424,31 @@ def test_streamed_task_validation_rejects_an_unknown_record(make_series):
         sources=(Source(id="missing-source", name="Missing", signals=(make_series(time_series_id="missing"),)),),
     )
     task = AnswerTask(prompt="q", targets=("a",), inputs=(unknown,))
-    dataset.set_task_stream([AnswerTask], lambda: iter((task,)))
+    dataset.set_task_stream(lambda: iter((task,)))
     with pytest.raises(TimeFValidationError, match="not registered"):
         list(dataset.iter_streamed_tasks_validated())
 
 
-def test_streamed_task_validation_rejects_an_undeclared_type(make_series):
+def test_streamed_task_types_reach_the_schema_after_a_complete_pass(make_series):
     dataset = _dataset()
     record = dataset.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(),)),), record_id="s-0")
     )
-    task = ClassificationTask(targets=("a",), inputs=(record,))
-    dataset.set_task_stream([AnswerTask], lambda: iter((task,)))  # declared AnswerTask, streamed a different type
-    with pytest.raises(TimeFValidationError, match="not one of the declared"):
-        list(dataset.iter_streamed_tasks_validated())
+    answer = AnswerTask(prompt="q", targets=("a",), inputs=(record,))
+    label = ClassificationTask(targets=("a",), inputs=(record,))
+    dataset.set_task_stream(lambda: iter((answer, label, answer)))
+    dataset.derive_schema()
+    assert dataset.schema.tasks == ()
+
+    partial_pass = dataset.iter_streamed_tasks_validated()
+    next(partial_pass)
+    partial_pass.close()  # an aborted write does not record the types
+    assert dataset.schema.tasks == ()
+
+    list(dataset.iter_streamed_tasks_validated())
+    assert dataset.schema.tasks == (AnswerTask, ClassificationTask)
+    dataset.derive_schema()  # re-deriving keeps the types the write learned
+    assert dataset.schema.tasks == (AnswerTask, ClassificationTask)
 
 
 def test_streamed_task_validation_does_not_rewalk_registered_signals(make_series, monkeypatch):
@@ -458,7 +469,7 @@ def test_streamed_task_validation_does_not_rewalk_registered_signals(make_series
         return original.__get__(self, Record)
 
     monkeypatch.setattr(Record, "signals", property(tracked_signals))
-    dataset.set_task_stream([AnswerTask], lambda: iter((task, task)))
+    dataset.set_task_stream(lambda: iter((task, task)))
 
     assert list(dataset.iter_streamed_tasks_validated()) == [task, task]
     assert calls == 0
@@ -850,7 +861,7 @@ def split_dataset(request, make_series):
         ClassificationTask(inputs=(record,), targets=("e",), split=Split.TRAIN),
     )
     if request.param:
-        dataset.set_task_stream(task_types=(ClassificationTask,), source=lambda: iter(tasks))
+        dataset.set_task_stream(source=lambda: iter(tasks))
     else:
         dataset.add_tasks(tasks=tasks)
     return dataset, tasks
@@ -894,7 +905,7 @@ def test_multi_split_selection_reads_stream_once_and_iteration_is_lazy(make_seri
             visited.append(task.id)
             yield task
 
-    dataset.set_task_stream(task_types=(ClassificationTask,), source=stream)
+    dataset.set_task_stream(source=stream)
     selected = dataset.iter_tasks(split=(Split.TRAIN, Split.VALIDATION))
     assert visited == []
     assert next(selected) is train

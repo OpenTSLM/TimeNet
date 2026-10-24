@@ -33,7 +33,7 @@ from typing import ClassVar
 
 from timenet.dataset import Record, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
-from timenet.types import Annotation, ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
+from timenet.types import Annotation, TimeInterval
 from timenet_connectors.bases import excel
 from timenet_connectors.bases.edf import reader, timeseries
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
@@ -322,10 +322,7 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
 
         for vocabulary in tasks.build_vocabularies(_ID_PREFIX):
             dataset.annotate(vocabulary)
-        dataset.set_task_stream(
-            [ClassificationTask, TemporalLocalizationTask, ScalarPredictionTask],
-            lambda: tasks.iter_tasks(dataset.records, _ID_PREFIX),
-        )
+        dataset.set_task_stream(lambda: tasks.iter_tasks(dataset.records, _ID_PREFIX))
         return dataset
 
 

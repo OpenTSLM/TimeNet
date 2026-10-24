@@ -237,10 +237,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
             annotation.id: dataset.annotate(annotation)
             for annotation in self._metadata_annotations(question_types, template_ids, contexts, answers)
         }
-        dataset.set_task_stream(
-            [AnswerTask],
-            lambda: self._iter_tasks(source, answers, records, task_annotations),
-        )
+        dataset.set_task_stream(lambda: self._iter_tasks(source, answers, records, task_annotations))
         return dataset
 
     def _leads_for(self, ecg_id: int, record_base: Path) -> tuple[Signal, ...]:

@@ -102,6 +102,10 @@ validated stream once while inserting task rows and object relationships. It ret
 deferred dependency edges, not every Task object, so a large task corpus does not need to be
 materialized in Python.
 
+The writer also records the task types the stream yields, in first-seen order, and the manifest
+declares them in `schema.tasks`. The connector does not list them. Until a write drains the
+stream, the dataset's in-memory schema lists no task types.
+
 ## Progress
 
 Pass `progress_cb` to receive `WriteProgressEvent` objects. Events report schema work, completed

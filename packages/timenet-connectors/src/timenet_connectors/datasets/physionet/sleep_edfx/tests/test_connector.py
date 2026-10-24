@@ -326,7 +326,10 @@ def test_the_source_gives_a_fresh_iterator_each_call(release, monkeypatch):
 
 def test_the_schema_names_every_task_type(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
-    assert set(dataset._streamed_task_types) == {
+    assert not dataset.derive_schema().tasks  # learned from the stream, so empty until a write drains it
+    list(dataset.iter_streamed_tasks_validated())
+    assert dataset.schema is not None
+    assert set(dataset.schema.tasks) == {
         ClassificationTask,
         ScalarPredictionTask,
         TemporalLocalizationTask,
