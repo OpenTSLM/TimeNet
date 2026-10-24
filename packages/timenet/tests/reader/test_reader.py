@@ -72,8 +72,8 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
             """SELECT DISTINCT r.record_id
                FROM records r
                JOIN annotation_occurrences o
-                 ON o.object_type = 'Record' AND o.object_key = r.record_key
-               JOIN annotation_contents c USING (content_key)
+                 ON o.object_type = 'Record' AND o.object_id = r.record_id
+               JOIN annotation_contents c USING (content_id)
                WHERE c.name = 'subject_ids'
                  AND list_contains(c.text_list_value, ?)""",
             ["patient-1"],
