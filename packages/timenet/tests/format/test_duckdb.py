@@ -11,7 +11,7 @@ from timenet.format.duckdb import (
 )
 
 
-def test_control_schema_is_version_one_and_has_no_stored_relationship_constraints(tmp_path):
+def test_control_schema_stores_its_version_and_no_constraints(tmp_path):
     path = tmp_path.joinpath("control.duckdb")
     with connect_control(path) as connection:
         create_control_schema(connection)
@@ -20,8 +20,7 @@ def test_control_schema_is_version_one_and_has_no_stored_relationship_constraint
             "SELECT constraint_type FROM duckdb_constraints() WHERE constraint_type <> 'NOT NULL'"
         ).fetchall()
 
-    assert CONTROL_SCHEMA_VERSION == 1
-    assert version == ("1",)
+    assert version == (str(CONTROL_SCHEMA_VERSION),)
     assert stored_constraints == []
 
 
@@ -34,11 +33,34 @@ def test_control_transaction_rolls_back_all_rows(tmp_path):
                 """INSERT INTO records (
                        record_id, clock_id, time_span_start_us, time_span_end_us, metadata
                    ) VALUES (?, 1, NULL, NULL, ?)""",
-                ["record-1", "{}"],
+                [10, "{}"],
             )
             raise RuntimeError("stop")
 
         assert connection.execute("SELECT count(*) FROM records").fetchone() == (0,)
+
+
+def test_entity_id_columns_are_bigint_and_dataset_id_stays_varchar(tmp_path):
+    with connect_control(tmp_path.joinpath("control.duckdb")) as connection:
+        create_control_schema(connection)
+        types = dict(
+            connection.execute(
+                "SELECT table_name || '.' || column_name, data_type FROM information_schema.columns"
+            ).fetchall()
+        )
+
+    id_columns = {name: kind for name, kind in types.items() if name.endswith("_id") and not name.endswith(".clock_id")}
+    assert id_columns.pop("datasets.dataset_id") == "VARCHAR"
+    assert set(id_columns.values()) == {"BIGINT"}
+    assert {name.split(".")[1] for name in id_columns} >= {
+        "record_id",
+        "source_id",
+        "axis_id",
+        "signal_id",
+        "content_id",
+        "occurrence_id",
+        "task_id",
+    }
 
 
 def test_control_schema_rejects_an_unknown_version(tmp_path):

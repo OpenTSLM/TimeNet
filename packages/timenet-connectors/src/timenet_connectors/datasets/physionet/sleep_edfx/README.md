@@ -75,7 +75,7 @@ connector. The eight labels count as `Sleep stage W` 290 365, `Sleep stage 2` 88
 `Sleep stage R` 34 184, `Sleep stage 1` 25 175, `Sleep stage ?` 25 047, `Sleep stage 3` 12 191,
 `Sleep stage 4` 7263 and `Movement time` 211 *(measured)*.
 
-**An epoch task names no signal.** Its `scope` covers the epoch and leaves `time_series_ids`
+**An epoch task names no signal.** Its `scope` covers the epoch and leaves `time_series`
 unset. A sleep-stage annotation names the four signals that the technician read, because that is
 what the release states. A task states what a model must answer, which is a different thing. If a
 task names four signals, a model cannot read the respiration or the temperature signal. That is
@@ -129,8 +129,7 @@ name alone tells a consumer nothing about what is in the set.
 **The tasks stream, and the connector does not hold them in memory.** `set_task_stream` exists for
 a dataset with far more tasks than records. This release has about 2450 tasks for each recording.
 The writer validates each streamed task against the dataset. Checks that need the complete task set,
-such as duplicate IDs and cross-task derivations, do not run. Each task carries its own `inputs`, and
-streamed tasks do not populate `Record.task_ids`.
+such as cross-task derivations, do not run. Each task carries its own `inputs`.
 
 **The stream reads no file.** It expands the sleep-stage annotations that the records already
 carry. A second read of the hypnograms can let the tasks and the annotations disagree.

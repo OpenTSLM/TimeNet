@@ -105,14 +105,6 @@ def test_manifest_data_files_are_lists_of_parts(tmp_path):
 # ---- shard schema & encodings -----------------------------------------------------------------
 
 
-def test_shard_has_time_series_id_column(tmp_path):
-    version_dir = _written(tmp_path)
-    shard = next(version_dir.glob("time_series/part-*.parquet"))
-    names = set(pq.ParquetFile(shard).schema_arrow.names)
-    assert "time_series_id" in names  # self-describing shards (re-indexable)
-    assert "values" in names
-
-
 def test_values_carry_the_selected_encoding(tmp_path):
     version_dir = _written(tmp_path)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
@@ -132,10 +124,7 @@ def test_long_series_splits_into_multiple_chunks(tmp_path):
     # Tiny chunk cap forces the long hello_world series to split.
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
-        index = connection.execute(
-            """SELECT signals.signal_id, chunks.chunk_index
-               FROM signal_chunks chunks JOIN signals USING (signal_key)"""
-        ).fetchall()
+        index = connection.execute("SELECT signal_id, chunk_index FROM signal_chunks").fetchall()
     chunks_per_series: dict[str, set] = {}
     for signal_id, chunk_index in index:
         chunks_per_series.setdefault(signal_id, set()).add(chunk_index)
@@ -146,10 +135,8 @@ def test_index_offsets_resolve_to_values(tmp_path):
     version_dir = _written(tmp_path, chunk_max_bytes=64, row_group_target_bytes=64)
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         row = connection.execute(
-            """SELECT chunks.value_path, chunks.chunk_major_index, chunks.chunk_minor_index,
-                      chunks.n_values
-               FROM signal_chunks chunks JOIN signals USING (signal_key)
-               ORDER BY signals.signal_id, chunks.chunk_index LIMIT 1"""
+            """SELECT value_path, chunk_major_index, chunk_minor_index, n_values
+               FROM signal_chunks ORDER BY signal_id, chunk_index LIMIT 1"""
         ).fetchone()
     assert row is not None
     value_path, major_index, minor_index, n_values = row
@@ -270,7 +257,6 @@ def test_per_series_array_contract_enforced(tmp_path):
         name="S",
         unit_value=ureg.dimensionless,
     )
-    import pyarrow as pa  # noqa: PLC0415
 
     # declares 5 observations, loader returns 3
     ts = Signal.from_loader(
@@ -291,45 +277,3 @@ def test_int32_guard_is_exposed():
     from timenet.values_backends.parquet.writer import MAX_ELEMENTS_PER_ROW_GROUP  # noqa: PLC0415
 
     assert MAX_ELEMENTS_PER_ROW_GROUP == 2**31
-
-
-def _dup_dataset():
-    return TimeFDataset(
-        metadata=DatasetMetadata(
-            dataset_id="demo/dup",
-            dataset_version=Version(1, 0, 0),
-            name="Dup",
-            description="d",
-            license=License.MIT,
-        )
-    )
-
-
-def test_same_id_different_series_rejected(tmp_path):
-    # Two records reaching different series under one time_series_id: only one can be written, so the
-    # other record would silently read back the wrong signal. Must fail loudly, not first-wins.
-    spec = TimeSeriesSpec(
-        spec_type="s",
-        name="S",
-        unit_value=ureg.dimensionless,
-    )
-    dataset = _dup_dataset()
-    a = Signal.from_loader(
-        spec=spec,
-        name="a",
-        time_axis=RegularAxis.from_rate_hz(1),
-        n_values=2,
-        loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
-        id="ts-x",
-    )
-    b = Signal.from_loader(  # same id, different signal and window
-        spec=spec,
-        name="b",
-        time_axis=RegularAxis.from_rate_hz(1),
-        n_values=2,
-        loader=lambda: pa.array([9.0, 9.0], type=pa.float32()),
-        id="ts-x",
-    )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(a,)),), record_id="s-a"))
-    with pytest.raises(TimeFValidationError, match="already belong to another Source"):
-        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(b,)),), record_id="s-b"))

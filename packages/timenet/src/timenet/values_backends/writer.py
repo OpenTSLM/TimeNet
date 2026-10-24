@@ -20,6 +20,7 @@ from typing import ClassVar, assert_never
 import pyarrow as pa
 
 from timenet.dataset import Signal
+from timenet.types.ids import EntityId
 from timenet.values_backends.parquet.config import ParquetValuesConfig
 from timenet.values_backends.types import ChunkDataIndex
 from timenet.values_backends.zarr.config import ZarrValuesConfig
@@ -45,7 +46,7 @@ class ChunkPlacement:
 class ValuesWriteResult:
     """The outcome of writing every series' values with a backend."""
 
-    placements: dict[tuple[str, int], ChunkPlacement]
+    placements: dict[tuple[EntityId, int], ChunkPlacement]
     """``(time_series_id, chunk_idx)`` -> its on-disk placement."""
     files: list[str] = field(default_factory=list)
     """Value files produced, relative to the staging directory, for ``manifest.files.time_series``."""

@@ -1,5 +1,3 @@
-import re
-
 import numpy as np
 import pytest
 
@@ -42,7 +40,7 @@ def test_assert_datasets_equal_compares_resolved_modalities():
     assert_datasets_equal(expected, actual)
 
     task.input_modalities = frozenset({InputModality.IMAGE})
-    with pytest.raises(AssertionError, match=rf"task {re.escape(task.id)} differs"):
+    with pytest.raises(AssertionError, match=f"task {task.id} differs"):
         assert_datasets_equal(expected, actual)
 
 
@@ -50,5 +48,5 @@ def test_assert_datasets_equal_detects_difference():
     ds = make_dataset()
     other = make_dataset()
     other.records[0].annotate(Annotation(key="extra", value=1))
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="annotations differ"):
         assert_datasets_equal(ds, other)

@@ -16,6 +16,7 @@ from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from timenet.dataset.dataset import TimeFDataset
     from timenet.dataset.time_series import Signal
+    from timenet.types.ids import EntityId
 
 
 def point_count(series: Signal) -> int:
@@ -65,9 +66,9 @@ def _identity(dataset: TimeFDataset) -> str:
     return "\n".join(lines)
 
 
-def _counts(dataset: TimeFDataset, unique_series: dict[str, Signal]) -> str:
+def _counts(dataset: TimeFDataset, unique_series: dict[EntityId, Signal]) -> str:
     task_counts = Counter(str(task.task_type) for task in dataset.tasks)
-    annotation_ids = {ann.id for record in dataset.records for ann in record.walk_annotations()}
+    annotation_ids = {ann._content_key for record in dataset.records for ann in record.walk_annotations()}
     spec_counts = Counter(ts.spec.spec_type for ts in unique_series.values())
     fields = {
         "records": str(len(dataset.records)),
@@ -80,7 +81,7 @@ def _counts(dataset: TimeFDataset, unique_series: dict[str, Signal]) -> str:
     return "\n".join(lines)
 
 
-def _specs(unique_series: dict[str, Signal]) -> str:
+def _specs(unique_series: dict[EntityId, Signal]) -> str:
     if not unique_series:
         return ""
     representative: dict[str, Signal] = {}
@@ -104,15 +105,16 @@ def _preview(dataset: TimeFDataset, rows: int) -> str:
     if not records:
         return ""
     header = ("record_id", "signals", "length", "tasks", "annotations")
+    tasks_per_record = Counter(id(record) for task in dataset.tasks for record in task.inputs)
     table_rows = []
     for record in records[:rows]:
         length = point_count(record.signals[0]) if record.signals else None
         table_rows.append(
             (
-                record.record_id,
+                str(record.id),
                 str(len(record.signals)),
                 "?" if length is None else str(length),
-                str(len(record.task_ids)),
+                str(tasks_per_record[id(record)]),
                 str(len(record.annotations)),
             )
         )

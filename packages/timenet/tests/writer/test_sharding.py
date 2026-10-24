@@ -31,6 +31,11 @@ _SMALL_TARGETS = {
 }
 
 
+def _signal_id(i: int) -> int:
+    """Return the id the dataset gives the signal of record ``i``; signals count from 1."""
+    return 1 + i
+
+
 def _sharded_dataset(n_records: int, series_len: int) -> TimeFDataset:
     """Build a synthetic dataset large enough to shard every artifact type under small byte targets."""
     dataset = TimeFDataset(
@@ -46,16 +51,15 @@ def _sharded_dataset(n_records: int, series_len: int) -> TimeFDataset:
     axis = RegularAxis.from_rate_hz(16)
     for i in range(n_records):
         values = [float((i + j) % 11) for j in range(series_len)]
-        ts = Signal.from_values(values, spec=spec, name="a", time_axis=axis, id=f"ts-{i:03d}")
+        ts = Signal.from_values(values, spec=spec, name="a", time_axis=axis)
         record = dataset.add_record(
             record=Record(
-                sources=(Source(id=f"record-{i:03d}-source", name="Source", signals=(ts,)),),
-                record_id=f"record-{i:03d}",
+                sources=(Source(name="Source", signals=(ts,)),),
             )
         )
-        record.annotate(Annotation(key="subject_ids", value=[f"subj-{i}"], id=f"subject-ann-{i:03d}"))
-        record.annotate(Annotation(key="label", value=f"cls-{i % 3}", id=f"ann-{i:03d}"))
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=(f"c{i % 2}",), id=f"task-{i:03d}"))
+        record.annotate(Annotation(key="subject_ids", value=[f"subj-{i}"]))
+        record.annotate(Annotation(key="label", value=f"cls-{i % 3}"))
+        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=(f"c{i % 2}",)))
     return dataset
 
 
@@ -69,11 +73,9 @@ def _write(tmp_path, dataset, **targets):
 def _index_rows(version_dir):
     with duckdb.connect(str(version_dir / "control.duckdb"), read_only=True) as connection:
         rows = connection.execute(
-            """SELECT signals.signal_id, chunks.chunk_index, chunks.value_path,
-                          chunks.chunk_major_index, chunks.chunk_minor_index, chunks.n_values
-                   FROM signal_chunks chunks
-                   JOIN signals USING (signal_key)
-                   ORDER BY signals.signal_id, chunks.chunk_index"""
+            """SELECT signal_id, chunk_index, value_path, chunk_major_index, chunk_minor_index, n_values
+                   FROM signal_chunks
+                   ORDER BY signal_id, chunk_index"""
         ).fetchall()
     return [
         {
@@ -135,7 +137,7 @@ def test_open_and_build_records_reads_no_value_shard(tmp_path, monkeypatch):
     assert not [p for p in opened if "/time_series/" in p]
 
 
-@pytest.mark.parametrize("series_id", ["ts-000", "ts-006", "ts-011"])
+@pytest.mark.parametrize("series_id", [_signal_id(0), _signal_id(6), _signal_id(11)])
 def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, series_id):
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
@@ -157,7 +159,9 @@ def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, ser
 
 def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
     version_dir = _write(tmp_path, _sharded_dataset(12, 128), **_SMALL_TARGETS)
-    expected = {(r["chunk_file"], r["chunk_major_idx"]) for r in _index_rows(version_dir) if r["signal_id"] == "ts-006"}
+    expected = {
+        (r["chunk_file"], r["chunk_major_idx"]) for r in _index_rows(version_dir) if r["signal_id"] == _signal_id(6)
+    }
 
     read: list[tuple[str, int]] = []
     original = values_reader.ParquetValuesReader._row_group
@@ -168,6 +172,6 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
 
     monkeypatch.setattr(values_reader.ParquetValuesReader, "_row_group", spy)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        series = next(ts for s in reader.read().records for ts in s.signals if ts.id == "ts-006")
+        series = next(ts for s in reader.read().records for ts in s.signals if ts.id == _signal_id(6))
         series.to_arrow()
-    assert set(read) == expected  # only ts-006's chunks' row groups were decoded, not whole shards
+    assert set(read) == expected  # only signal 6's chunks' row groups were decoded, not whole shards

@@ -57,7 +57,7 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
     dataset = _referenced_annotation_dataset()
     record = dataset.records[0]
     if subjects:
-        record.annotate(Annotation(key="subject_ids", value=list(subjects), id="record-subjects"))
+        record.annotate(Annotation(key="subject_ids", value=list(subjects)))
     version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -72,8 +72,8 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
             """SELECT DISTINCT r.record_id
                FROM records r
                JOIN annotation_occurrences o
-                 ON o.object_type = 'Record' AND o.object_key = r.record_key
-               JOIN annotation_contents c USING (content_key)
+                 ON o.object_type = 'Record' AND o.object_id = r.record_id
+               JOIN annotation_contents c USING (content_id)
                WHERE c.name = 'subject_ids'
                  AND list_contains(c.text_list_value, ?)""",
             ["patient-1"],
@@ -81,7 +81,7 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
     assert matches == ([(record.id,)] if subjects else [])
 
 
-def _referenced_annotation_dataset() -> TimeFDataset:
+def _referenced_annotation_dataset(*, with_task: bool = True) -> TimeFDataset:
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="test/referenced-annotation",
@@ -97,24 +97,22 @@ def _referenced_annotation_dataset() -> TimeFDataset:
         name="I",
         time_axis=RegularAxis.from_rate_hz(Fraction(500)),
         data=[0.0, 1.0, 2.0],
-        id="ecg-rec-0-I",
     )
     record = dataset.add_record(
         record=Record(
-            sources=(Source(id="rec-0-source", name="Source", signals=(signal,)),),
-            record_id="rec-0",
+            sources=(Source(name="Source", signals=(signal,)),),
         )
     )
-    options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno"))
-    dataset.add_task(
-        task=AnswerTask(
-            prompt="Rhythm?",
-            targets=("yes",),
-            inputs=(record,),
-            input_annotations=(options,),
-            id="qa-0",
+    options = record.annotate(Annotation(key="answer_options", value=["yes", "no"]))
+    if with_task:
+        dataset.add_task(
+            task=AnswerTask(
+                prompt="Rhythm?",
+                targets=("yes",),
+                inputs=(record,),
+                input_annotations=(options,),
+            )
         )
-    )
     return dataset
 
 
@@ -127,10 +125,7 @@ def test_annotation_occurrence_and_task_object_references_round_trip(tmp_path):
 
 
 def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
-    dataset = _referenced_annotation_dataset()
-    dataset._tasks.clear()
-    dataset._task_ids.clear()
-    dataset.records[0].task_ids = ()
+    dataset = _referenced_annotation_dataset(with_task=False)
     record = dataset.records[0]
     options = record.annotations[0]
     tasks = [
@@ -140,7 +135,6 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
             rationale=f"reason {index}",
             inputs=(record,),
             input_annotations=(options,),
-            id=f"qa-{index}",
         )
         for index in range(5)
     ]
@@ -153,8 +147,7 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
 
 def test_streamed_tasks_round_trip_and_back_populate_records(tmp_path):
     restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)))
-    task = next(task for task in restored.tasks if task.id == "qa-3")
-    assert task.prompt == "Question 3?"
+    task = next(task for task in restored.tasks if task.prompt == "Question 3?")
     assert task.rationale == "reason 3"
     assert task.inputs == (restored.records[0],)
     assert {task.id for task in restored.tasks_for(restored.records[0])} == {task.id for task in restored.tasks}
@@ -187,9 +180,9 @@ def test_metadata_and_schema_come_from_the_manifest_without_opening_control(tmp_
 def test_iter_records_matches_full_read(tmp_path):
     version_dir = _write(tmp_path)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        streamed = {record.record_id for record in reader.iter_records()}
+        streamed = {record.id for record in reader.iter_records()}
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        materialized = {record.record_id for record in reader.read().records}
+        materialized = {record.id for record in reader.read().records}
     assert streamed == materialized
 
 
@@ -214,14 +207,14 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
 
 def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
     version_dir = _write(tmp_path)
-    original = DuckDBControlReader.chunk_rows_by_keys
+    original = DuckDBControlReader.chunk_rows_by_ids
     calls = []
 
     def counting_batch(reader, signals):
         calls.append(tuple(signals))
         return original(reader, signals)
 
-    monkeypatch.setattr(DuckDBControlReader, "chunk_rows_by_keys", counting_batch)
+    monkeypatch.setattr(DuckDBControlReader, "chunk_rows_by_ids", counting_batch)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         records = tuple(reader.iter_records())
         signals = tuple(signal for record in records for signal in record.signals)
@@ -274,7 +267,7 @@ def test_iter_records_rejects_an_unknown_id_before_yielding(tmp_path):
         TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader,
         pytest.raises(TimeFValidationError, match="no such record"),
     ):
-        next(reader.iter_records(record_ids=(dataset.records[0].id, "record-nope")))
+        next(reader.iter_records(record_ids=(dataset.records[0].id, 99)))
 
 
 def test_iter_records_can_skip_annotations_without_losing_values(tmp_path):
@@ -337,7 +330,7 @@ def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_pa
     }
     assert all(task.inputs[0] is record0 for task in tasks)
     answer = next(task for task in tasks if task.id == expected_answer.id)
-    cohort = next(annotation for annotation in record0.annotations if annotation.id == expected_context.id)
+    cohort = next(annotation for annotation in record0.annotations if annotation == expected_context)
     assert answer.input_annotations[0] is cohort
 
 
@@ -359,3 +352,12 @@ def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
         train_task.id: Split.TRAIN,
         test_task.id: Split.TEST,
     }
+
+
+def test_task_views_reject_a_non_int_record_id(tmp_path):
+    dataset = make_dataset()
+    record0 = dataset.records[0]
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+        for view in (reader.task_table, reader.target_table):
+            with pytest.raises(TimeFValidationError, match="positive int64 id"):
+                view(record_ids=(str(record0.id),))  # ty: ignore[invalid-argument-type]

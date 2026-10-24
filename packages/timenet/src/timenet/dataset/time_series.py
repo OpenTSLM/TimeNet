@@ -18,7 +18,15 @@ from timenet.dataset.materialized_values import (
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
-from timenet.types import Annotation, Span, StepInterval, SupportsAnnotate, TimeInterval, TimeSeriesSpec, new_id
+from timenet.types import (
+    Annotation,
+    Span,
+    StepInterval,
+    SupportsAnnotate,
+    TimeInterval,
+    TimeSeriesSpec,
+)
+from timenet.types.ids import EntityId, assigned_id
 
 
 @dataclass(frozen=True, eq=False, init=False, kw_only=True)
@@ -46,8 +54,6 @@ class Signal(SupportsAnnotate):
     An :class:`~timenet.dataset.axis.IrregularAxis` requires this loader, and any other axis
     rejects it. A regular axis computes its time offsets and an ordinal one has none. A stream attached to
     either gives a second, conflicting answer to the same question."""
-    id: str = field(default_factory=new_id)
-    """Stable Signal identity. Defaults to a UUIDv7."""
     n_values: int
     """The number of values the series holds, one per timestep. If ``spec`` gives each timestep a shape,
     the series counts one value per timestep, not one per scalar. This matches the count a chunk's
@@ -58,13 +64,13 @@ class Signal(SupportsAnnotate):
     """Annotations attached directly to this signal."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible signal metadata."""
+    _id: EntityId | None = field(default=None, init=False, repr=False)
 
     def __init__(  # noqa: PLR0913 - a signal carries its complete public metadata
         self,
         *,
         spec: TimeSeriesSpec,
         time_axis: TimeAxis,
-        id: str | None = None,
         name: str,
         data: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array,
         annotations: tuple[Annotation, ...] = (),
@@ -75,7 +81,6 @@ class Signal(SupportsAnnotate):
         self._initialize(
             spec=spec,
             time_axis=time_axis,
-            id=id or new_id(),
             name=name,
             loader=loader,
             n_values=len(loader),
@@ -92,7 +97,6 @@ class Signal(SupportsAnnotate):
         name: str,
         loader: ValuesLoader | Callable[[], pa.Array],
         n_values: int,
-        id: str | None = None,
         time_offsets_loader: ValuesLoader | Callable[[], pa.Array] | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
@@ -109,7 +113,6 @@ class Signal(SupportsAnnotate):
         instance._initialize(
             spec=spec,
             time_axis=time_axis,
-            id=id or new_id(),
             name=name,
             loader=loader,
             n_values=n_values,
@@ -124,7 +127,6 @@ class Signal(SupportsAnnotate):
         *,
         spec: TimeSeriesSpec,
         time_axis: TimeAxis,
-        id: str,
         name: str,
         loader: ValuesLoader | Callable[[], pa.Array],
         n_values: int,
@@ -141,7 +143,7 @@ class Signal(SupportsAnnotate):
         set_field(
             self, "time_offsets_loader", None if time_offsets_loader is None else as_values_loader(time_offsets_loader)
         )
-        set_field(self, "id", id)
+        set_field(self, "_id", None)
         set_field(self, "n_values", n_values)
         set_field(self, "annotations", tuple(annotations))
         set_field(self, "metadata", {} if metadata is None else metadata)
@@ -162,7 +164,9 @@ class Signal(SupportsAnnotate):
     def _validate_annotation(self, annotation: Annotation) -> None:
         """Validate an annotation without changing this Signal."""
         if annotation.span is not None:
-            check_span_within_window(f"annotation {annotation.key!r}", annotation.span, (self,), self.id)
+            check_span_within_window(
+                f"annotation {annotation.key!r}", annotation.span, (self,), f"signal {self.name!r}"
+            )
 
     def _attach_annotation(self, annotation: Annotation) -> Annotation:
         """Attach an already validated annotation as a new occurrence.
@@ -178,8 +182,9 @@ class Signal(SupportsAnnotate):
         """Validate the intrinsic per-series invariants.
 
         Raises:
-            TimeFValidationError: If ``n_values`` is not a positive integer, or if ``time_offsets_loader``
-                and the axis shape disagree about whether this series stores per-value time offsets.
+            TimeFValidationError: If ``n_values`` is not a positive integer, or if
+                ``time_offsets_loader`` and the axis shape disagree about whether this series stores
+                per-value time offsets.
             ValueError: If ``signal`` is empty. The axis validates itself.
         """
         if not self.name:
@@ -201,6 +206,17 @@ class Signal(SupportsAnnotate):
 
         for annotation in self.annotations:
             self._validate_annotation(annotation)
+
+    @property
+    def id(self) -> EntityId:
+        """The signal's id, unique among the signals of its dataset.
+
+        :meth:`~timenet.dataset.TimeFDataset.add_record` sets it, and the reader sets it on read-back.
+
+        Raises:
+            TimeFValidationError: If the signal's record is not in a dataset yet.
+        """  # noqa: DOC502 (raised by assigned_id)
+        return assigned_id(self._id, "Signal")
 
     @property
     def span_us(self) -> tuple[int, int] | None:
@@ -231,7 +247,6 @@ class Signal(SupportsAnnotate):
         spec: TimeSeriesSpec,
         name: str,
         time_axis: TimeAxis,
-        id: str | None = None,
     ) -> "Signal":
         """Build a series from already-materialized values and wrap them in a loader for the spec's dtype.
 
@@ -250,7 +265,6 @@ class Signal(SupportsAnnotate):
             spec: The series' measurement-modality spec.
             name: The signal name.
             time_axis: Where the values sit in time.
-            id: Explicit id, or ``None`` for an auto-generated UUIDv7.
 
         Returns:
             The constructed :class:`Signal`.
@@ -260,18 +274,16 @@ class Signal(SupportsAnnotate):
             name=name,
             data=values,
             time_axis=time_axis,
-            id=id,
         )
 
     @classmethod
-    def from_irregular(  # noqa: PLR0913 - construction includes an explicit validation policy
+    def from_irregular(
         cls,
         values: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array,
         *,
         time_offsets_us: np.ndarray | Sequence[int],
         spec: TimeSeriesSpec,
         name: str,
-        id: str | None = None,
         full_validation: bool = True,
     ) -> "Signal":
         """Build an irregular series from materialized values and their time offsets.
@@ -289,7 +301,6 @@ class Signal(SupportsAnnotate):
             time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
             spec: The series' measurement-modality spec.
             name: The signal name.
-            id: Explicit id, or ``None`` for an auto-generated UUIDv7.
             full_validation: Check timestamp ordering by default. Set to ``False`` only for previously
                 validated timestamps to skip that scan. Both modes check type, shape, integer range,
                 endpoints, and one timestamp per value. Conversion can still allocate when needed.
@@ -315,7 +326,6 @@ class Signal(SupportsAnnotate):
             time_axis=IrregularAxis(first_us=int(time_offsets[0]), last_us=int(time_offsets[-1])),
             loader=loader,
             time_offsets_loader=NumpyMaterializedValues(time_offsets),
-            id=id,
             n_values=len(loader),
         )
 
@@ -401,9 +411,9 @@ class Signal(SupportsAnnotate):
                 past the series' steps. If the located range is empty.
         """
         if isinstance(span, StepInterval):
-            if span.time_series_id != self.id:
+            if span.time_series is not self:
                 raise TimeFValidationError(
-                    f"a step span counts on {span.time_series_id!r}, not this series {self.id!r}"
+                    f"a step span counts on series {span.time_series.name!r}, not this series {self.name!r}"
                 )
             if span.stop > self.n_values:
                 raise TimeFValidationError(
@@ -421,19 +431,19 @@ class Signal(SupportsAnnotate):
             stop = int(np.searchsorted(offsets, span.end_us, side="left"))
         elif isinstance(axis, OrdinalAxis):
             raise TimeFValidationError(
-                f"a seconds span has no step range on ordinal series {self.id!r}, which has "
+                f"a seconds span has no step range on ordinal series {self.name!r}, which has "
                 f"no timeline; name the horizon in steps instead"
             )
         else:
             assert_never(axis)
         if start < 0 or stop > self.n_values:
             raise TimeFValidationError(
-                f"span {span!r} runs past the {self.n_values} steps of series {self.id!r}: "
+                f"span {span!r} runs past the {self.n_values} steps of series {self.name!r}: "
                 f"it resolves to ({start}, {stop})"
             )
         if stop <= start:
             raise TimeFValidationError(
-                f"span {span!r} covers no steps of series {self.id!r}: it resolves to the "
+                f"span {span!r} covers no steps of series {self.name!r}: it resolves to the "
                 f"empty range ({start}, {stop}). A forecast horizon needs at least one step"
             )
         return (start, stop)

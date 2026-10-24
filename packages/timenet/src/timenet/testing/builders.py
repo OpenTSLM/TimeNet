@@ -8,12 +8,14 @@ import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
+from timenet.format.task_codec import encode_span
 from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
     Domain,
+    EntityId,
     License,
     LocalizationMode,
     ScalarPredictionTask,
@@ -80,13 +82,12 @@ _COSINE = TimeSeriesSpec(
 )
 
 
-def _series(spec, signal, n, time_series_id, phase=0.0):
+def _series(spec, signal, n, phase=0.0):
     return Signal.from_loader(
         spec=spec,
         name=signal,
         time_axis=RegularAxis.from_rate_hz(int(_RATE_HZ)),
         loader=sine_loader(n=n, freq_hz=1.0, sampling_rate_hz=_RATE_HZ, phase=phase),
-        id=time_series_id,
         n_values=n,
     )
 
@@ -99,8 +100,8 @@ def make_dataset() -> TimeFDataset:
     annotation shapes, and one annotation appears in two records. It chains a classification task
     to an answer task, and the answer carries a rationale and an input annotation. It also adds a
     scoped classification, a scalar prediction, and a temporal localization whose target is a point
-    and an interval. The ids never change, so two calls produce equal datasets. This is the canonical
-    writer and reader round-trip fixture.
+    and an interval. The dataset numbers every id, so two calls build equal datasets. This is the
+    canonical writer and reader round-trip fixture.
 
     Returns:
         The populated :class:`TimeFDataset`.
@@ -115,31 +116,28 @@ def make_dataset() -> TimeFDataset:
             domains=(Domain.GENERAL,),
         )
     )
-    shared = _series(_SINE, "a", 16, "ts-shared")
-    cohort = Annotation(key="cohort", value="A", id="cohort-shared")
+    shared = _series(_SINE, "a", 16)
 
     record0 = dataset.add_record(
         record=Record(
-            record_id="record-0",
             start_time=TimeOrigin(9_007_199_254_740_993),
             sources=(
                 Source(
-                    id="source-record-0",
                     name="Synthetic monitor",
-                    signals=(shared, _series(_COSINE, "b", 16, "ts-cos-0")),
+                    signals=(shared, _series(_COSINE, "b", 16)),
                 ),
             ),
         )
     )
     _, record0_cohort, _ = record0.add_annotations(
         [
-            Annotation(key="age", value=64, unit="years", id="age-0"),
-            cohort,
-            Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0"),
+            Annotation(key="age", value=64, unit="years"),
+            Annotation(key="cohort", value="A"),
+            Annotation(key="stimulus", span=TimePoint.seconds(0.5)),
         ]
     )
-    shared.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25), id="art-0"))
-    classification = ClassificationTask(inputs=(record0,), targets=("normal",), id="task-cls-0")
+    shared.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25)))
+    classification = ClassificationTask(inputs=(record0,), targets=("normal",))
     dataset.add_tasks(
         tasks=[
             classification,
@@ -150,14 +148,12 @@ def make_dataset() -> TimeFDataset:
                 rationale="Regular intervals with one peak per cycle.",
                 input_annotations=(record0_cohort,),
                 from_tasks=(classification,),
-                id="task-answer-0",
             ),
             ScalarPredictionTask(
                 inputs=(record0,),
                 targets=(62.0,),
                 unit="bpm",
                 target_name="mean_rate",
-                id="task-scalar-0",
             ),
             TemporalLocalizationTask(
                 inputs=(record0,),
@@ -165,43 +161,38 @@ def make_dataset() -> TimeFDataset:
                 mode=LocalizationMode.SPARSE,
                 targets=(
                     TimePoint.seconds(0.5),
-                    TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.id,)),
+                    TimeInterval.seconds(0.0, 0.25, time_series=(shared,)),
                 ),
-                id="task-localize-0",
             ),
         ],
     )
 
     record1 = dataset.add_record(
         record=Record(
-            record_id="record-1",
             sources=(
                 Source(
-                    id="source-record-1",
                     name="Synthetic monitor",
                     signals=(
-                        _series(_SINE, "a", 16, "ts-short-1"),
-                        _series(_SINE, "a", 512, "ts-long-1", phase=1.0),
+                        _series(_SINE, "a", 16),
+                        _series(_SINE, "a", 512, phase=1.0),
                     ),
                 ),
             ),
         )
     )
-    record1.annotate(cohort)  # A new occurrence shares the cohort content across both records.
+    record1.annotate(record0_cohort)  # A new occurrence shares the cohort content across both records.
 
-    window = _series(_SINE, "a", 8, "ts-window-2")
+    window = _series(_SINE, "a", 8)
     record2 = dataset.add_record(
         record=Record(
-            record_id="record-2",
-            sources=(Source(id="source-record-2", name="Synthetic monitor", signals=(window,)),),
+            sources=(Source(name="Synthetic monitor", signals=(window,)),),
         )
     )
     dataset.add_task(
         task=ClassificationTask(
             inputs=(record2,),
             targets=("onset",),
-            id="task-cls-2",
-            scope=TimeInterval.seconds(0.0, 0.25, time_series_ids=(window.id,)),
+            scope=TimeInterval.seconds(0.0, 0.25, time_series=(window,)),
         ),
     )
     return dataset
@@ -210,9 +201,10 @@ def make_dataset() -> TimeFDataset:
 def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     """Assert two datasets are logically equal per the round-trip preserved-field contract.
 
-    This compares the metadata, every record matched by ``record_id``, and every task matched by
-    ``id``. It compares each series' fields and its materialized values. It raises ``AssertionError``
-    if any compared field differs.
+    This compares the metadata, every record matched by its id, and every task matched by its id.
+    It compares each series' fields and its materialized values. A span holds Signal objects, so task
+    scopes are compared by the ids of their Signals. It raises ``AssertionError`` if any compared
+    field differs.
 
     Args:
         expected: The reference dataset.
@@ -220,18 +212,17 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     """
     assert expected.metadata == actual.metadata, "metadata differs"
 
-    exp_records = {s.record_id: s for s in expected.records}
-    act_records = {s.record_id: s for s in actual.records}
+    exp_records = {s.id: s for s in expected.records}
+    act_records = {s.id: s for s in actual.records}
     assert exp_records.keys() == act_records.keys(), "record ids differ"
     for record_id, exp in exp_records.items():
         act = act_records[record_id]
         assert exp.start_time.timestamp == act.start_time.timestamp, f"start_time differs for {record_id}"
-        assert tuple(sorted(exp.task_ids)) == tuple(sorted(act.task_ids)), f"task_ids differ for {record_id}"
         assert exp.metadata == act.metadata, f"metadata differs for {record_id}"
-        assert sorted(exp.annotations, key=lambda a: a.id) == sorted(act.annotations, key=lambda a: a.id), (
+        assert sorted(exp.annotations, key=repr) == sorted(act.annotations, key=repr), (
             f"annotations differ for {record_id}"
         )
-        _assert_sources_equal(record_id, exp.sources, act.sources)
+        _assert_sources_equal(record_id, exp, act)
         _assert_series_equal(record_id, exp.signals, act.signals)
 
     exp_tasks = {t.id: t for t in expected.tasks}
@@ -239,30 +230,33 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     assert exp_tasks.keys() == act_tasks.keys(), "task ids differ"
     for task_id, exp_task in exp_tasks.items():
         act_task = act_tasks[task_id]
-        assert replace(exp_task, input_modalities=exp_task.resolved_input_modalities) == replace(
-            act_task, input_modalities=act_task.resolved_input_modalities
+        assert [record.id for record in exp_task.inputs] == [record.id for record in act_task.inputs], (
+            f"task {task_id} inputs differ"
+        )
+        assert encode_span(exp_task.scope) == encode_span(act_task.scope), f"task {task_id} scope differs"
+        assert replace(exp_task, scope=None, input_modalities=exp_task.resolved_input_modalities) == replace(
+            act_task, scope=None, input_modalities=act_task.resolved_input_modalities
         ), f"task {task_id} differs"
 
 
-def _assert_sources_equal(record_id: str, expected: tuple[Source, ...], actual: tuple[Source, ...]) -> None:
-    """Assert two recursive source hierarchies are logically equal."""
-    exp = {source.id: source for root in expected for source in root.walk_sources()}
-    act = {source.id: source for root in actual for source in root.walk_sources()}
-    assert exp.keys() == act.keys(), f"source ids differ for {record_id}"
-    for source_id, exp_source in exp.items():
-        act_source = act[source_id]
-        assert exp_source.name == act_source.name, f"source name differs for {source_id}"
-        assert exp_source.metadata == act_source.metadata, f"source metadata differs for {source_id}"
-        assert exp_source.annotations == act_source.annotations, f"source annotations differ for {source_id}"
-        assert {source.id for source in exp_source.sources} == {source.id for source in act_source.sources}, (
-            f"child sources differ for {source_id}"
-        )
+def _assert_sources_equal(record_id: EntityId, expected: Record, actual: Record) -> None:
+    """Assert two recursive source hierarchies are logically equal, walked in the same order."""
+    exp, act = list(expected.walk_sources()), list(actual.walk_sources())
+    assert len(exp) == len(act), f"sources differ for {record_id}"
+    for exp_source, act_source in zip(exp, act, strict=True):
+        name = exp_source.name
+        assert name == act_source.name, f"source name differs for {record_id}"
+        assert exp_source.metadata == act_source.metadata, f"source metadata differs for {name}"
+        assert exp_source.annotations == act_source.annotations, f"source annotations differ for {name}"
+        assert sorted(source.name for source in exp_source.sources) == sorted(
+            source.name for source in act_source.sources
+        ), f"child sources differ for {name}"
         assert {signal.id for signal in exp_source.signals} == {signal.id for signal in act_source.signals}, (
-            f"source signals differ for {source_id}"
+            f"source signals differ for {name}"
         )
 
 
-def _assert_series_equal(record_id: str, expected: tuple[Signal, ...], actual: tuple[Signal, ...]) -> None:
+def _assert_series_equal(record_id: EntityId, expected: tuple[Signal, ...], actual: tuple[Signal, ...]) -> None:
     """Assert two tuples of series (matched by ``time_series_id``) are equal, values included."""
     exp = {ts.id: ts for ts in expected}
     act = {ts.id: ts for ts in actual}

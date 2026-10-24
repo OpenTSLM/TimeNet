@@ -11,7 +11,7 @@ from timenet.types.annotations import (
 )
 from timenet.types.clock import US_PER_S, TimeOrigin, offset_us, seconds_to_us, unix_us, us_to_seconds
 from timenet.types.domains import Domain
-from timenet.types.ids import new_id, uuid7
+from timenet.types.ids import EntityId, check_id
 from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema
 from timenet.types.modalities import InputModality
@@ -58,6 +58,7 @@ __all__ = [
     "DatasetMetadata",
     "DatasetSchema",
     "Domain",
+    "EntityId",
     "ForecastingTask",
     "InputModality",
     "License",
@@ -84,7 +85,7 @@ __all__ = [
     "TimeSpan",
     "Version",
     "annotation_type_of",
-    "new_id",
+    "check_id",
     "normalize_unit",
     "offset_us",
     "parse_split",
@@ -93,6 +94,5 @@ __all__ = [
     "ureg",
     "us_to_seconds",
     "use_as_application_registry",
-    "uuid7",
     "value_type_of",
 ]
