@@ -171,7 +171,7 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
         restored = reader.read()
 
     by_record = {
-        record.record_id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
+        record.id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
     }
     for task in restored.tasks:
         reachable = set().union(*(by_record[record.id] for record in task.inputs))

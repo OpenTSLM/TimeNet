@@ -7,9 +7,8 @@ from typing import Any
 
 @dataclass(frozen=True)
 class TSQASample:
-    """One source row, retaining its original index for stable record and task IDs."""
+    """One parsed source row."""
 
-    index: int
     category: str
     question: str
     answer: str
@@ -17,7 +16,7 @@ class TSQASample:
     signals: tuple[tuple[float, ...], ...]
 
     @classmethod
-    def from_row(cls, index: int, row: dict[str, Any]) -> "TSQASample":
+    def from_row(cls, row: dict[str, Any]) -> "TSQASample":
         """Parse a row once, normalizing flat series to one channel.
 
         Returns:
@@ -26,7 +25,6 @@ class TSQASample:
         series = json.loads(row["Series"])
         channels = series if series and isinstance(series[0], list) else [series]
         return cls(
-            index=index,
             category=row["Task"],
             question=row["Question"],
             answer=row["Answer"],

@@ -129,7 +129,7 @@ check duplicate task IDs or `from_tasks` relationships across streamed Tasks.
 
 ## Scope an input
 
-`scope` restricts the region supplied to the model:
+`scope` restricts the region supplied to the model. A scope holds the Signal objects it covers:
 
 ```python
 from timenet.types import ClassificationTask, TimeInterval
@@ -139,7 +139,7 @@ task = ClassificationTask(
     scope=TimeInterval.seconds(
         5.0,
         8.0,
-        time_series_ids=("vibration",),
+        time_series=(vibration,),
     ),
     targets=("fault_episode",),
 )
@@ -218,8 +218,8 @@ TemporalLocalizationTask(
     prompt="Locate all R-peaks in lead II.",
     mode=LocalizationMode.SPARSE,
     targets=(
-        TimePoint.seconds(1.20, time_series_ids=("II",)),
-        TimePoint.seconds(2.05, time_series_ids=("II",)),
+        TimePoint.seconds(1.20, time_series=(lead_ii,)),
+        TimePoint.seconds(2.05, time_series=(lead_ii,)),
     ),
 )
 ```

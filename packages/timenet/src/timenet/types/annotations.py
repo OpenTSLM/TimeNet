@@ -104,21 +104,16 @@ class Annotation:
             raise TimeFValidationError(
                 f"annotation {self.key!r} span must be a TimePoint or a TimeInterval, got {type(self.span).__name__}"
             )
-        if self.span is not None and self.span.time_series_ids is not None:
+        if self.span is not None and self.span.time_series is not None:
             raise TimeFValidationError(
                 "annotation scope comes from its owner; attach it to each selected Signal "
-                "instead of setting time_series_ids"
+                "instead of setting time_series"
             )
         if self.value is None and self.span is None:
             raise TimeFValidationError(
                 f"annotation {self.key!r} has neither a value nor a span, so it says nothing. Give it "
                 f"a value, or a span to mark a region of the timeline"
             )
-
-    @property
-    def content_id(self) -> str:
-        """Return the identity of the reusable annotation content."""
-        return self.id
 
     @property
     def _content_fields(self) -> tuple[object, ...]:

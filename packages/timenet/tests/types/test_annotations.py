@@ -49,7 +49,7 @@ def test_point_is_a_pure_marker_by_default():
     assert ann.span is not None
     assert ann.span.start_us == 4_000_000
     assert ann.span is not None
-    assert ann.span.time_series_ids is None
+    assert ann.span.time_series is None
 
 
 def test_interval_requires_end_after_start():
@@ -60,14 +60,14 @@ def test_interval_requires_end_after_start():
     assert ann.span.end_us == 12_000_000
 
 
-def test_point_rejects_empty_time_series_ids():
-    with pytest.raises(TimeFValidationError, match="time_series_ids"):
-        Annotation(key="stimulus", span=TimePoint.seconds(4.0, time_series_ids=()))
+def test_point_rejects_an_empty_time_series():
+    with pytest.raises(TimeFValidationError, match="time_series"):
+        Annotation(key="stimulus", span=TimePoint.seconds(4.0, time_series=()))
 
 
-def test_interval_rejects_empty_time_series_ids():
-    with pytest.raises(TimeFValidationError, match="time_series_ids"):
-        Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0, time_series_ids=()))
+def test_interval_rejects_an_empty_time_series():
+    with pytest.raises(TimeFValidationError, match="time_series"):
+        Annotation(key="artifact", span=TimeInterval.seconds(1.0, 2.0, time_series=()))
 
 
 def test_annotation_type_of():

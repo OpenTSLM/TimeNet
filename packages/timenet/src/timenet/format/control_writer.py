@@ -356,7 +356,7 @@ class DuckDBControlWriter:
             batches.records.add(
                 {
                     "record_key": record_key,
-                    "record_id": record.record_id,
+                    "record_id": record.id,
                     "clock_id": clock_keys[identity],
                     "time_span_start_us": None if span is None else span.start_us,
                     "time_span_end_us": None if span is None else span.end_us,
@@ -676,7 +676,7 @@ class DuckDBControlWriter:
         """
         if not record.sources:
             raise TimeFValidationError(
-                f"record {record.record_id!r} has no Sources; a Record stores its Signals under Sources"
+                f"record {record.id!r} has no Sources; a Record stores its Signals under Sources"
             )
 
         def write_source(source: Any, parent_key: int | None) -> None:
@@ -868,27 +868,25 @@ class DuckDBControlWriter:
         for object_type, object_key, annotation in annotations:
             if annotation.occurrence_id is None:
                 raise TimeFValidationError(
-                    f"annotation {annotation.content_id!r} on {object_type} key {object_key} has no occurrence id; "
+                    f"annotation {annotation.id!r} on {object_type} key {object_key} has no occurrence id; "
                     "attach it with annotate()"
                 )
             if annotation.occurrence_id in occurrence_keys:
                 raise TimeFValidationError(f"annotation occurrence id {annotation.occurrence_id!r} is not unique")
             content = annotation._content_fields
-            previous = contents.get(annotation.content_id)
+            previous = contents.get(annotation.id)
             if previous is not None and previous != content:
-                raise TimeFValidationError(
-                    f"annotation content id {annotation.content_id!r} is reused with different content"
-                )
+                raise TimeFValidationError(f"annotation content id {annotation.id!r} is reused with different content")
             if previous is None:
-                contents[annotation.content_id] = content
+                contents[annotation.id] = content
                 content_key = content_key_source.next()
-                content_keys[annotation.content_id] = content_key
+                content_keys[annotation.id] = content_key
                 content_batch.add(
                     {
                         "content_key": content_key,
-                        "content_id": annotation.content_id,
+                        "content_id": annotation.id,
                         "name": annotation.name,
-                        **encode_annotation_value(annotation.value, label=f"annotation {annotation.content_id!r}"),
+                        **encode_annotation_value(annotation.value, label=f"annotation {annotation.id!r}"),
                         "unit": annotation.unit,
                         "description": annotation.description,
                         "metadata": _json(annotation.metadata),
@@ -901,7 +899,7 @@ class DuckDBControlWriter:
                 {
                     "occurrence_key": occurrence_key,
                     "occurrence_id": annotation.occurrence_id,
-                    "content_key": content_keys[annotation.content_id],
+                    "content_key": content_keys[annotation.id],
                     "object_type": object_type,
                     "object_key": object_key,
                     "span_type": str(annotation_type_of(annotation)),

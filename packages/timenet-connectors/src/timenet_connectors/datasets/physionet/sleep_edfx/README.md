@@ -75,7 +75,7 @@ connector. The eight labels count as `Sleep stage W` 290 365, `Sleep stage 2` 88
 `Sleep stage R` 34 184, `Sleep stage 1` 25 175, `Sleep stage ?` 25 047, `Sleep stage 3` 12 191,
 `Sleep stage 4` 7263 and `Movement time` 211 *(measured)*.
 
-**An epoch task names no signal.** Its `scope` covers the epoch and leaves `time_series_ids`
+**An epoch task names no signal.** Its `scope` covers the epoch and leaves `time_series`
 unset. A sleep-stage annotation names the four signals that the technician read, because that is
 what the release states. A task states what a model must answer, which is a different thing. If a
 task names four signals, a model cannot read the respiration or the temperature signal. That is
