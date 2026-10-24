@@ -130,7 +130,6 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
     dataset = _referenced_annotation_dataset()
     dataset._tasks.clear()
     dataset._task_ids.clear()
-    dataset.records[0].task_ids = ()
     record = dataset.records[0]
     options = record.annotations[0]
     tasks = [

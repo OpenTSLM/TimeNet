@@ -265,18 +265,10 @@ class TimeFReader:
         Returns:
             The reconstructed dataset.
         """
-        records = list(self._all_records())
-        tasks = self.tasks
-        by_id = {record.id: record for record in records}
-        for task in tasks:
-            for referenced in task.inputs:
-                record = by_id.get(referenced.id)
-                if record is not None and task.id not in record.task_ids:
-                    record.task_ids = (*record.task_ids, task.id)
         return TimeFDataset.from_parts(
             metadata=self.metadata,
-            records=records,
-            tasks=tasks,
+            records=self._all_records(),
+            tasks=self.tasks,
             schema=self.schema,
             annotations=self._control_reader().read_dataset_annotations(self._manifest.dataset_id),
         )

@@ -112,8 +112,8 @@ events during gaps when every sensor is off.
 
 ## Connect tasks
 
-A [Task](tasks.md) refers directly to its input Records. Registering a Task adds its ID to each input
-Record.
+A [Task](tasks.md) refers directly to its input Records. Registering a Task does not change those
+Records.
 
 ```python
 from timenet.types import ClassificationTask

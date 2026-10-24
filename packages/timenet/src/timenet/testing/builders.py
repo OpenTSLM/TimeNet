@@ -228,7 +228,6 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     for record_id, exp in exp_records.items():
         act = act_records[record_id]
         assert exp.start_time.timestamp == act.start_time.timestamp, f"start_time differs for {record_id}"
-        assert tuple(sorted(exp.task_ids)) == tuple(sorted(act.task_ids)), f"task_ids differ for {record_id}"
         assert exp.metadata == act.metadata, f"metadata differs for {record_id}"
         assert sorted(exp.annotations, key=lambda a: a.id) == sorted(act.annotations, key=lambda a: a.id), (
             f"annotations differ for {record_id}"
@@ -241,6 +240,9 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     assert exp_tasks.keys() == act_tasks.keys(), "task ids differ"
     for task_id, exp_task in exp_tasks.items():
         act_task = act_tasks[task_id]
+        assert [record.id for record in exp_task.inputs] == [record.id for record in act_task.inputs], (
+            f"task {task_id} inputs differ"
+        )
         assert encode_span(exp_task.scope) == encode_span(act_task.scope), f"task {task_id} scope differs"
         assert replace(exp_task, scope=None, input_modalities=exp_task.resolved_input_modalities) == replace(
             act_task, scope=None, input_modalities=act_task.resolved_input_modalities

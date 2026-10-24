@@ -3,8 +3,8 @@
 Nothing here opens a file. ``connector.py`` passes the annotations, and every function takes
 values and gives tasks.
 
-No task names its own id. Nothing resolves one by id: the writer fills ``Record.task_ids`` from
-the task itself, and no task here states a lineage. Every task takes the id the dataset gives it.
+No task names its own id. Nothing resolves one by id: each task holds its record in ``inputs``,
+and no task here states a lineage. Every task takes the id the dataset gives it.
 
 A ``target_schema`` names the key of the dataset annotation that holds the set, so
 ``name_vocabulary`` builds both from one string.

@@ -82,7 +82,7 @@ def test_add_task_links_record_and_task(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     task = ds.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",)))
     assert task.inputs == (record,)
-    assert record.task_ids == (task.id,)
+    assert ds.tasks_for(record) == (task,)
     assert ds.tasks == (task,)
 
 
@@ -492,16 +492,6 @@ def test_tasks_for_unregistered_record_raises(make_series):
         ds.tasks_for(stranger)
 
 
-def test_tasks_for_non_reciprocal_link_raises(make_series):
-    ds = _dataset()
-    s1 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    s2 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = ds.add_task(task=ClassificationTask(inputs=(s1,), targets=("a",)))
-    s2.task_ids = (*s2.task_ids, task.id)  # s2 claims the task, but the task does not link back
-    with pytest.raises(TimeFValidationError, match="does not link back"):
-        ds.tasks_for(s2)
-
-
 def _matrix(x):
     return x.flatten().to_numpy(zero_copy_only=False).reshape(len(x), -1)
 
@@ -687,7 +677,7 @@ def test_add_tasks_registers_all_in_order_and_links(make_series):
     )
     assert tuple(t.targets for t in tasks) == (("a",), ("b",))
     assert ds.tasks == tasks
-    assert record.task_ids == tuple(t.id for t in tasks)
+    assert ds.tasks_for(record) == tasks
 
 
 def test_add_tasks_rejects_the_whole_batch_when_one_is_invalid(make_series):
@@ -704,7 +694,6 @@ def test_add_tasks_rejects_the_whole_batch_when_one_is_invalid(make_series):
     with pytest.raises(TimeFValidationError):
         ds.add_tasks(tasks=[good, bad])
     assert ds.tasks == ()  # all-or-nothing: the valid one is not registered either
-    assert record.task_ids == ()
 
 
 def test_add_tasks_allows_deriving_from_another_task_in_the_same_batch(make_series):
