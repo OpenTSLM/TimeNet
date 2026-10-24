@@ -130,8 +130,9 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             time_axis=_AXIS,
             id="ts-shared",
         )
-        # An annotation shared across two records. This uses the dedupe-by-id path.
-        cohort = Annotation(key="cohort", value="A", id="cohort-shared")
+        # An annotation shared across two records. The writer stores equal content once, so they share
+        # one content row.
+        cohort = Annotation(key="cohort", value="A")
 
         # Record 0: the full recording, with two modalities, all annotation shapes, and a task chain.
         cosine = Signal.from_values(
@@ -145,24 +146,18 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             id="record-0",
             sources=(
                 Source(
-                    id="source-record-0",
                     name="Synthetic generator",
                     signals=(shared, cosine),
                 ),
             ),
         )
         dataset.add_record(record=record0)
-        # These annotations have names. The localization task below can reference them by id instead
-        # of repeating the literal values.
-        stimulus = Annotation(key="stimulus", span=TimePoint.seconds(0.5), id="stim-0")
-        artifact = Annotation(
-            key="artifact",
-            span=TimeInterval.seconds(0.0, 0.25),
-            id="art-0",
-        )
+        # The localization task below references these annotations instead of repeating the literal values.
+        stimulus = Annotation(key="stimulus", span=TimePoint.seconds(0.5))
+        artifact = Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25))
         _, record0_cohort, stimulus = record0.add_annotations(
             [
-                Annotation(key="age", value=64, unit="years", id="age-0"),
+                Annotation(key="age", value=64, unit="years"),
                 cohort,
                 stimulus,
             ]
@@ -223,7 +218,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             id="record-1",
             sources=(
                 Source(
-                    id="source-record-1",
                     name="Synthetic generator",
                     signals=(
                         Signal.from_values(
@@ -239,7 +233,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             ),
         )
         dataset.add_record(record=record1)
-        record1.annotate(cohort)  # same instance and id, so the annotation is shared
+        record1.annotate(cohort)  # equal content, so the writer stores it once
 
         # Record 2: a windowed slice with a scoped classification task. This window covers the second
         # half of rec-0. This makes the window a genuine offset window, not a byte-identical prefix of
@@ -261,7 +255,6 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             id="record-2",
             sources=(
                 Source(
-                    id="source-record-2",
                     name="Synthetic generator",
                     signals=(window,),
                 ),

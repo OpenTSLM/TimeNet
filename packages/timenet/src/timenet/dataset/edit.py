@@ -54,21 +54,11 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[str], *, cascade:
         raise TimeFEditError(f"cannot remove unknown record ids: {sorted(unknown)}")
 
     annotations_by_record = {
-        record.id: frozenset(
-            annotation.occurrence_id
-            for annotation in (
-                *record.annotations,
-                *(annotation for source in record.walk_sources() for annotation in source.annotations),
-                *(annotation for signal in record.signals for annotation in signal.annotations),
-            )
-            if annotation.occurrence_id is not None
-        )
+        record.id: frozenset(id(annotation) for annotation in record.walk_annotations())
         for record in dataset.records
         if record.id not in remove
     }
-    dataset_annotation_ids = frozenset(
-        annotation.occurrence_id for annotation in dataset.annotations if annotation.occurrence_id is not None
-    )
+    dataset_annotation_ids = frozenset(id(annotation) for annotation in dataset.annotations)
     removed_signal_ids = {signal.id for record in dataset.records if record.id in remove for signal in record.signals}
     removed_task_ids = _tasks_to_remove(
         dataset,
@@ -108,8 +98,8 @@ def _tasks_to_remove(  # noqa: PLR0913 - each collection represents one part of 
     dataset: TimeFDataset,
     remove: set[str],
     removed_signal_ids: set[str],
-    annotations_by_record: Mapping[str, frozenset[str]],
-    dataset_annotation_ids: frozenset[str],
+    annotations_by_record: Mapping[str, frozenset[int]],
+    dataset_annotation_ids: frozenset[int],
     *,
     cascade: bool,
 ) -> set[str]:
@@ -121,8 +111,9 @@ def _tasks_to_remove(  # noqa: PLR0913 - each collection represents one part of 
         dataset: The base dataset.
         remove: The record IDs to remove.
         removed_signal_ids: The signal IDs owned by the removed records.
-        annotations_by_record: Annotation ids carried by each surviving record.
-        dataset_annotation_ids: Annotation occurrence IDs attached to the dataset itself.
+        annotations_by_record: Identities of the annotation occurrences carried by each surviving
+            record.
+        dataset_annotation_ids: Identities of the annotation occurrences attached to the dataset.
         cascade: If set, remove invalidated tasks (transitively) instead of rejecting the edit.
 
     Returns:
@@ -163,24 +154,25 @@ def _tasks_to_remove(  # noqa: PLR0913 - each collection represents one part of 
 
 def _reachable_annotation_ids(
     task: Task,
-    annotations_by_record: Mapping[str, frozenset[str]],
-    dataset_annotation_ids: frozenset[str],
-) -> set[str]:
-    """Return the annotation ids that ``task`` can still resolve.
+    annotations_by_record: Mapping[str, frozenset[int]],
+    dataset_annotation_ids: frozenset[int],
+) -> set[int]:
+    """Return the identities of the annotation occurrences that ``task`` can still resolve.
 
     These are occurrences attached directly to the dataset or anywhere below the task's surviving
     input records.
 
     Args:
         task: The task whose references the method resolves.
-        annotations_by_record: Annotation occurrence IDs carried by each surviving record. A removed
-            record is absent, so it contributes no ids.
-        dataset_annotation_ids: Annotation occurrence IDs attached directly to the dataset.
+        annotations_by_record: Identities of the annotation occurrences carried by each surviving
+            record. A removed record is absent, so it contributes nothing.
+        dataset_annotation_ids: Identities of the annotation occurrences attached directly to the
+            dataset.
 
     Returns:
-        The annotation ids still reachable from the task's surviving records.
+        The identities still reachable from the task's surviving records.
     """
-    reachable: set[str] = set(dataset_annotation_ids)
+    reachable: set[int] = set(dataset_annotation_ids)
     for record in task.inputs:
         reachable |= annotations_by_record.get(record.id, frozenset())
     return reachable
@@ -190,8 +182,8 @@ def _task_invalidated(
     task: Task,
     remove: set[str],
     removed_signal_ids: set[str],
-    annotations_by_record: Mapping[str, frozenset[str]],
-    dataset_annotation_ids: frozenset[str],
+    annotations_by_record: Mapping[str, frozenset[int]],
+    dataset_annotation_ids: frozenset[int],
 ) -> bool:
     """Return whether removing ``remove`` strips a required reference from ``task``.
 
@@ -214,15 +206,15 @@ def _task_invalidated(
     if task.inputs and all(record.id in remove for record in task.inputs):
         return True
     reachable = _reachable_annotation_ids(task, annotations_by_record, dataset_annotation_ids)
-    return any(annotation.occurrence_id not in reachable for annotation in task.target_annotations)
+    return any(id(annotation) not in reachable for annotation in task.target_annotations)
 
 
 def _rebuild_tasks(
     dataset: TimeFDataset,
     removed_task_ids: set[str],
     records_by_id: Mapping[str, "Record"],
-    annotations_by_record: Mapping[str, frozenset[str]],
-    dataset_annotation_ids: frozenset[str],
+    annotations_by_record: Mapping[str, frozenset[int]],
+    dataset_annotation_ids: frozenset[int],
 ) -> list[Task]:
     """Rebuild the surviving tasks. Strip out unreachable record, annotation, and from-task references.
 
@@ -230,7 +222,8 @@ def _rebuild_tasks(
         dataset: The base dataset.
         removed_task_ids: The ids of the tasks to drop.
         records_by_id: The replacement Record objects, keyed by ID.
-        annotations_by_record: Annotation ids carried by each surviving record.
+        annotations_by_record: Identities of the annotation occurrences carried by each surviving
+            record.
 
     Returns:
         The rebuilt surviving tasks, with ``from_tasks`` rewired to the rebuilt instances.
@@ -241,9 +234,7 @@ def _rebuild_tasks(
             continue
         reachable = _reachable_annotation_ids(task, annotations_by_record, dataset_annotation_ids)
         inputs = tuple(records_by_id[record.id] for record in task.inputs if record.id in records_by_id)
-        input_annotations = tuple(
-            annotation for annotation in task.input_annotations if annotation.occurrence_id in reachable
-        )
+        input_annotations = tuple(annotation for annotation in task.input_annotations if id(annotation) in reachable)
         changes: dict[str, object] = {
             "inputs": inputs,
             "targets": tuple(

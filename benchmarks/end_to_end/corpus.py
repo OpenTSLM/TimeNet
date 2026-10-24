@@ -75,7 +75,6 @@ def _add_record(
         id=record_id,
         sources=(
             Source(
-                id=f"{record_id}-source",
                 name=source_name,
                 signals=signals,
             ),
@@ -296,8 +295,8 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             source_name="Synthetic ECG monitor",
             signals=signals,
         )
-        record.annotate(Annotation(key="subject_ids", value=["subject-ecg"], id=f"{record.id}-subjects"))
-        record.annotate(Annotation(key="scenario", value="ecg", id=f"annotation-ecg-{index:03d}"))
+        record.annotate(Annotation(key="subject_ids", value=["subject-ecg"]))
+        record.annotate(Annotation(key="scenario", value="ecg"))
         dataset.add_task(
             task=AnswerTask(
                 inputs=(record,),
@@ -329,7 +328,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             source_name="TSQA row",
             signals=series,
         )
-        record.annotate(Annotation(key="scenario", value="tsqa", id=f"annotation-tsqa-{index:04d}"))
+        record.annotate(Annotation(key="scenario", value="tsqa"))
         dataset.add_task(
             task=AnswerTask(
                 inputs=(record,),
@@ -357,7 +356,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             source_name="Synthetic mean generator",
             signals=(series,),
         )
-        record.annotate(Annotation(key="scenario", value="test-mean", id=f"annotation-mean-{index:04d}"))
+        record.annotate(Annotation(key="scenario", value="test-mean"))
         dataset.add_task(
             task=ClassificationTask(
                 inputs=(record,),
@@ -403,8 +402,8 @@ def _add_rich_series(dataset: TimeFDataset, scale: int) -> None:
             source_name="Rich signal generator",
             signals=(tensor(values, spec, name),),
         )
-        record.annotate(Annotation(key="subject_ids", value=[f"subject-rich-{name}"], id=f"{record.id}-subjects"))
-        record.annotate(Annotation(key="rich-profile", value=True, id=f"annotation-rich-{name}"))
+        record.annotate(Annotation(key="subject_ids", value=[f"subject-rich-{name}"]))
+        record.annotate(Annotation(key="rich-profile", value=True))
 
 
 def _add_nonfloat_record(dataset: TimeFDataset, scale: int) -> None:
@@ -424,8 +423,8 @@ def _add_nonfloat_record(dataset: TimeFDataset, scale: int) -> None:
         source_name="Non-float signal generator",
         signals=series,
     )
-    record.annotate(Annotation(key="subject_ids", value=["subject-nonfloat"], id=f"{record.id}-subjects"))
-    record.annotate(Annotation(key="scenario", value="nonfloat", id="annotation-nonfloat"))
+    record.annotate(Annotation(key="subject_ids", value=["subject-nonfloat"]))
+    record.annotate(Annotation(key="scenario", value="nonfloat"))
 
 
 def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
@@ -469,17 +468,16 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             source_name=scenario.name.replace("-", " ").title(),
             signals=series,
         )
-        record.annotate(Annotation(key="subject_ids", value=[f"subject-{scenario.name}"], id=f"{record.id}-subjects"))
+        record.annotate(Annotation(key="subject_ids", value=[f"subject-{scenario.name}"]))
         annotations = [
-            Annotation(key="scenario", value=scenario.name, id=f"annotation-{scenario.name}-scenario"),
-            Annotation(key="event", span=TimePoint.seconds(1.0), id=f"annotation-{scenario.name}-event"),
+            Annotation(key="scenario", value=scenario.name),
+            Annotation(key="event", span=TimePoint.seconds(1.0)),
         ]
         if scenario.steps / scenario.sampling_rate_hz > 2:  # noqa: PLR2004, RUF100 - minimum interval duration
             annotations.append(
                 Annotation(
                     key="quality-window",
                     span=TimeInterval.seconds(1.0, 2.0),
-                    id=f"annotation-{scenario.name}-window",
                 )
             )
         record.add_annotations(annotations)

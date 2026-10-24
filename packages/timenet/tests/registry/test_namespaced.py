@@ -39,7 +39,7 @@ def _namespaced_dataset() -> TimeFDataset:
     )
     record = dataset.add_record(
         record=Record(
-            sources=(Source(id="ns-record-0-source", name="Source", signals=(series,)),),
+            sources=(Source(name="Source", signals=(series,)),),
             id="ns-record-0",
         )
     )

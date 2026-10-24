@@ -170,7 +170,6 @@ class TimeFWriter:
         """Serialize every artifact except the manifest into the staging directory."""
         if self._dataset.schema is None:
             self._dataset.derive_schema()
-        self._validate_shared_annotations()
 
         unique_series = self._dedupe_series()
         placements = self._write_values(unique_series)
@@ -368,20 +367,6 @@ class TimeFWriter:
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
 
     # ---- helpers -------------------------------------------------------------------------------
-
-    def _validate_shared_annotations(self) -> None:
-        """Check that shared annotation content agrees before writing values.
-
-        Raises:
-            TimeFValidationError: If one content ID has different payloads.
-        """
-        seen: dict[str, tuple[object, ...]] = {}
-        record_annotations = (ann for record in self._dataset.records for ann in record.walk_annotations())
-        for ann in record_annotations:
-            content = ann._content_fields
-            if ann.id in seen and seen[ann.id] != content:
-                raise TimeFValidationError(f"annotation content id {ann.id!r} is reused with different content")
-            seen[ann.id] = content
 
     def _build_counts(self) -> ManifestCounts:
         """Read exact entity counts from the completed control database.

@@ -220,8 +220,8 @@ def test_subject_ids_are_record_annotations(release, monkeypatch):
 def test_every_record_carries_the_same_study_annotation(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     study = [next(one for one in record.annotations if one.key == "study") for record in dataset.records]
-    assert study[0].id == study[1].id
-    assert study[0].occurrence_id != study[1].occurrence_id
+    assert study[0] == study[1]
+    assert study[0] is not study[1]
     assert study[0].value == _STUDY
 
 
@@ -235,8 +235,8 @@ def test_the_sex_of_two_records_is_one_annotation(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
     first = _annotations(dataset, "SC4901E0", "sex")[0]
     second = _annotations(dataset, "SC4902E0", "sex")[0]
-    assert first.id == second.id
-    assert first.occurrence_id != second.occurrence_id
+    assert first == second
+    assert first is not second
     assert first.value == "F"
 
 
@@ -304,7 +304,8 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
     assert lights_off.value == "22:30:00"
     assert lights_off.span is not None
     assert lights_off.span.start_us == 1800 * US_PER_S
-    assert len({one.id for one in record.walk_annotations() if one.key == "sleep_stage"}) == len(_SCORING)
+    stages = {(one.span, one.value) for one in record.walk_annotations() if one.key == "sleep_stage"}
+    assert len(stages) == len(_SCORING)
     # The tasks stream, so the writer reads them one time as it writes. No other test proves
     # that they survive the round trip. The writer wrote the ids of the pass it consumed, and a
     # fresh pass generates new ones, so compare what each task asks rather than its id.
@@ -353,9 +354,9 @@ def test_the_vocabularies_are_dataset_annotations_and_belong_to_no_record(releas
         "sex_vocabulary",
         "condition_vocabulary",
     }
-    registered = {one.id for one in dataset.annotations}
+    registered = {one.key for one in dataset.annotations}
     for record in dataset.records:
-        assert not registered & {one.id for one in record.annotations}
+        assert not registered & {one.key for one in record.annotations}
 
 
 def test_an_epoch_task_covers_each_scored_epoch(release, monkeypatch):
@@ -366,8 +367,8 @@ def test_an_epoch_task_covers_each_scored_epoch(release, monkeypatch):
     scored = sum(
         (one.span.exclusive_end - one.span.start_us) // (30 * US_PER_S)
         for record in dataset.records
-        for one in {a.id: a for a in record.walk_annotations()}.values()
-        if one.key == "sleep_stage" and one.span is not None
+        for one in {(a.span, a.value): a for a in record.walk_annotations() if a.key == "sleep_stage"}.values()
+        if one.span is not None
     )
     assert len(epochs) == scored
 

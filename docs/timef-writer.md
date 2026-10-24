@@ -78,11 +78,11 @@ timesteps. Irregular-axis offsets live in `control.duckdb`, not in either values
 
 The writer fails before publication when it finds an invalid state, including:
 
-- duplicate Record, Source, Signal, Task, or annotation occurrence IDs;
-- a Source attached to more than one parent or a recursive Source cycle;
+- duplicate Record, Signal, or Task IDs;
+- one annotation occurrence object attached to more than one object;
+- a recursive Source cycle;
 - a Signal attached to more than one Source;
-- inconsistent definitions sharing one axis ID;
-- annotation content IDs reused with different payloads;
+- one irregular axis object shared by Signals with different time offsets;
 - an annotation occurrence without an owning object;
 - task relationships pointing outside the dataset;
 - value arrays that disagree with their specification or declared length;
@@ -94,6 +94,11 @@ possible. The writer checks them while it streams rows, from the ID sets and key
 owns, rather than by scanning the finished tables. The same invariants exist in SQL form in
 `timenet.format.control_audit.audit_control_database()`, which scans every table of a
 `control.duckdb` and is what the test suite runs after each round trip.
+
+Sources, axes, and annotations have no ID, so the writer does not compare IDs for them. It stores
+equal annotation contents once, and equal regular or ordinal axes once. It matches irregular axes
+and annotation occurrences by object identity: Signals share an irregular axis row only if they use
+the same axis object, and each occurrence object gets one row.
 
 ## Task streams
 

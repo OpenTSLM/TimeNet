@@ -7,8 +7,8 @@ A test can call these functions with values alone.
 Some facts repeat across the release. The study, the night number, the sex and the drug
 condition each come from a set that the release fixes. One annotation covers every record that
 states that value. :class:`MetadataAnnotation` holds one instance for each value. The writer
-keys its annotation table by id, and lists the records that carry each one. Many records that
-share one annotation write one row.
+stores equal content one time, and lists the records that carry it. Many records that state one
+value write one content row.
 
 The age, the note and the lights-off time measure one recording. Each record gets its own.
 
@@ -53,8 +53,8 @@ class MetadataAnnotation:
     every later recording that states that value. Two records with the same sex then carry one
     annotation between them, and the writer stores it one time.
 
-    Each instance carries one id. Every record that states the value points at that id, so the
-    writer stores the annotation one time and no caller must keep two copies in step.
+    The writer stores equal content one time, so many records that state the value write one
+    content row, and no caller must keep two copies in step.
 
     Nothing reads the values up front. The build walks the release one time.
     """

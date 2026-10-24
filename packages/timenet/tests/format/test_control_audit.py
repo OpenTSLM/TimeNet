@@ -15,7 +15,7 @@ SPEC = TimeSeriesSpec(spec_type="voltage", name="Voltage", unit_value=ureg.milli
 
 
 def _dataset() -> TimeFDataset:
-    axis = RegularAxis(axis_id="axis-1", period_us=Fraction(2_000))
+    axis = RegularAxis(period_us=Fraction(2_000))
     lead_i = Signal.from_loader(
         id="lead-i",
         name="I",
@@ -24,10 +24,10 @@ def _dataset() -> TimeFDataset:
         n_values=2,
         loader=lambda: pa.array([1.0, 2.0], type=pa.float32()),
     )
-    ecg = Source(id="ecg", name="ECG", signals=(lead_i,))
-    monitor = Source(id="monitor", name="Monitor", sources=(ecg,))
+    ecg = Source(name="ECG", signals=(lead_i,))
+    monitor = Source(name="Monitor", sources=(ecg,))
     record = Record(id="record-1", sources=(monitor,))
-    record.annotate(Annotation(id="sex-male", key="patient_sex", value="male"))
+    record.annotate(Annotation(key="patient_sex", value="male"))
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="org/control-audit",
@@ -70,11 +70,11 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
             "records contains duplicate values for record_key",
         ),
         (
-            "UPDATE sources SET record_key = -1 WHERE source_id = 'monitor'",
+            "UPDATE sources SET record_key = -1 WHERE name = 'Monitor'",
             r"sources\.record_key refers to missing records\.record_key",
         ),
         (
-            "UPDATE sources SET parent_source_key = source_key WHERE source_id = 'ecg'",
+            "UPDATE sources SET parent_source_key = source_key WHERE name = 'ECG'",
             r"invalid sources\.parent_source_key value",
         ),
         (
@@ -83,12 +83,12 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
         ),
         (
             "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 'ghost', 1, '{}'); "
-            "UPDATE sources SET record_key = -1 WHERE source_id = 'ecg'",
+            "UPDATE sources SET record_key = -1 WHERE name = 'ECG'",
             "belong to different records",
         ),
         (
-            "UPDATE sources SET parent_source_key = (SELECT source_key FROM sources WHERE source_id = 'ecg') "
-            "WHERE source_id = 'monitor'",
+            "UPDATE sources SET parent_source_key = (SELECT source_key FROM sources WHERE name = 'ECG') "
+            "WHERE name = 'Monitor'",
             "contains a cycle",
         ),
         (

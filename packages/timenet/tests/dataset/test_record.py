@@ -14,7 +14,7 @@ def _record(signals, **kwargs):
     """Build a Record whose one Source owns ``signals``."""
     start_time = kwargs.pop("start_time", None)
     origin = TimeOrigin(start_time)
-    return Record(start_time=origin, sources=(Source(id="src", name="src", signals=tuple(signals)),), **kwargs)
+    return Record(start_time=origin, sources=(Source(name="src", signals=tuple(signals)),), **kwargs)
 
 
 def test_add_static_annotation(make_series):
@@ -26,12 +26,12 @@ def test_add_static_annotation(make_series):
 
 def test_annotate_binds_a_declarative_annotation(make_series):
     record = _record((make_series(),))
-    content = Annotation(key="patient_sex", value="male", id="sex-male")
+    content = Annotation(key="patient_sex", value="male")
 
     occurrence = record.annotate(content)
 
-    assert occurrence.id == content.id
-    assert occurrence.occurrence_id is not None
+    assert occurrence == content
+    assert occurrence is not content
     assert record.annotations == (occurrence,)
 
 

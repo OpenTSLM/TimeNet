@@ -71,13 +71,7 @@ class TestMeanConnector(BaseConnector[None]):
             )
             record = Record(
                 id=f"record-{index}",
-                sources=(
-                    Source(
-                        id=f"source-{index}",
-                        name="Synthetic generator",
-                        signals=(series,),
-                    ),
-                ),
+                sources=(Source(name="Synthetic generator", signals=(series,)),),
             )
             dataset.add_record(record=record)
             label = "above_zero" if offset > 0 else "below_zero"

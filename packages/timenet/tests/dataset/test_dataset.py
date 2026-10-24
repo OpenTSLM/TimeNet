@@ -54,21 +54,12 @@ def test_add_record_registers_and_returns(make_series):
 
 def test_add_record_accepts_a_complete_hierarchy(make_series):
     signal = make_series(id="signal")
-    source = Source(id="source", name="Device", signals=(signal,))
+    source = Source(name="Device", signals=(signal,))
     record = Record(id="record", sources=(source,))
     dataset = _dataset()
 
     assert dataset.add_record(record=record) is record
     assert dataset.records == (record,)
-
-
-def test_add_record_rejects_duplicate_source_ids_inside_one_hierarchy(make_series):
-    left = Source(id="sensor", name="Left", signals=(make_series(),))
-    right = Source(id="sensor", name="Right", signals=(make_series(),))
-    record = Record(sources=(left, right))
-
-    with pytest.raises(TimeFValidationError, match="duplicate source IDs"):
-        _dataset().add_record(record=record)
 
 
 def test_records_property_is_read_only_copy(make_series):
@@ -260,32 +251,21 @@ def test_add_record_rejects_duplicate_time_series_ids(make_series):
 def test_add_record_rejects_a_signal_owned_by_two_records(make_series):
     dataset = _dataset()
     signal = make_series()
-    dataset.add_record(
-        record=Record(
-            sources=(Source(name="A", signals=(signal,)),),
-        )
-    )
+    first = Record(sources=(Source(name="A", signals=(signal,)),))
+    dataset.add_record(record=first)
 
     with pytest.raises(TimeFValidationError, match="each Signal has one owner"):
         dataset.add_record(
             record=Record(
                 id="record-b",
-                sources=(Source(id="unused-source", name="B", signals=(signal,)),),
+                sources=(Source(name="B", signals=(signal,)),),
             )
         )
 
-    dataset.add_record(
-        record=Record(
-            id="record-c",
-            sources=(
-                Source(
-                    id="unused-source",
-                    name="C",
-                    signals=(make_series(),),
-                ),
-            ),
-        )
-    )
+    assert dataset.records == (first,)
+    retry = Record(id="record-b", sources=(Source(name="B", signals=(make_series(),)),))
+    dataset.add_record(record=retry)
+    assert dataset.records == (first, retry)
 
 
 def test_add_record_rejects_a_source_owned_by_two_records(make_series):

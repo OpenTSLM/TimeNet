@@ -29,7 +29,7 @@ A Fraction also reduces and validates itself.
 """
 
 from collections.abc import Sequence
-from dataclasses import dataclass, field, replace
+from dataclasses import dataclass, replace
 from datetime import datetime
 from enum import StrEnum, unique
 from fractions import Fraction
@@ -40,7 +40,6 @@ import numpy as np
 
 from timenet.errors import TimeFValidationError
 from timenet.types.clock import INT64_MAX, US_PER_S, check_int64, offset_us
-from timenet.types.ids import new_id
 
 
 @unique
@@ -80,8 +79,6 @@ class RegularAxis:
     recording, which keeps a span written against the recording meaningful on the window."""
     offset_us: int = 0
     """Whole microseconds from the record origin to the cadence's zero."""
-    axis_id: str = field(default_factory=new_id, compare=False)
-    """Stable identity used when several signals reference this axis."""
 
     def __post_init__(self) -> None:
         """Reject a period of the wrong type or too fine, or a non-integer or negative origin.
@@ -158,7 +155,7 @@ class RegularAxis:
         Returns:
             The window's axis, which shares this period.
         """
-        return replace(self, axis_id=new_id(), start_index=self.start_index + index)
+        return replace(self, start_index=self.start_index + index)
 
     def time_offset_us(self, index: int) -> int:
         """Return the time offset of one value, floored to whole microseconds.
@@ -293,8 +290,6 @@ class IrregularAxis:
     last_us: int
     """Time offset of the last value. The writer checks it against the stream at write time, so it is
     verified metadata, not an unbacked claim."""
-    axis_id: str = field(default_factory=new_id, compare=False)
-    """Stable identity used when several signals reference this axis."""
 
     def __post_init__(self) -> None:
         """Reject non-integral or backwards endpoints.
@@ -338,8 +333,6 @@ class OrdinalAxis:
 
     axis_type: ClassVar[AxisType] = AxisType.ORDINAL
     """The stored discriminator."""
-    axis_id: str = field(default_factory=new_id, compare=False)
-    """Stable identity used when several signals reference this axis."""
 
 
 TimeAxis = RegularAxis | IrregularAxis | OrdinalAxis
