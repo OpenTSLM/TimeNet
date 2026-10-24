@@ -1,12 +1,14 @@
 """Canonical codecs between Task fields and the typed columns of the ``tasks`` and ``task_targets`` tables.
 
 Spans, task configuration, and targets are all stored as plain columns rather than JSON, so DuckDB can
-filter on them and the reader builds objects straight from row values. Object references travel as
-public IDs here; the writer and reader swap them for internal keys at the table boundary. A span
-holds Signal objects, so encoding reads their ids and decoding looks the read-back Signals up by id.
+filter on them and the reader builds objects straight from row values. Object references are public
+IDs, and the target rows use the ``task_targets`` column names, so they are stored and read back as
+they are. A span holds Signal objects, so encoding reads their ids and decoding looks the read-back
+Signals up by id.
 """
 
 from collections.abc import Iterable, Mapping
+from enum import StrEnum, unique
 from typing import Any, TypeVar, cast
 
 from pydantic import ValidationError
@@ -14,7 +16,7 @@ from pydantic import ValidationError
 from timenet.dataset.record import Record
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFFormatError
-from timenet.format.task_target_kind import TaskTargetKind
+from timenet.format.task_target_kind import SPAN_KINDS, TaskTargetKind
 from timenet.format.task_target_row import TargetValueRow
 from timenet.types import (
     ClassificationTask,
@@ -35,6 +37,22 @@ from timenet.types import (
 
 
 _T = TypeVar("_T")
+
+
+@unique
+class TaskRelationshipField(StrEnum):
+    """Task field that a ``task_record_refs`` or ``task_annotation_refs`` row belongs to."""
+
+    INPUTS = "inputs"
+    CANDIDATE_RECORDS = "candidate_records"
+    INPUT_ANNOTATIONS = "input_annotations"
+    TARGET_ANNOTATIONS = "target_annotations"
+
+
+RECORD_FIELDS = frozenset({TaskRelationshipField.INPUTS, TaskRelationshipField.CANDIDATE_RECORDS})
+"""The fields stored in ``task_record_refs``."""
+ANNOTATION_FIELDS = frozenset({TaskRelationshipField.INPUT_ANNOTATIONS, TaskRelationshipField.TARGET_ANNOTATIONS})
+"""The fields stored in ``task_annotation_refs``."""
 
 
 PAYLOAD_COLUMNS = ("target_schema", "unit", "target_name", "mode")
@@ -95,7 +113,7 @@ def encode_span(span: Span | None) -> dict[str, Any] | None:
         raise TimeFFormatError(f"cannot encode unsupported span type {type(span).__name__}")
     row = TargetValueRow.from_target(span)
     return {
-        "span_type": row.target_kind.value,
+        "span_type": row.target_kind,
         "span_start": row.span_start,
         "span_end": row.span_end,
         "signal_ids": row.span_signal_ids,
@@ -128,24 +146,25 @@ def decode_span(
     """
     if span_type is None:
         return None
+    if span_type not in SPAN_KINDS:
+        raise TimeFFormatError(f"stored span has unknown type {span_type!r}")
+    kind = TaskTargetKind(span_type)
     if span_start is None:
-        raise TimeFFormatError(f"stored {span_type} span has no start")
+        raise TimeFFormatError(f"stored {kind} span has no start")
     series = _signals(signal_ids, signals)
-    if span_type == "time_point":
+    if kind is TaskTargetKind.TIME_POINT:
         return TimePoint(start_us=span_start, time_series=series)
-    if span_type == "time_interval":
+    if kind is TaskTargetKind.TIME_INTERVAL:
         if span_end is None:
             raise TimeFFormatError("stored time_interval span has no end")
         return TimeInterval(start_us=span_start, end_us=span_end, time_series=series)
     if not series:
-        raise TimeFFormatError(f"stored {span_type} span names no series")
-    if span_type == "step_point":
+        raise TimeFFormatError(f"stored {kind} span names no series")
+    if kind is TaskTargetKind.STEP_POINT:
         return StepPoint(start=span_start, time_series=series[0])
-    if span_type == "step_interval":
-        if span_end is None:
-            raise TimeFFormatError("stored step_interval span has no stop")
-        return StepInterval(start=span_start, stop=span_end, time_series=series[0])
-    raise TimeFFormatError(f"stored span has unknown type {span_type!r}")
+    if span_end is None:
+        raise TimeFFormatError("stored step_interval span has no stop")
+    return StepInterval(start=span_start, stop=span_end, time_series=series[0])
 
 
 def encode_task_payload(task: Task) -> dict[str, str | None]:
