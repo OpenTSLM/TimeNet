@@ -207,14 +207,14 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
 
 def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
     version_dir = _write(tmp_path)
-    original = DuckDBControlReader.chunk_rows_by_keys
+    original = DuckDBControlReader.chunk_rows_by_ids
     calls = []
 
     def counting_batch(reader, signals):
         calls.append(tuple(signals))
         return original(reader, signals)
 
-    monkeypatch.setattr(DuckDBControlReader, "chunk_rows_by_keys", counting_batch)
+    monkeypatch.setattr(DuckDBControlReader, "chunk_rows_by_ids", counting_batch)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         records = tuple(reader.iter_records())
         signals = tuple(signal for record in records for signal in record.signals)

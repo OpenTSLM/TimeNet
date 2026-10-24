@@ -105,13 +105,9 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
             "inputs",
             RECORD_ID,
         )
-        assert connection.execute(
-            """SELECT parent.source_id
-               FROM sources child
-               JOIN sources parent ON parent.source_key = child.parent_source_key
-               WHERE child.source_id = ?""",
-            [ECG_ID],
-        ).fetchone() == (MONITOR_ID,)
+        assert connection.execute("SELECT parent_source_id FROM sources WHERE source_id = ?", [ECG_ID]).fetchone() == (
+            MONITOR_ID,
+        )
         assert connection.execute(
             """SELECT contents.content_id, occurrences.object_type, records.record_id
                FROM annotation_occurrences occurrences
@@ -310,8 +306,8 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
 
     def write_corrupt_relationship(writer, connection, dataset, tasks):
         task_counts = original(writer, connection, dataset, tasks)
-        connection.execute("INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 99, 1, '{}')")
-        connection.execute("UPDATE sources SET record_key = -1 WHERE source_id = ?", [MONITOR_ID])
+        connection.execute("INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}')")
+        connection.execute("UPDATE sources SET record_id = 99 WHERE source_id = ?", [MONITOR_ID])
         return task_counts
 
     monkeypatch.setattr(DuckDBControlWriter, "_write_objects", write_corrupt_relationship)
@@ -386,7 +382,7 @@ def test_control_writer_stores_value_chunk_locations(tmp_path):
     with connect_control(path, read_only=True) as connection:
         assert connection.execute(
             """SELECT value_path, chunk_major_index, chunk_minor_index, signal_chunks.n_values
-               FROM signal_chunks JOIN signals USING (signal_key)
+               FROM signal_chunks
                WHERE signal_id = ?""",
             [LEAD_I_ID],
         ).fetchone() == ("values/part-00000000.parquet", 2, 3, 2)

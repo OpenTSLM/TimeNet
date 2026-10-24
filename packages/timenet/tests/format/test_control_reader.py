@@ -328,9 +328,7 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
     with connect_control(path) as connection:
         connection.execute(
             """UPDATE signals SET modality = 'corrupt'
-               WHERE source_key IN (
-                   SELECT source_key FROM sources JOIN records USING (record_key) WHERE records.record_id = ?
-               )""",
+               WHERE source_id IN (SELECT source_id FROM sources WHERE record_id = ?)""",
             [corrupt_record.id],
         )
     with DuckDBControlReader(path) as reader:
@@ -348,11 +346,11 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
             "missing content",
         ),
         (
-            "UPDATE sources SET parent_source_key = 999 WHERE source_id = 2",
+            "UPDATE sources SET parent_source_id = 999 WHERE source_id = 2",
             "missing parent",
         ),
         (
-            "UPDATE signals SET source_key = 999 WHERE signal_id = 1",
+            "UPDATE signals SET source_id = 999 WHERE signal_id = 1",
             "missing source",
         ),
     ],
