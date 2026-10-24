@@ -276,7 +276,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
                 inputs=(record2,),
                 targets=("onset",),
                 id="task-cls-2",
-                scope=TimeInterval.seconds(0.5, 0.75, time_series_ids=(window.id,)),
+                scope=TimeInterval.seconds(0.5, 0.75, time_series=(window,)),
             ),
         )
         return dataset

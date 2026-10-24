@@ -1,3 +1,5 @@
+from dataclasses import replace
+
 import pyarrow as pa
 import pytest
 
@@ -237,18 +239,21 @@ def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path, mo
     ] == expected
 
 
+def _spans_over(signal):
+    return (
+        TimePoint.seconds(0.001, time_series=(signal,)),
+        TimeInterval.seconds(0, 0.002, time_series=(signal,)),
+        StepPoint(start=1, time_series=signal),
+        StepInterval(start=0, stop=2, time_series=signal),
+    )
+
+
 def test_control_reader_hydrates_each_target_storage_type(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
     record = dataset.records[0]
     signal = record.signals[0]
-    spans = (
-        TimePoint.seconds(0.001, time_series_ids=(signal.id,)),
-        TimeInterval.seconds(0, 0.002, time_series_ids=(signal.id,)),
-        StepPoint(start=1, time_series_id=signal.id),
-        StepInterval(start=0, stop=2, time_series_id=signal.id),
-    )
-    dataset.tasks[0].targets = ("Yes", 7, 0.5, True, record, signal, *spans)
+    dataset.tasks[0].targets = ("Yes", 7, 0.5, True, record, signal, *_spans_over(signal))
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
@@ -260,7 +265,7 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
     assert (text, integer, floating, boolean) == ("Yes", 7, 0.5, True)
     assert target_record is records[0]
     assert target_signal is records[0].signals[0]
-    assert tuple(target_spans) == spans
+    assert tuple(target_spans) == _spans_over(target_signal)
 
 
 def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
@@ -421,10 +426,17 @@ def test_typed_scope_and_payload_columns_round_trip(tmp_path):
     for task in dataset.tasks:
         back = restored[task.id]
         assert type(back) is type(task)
-        assert back.scope == task.scope
+        assert _scope_key(back) == _scope_key(task)
         for field in ("target_schema", "unit", "target_name", "mode"):
             if hasattr(task, field):
                 assert getattr(back, field) == getattr(task, field), field
+
+
+def _scope_key(task):
+    scope = task.scope
+    if scope is None:
+        return None
+    return replace(scope, time_series=None), tuple(signal.id for signal in scope.time_series or ())
 
 
 @pytest.mark.parametrize(

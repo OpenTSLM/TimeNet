@@ -241,7 +241,7 @@ def _counting(n, tsid="s", axis=None):
 
 def test_step_range_of_a_steps_span_is_the_span():
     ts = _counting(6)
-    assert ts.step_range(StepInterval(time_series_id="s", start=2, stop=5)) == (2, 5)
+    assert ts.step_range(StepInterval(time_series=ts, start=2, stop=5)) == (2, 5)
 
 
 def test_step_range_of_a_seconds_span_on_a_regular_axis():
@@ -293,24 +293,26 @@ def test_irregular_basic_validation_rejects_invalid_offsets(offsets, message):
 
 def test_step_range_horizon_matches_n_steps():
     ts = _counting(12)
-    span = StepInterval(time_series_id="s", start=0, stop=12)
+    span = StepInterval(time_series=ts, start=0, stop=12)
     start, stop = ts.step_range(span)
     assert stop - start == span.n_steps
 
 
 def test_step_range_rejects_a_point():
     with pytest.raises(TimeFValidationError, match="not a point"):
-        _counting(3).step_range(StepPoint(time_series_id="s", start=1))
+        ts = _counting(3)
+        ts.step_range(StepPoint(time_series=ts, start=1))
 
 
 def test_step_range_rejects_a_steps_span_naming_another_series():
     with pytest.raises(TimeFValidationError, match="not this series"):
-        _counting(6).step_range(StepInterval(time_series_id="other", start=0, stop=3))
+        _counting(6).step_range(StepInterval(time_series=_counting(6), start=0, stop=3))
 
 
 def test_step_range_rejects_a_steps_span_past_the_series():
     with pytest.raises(TimeFValidationError, match="runs past"):
-        _counting(3).step_range(StepInterval(time_series_id="s", start=0, stop=4))
+        ts = _counting(3)
+        ts.step_range(StepInterval(time_series=ts, start=0, stop=4))
 
 
 def test_step_range_rejects_a_seconds_span_on_an_ordinal_series():

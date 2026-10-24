@@ -126,4 +126,4 @@ def test_lights_off_keeps_the_clock_and_places_the_point():
     assert annotation.span is not None
     assert annotation.span.start_us == 12300 * US_PER_S
     assert annotation.span.is_point
-    assert annotation.span.time_series_ids is None
+    assert annotation.span.time_series is None

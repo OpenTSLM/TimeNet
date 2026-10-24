@@ -8,6 +8,7 @@ import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
+from timenet.format.task_codec import encode_span
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -165,7 +166,7 @@ def make_dataset() -> TimeFDataset:
                 mode=LocalizationMode.SPARSE,
                 targets=(
                     TimePoint.seconds(0.5),
-                    TimeInterval.seconds(0.0, 0.25, time_series_ids=(shared.id,)),
+                    TimeInterval.seconds(0.0, 0.25, time_series=(shared,)),
                 ),
                 id="task-localize-0",
             ),
@@ -201,7 +202,7 @@ def make_dataset() -> TimeFDataset:
             inputs=(record2,),
             targets=("onset",),
             id="task-cls-2",
-            scope=TimeInterval.seconds(0.0, 0.25, time_series_ids=(window.id,)),
+            scope=TimeInterval.seconds(0.0, 0.25, time_series=(window,)),
         ),
     )
     return dataset
@@ -210,9 +211,10 @@ def make_dataset() -> TimeFDataset:
 def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     """Assert two datasets are logically equal per the round-trip preserved-field contract.
 
-    This compares the metadata, every record matched by ``record_id``, and every task matched by
-    ``id``. It compares each series' fields and its materialized values. It raises ``AssertionError``
-    if any compared field differs.
+    This compares the metadata, every record matched by its id, and every task matched by its id.
+    It compares each series' fields and its materialized values. A span holds Signal objects, so task
+    scopes are compared by the ids of their Signals. It raises ``AssertionError`` if any compared
+    field differs.
 
     Args:
         expected: The reference dataset.
@@ -239,8 +241,9 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     assert exp_tasks.keys() == act_tasks.keys(), "task ids differ"
     for task_id, exp_task in exp_tasks.items():
         act_task = act_tasks[task_id]
-        assert replace(exp_task, input_modalities=exp_task.resolved_input_modalities) == replace(
-            act_task, input_modalities=act_task.resolved_input_modalities
+        assert encode_span(exp_task.scope) == encode_span(act_task.scope), f"task {task_id} scope differs"
+        assert replace(exp_task, scope=None, input_modalities=exp_task.resolved_input_modalities) == replace(
+            act_task, scope=None, input_modalities=act_task.resolved_input_modalities
         ), f"task {task_id} differs"
 
 

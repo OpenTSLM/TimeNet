@@ -113,10 +113,12 @@ coordinate frame.
 | `StepPoint` | One ordinal position in a Signal without a clock. |
 | `StepInterval` | One half-open ordinal range, `[start, stop)`. |
 
-Task time spans can select Signals through `time_series_ids`. Each task span must identify exactly
-one input Record. Annotation spans cannot select Signal IDs. Their owner determines scope.
+Task time spans can select Signals through `time_series`, a tuple of Signal objects. Each task span
+must identify exactly one input Record. Annotation spans cannot select Signals. Their owner
+determines scope.
 
-Step spans always name exactly one Signal through `time_series_id`.
+Step spans always name exactly one Signal through `time_series`. The writer stores the IDs of these
+Signals, and the reader puts the read-back Signals in their place.
 
 ```python
 from timenet.types import StepInterval, TimeInterval, TimePoint
@@ -125,9 +127,9 @@ event = TimePoint.seconds(1.2)
 window = TimeInterval.seconds(
     5.0,
     8.0,
-    time_series_ids=("vibration",),
+    time_series=(vibration,),
 )
-tokens = StepInterval(time_series_id="text-series", start=132, stop=144)
+tokens = StepInterval(time_series=text_series, start=132, stop=144)
 ```
 
 Use `record.time_point()` or `record.time_interval()` to convert wall-clock values through a
