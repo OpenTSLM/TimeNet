@@ -455,15 +455,15 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         scoped = tuple(signal for record in task.inputs for signal in index.signals_by_record_id[record.id])
         for span in spans:
             label = f"{type(task).__name__} span"
-            if isinstance(span, StepSpan) or (isinstance(span, TimeSpan) and span.time_series_ids is not None):
-                check_span_within_window(label, span, scoped, task.id)
+            if isinstance(span, StepSpan) or (isinstance(span, TimeSpan) and span.time_series is not None):
+                check_span_within_window(label, span, scoped, f"the inputs of task {task.id!r}")
             else:
                 for record in task.inputs:
                     check_span_within_window(
                         label,
                         span,
                         index.signals_by_record_id[record.id],
-                        record.id,
+                        f"record {record.id!r}",
                         record.time_span,
                     )
 
@@ -477,15 +477,18 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         for span in task.spans():
             if not isinstance(span, TimeSpan):
                 continue
-            if span.time_series_ids is not None:
-                known = {signal.id for record in task.inputs for signal in record.signals}
-                unknown = set(span.time_series_ids) - known
+            scope = None if span.time_series is None else {id(signal) for signal in span.time_series}
+            if scope is not None:
+                known = {id(signal) for record in task.inputs for signal in record.signals}
+                unknown = [signal.name for signal in span.time_series or () if id(signal) not in known]
                 if unknown:
-                    raise TimeFValidationError(f"task {task.id!r} references unknown time_series_id {sorted(unknown)}")
+                    raise TimeFValidationError(
+                        f"task {task.id!r} references Signals that are not in its inputs: {unknown}"
+                    )
             selected = [
                 record
                 for record in task.inputs
-                if span.time_series_ids is None or any(signal.id in span.time_series_ids for signal in record.signals)
+                if scope is None or any(id(signal) in scope for signal in record.signals)
             ]
             if len(selected) != 1:
                 raise TimeFValidationError(f"task {task.id!r} time span must resolve to exactly one input Record")

@@ -99,27 +99,27 @@ class TargetValueRow(_TargetValues):
             return cls(
                 target_kind=TaskTargetKind.TIME_POINT,
                 span_start=target.start_us,
-                span_signal_ids=target.time_series_ids,
+                span_signal_ids=None if target.time_series is None else tuple(s.id for s in target.time_series),
             )
         elif isinstance(target, TimeInterval):
             return cls(
                 target_kind=TaskTargetKind.TIME_INTERVAL,
                 span_start=target.start_us,
                 span_end=target.end_us,
-                span_signal_ids=target.time_series_ids,
+                span_signal_ids=None if target.time_series is None else tuple(s.id for s in target.time_series),
             )
         elif isinstance(target, StepPoint):
             return cls(
                 target_kind=TaskTargetKind.STEP_POINT,
                 span_start=target.start,
-                span_signal_ids=(target.time_series_id,),
+                span_signal_ids=(target.time_series.id,),
             )
         elif isinstance(target, StepInterval):
             return cls(
                 target_kind=TaskTargetKind.STEP_INTERVAL,
                 span_start=target.start,
                 span_end=target.stop,
-                span_signal_ids=(target.time_series_id,),
+                span_signal_ids=(target.time_series.id,),
             )
         else:
             raise TimeFFormatError(f"cannot encode unsupported target type {type(target).__name__}")
