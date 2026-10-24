@@ -118,8 +118,9 @@ dataset.add_record(record=record)
 dataset.add_task(task=task)
 ```
 
-`add_task()` validates Record, Signal, Annotation, Span, and parent-Task references. It also attaches
-the Task ID to each input Record.
+`add_task()` validates Record, Signal, Annotation, Span, and parent-Task references. It does not
+change the input Records. Use `dataset.tasks_for(record)` to find the Tasks that take a Record as
+input.
 
 Use `add_tasks()` for an atomic batch. A parent in `from_tasks` can appear in the same batch.
 

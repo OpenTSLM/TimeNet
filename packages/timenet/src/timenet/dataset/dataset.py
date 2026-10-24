@@ -196,7 +196,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """Validate and register one fully constructed task.
 
         The Task owns its input and target object references. Registration verifies those objects
-        against this dataset before changing either the dataset or its Records.
+        against this dataset before it changes the dataset. It does not change the input Records.
 
         Args:
             task: The concrete task to register.
@@ -252,8 +252,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
         For a dataset with far more tasks than records (many questions over few recordings), holding
         every task in memory is the scaling wall. A streaming connector builds the bounded records, then
-        hands the tasks over through ``source``; the writer streams them to disk without a list. Streamed
-        tasks do not populate ``Record.task_ids``.
+        hands the tasks over through ``source``; the writer streams them to disk without a list.
 
         Args:
             task_types: The task classes the stream yields, so :meth:`derive_schema` records them.
@@ -389,19 +388,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 "add_task/add_tasks cannot be used on a streamed dataset: set_task_stream already provides its tasks"
             )
         self._validate_task_batch(batch)
-        # Extend each record's task_ids once per batch rather than once per task, so a record with
-        # thousands of tasks does not copy its tuple thousands of times.
-        new_task_ids: dict[str, list[str]] = {}
-        records_by_id: dict[str, Record] = {}
         for task in batch:
-            for record in task.inputs:
-                records_by_id[record.id] = record
-                new_task_ids.setdefault(record.id, []).append(task.id)
             self._tasks.append(task)
             self._task_ids.add(task.id)
-        for record_id, task_ids in new_task_ids.items():
-            record = records_by_id[record_id]
-            record.task_ids = (*record.task_ids, *task_ids)
         return batch
 
     def _validate_task_batch(self, batch: tuple[Task, ...]) -> None:
@@ -832,38 +821,30 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     @overload
     def tasks_for(self, record: Record, task_type: type[TTask]) -> tuple[TTask, ...]: ...
     def tasks_for(self, record: Record, task_type: type[Task] = Task) -> tuple[Task, ...]:
-        """Return the tasks attached to a record, optionally filtered by type.
+        """Return the tasks that take a record as input, optionally filtered by type.
 
-        This method reverses the stored direction. Tasks reference their records, so this method
-        resolves a record's ``task_ids`` back to the task objects.
+        Tasks reference their records, so this method scans the tasks for the ones whose inputs
+        hold this record.
 
         Args:
-            record: The record whose tasks to resolve.
+            record: The record whose tasks to find.
             task_type: Keep only tasks of this subclass. The default keeps every task on the
                 record.
 
         Returns:
-            The record's tasks of ``task_type``, in the record's task order.
+            The record's tasks of ``task_type``, in insertion order.
 
         Raises:
-            TimeFValidationError: This error occurs if ``record`` is not registered in this
-                dataset. It also occurs if one of the record's ``task_ids`` does not resolve to a
-                registered task that links back to the record.
+            TimeFValidationError: If ``record`` is not registered in this dataset.
         """
         registered_ids = {registered.id for registered in self._records}
         if record.id not in registered_ids:
             raise TimeFValidationError(f"record {record.id!r} is not registered in this dataset")
-        by_id = {task.id: task for task in self._tasks}
-        resolved: list[Task] = []
-        for task_id in record.task_ids:
-            task = by_id.get(task_id)
-            if task is None or all(linked is not record for linked in task.inputs):
-                raise TimeFValidationError(
-                    f"record {record.id!r} links task {task_id!r}, but the task is missing or does "
-                    f"not link back to the record"
-                )
-            resolved.append(task)
-        return tuple(task for task in resolved if isinstance(task, task_type))
+        return tuple(
+            task
+            for task in self._tasks
+            if isinstance(task, task_type) and any(linked is record for linked in task.inputs)
+        )
 
     @overload
     def to_features_and_targets(

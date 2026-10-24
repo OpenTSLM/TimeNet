@@ -20,8 +20,8 @@ from timenet.types.clock import check_int64, offset_us, unix_us
 class Record(SupportsAnnotate):
     """One logical unit of time-series data: a recording, a session, a sensor bundle, a market window.
 
-    Created via :meth:`~timenet.dataset.TimeFDataset.add_record`. Mutable so ``task_ids`` and
-    ``annotations`` can be populated after construction.
+    Created via :meth:`~timenet.dataset.TimeFDataset.add_record`. Mutable so ``annotations`` can be
+    populated after construction.
 
     A record has no metadata field. Record-level facts, such as a subject's age or the recording
     device, are :class:`~timenet.types.Annotation` objects with no ``span``. Such an annotation can
@@ -34,8 +34,6 @@ class Record(SupportsAnnotate):
     """The common relative zero, with an optional absolute timestamp."""
     id: str = field(default_factory=new_id)
     """Unique id for the record (default: an auto-generated uuid7)."""
-    task_ids: tuple[str, ...] = ()
-    """Ids of the tasks attached to this record."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the record."""
     metadata: JsonMapping = field(default_factory=dict)
