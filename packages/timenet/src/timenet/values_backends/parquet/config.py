@@ -3,7 +3,6 @@
 from dataclasses import dataclass
 from pathlib import Path
 
-from timenet.format.schemas import IdCodec, IdTypes
 from timenet.writer.value_encoding import ValueEncoding
 
 
@@ -19,10 +18,6 @@ class ParquetValuesConfig:
 
     staging_dir: Path
     """Version staging directory. The writer puts shards beneath it."""
-    id_types: IdTypes
-    """Resolved logical-id storage types."""
-    codec: IdCodec
-    """Shared logical-id codec that the rest of the TimeF writer uses."""
     shard_target_bytes: int
     """Target size for rotating shards."""
     row_group_target_bytes: int
