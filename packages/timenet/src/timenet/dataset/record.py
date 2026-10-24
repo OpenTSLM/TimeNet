@@ -12,16 +12,17 @@ from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
-from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint, new_id
+from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint
 from timenet.types.clock import check_int64, offset_us, unix_us
+from timenet.types.ids import EntityId, assigned_id
 
 
 @dataclass(kw_only=True)
 class Record(SupportsAnnotate):
     """One logical unit of time-series data: a recording, a session, a sensor bundle, a market window.
 
-    Created via :meth:`~timenet.dataset.TimeFDataset.add_record`. Mutable so ``task_ids`` and
-    ``annotations`` can be populated after construction.
+    Created via :meth:`~timenet.dataset.TimeFDataset.add_record`. Mutable so ``annotations`` can be
+    populated after construction.
 
     A record has no metadata field. Record-level facts, such as a subject's age or the recording
     device, are :class:`~timenet.types.Annotation` objects with no ``span``. Such an annotation can
@@ -32,10 +33,6 @@ class Record(SupportsAnnotate):
     """The root sources that belong to this recording."""
     start_time: TimeOrigin = field(default_factory=TimeOrigin)
     """The common relative zero, with an optional absolute timestamp."""
-    record_id: str = field(default_factory=new_id)
-    """Unique id for the record (default: an auto-generated uuid7)."""
-    task_ids: tuple[str, ...] = ()
-    """Ids of the tasks attached to this record."""
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached to the record."""
     metadata: JsonMapping = field(default_factory=dict)
@@ -44,15 +41,11 @@ class Record(SupportsAnnotate):
     """The session's overall span on the source recording timeline: an :class:`~timenet.types.TimeInterval`
     covering the whole record, or ``None``. Declare it when the series have gaps and an event may fall in
     one, for example a note taken while every sensor was briefly off. This checks an unscoped span
-    against it, rather than against the union of the series' windows. Its ``time_series_ids`` must be
+    against it, rather than against the union of the series' windows. Its ``time_series`` must be
     ``None``, and it must contain every series' window."""
+    _id: EntityId | None = field(default=None, init=False, repr=False, compare=False)
 
-    @property
-    def id(self) -> str:
-        """Return the record's stable public identifier."""
-        return self.record_id
-
-    def __post_init__(self) -> None:  # noqa: PLR0912 - hierarchy, timing, and annotation invariants
+    def __post_init__(self) -> None:
         """Validate the record hierarchy and its optional single-clock session span.
 
         Raises:
@@ -62,38 +55,47 @@ class Record(SupportsAnnotate):
         if not isinstance(self.start_time, TimeOrigin):
             raise TimeFValidationError("Record.start_time must be a TimeOrigin")
         self.metadata = validate_json_mapping(self.metadata)
-        if self.sources:
-            tuple(self.walk_sources())
-            signal_ids = [signal.id for signal in self.walk_signals()]
-            if len(signal_ids) != len(set(signal_ids)):
-                raise TimeFValidationError(f"record {self.record_id!r} contains duplicate signal IDs")
         for signal in self.signals:
             if (window := signal.span_us) is not None:
                 for endpoint in window:
-                    check_int64(f"signal {signal.id!r} time offset", endpoint)
+                    check_int64(f"signal {signal.name!r} time offset", endpoint)
                     if self.start_time.timestamp is not None:
                         check_int64(
-                            f"signal {signal.id!r} absolute time", unix_us(self.start_time.timestamp) + endpoint
+                            f"signal {signal.name!r} absolute time", unix_us(self.start_time.timestamp) + endpoint
                         )
         if self.time_span is not None:
             if not isinstance(self.time_span, TimeInterval):
                 raise TimeFValidationError(
                     f"Record.time_span must be a TimeInterval covering the whole record, got {self.time_span!r}"
                 )
-            if self.time_span.time_series_ids is not None:
-                raise TimeFValidationError(
-                    "Record.time_span covers the whole record, so its time_series_ids must be None"
-                )
+            if self.time_span.time_series is not None:
+                raise TimeFValidationError("Record.time_span covers the whole record, so its time_series must be None")
             for ts in self.signals:
                 window = ts.span_us
                 if window is not None and (window[0] < self.time_span.start_us or window[1] > self.time_span.end_us):
                     raise TimeFValidationError(
                         f"Record.time_span ({self.time_span.start_us}, {self.time_span.end_us}) us must contain "
-                        f"every series' window, but {ts.id!r} covers {window} us"
+                        f"every series' window, but {ts.name!r} covers {window} us"
                     )
 
         for annotation in self.annotations:
             self._validate_annotation(annotation)
+
+    @property
+    def id(self) -> EntityId:
+        """The record's id, unique among the records of its dataset.
+
+        :meth:`~timenet.dataset.TimeFDataset.add_record` sets it, and the reader sets it on read-back.
+
+        Raises:
+            TimeFValidationError: If the record is not in a dataset yet.
+        """  # noqa: DOC502 (raised by assigned_id)
+        return assigned_id(self._id, "Record")
+
+    @property
+    def _label(self) -> str:
+        """Name the record in an error message, with its id once it has one."""
+        return "record" if self._id is None else f"record {self._id!r}"
 
     @property
     def signals(self) -> tuple[Signal, ...]:
@@ -115,23 +117,23 @@ class Record(SupportsAnnotate):
         def walk(source: Source) -> Iterable[Source]:
             identity = id(source)
             if identity in active:
-                raise TimeFValidationError(f"source hierarchy contains a cycle at source {source.id!r}")
+                raise TimeFValidationError(f"source hierarchy contains a cycle at source {source.name!r}")
             if identity in seen:
-                raise TimeFValidationError(f"source {source.id!r} is attached more than once")
+                raise TimeFValidationError(f"source {source.name!r} is attached more than once")
             seen.add(identity)
             active.add(identity)
             yield source
-            for child in sorted(source.sources, key=lambda item: (item.name, item.id)):
+            for child in sorted(source.sources, key=lambda item: item.name):
                 yield from walk(child)
             active.remove(identity)
 
-        for root in sorted(self.sources, key=lambda item: (item.name, item.id)):
+        for root in sorted(self.sources, key=lambda item: item.name):
             yield from walk(root)
 
     def walk_signals(self) -> Iterable[Signal]:
         """Yield every signal in deterministic source and signal order."""
         for source in self.walk_sources():
-            yield from sorted(source.signals, key=lambda signal: (signal.name, signal.id))
+            yield from sorted(source.signals, key=lambda signal: signal.name)
 
     def walk_annotations(self) -> Iterable[Annotation]:
         """Yield annotation occurrences from this Record, its Sources, and its Signals."""
@@ -146,22 +148,22 @@ class Record(SupportsAnnotate):
         """Whether this record's relative timeline has a Unix-time anchor."""
         return self.start_time.timestamp is not None
 
-    def time_point(self, at: datetime, *, time_series_ids: tuple[str, ...] | None = None) -> TimePoint:
+    def time_point(self, at: datetime, *, time_series: tuple[Signal, ...] | None = None) -> TimePoint:
         """Build a :class:`~timenet.types.TimePoint` at a wall-clock moment on this record's timeline.
 
         The Record must have a known absolute timestamp.
 
         Args:
             at: The wall-clock moment, timezone-aware.
-            time_series_ids: Series the point is scoped to. ``None`` covers every series.
+            time_series: Series the point is scoped to. ``None`` covers every series.
 
         Returns:
             The point, in microseconds from this record's relative zero.
         """
-        return TimePoint(start_us=offset_us(at, self.start_time.timestamp), time_series_ids=time_series_ids)
+        return TimePoint(start_us=offset_us(at, self.start_time.timestamp), time_series=time_series)
 
     def time_interval(
-        self, start: datetime, end: datetime, *, time_series_ids: tuple[str, ...] | None = None
+        self, start: datetime, end: datetime, *, time_series: tuple[Signal, ...] | None = None
     ) -> TimeInterval:
         """Build a :class:`~timenet.types.TimeInterval` between two wall-clock moments on this timeline.
 
@@ -170,7 +172,7 @@ class Record(SupportsAnnotate):
         Args:
             start: Wall-clock start, timezone-aware.
             end: Wall-clock end, exclusive and timezone-aware.
-            time_series_ids: Series the interval is scoped to. ``None`` covers every series.
+            time_series: Series the interval is scoped to. ``None`` covers every series.
 
         Returns:
             The half-open interval, in microseconds from this record's relative zero.
@@ -178,7 +180,7 @@ class Record(SupportsAnnotate):
         return TimeInterval(
             start_us=offset_us(start, self.start_time.timestamp),
             end_us=offset_us(end, self.start_time.timestamp),
-            time_series_ids=time_series_ids,
+            time_series=time_series,
         )
 
     def annotate(self, annotation: Annotation, *, warn_when_outside: bool = True) -> Annotation:
@@ -246,7 +248,7 @@ class Record(SupportsAnnotate):
                 f"annotation {annotation.key!r}",
                 annotation.span,
                 self.signals,
-                self.record_id,
+                self._label,
                 self.time_span,
                 warn_when_outside=warn_when_outside,
             )

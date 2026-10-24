@@ -199,7 +199,10 @@ def test_signals_cannot_share_an_axis_id_with_different_offsets(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=signals),)))
     dataset.derive_schema()
 
-    with pytest.raises(TimeFValidationError, match="shared by signals with different time offsets"):
+    with pytest.raises(
+        TimeFValidationError,
+        match="one IrregularAxis object is shared by signals 'temp' and 'humidity' with different time offsets",
+    ):
         _written(tmp_path, dataset)
 
 

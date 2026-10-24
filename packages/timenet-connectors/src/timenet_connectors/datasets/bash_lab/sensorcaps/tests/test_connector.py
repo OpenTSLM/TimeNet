@@ -121,16 +121,17 @@ def _write_row(tmp_path, row):
 
 def _assert_records_and_tasks(records, tasks):
     assert len(records) == len(tasks) == 10
+    records_by_row = {
+        (_annotations(record)["source_partition"], _annotations(record)["source_row"]): record for record in records
+    }
+    tasks_by_record = {task.inputs[0].id: task for task in tasks}
     for partition_index, partition in enumerate(_PARTITIONS):
         for row_index, row in enumerate(_rows(partition)):
-            index = partition_index * 2 + row_index
-            record, task = records[index], tasks[index]
-            record_id = f"sensorcaps-{partition.replace('_', '-')}-{row_index:06d}"
-            assert record.id == record_id
+            record = records_by_row[partition, row_index]
+            task = tasks_by_record[record.id]
             assert record.start_time.timestamp is None
             assert len(record.sources) == 1
             source = record.sources[0]
-            assert source.id == f"{record_id}-imu"
             assert source.name == "IMU"
             assert source.sources == ()
             assert len(source.signals) == len(record.signals) == 6
@@ -148,10 +149,10 @@ def _assert_records_and_tasks(records, tasks):
             identities = (
                 _PAMAP2_CHANNELS if partition == "pamap2_v2" else tuple((sensor, axis) for sensor, axis, _ in _CHANNELS)
             )
-            for channel_index, (signal, (sensor, axis)) in enumerate(zip(source.signals, identities, strict=True)):
-                axis_id = axis.replace("_", "-")
-                assert signal.id == f"{record_id}-{sensor}-{axis_id}"
-                assert signal.name == f"{sensor}_{axis}"
+            signals = {signal.name: signal for signal in source.signals}
+            assert set(signals) == {f"{sensor}_{axis}" for sensor, axis in identities}
+            for channel_index, (sensor, axis) in enumerate(identities):
+                signal = signals[f"{sensor}_{axis}"]
                 assert signal.spec == TimeSeriesSpec(
                     spec_type=sensor, name=sensor.capitalize(), unit_value=None, dtype="float32"
                 )
@@ -165,7 +166,6 @@ def _assert_records_and_tasks(records, tasks):
                 assert actual.dtype == np.float32
                 np.testing.assert_array_equal(actual, expected_values)
             assert type(task) is AnswerTask
-            assert task.id == f"{record_id}-caption"
             assert len(task.inputs) == 1 and task.inputs[0] is record
             assert task.targets == (row["messages"][2]["content"],)
             assert task.prompt == row["messages"][0]["content"] + "\n\n" + _FEATURES

@@ -11,7 +11,7 @@ import pint
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
-from timenet.types.ids import new_id
+from timenet.types.ids import EntityId, assigned_id
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
@@ -45,7 +45,7 @@ class TaskType(StrEnum):
 def validate_input_modalities(
     modalities: Iterable[InputModality] | None,
     *,
-    task_id: str,
+    task_id: EntityId | None,
     prompt: str | None,
     has_record_inputs: bool,
 ) -> frozenset[InputModality]:
@@ -53,7 +53,7 @@ def validate_input_modalities(
 
     Args:
         modalities: The task's declared input kinds.
-        task_id: The task identifier used in validation errors.
+        task_id: The task id used in validation errors, or ``None`` before the task has one.
         prompt: The task's optional text prompt.
         has_record_inputs: Whether the task supplies input Records.
 
@@ -65,19 +65,20 @@ def validate_input_modalities(
     """
     if modalities is None or isinstance(modalities, (str, bytes)):
         raise TimeFValidationError("input_modalities must be a non-empty collection of InputModality values")
+    task = "task" if task_id is None else f"task {task_id!r}"
     try:
         declared = frozenset(InputModality(value) for value in modalities)
     except (TypeError, ValueError) as exc:
-        raise TimeFValidationError(f"invalid input_modalities for task {task_id!r}") from exc
+        raise TimeFValidationError(f"invalid input_modalities for {task}") from exc
     if not declared:
-        raise TimeFValidationError(f"task {task_id!r} must declare an input modality")
+        raise TimeFValidationError(f"{task} must declare an input modality")
     if prompt and InputModality.TEXT not in declared:
-        raise TimeFValidationError(f"task {task_id!r} has a prompt but does not declare text input")
+        raise TimeFValidationError(f"{task} has a prompt but does not declare text input")
     if InputModality.NO_INPUT in declared:
         if has_record_inputs or declared - {InputModality.NO_INPUT, InputModality.TEXT}:
-            raise TimeFValidationError(f"task {task_id!r} cannot combine no_input with record or media inputs")
+            raise TimeFValidationError(f"{task} cannot combine no_input with record or media inputs")
     elif not has_record_inputs and declared <= {InputModality.TEXT}:
-        raise TimeFValidationError(f"task {task_id!r} needs no_input when it has only a text prompt")
+        raise TimeFValidationError(f"{task} needs no_input when it has only a text prompt")
     return declared
 
 
@@ -104,8 +105,6 @@ class Task(SupportsAnnotate, ABC):
     def task_type(self) -> TaskType:
         """Return the concrete task's stable storage tag."""
 
-    id: str = field(default_factory=new_id)
-    """Unique public task identifier."""
     inputs: tuple["Record", ...] = field(default=(), compare=False)
     """Records supplied to the model, in semantic order."""
     targets: tuple[TargetItem, ...] | None = field(default=None, compare=False)
@@ -131,6 +130,7 @@ class Task(SupportsAnnotate, ABC):
     """Annotations describing this task itself."""
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible task metadata."""
+    _id: EntityId | None = field(default=None, init=False, repr=False, compare=False)
 
     def __post_init__(self) -> None:
         """Normalize caller-provided sequences and validate target item types and the split.
@@ -154,6 +154,17 @@ class Task(SupportsAnnotate, ABC):
                 raise TimeFValidationError(f"{type(self).__name__} target has unsupported type {type(target).__name__}")
 
     @property
+    def id(self) -> EntityId:
+        """The task's id, unique among the tasks of its dataset.
+
+        :meth:`~timenet.dataset.TimeFDataset.add_task` sets it, and the reader sets it on read-back.
+
+        Raises:
+            TimeFValidationError: If the task is not in a dataset yet.
+        """  # noqa: DOC502 (raised by assigned_id)
+        return assigned_id(self._id, type(self).__name__)
+
+    @property
     def resolved_input_modalities(self) -> frozenset[InputModality]:
         """Return the validated override, or infer kinds from the current inputs.
 
@@ -165,25 +176,20 @@ class Task(SupportsAnnotate, ABC):
         if modalities is None:
             modalities = self._infer_input_modalities()
         return validate_input_modalities(
-            modalities, task_id=self.id, prompt=self.prompt, has_record_inputs=bool(self.inputs)
+            modalities, task_id=self._id, prompt=self.prompt, has_record_inputs=bool(self.inputs)
         )
 
     def _infer_input_modalities(self) -> frozenset[InputModality]:
-        signal_ids = None
+        scoped: tuple[Signal, ...] | None = None
         if isinstance(self.scope, StepSpan):
-            signal_ids = {self.scope.time_series_id}
-        elif isinstance(self.scope, TimeSpan) and self.scope.time_series_ids is not None:
-            signal_ids = set(self.scope.time_series_ids)
-        signals = {signal.id: signal for record in self.inputs for signal in record.walk_signals()}
-        if signal_ids is not None and signal_ids - signals.keys():
-            raise TimeFValidationError(
-                f"task {self.id!r} scope names unknown input Signals: {signal_ids - signals.keys()}"
-            )
-        kinds = {
-            signal.spec.modality
-            for signal_id, signal in signals.items()
-            if signal_ids is None or signal_id in signal_ids
-        }
+            scoped = (self.scope.time_series,)
+        elif isinstance(self.scope, TimeSpan):
+            scoped = self.scope.time_series
+        signals = {id(signal): signal for record in self.inputs for signal in record.walk_signals()}
+        unknown = [signal.name for signal in scoped or () if id(signal) not in signals]
+        if unknown:
+            raise TimeFValidationError(f"task scope names Signals that are not in its inputs: {unknown}")
+        kinds = {signal.spec.modality for signal in (signals.values() if scoped is None else scoped)}
         if self.prompt or any(
             value_type_of(annotation.value) in {"str", "list"} for annotation in self.input_annotations
         ):
@@ -306,10 +312,16 @@ class TSCorrespondenceTask(Task):
         self.candidate_records = tuple(self.candidate_records)
         if not self.candidate_records:
             return
-        candidate_ids = {record.id for record in self.candidate_records}
-        outside = [target.id for target in self.targets or () if _is_record(target) and target.id not in candidate_ids]
+        candidates = {id(record) for record in self.candidate_records}
+        outside = [
+            position
+            for position, target in enumerate(self.targets or ())
+            if _is_record(target) and id(target) not in candidates
+        ]
         if outside:
-            raise TimeFValidationError(f"TSCorrespondenceTask Record targets {outside} are not in candidate_records")
+            raise TimeFValidationError(
+                f"TSCorrespondenceTask Record targets at positions {outside} are not in candidate_records"
+            )
 
 
 def _is_record(value: object) -> TypeGuard["Record"]:

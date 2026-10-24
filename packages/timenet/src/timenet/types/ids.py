@@ -1,79 +1,111 @@
-"""Generate entity ids.
+"""Entity ids and the per-dataset counters that hand them out.
 
-TimeF entity ids (records, series, annotations, tasks) default to a canonical UUIDv7 string. UUIDv7
-(RFC 9562 §5.7) puts a 48-bit millisecond Unix timestamp in the high bits, so ids sort by creation
-time. The writer sorts rows by id. The shared timestamp prefix then forms long runs that compress
-well, and the writer can store canonical-UUID id columns as 16 raw bytes. ``uuid.uuid7()`` arrives
-only in Python 3.14, so this module generates the value.
+TimeF ids are positive int64 values. Records, Signals, and Tasks have a public, read-only ``id``. A
+dataset sets it when the object is added, and the reader sets it when it reads the object back.
+Sources, axes, and annotations have no id. The writer numbers their rows from 1 on every write.
+Public ids are unique per kind within one dataset and stay the same across edits. They do not
+follow storage order, and two datasets can use the same id.
 """
 
-import secrets
-import time
-import uuid
+from collections.abc import Mapping
+import numbers
+import operator
+from typing import TypeAlias
+
+from timenet.errors import TimeFValidationError
+from timenet.types.clock import INT64_MAX
+from timenet.types.object_kind import ObjectKind
 
 
-def uuid7() -> uuid.UUID:
-    """Return a UUIDv7 (RFC 9562 §5.7): 48-bit ms timestamp, then random bits.
-
-    Returns:
-        A version-7 :class:`uuid.UUID`. Two calls in the same millisecond differ in their random bits.
-    """
-    unix_ms = time.time_ns() // 1_000_000
-    value = (unix_ms & 0xFFFFFFFFFFFF) << 80  # 48-bit timestamp in the high bits
-    value |= 0x7 << 76  # version 7
-    value |= secrets.randbits(12) << 64  # rand_a
-    value |= 0b10 << 62  # RFC 4122 variant
-    value |= secrets.randbits(62)  # rand_b
-    return uuid.UUID(int=value)
+EntityId: TypeAlias = int
+"""The id of one TimeF entity, a positive int64."""
 
 
-def new_id() -> str:
-    """Return a new canonical UUIDv7 string, the default id for every TimeF entity.
-
-    Returns:
-        The canonical 36-character UUIDv7 string (time-ordered).
-    """
-    return str(uuid7())
+ID_KINDS = (ObjectKind.RECORD, ObjectKind.SIGNAL, ObjectKind.TASK)
+"""The object kinds with a public id, each with its own counter."""
 
 
-def is_canonical_uuid(value: str) -> bool:
-    """Return whether ``value`` is a canonical UUID string that round-trips exactly.
+class IdCounters:
+    """The last id handed out for each entity kind in one dataset."""
 
-    Only canonical values qualify for compact 16-byte storage. A canonical value is lowercase and
-    hyphenated, exactly as :func:`str` renders a :class:`uuid.UUID`. Its round-trip back to a string
-    is byte-for-byte identical.
+    def __init__(self, last: Mapping[ObjectKind, EntityId] | None = None) -> None:
+        """Start the counters at zero or continue from stored values.
+
+        Args:
+            last: The last id used per kind, for example as read from a stored version.
+        """
+        self._last = dict.fromkeys(ID_KINDS, 0)
+        for kind, value in (last or {}).items():
+            if value != 0:
+                self.claim(ObjectKind(kind), value)
+
+    def next(self, kind: ObjectKind) -> EntityId:
+        """Return the next unused id of one kind.
+
+        Returns:
+            The new id.
+
+        Raises:
+            TimeFValidationError: If the kind has used every int64 id.
+        """
+        if self._last[kind] >= INT64_MAX:
+            raise TimeFValidationError(f"no {kind} ids are left in this dataset")
+        self._last[kind] += 1
+        return self._last[kind]
+
+    def claim(self, kind: ObjectKind, value: object) -> EntityId:
+        """Record an id that is already in use, so that :meth:`next` never returns it.
+
+        Returns:
+            ``value`` as a Python int.
+        """
+        number = check_id(value, f"{kind} id")
+        self._last[kind] = max(self._last[kind], number)
+        return number
+
+    def last(self) -> dict[ObjectKind, EntityId]:
+        """Return the last id used per kind, the state that a stored version keeps."""
+        return dict(self._last)
+
+
+def check_id(value: object, what: str) -> EntityId:
+    """Return ``value`` as an int if it is a valid entity id.
+
+    Any integral value is accepted, including NumPy integers read back from Arrow or pandas.
 
     Args:
-        value: The id to test.
+        value: The candidate id.
+        what: The name of the id, used in the error message.
 
     Returns:
-        ``True`` if ``value`` is a canonical UUID string.
+        ``value`` as a Python int.
+
+    Raises:
+        TimeFValidationError: If ``value`` is not an integral number (bool excluded) in
+            ``0 < value < 2**63``.
     """
-    try:
-        return str(uuid.UUID(value)) == value
-    except (ValueError, AttributeError, TypeError):
-        return False
+    if type(value) is int and 0 < value <= INT64_MAX:
+        return value
+    if isinstance(value, numbers.Integral) and not isinstance(value, bool):
+        number = operator.index(value)
+        if 0 < number <= INT64_MAX:
+            return number
+    raise TimeFValidationError(f"{what} must be a positive int64 id, got {value!r}")
 
 
-def id_to_bytes(value: str) -> bytes:
-    """Return the 16 raw bytes of a canonical-UUID id string.
+def assigned_id(value: EntityId | None, owner: str) -> EntityId:
+    """Return the id a dataset or the reader gave an object.
 
     Args:
-        value: A canonical UUID string.
+        value: The object's private id, ``None`` until it has one.
+        owner: The object's type name, used in the error message.
 
     Returns:
-        The UUID's 16-byte representation.
+        The id.
+
+    Raises:
+        TimeFValidationError: If the object has no id yet.
     """
-    return uuid.UUID(value).bytes
-
-
-def id_from_bytes(raw: bytes) -> str:
-    """Return the canonical UUID string for 16 raw bytes.
-
-    Args:
-        raw: A 16-byte UUID.
-
-    Returns:
-        The canonical UUID string.
-    """
-    return str(uuid.UUID(bytes=raw))
+    if value is None:
+        raise TimeFValidationError(f"this {owner} has no id yet; add it to a dataset to give it one")
+    return value

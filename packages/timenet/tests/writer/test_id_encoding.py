@@ -1,17 +1,14 @@
-"""IDs use canonical strings in DuckDB and round-trip without changing their values."""
+"""Task spans and record references keep their entity ids through a write and read."""
 
-import uuid
+from dataclasses import replace
 
 import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
-from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
-from timenet.testing import assert_datasets_equal
 from timenet.types import (
-    Annotation,
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
@@ -46,62 +43,17 @@ def _series():
     )
 
 
-def _uuid_dataset(*, record_id=None):
-    """Build a dataset whose ids default to uuid7 (unless an explicit record_id is passed)."""
-    dataset = TimeFDataset(
-        metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
-            dataset_version=Version(1, 0, 0),
-            name="U",
-            description="d",
-            license=License.MIT,
-        )
-    )
-    series = (_series(),)
-    sources = (Source(name="Source", signals=series),)
-    record = Record(sources=sources) if record_id is None else Record(sources=sources, record_id=record_id)
-    dataset.add_record(record=record)
-    record.annotate(Annotation(key="k", value=1))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",)))
-    dataset.derive_schema()
-    return dataset
-
-
 def _write(tmp_path, dataset):
     with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
     return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
 
 
-def test_default_ids_are_uuid7():
-    dataset = _uuid_dataset()
-    sid = dataset.records[0].record_id
-    assert uuid.UUID(sid).version == 7
-    assert str(uuid.UUID(sid)) == sid  # canonical
-
-
-def test_manifest_has_no_id_encoding(tmp_path):
-    version_dir = _write(tmp_path, _uuid_dataset())
-    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
-    assert not hasattr(manifest, "id_encoding") or "id_encoding" not in manifest.to_dict()
-
-
-def test_uuid_ids_round_trip_as_canonical_strings(tmp_path):
-    dataset = _uuid_dataset()
-    version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        restored = reader.read()
-    assert_datasets_equal(dataset, restored)
-    sid = restored.records[0].record_id
-    assert str(uuid.UUID(sid)) == sid
-    assert uuid.UUID(sid).version == 7
-
-
 def test_forecasting_target_span_round_trips(tmp_path):
     """target_span is the only single-Span payload column; exercise its encode/decode branch."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",
@@ -109,24 +61,24 @@ def test_forecasting_target_span_round_trips(tmp_path):
         )
     )
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),)))
-    series_id = record.signals[0].id
-    span = TimeInterval.seconds(1.0, 3.0, time_series_ids=(series_id,))
-    scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series_id,))
+    span = TimeInterval.seconds(1.0, 3.0, time_series=record.signals)
+    scope = TimeInterval.seconds(0.0, 1.0, time_series=record.signals)
     dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, ForecastingTask)
-    assert task.targets == (span,)
-    assert task.scope == scope
+    restored = task.inputs[0].signals
+    assert task.targets == (replace(span, time_series=restored),)
+    assert task.scope == replace(scope, time_series=restored)
 
 
 def test_forecasting_step_horizon_round_trips(tmp_path):
     """A steps target_span carries its frame and bounds through the writer and reader."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",
@@ -135,24 +87,24 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
     )
     ordinal = Signal.from_values([float(i) for i in range(6)], spec=_spec(), name="c", time_axis=OrdinalAxis())
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ordinal,)),)))
-    series_id = record.signals[0].id
-    span = StepInterval(time_series_id=series_id, start=4, stop=6)
-    scope = StepInterval(time_series_id=series_id, start=0, stop=4)
+    span = StepInterval(time_series=ordinal, start=4, stop=6)
+    scope = StepInterval(time_series=ordinal, start=0, stop=4)
     dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, ForecastingTask)
-    assert task.targets == (span,)
-    assert task.scope == scope
+    (restored,) = task.inputs[0].signals
+    assert task.targets == (replace(span, time_series=restored),)
+    assert task.scope == replace(scope, time_series=restored)
 
 
-def test_span_series_ids_round_trip(tmp_path):
-    """A task scope keeps its Signal ID scope through the integer-key scope columns."""
+def test_a_span_reads_back_the_signals_of_its_record(tmp_path):
+    """A task scope names the read-back Signal objects of its input, not copies of them."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",
@@ -161,21 +113,26 @@ def test_span_series_ids_round_trip(tmp_path):
     )
     series = _series()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
-    scope = TimeInterval.seconds(0.0, 1.0, time_series_ids=(series.id,))
+    other = _series()
+    dataset.add_record(record=Record(sources=(Source(name="Other", signals=(other,)),)))
+    scope = TimeInterval.seconds(0.0, 1.0, time_series=(series,))
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), scope=scope))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         (task,) = reader.tasks
-    assert task.scope == scope
+    assert isinstance(task.scope, TimeInterval)
+    assert task.scope.time_series is not None
+    assert task.scope.time_series[0] is task.inputs[0].signals[0]
+    assert task.scope.time_series[0].id == series.id
 
 
 def test_correspondence_record_targets_round_trip(tmp_path):
     """Correspondence Record targets and candidates return as hydrated objects."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",
@@ -206,7 +163,7 @@ def test_correspondence_record_targets_round_trip(tmp_path):
 def test_editing_and_generation_record_targets_round_trip(tmp_path):
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",
@@ -242,7 +199,7 @@ def test_editing_and_generation_record_targets_round_trip(tmp_path):
 def test_time_span_round_trips(tmp_path):
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
-            dataset_id="timenet/uuid-test",
+            dataset_id="timenet/id-test",
             dataset_version=Version(1, 0, 0),
             name="U",
             description="d",

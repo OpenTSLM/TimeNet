@@ -31,7 +31,7 @@ Every Task supports these fields:
 
 | Field | Purpose |
 | --- | --- |
-| `id` | Stable Task identity. |
+| `id` | Read-only int64 Task identity. `add_task()` sets it. |
 | `inputs` | Ordered input Records. |
 | `targets` | Ordered inline values or stored objects. |
 | `prompt` | Optional instruction or question. |
@@ -118,8 +118,9 @@ dataset.add_record(record=record)
 dataset.add_task(task=task)
 ```
 
-`add_task()` validates Record, Signal, Annotation, Span, and parent-Task references. It also attaches
-the Task ID to each input Record.
+`add_task()` validates Record, Signal, Annotation, Span, and parent-Task references. It does not
+change the input Records. Use `dataset.tasks_for(record)` to find the Tasks that take a Record as
+input.
 
 Use `add_tasks()` for an atomic batch. A parent in `from_tasks` can appear in the same batch.
 
@@ -129,7 +130,7 @@ check duplicate task IDs or `from_tasks` relationships across streamed Tasks.
 
 ## Scope an input
 
-`scope` restricts the region supplied to the model:
+`scope` restricts the region supplied to the model. A scope holds the Signal objects it covers:
 
 ```python
 from timenet.types import ClassificationTask, TimeInterval
@@ -139,7 +140,7 @@ task = ClassificationTask(
     scope=TimeInterval.seconds(
         5.0,
         8.0,
-        time_series_ids=("vibration",),
+        time_series=(vibration,),
     ),
     targets=("fault_episode",),
 )
@@ -218,8 +219,8 @@ TemporalLocalizationTask(
     prompt="Locate all R-peaks in lead II.",
     mode=LocalizationMode.SPARSE,
     targets=(
-        TimePoint.seconds(1.20, time_series_ids=("II",)),
-        TimePoint.seconds(2.05, time_series_ids=("II",)),
+        TimePoint.seconds(1.20, time_series=(lead_ii,)),
+        TimePoint.seconds(2.05, time_series=(lead_ii,)),
     ),
 )
 ```

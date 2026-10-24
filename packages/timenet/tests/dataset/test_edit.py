@@ -1,7 +1,5 @@
 """Copy-on-write edits: remove_records validate-and-cascade, and the edit_version round trip."""
 
-import re
-
 import duckdb
 import pytest
 
@@ -18,13 +16,13 @@ from timenet.writer import TimeFWriter
 def test_remove_records_preserves_dataset_annotations_and_their_refs():
     # A dataset annotation and a task reference to its occurrence survive an unrelated record removal.
     dataset = make_dataset()
-    options = dataset.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-shared"))
+    options = dataset.annotate(Annotation(key="answer_options", value=["yes", "no"]))
     answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
     answer.input_annotations = (*answer.input_annotations, options)
 
     edited = remove_records(dataset, [dataset.records[2].id], cascade=True)
 
-    assert [ann.id for ann in edited.annotations] == [options.id]
+    assert list(edited.annotations) == [options]
     kept = next(task for task in edited.tasks if task.id == answer.id)
     assert options in kept.input_annotations
 
@@ -50,11 +48,10 @@ def _answer_reads_context_via_additional_input():
     (shared_annotation,) = answer.input_annotations
     context_record = dataset.records[1]
     context_annotation = next(
-        annotation for annotation in context_record.annotations if annotation.id == shared_annotation.id
+        annotation for annotation in context_record.annotations if annotation == shared_annotation
     )
     answer.inputs = (record, context_record)
-    context_record.task_ids = (*context_record.task_ids, answer.id)
-    record.annotations = tuple(annotation for annotation in record.annotations if annotation.id != shared_annotation.id)
+    record.annotations = tuple(annotation for annotation in record.annotations if annotation != shared_annotation)
     answer.input_annotations = (context_annotation,)
     return dataset
 
@@ -68,7 +65,7 @@ def test_remove_leaf_record():
     removed_record = dataset.records[1]
     retained_records = (dataset.records[0], dataset.records[2])
     expected_task_ids = {task.id for task in dataset.tasks}
-    assert not removed_record.task_ids, "the removed record must have no tasks"
+    assert not dataset.tasks_for(removed_record), "the removed record must have no tasks"
     edited = remove_records(dataset, [removed_record.id])
     assert {record.id for record in edited.records} == {record.id for record in retained_records}
     assert {task.id for task in edited.tasks} == expected_task_ids
@@ -78,7 +75,7 @@ def test_remove_unknown_record_raises():
     dataset = make_dataset()
     dataset.derive_schema()
     with pytest.raises(TimeFEditError, match="unknown record ids"):
-        remove_records(dataset, ["nope"])
+        remove_records(dataset, [999])
 
 
 def test_remove_record_with_task_rejects_without_cascade():
@@ -109,7 +106,7 @@ def test_shared_annotation_survives_on_remaining_record():
     retained_record = dataset.records[1]
     edited = remove_records(dataset, [removed_record.id], cascade=True)
     restored_record = next(record for record in edited.records if record.id == retained_record.id)
-    assert any(annotation.id == shared_annotation.id for annotation in restored_record.annotations)
+    assert shared_annotation in restored_record.annotations
 
 
 def test_input_annotation_refs_are_stripped_when_unreachable():
@@ -133,7 +130,7 @@ def test_input_annotation_refs_survive_a_reachable_removal():
     (context_annotation,) = answer.input_annotations
     edited = remove_records(dataset, [dataset.records[1].id])
     rebuilt = next(task for task in edited.tasks if task.id == answer.id)
-    assert tuple(annotation.id for annotation in rebuilt.input_annotations) == (context_annotation.id,)
+    assert rebuilt.input_annotations == (context_annotation,)
 
 
 def test_target_annotation_refs_are_required():
@@ -148,10 +145,9 @@ def test_target_annotation_refs_are_required():
     localize.inputs = (removed_record, retained_record)
     localize.targets = None
     localize.target_annotations = (target_annotation,)
-    retained_record.task_ids = (*retained_record.task_ids, localize.id)
     dataset.derive_schema()
 
-    with pytest.raises(TimeFEditError, match=re.escape(localize.id)):
+    with pytest.raises(TimeFEditError, match=rf"dangle tasks \[[^\]]*\b{localize.id}\b"):
         remove_records(dataset, [removed_record.id])
 
     edited = remove_records(dataset, [removed_record.id], cascade=True)
@@ -170,13 +166,11 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         restored = reader.read()
 
-    by_record = {
-        record.record_id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
-    }
+    by_record = {record.id: {id(annotation) for annotation in record.annotations} for record in restored.records}
     for task in restored.tasks:
         reachable = set().union(*(by_record[record.id] for record in task.inputs))
         named = (*task.input_annotations, *task.target_annotations)
-        assert not [annotation for annotation in named if annotation.occurrence_id not in reachable]
+        assert not [annotation for annotation in named if id(annotation) not in reachable]
 
 
 def test_target_and_candidate_records_are_required_whatever_the_task_type():
@@ -188,7 +182,6 @@ def test_target_and_candidate_records_are_required_whatever_the_task_type():
             inputs=(dataset.records[0],),
             prompt="Denoise it.",
             targets=(edited_record,),
-            id="task-edit-0",
         )
     )
     correspondence_task = dataset.add_task(
@@ -197,13 +190,12 @@ def test_target_and_candidate_records_are_required_whatever_the_task_type():
             prompt="Which trace matches?",
             candidate_records=(edited_record, candidate_record),
             targets=(candidate_record,),
-            id="task-corr-0",
         )
     )
     dataset.derive_schema()
-    with pytest.raises(TimeFEditError, match=re.escape(edit_task.id)):
+    with pytest.raises(TimeFEditError, match=rf"dangle tasks \[[^\]]*\b{edit_task.id}\b"):
         remove_records(dataset, [edited_record.id])
-    with pytest.raises(TimeFEditError, match=re.escape(correspondence_task.id)):
+    with pytest.raises(TimeFEditError, match=rf"dangle tasks \[[^\]]*\b{correspondence_task.id}\b"):
         remove_records(dataset, [candidate_record.id])
 
 
