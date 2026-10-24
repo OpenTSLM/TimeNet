@@ -52,7 +52,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
-        samples = [TSQASample.from_row(index, row) for index, row in enumerate(raw_refs)]
+        samples = [TSQASample.from_row(row) for row in raw_refs]
         splits = self.splitter.split(samples)
         dataset = TimeFDataset(metadata=self.metadata())
         for split_name, samples_in_split in splits.items():
@@ -65,7 +65,6 @@ class TSQAConnector(BaseHuggingFaceConnector):
 
     @staticmethod
     def _make_record(sample: TSQASample) -> Record:
-        index = sample.index
         signals: list[Signal] = []
         for channel, values in enumerate(sample.signals):
             signal = Signal.from_values(
@@ -73,16 +72,12 @@ class TSQAConnector(BaseHuggingFaceConnector):
                 spec=_SPEC,
                 name=f"c{channel}",
                 time_axis=OrdinalAxis(),
-                id=f"row-{index}-c{channel}",
             )
             signals.append(signal)
-        record = Record(
-            id=f"row-{index}",
-            sources=(Source(id=f"row-{index}-source", name="TSQA series", signals=tuple(signals)),),
-        )
-        record.annotate(Annotation(key="task", value=sample.category, id=f"task-{index}"))
+        record = Record(sources=(Source(name="TSQA series", signals=tuple(signals)),))
+        record.annotate(Annotation(key="task", value=sample.category))
         if sample.label:
-            record.annotate(Annotation(key="label", value=sample.label, id=f"label-{index}"))
+            record.annotate(Annotation(key="label", value=sample.label))
         return record
 
     @staticmethod
@@ -91,7 +86,6 @@ class TSQAConnector(BaseHuggingFaceConnector):
             inputs=(record,),
             prompt=sample.question,
             targets=(sample.answer,),
-            id=f"qa-{sample.index}",
             split=split,
         )
 

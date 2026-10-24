@@ -1,5 +1,4 @@
 import json
-from pathlib import Path
 import platform
 
 import pytest
@@ -20,6 +19,22 @@ from timenet_connectors.discovery import available, resolve
 
 runner = CliRunner()
 
+
+@pytest.fixture
+def converted(monkeypatch):
+    """Collect every dataset HelloWorldConnector.convert returns, so a test can compare against it."""
+    datasets = []
+    convert = HelloWorldConnector.convert
+
+    def spy(self, raw_refs):
+        dataset = convert(self, raw_refs)
+        datasets.append(dataset)
+        return dataset
+
+    monkeypatch.setattr(HelloWorldConnector, "convert", spy)
+    return datasets
+
+
 # The CLI tests below pass --no-isolation so a build stays in this process. The isolated path
 # shells out to uv and is covered on its own.
 
@@ -29,7 +44,7 @@ def test_discovery_resolves_and_lists():
     assert set(available()) >= {"timenet/hello-world", "chengsenwang/tsqa", "physionet/ecg-qa-cot"}
 
 
-def test_build_then_load_round_trips(tmp_path):
+def test_build_then_load_round_trips(converted, tmp_path):
     registry = tmp_path / "registry"
 
     # PRODUCE: build the demo dataset into a local registry directory.
@@ -37,10 +52,9 @@ def test_build_then_load_round_trips(tmp_path):
     assert result.exit_code == 0, result.output
     assert (registry / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
 
-    # CONSUME: load it back through the SDK and compare to a fresh conversion.
+    # CONSUME: load it back through the SDK and compare to the dataset the build wrote.
     restored = TimeNet(registry, storage_path=tmp_path / "store").load("timenet/hello-world")
-    connector = HelloWorldConnector()
-    original = connector.convert(connector.download(Path("cache")))
+    [original] = converted
     assert_datasets_equal(original, restored)
 
 
@@ -110,15 +124,14 @@ def test_resolve_target_publishes_to_remote_timenet_registry(clean_env, monkeypa
     assert isinstance(_resolve_target(None), RemoteRegistry)
 
 
-def test_publish_pipeline_stores_through_writable_registry(clean_env, tmp_path):
+def test_publish_pipeline_stores_through_writable_registry(clean_env, converted, tmp_path):
     # publish_pipeline hands the converted dataset to registry.store; a LocalRegistry stands in for a
     # remote one, so the publish path is exercised without a network round-trip.
     registry = LocalRegistry(tmp_path / "registry")
     assert publish_pipeline(HelloWorldConnector(), registry) == "1.0.0"
 
     restored = TimeNet(tmp_path / "registry", storage_path=tmp_path / "store").load("timenet/hello-world")
-    connector = HelloWorldConnector()
-    original = connector.convert(connector.download(Path("cache")))
+    [original] = converted
     assert_datasets_equal(original, restored)
 
 

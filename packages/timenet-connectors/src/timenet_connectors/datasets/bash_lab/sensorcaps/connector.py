@@ -112,8 +112,8 @@ class _RowRef:
     offset: int
 
     @property
-    def id(self) -> str:
-        return f"sensorcaps-{self.file.partition.replace('_', '-')}-{self.index:06d}"
+    def key(self) -> tuple[str, int]:
+        return self.file.partition, self.index
 
     @property
     def context(self) -> str:
@@ -307,7 +307,6 @@ def _make_record(ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
     channels = _PAMAP2_CHANNELS if ref.file.partition == "pamap2_v2" else _CHANNELS
     signals = tuple(
         Signal.from_loader(
-            id=f"{ref.id}-{name.replace('_', '-')}",
             name=name,
             spec=spec,
             time_axis=_AXIS,
@@ -317,10 +316,7 @@ def _make_record(ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
         )
         for spec, name, sensor, dimension in channels
     )
-    record = Record(
-        id=ref.id,
-        sources=(Source(id=f"{ref.id}-imu", name="IMU", signals=signals),),
-    )
+    record = Record(sources=(Source(name="IMU", signals=signals),))
     source = ref.file.partition.rsplit("_", 1)[0]
     metadata: dict[str, str | int] = {
         "source_dataset": source,
@@ -332,11 +328,13 @@ def _make_record(ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
     if row.location is not None:
         metadata["sensor_location"] = row.location
     for key, value in metadata.items():
-        record.annotate(Annotation(key=key, value=value, id=f"{ref.id}-{key}"))
+        record.annotate(Annotation(key=key, value=value))
     return record
 
 
-def _iter_tasks(files: tuple[SensorCapsFileRef, ...], records: Mapping[str, Record]) -> Iterator[AnswerTask]:
+def _iter_tasks(
+    files: tuple[SensorCapsFileRef, ...], records: Mapping[tuple[str, int], Record]
+) -> Iterator[AnswerTask]:
     """Re-read original system prompts and caption targets without retaining the corpus.
 
     Yields:
@@ -344,14 +342,13 @@ def _iter_tasks(files: tuple[SensorCapsFileRef, ...], records: Mapping[str, Reco
     """
     for file in files:
         for ref, row in _iter_rows(file):
-            record = records[ref.id]
+            record = records[ref.key]
             context = [
                 annotation
                 for annotation in record.annotations
                 if annotation.key in {"activity_summary", "sensor_location"}
             ]
             yield AnswerTask(
-                id=f"{ref.id}-caption",
                 inputs=(record,),
                 targets=(row.caption,),
                 prompt=f"{row.system}\n\n{row.features}" if row.features.strip() else row.system,
@@ -415,15 +412,15 @@ class SensorCapsConnector(BaseConnector[SensorCapsFileRef]):
             ("source_window_samples", _SOURCE_WINDOW_SAMPLES),
             ("time_axis_reconstruction", "round(linspace(0, 119, 60)) / 20 seconds relative to window start"),
         ):
-            dataset.annotate(Annotation(key=key, value=value, id=f"sensorcaps-{key}"))
-        records: dict[str, Record] = {}
+            dataset.annotate(Annotation(key=key, value=value))
+        records: dict[tuple[str, int], Record] = {}
         loader = _ValueLoader()
         for file in raw_refs:
             count = 0
             for ref, row in _iter_rows(file):
                 record = _make_record(ref, row, loader)
                 dataset.add_record(record=record)
-                records[record.id] = record
+                records[ref.key] = record
                 count += 1
             if not count:
                 raise TimeFValidationError(f"{file.path} ({file.partition}): empty source partition")
