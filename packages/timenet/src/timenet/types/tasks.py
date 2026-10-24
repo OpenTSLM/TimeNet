@@ -169,21 +169,16 @@ class Task(SupportsAnnotate, ABC):
         )
 
     def _infer_input_modalities(self) -> frozenset[InputModality]:
-        signal_ids = None
+        scoped: tuple[Signal, ...] | None = None
         if isinstance(self.scope, StepSpan):
-            signal_ids = {self.scope.time_series_id}
-        elif isinstance(self.scope, TimeSpan) and self.scope.time_series_ids is not None:
-            signal_ids = set(self.scope.time_series_ids)
-        signals = {signal.id: signal for record in self.inputs for signal in record.walk_signals()}
-        if signal_ids is not None and signal_ids - signals.keys():
-            raise TimeFValidationError(
-                f"task {self.id!r} scope names unknown input Signals: {signal_ids - signals.keys()}"
-            )
-        kinds = {
-            signal.spec.modality
-            for signal_id, signal in signals.items()
-            if signal_ids is None or signal_id in signal_ids
-        }
+            scoped = (self.scope.time_series,)
+        elif isinstance(self.scope, TimeSpan):
+            scoped = self.scope.time_series
+        signals = {id(signal): signal for record in self.inputs for signal in record.walk_signals()}
+        unknown = [signal.name for signal in scoped or () if id(signal) not in signals]
+        if unknown:
+            raise TimeFValidationError(f"task scope names Signals that are not in its inputs: {unknown}")
+        kinds = {signal.spec.modality for signal in (signals.values() if scoped is None else scoped)}
         if self.prompt or any(
             value_type_of(annotation.value) in {"str", "list"} for annotation in self.input_annotations
         ):

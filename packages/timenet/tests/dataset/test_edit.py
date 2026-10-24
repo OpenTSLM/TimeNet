@@ -53,7 +53,6 @@ def _answer_reads_context_via_additional_input():
         annotation for annotation in context_record.annotations if annotation.id == shared_annotation.id
     )
     answer.inputs = (record, context_record)
-    context_record.task_ids = (*context_record.task_ids, answer.id)
     record.annotations = tuple(annotation for annotation in record.annotations if annotation.id != shared_annotation.id)
     answer.input_annotations = (context_annotation,)
     return dataset
@@ -68,7 +67,7 @@ def test_remove_leaf_record():
     removed_record = dataset.records[1]
     retained_records = (dataset.records[0], dataset.records[2])
     expected_task_ids = {task.id for task in dataset.tasks}
-    assert not removed_record.task_ids, "the removed record must have no tasks"
+    assert not dataset.tasks_for(removed_record), "the removed record must have no tasks"
     edited = remove_records(dataset, [removed_record.id])
     assert {record.id for record in edited.records} == {record.id for record in retained_records}
     assert {task.id for task in edited.tasks} == expected_task_ids
@@ -148,7 +147,6 @@ def test_target_annotation_refs_are_required():
     localize.inputs = (removed_record, retained_record)
     localize.targets = None
     localize.target_annotations = (target_annotation,)
-    retained_record.task_ids = (*retained_record.task_ids, localize.id)
     dataset.derive_schema()
 
     with pytest.raises(TimeFEditError, match=re.escape(localize.id)):
@@ -171,7 +169,7 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
         restored = reader.read()
 
     by_record = {
-        record.record_id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
+        record.id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
     }
     for task in restored.tasks:
         reachable = set().union(*(by_record[record.id] for record in task.inputs))

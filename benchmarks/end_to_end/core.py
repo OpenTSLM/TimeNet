@@ -125,9 +125,8 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
             digest.update(
                 json.dumps(
                     {
-                        "record_id": record.record_id,
+                        "record_id": record.id,
                         "metadata": record.metadata,
-                        "task_ids": record.task_ids,
                         "annotations": _canonical(record.annotations),
                         "sources": _canonical(record.sources),
                     },

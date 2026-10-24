@@ -72,7 +72,7 @@ def _add_record(
         The registered Record.
     """
     record = Record(
-        record_id=record_id,
+        id=record_id,
         sources=(
             Source(
                 id=f"{record_id}-source",

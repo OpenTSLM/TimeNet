@@ -127,7 +127,7 @@ class TimeFTorchDataset(Dataset):
     def _item(record: Record, tasks: tuple[Task, ...]) -> dict[str, Any]:
         pairs = tuple(_series_tensor_and_mask(signal) for signal in record.signals)
         return {
-            "record_id": record.record_id,
+            "record_id": record.id,
             "series": tuple(values for values, _ in pairs),
             "series_masks": tuple(mask for _, mask in pairs),
             "tasks": tasks,
@@ -136,32 +136,22 @@ class TimeFTorchDataset(Dataset):
 
 
 class _DatasetItems:
-    """Items from a materialized dataset, resolved through each record's ``task_ids``."""
+    """Items from a materialized dataset, each record with the tasks that take it as input."""
 
     def __init__(self, dataset: TimeFDataset) -> None:
         self._records = dataset.records
-        self._tasks_by_id = {task.id: task for task in dataset.tasks}
+        self._tasks_by_record: dict[int, list[Task]] = {}
+        for task in dataset.tasks:
+            for record in task.inputs:
+                self._tasks_by_record.setdefault(id(record), []).append(task)
 
     def __len__(self) -> int:
         return len(self._records)
 
     def fetch(self, indices: Sequence[int]) -> list[tuple[Record, tuple[Task, ...]]]:
-        """Return the records at ``indices`` with their tasks, in order.
-
-        Raises:
-            TimeFValidationError: If a record references a task id that does not exist.
-        """
-        items: list[tuple[Record, tuple[Task, ...]]] = []
-        for index in indices:
-            record = self._records[index]
-            tasks = []
-            for task_id in record.task_ids:
-                task = self._tasks_by_id.get(task_id)
-                if task is None:
-                    raise TimeFValidationError(f"record {record.record_id!r} references unknown task id {task_id!r}")
-                tasks.append(task)
-            items.append((record, tuple(tasks)))
-        return items
+        """Return the records at ``indices`` with their tasks, in order."""
+        records = [self._records[index] for index in indices]
+        return [(record, tuple(self._tasks_by_record.get(id(record), ()))) for record in records]
 
 
 class _ReaderItems:
@@ -183,13 +173,13 @@ class _ReaderItems:
         """Return the records at ``indices`` with their tasks, in order."""
         ids = self._ids()
         records = tuple(self._reader.iter_records([ids[index] for index in indices]))
-        tasks_by_record: dict[str, list[Task]] = {record.record_id: [] for record in records}
+        tasks_by_record: dict[str, list[Task]] = {record.id: [] for record in records}
         for task in self._reader.read_tasks(records):
             for record in task.inputs:
-                attached = tasks_by_record.get(record.record_id)
+                attached = tasks_by_record.get(record.id)
                 if attached is not None:
                     attached.append(task)
-        return [(record, tuple(tasks_by_record[record.record_id])) for record in records]
+        return [(record, tuple(tasks_by_record[record.id])) for record in records]
 
 
 def _series_tensor_and_mask(ts: Signal) -> tuple[Shaped[Tensor, " time *value"], Tensor]:

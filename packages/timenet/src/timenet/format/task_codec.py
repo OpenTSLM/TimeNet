@@ -2,7 +2,8 @@
 
 Spans, task configuration, and targets are all stored as plain columns rather than JSON, so DuckDB can
 filter on them and the reader builds objects straight from row values. Object references travel as
-public IDs here; the writer and reader swap them for internal keys at the table boundary.
+public IDs here; the writer and reader swap them for internal keys at the table boundary. A span
+holds Signal objects, so encoding reads their ids and decoding looks the read-back Signals up by id.
 """
 
 from collections.abc import Iterable, Mapping
@@ -89,35 +90,15 @@ def encode_span(span: Span | None) -> dict[str, Any] | None:
     """
     if span is None:
         return None
-    if isinstance(span, TimePoint):
-        return {
-            "span_type": "time_point",
-            "span_start": span.start_us,
-            "span_end": None,
-            "signal_ids": span.time_series_ids,
-        }
-    if isinstance(span, TimeInterval):
-        return {
-            "span_type": "time_interval",
-            "span_start": span.start_us,
-            "span_end": span.end_us,
-            "signal_ids": span.time_series_ids,
-        }
-    if isinstance(span, StepPoint):
-        return {
-            "span_type": "step_point",
-            "span_start": span.start,
-            "span_end": None,
-            "signal_ids": (span.time_series_id,),
-        }
-    if isinstance(span, StepInterval):
-        return {
-            "span_type": "step_interval",
-            "span_start": span.start,
-            "span_end": span.stop,
-            "signal_ids": (span.time_series_id,),
-        }
-    raise TimeFFormatError(f"cannot encode unsupported span type {type(span).__name__}")
+    if not isinstance(span, (TimePoint, TimeInterval, StepPoint, StepInterval)):
+        raise TimeFFormatError(f"cannot encode unsupported span type {type(span).__name__}")
+    row = TargetValueRow.from_target(span)
+    return {
+        "span_type": row.target_kind.value,
+        "span_start": row.span_start,
+        "span_end": row.span_end,
+        "signal_ids": row.span_signal_ids,
+    }
 
 
 def decode_span(
@@ -125,34 +106,44 @@ def decode_span(
     span_start: int | None,
     span_end: int | None,
     signal_ids: Iterable[str] | None,
+    *,
+    signals: Mapping[str, Signal],
 ) -> Span | None:
     """Decode the four span columns.
+
+    Args:
+        span_type: The stored span shape, or ``None`` for no span.
+        span_start: The stored start bound.
+        span_end: The stored end bound.
+        signal_ids: The ids of the Signals the span is scoped to.
+        signals: The read-back Signals by id, which take the place of ``signal_ids``.
 
     Returns:
         The decoded Span, or ``None`` when ``span_type`` is NULL.
 
     Raises:
-        TimeFFormatError: If the stored span type is unknown or a required bound is NULL.
+        TimeFFormatError: If the stored span type is unknown, a required bound is NULL, or a
+            Signal id names no read-back Signal.
     """
     if span_type is None:
         return None
     if span_start is None:
         raise TimeFFormatError(f"stored {span_type} span has no start")
-    ids = _tuple_or_none(signal_ids)
+    series = _signals(signal_ids, signals)
     if span_type == "time_point":
-        return TimePoint(start_us=span_start, time_series_ids=ids)
+        return TimePoint(start_us=span_start, time_series=series)
     if span_type == "time_interval":
         if span_end is None:
             raise TimeFFormatError("stored time_interval span has no end")
-        return TimeInterval(start_us=span_start, end_us=span_end, time_series_ids=ids)
-    if not ids:
+        return TimeInterval(start_us=span_start, end_us=span_end, time_series=series)
+    if not series:
         raise TimeFFormatError(f"stored {span_type} span names no series")
     if span_type == "step_point":
-        return StepPoint(start=span_start, time_series_id=ids[0])
+        return StepPoint(start=span_start, time_series=series[0])
     if span_type == "step_interval":
         if span_end is None:
             raise TimeFFormatError("stored step_interval span has no stop")
-        return StepInterval(start=span_start, stop=span_end, time_series_id=ids[0])
+        return StepInterval(start=span_start, stop=span_end, time_series=series[0])
     raise TimeFFormatError(f"stored span has unknown type {span_type!r}")
 
 
@@ -191,8 +182,8 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
 def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding branch
     row: Mapping[str, object] | TargetValueRow,
     *,
-    records: dict[str, Record],
-    signals: dict[str, Signal],
+    records: Mapping[str, Record],
+    signals: Mapping[str, Signal],
 ) -> object:
     """Decode one typed target row and resolve stored object references.
 
@@ -220,18 +211,20 @@ def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding b
     if kind == TaskTargetKind.SIGNAL:
         return _resolve(signals, _required(values.signal_id, kind, "signal_id"), "Signal")
     start = _required(values.span_start, kind, "span_start")
-    signal_ids = values.span_signal_ids
     if kind == TaskTargetKind.TIME_POINT:
-        return TimePoint(start_us=start, time_series_ids=signal_ids)
+        return TimePoint(start_us=start, time_series=_signals(values.span_signal_ids, signals))
     if kind == TaskTargetKind.TIME_INTERVAL:
         return TimeInterval(
-            start_us=start, end_us=_required(values.span_end, kind, "span_end"), time_series_ids=signal_ids
+            start_us=start,
+            end_us=_required(values.span_end, kind, "span_end"),
+            time_series=_signals(values.span_signal_ids, signals),
         )
     (signal_id,) = _required(values.span_signal_ids, kind, "span_signal_ids")
+    signal = _resolve(signals, signal_id, "Signal")
     if kind == TaskTargetKind.STEP_POINT:
-        return StepPoint(start=start, time_series_id=signal_id)
+        return StepPoint(start=start, time_series=signal)
     if kind == TaskTargetKind.STEP_INTERVAL:
-        return StepInterval(start=start, stop=_required(values.span_end, kind, "span_end"), time_series_id=signal_id)
+        return StepInterval(start=start, stop=_required(values.span_end, kind, "span_end"), time_series=signal)
     raise TimeFFormatError(f"task target has unknown kind {kind!r}")
 
 
@@ -241,17 +234,19 @@ def _required(value: _T | None, kind: TaskTargetKind, name: str) -> _T:
     return value
 
 
-def _resolve(objects: dict[str, _T], public_id: str, label: str) -> _T:
+def _resolve(objects: Mapping[str, _T], public_id: str, label: str) -> _T:
     try:
         return objects[public_id]
     except KeyError as exc:
         raise TimeFFormatError(f"task target refers to missing {label} {public_id!r}") from exc
 
 
-def _tuple_or_none(value: object) -> tuple[str, ...] | None:
-    """Normalize a stored signal-ID sequence.
+def _signals(signal_ids: object, signals: Mapping[str, Signal]) -> tuple[Signal, ...] | None:
+    """Resolve a stored Signal id sequence to the read-back Signals.
 
     Returns:
-        The immutable sequence, or ``None``.
+        The Signals in stored order, or ``None`` when no ids are stored.
     """
-    return None if value is None else tuple(cast("Iterable[str]", value))
+    if signal_ids is None:
+        return None
+    return tuple(_resolve(signals, signal_id, "Signal") for signal_id in cast("Iterable[str]", signal_ids))

@@ -59,13 +59,6 @@ def test_transform_applied():
     assert isinstance(ds[0], torch.Tensor)
 
 
-def test_dangling_task_id_raises():
-    dataset = make_dataset()
-    dataset.records[0].task_ids = ("no-such-task",)
-    with pytest.raises(TimeFValidationError, match="unknown task id"):
-        TimeFTorchDataset(dataset)[0]
-
-
 def _typed_dataset(dtype, values, *, nullable=False):
     spec = TimeSeriesSpec(
         spec_type=f"chan_{dtype}",
@@ -85,7 +78,7 @@ def _typed_dataset(dtype, values, *, nullable=False):
             domains=(Domain.GENERAL,),
         )
     )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), record_id="record-0"))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),), id="record-0"))
     return dataset
 
 

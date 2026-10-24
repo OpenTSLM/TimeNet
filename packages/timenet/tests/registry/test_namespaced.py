@@ -40,7 +40,7 @@ def _namespaced_dataset() -> TimeFDataset:
     record = dataset.add_record(
         record=Record(
             sources=(Source(id="ns-record-0-source", name="Source", signals=(series,)),),
-            record_id="ns-record-0",
+            id="ns-record-0",
         )
     )
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), id="ns-task-0"))
