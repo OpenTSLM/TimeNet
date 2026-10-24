@@ -41,7 +41,7 @@ class SignalSelection:
             selected = tuple(signals)
             unknown = [signal.id for signal in selected if by_id.get(signal.id) is not signal]
             if unknown:
-                raise TimeFValidationError(f"signals {unknown} do not belong to source {source.id!r}")
+                raise TimeFValidationError(f"signals {unknown} do not belong to source {source.name!r}")
         else:
             names = tuple(signal_names or ())
             matches: dict[str, list[Signal]] = {}
@@ -51,10 +51,10 @@ class SignalSelection:
             unknown = [name for name in names if name not in matches]
             if ambiguous:
                 raise TimeFValidationError(
-                    f"signal_names {ambiguous} are ambiguous below source {source.id!r}; select objects instead"
+                    f"signal_names {ambiguous} are ambiguous below source {source.name!r}; select objects instead"
                 )
             if unknown:
-                raise TimeFValidationError(f"signal_names {unknown} do not exist below source {source.id!r}")
+                raise TimeFValidationError(f"signal_names {unknown} do not exist below source {source.name!r}")
             selected = tuple(matches[name][0] for name in names)
         ids = [signal.id for signal in selected]
         if not ids:

@@ -18,13 +18,13 @@ from timenet.writer import TimeFWriter
 def test_remove_records_preserves_dataset_annotations_and_their_refs():
     # A dataset annotation and a task reference to its occurrence survive an unrelated record removal.
     dataset = make_dataset()
-    options = dataset.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-shared"))
+    options = dataset.annotate(Annotation(key="answer_options", value=["yes", "no"]))
     answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
     answer.input_annotations = (*answer.input_annotations, options)
 
     edited = remove_records(dataset, [dataset.records[2].id], cascade=True)
 
-    assert [ann.id for ann in edited.annotations] == [options.id]
+    assert list(edited.annotations) == [options]
     kept = next(task for task in edited.tasks if task.id == answer.id)
     assert options in kept.input_annotations
 
@@ -50,10 +50,10 @@ def _answer_reads_context_via_additional_input():
     (shared_annotation,) = answer.input_annotations
     context_record = dataset.records[1]
     context_annotation = next(
-        annotation for annotation in context_record.annotations if annotation.id == shared_annotation.id
+        annotation for annotation in context_record.annotations if annotation == shared_annotation
     )
     answer.inputs = (record, context_record)
-    record.annotations = tuple(annotation for annotation in record.annotations if annotation.id != shared_annotation.id)
+    record.annotations = tuple(annotation for annotation in record.annotations if annotation != shared_annotation)
     answer.input_annotations = (context_annotation,)
     return dataset
 
@@ -108,7 +108,7 @@ def test_shared_annotation_survives_on_remaining_record():
     retained_record = dataset.records[1]
     edited = remove_records(dataset, [removed_record.id], cascade=True)
     restored_record = next(record for record in edited.records if record.id == retained_record.id)
-    assert any(annotation.id == shared_annotation.id for annotation in restored_record.annotations)
+    assert shared_annotation in restored_record.annotations
 
 
 def test_input_annotation_refs_are_stripped_when_unreachable():
@@ -132,7 +132,7 @@ def test_input_annotation_refs_survive_a_reachable_removal():
     (context_annotation,) = answer.input_annotations
     edited = remove_records(dataset, [dataset.records[1].id])
     rebuilt = next(task for task in edited.tasks if task.id == answer.id)
-    assert tuple(annotation.id for annotation in rebuilt.input_annotations) == (context_annotation.id,)
+    assert rebuilt.input_annotations == (context_annotation,)
 
 
 def test_target_annotation_refs_are_required():
@@ -168,13 +168,11 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         restored = reader.read()
 
-    by_record = {
-        record.id: {annotation.occurrence_id for annotation in record.annotations} for record in restored.records
-    }
+    by_record = {record.id: {id(annotation) for annotation in record.annotations} for record in restored.records}
     for task in restored.tasks:
         reachable = set().union(*(by_record[record.id] for record in task.inputs))
         named = (*task.input_annotations, *task.target_annotations)
-        assert not [annotation for annotation in named if annotation.occurrence_id not in reachable]
+        assert not [annotation for annotation in named if id(annotation) not in reachable]
 
 
 def test_target_and_candidate_records_are_required_whatever_the_task_type():

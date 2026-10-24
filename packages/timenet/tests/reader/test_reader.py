@@ -57,7 +57,7 @@ def test_subject_annotations_round_trip_and_filter(tmp_path, backend, subjects):
     dataset = _referenced_annotation_dataset()
     record = dataset.records[0]
     if subjects:
-        record.annotate(Annotation(key="subject_ids", value=list(subjects), id="record-subjects"))
+        record.annotate(Annotation(key="subject_ids", value=list(subjects)))
     version_dir = _write(tmp_path, dataset=dataset, values_backend=backend)
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
@@ -101,11 +101,11 @@ def _referenced_annotation_dataset() -> TimeFDataset:
     )
     record = dataset.add_record(
         record=Record(
-            sources=(Source(id="rec-0-source", name="Source", signals=(signal,)),),
+            sources=(Source(name="Source", signals=(signal,)),),
             id="rec-0",
         )
     )
-    options = record.annotate(Annotation(key="answer_options", value=["yes", "no"], id="opts-yesno"))
+    options = record.annotate(Annotation(key="answer_options", value=["yes", "no"]))
     dataset.add_task(
         task=AnswerTask(
             prompt="Rhythm?",
@@ -336,7 +336,7 @@ def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_pa
     }
     assert all(task.inputs[0] is record0 for task in tasks)
     answer = next(task for task in tasks if task.id == expected_answer.id)
-    cohort = next(annotation for annotation in record0.annotations if annotation.id == expected_context.id)
+    cohort = next(annotation for annotation in record0.annotations if annotation == expected_context)
     assert answer.input_annotations[0] is cohort
 
 

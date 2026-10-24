@@ -76,12 +76,6 @@ def test_annotation_type_of():
     assert annotation_type_of(Annotation(key="a", span=TimeInterval.seconds(1.0, 2.0))) is AnnotationType.INTERVAL
 
 
-def test_auto_id_unique():
-    a = Annotation(key="age", value=1)
-    b = Annotation(key="age", value=1)
-    assert a.id != b.id
-
-
 def test_sequence_value_canonicalized_to_list():
     # value_type is "list" for any sequence, and the manifest stores it as a JSON array that decodes
     # back to a list; normalizing at construction keeps an annotation equal to its read-back form.

@@ -115,9 +115,9 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   `dataset.add_tasks(tasks=[...])` takes an iterable and registers the batch all-or-nothing. The task
   names its input records itself. Set `scope` and `from_tasks` on the task too; a batch may derive
   from its own members in any order.
-- Do not pass ids. Every record, source, signal, annotation, and task gets a generated id. Put
-  upstream identifiers (a recording name, an `ecg_id`) in `Record.metadata` or in an annotation, for
-  example `metadata={"ecg_id": 17}`.
+- Do not pass ids. Every record, signal, and task gets a generated id. Sources, axes, and
+  annotations have no id. Put upstream identifiers (a recording name, an `ecg_id`) in
+  `Record.metadata` or in an annotation, for example `metadata={"ecg_id": 17}`.
 - Keep a Python reference to any annotation or task you reference later and pass that object. When
   you look objects up by an upstream key, keep a local dict keyed by that key, not by a derived id
   string.

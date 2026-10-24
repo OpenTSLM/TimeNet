@@ -43,19 +43,15 @@ class _TaskValidationIndex:
         self.records_by_id = dataset._records_by_id
         self.signals_by_id = dataset._signals_by_id
         self.signals_by_record_id = dataset._signals_by_record_id
-        self.dataset_annotation_ids = {
-            annotation.occurrence_id for annotation in dataset._annotations if annotation.occurrence_id is not None
-        }
-        self._record_annotation_ids: dict[str, set[str]] = {}
+        self.dataset_annotations = {id(annotation) for annotation in dataset._annotations}
+        self._record_annotations: dict[int, set[int]] = {}
 
-    def annotation_ids_for(self, record: Record) -> set[str]:
-        """Return occurrence IDs attached anywhere in one Record hierarchy."""
-        known = self._record_annotation_ids.get(record.id)
-        if known is not None:
-            return known
-        annotations = record.walk_annotations()
-        known = {annotation.occurrence_id for annotation in annotations if annotation.occurrence_id is not None}
-        self._record_annotation_ids[record.id] = known
+    def annotations_for(self, record: Record) -> set[int]:
+        """Return the identities of the occurrences attached anywhere in one Record hierarchy."""
+        known = self._record_annotations.get(id(record))
+        if known is None:
+            known = {id(annotation) for annotation in record.walk_annotations()}
+            self._record_annotations[id(record)] = known
         return known
 
 
@@ -71,8 +67,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._metadata = metadata
         self._records: list[Record] = []
         self._records_by_id: dict[str, Record] = {}
-        self._sources_by_id: dict[str, Source] = {}
         self._signals_by_id: dict[str, Signal] = {}
+        self._sources: set[int] = set()
         self._signals_by_record_id: dict[str, tuple[Signal, ...]] = {}
         self._tasks: list[Task] = []
         self._task_ids: set[str] = set()
@@ -98,11 +94,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         if record.id in self._records_by_id:
             raise TimeFValidationError(f"record id {record.id!r} is already registered")
         record_sources, record_signals = self._index_record_hierarchy(record)
-        repeated_sources = sorted(self._sources_by_id.keys() & record_sources.keys())
-        if repeated_sources:
-            raise TimeFValidationError(
-                f"source id(s) {repeated_sources} already belong to another record; each Source has one owner"
-            )
+        shared = [source.name for identity, source in record_sources.items() if identity in self._sources]
+        if shared:
+            raise TimeFValidationError(f"Sources {shared} already belong to another record; each Source has one owner")
         repeated_signals = sorted(self._signals_by_id.keys() & record_signals.keys())
         if repeated_signals:
             raise TimeFValidationError(
@@ -110,7 +104,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             )
         self._records.append(record)
         self._records_by_id[record.id] = record
-        self._sources_by_id.update(record_sources)
+        self._sources.update(record_sources)
         self._signals_by_id.update(record_signals)
         self._signals_by_record_id[record.id] = tuple(record_signals.values())
         return record
@@ -128,19 +122,16 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return sorted(duplicates)
 
     @classmethod
-    def _index_record_hierarchy(cls, record: Record) -> tuple[dict[str, Source], dict[str, Signal]]:
-        """Collect one record's hierarchy and reject IDs repeated inside it.
+    def _index_record_hierarchy(cls, record: Record) -> tuple[dict[int, Source], dict[str, Signal]]:
+        """Collect one record's hierarchy and reject Signal IDs repeated inside it.
 
         Returns:
-            Sources and Signals keyed by their stable public IDs.
+            Sources keyed by object identity and Signals keyed by their stable public IDs.
 
         Raises:
-            TimeFValidationError: If two Sources or Signals in the record share an ID.
+            TimeFValidationError: If two Signals in the record share an ID.
         """
         sources = tuple(record.walk_sources())
-        source_duplicates = cls._duplicate_ids(source.id for source in sources)
-        if source_duplicates:
-            raise TimeFValidationError(f"record {record.id!r} contains duplicate source IDs {source_duplicates}")
         signals = tuple(
             signal for source in sources for signal in sorted(source.signals, key=lambda item: (item.name, item.id))
         )
@@ -148,7 +139,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         if signal_duplicates:
             raise TimeFValidationError(f"record {record.id!r} contains duplicate signal IDs {signal_duplicates}")
         return (
-            {source.id: source for source in sources},
+            {id(source): source for source in sources},
             {signal.id: signal for signal in signals},
         )
 
@@ -637,16 +628,16 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: If a referenced annotation occurrence is attached neither to the
                 dataset nor to a target record.
         """
-        record_occurrences = tuple(index.annotation_ids_for(record) for record in records)
+        record_occurrences = tuple(index.annotations_for(record) for record in records)
         for field_name in ("input_annotations", "target_annotations"):
             for annotation in getattr(task, field_name):
-                occurrence_id = annotation.occurrence_id
-                if occurrence_id not in index.dataset_annotation_ids and not any(
-                    occurrence_id in known for known in record_occurrences
+                identity = id(annotation)
+                if identity not in index.dataset_annotations and not any(
+                    identity in known for known in record_occurrences
                 ):
                     raise TimeFValidationError(
-                        f"{type(task).__name__} {field_name} refers to annotation occurrence "
-                        f"{annotation.occurrence_id!r}, which is not attached to its dataset or input hierarchy"
+                        f"{type(task).__name__} {field_name} refers to an occurrence of annotation "
+                        f"{annotation.key!r} that is not attached to its dataset or input hierarchy"
                     )
 
     @staticmethod

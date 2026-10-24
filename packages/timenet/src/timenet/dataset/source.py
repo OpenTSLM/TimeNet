@@ -8,7 +8,7 @@ from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
-from timenet.types import Annotation, SupportsAnnotate, new_id
+from timenet.types import Annotation, SupportsAnnotate
 
 
 if TYPE_CHECKING:
@@ -21,8 +21,6 @@ class Source(SupportsAnnotate):
 
     name: str
     """Human-readable source name."""
-    id: str = field(default_factory=new_id)
-    """Stable source identifier."""
     sources: tuple["Source", ...] = ()
     """Direct child sources. Their order has no semantic meaning."""
     signals: tuple[Signal, ...] = ()
@@ -33,20 +31,17 @@ class Source(SupportsAnnotate):
     """Optional JSON-compatible source metadata."""
 
     def __post_init__(self) -> None:
-        """Validate the source's local identity and direct children.
+        """Validate the source's name, its direct signals, and the spans of its annotations.
 
         Raises:
-            TimeFValidationError: If the source has no name or repeats a direct child ID.
+            TimeFValidationError: If the source has no name or repeats a direct signal ID.
         """
         if not self.name:
             raise TimeFValidationError("Source.name must be non-empty")
         self.metadata = validate_json_mapping(self.metadata)
-        source_ids = [source.id for source in self.sources]
         signal_ids = [signal.id for signal in self.signals]
-        if len(source_ids) != len(set(source_ids)):
-            raise TimeFValidationError(f"source {self.id!r} contains duplicate child source IDs")
         if len(signal_ids) != len(set(signal_ids)):
-            raise TimeFValidationError(f"source {self.id!r} contains duplicate signal IDs")
+            raise TimeFValidationError(f"source {self.name!r} contains duplicate signal IDs")
 
         for annotation in self.annotations:
             if annotation.span is not None:
@@ -61,7 +56,7 @@ class Source(SupportsAnnotate):
         """Yield this source and all descendants in deterministic depth-first order.
 
         Yields:
-            This source followed by its descendants, sorted by name and ID at each level.
+            This source followed by its descendants, sorted by name at each level.
 
         Raises:
             TimeFValidationError: If the graph contains a cycle or one source has two parents.
@@ -72,13 +67,13 @@ class Source(SupportsAnnotate):
         def walk(source: Source) -> Iterator[Source]:
             identity = id(source)
             if identity in active:
-                raise TimeFValidationError(f"source hierarchy contains a cycle at source {source.id!r}")
+                raise TimeFValidationError(f"source hierarchy contains a cycle at source {source.name!r}")
             if identity in seen:
-                raise TimeFValidationError(f"source {source.id!r} is attached to more than one parent")
+                raise TimeFValidationError(f"source {source.name!r} is attached to more than one parent")
             seen.add(identity)
             active.add(identity)
             yield source
-            for child in sorted(source.sources, key=lambda item: (item.name, item.id)):
+            for child in sorted(source.sources, key=lambda item: item.name):
                 yield from walk(child)
             active.remove(identity)
 
