@@ -48,7 +48,8 @@ Signals can reference the same immutable `TimeAxis`.
 | Table | Purpose |
 | --- | --- |
 | `records` | Recording sessions and session-level timing metadata. |
-| `sources` | Recursive sources, linked to their record and parent source by internal keys. |
+| `clocks` | Record start times, shared by records that use the same `TimeOrigin`. |
+| `sources` | Recursive sources, linked to their record and parent source by ID. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
 | `axis_offsets` | Shared offsets for irregular axes. |
@@ -64,15 +65,16 @@ Signals can reference the same immutable `TimeAxis`.
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
 in either direction, so TimeF does not store duplicate reverse-index tables.
 
-Hierarchy tables carry a `BIGINT` internal key drawn from a sequence, and relationships between them
-refer to those keys. The task and annotation tables have no internal keys. Task tables are keyed by
-public IDs, annotation tables by the writer's storage IDs, and `task_annotation_refs` points at an
-occurrence by its `occurrence_id`. Public IDs (`record_id`, `signal_id`, and `task_id`) and the
-writer's storage IDs (`source_id`, `axis_id`, `content_id`, and `occurrence_id`) are positive int64
-values stored once, as `BIGINT`, on the row that owns them. The writer numbers storage IDs from 1 on
-every write. The `dataset_id` is the exception: it is the `org/name` string and is stored as
-`VARCHAR`. Fixed-shape fields are typed columns, so spans, task configuration, target values, and
-annotation values can be filtered in SQL. Only the free-form `metadata` dictionaries are JSON.
+Every table except `clocks` is keyed by IDs, and every relationship stores the ID it refers to.
+The one internal key is `clocks.clock_id`, which `records.clock_id` refers to. The writer numbers
+clocks from 1 on each write, so the value has no meaning outside one file and the Python API does
+not expose it. Public IDs (`record_id`, `signal_id`, and `task_id`) and the writer's storage IDs
+(`source_id`, `axis_id`, `content_id`, and `occurrence_id`) are positive int64 values stored as
+`BIGINT`. The writer numbers storage IDs from 1 on every write, like clocks. Each ID is unique
+within its own kind, so a Record and a Signal can share one. The `dataset_id` is the exception: it
+is the `org/name` string and is stored as `VARCHAR`. Fixed-shape fields are typed columns, so spans,
+task configuration, target values, and annotation values can be filtered in SQL. Only the free-form
+`metadata` dictionaries are JSON.
 
 The `control_metadata` table stores the last public ID used for each kind, under
 `last_id.Record`, `last_id.Signal`, and `last_id.Task`. A version edited from this one continues
@@ -84,8 +86,9 @@ Each `signals` row identifies its owning Source and axis. The fixed `TimeSeriesS
 stored inline:
 
 ```text
-signal_key, signal_id, source_key, name, axis_key, spec_type, spec_name, unit,
-dtype, categories, value_shape, dimension_names, nullable, n_values, metadata
+signal_id, source_id, name, axis_id, spec_type, spec_name, unit, dtype,
+categories, value_shape, dimension_names, nullable, n_values, metadata,
+modality
 ```
 
 There is no separate specification table. The fields are small, typed, directly queryable, and

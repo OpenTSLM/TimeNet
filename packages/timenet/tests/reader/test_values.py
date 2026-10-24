@@ -92,9 +92,7 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
         record = next(iter(reader.iter_records(with_annotations=False)))
         series = record.signals[0]
         control = reader._control_reader()
-        row = control.connection.execute("SELECT signal_key FROM signals WHERE signal_id = ?", [series.id]).fetchone()
-        assert row is not None
-        rows = control.chunk_rows_by_key(row[0], series.id)
+        rows = control.chunk_rows(series.id)
 
     projections: list[list[str]] = []
     values_reader = ParquetValuesReader()

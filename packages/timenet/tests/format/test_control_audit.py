@@ -57,50 +57,78 @@ def test_audit_accepts_a_freshly_written_database(control_path):
         audit_control_database(connection, require_chunks=False)
 
 
-def test_audit_requires_chunks_unless_told_otherwise(control_path):
-    with (
-        connect_control(control_path, read_only=True) as connection,
-        pytest.raises(TimeFFormatError, match="value chunks whose lengths do not match"),
-    ):
+def test_audit_requires_chunks_to_cover_each_signal(control_path):
+    with connect_control(control_path) as connection:
+        with pytest.raises(TimeFFormatError, match="value chunks whose lengths do not match"):
+            audit_control_database(connection)
+        connection.execute("INSERT INTO signal_chunks VALUES (1, 0, 'values.parquet', 0, NULL, 2)")
         audit_control_database(connection)
+        connection.execute("UPDATE signal_chunks SET n_values = 1")
+        with pytest.raises(TimeFFormatError, match="signal 1 has value chunks whose lengths do not match"):
+            audit_control_database(connection)
 
 
 @pytest.mark.parametrize(
     ("statement", "message"),
     [
         (
-            "INSERT INTO records (record_key, record_id, clock_id, metadata) SELECT record_key, record_id, clock_id, metadata FROM records",
-            "records contains duplicate values for record_key",
+            "INSERT INTO records (record_id, clock_id, metadata) SELECT record_id, clock_id, metadata FROM records",
+            "records contains duplicate values for record_id",
         ),
         (
-            "UPDATE sources SET record_key = -1 WHERE source_id = 1",
-            r"sources\.record_key refers to missing records\.record_key",
+            "UPDATE sources SET record_id = -1 WHERE source_id = 1",
+            r"sources\.record_id refers to missing records\.record_id value -1",
         ),
         (
-            "UPDATE sources SET parent_source_key = source_key WHERE source_id = 2",
-            r"invalid sources\.parent_source_key value",
+            "UPDATE signals SET source_id = 999",
+            r"signals\.source_id refers to missing sources\.source_id value 999",
+        ),
+        (
+            "UPDATE signals SET axis_id = 999",
+            r"signals\.axis_id refers to missing axes\.axis_id value 999",
+        ),
+        (
+            "INSERT INTO axis_offsets VALUES (999, 0, 0)",
+            r"axis_offsets\.axis_id refers to missing axes\.axis_id value 999",
+        ),
+        (
+            "INSERT INTO signal_chunks VALUES (999, 0, 'values.parquet', 0, NULL, 1)",
+            r"signal_chunks\.signal_id refers to missing signals\.signal_id value 999",
+        ),
+        (
+            "UPDATE sources SET parent_source_id = source_id WHERE source_id = 2",
+            r"invalid sources\.parent_source_id value",
         ),
         (
             "UPDATE signals SET n_values = 0",
             r"invalid signals\.n_values value",
         ),
         (
-            "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 99, 1, '{}'); "
-            "UPDATE sources SET record_key = -1 WHERE source_id = 2",
-            "belong to different records",
+            "INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}'); "
+            "UPDATE sources SET record_id = 99 WHERE source_id = 2",
+            f"source {ECG_ID} and its parent belong to different records",
         ),
         (
-            "UPDATE sources SET parent_source_key = (SELECT source_key FROM sources WHERE source_id = 2) "
-            "WHERE source_id = 1",
+            "UPDATE sources SET parent_source_id = 2 WHERE source_id = 1",
             "contains a cycle",
         ),
         (
-            "INSERT INTO axis_offsets SELECT axis_key, 0, 0 FROM axes",
+            "INSERT INTO axis_offsets SELECT axis_id, 0, 0 FROM axes",
             "axis length that does not match",
         ),
         (
-            "UPDATE records SET record_id = 0; UPDATE task_record_refs SET record_id = 0",
+            "UPDATE records SET record_id = 0; UPDATE sources SET record_id = 0; "
+            "UPDATE task_record_refs SET record_id = 0",
             r"invalid records\.record_id value",
+        ),
+        (
+            "UPDATE sources SET source_id = source_id - 100, parent_source_id = parent_source_id - 100; "
+            "UPDATE signals SET source_id = source_id - 100",
+            r"invalid sources\.source_id value",
+        ),
+        (
+            "UPDATE axes SET axis_id = 0; UPDATE signals SET axis_id = 0",
+            r"invalid axes\.axis_id value",
         ),
         ("UPDATE signals SET signal_id = -1", r"invalid signals\.signal_id value"),
         (
@@ -137,14 +165,14 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
             r"task_targets\.signal_id refers to missing signals\.signal_id value 999",
         ),
         (
-            "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 99, 1, '{}'); "
+            "INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}'); "
             "UPDATE tasks SET scope_type = 'time_interval', scope_start = 0, scope_end = 2000, "
             "scope_signal_ids = [1]; "
             "UPDATE task_record_refs SET record_id = 99",
             "task 1 time span must resolve to exactly one input Record",
         ),
         (
-            "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 99, 1, '{}'); "
+            "INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}'); "
             "UPDATE task_targets SET target_kind = 'time_interval', text_value = NULL, span_start = 0, "
             "span_end = 2000, span_signal_ids = [1]; "
             "UPDATE task_record_refs SET record_id = 99",

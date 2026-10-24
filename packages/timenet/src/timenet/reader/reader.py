@@ -53,7 +53,7 @@ class TimeFReader:
         self._records: tuple[Record, ...] | None = None
         self._values: BaseValuesReader | None = None
         self._chunk_locator_batches: list[list[int]] = []
-        self._chunk_locator_batch_by_key: dict[int, int] = {}
+        self._chunk_locator_batch_by_id: dict[int, int] = {}
         self._chunk_rows_cache: dict[int, list[StoredChunk]] = {}
         self._axis_offsets_cache: OrderedDict[int, pa.Array] = OrderedDict()
         self._axis_offsets_cache_bytes = 0
@@ -321,18 +321,17 @@ class TimeFReader:
             self._values = make_values_reader(self._manifest.values_backend)
         return self._values
 
-    def _load_signal(self, signal_key: int, signal_id: EntityId, spec: TimeSeriesSpec) -> pa.Array:
+    def _load_signal(self, signal_id: EntityId, spec: TimeSeriesSpec) -> pa.Array:
         """Load all values for one Signal.
 
         Returns:
             The complete canonical Arrow array.
         """
-        rows = self._chunk_rows(signal_key, signal_id)
+        rows = self._chunk_rows(signal_id)
         return self._values_reader().load(self._version, rows, spec)
 
     def _load_signal_range(
         self,
-        signal_key: int,
         signal_id: EntityId,
         spec: TimeSeriesSpec,
         start: int,
@@ -343,54 +342,54 @@ class TimeFReader:
         Returns:
             The requested canonical Arrow values.
         """
-        rows = self._chunk_rows(signal_key, signal_id)
+        rows = self._chunk_rows(signal_id)
         return self._values_reader().load_range(self._version, rows, start, stop, spec)
 
-    def _chunk_rows(self, signal_key: int, signal_id: EntityId) -> list[StoredChunk]:
+    def _chunk_rows(self, signal_id: EntityId) -> list[StoredChunk]:
         """Return cached chunk locators after loading the Signal's bounded batch.
 
         Raises:
             TimeFFormatError: If the Signal has no stored chunks.
         """
-        cached = self._chunk_rows_cache.get(signal_key)
+        cached = self._chunk_rows_cache.get(signal_id)
         if cached is not None:
             if not cached:
                 raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
             return cached
-        batch_index = self._chunk_locator_batch_by_key.get(signal_key)
+        batch_index = self._chunk_locator_batch_by_id.get(signal_id)
         if batch_index is None:
-            return self._control_reader().chunk_rows_by_key(signal_key, signal_id)
+            return self._control_reader().chunk_rows(signal_id)
         batch = self._chunk_locator_batches[batch_index]
-        self._chunk_rows_cache.update(self._control_reader().chunk_rows_by_keys(batch))
-        rows = self._chunk_rows_cache[signal_key]
+        self._chunk_rows_cache.update(self._control_reader().chunk_rows_by_ids(batch))
+        rows = self._chunk_rows_cache[signal_id]
         if not rows:
             raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
         return rows
 
-    def _make_signal_loader(self, signal_key: int, signal_id: EntityId, spec: TimeSeriesSpec) -> _SignalLoader:
+    def _make_signal_loader(self, signal_id: EntityId, spec: TimeSeriesSpec) -> _SignalLoader:
         """Return a picklable, range-aware Signal loader."""
-        if signal_key not in self._chunk_locator_batch_by_key:
+        if signal_id not in self._chunk_locator_batch_by_id:
             if not self._chunk_locator_batches or len(self._chunk_locator_batches[-1]) >= _CHUNK_LOCATOR_BATCH_SIZE:
                 self._chunk_locator_batches.append([])
             batch_index = len(self._chunk_locator_batches) - 1
-            self._chunk_locator_batches[batch_index].append(signal_key)
-            self._chunk_locator_batch_by_key[signal_key] = batch_index
-        return _SignalLoader(self, signal_key, signal_id, spec)
+            self._chunk_locator_batches[batch_index].append(signal_id)
+            self._chunk_locator_batch_by_id[signal_id] = batch_index
+        return _SignalLoader(self, signal_id, spec)
 
-    def _load_offsets(self, axis_key: int, axis: IrregularAxis, n_values: int) -> pa.Array:
+    def _load_offsets(self, axis_id: int, axis: IrregularAxis, n_values: int) -> pa.Array:
         """Load stored offsets and keep recently used shared axes in an LRU cache.
 
         Returns:
             The axis offsets in microseconds.
         """
-        cached = self._axis_offsets_cache.get(axis_key)
+        cached = self._axis_offsets_cache.get(axis_id)
         if cached is not None:
-            self._axis_offsets_cache.move_to_end(axis_key)
+            self._axis_offsets_cache.move_to_end(axis_id)
             return cached
-        offsets = self._control_reader().load_axis_offsets_by_key(axis_key, axis, n_values)
+        offsets = self._control_reader().load_axis_offsets(axis_id, axis, n_values)
         if _AXIS_OFFSETS_CACHE_SIZE == 0:
             return offsets
-        self._axis_offsets_cache[axis_key] = offsets
+        self._axis_offsets_cache[axis_id] = offsets
         self._axis_offsets_cache_bytes += offsets.nbytes
         while len(self._axis_offsets_cache) > 1 and (
             len(self._axis_offsets_cache) > _AXIS_OFFSETS_CACHE_SIZE
@@ -429,7 +428,6 @@ class _SignalLoader:
     """Picklable values loader for one DuckDB-indexed Signal."""
 
     reader: TimeFReader
-    signal_key: int
     signal_id: EntityId
     spec: TimeSeriesSpec
 
@@ -439,7 +437,7 @@ class _SignalLoader:
         Returns:
             The complete canonical Arrow array.
         """
-        return self.reader._load_signal(self.signal_key, self.signal_id, self.spec)
+        return self.reader._load_signal(self.signal_id, self.spec)
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Load a half-open Signal step range.
@@ -447,4 +445,4 @@ class _SignalLoader:
         Returns:
             The requested canonical Arrow values.
         """
-        return self.reader._load_signal_range(self.signal_key, self.signal_id, self.spec, start, stop)
+        return self.reader._load_signal_range(self.signal_id, self.spec, start, stop)
