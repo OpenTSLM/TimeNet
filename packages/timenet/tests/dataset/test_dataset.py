@@ -63,9 +63,9 @@ def test_add_record_accepts_a_complete_hierarchy(make_series):
 
 
 def test_add_record_rejects_duplicate_source_ids_inside_one_hierarchy(make_series):
-    left = Source(id="sensor", name="Left", signals=(make_series(time_series_id="left"),))
-    right = Source(id="sensor", name="Right", signals=(make_series(time_series_id="right"),))
-    record = Record(id="record", sources=(left, right))
+    left = Source(id="sensor", name="Left", signals=(make_series(),))
+    right = Source(id="sensor", name="Right", signals=(make_series(),))
+    record = Record(sources=(left, right))
 
     with pytest.raises(TimeFValidationError, match="duplicate source IDs"):
         _dataset().add_record(record=record)
@@ -259,11 +259,10 @@ def test_add_record_rejects_duplicate_time_series_ids(make_series):
 
 def test_add_record_rejects_a_signal_owned_by_two_records(make_series):
     dataset = _dataset()
-    signal = make_series(time_series_id="shared-signal")
+    signal = make_series()
     dataset.add_record(
         record=Record(
-            id="record-a",
-            sources=(Source(id="source-a", name="A", signals=(signal,)),),
+            sources=(Source(name="A", signals=(signal,)),),
         )
     )
 
@@ -282,7 +281,7 @@ def test_add_record_rejects_a_signal_owned_by_two_records(make_series):
                 Source(
                     id="unused-source",
                     name="C",
-                    signals=(make_series(time_series_id="new-signal"),),
+                    signals=(make_series(),),
                 ),
             ),
         )
@@ -291,11 +290,11 @@ def test_add_record_rejects_a_signal_owned_by_two_records(make_series):
 
 def test_add_record_rejects_a_source_owned_by_two_records(make_series):
     dataset = _dataset()
-    source = Source(id="shared-source", name="Device", signals=(make_series(),))
-    dataset.add_record(record=Record(id="record-a", sources=(source,)))
+    source = Source(name="Device", signals=(make_series(),))
+    dataset.add_record(record=Record(sources=(source,)))
 
     with pytest.raises(TimeFValidationError, match="each Source has one owner"):
-        dataset.add_record(record=Record(id="record-b", sources=(source,)))
+        dataset.add_record(record=Record(sources=(source,)))
 
 
 def test_add_task_warns_for_a_scope_outside_record_span(make_series):
@@ -418,11 +417,8 @@ def test_add_task_rejects_on_a_streamed_dataset(make_series):
 
 def test_streamed_task_validation_rejects_an_unknown_record(make_series):
     dataset = _dataset()
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),), id="s-0"))
-    unknown = Record(
-        id="missing",
-        sources=(Source(id="missing-source", name="Missing", signals=(make_series(time_series_id="missing"),)),),
-    )
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    unknown = Record(sources=(Source(name="Missing", signals=(make_series(),)),))
     task = AnswerTask(prompt="q", targets=("a",), inputs=(unknown,))
     dataset.set_task_stream([AnswerTask], lambda: iter((task,)))
     with pytest.raises(TimeFValidationError, match="not registered"):
@@ -431,7 +427,7 @@ def test_streamed_task_validation_rejects_an_unknown_record(make_series):
 
 def test_streamed_task_validation_rejects_an_undeclared_type(make_series):
     dataset = _dataset()
-    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),), id="s-0"))
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     task = ClassificationTask(targets=("a",), inputs=(record,))
     dataset.set_task_stream([AnswerTask], lambda: iter((task,)))  # declared AnswerTask, streamed a different type
     with pytest.raises(TimeFValidationError, match="not one of the declared"):
@@ -440,10 +436,8 @@ def test_streamed_task_validation_rejects_an_undeclared_type(make_series):
 
 def test_streamed_task_validation_does_not_rewalk_registered_signals(make_series, monkeypatch):
     dataset = _dataset()
-    record = dataset.add_record(
-        record=Record(sources=(Source(name="Source", signals=(make_series(),)),), id="record-0")
-    )
-    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),), id="unrelated-record"))
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     task = AnswerTask(prompt="q", targets=("a",), inputs=(record,))
     calls = 0
     original = Record.signals
@@ -782,7 +776,7 @@ def test_add_tasks_drains_the_batch_before_checking_refs(make_series):
 def test_add_task_rejects_a_time_series_ref_not_on_the_record(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    unknown = make_series(time_series_id="no-such-series")
+    unknown = make_series()
     with pytest.raises(TimeFValidationError, match="not registered"):
         ds.add_task(task=TSCorrespondenceTask(inputs=(record,), targets=(unknown,)))
 

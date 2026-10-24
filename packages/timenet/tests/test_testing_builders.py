@@ -50,5 +50,5 @@ def test_assert_datasets_equal_detects_difference():
     ds = make_dataset()
     other = make_dataset()
     other.records[0].annotate(Annotation(key="extra", value=1))
-    with pytest.raises(AssertionError):
+    with pytest.raises(AssertionError, match="annotations differ"):
         assert_datasets_equal(ds, other)
