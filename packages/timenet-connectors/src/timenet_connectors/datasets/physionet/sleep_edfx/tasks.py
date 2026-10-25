@@ -325,8 +325,8 @@ def iter_tasks(records: Sequence[Record]) -> Iterator[Task]:
         # in one of them rather than in neither. Each builder then takes the part it reads.
         span_annotations = [one for one in record.annotations if one.span is not None]
         non_span_annotations = [one for one in record.annotations if one.span is None]
-        # Each stage is attached to every signal the technician read, so one epoch has one
-        # occurrence per signal. The same span and label mean the same stage.
+        # Every signal that the technician read carries each stage. So one epoch has one
+        # occurrence for each signal. The same span and label mean the same stage.
         stages = list(
             {
                 (one.span, one.value): one

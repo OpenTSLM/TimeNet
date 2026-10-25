@@ -97,8 +97,8 @@ owns, rather than by scanning the finished tables. The same invariants exist in 
 
 Sources, axes, and annotations have no ID, so the writer does not compare IDs for them. It stores
 equal annotation contents once, and equal regular or ordinal axes once. It matches irregular axes
-and annotation occurrences by object identity: Signals share an irregular axis row only if they use
-the same axis object, and each occurrence object gets one row.
+and annotation occurrences by object identity. Signals share an irregular axis row only if they use
+the same axis object. Each occurrence object gets one row.
 
 ## Task streams
 

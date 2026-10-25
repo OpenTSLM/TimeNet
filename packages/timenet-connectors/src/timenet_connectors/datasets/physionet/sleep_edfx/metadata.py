@@ -53,8 +53,8 @@ class MetadataAnnotation:
     every later recording that states that value. Two records with the same sex then carry one
     annotation between them, and the writer stores it one time.
 
-    The writer stores equal content one time, so many records that state the value write one
-    content row, and no caller must keep two copies in step.
+    The writer stores equal content one time. Many records that state the value write one content
+    row. No caller must keep two copies in step.
 
     Nothing reads the values up front. The build walks the release one time.
     """

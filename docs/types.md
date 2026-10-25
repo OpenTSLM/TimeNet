@@ -34,12 +34,12 @@ assert version > Version(1, 2, 0)
 
 Sources, axes, annotation contents, and annotation occurrences have no ID in Python. The writer
 numbers their rows each time it writes a version. It stores equal annotation contents once, and
-equal regular or ordinal axes once. An irregular axis is shared only by Signals that use the same
-axis object.
+equal regular or ordinal axes once. Signals share an irregular axis only if they use the same axis
+object.
 
 Two annotation contents are equal if the name, the value and its type, the unit, the description,
-and the metadata are equal. `0.0` and `-0.0` are equal, and so are all NaN values, but `True`, `1`,
-and `1.0` are not.
+and the metadata are equal. `0.0` and `-0.0` are equal. All NaN values are equal. `True`, `1`, and
+`1.0` are not equal.
 
 ## Units
 

@@ -730,9 +730,10 @@ class DuckDBControlReader:
         return tuple(self._dataset_annotations(row[0]).values())
 
     def _dataset_annotations(self, dataset_key: int) -> dict[int, Annotation]:
-        """Return a dataset's own annotation occurrences by occurrence key, read once.
+        """Return the annotation occurrences attached directly to a dataset, by occurrence key.
 
-        Tasks refer to these occurrences by object, so every read must return the same objects.
+        The reader reads them from storage only once. Tasks refer to these occurrences by object,
+        so every call must return the same objects.
 
         Returns:
             The occurrences attached to the dataset, in storage order.
@@ -1738,10 +1739,10 @@ class _TaskHydration:
             self.annotations_by_key.update(occurrences)
 
     def _match_foreign_occurrences(self) -> None:
-        """Find the occurrence keys of the Records that another reader instance hydrated, once.
+        """Find the occurrence keys of the Records that another reader instance hydrated.
 
-        A fresh read of the same Records builds their annotations in the same order, so the walks
-        line up one to one.
+        The method reads these Records again from storage only once. A fresh read builds their
+        annotations in the same order, so the two walks line up one to one.
         """
         foreign, self._foreign_records = self._foreign_records, []
         if not foreign:
@@ -1751,11 +1752,13 @@ class _TaskHydration:
             self.annotations_by_key.update(self._match_occurrences(record, fresh))
 
     def _match_occurrences(self, record: Record, fresh: Record) -> dict[int, Annotation]:
-        """Pair the annotations of ``record`` with those of ``fresh``, its read-back from storage.
+        """Pair the annotations of ``record`` with the annotations of ``fresh``.
+
+        ``fresh`` is the same Record, read again from storage.
 
         Returns:
-            The annotations of ``record`` by occurrence key, or nothing if any pair differs in key,
-            span or content.
+            The annotations of ``record`` by occurrence key. The result is empty if any pair differs
+            in key, span, or content.
         """
         keys = {id(annotation): key for key, annotation in self.reader._record_occurrences[id(fresh)].items()}
         stored = list(fresh.walk_annotations())

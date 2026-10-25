@@ -305,7 +305,8 @@ def test_control_writer_stores_equal_contents_and_regular_and_ordinal_axes_once(
         axes = connection.execute(
             "SELECT axis_type, count(*) FROM axes GROUP BY axis_type ORDER BY axis_type"
         ).fetchall()
-    # The two NaNs share a row. 0.0 and -0.0 do not, and neither do True and 1, or one would read back as the other.
+    # The two NaNs share a row. 0.0 and -0.0 get separate rows, and so do True and 1.
+    # A shared row makes one value read back as the other.
     assert contents == [("patient_sex", 1), ("probe", 5), ("task_kind", 1)]
     # Equal endpoints do not mean equal offsets, so the two irregular axes keep their own rows.
     assert axes == [("irregular", 2), ("ordinal", 1), ("regular", 1)]
