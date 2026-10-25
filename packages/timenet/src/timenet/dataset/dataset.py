@@ -251,8 +251,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.
 
         For a dataset with far more tasks than records (many questions over few recordings), holding
-        every task in memory is the scaling wall. A streaming connector builds the bounded records, then
-        hands the tasks over through ``source``; the writer streams them to disk without a list.
+        every task in memory does not scale. A streaming connector builds the bounded records. Then it
+        gives the tasks through ``source``. The writer streams them to disk without a list.
 
         Args:
             task_types: The task classes the stream yields, so :meth:`derive_schema` records them.

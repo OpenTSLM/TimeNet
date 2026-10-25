@@ -20,8 +20,8 @@ from timenet.types.clock import check_int64, offset_us, unix_us
 class Record(SupportsAnnotate):
     """One logical unit of time-series data: a recording, a session, a sensor bundle, a market window.
 
-    Created via :meth:`~timenet.dataset.TimeFDataset.add_record`. Mutable so ``annotations`` can be
-    populated after construction.
+    You create a record with :meth:`~timenet.dataset.TimeFDataset.add_record`. The record is mutable,
+    so you can add ``annotations`` after construction.
 
     A record has no metadata field. Record-level facts, such as a subject's age or the recording
     device, are :class:`~timenet.types.Annotation` objects with no ``span``. Such an annotation can
