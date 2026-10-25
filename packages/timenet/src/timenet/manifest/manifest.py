@@ -10,8 +10,6 @@ from timenet.manifest.files import ManifestFiles
 from timenet.types import DatasetMetadata, DatasetSchema
 from timenet.types._model import TimeFModel
 from timenet.types.metadata_fields import DatasetId
-from timenet.types.wire import ValueEncoding
-from timenet.values_backends import ValuesBackend
 
 
 class BuildEnvironment(TypedDict, total=False):
@@ -34,10 +32,6 @@ class Manifest(TimeFModel):
     """Structural schema: time-series specs, annotations, and tasks."""
     counts: ManifestCounts = Field(default_factory=ManifestCounts)
     """Row and entity counts recorded for quick inspection."""
-    values_backend: ValuesBackend = ValuesBackend.PARQUET
-    """Storage backend for the time-series values plane."""
-    value_encoding: dict[StrictStr, ValueEncoding] = Field(default_factory=dict)
-    """``spec_type`` to the values-column encoding used by its shards."""
     build_env: BuildEnvironment = Field(default_factory=dict)
     """The Python version and package set that produced this version."""
     timef_format_version: Annotated[int, Field(strict=True, ge=1, le=1)]

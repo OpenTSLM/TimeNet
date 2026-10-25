@@ -32,9 +32,9 @@ def _write(tmp_path, **kwargs) -> Path:
 def test_manifest_records_zarr_backend_and_store_files(tmp_path):
     version_dir = _write(tmp_path)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
-    assert manifest.values_backend == "zarr"
-    assert manifest.files.time_series, "expected the zarr store's files to be listed"
-    for part in manifest.files.time_series:
+    assert manifest.files.time_series.backend == "zarr"
+    assert manifest.files.time_series.parts, "expected the zarr store's files to be listed"
+    for part in manifest.files.time_series.parts:
         assert part.path.startswith("time_series.zarr/")
         assert (version_dir / part.path).is_file()
         assert part.checksum.startswith("sha256:")
@@ -108,7 +108,7 @@ def test_copy_on_write_edit_keeps_zarr_backend(tmp_path):
     version_dir = _write(tmp_path)
     out = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=("record-1",))
     manifest = Manifest.model_validate_json((out / "manifest.json").read_text())
-    assert manifest.values_backend == "zarr"
+    assert manifest.files.time_series.backend == "zarr"
     with TimeFReader(DatasetVersion.open_local(out)) as reader:
         record = next(iter(reader.iter_records()))
         assert len(record.signals[0].to_arrow()) > 0
