@@ -1,10 +1,10 @@
 """Audit a finished ``control.duckdb`` for relational integrity.
 
-The control database carries no persisted constraints: ART indexes on the large ``axis_offsets`` and
-``signal_chunks`` tables would slow every write and bloat the file. The writer instead keeps the
-invariants while it streams rows, from the ID sets it checks in Python.
-This module holds the SQL form of the same invariants. It scans every table, so it is not part of
-the write path. Tests run it after each round trip, and tooling can run it over a published version.
+The control database has no persisted constraints. ART indexes on the large ``axis_offsets`` and
+``signal_chunks`` tables make every write slower and the file larger. Instead, the writer keeps the
+invariants while it streams rows. It checks them in Python with ID sets. This module holds the SQL
+form of the same invariants. It scans every table, so it is not part of the write path. Tests run it
+after each round trip, and tooling can run it on a published version.
 """
 
 from collections.abc import Iterable

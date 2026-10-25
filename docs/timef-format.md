@@ -65,16 +65,18 @@ Signals can reference the same immutable `TimeAxis`.
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
 in either direction, so TimeF does not store duplicate reverse-index tables.
 
-Every table except `clocks` is keyed by IDs, and every relationship stores the ID it refers to.
-The one internal key is `clocks.clock_id`, which `records.clock_id` refers to. The writer numbers
-clocks from 1 on each write, so the value has no meaning outside one file and the Python API does
-not expose it. Public IDs (`record_id`, `signal_id`, and `task_id`) and the writer's storage IDs
-(`source_id`, `axis_id`, `content_id`, and `occurrence_id`) are positive int64 values stored as
-`BIGINT`. The writer numbers storage IDs from 1 on every write, like clocks. Each ID is unique
-within its own kind, so a Record and a Signal can share one. The `dataset_id` is the exception: it
-is the `org/name` string and is stored as `VARCHAR`. Fixed-shape fields are typed columns, so spans,
-task configuration, target values, and annotation values can be filtered in SQL. Only the free-form
-`metadata` dictionaries are JSON.
+Every table except `clocks` uses IDs as keys. Every relationship stores the ID that it refers to.
+The only internal key is `clocks.clock_id`, and `records.clock_id` refers to it. The writer numbers
+clocks from 1 on each write. As a result, the value has no meaning outside one file, and the Python
+API does not expose it.
+
+Public IDs (`record_id`, `signal_id`, and `task_id`) and the writer's storage IDs (`source_id`,
+`axis_id`, `content_id`, and `occurrence_id`) are positive int64 values stored as `BIGINT`. The
+writer numbers storage IDs from 1 on every write, like clocks. Each ID is unique within its own
+kind, so a Record and a Signal can have the same ID. The `dataset_id` is the exception: it is the
+`org/name` string, stored as `VARCHAR`. Fixed-shape fields are typed columns, so SQL can filter
+spans, task configuration, target values, and annotation values. Only the free-form `metadata`
+dictionaries are JSON.
 
 The `control_metadata` table stores the last public ID used for each kind, under
 `last_id.Record`, `last_id.Signal`, and `last_id.Task`. A version edited from this one continues
