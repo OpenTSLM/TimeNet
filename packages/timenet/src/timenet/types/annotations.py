@@ -117,12 +117,12 @@ class Annotation:
         """Return the reusable payload, without occurrence-specific fields, as a hashable key.
 
         The writer stores annotations with equal keys as one content row. The value type is part of
-        the key, so ``True``, ``1`` and ``1.0`` differ. A float compares by its bits after adding
-        ``0.0``, so ``0.0`` and ``-0.0`` are equal, and so is every NaN.
+        the key, so ``True``, ``1`` and ``1.0`` differ. A float compares by its bits, so ``0.0`` and
+        ``-0.0`` differ, and every NaN is equal.
         """
         value = self.value
         if isinstance(value, float):
-            value = float.hex(value + 0.0)
+            value = float.hex(value)
         elif isinstance(value, list):
             value = tuple(value)
         metadata = json.dumps(self.metadata, sort_keys=True)
