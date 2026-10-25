@@ -95,45 +95,45 @@ through boto3, so it names `boto3` too.
 Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, TimeFDataset`):
 
 - `Signal.from_values(values, *, spec, name, time_axis)`
-  is the shortcut when you already hold the values in memory: it wraps them in a loader for the
-  spec's dtype and takes `n_values` from the array's own length. When the source has one arbitrary
-  time offset per point, use `Signal.from_irregular(values, *, time_offsets_us, spec, name)` instead,
-  which derives the axis from the stream. Use `Signal.from_loader(..., loader=<Callable[[], pa.Array]>,
-  n_values=...)` only for genuinely lazy sources (files, remote shards).
+  is the shortcut when you already hold the values in memory. It wraps them in a loader for the
+  spec's dtype and takes `n_values` from the array length. If the source has one arbitrary time
+  offset per point, use `Signal.from_irregular(values, *, time_offsets_us, spec, name)` instead.
+  It derives the axis from the stream. Use `Signal.from_loader(..., loader=<Callable[[], pa.Array]>,
+  n_values=...)` only for lazy sources (files, remote shards).
 - `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_value=ureg.<unit>, data_source=...)`.
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
-- Group signals under a `Source(name=..., signals=...)`, then
+- Group signals under a `Source(name=..., signals=...)`. Then
   `dataset.add_record(record=Record(sources=(source,)))` registers the record and returns it. A
   windowed record says so through its axis: `RegularAxis.at_index(...)` moves the origin into the
   recording.
-- `record.annotate(Annotation(key=..., value=...))` attaches one and returns it;
-  `record.add_annotations([...])` takes an iterable and returns a tuple. One class: its shape comes from
-  its `span`. No span means whole-record; `span=TimePoint.seconds(...)` a time offset;
-  `span=TimeInterval.seconds(...)` a region.
-- `dataset.add_task(task=<Task>(inputs=(record,), ...))` registers one and returns it;
+- `record.annotate(Annotation(key=..., value=...))` attaches one annotation and returns it.
+  `record.add_annotations([...])` takes an iterable and returns a tuple. There is one annotation
+  class, and its `span` gives its shape. No span means the whole record.
+  `span=TimePoint.seconds(...)` means a time offset. `span=TimeInterval.seconds(...)` means a region.
+- `dataset.add_task(task=<Task>(inputs=(record,), ...))` registers one task and returns it.
   `dataset.add_tasks(tasks=[...])` takes an iterable and registers the batch all-or-nothing. The task
-  names its input records itself. Set `scope` and `from_tasks` on the task too; a batch may derive
+  names its input records itself. Set `scope` and `from_tasks` on the task too. A batch can derive
   from its own members in any order.
 - Do not pass ids. Every record, source, signal, annotation, and task gets a generated id. Put
   upstream identifiers (a recording name, an `ecg_id`) in `Record.metadata` or in an annotation, for
   example `metadata={"ecg_id": 17}`.
-- Keep a Python reference to any annotation or task you reference later and pass that object. When
-  you look objects up by an upstream key, keep a local dict keyed by that key, not by a derived id
-  string.
+- Keep a Python reference to each annotation or task that you reference later. Pass that object.
+  If you look up objects by an upstream key, keep a local dict keyed by that key, not by a derived
+  id string.
 
 ## Task types (`timenet.types.tasks`)
 
 The task **class** is the type tag (used by `search(task=...)`); the instance carries the payload.
 
-Every task shares one frame on the `Task` base — `inputs`, `prompt`, `scope` (a `Span` narrowing the
-input), `input_annotations`, `targets` / `target_annotations`, `rationale`, `from_tasks` — so the
-type only says what *kind* of answer it is.
+Every task shares one set of fields on the `Task` base: `inputs`, `prompt`, `scope` (a `Span` that
+narrows the input), `input_annotations`, `targets` / `target_annotations`, `rationale`, `from_tasks`.
+So the type only says what *kind* of answer it is.
 
 | Task | Answer | Extra payload |
 | --- | --- | --- |
 | `ClassificationTask` | `target: str` (a label) | optional `target_schema` |
-| `AnswerTask` | `targets: tuple[str, ...]` (free text; a caption when there is no `prompt`) | — |
+| `AnswerTask` | `targets: tuple[str, ...]` (free text, which is a caption when there is no `prompt`) | — |
 | `ScalarPredictionTask` | `target: float` | optional `unit`, `target_name` |
 | `TemporalLocalizationTask` | `target: tuple[Span, ...]` | `mode` (`SPARSE` / `EXHAUSTIVE`) |
 | `ForecastingTask` | the produced series | `context_record_ids`, `target_record_id` |
@@ -224,13 +224,14 @@ from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
 ## PhysioNet notes: `physionet/ecg_qa_cot`
 
 Subclasses `BasePhysioNetConnector[EcgQaCotRef]` where `EcgQaCotRef` is a frozen dataclass ref.
-`download` calls `ensure_archive` / `download_files` and returns refs; `convert` builds one record per
-recording (a local dict keyed by the PTB-XL `ecg_id`, which it also stores in `Record.metadata`), attaches
-whole-record `Annotation`s (split, question_type, template_id, clinical_context, answer_options), and adds a
+`download` calls `ensure_archive` / `download_files` and returns refs. `convert` builds one record per
+recording and keeps the records in a local dict keyed by the PTB-XL `ecg_id`. It also stores the
+`ecg_id` in `Record.metadata`. It attaches whole-record `Annotation`s (split, question_type,
+template_id, clinical_context, answer_options). It adds an
 `AnswerTask(inputs=(record,), prompt=..., rationale=<CoT>, targets=(<label>,))`. `_leads_for` reads
 the WFDB header for `fs`/`sig_len`/`sig_name` and builds one lazy `Signal` per lead. All tasks for a
-recording point at its one record; no series is shared across records. See its `connector.py` for
-the full pattern.
+recording point at its one record. Records do not share a series. See its `connector.py` for the
+full pattern.
 
 ## Fixture-based test pattern
 

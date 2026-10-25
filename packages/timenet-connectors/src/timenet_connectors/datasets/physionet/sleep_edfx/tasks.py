@@ -310,8 +310,8 @@ def iter_tasks(records: Sequence[Record]) -> Iterator[Task]:
     fresh iterator each time.
 
     Args:
-        records: The records of the build, each carrying its annotations and, in
-            ``metadata["recording_id"]``, the name of its recording.
+        records: The records of the build. Each record carries its annotations and holds the name
+            of its recording in ``metadata["recording_id"]``.
 
     Yields:
         The epoch tasks of each recording, then its whole-record tasks.

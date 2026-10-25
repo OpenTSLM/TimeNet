@@ -1,11 +1,11 @@
 """The ECG-QA CoT connector: PTB-XL 12-lead ECGs with chain-of-thought question answering.
 
 Each record is one PTB-XL recording: 12 leads at 500 Hz in millivolts. Every chain-of-thought row is
-an :class:`~timenet.types.AnswerTask` on that recording, whose ``prompt`` is the question, ``targets``
+an :class:`~timenet.types.AnswerTask` on that recording. Its ``prompt`` is the question, ``targets``
 is the short evaluation answer, and ``rationale`` is the reasoning target. So a recording carries many
-QA tasks; there is no record per question. Per-question metadata (question type, template, answer
-options, clinical context) is stored once as value-deduped annotations the tasks reference, and each
-recording carries its dataset split. The ~230k tasks stream to disk, so they never all live in memory.
+QA tasks. There is no record per question. The connector stores per-question metadata (question type,
+template, answer options, clinical context) once, as value-deduped annotations that the tasks
+reference. Each recording carries its dataset split. The ~230k tasks stream to disk, so they never all live in memory.
 
 Sources come from three places. The signals come from PhysioNet PTB-XL. The per-template answer options
 come from the ``Jwoo5/ecg-qa`` GitHub repo. The precomputed CoT rows (question, answer, rationale,
@@ -104,7 +104,7 @@ def _clinical_context(row: Mapping[str, str]) -> str:
     return str(row.get("clinical_context") or _DEFAULT_CONTEXT)
 
 
-# A metadata annotation is looked up by its key and the upstream value it was built from.
+# The connector looks up a metadata annotation by its key and the upstream value that it comes from.
 _AnnotationKey = tuple[str, str | int]
 
 
@@ -230,7 +230,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
             record_base: The record path without the ``.dat`` / ``.hea`` extension.
 
         Returns:
-            One :class:`Signal` per lead, sharing the ECG spec.
+            One :class:`Signal` per lead. All leads share the ECG spec.
         """
         header = self._read_header(record_base)
         axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
@@ -261,8 +261,8 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
             answers: Per-template answer options.
 
         Returns:
-            One annotation per distinct value, keyed by its annotation key and the upstream value
-            :meth:`_iter_tasks` looks it up by.
+            One annotation per distinct value. Its dict key is the annotation key and the upstream value
+            that :meth:`_iter_tasks` uses to look it up.
         """
         annotations: dict[_AnnotationKey, Annotation] = {
             ("question_type", qt): Annotation(key="question_type", value=qt) for qt in sorted(question_types)
