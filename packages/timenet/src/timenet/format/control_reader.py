@@ -847,9 +847,9 @@ class DuckDBControlReader:
     ) -> pa.Table:
         """Return the task table as Arrow, with object references as public IDs, without building Tasks.
 
-        One row per task with its type, prompt, rationale, the four scope columns, the configuration
-        columns, ordered ``input_record_ids``, ordered
-        ``from_task_ids``, and the metadata JSON string. Targets are in :meth:`target_table`.
+        The table has one row per task. Each row holds the type, prompt, rationale, the four scope
+        columns, the configuration columns, ordered ``input_record_ids``, ordered ``from_task_ids``,
+        and the metadata JSON string. Targets are in :meth:`target_table`.
 
         Args:
             record_ids: Keep only tasks whose inputs include one of these Records, or ``None`` for all.
@@ -1131,14 +1131,14 @@ class DuckDBControlReader:
         Args:
             table: ``task_record_refs`` or ``task_annotation_refs``.
             column: The referenced ID column of that table.
-            fields: The fields that table may hold.
+            fields: The fields that the table can hold.
             task_ids: The batch, or ``None`` for the whole table.
 
         Returns:
             ``task_id -> field -> ordered referenced IDs``.
 
         Raises:
-            TimeFFormatError: If a row names a field that the table may not hold.
+            TimeFFormatError: If a row names a field that the table cannot hold.
         """
         where, parameters = self._task_filter(task_ids)
         rows = self.connection.execute(

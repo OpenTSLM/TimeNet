@@ -2,8 +2,8 @@
 
 Spans, task configuration, and targets are all stored as plain columns rather than JSON, so DuckDB can
 filter on them and the reader builds objects straight from row values. Object references are public
-IDs, and the target rows use the ``task_targets`` column names, so they are stored and read back as
-they are. A span holds Signal objects, so encoding reads their ids and decoding looks the read-back
+IDs. The target rows use the ``task_targets`` column names, so the rows are stored and read back
+unchanged. A span holds Signal objects, so encoding reads their ids and decoding looks the read-back
 Signals up by id.
 """
 

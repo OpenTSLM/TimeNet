@@ -402,9 +402,9 @@ class DuckDBControlWriter:
     ) -> tuple[dict[str, int], list[_AnnotationRef]]:
         """Insert tasks and their relationships, one bounded batch at a time.
 
-        Dependencies may name tasks that are written later, so they are checked and stored once
-        every task is written. Annotation references are returned, because occurrences get their
-        ids only when :meth:`_write_annotations` writes them.
+        A dependency can name a task that the writer writes later. So the writer checks and stores
+        dependencies after it writes every task. The method returns the annotation references,
+        because occurrences get their ids only when :meth:`_write_annotations` writes them.
 
         Returns:
             Counts keyed by concrete task type, and the annotation references.
@@ -413,7 +413,7 @@ class DuckDBControlWriter:
             TimeFValidationError: If a task refers to a Record or Signal outside the dataset,
                 derives from a task that is not in the dataset, or derives from itself.
         """
-        # Weak, so a streamed task that no other task names can be freed once it is written.
+        # Weak: if no other task names a streamed task, Python can free it after the writer writes it.
         written: WeakValueDictionary[int, Task] = WeakValueDictionary()
         dependencies: list[tuple[int, int, Task]] = []
         annotation_refs: list[_AnnotationRef] = []
@@ -736,9 +736,9 @@ class DuckDBControlWriter:
     ) -> None:
         """Insert reusable content once, every occurrence separately, then the task references.
 
-        Occurrences are numbered in the order they are written, so the reader gives back each
-        object's annotations in the order they were attached. A task reference stores the id of
-        the same annotation object in this write.
+        The writer numbers occurrences in write order. So the reader gives back each object's
+        annotations in the order they were attached. A task reference stores the id that this write
+        gave to the same annotation object.
 
         Args:
             connection: The open write transaction.
