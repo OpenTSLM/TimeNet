@@ -129,7 +129,7 @@ check duplicate task IDs or `from_tasks` relationships across streamed Tasks.
 
 ## Scope an input
 
-`scope` restricts the region supplied to the model. A scope holds the Signal objects it covers:
+`scope` limits the region that the model gets. A scope holds the Signal objects that it covers:
 
 ```python
 from timenet.types import ClassificationTask, TimeInterval

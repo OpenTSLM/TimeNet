@@ -25,9 +25,9 @@ def check_span_within_window(  # noqa: PLR0913 (span rules have several branches
     A span's bounds are in the source recording timeline, the same frame as each series' axis. Where it
     is allowed to fall depends on what it is scoped to:
 
-    - **Scoped** to the Signals in ``time_series``: it claims to apply to every one of them, so it must
-      lie inside the *intersection* of their windows. Falling outside even one of those windows breaks
-      that claim.
+    - **Scoped** to the Signals in ``time_series``: the span claims to apply to every one of them. So it
+      must lie inside the *intersection* of their windows. If it falls outside even one of those windows,
+      that claim breaks.
     - **Unscoped** (``time_series`` is ``None``) on a record that declares a ``time_span``: checked
       against that session span. This is how a recording that spans a sensor gap says so. It lets an
       event fall in the gap on purpose, for example a note taken while every sensor was briefly off.
@@ -47,9 +47,9 @@ def check_span_within_window(  # noqa: PLR0913 (span rules have several branches
         warn_when_outside: Warn and keep the span when it leaves its window, rather than raise.
 
     Raises:
-        TimeFValidationError: If the span names a series that is not in ``time_series``. If a scoped span names a timeless series
-            or ones whose windows do not overlap. If the record has no timeline for an unscoped
-            span. If the span falls outside the window the rule selects, when
+        TimeFValidationError: If the span names a series that is not in ``time_series``. If a scoped span
+            names a timeless series or series whose windows do not overlap. If the record has no timeline
+            for an unscoped span. If the span falls outside the window the rule selects, when
             ``warn_when_outside`` is False. If a step span names a series with a timeline, or it runs
             past its steps.
     """

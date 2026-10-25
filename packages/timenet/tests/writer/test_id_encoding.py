@@ -150,7 +150,7 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
 
 
 def test_a_span_reads_back_the_signals_of_its_record(tmp_path):
-    """A task scope names the read-back Signal objects of its input, not copies of them."""
+    """A task scope refers to the Signal objects that the reader returns for its input, not to copies."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/uuid-test",

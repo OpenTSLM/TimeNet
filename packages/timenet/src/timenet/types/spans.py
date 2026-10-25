@@ -24,7 +24,7 @@ every span in circulation carries the shape and frame it means::
     StepInterval(time_series=signal, start=0, stop=12)
 
 A span holds the :class:`~timenet.dataset.Signal` objects it is scoped to, not their ids. The writer
-stores their ids, and the reader puts the read-back Signals in their place.
+stores their ids. The reader puts the read-back Signals in their place.
 """
 
 from dataclasses import dataclass, fields
@@ -35,7 +35,7 @@ from timenet.types.clock import check_int64, seconds_to_us
 
 
 if TYPE_CHECKING:
-    # A runtime import would create a cycle: dataset objects import these span types.
+    # A runtime import creates a cycle, because dataset objects import these span types.
     from timenet.dataset.time_series import Signal
 
 

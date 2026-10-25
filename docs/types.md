@@ -114,11 +114,11 @@ coordinate frame.
 | `StepInterval` | One half-open ordinal range, `[start, stop)`. |
 
 Task time spans can select Signals through `time_series`, a tuple of Signal objects. Each task span
-must identify exactly one input Record. Annotation spans cannot select Signals. Their owner
-determines scope.
+must identify exactly one input Record. Annotation spans cannot select Signals. The owner of an
+annotation sets its scope.
 
 Step spans always name exactly one Signal through `time_series`. The writer stores the IDs of these
-Signals, and the reader puts the read-back Signals in their place.
+Signals. The reader replaces these IDs with the Signals that it reads back.
 
 ```python
 from timenet.types import StepInterval, TimeInterval, TimePoint

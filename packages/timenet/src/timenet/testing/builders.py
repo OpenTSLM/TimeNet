@@ -212,9 +212,9 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     """Assert two datasets are logically equal per the round-trip preserved-field contract.
 
     This compares the metadata, every record matched by its id, and every task matched by its id.
-    It compares each series' fields and its materialized values. A span holds Signal objects, so task
-    scopes are compared by the ids of their Signals. It raises ``AssertionError`` if any compared
-    field differs.
+    It compares each series' fields and its materialized values. A span holds Signal objects, so it
+    compares task scopes by the ids of their Signals. If any compared field differs, it raises
+    ``AssertionError``.
 
     Args:
         expected: The reference dataset.

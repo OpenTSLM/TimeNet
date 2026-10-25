@@ -42,10 +42,10 @@ class Record(SupportsAnnotate):
     """Optional JSON-compatible recording metadata."""
     time_span: TimeInterval | None = None
     """The session's overall span on the source recording timeline: an :class:`~timenet.types.TimeInterval`
-    covering the whole record, or ``None``. Declare it when the series have gaps and an event may fall in
-    one, for example a note taken while every sensor was briefly off. This checks an unscoped span
-    against it, rather than against the union of the series' windows. Its ``time_series`` must be
-    ``None``, and it must contain every series' window."""
+    covering the whole record, or ``None``. Declare it when the series have gaps and an event can fall in a
+    gap. An example is a note taken while every sensor was briefly off. Record validation then checks an
+    unscoped span against this span, not against the union of the series' windows. Its ``time_series``
+    must be ``None``. It must contain the window of every series."""
 
     def __post_init__(self) -> None:  # noqa: PLR0912 - hierarchy, timing, and annotation invariants
         """Validate the record hierarchy and its optional single-clock session span.
