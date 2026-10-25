@@ -82,8 +82,8 @@ with lazy value loaders (never materialize arrays in `convert`). See the worked 
 
 You cannot pass ids. Records, signals, and tasks get a read-only int `id` when you add them to the
 dataset. Sources, axes, and annotations have no id. Put upstream identifiers in `Record.metadata`
-(for example `{"ecg_id": 17}`) or in an annotation, and reference other objects by the Python
-object, not by an id. A span takes Signal objects, for example
+(for example `{"ecg_id": 17}`) or in an annotation. Refer to other objects by the Python object,
+not by an id. A span takes Signal objects, for example
 `TimeInterval.seconds(0.0, 1.0, time_series=(signal,))`.
 
 ### 7. Verify

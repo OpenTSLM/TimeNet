@@ -224,7 +224,7 @@ _OBJECT_ID_SELECTS = {
 }
 """Per object type, the query that maps its internal keys to public IDs for annotation lookups.
 
-The Dataset is named by its ``dataset_id`` string, not an integer ID, so its ``object_id`` is NULL."""
+The Dataset has a ``dataset_id`` string, not an integer ID. Thus its ``object_id`` is NULL."""
 
 
 def _signal_ids_cte(name: str, table: str, keys_column: str, group_by: tuple[str, ...], ids_column: str) -> str:
@@ -719,10 +719,10 @@ class DuckDBControlReader:
         return children, roots
 
     def read_last_ids(self) -> dict[ObjectKind, int]:
-        """Return the last id used per entity kind, as stored by the writer.
+        """Return the last used id per entity kind, as the writer stored it.
 
         Returns:
-            The stored counters. A kind without a stored value is left out.
+            The stored counters. The result does not include a kind without a stored value.
 
         Raises:
             TimeFFormatError: If a stored counter names an unknown kind or is not an integer.
@@ -969,9 +969,9 @@ class DuckDBControlReader:
             object_type: Keep only occurrences on this object type, or ``None`` for all.
 
         Returns:
-            One row per occurrence with the annotated object's type and ID (NULL for the Dataset,
-            which has a string ``dataset_id`` instead), the content's ID and key,
-            typed value columns, unit, span columns, confidence, and JSON metadata.
+            One row per occurrence. Each row has the annotated object's type and ID, the content's
+            ID and key, typed value columns, unit, span columns, confidence, and JSON metadata. The
+            object ID is NULL for the Dataset, which has a string ``dataset_id`` instead.
 
         Raises:
             TimeFFormatError: If ``object_type`` is not an annotated object type.

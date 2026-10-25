@@ -182,7 +182,7 @@ class Signal(SupportsAnnotate):
         """Validate the intrinsic per-series invariants.
 
         Raises:
-            TimeFValidationError: If ``n_values`` is not a positive integer, or if
+            TimeFValidationError: If ``n_values`` is not a positive integer. Also if
                 ``time_offsets_loader`` and the axis shape disagree about whether this series stores
                 per-value time offsets.
             ValueError: If ``signal`` is empty. The axis validates itself.

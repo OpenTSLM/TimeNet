@@ -157,7 +157,7 @@ class Task(SupportsAnnotate, ABC):
     def id(self) -> EntityId:
         """The task's id, unique among the tasks of its dataset.
 
-        :meth:`~timenet.dataset.TimeFDataset.add_task` sets it, and the reader sets it on read-back.
+        :meth:`~timenet.dataset.TimeFDataset.add_task` sets it. The reader sets it when it reads the task back.
 
         Raises:
             TimeFValidationError: If the task is not in a dataset yet.

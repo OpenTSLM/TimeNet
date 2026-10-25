@@ -96,21 +96,22 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return self._register_record(record, keep_ids=False)
 
     def _register_record(self, record: Record, *, keep_ids: bool) -> Record:
-        """Register a record, numbering it and its signals or keeping the ids they have.
+        """Register a record and give new ids to it and its signals, or keep their ids.
 
         Args:
             record: The record to register.
-            keep_ids: Keep the ids the reader gave the record and its signals, instead of numbering
-                them. :meth:`from_parts` uses this so an edited version keeps every id.
+            keep_ids: If true, keep the ids that the reader gave the record and its signals. If
+                false, give them new ids. :meth:`from_parts` sets this so an edited version keeps
+                every id.
 
         Returns:
             The same record.
 
         Raises:
-            TimeFValidationError: If the record is already in this dataset, attaches one Signal or
-                annotation occurrence twice, or holds a Source or Signal that belongs to another
-                record. Without ``keep_ids``, also if the record or one of its signals already has
-                an id from another dataset or a reader.
+            TimeFValidationError: If the record is already in this dataset. Also if the record
+                attaches one Signal or annotation occurrence twice, or holds a Source or Signal
+                that belongs to another record. Without ``keep_ids``, also if the record or one of
+                its signals already has an id from another dataset or a reader.
         """
         if record._id is not None and self._records_by_id.get(record._id) is record:
             raise TimeFValidationError(f"{record._label} is already in this dataset")
@@ -318,14 +319,14 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     def iter_streamed_tasks_validated(self) -> Iterator[Task]:
         """Yield the streamed tasks, validating each against the dataset before it is written.
 
-        A streamed task gets the task id counter's value at :meth:`set_task_stream` plus its
-        position in the stream, so every pass over the stream gives it the same id.
+        The id of a streamed task is the task id counter's value at :meth:`set_task_stream` plus
+        its position in the stream. Thus every pass over the stream gives the task the same id.
 
         Streamed tasks skip :meth:`add_task`'s checks, so validate each here as it passes through: an
         undeclared type, an attachment to an unknown record, a dangling reference, a bad answer, or an
-        out-of-window span raises before the task reaches disk. The dataset holds no task list, so the
-        cross-task checks (``from_tasks`` derivations) that need every task at once do not run for a
-        stream.
+        out-of-window span raises before the task reaches disk. The dataset holds no task list. Thus
+        the cross-task checks (``from_tasks`` derivations) that need every task at once do not run
+        for a stream.
 
         Yields:
             Each validated task, in the source's order.

@@ -35,15 +35,15 @@ assert version > Version(1, 2, 0)
 Records, Signals, and Tasks have a public ID: a read-only, positive int64 `id` (`EntityId`). The
 dataset ID is the exception and stays an `org/name` string.
 
-You cannot pass an ID. The dataset sets it when you add the object, and the reader sets it when it
-reads the object back. Each kind has its own counter, so the first Record and the first Signal
-both get ID 1.
+You cannot pass an ID. The dataset sets it when you add the object. The reader sets it when it
+reads the object back. Each kind has its own counter. As a result, the first Record and the first
+Signal both get ID 1.
 
 - `add_record()` numbers the Record and its Signals.
 - `add_task()` and `add_tasks()` number the Tasks.
-- A streamed Task gets its ID as the writer reads it from the stream.
+- A streamed Task gets its ID when the writer reads it from the stream.
 
-Reading `id` on an object that is not in a dataset raises `TimeFValidationError`.
+If an object is not in a dataset, reading its `id` raises `TimeFValidationError`.
 
 ```python
 record = dataset.add_record(record=record)
@@ -59,10 +59,12 @@ Two annotation contents are equal if the name, the value and its type, the unit,
 and the metadata are equal. `0.0` and `-0.0` are equal. All NaN values are equal. `True`, `1`, and
 `1.0` are not equal.
 
-The writer stores the last ID of each kind, so an edited version continues from them and never
-reuses the ID of a removed object. IDs are unique per kind within one dataset and stay the same
-across edits. They do not follow storage order, and two datasets can use the same ID. IDs carry no
-meaning. Store upstream identifiers in `metadata` or in an annotation.
+The writer stores the last ID of each kind. An edited version continues from these IDs. As a
+result, it never reuses the ID of a removed object.
+
+IDs are unique per kind within one dataset. They stay the same across edits. They do not follow
+storage order. Two datasets can use the same ID. IDs carry no meaning. Store upstream identifiers
+in `metadata` or in an annotation.
 
 ## Units
 

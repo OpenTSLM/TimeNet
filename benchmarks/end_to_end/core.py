@@ -46,8 +46,8 @@ MATRIX = (
 
 
 _SKIPPED = frozenset({"loader", "time_offsets_loader"})
-"""Executable fields. Private fields, which hold the ids, are skipped too. The fingerprint names a
-referenced object by its position."""
+"""Executable fields that the fingerprint skips. The fingerprint also skips private fields, which
+hold the ids. It names a referenced object by its position."""
 
 
 @dataclass
@@ -63,8 +63,8 @@ def _canonical(value: Any, positions: _Positions | None = None) -> Any:  # noqa:
 
     Args:
         value: The value to convert.
-        positions: When given, a record or signal that the value refers to becomes its position, so a
-            task keeps which record and signal it labels.
+        positions: When given, each record or signal in the value becomes its position. The result
+            then shows which record and signal a task labels.
 
     Returns:
         A recursively canonicalized value.

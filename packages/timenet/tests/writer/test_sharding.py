@@ -32,7 +32,7 @@ _SMALL_TARGETS = {
 
 
 def _signal_id(i: int) -> int:
-    """Return the id the dataset gives the signal of record ``i``; signals count from 1."""
+    """Return the id the dataset gives the signal of record ``i``. Signals count from 1."""
     return 1 + i
 
 
@@ -176,4 +176,4 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         series = next(ts for s in reader.read().records for ts in s.signals if ts.id == _signal_id(6))
         series.to_arrow()
-    assert set(read) == expected  # only signal 6's chunks' row groups were decoded, not whole shards
+    assert set(read) == expected  # the reader decoded only the row groups of signal 6's chunks, not whole shards

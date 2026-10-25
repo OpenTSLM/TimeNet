@@ -215,16 +215,16 @@ class TimeFWriter:
     def _dedupe_series(self) -> list[Signal]:
         """Return every series once, sorted for stable output.
 
-        A dataset gives each Signal its own id and lets one record own it, so the series need no
-        merging.
+        A dataset gives each Signal its own id. Only one record owns each Signal. Thus the writer does
+        not merge series.
 
         Returns:
             The sorted series.
         """
         owned = [(record.id, ts) for record in self._dataset.records for ts in record.signals]
-        # Group a record's series together before splitting by signal, so all leads of one record are
-        # contiguous: the writer reads the record's source once, and a reader pulls a record's series
-        # from one place instead of scattered across signal-ordered shards.
+        # Group the series of a record together before the split by signal. Then all leads of one record
+        # are contiguous. The writer reads the source of the record once. A reader gets the series of a
+        # record from one place, not scattered across signal-ordered shards.
         owned.sort(key=lambda pair: (pair[1].spec.spec_type, pair[0], pair[1].name, pair[1].id))
         return [ts for _, ts in owned]
 

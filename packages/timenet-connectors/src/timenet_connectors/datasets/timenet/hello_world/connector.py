@@ -226,9 +226,9 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         record1.annotate(cohort)  # equal content, so the writer stores it once
 
         # Record 2: a windowed slice with a scoped classification task. This window covers the second
-        # half of rec-0. This makes the window a genuine offset window, not a byte-identical prefix of
-        # the shared sine signal. The phase offset continues the same wave, so the values match rec-0
-        # over the window.
+        # half of rec-0. As a result, the window is a true offset window and not a byte-identical
+        # prefix of the shared sine signal. The phase offset continues the same wave. The values
+        # therefore match rec-0 over the window.
         window_start = raw_refs[0].n_values // 2
         window = Signal.from_values(
             _wave_values(

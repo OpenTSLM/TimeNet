@@ -29,11 +29,11 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[EntityId], *, cas
     dataset also does not contain their dependents.
 
     The method repairs every surviving cross-reference. It removes deleted records from task
-    inputs. A task becomes
-    invalid if the edit removes all of its inputs, an object used as a target or candidate, an
-    annotation that holds its answer, or a task from which it was derived. If ``cascade`` is set,
-    the method removes such a task. If ``cascade`` is not set, the method rejects the edit, so a
-    committed version never contains a dangling reference.
+    inputs. A task becomes invalid if the edit removes all of its inputs or an object that it uses
+    as a target or candidate. It also becomes invalid if the edit removes an annotation that holds
+    its answer or a task that it derives from. If ``cascade`` is set, the method removes such a
+    task. If ``cascade`` is not set, the method rejects the edit, so a committed version never
+    contains a dangling reference.
 
     Args:
         dataset: The base dataset. This is typically read back from a committed version.

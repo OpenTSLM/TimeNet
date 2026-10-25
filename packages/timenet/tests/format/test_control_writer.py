@@ -20,8 +20,8 @@ SPEC = TimeSeriesSpec(
     unit_value=ureg.millivolt,
     dtype="float32",
 )
-# The ids the dataset and the writer give the objects of _dataset(). Each kind counts from 1, and the
-# writer numbers Sources and annotation contents in the order it writes them.
+# These are the ids that the dataset and the writer give to the objects of _dataset(). The ids of each
+# kind start at 1. The writer numbers Sources and annotation contents in the order that it writes them.
 RECORD_ID = 1
 MONITOR_ID = 1
 ECG_ID = 2

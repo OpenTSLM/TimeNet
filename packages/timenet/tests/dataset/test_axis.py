@@ -129,8 +129,8 @@ def test_irregular_axis_offers_no_constant_time_answer():
 
 
 def test_irregular_axis_compares_and_hashes():
-    # Comparing a tuple that holds an axis compares the axes. An axis holding the array instead
-    # would raise "truth value of an array with more than one element is ambiguous" right here.
+    # A comparison of two tuples that hold axes compares the axes. If an axis holds the array instead,
+    # this line raises "truth value of an array with more than one element is ambiguous".
     a, b = IrregularAxis.spanning([0, 7]), IrregularAxis.spanning([0, 7])
     assert a == b
     assert len({a, b}) == 1

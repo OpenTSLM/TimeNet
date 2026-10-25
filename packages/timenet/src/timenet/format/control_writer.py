@@ -286,8 +286,8 @@ class DuckDBControlWriter:
 
         Raises:
             TimeFValidationError: If the hierarchy refers to an object outside the dataset, holds a
-                value that cannot be stored as JSON, or declares Signal lengths that its axis offsets
-                or value chunks do not match.
+                value that JSON cannot store, or declares Signal lengths that do not match its axis
+                offsets or value chunks.
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:

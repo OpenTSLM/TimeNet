@@ -1,7 +1,7 @@
-"""Entity ids and the per-dataset counters that hand them out.
+"""Entity ids and the per-dataset counters that assign them.
 
 TimeF ids are positive int64 values. Records, Signals, and Tasks have a public, read-only ``id``. A
-dataset sets it when the object is added, and the reader sets it when it reads the object back.
+dataset sets the id when it adds the object. The reader sets the id when it reads the object back.
 Sources, axes, and annotations have no id. The writer numbers their rows from 1 on every write.
 Public ids are unique per kind within one dataset and stay the same across edits. They do not
 follow storage order, and two datasets can use the same id.
@@ -26,7 +26,7 @@ ID_KINDS = (ObjectKind.RECORD, ObjectKind.SIGNAL, ObjectKind.TASK)
 
 
 class IdCounters:
-    """The last id handed out for each entity kind in one dataset."""
+    """The last id used for each entity kind in one dataset."""
 
     def __init__(self, last: Mapping[ObjectKind, EntityId] | None = None) -> None:
         """Start the counters at zero or continue from stored values.
@@ -54,7 +54,7 @@ class IdCounters:
         return self._last[kind]
 
     def claim(self, kind: ObjectKind, value: object) -> EntityId:
-        """Record an id that is already in use, so that :meth:`next` never returns it.
+        """Mark an id as already in use, so that :meth:`next` never returns it.
 
         Returns:
             ``value`` as a Python int.
@@ -71,7 +71,7 @@ class IdCounters:
 def check_id(value: object, what: str) -> EntityId:
     """Return ``value`` as an int if it is a valid entity id.
 
-    Any integral value is accepted, including NumPy integers read back from Arrow or pandas.
+    The function accepts any integral value, including NumPy integers read back from Arrow or pandas.
 
     Args:
         value: The candidate id.
@@ -94,7 +94,7 @@ def check_id(value: object, what: str) -> EntityId:
 
 
 def assigned_id(value: EntityId | None, owner: str) -> EntityId:
-    """Return the id a dataset or the reader gave an object.
+    """Return the id that a dataset or the reader gave to an object.
 
     Args:
         value: The object's private id, ``None`` until it has one.

@@ -21,10 +21,12 @@ Signal ──N:1── TimeAxis
 `TimeSeriesSpec`. Several Signals can reference the same immutable axis or specification object.
 
 Records, Signals, and Tasks have a read-only, positive int64 `id`. The dataset sets it when you add
-the object. Sources, axes, and annotations have no ID. IDs carry no meaning, so keep upstream
-identifiers such as a patient or ECG number in `metadata` or in an annotation. Refer to another
-object through the object itself. The dataset ID is the exception: it stays the `org/name` string.
-See [IDs](types.md#ids) for the rules.
+the object. Sources, axes, and annotations have no ID. The dataset ID is the exception: it stays the
+`org/name` string.
+
+IDs carry no meaning. Keep upstream identifiers, such as a patient or ECG number, in `metadata` or
+in an annotation. To refer to another object, use the object itself. See [IDs](types.md#ids) for
+the rules.
 
 ## Signal
 

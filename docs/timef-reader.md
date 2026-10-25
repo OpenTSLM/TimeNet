@@ -41,7 +41,7 @@ annotations opens `control.duckdb` in read-only mode.
 Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy. A call to
 `to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from Parquet or Zarr.
 
-`iter_records(record_ids=...)` yields records one at a time. It takes int record IDs and does not
+`iter_records(record_ids=...)` yields records one at a time. It takes int record IDs. It does not
 create a complete `TimeFDataset`.
 
 Tasks have three useful read paths:
@@ -108,7 +108,7 @@ missing or does not match the manifest.
 
 For valid writer input, the reader restores Records, Sources, Signals, annotations, and tasks. It
 also restores task relationships and Signal values with their original dtype and shape. Public IDs
-are the durable references. Entity IDs are ints and the dataset ID is its `org/name` string. Python
-object identity from the writer process is not preserved.
+are the durable references. Entity IDs are ints. The dataset ID is its `org/name` string. The
+reader does not keep the Python object identity from the writer process.
 
 See the [API reference for `timenet.reader`](api/reader.md) for all members.
