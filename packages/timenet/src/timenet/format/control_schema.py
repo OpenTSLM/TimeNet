@@ -4,12 +4,13 @@ The DDL, the writer's Arrow batch schemas, and the audit's key and relationship 
 derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
 
 Version 1 of the control schema. Hierarchy and task tables carry a ``BIGINT`` key drawn from a
-sequence and store their ids once, on the row that owns them. Annotation tables have no key of
-their own and are keyed by the writer's storage ids. Fixed-shape fields are typed columns so they
-can be filtered in SQL; only the free-form ``metadata`` dictionaries are JSON. The database carries
-no persisted constraints: :data:`Table.unique` and :data:`Table.foreign_keys` are what the writer
-keeps while streaming and what :func:`timenet.format.control_audit.audit_control_database`
-re-checks.
+sequence. They store their ids once, on the row that owns them. Annotation tables have no key of
+their own. The writer's storage ids are their keys. Fixed-shape fields are typed columns, so SQL can
+filter them. Only the free-form ``metadata`` dictionaries are JSON.
+
+The database carries no persisted constraints. The writer keeps :data:`Table.unique` and
+:data:`Table.foreign_keys` while it streams, and
+:func:`timenet.format.control_audit.audit_control_database` checks them again.
 """
 
 from dataclasses import dataclass
@@ -136,7 +137,7 @@ ANNOTATED_OWNER_TABLES: dict[ObjectKind, tuple[str, str] | None] = {
 """The owner table and key column of each annotated object type. The Dataset has no owner row."""
 
 ANNOTATED_OBJECT_TYPES: frozenset[ObjectKind] = frozenset(ANNOTATED_OWNER_TABLES)
-"""The values ``annotation_occurrences.object_type`` may hold."""
+"""The values ``annotation_occurrences.object_type`` can hold."""
 
 LAST_ID_PREFIX = "last_id."
 """Prefix of the ``control_metadata`` keys that store the last id used per entity kind."""

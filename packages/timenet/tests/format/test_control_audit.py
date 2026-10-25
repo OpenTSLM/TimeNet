@@ -106,7 +106,7 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
             "annotation occurrence .* refers to missing Record 999",
         ),
         (
-            # Ids are unique per kind only, and Signal 1 exists, so the record id moves past it.
+            # Ids are unique only within one kind. Signal 1 exists, so the update moves the record id past it.
             "UPDATE annotation_occurrences SET object_type = 'Signal', object_id = object_id + 1",
             f"refers to missing Signal {RECORD_ID + 1}",
         ),

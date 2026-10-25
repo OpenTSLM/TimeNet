@@ -64,15 +64,17 @@ Signals can reference the same immutable `TimeAxis`.
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
 in either direction, so TimeF does not store duplicate reverse-index tables.
 
-Hierarchy and task tables carry a `BIGINT` internal key drawn from a sequence, and relationships
-between them refer to those keys. The annotation tables have no internal keys. They are keyed by
-the writer's storage IDs, and `task_annotation_refs` points at an occurrence by its
-`occurrence_id`. Public IDs (`record_id`, `signal_id`, and `task_id`) and the writer's storage IDs
-(`source_id`, `axis_id`, `content_id`, and `occurrence_id`) are positive int64 values stored once,
-as `BIGINT`, on the row that owns them. The writer numbers storage IDs from 1 on every write.
-The `dataset_id` is the exception: it is the `org/name` string and is stored as `VARCHAR`.
-Fixed-shape fields are typed columns, so spans, task configuration, target values, and annotation
-values can be filtered in SQL. Only the free-form `metadata` dictionaries are JSON.
+Hierarchy and task tables carry a `BIGINT` internal key drawn from a sequence. Relationships
+between these tables refer to those keys. The annotation tables have no internal keys. The
+writer's storage IDs are their keys. `task_annotation_refs` refers to an occurrence by its
+`occurrence_id`.
+
+Public IDs (`record_id`, `signal_id`, and `task_id`) and the writer's storage IDs (`source_id`,
+`axis_id`, `content_id`, and `occurrence_id`) are positive int64 values. Each one is stored once,
+as `BIGINT`, on the row that owns it. The writer numbers storage IDs from 1 on every write. The
+`dataset_id` is the exception: it is the `org/name` string, stored as `VARCHAR`. Fixed-shape fields
+are typed columns, so you can filter spans, task configuration, target values, and annotation
+values in SQL. Only the free-form `metadata` dictionaries are JSON.
 
 The `control_metadata` table stores the last public ID used for each kind, under
 `last_id.Record`, `last_id.Signal`, and `last_id.Task`. A version edited from this one continues
@@ -120,16 +122,19 @@ one typed column selected by `value_kind`: `text_value`, `integer_value`, `float
 `boolean_value`, or `text_list_value`
 for a list of strings such as a target vocabulary. A marker annotation, which only places a span,
 has `NULL` in all of them. `annotation_occurrences` says where the content applies. It points at
-the content through `content_id` and carries the span as `span_type`, `start_us`, and `end_us`,
-plus provenance, confidence, and occurrence metadata.
+the content through `content_id`. It also carries the span as `span_type`, `start_us`, and
+`end_us`, plus provenance, confidence, and occurrence metadata.
 
 An occurrence can annotate a Dataset, Task, Record, Source, or Signal. It names its owner with
-`object_type` and `object_id`. For a Record, Signal, or Task, `object_id` is the owner's public
-ID, and for a Source it is the Source's storage ID. `object_id` is `NULL` exactly when the owner
-is the Dataset. IDs are unique only within one kind, so the type is part of the reference. A read
-of every Record or every Task rejects an occurrence with an unknown owner type or a missing owner,
-instead of dropping it. One content row can apply to many objects without copying a long value.
-Each attachment still has its own `occurrence_id` and temporal placement.
+`object_type` and `object_id`. For a Record, Signal, or Task, `object_id` is the public ID of the
+owner. For a Source, it is the storage ID of the Source. `object_id` is `NULL` exactly when the
+owner is the Dataset. IDs are unique only within one kind, so the type is part of the reference.
+
+A read of every Record or every Task rejects an occurrence with an unknown owner type or a missing
+owner. It does not drop that occurrence.
+
+One content row can apply to many objects without copying a long value. Each attachment still has
+its own `occurrence_id` and temporal placement.
 
 ## Tasks
 

@@ -337,7 +337,7 @@ class DuckDBControlWriter:
             annotations,
             tasks,
         )
-        # Clustering occurrences on object_id lets keyed reads skip row groups.
+        # Occurrences sorted by object_id let keyed reads skip row groups.
         annotations.sort(key=lambda item: (item[1] is not None, item[1] or 0))
         occurrence_ids = self._write_annotations(connection, annotations)
         self._write_task_annotation_refs(connection, annotation_refs, occurrence_ids)

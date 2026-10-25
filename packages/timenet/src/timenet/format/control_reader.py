@@ -241,15 +241,16 @@ def _annotation_query(owners: Mapping[ObjectKind, Collection[int] | None]) -> tu
     """Build the occurrence query, restricted to the requested owners.
 
     Args:
-        owners: The owner IDs to read, by object type. ``None`` for the IDs reads every occurrence
-            of that type.
+        owners: The owner IDs to read, by object type. If the IDs are ``None``, the query reads
+            every occurrence of that type.
 
     Returns:
         The SQL and its positional parameters.
     """
     parameters: list[object] = []
-    # A parameter inside an OR keeps DuckDB from pushing the filter below the join, which made a
-    # one-Record read scan every occurrence, so each owner type is one subquery of plain predicates.
+    # With a parameter inside an OR, DuckDB does not push the filter below the join. A one-Record
+    # read then scans every occurrence. For this reason, each owner type is one subquery of plain
+    # predicates.
     selects: list[str] = []
     every: list[str] = []
     for object_type, object_ids in owners.items():
@@ -1425,12 +1426,12 @@ class DuckDBControlReader:
         """Hydrate annotation content and occurrences.
 
         Args:
-            owners: IDs of the annotated objects by object type, or ``None`` for the IDs to
-                read every occurrence of that type. IDs match only within their type.
+            owners: IDs of the annotated objects by object type. If the IDs of a type are ``None``,
+                the read gets every occurrence of that type. IDs match only within their type.
             by_occurrence: Filled with every hydrated occurrence by its occurrence id.
 
         Returns:
-            Attached occurrences keyed by object type and object ID, which is ``None`` for
+            Attached occurrences keyed by object type and object ID. The object ID is ``None`` for
             the Dataset.
 
         Raises:
@@ -1764,8 +1765,8 @@ class _TaskHydration:
         ``fresh`` is the same Record, read again from storage.
 
         Returns:
-            The annotations of ``record`` by occurrence id, or nothing if any pair differs in key,
-            span or content.
+            The annotations of ``record`` by occurrence id. The result is empty if any pair differs
+            in key, span or content.
         """
         ids = {
             id(annotation): occurrence_id
