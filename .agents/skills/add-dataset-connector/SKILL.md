@@ -35,13 +35,14 @@ Understand the raw data before designing anything:
 - Sampling rate and physical units (Hz, seconds, mV, dimensionless).
 - Labels, questions/answers, rationales, splits, and any per-row metadata.
 
-For HuggingFace, the Hub auto-converts public datasets to parquet on the `refs/convert/parquet` branch;
-inspect columns via the dataset viewer or the datasets-server API. For PhysioNet, inspect the archive
-layout and a WFDB header (`fs`, `sig_len`, `sig_name`).
+For HuggingFace, inspect columns via the dataset viewer or the datasets-server API, and list the
+repo's files at the commit you will pin (`https://huggingface.co/api/datasets/<repo>/refs` gives the
+`main` and `refs/convert/parquet` commits; the Hub auto-converts public datasets to parquet on the
+latter). For PhysioNet, inspect the archive layout and a WFDB header (`fs`, `sig_len`, `sig_name`).
 
 ### 3. Pick the base connector
-- Hub dataset: subclass `BaseHuggingFaceConnector`, set `HF_REPO`, inherit `download`, implement only
-  `convert`.
+- Hub dataset: subclass `BaseHuggingFaceConnector`, set `HF_REPO`, `SOURCE_REVISION` (a commit), and
+  `SOURCE_FILES`, inherit `download`, and implement `convert` over the `HubFileRef` list.
 - PhysioNet/WFDB: subclass `BasePhysioNetConnector`, implement `download` (use `ensure_archive` /
   `download_files` from `timenet_connectors.download`) and `convert` (use `_read_header` / `_lead_loader`).
 - Neither: subclass `BaseConnector[TRaw]` and implement `download` + `convert` yourself.

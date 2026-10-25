@@ -70,12 +70,21 @@ tags:
 ## Base connectors to reuse
 
 ### `BaseHuggingFaceConnector` (`bases/huggingface.py`)
-`BaseHuggingFaceConnector(BaseConnector[dict[str, Any]])`. Set `HF_REPO` to the external Hub repo id
-and implement `convert`. `download` is inherited: it reads the Hub's auto-converted parquet on
-`refs/convert/parquet` and returns one dict per row, so any source format is handled uniformly.
-The connector imports `huggingface_hub` lazily and declares it in its `requirements.txt`. The lazy
-import keeps `--no-isolation` usable while you write the connector. `HF_TOKEN` is read from the
-environment, so gated datasets work. Fully private repos have no auto-parquet ref and aren't supported.
+`BaseHuggingFaceConnector(BaseConnector[HubFileRef])` downloads files from a Hub dataset at a pinned
+commit. Set:
+
+- `HF_REPO`: the Hub repo id.
+- `SOURCE_REVISION`: a 40-character commit, not a branch, so every rebuild reads the same files.
+- `SOURCE_FILES`: part name -> file path in the repo.
+
+`download` is inherited and returns one `HubFileRef(path, part)` per file. Declare
+`huggingface_hub>=1.1` in the connector's `requirements.txt`, and set `HF_TOKEN` for gated or
+private datasets. Start `convert` with `self.new_dataset(raw_refs, "<prefix>")`, which checks the
+refs and adds `source_repository` and `source_revision` annotations.
+
+To read the Hub's parquet conversion instead of the original files, pin the commit that
+`refs/convert/parquet` points to and read the files with `iter_parquet_rows`
+(`timenet_connectors.sources.parquet`).
 
 ### `BasePhysioNetConnector` (`bases/physionet.py`)
 `BasePhysioNetConnector(BaseConnector[TRaw])`. Implement `download` and `convert`. Its two helpers read
@@ -146,12 +155,14 @@ the bounds of every `Span` the task carries.
 
 ```python
 import json
-from typing import Any
+from collections.abc import Mapping
+from typing import ClassVar
 
 from timenet.dataset import TimeFDataset, TimeSeries
 from timenet.dataset.axis import OrdinalAxis
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet_connectors.sources.parquet import iter_parquet_rows
 
 _SPEC = TimeSeriesSpec(
     spec_type="tsqa_series",
@@ -163,10 +174,15 @@ class TSQAConnector(BaseHuggingFaceConnector):
     """Connector for the TSQA time-series QA dataset."""
 
     HF_REPO = "ChengsenWang/TSQA"  # external Hub repo id, keeps its own casing
+    # The commit refs/convert/parquet pointed to: the Hub's parquet conversion of the CSV.
+    SOURCE_REVISION = "22518209e3ee6302be4b4957f2692b3e8de849c3"
+    SOURCE_FILES: ClassVar[Mapping[str, str]] = {"train": "default/train/0000.parquet"}
 
-    def convert(self, raw_refs: list[dict[str, Any]]) -> TimeFDataset:
+    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+        self.check_refs(raw_refs)
         dataset = TimeFDataset(metadata=self.metadata())
-        for index, row in enumerate(raw_refs):
+        rows = (row for ref in raw_refs for row in iter_parquet_rows(ref.path))
+        for index, row in enumerate(rows):
             series = json.loads(row["Series"])
             signals = series if series and isinstance(series[0], list) else [series]
             time_series = tuple(

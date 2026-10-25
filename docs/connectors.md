@@ -188,7 +188,7 @@ A connector declares the libraries its source needs in a `requirements.txt` besi
 
 ```text
 # Downloads the source dataset from the HuggingFace Hub.
-huggingface_hub>=0.24
+huggingface_hub>=1.1
 ```
 
 A build runs the connector in an environment built from that file. That environment is layered over
@@ -267,8 +267,9 @@ pull their database archive.
   a deterministic dataset for examples and round-trip tests. It covers nested Sources, shared
   descriptors, windowed Signals, annotations, and several task types.
 - `chengsenwang/tsqa` is a time-series QA dataset. Each row's series becomes a Signal, and each
-  row's question and answer become an `AnswerTask`. It downloads data from the Hub, so its
-  `requirements.txt` names `huggingface_hub`.
+  row's question and answer become an `AnswerTask`. It downloads the Hub's parquet conversion of
+  the dataset at a pinned commit, through `BaseHuggingFaceConnector`, so its `requirements.txt` names
+  `huggingface_hub`.
 
 ```bash
 timenet-build build timenet/hello-world             # offline, synthetic
