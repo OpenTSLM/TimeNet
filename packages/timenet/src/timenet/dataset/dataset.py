@@ -690,14 +690,14 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
     @staticmethod
     def _check_signal_refs(task: Task, index: _TaskValidationIndex) -> None:
-        """Reject a Signal target that is not owned by a registered Record.
+        """Reject a Signal reference that is not owned by a registered Record.
 
         Args:
             task: The task to register.
             index: Reusable dataset identity and annotation lookups.
 
         Raises:
-            TimeFValidationError: If a Signal target is unknown or is a replacement object.
+            TimeFValidationError: If a Signal target or span Signal is unknown or is a replacement object.
         """
         for signal in TimeFDataset._task_signals(task):
             if signal._id is None or index.signals_by_id.get(signal._id) is not signal:
@@ -721,8 +721,14 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
     @staticmethod
     def _task_signals(task: Task) -> tuple[Signal, ...]:
-        """Return all Signals referenced directly as target items."""
-        return tuple(target for target in task.targets or () if isinstance(target, Signal))
+        """Return all Signals referenced as target items or by the scope and span targets."""
+        signals = [target for target in task.targets or () if isinstance(target, Signal)]
+        for span in task.spans():
+            if isinstance(span, StepSpan):
+                signals.append(span.time_series)
+            elif isinstance(span, TimeSpan):
+                signals.extend(span.time_series or ())
+        return tuple(signals)
 
     @staticmethod
     def _ordered_unique(items: Iterable[T]) -> list[T]:

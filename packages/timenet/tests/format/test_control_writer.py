@@ -187,20 +187,6 @@ def _foreign_dataset() -> TimeFDataset:
             lambda task, foreign: (Annotation(key="outside", value="x"),),
             "task 1 field 'input_annotations' refers to an annotation that is not in the dataset",
         ),
-        ("inputs", lambda task, foreign: (foreign.records[1],), "task 1 field 'inputs' refers to unknown record 2"),
-        ("targets", lambda task, foreign: (foreign.records[1],), "task 1 target 0 refers to unknown Record 2"),
-        (
-            "targets",
-            lambda task, foreign: (StepPoint(start=1, time_series=foreign.records[1].signals[0]),),
-            r"task 1 target 0 refers to unknown Signals \[3\]",
-        ),
-        (
-            "targets",
-            lambda task, foreign: (
-                TimeInterval(start_us=0, end_us=2_000, time_series=(foreign.records[1].signals[0],)),
-            ),
-            r"task 1 target 0 refers to unknown Signals \[3\]",
-        ),
     ],
 )
 def test_control_writer_rejects_task_references_outside_the_dataset(tmp_path, field, value, message):
@@ -211,6 +197,73 @@ def test_control_writer_rejects_task_references_outside_the_dataset(tmp_path, fi
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match=message):
+        DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    assert not path.exists()
+
+
+# Record 1 and Signal 1 of the foreign dataset have the same ids as objects of _dataset(). Record 2
+# and Signal 3 have ids that _dataset() does not use.
+@pytest.mark.parametrize("record_index", [0, 1], ids=["same-ids", "new-ids"])
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("inputs", lambda record: (record,), "references a Record that is not registered"),
+        ("targets", lambda record: (record,), "references a Record that is not registered"),
+        ("targets", lambda record: (record.signals[0],), "references Signal '.+', which is not registered"),
+        (
+            "targets",
+            lambda record: (StepPoint(start=1, time_series=record.signals[0]),),
+            "references Signal '.+', which is not registered",
+        ),
+        (
+            "targets",
+            lambda record: (TimeInterval(start_us=0, end_us=2_000, time_series=(record.signals[0],)),),
+            "references Signal '.+', which is not registered",
+        ),
+        (
+            "scope",
+            lambda record: TimeInterval(start_us=0, end_us=2_000, time_series=(record.signals[0],)),
+            "references Signal '.+', which is not registered",
+        ),
+    ],
+)
+def test_control_writer_rejects_records_and_signals_of_another_dataset(tmp_path, record_index, field, value, message):
+    dataset = _dataset()
+    (task,) = dataset.tasks
+    setattr(task, field, value(_foreign_dataset().records[record_index]))
+    path = tmp_path / "control.duckdb"
+
+    with pytest.raises(TimeFValidationError, match=message):
+        DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    assert not path.exists()
+
+
+def test_control_writer_rejects_a_target_signal_that_left_the_hierarchy(tmp_path):
+    dataset = _dataset()
+    (task,) = dataset.tasks
+    (record,) = dataset.records
+    ecg = record.sources[0].sources[0]
+    lead_i, lead_ii = ecg.signals
+    task.targets = (lead_ii,)
+    ecg.signals = (lead_i,)
+    path = tmp_path / "control.duckdb"
+
+    with pytest.raises(TimeFValidationError, match=f"task 1 target 0 refers to unknown Signal {LEAD_II_ID}"):
+        DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    assert not path.exists()
+
+
+def test_control_writer_rejects_two_tasks_with_one_id(tmp_path):
+    dataset = _dataset()
+    (task,) = dataset.tasks
+    twin = dataset.add_task(task=AnswerTask(inputs=task.inputs, targets=("No",)))
+    twin._id = task.id
+    path = tmp_path / "control.duckdb"
+
+    with pytest.raises(TimeFValidationError, match=f"task id {TASK_ID} is not unique"):
         DuckDBControlWriter(path).write_hierarchy(dataset)
 
     assert not path.exists()

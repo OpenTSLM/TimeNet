@@ -109,6 +109,7 @@ def test_a_scope_must_name_signals_of_the_inputs(make_series):
     ds = _dataset()
     ts = make_series()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
+    other = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     ds.add_task(
         task=ClassificationTask(
             inputs=(record,),
@@ -121,7 +122,7 @@ def test_a_scope_must_name_signals_of_the_inputs(make_series):
             task=ClassificationTask(
                 inputs=(record,),
                 targets=("beat",),
-                scope=TimePoint.seconds(0.0, time_series=(make_series(),)),
+                scope=TimePoint.seconds(0.0, time_series=other.signals),
             )
         )
 

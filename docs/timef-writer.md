@@ -91,7 +91,12 @@ The writer fails before publication when it finds an invalid state, including:
 
 These failures raise TimeNet validation errors. Where possible, the errors name object IDs and
 relationship fields. The writer checks most of them while it streams rows. It uses the ID sets and
-key sequences it owns, and does not scan the finished tables.
+key sequences it owns. It does not keep the ID of every task, so after the last task batch it runs
+one query on `tasks` to find a repeated task ID.
+
+Each Record and Signal that a task refers to, as an input, a target, or in a span, must be the
+same object that the dataset registered under that ID. So a Record from another dataset fails,
+even when its ID is in use in this dataset.
 
 The writer inserts annotation references after the occurrences get their ids. So an annotation
 that is not attached in the dataset fails at that step. The writer inserts dependencies after the

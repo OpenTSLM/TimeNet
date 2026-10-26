@@ -18,6 +18,7 @@ from pydantic import ValidationError
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
+from timenet.dataset.dataset import _TaskValidationIndex
 from timenet.dataset.materialized_values import ValuesLoader
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
@@ -253,9 +254,9 @@ class DuckDBControlWriter:
             Counts keyed by concrete task type.
 
         Raises:
-            TimeFValidationError: If the hierarchy refers to an object outside the dataset, holds a
-                value that JSON cannot store, or declares Signal lengths that do not match its axis
-                offsets or value chunks.
+            TimeFValidationError: If the hierarchy refers to an object outside the dataset, repeats a
+                task id, holds a value that JSON cannot store, or declares Signal lengths that do not
+                match its axis offsets or value chunks.
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
         try:
@@ -332,7 +333,9 @@ class DuckDBControlWriter:
                 batches,
             )
         batches.flush()
-        task_counts, annotation_refs = self._write_tasks(connection, record_ids, signal_ids, annotations, tasks)
+        task_counts, annotation_refs = self._write_tasks(
+            connection, dataset, record_ids, signal_ids, annotations, tasks
+        )
         # Clustering occurrences on object_id lets keyed reads skip row groups.
         annotations.sort(key=lambda item: (item[1] is not None, item[1] or 0))
         self._write_annotations(connection, annotations, annotation_refs)
@@ -392,9 +395,10 @@ class DuckDBControlWriter:
             )
         chunks.flush()
 
-    def _write_tasks(
+    def _write_tasks(  # noqa: PLR0913, PLR0917 - reference sets stay explicit
         self,
         connection: duckdb.DuckDBPyConnection,
+        dataset: TimeFDataset,
         record_ids: Container[int],
         signal_ids: Container[int],
         annotations: list[tuple[ObjectKind, int | None, Annotation]],
@@ -410,19 +414,24 @@ class DuckDBControlWriter:
             Counts keyed by concrete task type, and the annotation references.
 
         Raises:
-            TimeFValidationError: If a task refers to a Record or Signal outside the dataset,
-                derives from a task that is not in the dataset, or derives from itself.
+            TimeFValidationError: If a task refers to a Record or Signal outside the dataset, or to
+                a Record or Signal object that the dataset did not register under that id. Also if
+                two tasks share an id, or a task derives from a task that is not in the dataset or
+                from itself.
         """
         # Weak: if no other task names a streamed task, Python can free it after the writer writes it.
         written: WeakValueDictionary[int, Task] = WeakValueDictionary()
         dependencies: list[tuple[int, int, Task]] = []
         annotation_refs: list[_AnnotationRef] = []
         task_counts: dict[str, int] = {}
+        index = _TaskValidationIndex(dataset)
         for batch in _task_batches(tasks_source):
             task_rows: list[dict[str, object]] = []
             target_rows: list[dict[str, object]] = []
             record_ref_rows: list[dict[str, object]] = []
             for task in batch:
+                TimeFDataset._check_record_refs(task, index)
+                TimeFDataset._check_signal_refs(task, index)
                 task_id = task.id
                 written[task_id] = task
                 task_type = str(task.task_type)
@@ -464,6 +473,11 @@ class DuckDBControlWriter:
             _insert_rows(connection, TABLES["tasks"], task_rows)
             _insert_rows(connection, TABLES["task_targets"], target_rows)
             _insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
+        duplicate = connection.execute(
+            "SELECT task_id FROM tasks GROUP BY task_id HAVING count(*) > 1 LIMIT 1"
+        ).fetchone()
+        if duplicate is not None:
+            raise TimeFValidationError(f"task id {duplicate[0]!r} is not unique")
         dependency_rows: list[dict[str, object]] = []
         for task_id, position, parent in dependencies:
             if parent._id is None or written.get(parent._id) is not parent:
