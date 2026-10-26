@@ -43,7 +43,9 @@ ImportMap: TypeAlias = dict[tuple[InputAlias, ObjectKind, str], str]
 It is the one record of what a dataset imported. An import looks a parent object up here and then
 finds the copy by its child ID among the dataset's own objects, so a copy the dataset no longer
 holds is copied again. The map holds plain IDs and copies with ``dict(...)``. The writer stores the
-entries whose copy the dataset still holds in the ``imported_objects`` table.
+entries whose copy the dataset holds in the ``imported_objects`` table, and a dataset read back
+from storage gets them back. An edit that builds a new dataset gives it a copy of the map without
+the entries of the copies the edit removes.
 """
 
 _STRICTNESS = {Access.OPEN: 0, Access.CREDENTIALED: 1, Access.RESTRICTED: 2}

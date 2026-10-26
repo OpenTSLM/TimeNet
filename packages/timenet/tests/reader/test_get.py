@@ -370,12 +370,53 @@ def test_malformed_import_selectors_raise_validation_errors(child):
         assert reader.get(Record, "p-record", alias=_BASE).id == "record-0"
 
 
-def test_a_catalog_that_names_another_parent_than_its_manifest_raises_a_format_error(child):
+def test_a_read_restores_the_import_map_the_parent_cards_and_the_lineage(child):
+    card = Manifest.model_validate_json((child / "manifest.json").read_text()).parent_cards[_BASE]
+    _declare_control_file(child, lineage=(card,))
+    with TimeFReader(open_local_version(child)) as reader:
+        dataset = reader.read()
+    assert dataset._imports == {
+        (_BASE, ObjectKind.RECORD, "p-record"): "record-0",
+        (_BASE, ObjectKind.SIGNAL, "p-signal"): "ts-shared",
+        (_BASE, ObjectKind.TASK, "p-task"): "task-answer-0",
+    }
+    assert dataset.parent_cards == {_BASE: card}
+    assert dataset.lineage == {"test/parent@1.0.0": card}
+
+
+@pytest.mark.parametrize(
+    "read",
+    [lambda reader: reader.get(Record, "p-record", alias=_BASE), TimeFReader.read],
+    ids=["get", "read"],
+)
+def test_a_catalog_that_names_another_parent_than_its_manifest_raises_a_format_error(child, read):
     with connect_control(child / "control.duckdb") as connection:
         connection.execute("UPDATE imports SET parent_ref = 'test/parent@1.0.1'")
     _declare_control_file(child)
     with (
         TimeFReader(open_local_version(child)) as reader,
-        pytest.raises(TimeFFormatError, match="differs from its manifest"),
+        pytest.raises(TimeFFormatError, match=r"differs? from its manifest"),
     ):
-        reader.get(Record, "p-record", alias=_BASE)
+        read(reader)
+
+
+def test_a_catalog_without_an_input_alias_of_its_manifest_raises_a_format_error(child):
+    card = Manifest.model_validate_json((child / "manifest.json").read_text()).parent_cards[_BASE]
+    _declare_control_file(child, parent_cards={_BASE: card, InputAlias("again"): card})
+    with TimeFReader(open_local_version(child)) as reader:
+        with pytest.raises(TimeFFormatError, match=r"differ from its manifest's parent cards"):
+            reader.read()
+        with pytest.raises(TimeFFormatError, match="names no parent release for input alias 'again'"):
+            reader.get(Record, "p-record", alias=InputAlias("again"))
+        assert reader.get(Record, "p-record", alias=_BASE).id == "record-0"
+
+
+def test_a_read_of_a_catalog_with_a_corrupt_import_row_raises_a_format_error(child):
+    with connect_control(child / "control.duckdb") as connection:
+        connection.execute("UPDATE imported_objects SET object_kind = 'Bogus' WHERE parent_id = 'p-record'")
+    _declare_control_file(child)
+    with (
+        TimeFReader(open_local_version(child)) as reader,
+        pytest.raises(TimeFFormatError, match="corrupt or inconsistent TimeF artifact"),
+    ):
+        reader.read()

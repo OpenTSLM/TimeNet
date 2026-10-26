@@ -6,7 +6,7 @@ import pytest
 
 from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset, composition
 from timenet.dataset.composition import ImportedDataset
-from timenet.dataset.edit import remove_records
+from timenet.dataset.edit import edit_version, remove_records, remove_signals
 from timenet.errors import TimeFNotFoundError, TimeFValidationError
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
@@ -59,6 +59,11 @@ def store(root, dataset):
     with TimeFWriter(root, dataset) as writer:
         writer.write()
     return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+
+
+def _next_version(dataset):
+    """Give a dataset read back from storage the next patch version, so that it writes beside its release."""
+    dataset._metadata = dataset.metadata.model_copy(update={"dataset_version": Version(1, 0, 1)})
 
 
 def _metadata(dataset_id, **update):
@@ -659,9 +664,15 @@ def test_a_grandchild_records_every_ancestor_in_its_lineage(tmp_path):
     assert list(manifest.parent_cards) == ["child"]
     assert sorted(str(card.source) for card in manifest.lineage) == ["test/child@1.0.0", "test/tree@1.0.0"]
     with TimeFReader(open_local_version(grandchild_dir)) as reader:
-        (record,) = reader.read().records
+        reread = reader.read()
+        (record,) = reread.records
         assert _keys(record) == ["age", "early", "late"]
         assert [signal.to_numpy().tolist() for signal in record.signals] == [list(range(16))] * 2
+        # Read back, the grandchild keeps its parent cards and lineage, and writes them again.
+        assert (reread.parent_cards, reread.lineage) == (grandchild.parent_cards, grandchild.lineage)
+        _next_version(reread)
+        again_dir = store(tmp_path, reread)
+    assert open_local_version(again_dir).manifest.lineage == manifest.lineage
 
 
 def test_the_writer_rejects_copies_imported_under_an_alias_without_a_parent_card(tmp_path):
@@ -673,19 +684,11 @@ def test_the_writer_rejects_copies_imported_under_an_alias_without_a_parent_card
             store(tmp_path, child)
 
 
-def _without_rec(child, imported):
-    """Remove the copy of ``rec``, carrying the import map and the parent cards through the edit by hand."""
-    edited = remove_records(child, [imported.records["rec"].id])
-    edited._imports = dict(child._imports)
-    edited.parent_cards = dict(child.parent_cards)
-    return edited
-
-
 def test_an_import_copies_again_what_the_child_no_longer_holds(tmp_path):
     with _reader(tmp_path, _tree()) as reader:
         child = _child(reader)
         imported = child.import_from(reader, records=["rec", "other"])
-        edited = _without_rec(child, imported)
+        edited = remove_records(child, [imported.records["rec"].id])
         (kept,) = edited.records
         again = edited.import_from(reader, records=["rec", "other"])
         edited_dir = store(tmp_path, edited)
@@ -697,14 +700,20 @@ def test_an_import_copies_again_what_the_child_no_longer_holds(tmp_path):
         assert stored.get(Record, "rec", alias=_ALIAS).metadata == {"site": "north"}
 
 
-def test_the_writer_stores_import_rows_only_for_copies_the_child_holds(tmp_path):
+def test_an_edit_drops_the_import_entries_of_what_it_removes(tmp_path):
     with _reader(tmp_path, _tree()) as reader:
         child = _child(reader)
         imported = child.import_from(reader, records=["rec", "other"])
-        edited_dir = store(tmp_path, _without_rec(child, imported))
+        edited = remove_records(child, [imported.records["rec"].id])
+        edited_dir = store(tmp_path, edited)
+    # The map links only the copies the edit holds, and the writer stores those.
+    assert edited._imports == {key: value for key, value in child._imports.items() if key[2] in {"other", "sig-c"}}
     assert _rows(edited_dir) == [("Record", "other"), ("Signal", "sig-c")]
-    with TimeFReader(open_local_version(edited_dir)) as stored, pytest.raises(TimeFNotFoundError):
-        stored.get(Record, "rec", alias=_ALIAS)
+    manifest = open_local_version(edited_dir).manifest
+    assert manifest.parent_cards == child.parent_cards
+    assert {str(card.source): card for card in manifest.lineage} == child.lineage
+    with TimeFReader(open_local_version(edited_dir)) as stored:
+        assert stored.read()._imports == edited._imports
 
 
 def test_the_writer_ignores_stale_entries_of_an_alias_the_child_dropped(tmp_path):
@@ -712,10 +721,254 @@ def test_the_writer_ignores_stale_entries_of_an_alias_the_child_dropped(tmp_path
         child = _child(reader)
         imported = child.import_from(reader, records=["rec"])
         edited = remove_records(child, [imported.records["rec"].id])
-        # The map still names the removed copies, but the edit dropped the parent's card.
+        # By hand: the map still names the removed copies, and the parent's card is gone.
         edited._imports = dict(child._imports)
+        del edited.parent_cards[_ALIAS]
         edited_dir = store(tmp_path, edited)
     assert _rows(edited_dir) == []
+
+
+def _partial_rec(reader):
+    """Return a child holding a copy of ``rec`` with ``sig-a`` only, whose metadata and annotations it edited."""
+    child = _child(reader)
+    child.import_from(reader, signals=["sig-a"])
+    (partial,) = child.records
+    partial.metadata["site"] = "edited"
+    partial.annotations = tuple(annotation for annotation in partial.annotations if annotation.key != "age")
+    return child
+
+
+def test_a_child_read_back_extends_its_partial_copy_and_keeps_its_edits(tmp_path):
+    with _reader(tmp_path, _tree()) as reader:
+        in_memory = _partial_rec(reader)
+        in_memory.import_from(reader, records=["rec"])
+        child_dir = store(tmp_path, _partial_rec(reader))
+        with TimeFReader(open_local_version(child_dir)) as stored:
+            reread = stored.read()
+            (record,) = reread.records
+            whole = reread.import_from(reader, records=["rec"])
+            _next_version(reread)
+            again_dir = store(tmp_path, reread)
+    assert whole.records == {"rec": record}
+    assert reread.records == (record,)
+    assert record.metadata == {"site": "edited"}
+    assert sorted(signal.name for signal in record.signals) == ["sig-a", "sig-b"]
+    # The extension attaches the annotations that sig-b places, as it does in memory, and age,
+    # which the child removed, stays removed.
+    assert _all_keys(record) == _all_keys(in_memory.records[0])
+    assert _keys(record) == ["early", "late"]
+    with TimeFReader(open_local_version(again_dir)) as stored:
+        copy = stored.get(Record, "rec", alias=_ALIAS)
+        assert (copy.id, copy.metadata) == (record.id, {"site": "edited"})
+        assert sorted(signal.name for signal in copy.signals) == ["sig-a", "sig-b"]
+
+
+def test_a_child_read_back_and_written_again_reads_every_copy_by_parent_id(tmp_path):
+    with _reader(tmp_path, _tree()) as reader:
+        child = _child(reader)
+        first = child.import_from(reader, records=["rec"])
+        child_dir = store(tmp_path, child)
+        with TimeFReader(open_local_version(child_dir)) as stored:
+            reread = stored.read()
+            assert (reread._imports, reread.parent_cards, reread.lineage) == (
+                child._imports,
+                child.parent_cards,
+                child.lineage,
+            )
+            second = reread.import_from(reader, records=["other"])
+            _next_version(reread)
+            again_dir = store(tmp_path, reread)
+    assert _rows(again_dir) == [
+        ("Record", "other"),
+        ("Record", "rec"),
+        ("Signal", "sig-a"),
+        ("Signal", "sig-b"),
+        ("Signal", "sig-c"),
+    ]
+    with TimeFReader(open_local_version(again_dir)) as stored:
+        assert stored.get(Record, "rec", alias=_ALIAS).id == first.records["rec"].id
+        assert stored.get(Record, "other", alias=_ALIAS).id == second.records["other"].id
+        assert {signal.name for signal in stored.get_many(Signal, ["sig-a", "sig-c"], alias=_ALIAS)} == {
+            "sig-a",
+            "sig-c",
+        }
+
+
+def test_an_edited_version_keeps_the_parent_cards_and_the_import_map(tmp_path):
+    with _reader(tmp_path, _tree()) as reader:
+        child = _child(reader)
+        imported = child.import_from(reader, records=["rec", "other"])
+        child_dir = store(tmp_path, child)
+        edited_dir = edit_version(
+            child_dir, dataset_version=Version(1, 0, 1), remove_record_ids=[imported.records["other"].id]
+        )
+        assert open_local_version(edited_dir).manifest.parent_cards == child.parent_cards
+        assert _rows(edited_dir) == [("Record", "rec"), ("Signal", "sig-a"), ("Signal", "sig-b")]
+        with TimeFReader(open_local_version(edited_dir)) as stored:
+            assert stored.get(Record, "rec", alias=_ALIAS).id == imported.records["rec"].id
+            with pytest.raises(TimeFNotFoundError, match="no Record 'other' imported under input alias 'base'"):
+                stored.get(Record, "other", alias=_ALIAS)
+            # Read back, the edited version extends the copy it holds and copies the removed one again.
+            edited = stored.read()
+            (kept,) = edited.records
+            again = edited.import_from(reader, records=["rec", "other"])
+    assert {str(card.source): card for card in open_local_version(edited_dir).manifest.lineage} == child.lineage
+    assert again.records["rec"] is kept
+    assert edited.records == (kept, again.records["other"])
+    assert again.records["other"].id == imported.records["other"].id
+
+
+@pytest.mark.filterwarnings("ignore::timenet.errors.SpanOutsideWindowWarning")
+def test_a_removed_signal_comes_back_with_its_annotations_once(tmp_path):
+    parent = _tree()
+    # No window places gap, so a copy holds it while it holds every Signal.
+    parent.records[0].annotate(Annotation(key="gap", span=TimePoint.seconds(1.5)))
+    with _reader(tmp_path, parent) as reader:
+        whole = _child(reader, dataset_id="test/whole")
+        whole.import_from(reader, records=["rec"])
+        child = _child(reader)
+        sig_a = child.import_from(reader, signals=["sig-a", "sig-b"]).signals["sig-a"].id
+        # In memory. Removing sig-a drops early and src-early, which only it places, gap, which only
+        # the complete copy places, and its entry.
+        trimmed = remove_signals(child, [sig_a])
+        assert _all_keys(trimmed.records[0]) == [
+            ("record", ["age", "late"]),
+            ("leads", []),
+            ("monitor", ["device", "src-late"]),
+        ]
+        assert (_ALIAS, "Signal", "sig-a") not in trimmed._imports
+        trimmed.import_from(reader, records=["rec"])
+        # Stored. edit_version removes it from a written child, and an import copies it back after
+        # a read-back.
+        child_dir = store(tmp_path, child)
+        edited_dir = edit_version(child_dir, dataset_version=Version(1, 0, 1), remove_signal_ids=[sig_a])
+        assert _rows(edited_dir) == [("Record", "rec"), ("Signal", "sig-b")]
+        with TimeFReader(open_local_version(edited_dir)) as stored:
+            reread = stored.read()
+            reread.import_from(reader, records=["rec"])
+            reread._metadata = reread.metadata.model_copy(update={"dataset_version": Version(1, 0, 2)})
+            again_dir = store(tmp_path, reread)
+        with TimeFReader(open_local_version(again_dir)) as stored:
+            (written,) = stored.read().records
+    # Each time, the copy gets back sig-a and each annotation once, as one import of the whole
+    # Record gives.
+    for copy in (trimmed.records[0], reread.records[0], written):
+        assert _all_keys(copy) == _all_keys(whole.records[0])
+        assert sorted((signal.name, _keys(signal)) for signal in copy.signals) == [
+            ("sig-a", ["artifact"]),
+            ("sig-b", []),
+        ]
+    assert child._imports[_ALIAS, "Signal", "sig-a"] == sig_a
+
+
+def test_a_new_copy_of_a_removed_record_grows_as_a_first_copy_does(tmp_path):
+    with _reader(tmp_path, _tree()) as reader:
+        fresh = _child(reader, dataset_id="test/fresh")
+        fresh.import_from(reader, signals=["sig-b"])
+        fresh.import_from(reader, records=["rec"])
+        child = _child(reader)
+        removed = child.import_from(reader, records=["rec"]).records["rec"].id
+        child_dir = store(tmp_path, child)
+        # In memory. The edit drops the entries of the removed copy and its Signals.
+        edited = remove_records(child, [removed])
+        assert edited._imports == {}
+        edited.import_from(reader, signals=["sig-b"])
+        edited.import_from(reader, records=["rec"])
+        # The same through edit_version, with a write and a read-back between the two imports.
+        edited_dir = edit_version(child_dir, dataset_version=Version(1, 0, 1), remove_record_ids=[removed])
+        with TimeFReader(open_local_version(edited_dir)) as stored:
+            partial = stored.read()
+            partial.import_from(reader, signals=["sig-b"])
+            partial._metadata = partial.metadata.model_copy(update={"dataset_version": Version(1, 0, 2)})
+            partial_dir = store(tmp_path, partial)
+        with TimeFReader(open_local_version(partial_dir)) as stored:
+            reread = stored.read()
+            reread.import_from(reader, records=["rec"])
+    # Each copy gets early and src-early, which only sig-a places, when the whole Record comes.
+    assert _keys(fresh.records[0]) == ["age", "early", "late"]
+    assert _all_keys(edited.records[0]) == _all_keys(fresh.records[0])
+    assert _all_keys(reread.records[0]) == _all_keys(fresh.records[0])
+
+
+def test_an_import_into_a_child_read_back_leaves_its_reader_as_it_is(tmp_path):
+    with _reader(tmp_path, _tree()) as reader, _reader(tmp_path, _tree("test/second")) as second:
+        child = _child(reader, second, aliases=(_ALIAS, InputAlias("second")))
+        child.import_from(reader, records=["rec"])
+        child_dir = store(tmp_path, child)
+        with TimeFReader(open_local_version(child_dir)) as stored:
+            reread = stored.read()
+            reread.import_from(second, records=["other"])
+            assert list(reread.parent_cards) == [_ALIAS, "second"]
+            # The reader's own parent cards are not the dataset's, so they stay as stored.
+            assert list(stored.read().parent_cards) == [_ALIAS]
+            with pytest.raises(TimeFNotFoundError, match="declares no input alias 'second'"):
+                stored.get(Record, "other", alias=InputAlias("second"))
+
+
+def _containers(dataset):
+    """Return what each Record and Source of a dataset holds, as it holds it now."""
+    return [(record.sources, record.annotations, record.task_ids) for record in dataset.records] + [
+        (source.sources, source.signals, source.annotations)
+        for record in dataset.records
+        for source in record.walk_sources()
+    ]
+
+
+def _state(dataset):
+    return _containers(dataset), _indexes(dataset), dict(dataset.parent_cards), dict(dataset.lineage)
+
+
+def test_an_import_into_an_edited_dataset_leaves_the_original_as_it_is(tmp_path):
+    with _reader(tmp_path, _tasks_tree()) as reader, _reader(tmp_path, _tree("test/second")) as second:
+        child = _child(reader, second, aliases=(_ALIAS, InputAlias("second")))
+        imported = child.import_from(reader, signals=["sig-a", "sig-b"], records=["other"])
+        other = imported.records["other"]
+        # Removing sig-a leaves the nested Source leads empty.
+        trimmed = remove_signals(child, [imported.signals["sig-a"].id])
+        before = {id(dataset): _state(dataset) for dataset in (child, trimmed)}
+        edited = remove_records(trimmed, [other.id])
+        # The import extends the copy of rec in place, copying sig-a back into leads and adding
+        # aux, and copies other and the tasks again. Another parent adds a card and an ancestor.
+        again = edited.import_from(reader, records=["rec", "other"], tasks=["question"])
+        edited.import_from(second, records=["other"])
+    assert again.records["rec"] is edited.records[0]
+    assert sorted(signal.name for signal in edited.records[0].signals) == ["sig-a", "sig-b"]
+    assert (len(edited.records), len(edited.tasks), list(edited.parent_cards)) == (3, 2, [_ALIAS, "second"])
+    for dataset in (child, trimmed):
+        assert _state(dataset) == before[id(dataset)]
+        assert (dataset.tasks, dataset.annotations, list(dataset.parent_cards)) == ((), (), [_ALIAS])
+    (partial,) = (record for record in trimmed.records if record.id != other.id)
+    assert [signal.name for signal in partial.signals] == ["sig-b"]
+
+
+def test_an_import_into_a_dataset_that_remove_signals_built_leaves_the_original_as_it_is(tmp_path):
+    with _reader(tmp_path, _tree()) as reader:
+        child = _child(reader)
+        other = child.import_from(reader, signals=["sig-a"], records=["other"]).records["other"]
+        (partial,) = (record for record in child.records if record is not other)
+        before = _state(child)
+        # The edit leaves the partial copy of rec as it is, and still copies it, so the import that
+        # extends it extends the edit's copy.
+        trimmed = remove_signals(child, [other.signals[0].id])
+        trimmed.import_from(reader, records=["rec"])
+    assert _state(child) == before
+    assert [signal.name for signal in partial.signals] == ["sig-a"]
+    (extended,) = (record for record in trimmed.records if record.id == partial.id)
+    assert sorted(signal.name for signal in extended.signals) == ["sig-a", "sig-b"]
+
+
+def test_remove_signals_drops_the_entries_of_the_task_copies_it_removes(tmp_path):
+    with _reader(tmp_path, _tasks_tree()) as reader:
+        child = _child(reader)
+        imported = child.import_from(reader, tasks=["edit"])
+        (target, _) = imported.tasks["edit"].targets
+        trimmed = remove_signals(child, [target.id], cascade=True)
+        trimmed_dir = store(tmp_path, trimmed)
+    assert trimmed.tasks == ()
+    assert (_ALIAS, "Signal", "sig-e1") not in trimmed._imports
+    assert _task_imports(trimmed) == {}
+    assert ("Task", "edit") not in _rows(trimmed_dir)
+    assert set(_task_imports(child)) == {(_ALIAS, "Task", "edit")}
 
 
 def test_two_children_of_one_parent_keep_metadata_separate_and_reuse_payloads(tmp_path):
@@ -1080,7 +1333,6 @@ def test_task_copies_that_fail_to_register_leave_no_task_and_no_map_entry(tmp_pa
         assert _task_imports(child) == {}
         # Once the clash is gone, the same import completes.
         edited = remove_records(child, ["mine"], cascade=True)
-        edited._imports, edited.parent_cards = dict(child._imports), dict(child.parent_cards)
         question, _ = edited.import_from(reader, tasks=["question", "second"]).tasks.values()
     assert question.id == clash
     assert len(edited.tasks) == 3
@@ -1234,6 +1486,75 @@ def test_annotations_on_another_record_share_one_copy_that_a_later_import_comple
         ("tail", []),
     ]
     assert [task.input_annotations[0].key for task in tasks.values()] == ["static", "late", "near-note"]
+
+
+def test_a_child_read_back_reuses_its_task_copies(tmp_path, monkeypatch):
+    def unexpected_read(*args):
+        pytest.fail("an import must not read a task the child holds a copy of")
+
+    with _reader(tmp_path, _tasks_tree()) as reader:
+        child = _child(reader)
+        child.import_from(reader, tasks=["question"])
+        child_dir = store(tmp_path, child)
+        with TimeFReader(open_local_version(child_dir)) as stored:
+            reread = stored.read()
+            (record,) = reread.records
+            (question,) = reread.tasks_of(AnswerTask)
+            tasks, annotations = reread.tasks, reread.annotations
+            with monkeypatch.context() as patch:
+                patch.setattr(DuckDBControlReader, "read_tasks_by_id", unexpected_read)
+                again = reread.import_from(reader, tasks=["question", "label"])
+            (locate,) = reread.import_from(reader, tasks=["locate"]).tasks.values()
+            _next_version(reread)
+            again_dir = store(tmp_path, reread)
+    assert again.tasks["question"] is question
+    assert again.tasks["label"] is question.from_tasks[0]
+    assert (locate.inputs, locate.from_tasks) == ((record,), (question,))
+    assert reread.tasks == (*tasks, locate)
+    assert (reread.records, reread.annotations) == ((record,), annotations)
+    with TimeFReader(open_local_version(again_dir)) as stored:
+        assert stored.get(Task, "locate", alias=_ALIAS).from_tasks[0].id == question.id
+
+
+def test_a_cascading_removal_drops_task_copies_that_a_later_import_brings_back(tmp_path):
+    with _reader(tmp_path, _tasks_tree()) as reader:
+        child = _child(reader)
+        imported = child.import_from(reader, records=["other"], tasks=["question"])
+        other = imported.records["other"]
+        (record,) = imported.tasks["question"].inputs
+        edited = remove_records(child, [record.id], cascade=True)
+        assert ([copy.id for copy in edited.records], edited.tasks) == ([other.id], ())
+        # The map links only the copies the edit holds: no Record, Signal, or task copy it removed.
+        assert set(edited._imports) == {(_ALIAS, "Record", "other"), (_ALIAS, "Signal", "sig-c")}
+        edited_dir = store(tmp_path, edited)
+        (question,) = edited.import_from(reader, tasks=["question"]).tasks.values()
+    # The written edit has rows only for the copies it holds, none for the removed tasks.
+    assert _rows(edited_dir) == [("Record", "other"), ("Signal", "sig-c")]
+    assert question.id == imported.tasks["question"].id
+    assert [copy.id for copy in edited.records] == [other.id, record.id]
+    assert [task.id for task in edited.tasks] == [question.id, question.from_tasks[0].id]
+    # The dataset annotation that the first import brought stays, and the new copy references it.
+    (note,) = edited.annotations
+    assert question.input_annotations[2] is note
+    assert set(_task_imports(edited)) == {(_ALIAS, "Task", "label"), (_ALIAS, "Task", "question")}
+    assert len(child.tasks) == 2
+
+
+def test_get_by_parent_id_finds_no_copy_an_edit_removed(tmp_path):
+    with _reader(tmp_path, _tasks_tree()) as reader:
+        child = _child(reader)
+        imported = child.import_from(reader, records=["other"], tasks=["question"])
+        (record,) = imported.tasks["question"].inputs
+        edited_dir = store(tmp_path, remove_records(child, [record.id], cascade=True))
+    with TimeFReader(open_local_version(edited_dir)) as stored:
+        for kind, identity in ((Record, "rec"), (Signal, "sig-a"), (Task, "question")):
+            with pytest.raises(
+                TimeFNotFoundError, match=rf"no {kind.__name__} '{identity}' imported under input alias 'base'"
+            ):
+                stored.get(kind, identity, alias=_ALIAS)
+        with pytest.raises(TimeFNotFoundError, match="no Record 'rec' imported"):
+            stored.get_many(Record, ["other", "rec"], alias=_ALIAS)
+        assert stored.get(Record, "other", alias=_ALIAS).id == imported.records["other"].id
 
 
 def test_task_copies_reuse_the_parent_payloads_of_packed_text(tmp_path, monkeypatch):

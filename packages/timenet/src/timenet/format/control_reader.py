@@ -20,6 +20,7 @@ import duckdb
 import pyarrow as pa
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeAxis, TimeFDataset
+from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
@@ -57,7 +58,7 @@ from timenet.types import (
 )
 from timenet.types.handles import CallableArray
 from timenet.types.object_kind import ObjectKind
-from timenet.types.reference_keys import OwnerKey
+from timenet.types.reference_keys import InputAlias, OwnerKey
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
@@ -503,7 +504,7 @@ _CATALOG_ERRORS = (duckdb.CatalogException, duckdb.BinderException, duckdb.Conve
 """DuckDB errors that mean the catalog lacks a table, column, or type that a read expects."""
 
 
-class DuckDBControlReader:
+class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of catalog read
     """Keep one read-only DuckDB connection and hydrate requested records from it.
 
     The connection opens again on the next query after :meth:`close`, and after the process forks,
@@ -1183,6 +1184,19 @@ class DuckDBControlReader:
             [ObjectKind.RECORD.value, ObjectKind.SOURCE.value, ObjectKind.SIGNAL.value, list(occurrence_ids)],
         )
         return {occurrence_id: record_id for occurrence_id, record_id in rows if record_id is not None}
+
+    def import_map(self) -> tuple[dict[str, str], ImportMap]:
+        """Return the parent release of each input alias, and the import map of the catalog.
+
+        Returns:
+            The parent release that ``imports`` names for each input alias, and the local ID of each
+            object in ``imported_objects``, keyed by input alias, kind, and parent ID.
+        """
+        releases: dict[str, str] = dict(self._query("SELECT alias, parent_ref FROM imports"))
+        rows = self._query("SELECT alias, object_kind, parent_id, object_id FROM imported_objects")
+        return releases, {
+            (InputAlias(alias), ObjectKind(kind), parent_id): object_id for alias, kind, parent_id, object_id in rows
+        }
 
     def signal_record_ids(self, signal_ids: Collection[str]) -> dict[str, str]:
         """Return the ID of the Record that holds each of the given Signals, building no object.

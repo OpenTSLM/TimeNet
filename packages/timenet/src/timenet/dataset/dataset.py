@@ -171,7 +171,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         adds the Signals and Sources they lack and attaches the annotations that the added Signals
         place and the Signals the copy holds did not. The copies' other annotations and edits stay
         as they are. A task copy is reused as it is. An object this dataset no longer holds is
-        copied again. Removing a Signal from a copy is meant to drop the annotations that only it
+        copied again. This holds for a dataset read back from storage and for one that an edit such
+        as ``remove_records`` built, which keep the import map. Remove a Signal from a copy with
+        :func:`~timenet.dataset.edit.remove_signals`, which drops the annotations that only it
         placed, so that copying it back attaches them once; other structural edits of a copy, such
         as assigning a Source's ``signals`` or ``sources``, are not supported, and a later import
         may then attach an annotation twice. A copy's Source that holds no imported Signal is found
@@ -756,7 +758,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     ) -> "TimeFDataset":
         """Build a dataset from parts that are already constructed.
 
-        The reader uses this method when it reads a dataset back from disk.
+        The reader uses this method when it reads a dataset back from disk. The dataset starts with
+        no :attr:`parent_cards`, no :attr:`lineage`, and an empty import map.
 
         Args:
             metadata: The dataset's descriptive identity.
