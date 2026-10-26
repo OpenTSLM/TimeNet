@@ -37,7 +37,8 @@ class TestMeanConnector(BaseConnector[None]):
     Synthetic: :meth:`download` returns no references and :meth:`convert` generates every record directly.
     """
 
-    def download(self, cache_dir: Path) -> list[None]:  # noqa: ARG002, PLR6301 (synthetic: nothing to download)
+    # ruff: ignore[unused-method-argument, no-self-use] (synthetic: nothing to download)
+    def download(self, cache_dir: Path) -> list[None]:
         """Return no references; the data is synthetic and built entirely in :meth:`convert`.
 
         Args:
@@ -48,7 +49,8 @@ class TestMeanConnector(BaseConnector[None]):
         """
         return []
 
-    def convert(self, raw_refs: list[None]) -> TimeFDataset:  # noqa: ARG002 (synthetic: nothing to convert)
+    # ruff: ignore[unused-method-argument] (synthetic: nothing to convert)
+    def convert(self, raw_refs: list[None]) -> TimeFDataset:
         """Generate the balanced set of labeled, single-signal records.
 
         Args:

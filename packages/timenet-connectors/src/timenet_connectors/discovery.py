@@ -80,7 +80,7 @@ def requirements_for(dataset_id: str) -> Path | None:
 
     Raises:
         LookupError: If no module exists for the id.
-    """  # noqa: DOC502 (raised by connector_dir, not directly here)
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by connector_dir, not directly here)
     path = connector_dir(dataset_id) / "requirements.txt"
     return path if path.is_file() else None
 
@@ -143,7 +143,7 @@ def resolve(dataset_id: str) -> type[BaseConnector]:
         LookupError: If no module exists for the id, or it exposes no ``CONNECTOR``.
         ModuleNotFoundError: If a connector module for the id exists but fails to import one of its own
             dependencies. This surfaces the real error instead of masking it as an unknown id.
-    """  # noqa: DOC502 (raised by _connector_spec, not directly here)
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _connector_spec, not directly here)
     spec = _connector_spec(dataset_id)
     if spec is None:
         raise LookupError(f"no connector for {dataset_id!r}; known: {', '.join(available()) or '(none)'}")

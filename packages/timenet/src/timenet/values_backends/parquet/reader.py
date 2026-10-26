@@ -48,7 +48,7 @@ def _target_type(spec: TimeSeriesSpec) -> pa.DataType:
     if spec.dtype == "str":
         return pa.string()
     if spec.dtype == "enum":
-        from timenet.values_backends.parquet.writer import _ENUM_LEAF  # noqa: PLC0415
+        from timenet.values_backends.parquet.writer import _ENUM_LEAF  # ruff: ignore[import-outside-top-level]
 
         return _ENUM_LEAF
     return pa.from_numpy_dtype(np.dtype(spec.dtype))

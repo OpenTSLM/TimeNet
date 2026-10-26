@@ -75,7 +75,7 @@ class BuilderBackend(Protocol):
         """
         ...
 
-    def build(  # noqa: PLR0913
+    def build(  # ruff: ignore[too-many-arguments]
         self,
         dataset_id: str,
         root: Path,
@@ -133,7 +133,7 @@ def find_card(dataset_id: str) -> DatasetMetadata | None:
 
     Raises:
         TimeNetInvalidCardError: If the card of the connector cannot be read.
-    """  # noqa: DOC502 - raised by the backend
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
     builder = find_builder(dataset_id)
     return None if builder is None else builder.card(dataset_id)
 
@@ -153,7 +153,7 @@ def exact_builder(reference: DatasetRef) -> BuilderBackend | None:
 
     Raises:
         TimeNetInvalidCardError: If the card of the connector cannot be read.
-    """  # noqa: DOC502 - raised by the backend
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
     builder = find_builder(reference.dataset_id)
     card = None if builder is None else builder.card(reference.dataset_id)
     return builder if card is not None and card.dataset_version == reference.version else None

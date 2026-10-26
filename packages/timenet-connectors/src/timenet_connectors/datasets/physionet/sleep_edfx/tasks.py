@@ -319,7 +319,7 @@ def iter_tasks(records: Sequence[Record]) -> Iterator[Task]:
     Raises:
         TimeFFormatError: If a scoring cannot be expanded into whole epochs. The message names
             the recording, because a task is one of hundreds of thousands.
-    """  # noqa: DOC502 (raised by build_epoch_tasks, not directly here)
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by build_epoch_tasks, not directly here)
     for record in records:
         # The two lists partition the annotations, so a key that neither builder asks about is
         # in one of them rather than in neither. Each builder then takes the part it reads.
@@ -350,7 +350,7 @@ def iter_tasks(records: Sequence[Record]) -> Iterator[Task]:
 
 
 def build_lights_off_task(
-    recording_id: str,  # noqa: ARG001 - keeps builder signatures and error context consistent
+    recording_id: str,  # ruff: ignore[unused-function-argument] - keeps builder signatures and error context consistent
     session: TimeInterval | None,
     span_annotations: Sequence[Annotation],
 ) -> TemporalLocalizationTask | None:

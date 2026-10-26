@@ -193,14 +193,14 @@ class PackedValueLocator(TimeFModel):
 
     @property
     def key(self) -> ExternalObjectFieldKey:
-        """Return the validated object field addressed by this locator."""
+        """The validated object field addressed by this locator."""
         return ExternalObjectFieldKey(
             object_kind=self.object_kind, object_id=self.object_id, field=self.field, position=self.position
         )
 
     @property
     def location(self) -> PackedLocation:
-        """Return where the value is packed."""
+        """Where the value is packed."""
         digest = self.value_digest
         return PackedLocation(
             source=self.source_key,
@@ -333,17 +333,17 @@ class StoredText(TextHandle):
 
     @property
     def _location(self) -> PackedLocation:
-        """Return where the string is packed."""
+        """Where the string is packed."""
         return self._packed_location
 
     @property
     def is_loaded(self) -> bool:
-        """Return whether the handle keeps the string, so reads need no payload access."""
+        """Whether the handle keeps the string, so reads need no payload access."""
         return self._kept.value is not None
 
     @property
     def length(self) -> int:
-        """Return the string's length, recorded in its location."""
+        """The string's length, recorded in its location."""
         return self._location.length
 
     def read(self) -> str:
@@ -359,7 +359,7 @@ class StoredText(TextHandle):
 
         Raises:
             TimeNetError: If the handle is already loaded.
-        """  # noqa: DOC502 - raised by WriteOnce.set
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by WriteOnce.set
         self._kept.set(self.read())
 
     def _content_key(self) -> Hashable:
@@ -395,17 +395,17 @@ class StoredTextList(TextListHandle):
 
     @property
     def _location(self) -> PackedLocation:
-        """Return where the list is packed."""
+        """Where the list is packed."""
         return self._packed_location
 
     @property
     def is_loaded(self) -> bool:
-        """Return whether the handle keeps the strings, so reads need no payload access."""
+        """Whether the handle keeps the strings, so reads need no payload access."""
         return self._kept.value is not None
 
     @property
     def length(self) -> int:
-        """Return the number of strings, recorded in the list's location."""
+        """The number of strings, recorded in the list's location."""
         return self._location.length
 
     def read(self) -> list[str]:
@@ -422,7 +422,7 @@ class StoredTextList(TextListHandle):
 
         Raises:
             TimeNetError: If the handle is already loaded.
-        """  # noqa: DOC502 - raised by WriteOnce.set
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by WriteOnce.set
         self._kept.set(tuple(self.read()))
 
     def _content_key(self) -> Hashable:
@@ -462,22 +462,22 @@ class StoredOffsets(ArrayHandle):
 
     @property
     def _location(self) -> PackedLocation:
-        """Return where the time offsets are packed."""
+        """Where the time offsets are packed."""
         return self._packed_location
 
     @property
     def is_loaded(self) -> bool:
-        """Return whether a read has kept the time offsets."""
+        """Whether a read has kept the time offsets."""
         return self._kept.value is not None
 
     @property
     def length(self) -> int:
-        """Return the number of time offsets, recorded in their location."""
+        """The number of time offsets, recorded in their location."""
         return self._location.length
 
     @property
     def digest(self) -> bytes:
-        """Return the time offsets' SHA-256 digest, recorded in their location.
+        """The time offsets' SHA-256 digest, recorded in their location.
 
         The catalog stores a digest with every axis's time offsets, so only a location built by hand
         can lack one.
@@ -574,7 +574,7 @@ class PackedValueReader:
 
         Raises:
             TimeFFormatError: If the manifest does not list the location's payload file.
-        """  # noqa: DOC502 - raised by checksum
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by checksum
         return PackedContentKey(checksum=self.checksum(location), row=location.row, kind=location.kind)
 
     def read_scalar(self, location: PackedLocation) -> pa.Scalar:
@@ -605,7 +605,7 @@ class PackedValueReader:
             TimeFFormatError: If the manifest does not list the location's payload file.
             TimeFValidationError: If the location holds time offsets, whose ``StoredOffsets`` also
                 needs their axis.
-        """  # noqa: DOC502 - raised by checksum
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by checksum
         self.checksum(location)
         kind = location.kind
         match kind:
@@ -634,7 +634,7 @@ class PackedValueReader:
 
         Raises:
             TimeFFormatError: If the manifest does not list the location's payload file.
-        """  # noqa: DOC502 - raised by checksum
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by checksum
         self.checksum(location)
         return StoredOffsets(self, location, axis_id=axis_id, first=first, last=last)
 
@@ -666,7 +666,8 @@ class PackedValueReader:
         columns = ", ".join(EXTERNAL_VALUES.column_names)
         try:
             rows = connection.execute(
-                f"SELECT {columns} FROM {EXTERNAL_VALUES.name} "  # noqa: S608 - fixed identifiers
+                # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+                f"SELECT {columns} FROM {EXTERNAL_VALUES.name} "
                 "WHERE object_kind = ? AND object_id IN (SELECT unnest(?))",
                 [kind.value, identities],
             ).fetchall()
@@ -803,7 +804,7 @@ class PackedValueWriter:
         self.locators: list[PackedValueLocator] = []
         self.bytes = 0
 
-    def pack(  # noqa: PLR0913 - a known digest spares hashing the time offsets twice
+    def pack(  # ruff: ignore[too-many-arguments] - a known digest spares hashing the time offsets twice
         self,
         kind: ObjectKind,
         object_id: int,
@@ -836,7 +837,7 @@ class PackedValueWriter:
         Raises:
             TimeFValidationError: If the locator is invalid for this field, or a reused payload is
                 stored by the output release or missing from the release that stores it.
-        """  # noqa: DOC502 - raised by _add_locator and StorageSources.add
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _add_locator and StorageSources.add
         key = ExternalObjectFieldKey(object_kind=kind, object_id=object_id, field=field, position=position)
         if isinstance(value, StoredText | StoredTextList | StoredOffsets):
             stored = value._location

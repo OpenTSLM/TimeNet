@@ -23,7 +23,7 @@ def _decode_image(source: Path | bytes) -> np.ndarray:
     Raises:
         TimeFFormatError: If the image cannot be decoded.
     """
-    from PIL import Image, ImageOps  # noqa: PLC0415 - optional connector dependency
+    from PIL import Image, ImageOps  # ruff: ignore[import-outside-top-level] - optional connector dependency
 
     try:
         with Image.open(source if isinstance(source, Path) else BytesIO(source)) as opened:

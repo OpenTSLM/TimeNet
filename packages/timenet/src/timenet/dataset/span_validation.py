@@ -11,7 +11,7 @@ if TYPE_CHECKING:
     from timenet.dataset.time_series import Signal
 
 
-def check_span_within_window(  # noqa: PLR0913 (span rules have several branches)
+def check_span_within_window(  # ruff: ignore[too-many-arguments] (span rules have several branches)
     label: str,
     span: Span,
     time_series: tuple["Signal", ...],
@@ -106,7 +106,7 @@ def check_span_within_window(  # noqa: PLR0913 (span rules have several branches
     _reject_outside_union(label, span, windows, owner, warn_when_outside=warn_when_outside)
 
 
-def _reject_outside(  # noqa: PLR0913 (the sixth is the keyword-only guard)
+def _reject_outside(  # ruff: ignore[too-many-arguments] (the sixth is the keyword-only guard)
     label: str, span: TimeSpan, start: int, end: int, owner: str, *, warn_when_outside: bool = True
 ) -> None:
     """Reject a time span that runs past the half-open window ``[start, end)``.

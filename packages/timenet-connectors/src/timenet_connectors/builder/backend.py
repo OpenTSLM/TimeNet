@@ -14,7 +14,7 @@ from timenet_connectors.discovery import connector_dir, has_connector
 class ConnectorBuilder:
     """Builds a dataset by running its connector in an environment built from its requirements."""
 
-    def knows(self, dataset_id: str) -> bool:  # noqa: PLR6301 (BuilderBackend protocol method)
+    def knows(self, dataset_id: str) -> bool:  # ruff: ignore[no-self-use] (BuilderBackend protocol method)
         """Report whether a connector package exists for the id, without importing it.
 
         Args:
@@ -36,11 +36,11 @@ class ConnectorBuilder:
 
         Raises:
             TimeNetInvalidCardError: If the card of the connector cannot be read or is not a mapping.
-        """  # noqa: DOC502 - raised by card()
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by card()
         card = self.card(dataset_id)
         return None if card is None else str(card.dataset_version)
 
-    def card(self, dataset_id: str) -> DatasetMetadata | None:  # noqa: PLR6301 (protocol)
+    def card(self, dataset_id: str) -> DatasetMetadata | None:  # ruff: ignore[no-self-use] (protocol)
         """Read the connector's ``dataset.yaml`` card, without importing or building the connector.
 
         Args:
@@ -51,14 +51,14 @@ class ConnectorBuilder:
 
         Raises:
             TimeNetInvalidCardError: If the card cannot be read or is not a mapping.
-        """  # noqa: DOC502 - raised by DatasetMetadata.from_yaml
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by DatasetMetadata.from_yaml
         try:
             directory = connector_dir(dataset_id)
         except LookupError:
             return None
         return DatasetMetadata.from_yaml(directory / "dataset.yaml")
 
-    def build(  # noqa: PLR0913, PLR6301 (protocol)
+    def build(  # ruff: ignore[too-many-arguments, no-self-use] (protocol)
         self,
         dataset_id: str,
         root: Path,
@@ -92,7 +92,7 @@ class ConnectorBuilder:
 
         Raises:
             TimeFValidationError: If ``values_backend`` names a backend that TimeF does not support.
-        """  # noqa: DOC502 - raised by build_one
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by build_one
         return Path(
             build_one(
                 dataset_id,
