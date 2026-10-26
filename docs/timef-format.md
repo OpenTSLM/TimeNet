@@ -188,9 +188,12 @@ Python object references. It can also give back the same rows as Arrow tables of
 Signal arrays remain outside DuckDB. A `signal_chunks` row contains:
 
 ```text
-signal_id, chunk_index, value_path, chunk_major_index,
+signal_id, chunk_index, value_path, source_key, chunk_major_index,
 chunk_minor_index, n_values
 ```
+
+`source_key` is `NULL` when this release stores the chunk. Otherwise it is a key of the manifest's
+`payload_sources`, which names the release that does.
 
 For Parquet, the locator identifies a shard row group and row. For Zarr, it identifies an array and
 element range. The reader resolves only the requested Signal's rows and keeps its values lazy. Range

@@ -12,6 +12,27 @@
       "title": "Access",
       "type": "string"
     },
+    "DatasetRef": {
+      "additionalProperties": false,
+      "description": "An exact release, independent of its registry location.",
+      "properties": {
+        "dataset_id": {
+          "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
+          "title": "Dataset Id",
+          "type": "string"
+        },
+        "version": {
+          "pattern": "^\\d+\\.\\d+\\.\\d+$",
+          "type": "string"
+        }
+      },
+      "required": [
+        "dataset_id",
+        "version"
+      ],
+      "title": "DatasetRef",
+      "type": "object"
+    },
     "Domain": {
       "description": "Describes what kind of data a dataset contains. A dataset may declare more than one.",
       "enum": [
@@ -58,7 +79,7 @@
     }
   },
   "additionalProperties": false,
-  "description": "A dataset's descriptive identity: who it is, not what it emits.\n\nThe dataset card holds these fields. ``dataset_version`` is the semantic version of the upstream\nsource. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an\n``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid\ncasing-only differences on case-insensitive filesystems.",
+  "description": "Dataset identity, release version, source information, and access requirements.\n\nThe dataset card defines these fields. ``dataset_version`` identifies the TimeNet release.\n``source_revision`` identifies the original source release, tag, or commit.\n``yaml_schema_version`` identifies the card schema. ``dataset_id`` is a case-sensitive\n``org/name`` pair with exactly one slash. Casing-only differences can cause conflicts on\ncase-insensitive filesystems.",
   "properties": {
     "dataset_id": {
       "pattern": "^[A-Za-z0-9_-][A-Za-z0-9._-]*/[A-Za-z0-9_-][A-Za-z0-9._-]*$",
@@ -68,6 +89,32 @@
     "dataset_version": {
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "type": "string"
+    },
+    "inputs": {
+      "additionalProperties": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/DatasetRef"
+          },
+          {
+            "type": "string"
+          }
+        ]
+      },
+      "title": "Inputs",
+      "type": "object"
+    },
+    "source_revision": {
+      "anyOf": [
+        {
+          "type": "string"
+        },
+        {
+          "type": "null"
+        }
+      ],
+      "default": null,
+      "title": "Source Revision"
     },
     "name": {
       "minLength": 1,

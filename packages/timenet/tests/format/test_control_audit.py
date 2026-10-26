@@ -70,7 +70,10 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
     with connect_control(control_path) as connection:
         with pytest.raises(TimeFFormatError, match="value chunks whose lengths do not match"):
             audit_control_database(connection)
-        connection.execute("INSERT INTO signal_chunks VALUES (1, 0, 'values.parquet', 0, NULL, 2)")
+        connection.execute(
+            "INSERT INTO signal_chunks (signal_id, chunk_index, value_path, chunk_major_index, chunk_minor_index, "
+            "n_values) VALUES (1, 0, 'values.parquet', 0, NULL, 2)"
+        )
         audit_control_database(connection)
         connection.execute("UPDATE signal_chunks SET n_values = 1")
         with pytest.raises(TimeFFormatError, match="signal 1 has value chunks whose lengths do not match"):
@@ -97,7 +100,8 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
             r"signals\.axis_id refers to missing axes\.axis_id value 999",
         ),
         (
-            "INSERT INTO signal_chunks VALUES (999, 0, 'values.parquet', 0, NULL, 1)",
+            "INSERT INTO signal_chunks (signal_id, chunk_index, value_path, chunk_major_index, chunk_minor_index, "
+            "n_values) VALUES (999, 0, 'values.parquet', 0, NULL, 1)",
             r"signal_chunks\.signal_id refers to missing signals\.signal_id value 999",
         ),
         (

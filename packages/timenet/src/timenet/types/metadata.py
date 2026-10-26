@@ -20,23 +20,30 @@ from timenet.types.annotations import AnnotationDescriptor
 from timenet.types.domains import Domain
 from timenet.types.licenses import License
 from timenet.types.metadata_fields import DatasetId, NonEmptyText, SemanticVersion
+from timenet.types.reference_keys import InputAliasField
+from timenet.types.references import DatasetRef
 from timenet.types.specs import TimeSeriesSpec
 from timenet.types.tasks import TASKS, Task, TaskType
 
 
 class DatasetMetadata(TimeFModel):
-    """A dataset's descriptive identity: who it is, not what it emits.
+    """Dataset identity, release version, source information, and access requirements.
 
-    The dataset card holds these fields. ``dataset_version`` is the semantic version of the upstream
-    source. ``yaml_schema_version`` is the version of the card's own field schema. ``dataset_id`` is an
-    ``org/name`` pair in HuggingFace style with exactly one slash. Ids are case-sensitive, so avoid
-    casing-only differences on case-insensitive filesystems.
+    The dataset card defines these fields. ``dataset_version`` identifies the TimeNet release.
+    ``source_revision`` identifies the original source release, tag, or commit.
+    ``yaml_schema_version`` identifies the card schema. ``dataset_id`` is a case-sensitive
+    ``org/name`` pair with exactly one slash. Casing-only differences can cause conflicts on
+    case-insensitive filesystems.
     """
 
     dataset_id: DatasetId
     """HuggingFace-style ``org/name`` pair, case-sensitive, exactly one slash."""
     dataset_version: SemanticVersion
-    """Semantic version of the upstream source data."""
+    """Semantic version of the compiled TimeNet release."""
+    inputs: dict[InputAliasField, DatasetRef] = Field(default_factory=dict)
+    """Exact parent releases indexed by connector-local aliases."""
+    source_revision: StrictStr | None = None
+    """Upstream release, tag, or commit, separate from the compiled dataset version."""
     name: NonEmptyText
     """Human-readable display name."""
     description: NonEmptyText
@@ -59,6 +66,13 @@ class DatasetMetadata(TimeFModel):
     """Where to obtain access (the DUA or credentialing page). Required when ``access`` is not ``OPEN``."""
     yaml_schema_version: Annotated[int, Field(strict=True, ge=1, le=1)] = 1
     """Version of the card's own field schema."""
+
+    @field_validator("inputs", mode="before", json_schema_input_type=dict[InputAliasField, DatasetRef | str])
+    @classmethod
+    def _parse_inputs(cls, value: Any) -> Any:
+        if isinstance(value, dict):
+            return {key: DatasetRef.parse(ref) if isinstance(ref, str) else ref for key, ref in value.items()}
+        return value
 
     @field_validator("name", "description")
     @classmethod
