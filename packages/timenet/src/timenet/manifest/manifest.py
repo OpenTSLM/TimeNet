@@ -7,12 +7,12 @@ from typing_extensions import TypedDict
 
 from timenet.manifest.counts import ManifestCounts
 from timenet.manifest.files import ManifestFiles
+from timenet.manifest.payload_source import PayloadSource
 from timenet.types import DatasetMetadata, DatasetSchema
 from timenet.types._model import TimeFModel
 from timenet.types.metadata_fields import DatasetId
 from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import InputAliasField, SourceKeyField
-from timenet.types.references import DatasetRef
 from timenet.types.wire import ValueEncoding
 from timenet.values_backends import ValuesBackend
 
@@ -45,8 +45,10 @@ class Manifest(TimeFModel):
     """Copies of the cards for build inputs, indexed by input alias."""
     lineage: tuple[ParentDatasetCard, ...] = ()
     """Flattened provenance snapshots; never traversed to read data."""
-    payload_sources: dict[SourceKeyField, DatasetRef] = Field(default_factory=dict)
-    """Releases that store referenced payload files, by source key, flattened by the writer."""
+    payload_sources: dict[SourceKeyField, PayloadSource] = Field(default_factory=dict)
+    """Every release that stores a payload file this release reads, by source key, pinned to those
+    files. The writer flattens them, so a source's own sources are not listed unless this release
+    reads their files too."""
     build_env: BuildEnvironment = Field(default_factory=dict)
     """The Python version and package set that produced this version."""
     timef_format_version: Annotated[int, Field(strict=True, ge=1, le=1)]
@@ -59,6 +61,13 @@ class Manifest(TimeFModel):
                 f"manifest dataset_id {self.dataset_id!r} does not match "
                 f"metadata.dataset_id {self.metadata.dataset_id!r}"
             )
+        return self
+
+    @model_validator(mode="after")
+    def _source_keys_name_their_release(self) -> Self:
+        for key, source in self.payload_sources.items():
+            if key != str(source.release):
+                raise ValueError(f"payload source key {key!r} does not name its release {source.release}")
         return self
 
     def to_dict(self) -> dict[str, Any]:

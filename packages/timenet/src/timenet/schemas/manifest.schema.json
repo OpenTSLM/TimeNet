@@ -513,6 +513,29 @@
       "title": "ParentDatasetCard",
       "type": "object"
     },
+    "PayloadSource": {
+      "additionalProperties": false,
+      "description": "A release whose payload files this release reads, pinned to the files it reuses.\n\nThe pins copy the source's own manifest records, so checking that the source is still the\nrelease this one was written against needs only the two manifests, no hashing.",
+      "properties": {
+        "release": {
+          "$ref": "#/$defs/DatasetRef"
+        },
+        "files": {
+          "items": {
+            "$ref": "#/$defs/FilePart"
+          },
+          "minItems": 1,
+          "title": "Files",
+          "type": "array"
+        }
+      },
+      "required": [
+        "release",
+        "files"
+      ],
+      "title": "PayloadSource",
+      "type": "object"
+    },
     "TimeSeriesSpec": {
       "additionalProperties": false,
       "description": "Define the contract for a measurement modality: identity, value unit, dtype, and per-timestep shape.\n\nThe spec carries no unit for time or for a sampling rate. Time offsets are integer microseconds and\na cadence is a Fraction of them, so those units can only be ``second`` and ``hertz``.",
@@ -664,7 +687,7 @@
     },
     "payload_sources": {
       "additionalProperties": {
-        "$ref": "#/$defs/DatasetRef"
+        "$ref": "#/$defs/PayloadSource"
       },
       "title": "Payload Sources",
       "type": "object"

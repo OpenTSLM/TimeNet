@@ -115,6 +115,25 @@ def _validated_irregular_offsets(signal: Signal) -> np.ndarray:
     return offsets
 
 
+def _check_stored_offsets(signal: Signal, axis: IrregularAxis, time_offsets: StoredOffsets) -> None:
+    """Check stored time offsets against a Signal and its axis without reading them.
+
+    Raises:
+        TimeFValidationError: If the time offsets are a different length from the Signal, or were
+            read with an axis whose endpoints differ from the Signal's axis.
+    """
+    if time_offsets.length != signal.n_values:
+        raise TimeFValidationError(
+            f"series {signal.id!r}: its stored time offsets number {time_offsets.length} "
+            f"but it declares n_values={signal.n_values}"
+        )
+    if (time_offsets.first, time_offsets.last) != (axis.first_us, axis.last_us):
+        raise TimeFValidationError(
+            f"series {signal.id!r}: its axis claims the stream runs {axis.first_us}..{axis.last_us} us "
+            f"but its stored time offsets run {time_offsets.first}..{time_offsets.last} us"
+        )
+
+
 def _task_batches(tasks: Iterable[Task]) -> Iterator[tuple[Task, ...]]:
     """Yield bounded task batches without materializing a streamed source."""
     iterator = iter(tasks)
@@ -362,6 +381,7 @@ class DuckDBControlWriter:
                     "signal_id": signal_id,
                     "chunk_index": chunk_index,
                     "value_path": placement.chunk_file,
+                    "source_key": placement.source_key,
                     "chunk_major_index": placement.data_index.major_idx,
                     "chunk_minor_index": placement.data_index.minor_idx,
                     "n_values": placement.n_values,
@@ -687,16 +707,17 @@ class DuckDBControlWriter:
                     "last_us": axis.last_us,
                 }
             )
-            if signal._time_offsets is None:
-                raise TimeFValidationError(f"irregular signal {signal.id!r} has no time offsets")
-            offsets = _validated_irregular_offsets(signal)
             time_offsets = signal._time_offsets
-            # Reading stored offsets checked them against their digest, so they need no second hash.
-            signature = (
-                _OffsetSignature(len(offsets), time_offsets.digest)
-                if isinstance(time_offsets, StoredOffsets)
-                else _offset_signature(offsets)
-            )
+            if time_offsets is None:
+                raise TimeFValidationError(f"irregular signal {signal.id!r} has no time offsets")
+            if isinstance(time_offsets, StoredOffsets):
+                # Stored time offsets keep their payload. Checking them needs no read: their location
+                # records their length and digest, and the handle its axis's endpoints.
+                _check_stored_offsets(signal, axis, time_offsets)
+                self.external.pack(ObjectKind.AXIS, axis_id, PackedField.TIME_OFFSETS, time_offsets)
+                return _OffsetSignature(time_offsets.length, time_offsets.digest)
+            offsets = _validated_irregular_offsets(signal)
+            signature = _offset_signature(offsets)
             self.external.pack(
                 ObjectKind.AXIS,
                 axis_id,

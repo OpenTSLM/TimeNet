@@ -17,6 +17,8 @@ from timenet.values_backends.reader import BaseValuesReader
 
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from timenet.registry.version import DatasetVersion
     from timenet.types import TimeSeriesSpec
     from timenet.values_backends.types import StoredChunk
@@ -60,7 +62,7 @@ class ParquetValuesReader(BaseValuesReader):
         self._parquet = SignalRowGroupCache(_ROW_GROUP_CACHE_SIZE)
         self._target_types: dict[str, pa.DataType] = {}
 
-    def load(self, version: DatasetVersion, rows: list[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
+    def load(self, version: DatasetVersion, rows: Sequence[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
         """Read a series' chunks using row-group and row coordinates in ``data_index``.
 
         This method copies each chunk into a new array. A caller that keeps the values therefore
@@ -95,7 +97,7 @@ class ParquetValuesReader(BaseValuesReader):
         return target
 
     def load_range(
-        self, version: DatasetVersion, rows: list[StoredChunk], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, rows: Sequence[StoredChunk], start: int, stop: int, spec: TimeSeriesSpec
     ) -> pa.Array:
         """Read a scalar temporal subsection, trimming chunks at the requested boundaries.
 

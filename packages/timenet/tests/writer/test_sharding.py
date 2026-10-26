@@ -8,7 +8,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.storage.parquet import SignalRowGroupCache
 from timenet.testing import assert_datasets_equal
 from timenet.types import (
@@ -102,7 +102,7 @@ def test_values_shard_and_the_dataset_round_trips(tmp_path, n_records, series_le
     assert len(files.time_series) >= 3  # values-plane shards
     for rel in files.all_parts():
         assert (version_dir / rel).exists()
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         restored = reader.read()
     assert_datasets_equal(original, restored)
 
@@ -130,7 +130,7 @@ def test_open_and_build_records_reads_no_value_shard(tmp_path, monkeypatch):
     opened: list[str] = []
     original = pq.ParquetFile
     monkeypatch.setattr(pq, "ParquetFile", lambda p, *a, **k: opened.append(str(p)) or original(p, *a, **k))
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         dataset = reader.read()
         _ = [s.signals for s in dataset.records]  # touch every record's series metadata
     # values are lazy; building records may open control-plane tables but no value shard (under time_series/)
@@ -148,7 +148,7 @@ def test_reading_a_series_opens_only_its_value_shards(tmp_path, monkeypatch, ser
     opened: list[str] = []
     original = pq.ParquetFile
     monkeypatch.setattr(pq, "ParquetFile", lambda p, *a, **k: opened.append(str(p)) or original(p, *a, **k))
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         dataset = reader.read()
         assert not [p for p in opened if "/time_series/" in p]  # read touches control tables, not value shards
         series = next(ts for s in dataset.records for ts in s.signals if ts.id == series_id)
@@ -171,7 +171,7 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
         return original(self, version, rel_path, row_group)
 
     monkeypatch.setattr(SignalRowGroupCache, "read_values", spy)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         series = next(ts for s in reader.read().records for ts in s.signals if ts.id == _signal_id(6))
         series.to_arrow()
     assert set(read) == expected  # the reader decoded only the row groups of signal 6's chunks, not whole shards

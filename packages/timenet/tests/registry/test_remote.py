@@ -1,17 +1,19 @@
 import json
 from pathlib import Path
 
-from _fake_registry import build_fake, build_publish_fake
+from _fake_registry import build_fake, build_publish_fake, registry_server
 import httpx
 from pydantic import ValidationError
 import pytest
 
 from timenet.client import TimeNet
-from timenet.errors import TimeNetRegistryError
+from timenet.dataset import TimeFDataset
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.manifest import Manifest
-from timenet.registry import RemoteRegistry
+from timenet.reader import TimeFReader
+from timenet.registry import LocalRegistry, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
-from timenet.types import Access, Domain, License
+from timenet.types import Access, DatasetSchema, Domain, License
 from timenet.writer import TimeFWriter
 
 
@@ -186,11 +188,12 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
 
 
 def test_load_full_round_trips(version_dir, tmp_path):
-    registry, _ = _remote(version_dir, tmp_path)
-    _, manifest = version_dir
-    client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
-    loaded = client.load(manifest.metadata.dataset_id)  # a remote load materializes then reads locally
-    assert_datasets_equal(make_dataset(), loaded)
+    directory, manifest = version_dir
+    with registry_server(directory) as server:
+        registry = RemoteRegistry(server.url, cache_dir=tmp_path / "cache")
+        client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
+        loaded = client.load(manifest.metadata.dataset_id)
+        assert_datasets_equal(make_dataset(), loaded)
 
 
 def test_store_publishes_uploads_and_finalizes(tmp_path):
@@ -202,6 +205,28 @@ def test_store_publishes_uploads_and_finalizes(tmp_path):
     assert state["finalized"] is True
     # every declared file was uploaded
     assert set(state["store"]) == set(state["published"])
+
+
+def test_store_refuses_a_payload_source_the_service_does_not_hold_before_publishing(tmp_path):
+    local = LocalRegistry(tmp_path / "local")
+    local.store(make_dataset())
+    transport, state = build_publish_fake(token="tok_rw")
+    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path / "cache")
+    with TimeFReader(local.open_version(make_dataset().metadata.dataset_id)) as reader:
+        parent = reader.read()
+        child = TimeFDataset.from_parts(
+            metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}),
+            records=parent.records,
+            tasks=(),
+            schema=DatasetSchema(),
+            last_ids=parent.last_ids,
+        )
+        with pytest.raises(
+            TimeNetDatasetNotFoundError, match=r"of test/child@1\.0\.0 is not in registry http://api\.local"
+        ):
+            registry.store(child)
+    assert state["manifest"] is None
+    assert not state["store"]
 
 
 def test_store_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path):

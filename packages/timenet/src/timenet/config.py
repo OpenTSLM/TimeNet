@@ -47,6 +47,11 @@ class TimeNetSettings(BaseSettings):
         return (self.cache if self.cache is not None else self.home_dir / "cache").expanduser()
 
     @property
+    def control_cache_dir(self) -> Path:
+        """Where verified remote control databases are cached by checksum."""
+        return self.cache_dir / "control"
+
+    @property
     def registry_path(self) -> Path:
         """The default local registry directory (``$TIMENET_REGISTRY`` is the selector, not this)."""
         return self.home_dir / "registry"

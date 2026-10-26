@@ -12,14 +12,17 @@ import tempfile
 from typing import BinaryIO, cast
 
 import httpx
+import pyarrow.fs as pafs
 
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetRegistryError
-from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
+from timenet.registry._paths import release_dir
+from timenet.registry.lazy_read import LazyReadRegistry
 from timenet.registry.remote._download import ProgressCallback, download_version_files
 from timenet.registry.remote._http import RegistryHttpClient
+from timenet.registry.remote.filesystem import RegistryFileSystem
 from timenet.registry.remote.models import (
     DatasetDetailModel,
     DatasetListModel,
@@ -27,13 +30,12 @@ from timenet.registry.remote.models import (
     UploadGrantModel,
 )
 from timenet.registry.version import DatasetVersion
-from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
-from timenet.types.references import is_latest
+from timenet.types.references import DatasetRef, is_latest
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
-class RemoteRegistry(WritableRegistry):
+class RemoteRegistry(LazyReadRegistry):
     """Serves datasets from the hosted TimeNet registry over HTTP(S)."""
 
     def __init__(
@@ -56,6 +58,14 @@ class RemoteRegistry(WritableRegistry):
         self._base_url = base_url
         self._http = RegistryHttpClient(base_url, token=token if token is not None else cfg.token, transport=transport)
         self._cache_dir = Path(cache_dir) if cache_dir is not None else cfg.storage_dir
+
+    def __str__(self) -> str:
+        return f"registry {self._base_url}"
+
+    @property
+    def local_root(self) -> Path:
+        """The directory that holds complete local releases."""
+        return self._cache_dir
 
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
@@ -110,28 +120,19 @@ class RemoteRegistry(WritableRegistry):
         buffer.seek(0)
         return buffer
 
-    def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
-        """Open a committed version as a local handle, materializing it on first use.
-
-        A remote version is downloaded in full and then read from local disk, like the local and S3
-        backends. On-demand range reads are a separate follow-up.
-
-        Args:
-            dataset_id: The ``org/name`` id.
-            version: The version string, or ``None`` for the latest.
+    def _open_remote_version(self, reference: DatasetRef) -> DatasetVersion:
+        """Bind one remote manifest to a range-capable filesystem.
 
         Returns:
-            A handle to the committed version's manifest and files.
+            A handle without its payload sources, which ``open_version`` attaches.
         """
-        manifest = self.get_manifest(dataset_id, version)
-        resolved = str(manifest.metadata.dataset_version)
-        dest = self._cache_dir / dataset_id / resolved
-        if not (dest / MANIFEST_FILE).exists():
-            # download_version owns the one materialize path, so TimeNet.download() and open share it.
-            self.download_version(dataset_id, resolved, dest, manifest=manifest)
-        return DatasetVersion.open_local(dest)
+        manifest = self.get_manifest(reference.dataset_id, str(reference.version))
+        root = f"{reference.dataset_id}/{reference.version}"
+        files = {f"{root}/{part.path}": part.size for part in manifest.files.all_files()}
+        filesystem = RegistryFileSystem(self._base_url, files, token=self._http.token, transport=self._http.transport)
+        return DatasetVersion(manifest, pafs.PyFileSystem(pafs.FSSpecHandler(filesystem)), root)
 
-    def download_version(  # noqa: PLR0913
+    def _download_release(  # noqa: PLR0913
         self,
         dataset_id: str,
         version: str,
@@ -191,11 +192,15 @@ class RemoteRegistry(WritableRegistry):
             return version
         staging_root = Path(tempfile.mkdtemp(prefix="timenet-publish-"))
         try:
-            with TimeFWriter(staging_root, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
+            # The writer stages locally but checks every payload source against this registry.
+            with TimeFWriter(
+                staging_root, dataset, values_backend=values_backend, progress_cb=progress_cb, registry=self
+            ) as writer:
                 writer.write()
-            version_dir = staging_root / dataset_id / version
+            version_dir = release_dir(staging_root, DatasetRef.parse(f"{dataset_id}@{version}"))
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
-            declared = {part.path for part in Manifest.model_validate_json(manifest_bytes.decode()).files.all_files()}
+            manifest = Manifest.model_validate_json(manifest_bytes.decode())
+            declared = {part.path for part in manifest.files.all_files()}
             publish_endpoint = f"/datasets/{dataset_id}/{version}/publish"
             publish = PublishResponseModel.model_validate_json(
                 self._http.post(publish_endpoint, content=manifest_bytes).content

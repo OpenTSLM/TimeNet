@@ -1,8 +1,11 @@
 """An httpx.MockTransport fake of the registry, backed by a real on-disk TimeF version."""
 
-from collections.abc import Generator
+from collections.abc import Callable, Generator
 import contextlib
+from dataclasses import dataclass, field
+from functools import partial
 import http.server
+from itertools import count
 import json
 from pathlib import Path
 import threading
@@ -45,6 +48,9 @@ def build_fake(version_dir: Path, *, token: str | None = None, blob_base: str = 
     served by this same MockTransport with Range support (the httpx full-download path); point
     ``blob_base`` at a :func:`range_server` for the fsspec on-demand path, which reads over aiohttp and
     cannot see a MockTransport.
+
+    The default blob host never contacts the network. It reads existing files from the temporary
+    fixture release; this download handler does not create files.
     """
     version_dir = Path(version_dir)
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
@@ -55,16 +61,7 @@ def build_fake(version_dir: Path, *, token: str | None = None, blob_base: str = 
     def handler(request: httpx.Request) -> httpx.Response:  # noqa: PLR0911
         requests.append(request)
         if request.url.host == "blob.local":
-            relpath = request.url.path.lstrip("/")
-            data = (version_dir / relpath).read_bytes()
-            rng = request.headers.get("range")
-            if rng:
-                start, _, end = rng.removeprefix("bytes=").partition("-")
-                s = int(start)
-                e = int(end) if end else len(data) - 1
-                e = min(e, len(data) - 1)
-                return httpx.Response(206, content=data[s : e + 1], headers={"Accept-Ranges": "bytes"})
-            return httpx.Response(200, content=data, headers={"Accept-Ranges": "bytes"})
+            return read_file(version_dir, request)
 
         if token is not None and request.headers.get("authorization") != f"Bearer {token}":
             return httpx.Response(401, json={"detail": "invalid API token"})
@@ -92,50 +89,91 @@ def build_fake(version_dir: Path, *, token: str | None = None, blob_base: str = 
     return httpx.MockTransport(handler), requests
 
 
+@dataclass
+class HttpServer:
+    """A running test server and the responses it has sent."""
+
+    url: str
+    responses: list[httpx.Response] = field(default_factory=list)
+
+
 @contextlib.contextmanager
-def range_server(version_dir: Path) -> Generator[str]:
-    """Serve ``version_dir`` over real HTTP with Range support; yield its base URL.
+def _http_server(serve: Callable[[httpx.Request], httpx.Response]) -> Generator[HttpServer]:
+    """Run a request handler over a real socket and record its responses."""
 
-    The fsspec on-demand reader fetches presigned URLs over aiohttp, which a ``MockTransport`` cannot
-    intercept, so its object bytes must come from a real socket. Point ``build_fake(blob_base=...)`` here.
-    """
-    directory = str(version_dir)
-
-    class _Handler(http.server.SimpleHTTPRequestHandler):
+    class _Handler(http.server.BaseHTTPRequestHandler):
         def do_GET(self) -> None:
-            try:
-                body = (Path(directory) / self.path.lstrip("/")).read_bytes()
-            except OSError:
-                self.send_error(404)
-                return
-            total = len(body)
-            rng = self.headers.get("Range")
-            if rng:
-                start, _, end = rng.removeprefix("bytes=").partition("-")
-                s = int(start)
-                e = min(int(end) if end else total - 1, total - 1)
-                chunk = body[s : e + 1]
-                self.send_response(206)
-                self.send_header("Content-Range", f"bytes {s}-{e}/{total}")
-            else:
-                chunk = body
-                self.send_response(200)
-            self.send_header("Accept-Ranges", "bytes")
-            self.send_header("Content-Length", str(len(chunk)))
+            request = httpx.Request("GET", running.url + self.path, headers=dict(self.headers))
+            response = serve(request)
+            response.request = request
+            running.responses.append(response)
+            self.send_response(response.status_code)
+            for name, value in response.headers.items():
+                self.send_header(name, value)
             self.end_headers()
-            self.wfile.write(chunk)
+            self.wfile.write(response.content)
 
         def log_message(self, format: str, *args: Any) -> None:  # silence per-request logging
             pass
 
     server = http.server.ThreadingHTTPServer(("127.0.0.1", 0), _Handler)
+    running = HttpServer(f"http://127.0.0.1:{server.server_address[1]}")
     thread = threading.Thread(target=server.serve_forever, daemon=True)
     thread.start()
     try:
-        yield f"http://127.0.0.1:{server.server_address[1]}"
+        yield running
     finally:
         server.shutdown()
         server.server_close()
+
+
+def read_file(root: Path, request: httpx.Request) -> httpx.Response:
+    """Read one file, honoring its HTTP Range header."""
+    try:
+        data = (root / request.url.path.lstrip("/")).read_bytes()
+    except FileNotFoundError:
+        return httpx.Response(404)
+    rng = request.headers.get("range")
+    if not rng:
+        return httpx.Response(200, content=data)
+    start, _, end = rng.removeprefix("bytes=").partition("-")
+    first = int(start)
+    last = min(int(end) if end else len(data) - 1, len(data) - 1)
+    return httpx.Response(
+        206,
+        content=data[first : last + 1],
+        headers={"Content-Range": f"bytes {first}-{last}/{len(data)}", "Accept-Ranges": "bytes"},
+    )
+
+
+@contextlib.contextmanager
+def range_server(version_dir: Path) -> Generator[str]:
+    """Serve files over real HTTP with byte ranges, without registry API routes."""
+    with _http_server(partial(read_file, version_dir)) as server:
+        yield server.url
+
+
+@contextlib.contextmanager
+def registry_server(
+    version_dir: Path,
+    *,
+    serve_file: Callable[[httpx.Request], httpx.Response] | None = None,
+) -> Generator[HttpServer]:
+    """Serve the registry API and files, with an optional custom download handler."""
+    download = serve_file or partial(read_file, version_dir)
+    grants = count()
+
+    def serve(request: httpx.Request) -> httpx.Response:
+        if not request.url.path.startswith("/api/v1/"):
+            return download(request)
+        response = transport.handle_request(request)
+        if response.is_redirect:
+            response.headers["location"] += f"?grant={next(grants)}"
+        return response
+
+    with _http_server(serve) as server:
+        transport, _ = build_fake(version_dir, blob_base=server.url)
+        yield server
 
 
 def build_publish_fake(*, token: str = "tok_rw"):  # noqa: S107
@@ -199,14 +237,7 @@ def _blob(request: httpx.Request, root: Path) -> httpx.Response:
         target.parent.mkdir(parents=True, exist_ok=True)
         target.write_bytes(request.content)
         return httpx.Response(200)
-    data = (root / relpath).read_bytes()
-    rng = request.headers.get("range")
-    if rng:
-        start, _, end = rng.removeprefix("bytes=").partition("-")
-        s = int(start)
-        e = min(int(end) if end else len(data) - 1, len(data) - 1)
-        return httpx.Response(206, content=data[s : e + 1], headers={"Accept-Ranges": "bytes"})
-    return httpx.Response(200, content=data, headers={"Accept-Ranges": "bytes"})
+    return read_file(root, request)
 
 
 def _service_read(local: LocalRegistry, root: Path, parts: list[str]) -> httpx.Response:  # noqa: PLR0911

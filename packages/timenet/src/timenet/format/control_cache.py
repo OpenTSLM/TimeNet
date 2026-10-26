@@ -37,10 +37,10 @@ def materialize_control(version: DatasetVersion) -> Path:
         raise TimeFFormatError("TimeF manifest does not declare control.duckdb")
     part = parts[0]
     if isinstance(version.filesystem, pafs.LocalFileSystem):
-        return Path(version.path(part.path))
+        return Path(version.resolve_file_path(part.path))
 
     digest = part.checksum.removeprefix("sha256:")
-    cache_dir = settings().cache_dir / "control"
+    cache_dir = settings().control_cache_dir
     cache_dir.mkdir(parents=True, exist_ok=True)
     destination = cache_dir / f"{digest}.duckdb"
     if destination.exists() and destination.stat().st_size == part.size:
@@ -51,7 +51,10 @@ def materialize_control(version: DatasetVersion) -> Path:
     fd, temporary_name = tempfile.mkstemp(prefix=f".{digest}.", suffix=".tmp", dir=cache_dir)
     temporary = Path(temporary_name)
     try:
-        with os.fdopen(fd, "wb") as output, version.filesystem.open_input_file(version.path(part.path)) as source:
+        with (
+            os.fdopen(fd, "wb") as output,
+            version.filesystem.open_input_file(version.resolve_file_path(part.path)) as source,
+        ):
             shutil.copyfileobj(source, output)
         if temporary.stat().st_size != part.size or file_checksum(temporary) != part.checksum:
             raise TimeFFormatError("downloaded control.duckdb does not match its manifest checksum")

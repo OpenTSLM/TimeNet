@@ -1,6 +1,7 @@
 """Dataset registries: serve compiled TimeF versions and search over metadata."""
 
 from timenet.registry.base import BaseRegistry
+from timenet.registry.dependencies import open_local_version
 from timenet.registry.factory import (
     TIMENET_REGISTRY_URL,
     default_registry_path,
@@ -25,6 +26,7 @@ __all__ = [
     "WritableRegistry",
     "default_registry_path",
     "local_registry_path",
+    "open_local_version",
     "open_registry",
     "open_writable_registry",
 ]

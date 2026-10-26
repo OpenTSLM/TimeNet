@@ -7,7 +7,7 @@ from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.dataset.edit import edit_version
 from timenet.errors import TimeFValidationError
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -129,7 +129,7 @@ def test_an_edit_continues_the_stored_counters_and_never_reuses_an_id(tmp_path):
         dataset.add_record(record=_record())
     base_dir = dataset.write(path=tmp_path)
 
-    edited_dir = edit_version(base_dir, tmp_path, dataset_version=Version(1, 1, 0), remove_record_ids=[3])
+    edited_dir = edit_version(base_dir, dataset_version=Version(1, 1, 0), remove_record_ids=[3])
     edited = TimeFDataset.open(path=edited_dir)
     added = edited.add_record(record=_record())
 
@@ -139,7 +139,7 @@ def test_an_edit_continues_the_stored_counters_and_never_reuses_an_id(tmp_path):
 
 
 def _storage_ids(version_dir):
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         table = reader.read_annotation_table().to_pylist()
     return {(row["object_id"], row["key"]): (row["content_id"], row["occurrence_id"]) for row in table}
 
@@ -161,7 +161,7 @@ def test_an_edit_numbers_storage_rows_from_one_again(tmp_path):
         dataset.add_record(record=_record()).annotate(Annotation(key="cohort", value=value))
     base_dir = dataset.write(path=tmp_path)
 
-    edited_dir = edit_version(base_dir, tmp_path, dataset_version=Version(1, 1, 0), remove_record_ids=[1])
+    edited_dir = edit_version(base_dir, dataset_version=Version(1, 1, 0), remove_record_ids=[1])
 
     assert sorted(_storage_ids(edited_dir).values()) == [(1, 1), (2, 2)]
 

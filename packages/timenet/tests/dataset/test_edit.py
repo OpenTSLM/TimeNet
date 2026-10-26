@@ -7,7 +7,7 @@ from timenet.dataset.edit import edit_version, remove_records
 from timenet.errors import TimeFEditError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.testing import make_dataset
 from timenet.types import Annotation, AnswerTask, TemporalLocalizationTask, TSCorrespondenceTask, TSEditingTask, Version
 from timenet.writer import TimeFWriter
@@ -162,8 +162,8 @@ def test_edited_version_has_no_dangling_annotation_refs(tmp_path):
     answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
     context_record = answer.inputs[1]
     base = _base(tmp_path, dataset)
-    out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=[context_record.id])
-    with TimeFReader(DatasetVersion.open_local(out)) as reader:
+    out = edit_version(base, dataset_version=Version(1, 0, 1), remove_record_ids=[context_record.id])
+    with TimeFReader(open_local_version(out)) as reader:
         restored = reader.read()
 
     by_record = {record.id: {id(annotation) for annotation in record.annotations} for record in restored.records}
@@ -207,9 +207,11 @@ def test_edit_version_round_trip(tmp_path):
     removed_record = dataset.records[1]
     retained_records = (dataset.records[0], dataset.records[2])
     base = _base(tmp_path, dataset)
-    out = edit_version(base, tmp_path / "out", dataset_version=Version(1, 0, 1), remove_record_ids=[removed_record.id])
+    out = edit_version(base, dataset_version=Version(1, 0, 1), remove_record_ids=[removed_record.id])
+    # The derived version is written next to its base, where readers find the base's payload files.
+    assert out == base.parent / "1.0.1"
 
-    with TimeFReader(DatasetVersion.open_local(out)) as reader:
+    with TimeFReader(open_local_version(out)) as reader:
         restored = reader.read()
     assert {record.id for record in restored.records} == {record.id for record in retained_records}
 
@@ -228,7 +230,6 @@ def test_edit_version_same_version_rejected(tmp_path):
     with pytest.raises(TimeFEditError, match="must differ"):
         edit_version(
             base,
-            tmp_path / "out",
             dataset_version=dataset.metadata.dataset_version,
             remove_record_ids=[dataset.records[1].id],
         )

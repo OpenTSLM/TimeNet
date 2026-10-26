@@ -125,10 +125,11 @@ several Signals share. An irregular axis's time offsets use the field and value 
 `time_offsets` and sit in the payload column of that name. For them, `value_digest` also records
 the SHA-256 digest of the time offsets as contiguous little-endian int64 values, stored as
 `sha256:<hex>`, so a writer can compare a stored axis with other time offsets without reading it.
-The inline column keeps a placeholder: an empty string for text and an empty list for a string
-list. An empty inline value alone therefore does not mean empty text; readers look up
-`external_values` first. Direct SQL queries over inline columns do not resolve external values.
-The public Arrow table APIs return the complete text.
+`source_key` is `NULL` when this release stores the payload file, and otherwise names the payload
+source that does; see [Shared payloads](#shared-payloads). The inline column keeps a placeholder: an
+empty string for text and an empty list for a string list. An empty inline value alone therefore
+does not mean empty text; readers look up `external_values` first. Direct SQL queries over inline
+columns do not resolve external values. The public Arrow table APIs return the complete text.
 
 ## Annotations
 
@@ -199,7 +200,41 @@ For Parquet, the locator identifies a shard row group and row. For Zarr, it iden
 element range. The reader resolves only the requested Signal's rows and keeps its values lazy. Range
 reads load only intersecting chunks. The values plane does not duplicate irregular time offsets.
 Within one read, the Signals on one axis share one handle to its packed time offsets, which checks
-them against the axis on its first read and keeps them.
+them against the axis on its first read and keeps them. All chunks of one Signal have the same
+`source_key`.
+
+## Shared payloads
+
+A release can reuse the Signal chunks, packed text, and time offsets that other releases store,
+instead of copying them. A release that stores a reused file is a payload source of the release
+that reads it. The rows that locate such a payload in `signal_chunks` and `external_values` carry
+a source key, which names that payload source as `org/name@version`. A source key always names the
+release that stores the file, even when the value came through a release that reused it in turn,
+so a reader resolves every payload in one step, without opening the source's catalog.
+
+The manifest's `payload_sources` maps each source key to that exact release and pins the files the
+release reads from it: copies of the source's own `FilePart` records, with path, checksum, and
+size. For example:
+
+```json
+"payload_sources": {
+  "physionet/ptb-xl@1.0.0": {
+    "release": {"dataset_id": "physionet/ptb-xl", "version": "1.0.0"},
+    "files": [
+      {
+        "path": "time_series/part-00000000.parquet",
+        "checksum": "sha256:<hex digest>",
+        "size": 1048576
+      }
+    ]
+  }
+}
+```
+
+The pins let a reader check, from the two manifests alone, that a source is still the release this
+one was written against. A source replaced under the same version fails that check. The writer
+lists every source a release reads from, flattened, so a source's own sources appear only when the
+release reads their files too.
 
 ## Integrity
 

@@ -21,6 +21,7 @@ import pyarrow as pa
 
 from timenet.dataset import Signal
 from timenet.types.ids import EntityId
+from timenet.types.reference_keys import SourceKey
 from timenet.values_backends.parquet.config import ParquetValuesConfig
 from timenet.values_backends.types import ChunkDataIndex
 from timenet.values_backends.zarr.config import ZarrValuesConfig
@@ -40,6 +41,8 @@ class ChunkPlacement:
     """Signal name of the source series."""
     n_values: int
     """Number of values in the chunk."""
+    source_key: SourceKey | None = None
+    """The payload source that stores the chunk, a key of the manifest's ``payload_sources``, or ``None`` for this release."""
 
 
 @dataclass

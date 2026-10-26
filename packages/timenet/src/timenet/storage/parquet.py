@@ -62,16 +62,18 @@ class PayloadTableCache:
             self._tables.move_to_end(key)
             return cached
         try:
-            with pq.ParquetFile(version.path(path), filesystem=version.filesystem, pre_buffer=True) as source:
+            with pq.ParquetFile(
+                version.resolve_file_path(path), filesystem=version.filesystem, pre_buffer=True
+            ) as source:
                 found = source.schema_arrow
                 if not found.equals(schema):
                     raise TimeFFormatError(
-                        f"Parquet file {version.path(path)} has schema ({_describe(found)}), "
+                        f"Parquet file {version.resolve_file_path(path)} has schema ({_describe(found)}), "
                         f"expected ({_describe(schema)})"
                     )
                 table = source.read(use_threads=False)
         except (OSError, pa.ArrowException) as exc:
-            raise TimeFFormatError(f"cannot read Parquet file {version.path(path)}: {exc}") from exc
+            raise TimeFFormatError(f"cannot read Parquet file {version.resolve_file_path(path)}: {exc}") from exc
         self._tables[key] = table
         self._nbytes += table.nbytes
         while len(self._tables) > 1 and self._nbytes > self._max_bytes:
@@ -123,12 +125,12 @@ class SignalRowGroupCache:
             # Arrow silently omits a requested column if the file does not contain it.
             if "values" not in table.column_names:
                 raise TimeFFormatError(
-                    f"missing Parquet column 'values' in {version.path(path)}, row group {row_group}"
+                    f"missing Parquet column 'values' in {version.resolve_file_path(path)}, row group {row_group}"
                 )
             values = table.column("values").combine_chunks()
         except (OSError, pa.ArrowException) as exc:
             raise TimeFFormatError(
-                f"cannot read Parquet file {version.path(path)}, row group {row_group}: {exc}"
+                f"cannot read Parquet file {version.resolve_file_path(path)}, row group {row_group}: {exc}"
             ) from exc
         self._groups[key] = values
         return values
@@ -137,7 +139,7 @@ class SignalRowGroupCache:
         key = (version.root, path)
         handle = self._files.get(key)
         if handle is None:
-            handle = pq.ParquetFile(version.path(path), filesystem=version.filesystem, pre_buffer=True)
+            handle = pq.ParquetFile(version.resolve_file_path(path), filesystem=version.filesystem, pre_buffer=True)
             self._files[key] = handle
         return handle
 

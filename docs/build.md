@@ -56,7 +56,8 @@ The engine runs these stages:
 6. Remove the raw cache after success, unless `--keep-cache` is set.
 
 `--force` rebuilds or republishes a version that already exists. Without this flag, the pipeline
-returns the committed version and skips expensive work.
+returns the committed version and skips expensive work. A forced local build replaces the old
+version only once the new one is complete, so a failed rebuild keeps it.
 
 The connector selects Parquet or Zarr by default. Override it when you need to inspect another
 backend:

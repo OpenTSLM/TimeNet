@@ -43,20 +43,57 @@ with TimeFWriter(
 The context manager commits only after `write()` succeeds. An exception removes the temporary
 version directory.
 
+Pass `replace=True` to replace a version that is already committed. The old release stays in place
+until the new one is complete, then moves aside to `<version>.old-<uuid>` for the publishing rename
+and is deleted. A failed write keeps it. If a hard kill stops the writer between the two renames,
+rename `<version>.old-<uuid>` back to recover the old release. If the publishing rename fails and the
+old release cannot be moved back either, the error names the `<version>.old-<uuid>` directory that
+holds it.
+
+A replace is not isolated from readers that already opened the old release, or from releases that
+reuse its payloads. An open reader loses the files it has not read yet, and a release that reuses
+the old release's payloads fails to open, because its pins no longer match.
+
 ## Write stages
 
 The writer performs these operations:
 
 1. Derive the dataset schema when the caller has not done so.
 2. Validate hierarchy ownership and reusable annotation content.
-3. Read and validate each Signal, then write its values to Parquet or Zarr.
+3. Read and validate each Signal, then write its values to Parquet or Zarr. A Signal read from a
+   stored release keeps that release's chunks instead, without a read.
 4. Create `control.duckdb`, store each shared axis once, and insert hierarchy, annotation, task, and
-   chunk rows in one transaction.
+   chunk rows in one transaction. Packed text and time offsets read from a stored release keep
+   their payload rows there.
 5. Confirm the stored Source tree, checkpoint DuckDB, and close it.
 6. Calculate artifact sizes and SHA-256 checksums.
 7. Write `manifest.json` and atomically publish the version directory.
 
 A failed operation publishes nothing.
+
+Values read from a stored release are reused, not copied. The new catalog names the chunks and
+payload rows where they are, so the values settings below do not re-encode them. The manifest's
+`payload_sources` names each release that stores them, its payload sources, and pins the files the
+new release reads from each: a copy of that source's manifest record for each file. The new release
+therefore needs a different dataset ID or version than its sources.
+
+Its readers find the sources in the registry the release is published to, so the writer checks each
+source there at its first reuse, during `write()`. Pass that registry as `registry=`. It defaults to a
+local registry over `root`, and `S3Registry.store()` and `RemoteRegistry.store()` pass themselves while
+they stage the release locally. The writer fetches the source's manifest from the registry once and
+compares the record of each reused file. It refuses the write, before it writes the remaining values
+and with nothing published, when:
+
+- the registry does not hold the source, which raises `TimeNetDatasetNotFoundError` naming the source
+  and the registry;
+- the registry's source records a reused file differently, as after a forced replace, or because the
+  registry holds another release under the same dataset ID and version, which raises
+  `TimeFFormatError` naming the source and the first differing file; or
+- the source reads payloads of the release being written, which would make each the other's source
+  and raises `TimeFValidationError`.
+
+These are the errors that [opening](timef-reader.md#opening-a-version) raises for a missing or
+differing payload source.
 
 ## Values settings
 
@@ -87,7 +124,10 @@ The writer fails before publication when it finds an invalid state, including:
 - an annotation occurrence without an owning object;
 - task relationships pointing outside the dataset;
 - value arrays that disagree with their specification or declared length;
-- irregular offsets that disagree with their axis; or
+- irregular time offsets that disagree with their axis or their Signal's length;
+- reused values whose storing release is the output release or does not list their files, or a
+  reused Signal whose spec or length has changed;
+- a payload source that reads payloads of the output release; or
 - chunk rows that do not cover a Signal exactly.
 
 These failures raise TimeNet validation errors. Where possible, the errors include object IDs and

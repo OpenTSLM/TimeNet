@@ -1,5 +1,6 @@
 import copy
 import dataclasses
+import inspect
 import json
 from pathlib import Path
 import pickle
@@ -19,6 +20,8 @@ from timenet.format.checksums import file_checksum
 from timenet.format.control_audit import audit_control_database
 import timenet.format.control_writer as control_writer_module
 from timenet.format.duckdb import connect_control
+from timenet.format.storage import StorageSources
+from timenet.format.stored_array import ChunkLocation, StoredArray
 import timenet.format.stored_values as stored_values_module
 from timenet.format.stored_values import (
     CatalogValue,
@@ -35,23 +38,27 @@ from timenet.format.stored_values import (
     StoredTextList,
     offsets_digest,
 )
+from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.storage.parquet import PayloadTableCache
 from timenet.testing import make_dataset
 from timenet.types import (
     Annotation,
     AnswerTask,
     ArrayHandle,
+    DatasetSchema,
     ObjectKind,
     TextHandle,
     TextListHandle,
     TimeSeriesSpec,
     ValueHandle,
+    Version,
     ureg,
 )
 from timenet.types.annotations import value_type_of
 from timenet.types.handles import ArrowArray, CallableArray, NumpyArray
+from timenet.types.reference_keys import SourceKey
 from timenet.types.text import InlineText, InlineTextList, read_value
 from timenet.writer import TimeFWriter
 
@@ -123,7 +130,7 @@ def _stored(reader):
 
 @pytest.fixture
 def reader(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
+    with TimeFReader(open_local_version(_write(tmp_path))) as reader:
         yield reader
 
 
@@ -176,11 +183,20 @@ def test_a_stored_handle_carries_its_packed_location(reader):
         (StoredText, PackedLocation),
         (StoredTextList, PackedLocation),
         (StoredOffsets, PackedLocation),
+        (StoredArray, ChunkLocation),
     ],
 )
 def test_type_hints_resolve_on_every_handle_class(handle_type, location_type):
     # The base declares _location for type checkers only, so timenet.types needs no format names.
-    assert get_type_hints(handle_type).get("_location") is location_type
+    hints = get_type_hints(handle_type)
+    assert "_location" not in hints
+    location = inspect.getattr_static(handle_type, "_location")
+    if location_type is None:
+        assert location is None
+    else:
+        # A stored handle gives its location through a property, which type checkers accept as
+        # an override of the base's read-only one.
+        assert get_type_hints(location.fget)["return"] is location_type
 
 
 def test_the_annotation_table_returns_a_packed_string_list(reader):
@@ -234,8 +250,8 @@ def test_stored_text_compares_by_content_with_inline_text_and_native_values(read
 def test_handles_at_one_location_in_different_releases_compare_by_content(tmp_path):
     # Both prompts land in the first row of the first payload file and have the same length.
     with (
-        TimeFReader(DatasetVersion.open_local(_write(tmp_path / "a"))) as first,
-        TimeFReader(DatasetVersion.open_local(_write(tmp_path / "b", prompt=_TEXT.upper()))) as second,
+        TimeFReader(open_local_version(_write(tmp_path / "a"))) as first,
+        TimeFReader(open_local_version(_write(tmp_path / "b", prompt=_TEXT.upper()))) as second,
     ):
         (prompt, _), (other, _) = _stored(first), _stored(second)
         assert prompt._location == other._location
@@ -267,20 +283,74 @@ def test_a_deep_copy_shares_the_stored_handle(reader):
     assert copy.deepcopy(reports) is reports
 
 
-def test_writing_a_read_release_packs_its_stored_text_into_the_new_release(tmp_path):
-    source = _write(tmp_path / "a")
-    with TimeFReader(DatasetVersion.open_local(source)) as reader:
-        dataset = reader.read()
-        dataset.derive_schema()
-        with TimeFWriter(tmp_path / "b", dataset) as writer:
-            writer.write()
-    shutil.rmtree(source)
+def _child_of(dataset, records):
+    """Return a derived version of a read dataset that keeps the given Records and their ids."""
+    return TimeFDataset.from_parts(
+        metadata=dataset.metadata.model_copy(update={"dataset_version": Version(1, 1, 0)}),
+        records=records,
+        tasks=(),
+        schema=DatasetSchema(),
+        last_ids=dataset.last_ids,
+    )
 
-    target = tmp_path / "b" / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
-    with TimeFReader(DatasetVersion.open_local(target)) as reader:
+
+def test_writing_stored_text_reuses_its_payload_row_without_reading_it(tmp_path, payload_reads):
+    source = _write(tmp_path)
+    with TimeFReader(open_local_version(source)) as reader:
+        dataset = reader.read()
         prompt, reports = _stored(reader)
-        assert prompt == _TEXT
-        assert reports == _TEXTS
+        (record,) = [record for record in dataset.records if any(a.key == "reports" for a in record.annotations)]
+        child = _child_of(dataset, [record])
+        child.add_task(task=AnswerTask(inputs=(record,), prompt=prompt, targets=(prompt,)))
+        child.derive_schema()
+        with TimeFWriter(tmp_path, child) as writer:
+            writer.write()
+    assert not payload_reads
+
+    target = tmp_path / child.metadata.dataset_id / str(child.metadata.dataset_version)
+    source = SourceKey(f"{dataset.metadata.dataset_id}@{dataset.metadata.dataset_version}")
+    manifest = Manifest.model_validate_json((target / "manifest.json").read_text())
+    assert not manifest.files.payloads
+    assert list(manifest.payload_sources) == [source]
+    with TimeFReader(open_local_version(target)) as reader:
+        child_prompt, child_reports = _stored(reader)
+        # The child's locations name the parent payload rows, which the child reads through its source.
+        assert child_prompt._location == dataclasses.replace(prompt._location, source=source)
+        assert child_reports._location == dataclasses.replace(reports._location, source=source)
+        # The source's manifest gives the checksum, so the child's content keys are the parent's.
+        assert child_prompt._content_key() == prompt._content_key()
+        assert child_reports._content_key() == reports._content_key()
+        assert child_prompt.read() == _TEXT
+        assert child_reports.read() == _TEXTS
+
+
+@pytest.mark.parametrize("second_reader", ["opened", "pickled"])
+def test_child_tasks_find_parent_owned_annotations_on_records_from_another_reader(tmp_path, second_reader):
+    dataset, answer = _packed_dataset(prompt="short")
+    answer.inputs[0].annotate(Annotation(key="report", value=_TEXT))
+    with TimeFReader(open_local_version(_write_dataset(tmp_path, dataset))) as reader:
+        loaded = reader.read()
+        (record,) = [record for record in loaded.records if record.id == answer.inputs[0].id]
+        (report,) = [annotation for annotation in record.annotations if annotation.key == "report"]
+        child = _child_of(loaded, [record])
+        task = child.add_task(task=AnswerTask(inputs=(record,), prompt="Which report?", targets=("this one",)))
+        task.input_annotations = (report,)
+        target = _write_dataset(tmp_path, child)
+    version = open_local_version(target)
+
+    with TimeFReader(version) as first:
+        records = list(first.iter_records())
+        second = TimeFReader(version) if second_reader == "opened" else pickle.loads(pickle.dumps(first))
+        with second:
+            tasks = {task.id: task for task in second.iter_tasks(records)}
+
+    (child_record,) = records
+    (stored,) = [annotation for annotation in child_record.annotations if annotation.key == "report"]
+    assert isinstance(stored.value, StoredText)
+    assert isinstance(report.value, StoredText)
+    assert stored.value._location.source is not None
+    assert stored.value._content_key() == report.value._content_key()
+    assert tasks[task.id].input_annotations[0] is stored
 
 
 @pytest.mark.parametrize(
@@ -294,10 +364,12 @@ def test_writing_a_read_release_packs_its_stored_text_into_the_new_release(tmp_p
 )
 def test_a_location_that_disagrees_with_its_payload_fails_the_read(tmp_path, assignment, condition, stored, message):
     version_dir = _write(tmp_path)
+    # Opening checks the release's files, so open it before changing them.
+    version = open_local_version(version_dir)
     with connect_control(version_dir / "control.duckdb") as connection:
         connection.execute(f"UPDATE external_values SET {assignment} WHERE {condition}")  # noqa: S608 - fixed test SQL
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(version) as reader:
         handle = _stored(reader)[stored]
         with pytest.raises(TimeFFormatError, match=message):
             handle.read()
@@ -308,7 +380,7 @@ def test_written_payloads_have_the_payload_schema_and_read_back(tmp_path):
     for payload in (version_dir / "payloads").iterdir():
         assert pq.ParquetFile(payload).schema_arrow.equals(_PAYLOAD_SCHEMA)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         prompt, reports = _stored(reader)
         assert prompt.read() == _TEXT
         assert reports.read() == _TEXTS
@@ -316,12 +388,14 @@ def test_written_payloads_have_the_payload_schema_and_read_back(tmp_path):
 
 def test_a_payload_rebuilt_with_the_payload_schema_still_reads(tmp_path):
     version_dir = _write(tmp_path)
+    # Opening checks the release's files, so open it before changing them.
+    version = open_local_version(version_dir)
     (payload,) = (version_dir / "payloads").iterdir()
     rows = pq.read_table(payload).to_pylist()
     # Another compression and one row per group: only the Arrow schema has to match.
     pq.write_table(pa.Table.from_pylist(rows, schema=_PAYLOAD_SCHEMA), payload, compression="snappy", row_group_size=1)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(version) as reader:
         prompt, reports = _stored(reader)
         assert prompt.read() == _TEXT
         assert reports.read() == _TEXTS
@@ -345,10 +419,12 @@ def test_a_payload_rebuilt_with_the_payload_schema_still_reads(tmp_path):
 )
 def test_a_payload_with_another_schema_fails_every_read(tmp_path, rewrite, found):
     version_dir = _write(tmp_path)
+    # Opening checks the release's files, so open it before changing them.
+    version = open_local_version(version_dir)
     (payload,) = (version_dir / "payloads").iterdir()
     pq.write_table(rewrite(pq.read_table(payload)), payload)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(version) as reader:
         # A rejected file stays out of the cache, so each read checks it again.
         for handle in _stored(reader):
             with pytest.raises(TimeFFormatError, match=re.escape(f"payloads/{payload.name} has schema ({found}),")):
@@ -367,7 +443,9 @@ def test_a_payload_with_another_schema_fails_every_read(tmp_path, rewrite, found
     ],
 )
 def test_values_that_fit_their_catalog_row_stay_there(tmp_path, value, kept):
-    packed = PackedValueWriter(tmp_path).pack(ObjectKind.ANNOTATION_CONTENT, 1, PackedField.VALUE, value)
+    packed = PackedValueWriter(tmp_path, StorageSources()).pack(
+        ObjectKind.ANNOTATION_CONTENT, 1, PackedField.VALUE, value
+    )
     assert packed == CatalogValue(kept)
 
 
@@ -380,7 +458,9 @@ def test_values_that_fit_their_catalog_row_stay_there(tmp_path, value, kept):
     ],
 )
 def test_large_text_is_packed(tmp_path, value, kind):
-    packed = PackedValueWriter(tmp_path).pack(ObjectKind.ANNOTATION_CONTENT, 1, PackedField.VALUE, value)
+    packed = PackedValueWriter(tmp_path, StorageSources()).pack(
+        ObjectKind.ANNOTATION_CONTENT, 1, PackedField.VALUE, value
+    )
     assert isinstance(packed, ExternalValue)
     assert packed.locator.value_kind is kind
     assert packed.locator.location == PackedLocation(
@@ -472,8 +552,8 @@ def test_a_stored_content_key_never_equals_an_inline_key(reader, payload_reads):
 def test_one_location_in_two_payload_files_gives_two_content_keys(tmp_path):
     # Both prompts land in the first row of the first payload file, but their text differs.
     with (
-        TimeFReader(DatasetVersion.open_local(_write(tmp_path / "a"))) as first,
-        TimeFReader(DatasetVersion.open_local(_write(tmp_path / "b", prompt=_TEXT.upper()))) as second,
+        TimeFReader(open_local_version(_write(tmp_path / "a"))) as first,
+        TimeFReader(open_local_version(_write(tmp_path / "b", prompt=_TEXT.upper()))) as second,
     ):
         (prompt, _), (other, _) = _stored(first), _stored(second)
         assert prompt._location == other._location
@@ -482,11 +562,12 @@ def test_one_location_in_two_payload_files_gives_two_content_keys(tmp_path):
 
 def test_one_payload_file_in_two_releases_gives_one_content_key(tmp_path, payload_reads):
     source = _write(tmp_path / "a")
-    twin = tmp_path / "b" / "twin"
+    # The same release in a second registry.
+    twin = tmp_path / "b" / source.relative_to(tmp_path / "a")
     shutil.copytree(source, twin)
     with (
-        TimeFReader(DatasetVersion.open_local(source)) as first,
-        TimeFReader(DatasetVersion.open_local(twin)) as second,
+        TimeFReader(open_local_version(source)) as first,
+        TimeFReader(open_local_version(twin)) as second,
     ):
         (prompt, reports), (other, other_reports) = _stored(first), _stored(second)
         assert prompt.store is not other.store
@@ -503,7 +584,7 @@ def test_tasks_find_packed_annotations_on_records_from_another_reader(tmp_path, 
     dataset, answer = _packed_dataset(prompt="short")
     report = answer.inputs[0].annotate(Annotation(key="report", value=_TEXT))
     answer.input_annotations = (report,)
-    version = DatasetVersion.open_local(_write_dataset(tmp_path, dataset))
+    version = open_local_version(_write_dataset(tmp_path, dataset))
 
     with TimeFReader(version) as first:
         records = list(first.iter_records())
@@ -519,11 +600,13 @@ def test_tasks_find_packed_annotations_on_records_from_another_reader(tmp_path, 
 
 def test_a_payload_file_outside_the_manifest_is_rejected(tmp_path):
     version_dir = _write(tmp_path)
+    # Opening checks the release's files, so open it before changing them.
+    version = open_local_version(version_dir)
     with connect_control(version_dir / "control.duckdb") as connection:
         connection.execute("UPDATE external_values SET value_path = 'payloads/part-00000099.parquet'")
 
     with (
-        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        TimeFReader(version) as reader,
         pytest.raises(TimeFFormatError, match=r"payloads/part-00000099\.parquet.* not listed in the manifest"),
     ):
         reader.read()
@@ -534,7 +617,8 @@ def test_rewriting_stored_text_at_one_location_keeps_one_content_row(tmp_path):
     report = Annotation(key="report", value=_TEXT)
     for record in dataset.records:
         record.annotate(report)
-    with TimeFReader(DatasetVersion.open_local(_write_dataset(tmp_path / "a", dataset))) as reader:
+    source = _write_dataset(tmp_path / "a", dataset)
+    with TimeFReader(open_local_version(source)) as reader:
         loaded = reader.read()
         values = [
             annotation.value
@@ -545,11 +629,13 @@ def test_rewriting_stored_text_at_one_location_keeps_one_content_row(tmp_path):
         reports = [value for value in values if isinstance(value, StoredText)]
         assert len(reports) == len(values) == len(dataset.records) > 1
         assert len({value._content_key() for value in reports}) == 1
-        target = _write_dataset(tmp_path / "b", loaded)
+        # A new version beside the source, which stores the payloads it reuses.
+        target = _write_dataset(tmp_path / "a", _child_of(loaded, loaded.records))
 
-    assert len(_content_ids(target, "report")) == 1
+    # Each release keeps one content row for the shared report; the child names the parent's payload row.
+    assert [len(_content_ids(release, "report")) for release in (source, target)] == [1, 1]
     assert len(_external_rows(target)) == 2
-    with TimeFReader(DatasetVersion.open_local(target)) as reader:
+    with TimeFReader(open_local_version(target)) as reader:
         back = [
             annotation.value
             for record in reader.read().records
@@ -565,8 +651,8 @@ def _with_packed_second_target(tmp_path):
     return _write_dataset(tmp_path, dataset), task.id
 
 
-def _targets(version_dir, task_id):
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+def _targets(version, task_id):
+    with TimeFReader(version) as reader:
         (task,) = [task for task in reader.read_tasks() if task.id == task_id]
         rows = [
             (row["position"], row["text_value"])
@@ -582,17 +668,18 @@ def test_a_packed_target_after_the_first_keeps_its_position(tmp_path):
     assert [row for row in _external_rows(version_dir) if row[1] == task_id and row[2] == "targets"] == [
         (ObjectKind.TASK.value, task_id, PackedField.TARGETS.value, 1)
     ]
-    assert _targets(version_dir, task_id) == (["short", _TEXT], [(0, "short"), (1, _TEXT)])
+    assert _targets(open_local_version(version_dir), task_id) == (["short", _TEXT], [(0, "short"), (1, _TEXT)])
 
 
 def test_targets_are_matched_to_their_locators_by_stored_position(tmp_path):
     version_dir, task_id = _with_packed_second_target(tmp_path)
+    version = open_local_version(version_dir)
     with connect_control(version_dir / "control.duckdb") as connection:
         connection.execute("UPDATE task_targets SET position = position * 2 WHERE task_id = ?", [task_id])
         connection.execute(
             "UPDATE external_values SET position = position * 2 WHERE field = 'targets' AND object_id = ?", [task_id]
         )
-    assert _targets(version_dir, task_id) == (["short", _TEXT], [(0, "short"), (2, _TEXT)])
+    assert _targets(version, task_id) == (["short", _TEXT], [(0, "short"), (2, _TEXT)])
 
 
 def test_two_stored_texts_of_one_kind_in_one_payload_compare_by_content(tmp_path, payload_reads):
@@ -603,7 +690,7 @@ def test_two_stored_texts_of_one_kind_in_one_payload_compare_by_content(tmp_path
         task=AnswerTask(inputs=(dataset.records[0],), prompt=_TEXT, rationale=other, targets=("yes",))
     )
     version_dir = _write_dataset(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         (stored,) = [stored for stored in reader.read_tasks() if stored.id == task.id]
         prompt, rationale = stored.prompt, stored.rationale
         assert isinstance(prompt, StoredText)
@@ -662,7 +749,7 @@ def test_a_release_without_payloads_reads_no_locators(tmp_path, monkeypatch):
 
     monkeypatch.setattr(PackedValueReader, "handles", no_locators)
     monkeypatch.setattr(PackedValueReader, "locations", no_locators)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         reader.read()
         list(reader.iter_tasks())
         reader.read_task_table()
@@ -676,7 +763,7 @@ def test_a_catalog_without_its_locator_table_fails_as_a_format_error(tmp_path):
         connection.execute("DROP TABLE external_values")
 
     with (
-        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        TimeFReader(open_local_version(version_dir)) as reader,
         pytest.raises(TimeFFormatError, match="cannot read external values") as raised,
     ):
         reader.read()
@@ -711,7 +798,7 @@ def test_the_writer_stores_locators_one_task_batch_at_a_time(tmp_path, monkeypat
     assert max(held) <= 2
     with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM external_values WHERE field = 'prompt'").fetchone() == (7,)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         assert {read_value(task.prompt) for task in reader.read_tasks()} == {f"{_TEXT}{index}" for index in range(7)}
 
 
@@ -745,7 +832,7 @@ def _release_with_payload_files(tmp_path, monkeypatch, count):
     dataset = make_dataset()
     for index in range(count):
         dataset.records[0].annotate(Annotation(key=f"report-{index}", value=f"{_TEXT}{index}"))
-    version = DatasetVersion.open_local(_write_dataset(tmp_path, dataset))
+    version = open_local_version(_write_dataset(tmp_path, dataset))
     paths = [part.path for part in version.manifest.files.payloads]
     assert len(paths) == count
     return version, paths
@@ -862,7 +949,7 @@ def _stored_offsets(reader):
 
 @pytest.fixture
 def irregular_reader(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write_irregular(tmp_path))) as reader:
+    with TimeFReader(open_local_version(_write_irregular(tmp_path))) as reader:
         yield reader
 
 
@@ -883,7 +970,7 @@ def test_stored_offsets_give_the_digest_their_location_records(irregular_reader,
     assert handle.digest == handle._location.digest == offsets_digest(np.asarray(_OFFSETS_US, dtype=np.int64))
     assert not payload_reads
 
-    digestless = dataclasses.replace(handle, _location=dataclasses.replace(handle._location, digest=None))
+    digestless = dataclasses.replace(handle, _packed_location=dataclasses.replace(handle._location, digest=None))
     with pytest.raises(TimeFFormatError, match="has time offsets without a digest"):
         _ = digestless.digest
 
@@ -941,6 +1028,8 @@ def test_text_handles_are_not_built_for_stored_time_offsets(irregular_reader):
 
 def test_time_offsets_that_disagree_with_their_location_fail_the_read(tmp_path):
     version_dir = _write_irregular(tmp_path)
+    # Opening checks the release's files, so open it before changing them.
+    version = open_local_version(version_dir)
     for payload in (version_dir / "payloads").iterdir():
         table = pq.read_table(payload)
         rows = table.to_pylist()
@@ -949,7 +1038,7 @@ def test_time_offsets_that_disagree_with_their_location_fail_the_read(tmp_path):
                 del row["time_offsets"][1]
         pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), payload)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(version) as reader:
         handle = _stored_offsets(reader)
         with pytest.raises(TimeFFormatError, match="stores 2 offsets but its location records 3"):
             handle.read()
@@ -965,12 +1054,14 @@ def test_time_offsets_that_disagree_with_their_location_fail_the_read(tmp_path):
 )
 def test_time_offsets_of_another_element_type_fail_the_read(tmp_path, element, found):
     version_dir = _write_irregular(tmp_path)
+    # Opening checks the release's files, so open it before changing them.
+    version = open_local_version(version_dir)
     (payload,) = (version_dir / "payloads").iterdir()
     table = pq.read_table(payload)
     index = table.schema.get_field_index("time_offsets")
     pq.write_table(table.cast(table.schema.set(index, pa.field("time_offsets", pa.list_(element)))), payload)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(version) as reader:
         handle = _stored_offsets(reader)
         message = re.escape(f"payloads/{payload.name} has schema (") + ".*" + re.escape(f"time_offsets: {found}), ")
         with pytest.raises(TimeFFormatError, match=message):
@@ -999,7 +1090,7 @@ def test_kept_time_offsets_hold_only_their_axis(tmp_path):
     (payload,) = (version_dir / "payloads").iterdir()
     assert pq.read_table(payload)["time_offsets"].combine_chunks().flatten().nbytes == 5 * n_steps * 8
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         record = _irregular_record(reader)
         handle = record.signals[2]._time_offsets
         assert isinstance(handle, StoredOffsets)
@@ -1038,7 +1129,7 @@ def test_only_time_offset_locators_carry_a_digest(object_kind, field, value_kind
 )
 def test_only_non_null_int64_time_offsets_are_packed(tmp_path, offsets):
     with pytest.raises(TimeFValidationError, match="time offsets must be non-null int64 values"):
-        PackedValueWriter(tmp_path).pack(ObjectKind.AXIS, 1, PackedField.TIME_OFFSETS, offsets)
+        PackedValueWriter(tmp_path, StorageSources()).pack(ObjectKind.AXIS, 1, PackedField.TIME_OFFSETS, offsets)
 
 
 _LARGE_OFFSETS_US = [2**53 + 1, 2**62, 2**62 + 1]
@@ -1052,7 +1143,7 @@ def test_a_payload_of_interleaved_text_lists_and_time_offsets_round_trips_exactl
         (ObjectKind.AXIS, PackedField.TIME_OFFSETS, pa.array(_LARGE_OFFSETS_US, type=pa.int64())),
         (ObjectKind.TASK, PackedField.RATIONALE, _TEXT.upper()),
     ]
-    writer = PackedValueWriter(tmp_path)
+    writer = PackedValueWriter(tmp_path, StorageSources())
     packed = [writer.pack(kind, index, field, value) for index, (kind, field, value) in enumerate(values, start=1)]
     writer.flush()
 
@@ -1086,7 +1177,7 @@ def test_large_time_offsets_round_trip_as_non_null_int64(tmp_path):
     (payload,) = (version_dir / "payloads").iterdir()
     assert str(pq.read_schema(payload).field("time_offsets").type) == "list<element: int64 not null>"
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         record = _irregular_record(reader)
         assert record.signals[0].time_offsets_us().tolist() == _LARGE_OFFSETS_US
 
@@ -1102,7 +1193,7 @@ def test_packed_time_offsets_reach_the_payload_as_the_arrays_packed(tmp_path, mo
 
     monkeypatch.setattr(pa, "concat_arrays", spy)
     first, second = pa.array(_OFFSETS_US, type=pa.int64()), pa.array(_LARGE_OFFSETS_US, type=pa.int64())
-    writer = PackedValueWriter(tmp_path)
+    writer = PackedValueWriter(tmp_path, StorageSources())
     writer.pack(ObjectKind.AXIS, 1, PackedField.TIME_OFFSETS, first)
     writer.pack(ObjectKind.ANNOTATION_CONTENT, 1, PackedField.VALUE, _TEXTS)
     writer.pack(ObjectKind.AXIS, 2, PackedField.TIME_OFFSETS, second)
@@ -1152,10 +1243,12 @@ def _rewrite_time_offsets(version_dir, change):
 
 def test_time_offsets_whose_digest_differs_from_their_locator_fail_the_read(tmp_path):
     version_dir = _write_irregular(tmp_path)
+    # Opening checks the release's files, so open it before changing them.
+    version = open_local_version(version_dir)
     # Same length, endpoints and order: only the digest tells the change apart.
     _rewrite_time_offsets(version_dir, lambda offsets: offsets.__setitem__(1, offsets[1] - 1_000))
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(version) as reader:
         handle = _stored_offsets(reader)
         with pytest.raises(TimeFFormatError, match="time offsets whose digest differs from their locator's"):
             handle.read()
@@ -1174,19 +1267,21 @@ def test_repeated_time_offsets_round_trip(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="env", signals=(signal,)),)))
     version_dir = _write_dataset(tmp_path, dataset)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         assert _irregular_record(reader).signals[0].time_offsets_us().tolist() == offsets
 
 
 def test_time_offsets_in_a_payload_file_outside_the_manifest_are_rejected(tmp_path):
     version_dir = _write_irregular(tmp_path)
+    # Opening checks the release's files, so open it before changing them.
+    version = open_local_version(version_dir)
     with connect_control(version_dir / "control.duckdb") as connection:
         connection.execute(
             "UPDATE external_values SET value_path = 'payloads/part-00000099.parquet' WHERE object_kind = 'Axis'"
         )
 
     with (
-        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        TimeFReader(version) as reader,
         pytest.raises(TimeFFormatError, match=r"payloads/part-00000099\.parquet.* not listed in the manifest"),
     ):
         _irregular_record(reader)
@@ -1203,7 +1298,7 @@ def test_a_catalog_written_before_packed_values_fails_as_a_format_error(tmp_path
     manifest_path.write_text(json.dumps(manifest))
 
     with (
-        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        TimeFReader(open_local_version(version_dir)) as reader,
         pytest.raises(TimeFFormatError, match="cannot read external values") as raised,
     ):
         list(reader.iter_records())
@@ -1218,7 +1313,7 @@ def test_packed_values_in_a_release_that_lists_no_payload_files_are_refused(tmp_
     manifest_path.write_text(json.dumps(manifest))
 
     with (
-        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        TimeFReader(open_local_version(version_dir)) as reader,
         pytest.raises(TimeFFormatError, match="stores packed values, but the release lists no payload files"),
     ):
         list(reader.iter_records())
@@ -1242,7 +1337,7 @@ def test_a_reader_keeps_decoded_time_offsets_within_its_byte_budget(tmp_path, mo
     budget = 2 * n_steps * 8
     monkeypatch.setattr(stored_values_module, "_CACHE_BYTES", budget)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         packed = reader._packed_value_reader
         assert packed is not None
         record_ids = [record.id for record in reader.iter_records(with_annotations=False)]

@@ -35,14 +35,19 @@ class ValueHandle(ABC, Generic[_Value_co]):
     # Empty slots let slotted subclasses stay free of a per-instance __dict__.
     __slots__ = ()
 
-    # Declared for type checkers only, so get_type_hints() needs no import of timenet.format.
+    # Type checkers see a read-only property, which a stored handle overrides with a field or a
+    # property. Declaring it for them only keeps get_type_hints() free of timenet.format imports.
     if TYPE_CHECKING:
-        _location: PayloadLocation | None
-    _location = None
-    """Internal: where the value's bytes are stored, known without reading them.
 
-    ``None`` for a value that exists only in memory or behind a function. A stored handle sets it.
-    """
+        @property
+        def _location(self) -> PayloadLocation | None:
+            """Internal: where the value's bytes are stored, for writers, or ``None`` if not stored.
+
+            Packed values and loaded arrays need no I/O. An unloaded array resolves its chunks
+            through its reader, in batches.
+            """
+    else:
+        _location = None
 
     @property
     @abstractmethod
