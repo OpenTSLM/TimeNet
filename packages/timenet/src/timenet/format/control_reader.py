@@ -1620,6 +1620,39 @@ class DuckDBControlReader:
             raise TimeFFormatError(f"task refers to missing signal key {missing[0]!r}")
         return dict(rows)
 
+    def _record_keys_of_occurrences(self, occurrence_keys: Iterable[int]) -> set[int]:
+        """Return the keys of the Records whose hierarchy holds the given annotation occurrences.
+
+        An occurrence on the Dataset or a task has no Record.
+
+        Returns:
+            The Record keys, each once.
+        """
+        rows = self._query(
+            """SELECT DISTINCT coalesce(records.record_key, sources.record_key, signal_sources.record_key)
+               FROM annotation_occurrences AS occurrences
+               LEFT JOIN records ON occurrences.object_type = ? AND records.record_key = occurrences.object_key
+               LEFT JOIN sources ON occurrences.object_type = ? AND sources.source_key = occurrences.object_key
+               LEFT JOIN signals ON occurrences.object_type = ? AND signals.signal_key = occurrences.object_key
+               LEFT JOIN sources AS signal_sources ON signal_sources.source_key = signals.source_key
+               WHERE occurrences.occurrence_key IN (SELECT unnest(?))""",
+            [ObjectKind.RECORD.value, ObjectKind.SOURCE.value, ObjectKind.SIGNAL.value, sorted(set(occurrence_keys))],
+        )
+        return {record_key for (record_key,) in rows if record_key is not None}
+
+    def _record_keys_of_signals(self, signal_keys: Iterable[int]) -> set[int]:
+        """Return the keys of the Records that hold the given Signals.
+
+        Returns:
+            The Record keys, each once.
+        """
+        rows = self._query(
+            "SELECT DISTINCT record_key FROM signals JOIN sources USING (source_key) "
+            "WHERE signal_key IN (SELECT unnest(?))",
+            [sorted(set(signal_keys))],
+        )
+        return {record_key for (record_key,) in rows}
+
     def _task_relationships(
         self, table: str, column: str, task_keys: list[int] | None
     ) -> dict[int, dict[str, tuple[int, ...]]]:
@@ -2277,7 +2310,9 @@ class _TaskHydration:
             self._index_record(record_key, record)
 
     def _signals_by_key(self, signal_keys: set[int]) -> dict[int, Signal]:
-        """Resolve the Signals one batch's targets refer to.
+        """Resolve the Signals one batch's targets refer to, hydrating the Records that hold them.
+
+        A Signal target can lie on a Record that the task references in no other way.
 
         Returns:
             Signals by internal key.
@@ -2288,8 +2323,13 @@ class _TaskHydration:
         if not signal_keys:
             return {}
         self._index_signals()
+        signal_ids = self.reader._signal_ids_by_key(signal_keys)
+        unbuilt = [signal_key for signal_key, signal_id in signal_ids.items() if signal_id not in self.signals_by_id]
+        if unbuilt:
+            self._ensure_records(self.reader._record_keys_of_signals(unbuilt))
+            self._index_signals()
         resolved: dict[int, Signal] = {}
-        for signal_key, signal_id in self.reader._signal_ids_by_key(signal_keys).items():
+        for signal_key, signal_id in signal_ids.items():
             signal = self.signals_by_id.get(signal_id)
             if signal is None:
                 raise TimeFFormatError(
@@ -2313,7 +2353,9 @@ class _TaskHydration:
         self._records_without_signal_index.clear()
 
     def _annotations_by_occurrence(self, occurrence_keys: set[int]) -> dict[int, Annotation]:
-        """Resolve referenced annotation occurrences to the objects on the hydrated Records.
+        """Resolve referenced annotation occurrences, hydrating the Records that hold them.
+
+        A task can reference an annotation on a Record that it references in no other way.
 
         Returns:
             Annotations by internal occurrence key.
@@ -2327,6 +2369,11 @@ class _TaskHydration:
             "SELECT occurrence_key, occurrence_id FROM annotation_occurrences WHERE occurrence_key IN (SELECT unnest(?))",
             [sorted(occurrence_keys)],
         )
+        unbuilt = [
+            occurrence_key for occurrence_key, occurrence_id in rows if occurrence_id not in self.annotations_by_id
+        ]
+        if unbuilt:
+            self._ensure_records(self.reader._record_keys_of_occurrences(unbuilt))
         resolved: dict[int, Annotation] = {}
         for occurrence_key, occurrence_id in rows:
             annotation = self.annotations_by_id.get(occurrence_id)

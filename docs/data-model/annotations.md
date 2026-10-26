@@ -133,3 +133,7 @@ task = AnswerTask(
 
 Use `input_annotations` for context. Use `target_annotations` for the answer. A Task cannot combine
 inline `targets` with `target_annotations`.
+
+The occurrences may lie on the dataset itself or on any of its Records, not only on the Task's
+inputs. A Record that holds a referenced occurrence, like one that holds a Signal target, counts
+among the Task's Records: every read of the Task builds it, and removing it affects the Task.

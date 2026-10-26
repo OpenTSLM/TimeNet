@@ -49,6 +49,7 @@ class _TaskValidationIndex:
     """Hash-table lookups shared by every task in one validation pass."""
 
     def __init__(self, dataset: "TimeFDataset") -> None:
+        self.records = dataset._records
         self.records_by_id = dataset._records_by_id
         self.signals_by_id = dataset._signals_by_id
         self.signals_by_record_id = dataset._signals_by_record_id
@@ -56,6 +57,8 @@ class _TaskValidationIndex:
             annotation.occurrence_id for annotation in dataset._annotations if annotation.occurrence_id is not None
         }
         self._record_annotation_ids: dict[str, set[str]] = {}
+        self._records_by_signal_id: dict[str, Record] | None = None
+        self._records_by_occurrence_id: dict[str, Record] | None = None
 
     def annotation_ids_for(self, record: Record) -> set[str]:
         """Return occurrence IDs attached anywhere in one Record hierarchy."""
@@ -66,6 +69,31 @@ class _TaskValidationIndex:
         known = {annotation.occurrence_id for annotation in annotations if annotation.occurrence_id is not None}
         self._record_annotation_ids[record.id] = known
         return known
+
+    def record_of_signal(self, signal_id: str) -> Record | None:
+        """Return the registered Record that holds a Signal, or ``None``."""
+        if self._records_by_signal_id is None:
+            self._records_by_signal_id = {
+                signal.id: self.records_by_id[record_id]
+                for record_id, signals in self.signals_by_record_id.items()
+                for signal in signals
+            }
+        return self._records_by_signal_id.get(signal_id)
+
+    def record_of_annotation(self, occurrence_id: str, near: Iterable[Record] = ()) -> Record | None:
+        """Return the registered Record whose hierarchy holds an annotation occurrence, or ``None``.
+
+        The Records in ``near`` are looked through first, so a reference to an annotation of a
+        task's own input does not index every Record of the dataset.
+        """
+        for record in near:
+            if occurrence_id in self.annotation_ids_for(record):
+                return record
+        if self._records_by_occurrence_id is None:
+            self._records_by_occurrence_id = {
+                identity: record for record in self.records for identity in self.annotation_ids_for(record)
+            }
+        return self._records_by_occurrence_id.get(occurrence_id)
 
 
 class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
@@ -472,7 +500,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 f"streamed task {task.id!r} has type {type(task).__name__}, not one of the declared "
                 f"{sorted(t.__name__ for t in declared)}"
             )
-        referenced = self._task_records(task)
+        referenced = self._named_records(task)
         for record in referenced:
             registered = index.records_by_id.get(record.id)
             if registered is not record:
@@ -484,7 +512,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._check_task_answer(task)
         self._check_signal_refs(task, index)
         self._validate_task_spans(task, index)
-        self._check_annotation_refs(task, task.inputs, index)
+        self._check_annotation_refs(task, index)
 
     def _register_batch(self, batch: tuple[Task, ...]) -> tuple[Task, ...]:
         """Validate a whole batch of tasks, then attach all of it or none of it.
@@ -565,7 +593,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             self._check_task_answer(task)
             self._check_signal_refs(task, index)
             self._validate_task_spans(task, index)
-            self._check_annotation_refs(task, task.inputs, index)
+            self._check_annotation_refs(task, index)
 
     @classmethod
     def _validate_task_spans(cls, task: Task, index: _TaskValidationIndex) -> None:
@@ -749,32 +777,29 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             raise TimeFValidationError(f"{name} needs an answer: set targets= or target_annotations=")
 
     @staticmethod
-    def _check_annotation_refs(
-        task: Task,
-        records: tuple[Record, ...],
-        index: _TaskValidationIndex,
-    ) -> None:
-        """Reject a referenced annotation occurrence that neither the dataset nor a target record carries.
+    def _check_annotation_refs(task: Task, index: _TaskValidationIndex) -> None:
+        """Reject a referenced annotation occurrence that neither the dataset nor a registered Record carries.
+
+        The annotation may lie on any registered Record, which then counts among the task's Records.
 
         Args:
             task: The task to register.
-            records: The records that the task attaches to.
             index: Reusable dataset identity and annotation lookups.
 
         Raises:
             TimeFValidationError: If a referenced annotation occurrence is attached neither to the
-                dataset nor to a target record.
+                dataset nor to a registered Record.
         """
-        record_occurrences = tuple(index.annotation_ids_for(record) for record in records)
+        named = TimeFDataset._named_records(task)
         for field_name in ("input_annotations", "target_annotations"):
             for annotation in getattr(task, field_name):
                 occurrence_id = annotation.occurrence_id
-                if occurrence_id not in index.dataset_annotation_ids and not any(
-                    occurrence_id in known for known in record_occurrences
-                ):
+                if occurrence_id in index.dataset_annotation_ids:
+                    continue
+                if occurrence_id is None or index.record_of_annotation(occurrence_id, named) is None:
                     raise TimeFValidationError(
                         f"{type(task).__name__} {field_name} refers to annotation occurrence "
-                        f"{annotation.occurrence_id!r}, which is not attached to its dataset or input hierarchy"
+                        f"{annotation.occurrence_id!r}, which is not attached to its dataset or a registered Record"
                     )
 
     @staticmethod
@@ -788,7 +813,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Raises:
             TimeFValidationError: If a task references an unknown or replacement Record object.
         """
-        for record in TimeFDataset._task_records(task):
+        for record in TimeFDataset._named_records(task):
             if index.records_by_id.get(record.id) is not record:
                 raise TimeFValidationError(
                     f"{type(task).__name__} references Record {record.id!r}, which is not registered in this dataset"
@@ -812,8 +837,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 )
 
     @staticmethod
-    def _task_records(task: Task) -> tuple[Record, ...]:
-        """Return all Records referenced by a task, without duplicate objects."""
+    def _named_records(task: Task) -> tuple[Record, ...]:
+        """Return the Records a task names itself: its inputs, candidate Records, and Record targets, each once."""
         candidates = cast("tuple[Record, ...]", getattr(task, "candidate_records", ()))
         target_records = tuple(target for target in task.targets or () if isinstance(target, Record))
         found: list[Record] = []
@@ -824,6 +849,34 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 seen.add(identity)
                 found.append(record)
         return tuple(found)
+
+    @staticmethod
+    def _task_records(task: Task, index: _TaskValidationIndex) -> tuple[Record, ...]:
+        """Return the task's Records, each once.
+
+        They are the Records it names (:meth:`_named_records`), and the registered Records that hold
+        its Signal targets and the annotations it references. An annotation of the dataset itself
+        adds no Record.
+
+        Args:
+            task: The task.
+            index: The dataset's lookups.
+
+        Returns:
+            The Records, the named ones first.
+        """
+        named = TimeFDataset._named_records(task)
+        found = {id(record): record for record in named}
+        holders = [index.record_of_signal(signal.id) for signal in TimeFDataset._task_signals(task)]
+        holders.extend(
+            index.record_of_annotation(annotation.occurrence_id, named)
+            for annotation in (*task.input_annotations, *task.target_annotations)
+            if annotation.occurrence_id is not None and annotation.occurrence_id not in index.dataset_annotation_ids
+        )
+        for record in holders:
+            if record is not None:
+                found.setdefault(id(record), record)
+        return tuple(found.values())
 
     @staticmethod
     def _task_signals(task: Task) -> tuple[Signal, ...]:

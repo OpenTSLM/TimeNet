@@ -3,15 +3,29 @@
 import re
 
 import duckdb
+import numpy as np
 import pytest
 
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.dataset.edit import edit_version, remove_records
 from timenet.errors import TimeFEditError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
-from timenet.types import Annotation, AnswerTask, TemporalLocalizationTask, TSCorrespondenceTask, TSEditingTask, Version
+from timenet.types import (
+    Annotation,
+    AnswerTask,
+    DatasetMetadata,
+    License,
+    TemporalLocalizationTask,
+    TimeInterval,
+    TimeSeriesSpec,
+    TSCorrespondenceTask,
+    TSEditingTask,
+    Version,
+    ureg,
+)
 from timenet.writer import TimeFWriter
 
 
@@ -205,6 +219,70 @@ def test_target_and_candidate_records_are_required_whatever_the_task_type():
         remove_records(dataset, [edited_record.id])
     with pytest.raises(TimeFEditError, match=re.escape(correspondence_task.id)):
         remove_records(dataset, [candidate_record.id])
+
+
+_REF_SPEC = TimeSeriesSpec(spec_type="sine", name="Sine", unit_value=ureg.dimensionless)
+
+
+def _referenced_pair():
+    """Return a dataset of the Records ``a`` and ``b``, each with one Signal (``sig-a``, ``sig-b``) and annotation."""
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="test/pair", dataset_version=Version(1, 0, 0), name="pair", description="d", license=License.MIT
+        )
+    )
+    for name in ("a", "b"):
+        signal = Signal.from_values(
+            np.arange(16, dtype=np.float32),
+            spec=_REF_SPEC,
+            name=f"sig-{name}",
+            time_axis=RegularAxis.from_rate_hz(16),
+            id=f"sig-{name}",
+        )
+        record = dataset.add_record(record=Record(record_id=name, sources=(Source(name="m", signals=(signal,)),)))
+        record.annotate(Annotation(key="note", value=name))
+    return dataset
+
+
+def _referencing_b(kind):
+    """Return ``_referenced_pair()`` with a task whose input is ``a`` and which references ``b`` by ``kind``."""
+    dataset = _referenced_pair()
+    a, b = dataset.records
+    tasks = {
+        "candidate": lambda: TSCorrespondenceTask(inputs=(a,), candidate_records=(a, b), targets=(a,)),
+        "record-target": lambda: TSEditingTask(inputs=(a,), targets=(b,)),
+        "signal-target": lambda: TSEditingTask(inputs=(a,), targets=(b.signals[0],)),
+        "target-annotation": lambda: AnswerTask(inputs=(a,), target_annotations=b.annotations),
+        "span": lambda: AnswerTask(
+            inputs=(a, b), targets=("x",), scope=TimeInterval.seconds(0.0, 0.5, time_series_ids=("sig-b",))
+        ),
+    }
+    task = dataset.add_task(task=tasks[kind]())
+    return dataset, task
+
+
+@pytest.mark.parametrize("kind", ["candidate", "record-target", "signal-target", "target-annotation", "span"])
+def test_removing_a_record_invalidates_each_kind_of_reference_to_it(kind):
+    dataset, task = _referencing_b(kind)
+    with pytest.raises(TimeFEditError, match=re.escape(f"would dangle tasks ['{task.id}']")):
+        remove_records(dataset, ["b"])
+    edited = remove_records(dataset, ["b"], cascade=True)
+    assert (edited.tasks, [record.task_ids for record in edited.records]) == ((), [()])
+
+
+def test_an_input_annotation_on_another_record_stays_while_that_record_does():
+    dataset = _referenced_pair()
+    a, b = dataset.records
+    dataset.add_record(record=Record(record_id="c"))
+    dataset.add_task(task=AnswerTask(inputs=(a,), targets=("x",), input_annotations=(*a.annotations, *b.annotations)))
+    # b holds one of the task's annotations, so it is one of the task's Records: removing c keeps it.
+    (task,) = remove_records(dataset, ["c"]).tasks
+    assert [annotation.value for annotation in task.input_annotations] == ["a", "b"]
+    # Removing b strips that context and keeps the task.
+    edited = remove_records(dataset, ["b"])
+    (task,) = edited.tasks
+    assert task.inputs == edited.records[:1]
+    assert [annotation.value for annotation in task.input_annotations] == ["a"]
 
 
 # ---- copy-on-write version --------------------------------------------------------------------

@@ -20,6 +20,7 @@ from timenet.types import (
     ObjectKind,
     Split,
     Task,
+    TSEditingTask,
     Version,
 )
 from timenet.types.parent_dataset_card import ParentDatasetCard
@@ -170,6 +171,95 @@ def test_get_many_rejects_a_single_string_and_ids_that_are_not_strings(reader):
         reader.get_many(Record, 0)
     with pytest.raises(TimeFValidationError, match="object IDs are strings"):
         reader.get(Record, None)
+
+
+def _with_a_signal_target_outside_the_inputs() -> tuple[TimeFDataset, Signal]:
+    """Return ``make_dataset()`` with ``task-edit``, whose input is record-0 and whose target is a Signal of record-1."""
+    dataset = make_dataset()
+    record_0, record_1, _ = dataset.records
+    target = next(signal for signal in record_1.signals if signal.id == "ts-long-1")
+    dataset.add_task(task=TSEditingTask(id="task-edit", inputs=(record_0,), targets=(target,)))
+    return dataset, target
+
+
+def _only_target(task: Task) -> Signal:
+    assert task.targets is not None
+    (signal,) = task.targets
+    assert isinstance(signal, Signal)
+    return signal
+
+
+@pytest.mark.parametrize("read", ["get", "get_many"])
+def test_a_task_read_by_id_builds_the_record_of_a_signal_target_outside_its_inputs(tmp_path, read):
+    dataset, target = _with_a_signal_target_outside_the_inputs()
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        task = reader.get(Task, "task-edit") if read == "get" else reader.get_many(TSEditingTask, ["task-edit"])[0]
+        signal = _only_target(task)
+        assert signal.id == "ts-long-1"
+        assert signal.to_arrow().equals(target.to_arrow())
+
+
+@pytest.mark.parametrize("given", [True, False], ids=["given-records", "every-task"])
+@pytest.mark.parametrize("read", ["read_tasks", "iter_tasks"])
+def test_a_task_read_builds_the_record_of_a_signal_target_outside_its_inputs(tmp_path, read, given):
+    dataset, target = _with_a_signal_target_outside_the_inputs()
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        inputs = tuple(reader.iter_records(("record-0",))) if given else None
+        (task,) = (task for task in getattr(reader, read)(inputs=inputs) if task.id == "task-edit")
+        signal = _only_target(task)
+        assert signal.id == "ts-long-1"
+        assert signal.to_arrow().equals(target.to_arrow())
+        # A given Record stays the input; the target's Record is built beside it.
+        assert inputs is None or task.inputs[0] is inputs[0]
+
+
+def _with_annotations_outside_the_inputs(owner: str) -> TimeFDataset:
+    """Return ``make_dataset()`` with ``task-context``, whose input is record-0 and whose annotations lie on record-1.
+
+    It references an input annotation and has an answer annotation, both on record-1 itself, on its
+    Source, or on its Signal ``ts-long-1``.
+    """
+    dataset = make_dataset()
+    record_0, record_1, _ = dataset.records
+    (source,) = record_1.sources
+    signal = next(signal for signal in record_1.signals if signal.id == "ts-long-1")
+    annotated = {"record": record_1, "source": source, "signal": signal}[owner]
+    context = annotated.annotate(Annotation(key="context", value=owner))
+    answer = annotated.annotate(Annotation(key="answer", value="yes"))
+    dataset.add_task(
+        task=AnswerTask(
+            id="task-context", inputs=(record_0,), input_annotations=(context,), target_annotations=(answer,)
+        )
+    )
+    return dataset
+
+
+_READS = {
+    "read": lambda reader, _: reader.read().tasks,
+    "get": lambda reader, _: (reader.get(Task, "task-context"),),
+    "get_many": lambda reader, _: reader.get_many(AnswerTask, ["task-context"]),
+    "read_tasks": lambda reader, inputs: reader.read_tasks(inputs=inputs),
+    "iter_tasks": lambda reader, inputs: tuple(reader.iter_tasks(inputs=inputs)),
+}
+
+
+@pytest.mark.parametrize("owner", ["record", "source", "signal"])
+@pytest.mark.parametrize("given", [True, False], ids=["given-records", "no-records"])
+@pytest.mark.parametrize("read", list(_READS))
+def test_a_task_read_builds_the_records_of_the_annotations_it_references(tmp_path, read, given, owner):
+    dataset = _with_annotations_outside_the_inputs(owner)
+    (expected,) = (task for task in dataset.tasks if task.id == "task-context")
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        inputs = tuple(reader.iter_records(("record-0",))) if given else None
+        (task,) = (task for task in _READS[read](reader, inputs) if task.id == "task-context")
+
+        def portrait(annotations):
+            return [(annotation.key, annotation.value, annotation.occurrence_id) for annotation in annotations]
+
+        assert portrait(task.input_annotations) == portrait(expected.input_annotations)
+        assert portrait(task.target_annotations) == portrait(expected.target_annotations)
+        assert [record.id for record in task.inputs] == ["record-0"]
+        assert inputs is None or read not in {"read_tasks", "iter_tasks"} or task.inputs[0] is inputs[0]
 
 
 def test_read_tasks_and_iter_tasks_take_inputs_by_keyword_only(reader):
