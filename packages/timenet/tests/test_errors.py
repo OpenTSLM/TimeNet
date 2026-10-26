@@ -1,5 +1,6 @@
 from timenet.errors import (
     TimeFFormatError,
+    TimeFNotFoundError,
     TimeFReaderError,
     TimeFValidationError,
     TimeNetDatasetNotFoundError,
@@ -24,6 +25,12 @@ def test_all_derive_from_base():
 def test_validation_error_is_value_error():
     # So existing `except ValueError` handlers still catch dataset/writer validation failures.
     assert issubclass(TimeFValidationError, ValueError)
+
+
+def test_not_found_error_is_a_validation_error_and_a_lookup_error():
+    # Callers can tell a missing object from malformed input, and `except LookupError` catches it.
+    assert issubclass(TimeFNotFoundError, TimeFValidationError)
+    assert issubclass(TimeFNotFoundError, LookupError)
 
 
 def test_catchable_as_base():

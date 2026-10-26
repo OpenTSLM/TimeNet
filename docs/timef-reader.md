@@ -85,20 +85,24 @@ one axis share the checked array, so later calls on any of them read nothing.
 `iter_records(record_ids=...)` yields records one at a time. It does not create a complete
 `TimeFDataset`.
 
-Tasks have three useful read paths:
+Tasks have four useful read paths:
 
-- `read_tasks(records)` builds the tasks of selected Records, or every task, in one pass.
-- `iter_tasks(records)` yields tasks for selected Records in bounded batches. Its `split`,
-  `required_modalities`, and `supported_modalities` arguments filter in DuckDB before any task is
-  built, as they do on `read_task_table()` and `read_target_table()`.
+- `read_tasks(inputs=records)` builds the tasks that use one of the given Records as input, or
+  every task, in one pass. Its `split`, `required_modalities`, and `supported_modalities`
+  arguments filter in DuckDB before any task is built, as they do on `read_task_table()` and
+  `read_target_table()`. Every argument is keyword-only.
+- `iter_tasks(inputs=records)` takes the same arguments and yields the same tasks in bounded
+  batches.
+- `get(Task, id)` and `get_many(Task, ids)` read tasks by ID, as
+  [Reading objects by ID](#reading-objects-by-id) describes.
 - `read_task_table()`, `read_target_table()`, and `read_annotation_table()` return Arrow tables
   without creating Python task objects.
 
 One call returns one consistent set of objects. A Record that two tasks use is one object, and the
-Signals on one irregular axis share one handle to its time offsets. `read_tasks(records)` and
-`iter_tasks(records)` reuse the Record objects you pass: a task input is the same `Record` instance
-that `iter_records()` returned. Separate calls build separate objects, because the reader keeps no
-object caches; keep a result if you need it again.
+Signals on one irregular axis share one handle to its time offsets. `read_tasks(inputs=records)`
+and `iter_tasks(inputs=records)` reuse the Record objects you pass: a task input is the same
+`Record` instance that `iter_records()` returned. Separate calls build separate objects, because
+the reader keeps no object caches; keep a result if you need it again.
 
 `iter_tasks()` builds each batch on its own. The tasks of one batch share the objects the batch
 builds, as one call does, and batches share nothing but the Records you pass. A Record that tasks
@@ -108,12 +112,62 @@ none of a batch's objects once it has yielded the batch: it holds one batch of o
 and the keys of the selected tasks. The reader itself keeps compact chunk locators for the Signals
 it has resolved until it closes.
 
+## Reading objects by ID
+
+`get(kind, id)` reads one object by its ID, and `get_many(kind, ids)` reads several of one kind in
+one batch. The kind is `Record`, `Signal`, or a task class, and the result has that type:
+`get(AnswerTask, "question-1")` returns an `AnswerTask`. A read builds the object and what it
+references, nothing else: a task brings the Records it uses and the tasks it derives from, and a
+Signal comes inside its Record. Sources and annotations are not read by ID. Reach them through the
+object that holds them, such as `record.sources` or `signal.annotations`.
+
+```python
+from timenet.dataset import Signal
+from timenet.types import AnswerTask, read_value
+
+with TimeFReader(version) as reader:
+    task = reader.get(AnswerTask, "question-1")
+    # Reads this one text and keeps nothing; None without a prompt.
+    prompt = read_value(task.prompt)
+    # Reads only the chunks that cover steps 0 to 500.
+    window = reader.get(Signal, "lead-I").read_steps(0, 500)
+```
+
+`get_many` returns one object per ID, in the order of the IDs, and a repeated ID returns the same
+object. Its objects form one graph: a Record that several of them use is one object, and a Record
+whose Signals you ask for is built once. It takes a collection of IDs and rejects a single string,
+which would otherwise read as one ID per character.
+
+A child dataset gives the objects it imports from a parent IDs of its own. To read such a copy by
+the ID the parent gives it, name the parent by its input alias or by its exact release, but not
+both:
+
+```python
+from timenet.types.reference_keys import InputAlias
+from timenet.types.references import DatasetRef
+
+lead = reader.get(Signal, "00001-lead-I", alias=InputAlias("ptbxl"))
+same = reader.get(
+    Signal, "00001-lead-I", parent=DatasetRef.parse("physionet/ptb-xl@1.0.0")
+)
+```
+
+The reader translates the parent's ID to the local copy through the catalog, then reads the values
+from whichever release stores them.
+
+An ID that names nothing, an unknown alias or parent, and a stored object of another kind, such as
+`get(AnswerTask, ...)` on a classification task, raise `TimeFNotFoundError`, which subclasses both
+`TimeFValidationError` and `LookupError`. `get_many` raises it, naming every missing ID, before it
+returns anything. `Source`, `Annotation`, and any other kind not listed above, a single string
+passed to `get_many`, or both `alias` and `parent` raise `TimeFValidationError`.
+
 ## Loading values at read time
 
-`read()`, `read_tasks()`, and `iter_tasks()` take a `load=` plan that says which kinds of stored
-values the read loads into the objects it builds. A `LoadPlan` has one field per kind of value:
-`signal_values`, `time_offsets` for irregular axes, and `text` for packed prompts, rationales, text
-targets, and annotation values. Each field is `Loading.LAZY`, the default, or `Loading.EAGER`.
+`read()`, `read_tasks()`, `iter_tasks()`, `get()`, and `get_many()` take a `load=` plan that says
+which kinds of stored values the read loads into the objects it builds. A `LoadPlan` has one field
+per kind of value: `signal_values`, `time_offsets` for irregular axes, and `text` for packed
+prompts, rationales, text targets, and annotation values. Each field is `Loading.LAZY`, the
+default, or `Loading.EAGER`.
 
 ```python
 from timenet.reader import Loading, LoadPlan, TimeFReader
@@ -133,10 +187,12 @@ copy, so the decoded files and chunks it came from are not kept alive with it.
 A plan applies only to the objects the read builds and to what they reference directly. A task's
 plan reaches its text and annotations, the records it uses as inputs, candidates, or targets, the
 Signals it targets, and the annotations it references. It does not reach tasks the read builds only
-as another task's `from_tasks`, nor the Records you pass to `read_tasks(records)` or
-`iter_tasks(records)`, which stay as they are. A read never changes objects you already hold. To
-load more of them, read again with a larger plan; the new read returns new objects. A failed read
-returns nothing.
+as another task's `from_tasks`, nor the Records you pass to `read_tasks(inputs=records)` or
+`iter_tasks(inputs=records)`, which stay as they are. For `get()` and `get_many()`, the plan
+reaches the objects they return: a Record with its Signals, time offsets, and annotations, a Signal
+with its own, and a task as above. A read never changes objects you already hold. To load more of
+them, read again with a larger plan; the new read returns new objects. A failed read returns
+nothing.
 
 `iter_tasks()` loads each batch before it yields the batch, as far as the plan reaches from the
 batch's tasks. What a batch reaches only through its tasks' `from_tasks` parents, which is the
@@ -179,8 +235,10 @@ and decoded Zarr chunks until it closes.
 | --- | --- |
 | `read(load=...)` | Create the complete `TimeFDataset`, loading the values the plan names. |
 | `iter_records()` | Yield Records without building a dataset. |
-| `read_tasks(records, load=...)` | Build the tasks of selected Records, or every task, in one pass. |
-| `iter_tasks(records, split=..., load=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
+| `read_tasks(inputs=..., split=..., load=...)` | Build the matching tasks, or every task, in one pass. |
+| `iter_tasks(inputs=..., split=..., load=...)` | Yield the matching tasks in bounded batches. |
+| `get(kind, id, alias=..., load=...)` | Read one Record, Signal, or task by ID. |
+| `get_many(kind, ids, alias=..., load=...)` | Read objects of one kind by ID, in order, in one batch. |
 | `read_task_table()` | Return the task table with public IDs. |
 | `read_target_table()` | Return ordered task targets with public IDs. |
 | `read_annotation_table()` | Return annotation occurrences with public IDs. |
@@ -202,6 +260,10 @@ A catalog query raises `TimeFFormatError` when the catalog lacks a table, column
 read expects, and `TimeFReaderError` when the reader's connection closed while the read ran, through
 `close()` or a fork in another thread. Other DuckDB errors, such as I/O failures, running out of
 memory, or an interrupt, propagate unchanged.
+
+A request for an object, ID, or input alias that the dataset does not have raises
+`TimeFNotFoundError`, a `TimeFValidationError`. A catalog that disagrees with its manifest, such as
+one that names another parent release for an input alias, raises `TimeFFormatError`.
 
 Call `verify()` to check all files before reading data. It raises `TimeFFormatError` when a file is
 missing or does not match the manifest.

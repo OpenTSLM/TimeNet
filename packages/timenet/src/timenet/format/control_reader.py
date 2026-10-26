@@ -4,7 +4,7 @@ The objects hold their stored values behind value handles, unloaded.
 """
 
 from collections import ChainMap, defaultdict
-from collections.abc import Callable, Iterable, Iterator, Mapping, MutableMapping
+from collections.abc import Callable, Collection, Container, Iterable, Iterator, Mapping, MutableMapping
 from fractions import Fraction
 from functools import partial
 from graphlib import CycleError, TopologicalSorter
@@ -20,7 +20,7 @@ import duckdb
 import pyarrow as pa
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeAxis, TimeFDataset
-from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
 from timenet.format.stored_array import ChunkLocation
@@ -429,6 +429,17 @@ def _occurrence_span(row: _OccurrenceRow) -> TimePoint | TimeInterval | None:
     raise TimeFFormatError(f"annotation occurrence {row.occurrence_id!r} has unknown span type {row.span_type!r}")
 
 
+def _require_found(kind: ObjectKind, requested: Iterable[str], found: Container[str]) -> None:
+    """Check that every requested ID names a stored object of one kind.
+
+    Raises:
+        TimeFNotFoundError: If an ID names none, listing every such ID.
+    """
+    missing = [identity for identity in requested if identity not in found]
+    if missing:
+        raise TimeFNotFoundError(f"no {kind.value} {', '.join(map(repr, missing))}")
+
+
 def _missing_values(signal_id: str, _spec: TimeSeriesSpec) -> pa.Array:
     """Fail when metadata-only hydration is asked to load values.
 
@@ -739,7 +750,7 @@ class DuckDBControlReader:
             The hydrated records.
 
         Raises:
-            TimeFValidationError: If a requested record is absent.
+            TimeFNotFoundError: If a requested record is absent.
             TimeFFormatError: If the stored hierarchy is inconsistent.
         """  # noqa: DOC502 - row selection and hierarchy helpers validate the stored data
         hierarchy = self._read_record_hierarchy(None if record_ids is None else tuple(record_ids), shared_offsets)
@@ -791,7 +802,7 @@ class DuckDBControlReader:
             Record rows in result order, including repeated requests for the same record.
 
         Raises:
-            TimeFValidationError: If a requested record is absent.
+            TimeFNotFoundError: If a requested record is absent.
         """
         records_by_id = self._query_records_by_id(record_ids=requested)
         self._record_keys.update((row.record_id, row.record_key) for row in records_by_id.values())
@@ -799,7 +810,7 @@ class DuckDBControlReader:
             return list(records_by_id.values())
         missing = [record_id for record_id in requested if record_id not in records_by_id]
         if missing:
-            raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
+            raise TimeFNotFoundError(f"no such record(s) in control.duckdb: {missing}")
         return [records_by_id[record_id] for record_id in requested]
 
     def _prepare_signals(
@@ -1125,20 +1136,97 @@ class DuckDBControlReader:
             for key, stored in chunks.items()
         }
 
-    def read_tasks(
+    def imported_ids(
+        self, alias: str, kind: ObjectKind, parent_ids: Iterable[str]
+    ) -> tuple[str | None, dict[str, str]]:
+        """Return the parent release of an input alias and the local IDs of objects imported under it.
+
+        Args:
+            alias: The input alias the objects were imported under.
+            kind: The kind of the objects.
+            parent_ids: The objects' IDs in the parent release.
+
+        Returns:
+            The parent release the catalog names for the alias, or ``None`` if it names none, and
+            the local object ID of each parent ID the catalog knows.
+        """
+        found = self._query("SELECT parent_ref FROM imports WHERE alias = ?", [alias])
+        if not found:
+            return None, {}
+        rows = self._query(
+            "SELECT parent_id, object_id FROM imported_objects "
+            "WHERE alias = ? AND object_kind = ? AND parent_id IN (SELECT unnest(?))",
+            [alias, kind.value, list(parent_ids)],
+        )
+        return found[0][0], dict(rows)
+
+    def read_signals_by_id(self, signal_ids: Collection[str]) -> dict[str, Signal]:
+        """Build the Records that hold the given Signals, and return those Signals.
+
+        Each Record is built once, however many of its Signals are asked for, and the Records of
+        one call share one time-offsets handle per axis.
+
+        Args:
+            signal_ids: The Signals' IDs.
+
+        Returns:
+            The Signals by ID, each inside its Record, with stored values behind unloaded handles.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored Signal.
+        """  # noqa: DOC502 - raised by _require_found
+        owners: dict[str, str] = dict(
+            self._query(
+                "SELECT signal_id, record_id FROM signals JOIN sources USING (source_key) "
+                "JOIN records USING (record_key) WHERE signal_id IN (SELECT unnest(?))",
+                [list(signal_ids)],
+            )
+        )
+        _require_found(ObjectKind.SIGNAL, signal_ids, owners)
+        signals: dict[str, Signal] = {}
+        for record in self.read_records(list(dict.fromkeys(owners.values()))):
+            signals.update((signal.id, signal) for signal in record.walk_signals() if signal.id in owners)
+        return signals
+
+    def read_tasks_by_id(self, task_ids: Collection[str]) -> dict[str, Task]:
+        """Build the given tasks, sharing the Records they reference, a bounded batch at a time.
+
+        The tasks they derive from through ``from_tasks`` are built too.
+
+        Args:
+            task_ids: The task IDs, each once.
+
+        Returns:
+            The tasks by ID.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored task.
+        """  # noqa: DOC502 - raised by _require_found
+        keys: dict[str, int] = dict(
+            self._query("SELECT task_id, task_key FROM tasks WHERE task_id IN (SELECT unnest(?))", [list(task_ids)])
+        )
+        _require_found(ObjectKind.TASK, task_ids, keys)
+        tasks = _TaskHydration(self, None).read_keys([keys[identity] for identity in task_ids])
+        return {task.id: task for task in tasks}
+
+    def read_tasks(  # noqa: PLR0913 - one argument per task selection axis
         self,
         records: Iterable[Record] | None = None,
         *,
         cached_records: Iterable[Record] = (),
         dataset_annotations: Iterable[Annotation] | None = None,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+        split: Split | str | None = None,
     ) -> tuple[Task, ...]:
-        """Hydrate every task attached to ``records`` and restore all in-memory object references.
+        """Hydrate every selected task and restore all in-memory object references.
 
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
             cached_records: Hydrated Records to reuse without restricting the selection.
             dataset_annotations: The dataset's hydrated annotations, which tasks then reference
                 instead of their own copies, or ``None`` to read them when a task needs them.
+            split: Keep only tasks of this split, or ``None`` for every task.
 
         Returns:
             Concrete tasks in stable ID order.
@@ -1151,6 +1239,9 @@ class DuckDBControlReader:
             None if records is None else tuple(records),
             cached_records=cached_records,
             dataset_annotations=dataset_annotations,
+            required_modalities=required_modalities,
+            supported_modalities=supported_modalities,
+            split=split,
         )
         return tuple(hydration.read_all())
 
@@ -1824,7 +1915,7 @@ class _TaskHydration:
         """Index the caller's Records and decide whether the task table needs filtering.
 
         Raises:
-            TimeFValidationError: If one of ``records`` is not stored in the control database.
+            TimeFNotFoundError: If one of ``records`` is not stored in the control database.
         """
         self.reader = reader
         self.required_modalities = required_modalities
@@ -1855,7 +1946,7 @@ class _TaskHydration:
             )
             if len(rows) != len(unknown):
                 missing = sorted(set(unknown) - {record_id for _, record_id in rows})
-                raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
+                raise TimeFNotFoundError(f"no such record(s) in control.duckdb: {missing}")
             reader._record_keys.update((record_id, record_key) for record_key, record_id in rows)
         for record_id, record in list(self.records_by_id.items()):
             self._index_record(reader._record_keys[record_id], record)
@@ -1877,6 +1968,18 @@ class _TaskHydration:
         self._start_scope(given)
         for task_keys in self._pages():
             yield self._hydrate_scope(task_keys, given)
+
+    def read_keys(self, task_keys: list[int]) -> list[Task]:
+        """Build the tasks with these keys, each given once, a bounded batch at a time.
+
+        Returns:
+            The tasks in the order of ``task_keys``.
+        """
+        return [
+            task
+            for start in range(0, len(task_keys), _TASK_BATCH_SIZE)
+            for task in self._hydrate(task_keys[start : start + _TASK_BATCH_SIZE])
+        ]
 
     def read_all(self) -> list[Task]:
         """Build all selected tasks in one scope, using batches for filtered reads.

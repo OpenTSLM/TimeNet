@@ -156,8 +156,9 @@ record.annotate(
 
 ## Task
 
-`Task` is abstract. A concrete task such as `AnswerTask` or `ClassificationTask` refers directly to
-one or more input Records:
+`Task` is the base class of the concrete tasks and cannot be built itself: each concrete class
+sets its `task_type`. A concrete task such as `AnswerTask` or `ClassificationTask` refers directly
+to one or more input Records:
 
 ```python
 from timenet.types import AnswerTask

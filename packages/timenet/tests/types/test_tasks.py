@@ -31,9 +31,10 @@ from timenet.types.text import InlineText
 NO_INPUT = frozenset({InputModality.NO_INPUT})
 
 
-def test_task_is_an_abstract_base_class():
-    with pytest.raises(TypeError):
-        cast("Any", Task)()
+def test_only_a_task_class_that_sets_task_type_can_be_built():
+    with pytest.raises(TimeFValidationError, match="Task sets no task_type"):
+        Task(inputs=())
+    assert AnswerTask().task_type is TaskType.ANSWER
 
 
 def test_registry_contains_every_builtin_task_type():

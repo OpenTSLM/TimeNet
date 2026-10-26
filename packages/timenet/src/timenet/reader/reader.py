@@ -7,12 +7,12 @@ from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
 import types as _types
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, TypeAlias, TypeVar, cast
 
 import pyarrow as pa
 
-from timenet.dataset import Record, TimeFDataset
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.dataset import Record, Signal, Source, TimeFDataset
+from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
@@ -24,10 +24,12 @@ from timenet.format.stored_values import (
     PackedValueReader,
     materialize_table,
 )
+from timenet.reader.handles import DatasetHandle
 from timenet.reader.load_plan import LoadPlan, ValueLoad
-from timenet.types import DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
+from timenet.types import Annotation, DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.object_kind import ObjectKind
-from timenet.types.reference_keys import OwnerKey
+from timenet.types.reference_keys import InputAlias, OwnerKey
+from timenet.types.references import DatasetRef
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
@@ -37,6 +39,21 @@ if TYPE_CHECKING:
 
 
 _CHUNK_LOCATOR_BATCH_SIZE = 1_024
+
+Entity: TypeAlias = Record | Signal | Task
+"""An object that :meth:`TimeFReader.get` reads by ID: a Record, a Signal, or a task.
+
+Sources and annotations are read through the objects that hold them.
+"""
+
+E = TypeVar("E", bound=Entity)
+
+_KINDS: tuple[tuple[type[Entity], ObjectKind], ...] = (
+    (Record, ObjectKind.RECORD),
+    (Signal, ObjectKind.SIGNAL),
+    (Task, ObjectKind.TASK),
+)
+"""Each kind that :meth:`TimeFReader.get` reads, with its catalog tag."""
 
 
 @dataclass(frozen=True)
@@ -49,7 +66,7 @@ class _ReaderState:
     chunk_batches: tuple[tuple[int, ...], ...]
 
 
-class TimeFReader:
+class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
     """Read a committed TimeF dataset through its DuckDB control plane."""
 
     def __init__(self, version: DatasetVersion) -> None:
@@ -158,16 +175,25 @@ class TimeFReader:
             return self._control_reader().record_ids()
 
     def read_tasks(
-        self, records: Iterable[Record] | None = None, *, load: LoadPlan = LoadPlan.ALL_LAZY
+        self,
+        *,
+        inputs: Iterable[Record] | None = None,
+        split: Split | str | None = None,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+        load: LoadPlan = LoadPlan.ALL_LAZY,
     ) -> tuple[Task, ...]:
-        """Read the tasks attached to ``records`` in one pass.
+        """Read the tasks that match every filter given, in one pass; no filter reads every task.
 
-        Every call builds new tasks. A record a task uses that is not among ``records`` is read
-        once and shared by every task of the call.
+        Every call builds new tasks. A record a task uses that is not among ``inputs`` is read once
+        and shared by every task of the call.
 
         Args:
-            records: Input Records to select, or ``None`` for every task. Tasks reuse these objects,
-                which the read leaves as they are.
+            inputs: Keep only tasks that use one of these Records as input, or ``None`` for every
+                task. Tasks reuse these objects, which the read leaves as they are.
+            split: Keep only tasks of this split, or ``None`` for every task.
+            required_modalities: Keep only tasks that declare every one of these input modalities.
+            supported_modalities: Keep only tasks whose declared input modalities are all among these.
             load: Which kinds of stored values to load into the objects the read builds. The
                 default loads none.
 
@@ -175,8 +201,13 @@ class TimeFReader:
             Concrete tasks in stable ID order.
         """
         with self._as_format_error(preserve_validation=True):
-            selected = None if records is None else tuple(records)
-            tasks = self._control_reader().read_tasks(selected)
+            selected = None if inputs is None else tuple(inputs)
+            tasks = self._control_reader().read_tasks(
+                selected,
+                required_modalities=required_modalities,
+                supported_modalities=supported_modalities,
+                split=split,
+            )
             values = ValueLoad(load, keep=selected or ())
             values.add(tasks)
             values.run()
@@ -184,18 +215,18 @@ class TimeFReader:
 
     def iter_tasks(
         self,
-        records: Iterable[Record] | None = None,
         *,
+        inputs: Iterable[Record] | None = None,
+        split: Split | str | None = None,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
-        split: Split | str | None = None,
         load: LoadPlan = LoadPlan.ALL_LAZY,
     ) -> Iterator[Task]:
-        """Yield tasks a bounded batch at a time instead of building the whole table.
+        """Yield the tasks :meth:`read_tasks` reads, a bounded batch at a time.
 
         Each batch is built and loaded on its own. Its tasks share the objects it builds: a record
         that two of them use is one object, and the signals on one irregular axis share one
-        time-offsets handle. Batches share nothing but ``records``, so the stream keeps none of a
+        time-offsets handle. Batches share nothing but ``inputs``, so the stream keeps none of a
         batch's objects once it has yielded them: it holds one batch of objects and the selected
         task keys at a time, while the reader keeps compact chunk locators for the signals it has
         resolved until it closes. A record or parent task that tasks of several batches use is
@@ -203,11 +234,13 @@ class TimeFReader:
         batch's plan reaches it.
 
         Args:
-            records: Records from :meth:`iter_records` whose input tasks to yield, or ``None`` for
-                every task of the dataset. Tasks reference these ``Record`` objects directly, and
-                the read leaves them as they are.
+            inputs: Keep only tasks that use one of these Records as input, or ``None`` for every
+                task. Tasks reference these ``Record`` objects directly, and the read leaves them
+                as they are.
             split: Keep only tasks of this split, or ``None`` for every task. The filter runs in
                 DuckDB, so a task outside the split is never built.
+            required_modalities: Keep only tasks that declare every one of these input modalities.
+            supported_modalities: Keep only tasks whose declared input modalities are all among these.
             load: Which kinds of stored values to load into the objects each batch builds. The
                 default loads none. A batch builds but does not load what it reaches only through
                 its tasks' ``from_tasks`` parents, which is the parents and their records and
@@ -216,7 +249,7 @@ class TimeFReader:
         Yields:
             Concrete tasks in stable ID order.
         """
-        selected = None if records is None else tuple(records)
+        selected = None if inputs is None else tuple(inputs)
         values = ValueLoad(load, keep=selected or ())
         with self._as_format_error(preserve_validation=True):
             for batch in self._control_reader().iter_task_batches(
@@ -230,6 +263,111 @@ class TimeFReader:
                 yield from batch
                 # Hold no batch while the next one is built.
                 del batch
+
+    def get(
+        self,
+        kind: type[E],
+        id: str,
+        *,
+        alias: InputAlias | None = None,
+        parent: DatasetRef | None = None,
+        load: LoadPlan = LoadPlan.ALL_LAZY,
+    ) -> E:
+        """Read one object by its ID, from this dataset or imported from a parent.
+
+        ``get(Task, "q1")`` reads the task with ID ``q1``; ``get(AnswerTask, "q1")`` also checks
+        that it is an answer task. With ``alias`` or ``parent``, ``id`` is the ID the parent
+        dataset gives the object, and the read returns this dataset's imported copy.
+
+        Args:
+            kind: ``Record``, ``Signal``, or a task class such as ``Task`` or ``AnswerTask``.
+                Sources and annotations are read through the objects that hold them.
+            id: The object's ID.
+            alias: The input alias of the parent the object was imported from. Excludes ``parent``.
+            parent: The exact parent release the object was imported from. Excludes ``alias``.
+            load: Which kinds of stored values to load into the object and what it references. The
+                default loads none.
+
+        Returns:
+            The object. A Signal is part of its Record, which the read builds too.
+
+        Raises:
+            TimeFNotFoundError: If the ID, alias, or parent names nothing, or the stored object is
+                not a ``kind``.
+            TimeFValidationError: If ``kind`` is ``Source``, ``Annotation``, or another kind not
+                listed above, ``id`` is not a string, or both ``alias`` and ``parent`` are given.
+            TimeFFormatError: If the catalog names another parent release for ``alias`` than the
+                manifest does.
+        """  # noqa: DOC502 - raised by get_many
+        return self.get_many(kind, (id,), alias=alias, parent=parent, load=load)[0]
+
+    def get_many(
+        self,
+        kind: type[E],
+        ids: Iterable[str],
+        *,
+        alias: InputAlias | None = None,
+        parent: DatasetRef | None = None,
+        load: LoadPlan = LoadPlan.ALL_LAZY,
+    ) -> tuple[E, ...]:
+        """Read objects of one kind by their IDs, in one batch.
+
+        The objects form one graph: a Record that two of them reference is one object, and the
+        Signals on one irregular axis share one time-offsets handle. ``load`` loads their values in
+        one batch.
+
+        Args:
+            kind: ``Record``, ``Signal``, or a task class such as ``Task`` or ``AnswerTask``.
+                Sources and annotations are read through the objects that hold them.
+            ids: The objects' IDs, such as a list or tuple. A single string is rejected, since it
+                would read as one ID per character. With ``alias`` or ``parent``, the IDs the parent
+                dataset gives the objects.
+            alias: The input alias of the parent the objects were imported from. Excludes
+                ``parent``.
+            parent: The exact parent release the objects were imported from. Excludes ``alias``.
+            load: Which kinds of stored values to load into the objects and what they reference.
+                The default loads none.
+
+        Returns:
+            One object per ID, in the order of ``ids``. A repeated ID returns the same object.
+
+        Raises:
+            TimeFNotFoundError: If an ID, the alias, or the parent names nothing, or a stored object
+                is not a ``kind``. Nothing is returned then.
+            TimeFValidationError: If ``kind`` is ``Source``, ``Annotation``, or another kind not
+                listed above, ``ids`` is a string or holds a non-string, or both ``alias`` and
+                ``parent`` are given.
+            TimeFFormatError: If the catalog names another parent release for ``alias`` than the
+                manifest does.
+        """  # noqa: DOC502 - TimeFFormatError is raised by _local_ids
+        object_kind = _object_kind(kind)
+        if isinstance(ids, str):
+            raise TimeFValidationError(
+                f"get_many takes a collection of IDs, not the string {ids!r}; call get() for one"
+            )
+        try:
+            requested = tuple(ids)
+        except TypeError as exc:
+            raise TimeFValidationError(f"get_many takes a collection of IDs, got {type(ids).__name__}") from exc
+        for identity in requested:
+            if not isinstance(identity, str):
+                raise TimeFValidationError(f"object IDs are strings, got {type(identity).__name__} {identity!r}")
+        if alias is not None and parent is not None:
+            raise TimeFValidationError("choose either an input alias or an exact parent release, not both")
+        imported_from = None if alias is None and parent is None else self._import_alias(alias, parent)
+        with self._as_format_error(preserve_validation=True):
+            local = requested if imported_from is None else self._local_ids(imported_from, object_kind, requested)
+            unique = tuple(dict.fromkeys(local))
+            objects = self._read_by_id(object_kind, unique)
+            for identity in unique:
+                if not isinstance(objects[identity], kind):
+                    raise TimeFNotFoundError(
+                        f"no {kind.__name__} {identity!r}: the stored object is a {type(objects[identity]).__name__}"
+                    )
+            values = ValueLoad(load)
+            values.add(objects.values())
+            values.run()
+            return tuple(cast("E", objects[identity]) for identity in local)
 
     def read_task_table(
         self,
@@ -315,6 +453,10 @@ class TimeFReader:
         """Return the values-plane backend named by the manifest."""
         return self._manifest.values_backend
 
+    def get_handle(self) -> DatasetHandle:
+        """Return a dataset handle over this reader, without reading the catalog or payloads."""
+        return DatasetHandle(self)
+
     def read(self, *, load: LoadPlan = LoadPlan.ALL_LAZY) -> TimeFDataset:
         """Read the whole dataset, loading the kinds of stored values that ``load`` names.
 
@@ -367,6 +509,74 @@ class TimeFReader:
                 record_ids,
                 with_annotations=with_annotations,
             )
+
+    def _import_alias(self, alias: InputAlias | None, parent: DatasetRef | None) -> InputAlias:
+        """Return the input alias that ``alias`` or ``parent`` selects, from the manifest's parent cards.
+
+        Returns:
+            The alias.
+
+        Raises:
+            TimeFValidationError: If the alias is blank or not a string, ``parent`` is not a
+                ``DatasetRef``, or the parent release is imported under more than one alias.
+            TimeFNotFoundError: If the dataset declares no such alias, or imports from no such
+                parent release.
+        """
+        cards = self._manifest.parent_cards
+        dataset_id = self._manifest.dataset_id
+        if alias is not None:
+            if not isinstance(alias, str) or not alias.strip():
+                raise TimeFValidationError(f"an input alias must be a nonblank string, got {alias!r}")
+            if alias not in cards:
+                raise TimeFNotFoundError(f"{dataset_id} declares no input alias {alias!r}")
+            return alias
+        if not isinstance(parent, DatasetRef):
+            raise TimeFValidationError(f"parent must be an exact DatasetRef, got {parent!r}")
+        matches = sorted(name for name, card in cards.items() if card.source == parent)
+        if not matches:
+            raise TimeFNotFoundError(f"{dataset_id} declares no input from {parent}")
+        if len(matches) > 1:
+            raise TimeFValidationError(f"{dataset_id} imports {parent} under the aliases {matches}; pass alias=")
+        return matches[0]
+
+    def _local_ids(self, alias: InputAlias, kind: ObjectKind, parent_ids: tuple[str, ...]) -> tuple[str, ...]:
+        """Translate the IDs a parent gives its objects into the IDs of this dataset's copies.
+
+        Returns:
+            The local IDs, one per parent ID, in order.
+
+        Raises:
+            TimeFFormatError: If the catalog names another parent release for ``alias`` than the
+                manifest does.
+            TimeFNotFoundError: If a parent ID names no object imported under ``alias``.
+        """
+        parent_ref, imported = self._control_reader().imported_ids(alias, kind, dict.fromkeys(parent_ids))
+        if parent_ref is not None and parent_ref != str(self._manifest.parent_cards[alias].source):
+            raise TimeFFormatError(f"the catalog's parent release for input alias {alias!r} differs from its manifest")
+        missing = [identity for identity in parent_ids if identity not in imported]
+        if missing:
+            raise TimeFNotFoundError(
+                f"no {kind.value} {', '.join(map(repr, missing))} imported under input alias {alias!r}"
+            )
+        return tuple(imported[identity] for identity in parent_ids)
+
+    def _read_by_id(self, kind: ObjectKind, ids: tuple[str, ...]) -> dict[str, Entity]:
+        """Build the objects of one kind with these IDs, each once, with every value unloaded.
+
+        Returns:
+            The objects by ID.
+        """
+        objects: dict[str, Entity] = {}
+        if not ids:
+            return objects
+        control = self._control_reader()
+        if kind is ObjectKind.RECORD:
+            objects.update(zip(ids, control.read_records(ids), strict=True))
+        elif kind is ObjectKind.TASK:
+            objects.update(control.read_tasks_by_id(ids))
+        else:
+            objects.update(control.read_signals_by_id(ids))
+        return objects
 
     def _control_reader(self) -> DuckDBControlReader:
         """Open and return the cached read-only control database.
@@ -479,3 +689,25 @@ class TimeFReader:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
         except (ValueError, KeyError, TypeError, AttributeError, OSError, pa.ArrowException) as exc:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
+
+
+def _object_kind(kind: object) -> ObjectKind:
+    """Return the catalog tag of a kind of object that :meth:`TimeFReader.get` reads.
+
+    Returns:
+        The tag.
+
+    Raises:
+        TimeFValidationError: If ``kind`` is ``Source``, ``Annotation``, or anything else that is
+            not ``Record``, ``Signal``, a subclass of either, or a task class.
+    """
+    if isinstance(kind, type):
+        for base, tag in _KINDS:
+            if issubclass(kind, base):
+                return tag
+    hint = (
+        "; sources and annotations are read through the objects that hold them"
+        if kind is Source or kind is Annotation
+        else ""
+    )
+    raise TimeFValidationError(f"get reads a Record, Signal, or task class such as AnswerTask, got {kind!r}{hint}")

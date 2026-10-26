@@ -32,6 +32,10 @@ class TimeFValidationError(TimeNetError, ValueError):
     """A dataset or its arrays violate a TimeF invariant (raised while building or writing)."""
 
 
+class TimeFNotFoundError(TimeFValidationError, LookupError):
+    """An ID, input alias, or parent release names nothing in the dataset, or the stored object has another kind."""
+
+
 class TimeFEditError(TimeFValidationError):
     """An edit would leave a dataset referentially inconsistent (for example, a dangling reference)."""
 

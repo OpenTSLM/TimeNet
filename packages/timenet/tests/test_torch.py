@@ -112,6 +112,9 @@ def test_reader_backed_view_hydrates_a_batch_with_the_same_items(tmp_path):
     from timenet.writer import TimeFWriter  # noqa: PLC0415
 
     dataset = make_dataset()
+    # A prompt this long is packed, so it stays behind its handle unless a read loads it.
+    prompt = "What rhythm? " * 400
+    next(task for task in dataset.tasks if task.id == "task-answer-0").prompt = prompt
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
@@ -129,6 +132,15 @@ def test_reader_backed_view_hydrates_a_batch_with_the_same_items(tmp_path):
         assert all(torch.equal(a, b) for a, b in zip(item["series"], expected["series"], strict=True))
     assert single["record_id"] == batch[0]["record_id"]
     assert all(task.inputs[0] is batch[0]["tasks"][0].inputs[0] for task in batch[0]["tasks"])
+    # The batch's records arrive with their values loaded, and its tasks with their text.
+    assert all(signal._values.is_loaded for task in batch[0]["tasks"] for signal in task.inputs[0].signals)
+    (answer,) = (task for task in batch[0]["tasks"] if task.id == "task-answer-0")
+    (unloaded,) = (task for task in materialized.__getitems__([0])[0]["tasks"] if task.id == "task-answer-0")
+    assert answer.prompt is not None
+    assert unloaded.prompt is not None
+    assert not unloaded.prompt.is_loaded
+    assert answer.prompt.is_loaded
+    assert answer.prompt.read() == prompt
 
 
 @pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="needs the fork start method")
