@@ -77,8 +77,9 @@ frame = pd.DataFrame({signal.name: signal.to_numpy()})
 print(frame.head())
 ```
 
-The hierarchy loads immediately. Signal values remain lazy until `to_arrow()`, `to_numpy()`, or
-`read_steps()` reads them.
+`load()` reads the whole dataset with every value in memory. For a dataset too large for that,
+`client.open()` returns a reader whose reads leave Signal values in storage until `to_arrow()`,
+`to_numpy()`, or `read_steps()` reads them; see [Client](client.md#open-load-or-download).
 
 !!! tip "pandas is optional"
     The DataFrame step needs pandas (`uv add pandas`). Remove that step for an Arrow or NumPy

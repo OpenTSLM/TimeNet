@@ -37,14 +37,20 @@ def s3_root(monkeypatch):
     server.stop()
 
 
+@pytest.mark.parametrize("entry_point", ["open", "load"])
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
-def test_store_and_remote_load_round_trip(s3_root, tmp_path, backend):
+def test_store_and_remote_load_round_trip(s3_root, tmp_path, backend, entry_point):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
     version = registry.store(make_dataset(), values_backend=backend)
     assert version == str(make_dataset().metadata.dataset_version)
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
-    loaded = client.load(make_dataset().metadata.dataset_id)
-    assert_datasets_equal(make_dataset(), loaded)
+    if entry_point == "open":
+        with client.open(make_dataset().metadata.dataset_id) as reader:
+            # The reader reads the release from S3, not from a downloaded copy.
+            assert isinstance(reader._version.filesystem, pafs.S3FileSystem)
+            assert_datasets_equal(make_dataset(), reader.read())
+    else:
+        assert_datasets_equal(make_dataset(), client.load(make_dataset().metadata.dataset_id))
     assert isinstance(registry.open_version(make_dataset().metadata.dataset_id).filesystem, pafs.S3FileSystem)
     assert not (tmp_path / "cache" / make_dataset().metadata.dataset_id).exists()
 

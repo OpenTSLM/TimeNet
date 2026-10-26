@@ -88,7 +88,7 @@ with lazy value loaders (never materialize arrays in `convert`). See the worked 
 - If you added or changed a `requirements.txt`, re-run `make sync` so the new library lands in your own
   environment. Otherwise `ty` reports your lazy import as unresolved and the connector test can't run.
 - Round-trip end to end: `uv run timenet-build build <id> --out <tmp-dir>`, then
-  `TimeNet(registry="<tmp-dir>").load("<id>").describe()`.
+  `with TimeNet(registry="<tmp-dir>").open("<id>") as reader: reader.read().describe()`.
 - Run `make check` and `make test`, and state which checks you ran (per AGENTS.md).
 
 ## Further reading

@@ -244,10 +244,12 @@ version_path = dataset.write(
 )
 ```
 
-Open a local version with lazy Signal values:
+Open a local version with `open()`, which returns a [`TimeFReader`](timef-reader.md). Its
+`read()` returns the dataset with lazy Signal values:
 
 ```python
-dataset = TimeFDataset.open(path=version_path)
+with TimeFDataset.open(path=version_path) as reader:
+    dataset = reader.read()
 ```
 
 The stored version contains `manifest.json`, an immutable `control.duckdb`, and a Parquet or Zarr

@@ -21,7 +21,14 @@ record = dataset.records[0]
 signal = record.signals[0]
 ```
 
-The hierarchy loads first. Signal values load only when an array method reads them.
+`load()` reads the hierarchy and every Signal value into memory. For a large dataset, open it
+instead. The reader's reads leave each Signal's values in storage until an array method reads them:
+
+```python
+with TimeNet(".timenet-registry").open("timenet/hello-world") as reader:
+    dataset = reader.read()
+    values = dataset.records[0].signals[0].to_numpy()
+```
 
 ## Arrow and NumPy
 
