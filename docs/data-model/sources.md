@@ -17,47 +17,80 @@ A Source can hold Signals, child Sources, or both. A Signal is always a leaf.
 
 ## Create a Source
 
-Build the tree from the leaves upward. The `vibration()` helper builds a 10 Hz Signal with 50
-values, as in [Time series](time-series.md).
+Build the tree from the leaves upward. This example is one night of a sleep study. The
+participant wears a Polar H10 chest strap, which records ECG at 130 Hz. They also wear an
+Empatica EmbracePlus watch. Its accelerometer records three axes at 64 Hz.
 
 ```python
 import numpy as np
 
 from timenet.dataset import Record, Signal, Source
 from timenet.dataset.axis import RegularAxis
-from timenet.types import TimeSeriesSpec
+from timenet.types import TimeSeriesSpec, ureg
 
+# Stand-in for 60 s of a device export. A connector reads these values.
+rng = np.random.default_rng(17)
+ecg_values = rng.normal(0.0, 0.2, 60 * 130).astype(np.float32)
+wrist_values = rng.normal(0.0, 0.05, (3, 60 * 64)).astype(np.float32)
 
-def vibration(name: str) -> Signal:
-    return Signal(
-        name=name,
-        spec=TimeSeriesSpec(
-            spec_type="acceleration",
-            name="Acceleration",
-            unit_value="m/s**2",
-            dtype="float32",
+ecg = TimeSeriesSpec(
+    spec_type="ecg",
+    name="ECG",
+    unit_value=ureg.millivolt,
+    dtype="float32",
+)
+acceleration = TimeSeriesSpec(
+    spec_type="acceleration",
+    name="Acceleration",
+    unit_value=ureg.standard_gravity,
+    dtype="float32",
+)
+
+chest_strap = Source(
+    name="Chest strap",
+    signals=(
+        Signal(
+            name="ECG",
+            spec=ecg,
+            time_axis=RegularAxis.from_rate_hz(130),
+            data=ecg_values,
         ),
-        time_axis=RegularAxis.from_rate_hz(10),
-        data=np.zeros(50, dtype=np.float32),
-    )
-
-
+    ),
+    metadata={"model": "Polar H10"},
+)
 accelerometer = Source(
     name="Accelerometer",
-    signals=(vibration("x"), vibration("y")),
-    metadata={"model": "ADXL355"},
+    signals=tuple(
+        Signal(
+            name=axis,
+            spec=acceleration,
+            time_axis=RegularAxis.from_rate_hz(64),
+            data=values,
+        )
+        for axis, values in zip("xyz", wrist_values)
+    ),
 )
-gearbox = Source(name="Gearbox", sources=(accelerometer,))
-record = Record(sources=(gearbox,))
+watch = Source(
+    name="Wrist watch",
+    sources=(accelerometer,),
+    metadata={"model": "Empatica EmbracePlus"},
+)
+record = Record(
+    sources=(chest_strap, watch),
+    metadata={"participant": "P017", "session": "night-1"},
+)
 
 print([source.name for source in record.walk_sources()])
 print([signal.name for signal in record.signals])
 ```
 
 ```text
-['Gearbox', 'Accelerometer']
-['x', 'y']
+['Chest strap', 'Wrist watch', 'Accelerometer']
+['ECG', 'x', 'y', 'z']
 ```
+
+The device model goes in the `metadata` of its Source. The participant and the session go in the
+`metadata` of the Record.
 
 All fields are keyword-only:
 
@@ -82,17 +115,18 @@ Names do not have to be unique. If two Signals below one Source have the same na
 ## Annotate a Source
 
 `source.annotate(annotation)` attaches one occurrence and returns it. A static annotation
-describes the whole device, for example its firmware version:
+describes the whole device, for example its firmware version. A timed annotation covers an
+interval, for example a time when an electrode lost contact with the skin:
 
 ```python
 from timenet.types import Annotation, TimeInterval
 
-gearbox.annotate(Annotation(key="firmware", value="2.4.1"))
-gearbox.annotate(
+chest_strap.annotate(Annotation(key="firmware", value="3.1.1"))
+chest_strap.annotate(
     Annotation(
-        key="fault",
-        value="bearing",
-        span=TimeInterval.seconds(1.0, 2.0),
+        key="electrode_contact",
+        value="lost",
+        span=TimeInterval.seconds(12.0, 15.5),
     )
 )
 ```
@@ -112,8 +146,8 @@ or an upstream device code in `metadata` or in a static annotation.
 ## Ownership
 
 Each Source has one parent. The parent is a Source, or the Record that lists it as a root. Each
-Signal belongs to one Source. If two Records use the same device, build a separate Source for each
-Record.
+Signal belongs to one Source. If the participant wears the same chest strap on the next night,
+build a new Source for the new Record.
 
 `walk_sources()` rejects a Source under two parents, and it rejects a cycle in the tree. When you
 construct a Record, it does the same checks. `add_record()` rejects a Source or Signal that
@@ -125,19 +159,23 @@ from timenet.types import DatasetMetadata
 
 dataset = TimeFDataset(
     metadata=DatasetMetadata(
-        dataset_id="demo/gearbox",
+        dataset_id="demo/sleep-wearables",
         dataset_version="1.0.0",
-        name="Gearbox demo",
-        description="One gearbox run.",
+        name="Sleep wearables demo",
+        description="One night of one participant.",
         license="CC-BY-4.0",
     )
 )
 dataset.add_record(record=record)
-dataset.add_record(record=Record(sources=(accelerometer,)))
+night_2 = Record(
+    sources=(chest_strap,),
+    metadata={"participant": "P017", "session": "night-2"},
+)
+dataset.add_record(record=night_2)
 ```
 
 ```text
-TimeFValidationError: Sources ['Accelerometer'] already belong to another
+TimeFValidationError: Sources ['Chest strap'] already belong to another
 record; each Source has one owner
 ```
 
@@ -156,14 +194,14 @@ annotations and metadata. Signal values stay lazy until you read them.
 ```python
 version = dataset.write(path="./registry")
 (stored,) = TimeFDataset.open(path=version).records
-(device,) = stored.sources
-print(device.name, [a.key for a in device.annotations])
-print(device.sources[0].metadata)
+strap, stored_watch = stored.sources
+print(strap.name, [a.key for a in strap.annotations])
+print(stored_watch.metadata, stored_watch.sources[0].name)
 ```
 
 ```text
-Gearbox ['firmware', 'fault']
-{'model': 'ADXL355'}
+Chest strap ['firmware', 'electrode_contact']
+{'model': 'Empatica EmbracePlus'} Accelerometer
 ```
 
 ## Validation errors
