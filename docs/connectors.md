@@ -188,7 +188,7 @@ A connector declares the libraries its source needs in a `requirements.txt` besi
 
 ```text
 # Downloads the source dataset from the HuggingFace Hub.
-huggingface_hub>=0.24
+huggingface_hub>=1.1
 ```
 
 A build runs the connector in an environment built from that file. That environment is layered over
@@ -255,7 +255,8 @@ class MyConnector(BaseConnector[MyRawRef]):
 An ambient sink reports progress, through `timenet_connectors.download.progress`. The download helpers
 emit `DownloadProgress` events, and the `timenet-build` CLI renders these events. As a result,
 downloads show progress without a `progress` argument passed through the connector. On a terminal,
-the events render as live progress bars, one row per file, that update at the same time. Piped output
+the events render as live progress bars, one row per file, that update at the same time. A Hugging Face
+Hub download shows as one row for all its files. Piped output
 falls back to throttled text lines. The `--quiet` flag silences all output.
 
 PhysioNet connectors extend `BasePhysioNetConnector` for WFDB record I/O. They use `ensure_archive` to
@@ -267,8 +268,9 @@ pull their database archive.
   a deterministic dataset for examples and round-trip tests. It covers nested Sources, shared
   descriptors, windowed Signals, annotations, and several task types.
 - `chengsenwang/tsqa` is a time-series QA dataset. Each row's series becomes a Signal, and each
-  row's question and answer become an `AnswerTask`. It downloads data from the Hub, so its
-  `requirements.txt` names `huggingface_hub`.
+  row's question and answer become an `AnswerTask`. It downloads the Hub's parquet conversion of
+  the dataset at a pinned commit, through `BaseHuggingFaceConnector`, so its `requirements.txt` names
+  `huggingface_hub`.
 
 ```bash
 timenet-build build timenet/hello-world             # offline, synthetic

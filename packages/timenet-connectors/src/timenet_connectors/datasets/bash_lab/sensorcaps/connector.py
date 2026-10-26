@@ -1,32 +1,28 @@
 """Convert pinned SensorCaps chat rows into lazy IMU Signals and streamed caption tasks.
 
-The row-based HuggingFace base accumulates the complete corpus and loses file provenance. This
-connector instead downloads original JSONL files, indexes rows by byte offset, and keeps just one
-decoded sensor row cached across the six channel loaders. Tasks use the original system message
-followed by the original derived-feature text as their prompt, with the activity summary and
-optional sensor location as input annotations. Feature text is streamed rather than retained
-across the corpus.
+The connector downloads the original JSONL files at a pinned commit through the HuggingFace base,
+indexes rows by byte offset, and keeps just one decoded sensor row cached across the six channel
+loaders, so the complete corpus is never held in memory. Tasks use the original system message
+followed by the original derived-feature text as their prompt, with the activity summary and optional
+sensor location as input annotations. Feature text is streamed rather than retained across the corpus.
 """
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
 import json
-from pathlib import Path
-from typing import Annotated
+from typing import Annotated, ClassVar
 
 import pyarrow as pa
 from pydantic import Field, FiniteFloat, JsonValue, Strict, TypeAdapter, ValidationError
 
-from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec
-from timenet_connectors.sources.huggingface_hub import hub_snapshot
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 
 
-HF_REPO = "BASH-Lab/SensorCaps"
 DECLARED_SAMPLING_RATE_HZ = 10
 _SOURCE_SAMPLING_RATE_HZ = 20
 _SOURCE_WINDOW_SAMPLES = 120
@@ -43,10 +39,6 @@ _TIME_OFFSETS_US = pa.array(
     type=pa.int64(),
 )
 _AXIS = IrregularAxis(first_us=0, last_us=(_SOURCE_WINDOW_SAMPLES - 1) * (1_000_000 // _SOURCE_SAMPLING_RATE_HZ))
-# Pin the original JSONL files together: a mutable branch can silently change rebuilt datasets.
-SOURCE_REVISION = "4242e07feaacb0ee3aff86182a62914fa7abacef"
-# Pinned inventory of the original captioning files.
-SOURCE_ROWS = {"hhar_v2": 9166, "motion_v2": 4534, "pamap2_v2": 9672, "shoaib_v2": 10500, "uci_v2": 2088}
 _SPECS = (
     # Upstream rounds IMU values to six decimal places. Use compact float32 storage, accepting
     # normal binary floating-point rounding rather than implying exact decimal preservation.
@@ -81,43 +73,19 @@ _XYZValues = Annotated[list[Annotated[FiniteFloat, Strict()]], Field(min_length=
 _SENSOR_VALUES = TypeAdapter(Annotated[list[_XYZValues], Field(min_length=1)])
 
 
-def _source_filename(partition: str) -> str:
-    """Return the original repository-relative filename for a source partition.
-
-    Returns:
-        The partition's JSONL path within the pinned snapshot.
-    """
-    return f"data/{partition}-00000-of-00001.jsonl"
-
-
-@dataclass(frozen=True)
-class SensorCapsFileRef:
-    """One local JSONL file and its upstream source partition."""
-
-    path: Path
-    partition: str
-    expected_rows: int | None = None
-    """Pinned inventory count for downloads; local fixtures may omit it."""
-
-    @property
-    def filename(self) -> str:
-        """Return the original repository-relative filename."""
-        return _source_filename(self.partition)
-
-
 @dataclass(frozen=True)
 class _RowRef:
-    file: SensorCapsFileRef
+    file: HubFileRef
     index: int
     offset: int
 
     @property
     def key(self) -> tuple[str, int]:
-        return self.file.partition, self.index
+        return self.file.part, self.index
 
     @property
     def context(self) -> str:
-        return f"{self.file.path} ({self.file.partition}, row {self.index})"
+        return f"{self.file.path} ({self.file.part}, row {self.index})"
 
 
 @dataclass(frozen=True)
@@ -249,7 +217,7 @@ def _parse_row(raw: bytes, context: str) -> _ParsedRow:
         raise TimeFValidationError(f"{context}: {exc}") from exc
 
 
-def _iter_rows(file: SensorCapsFileRef) -> Iterator[tuple[_RowRef, _ParsedRow]]:
+def _iter_rows(file: HubFileRef) -> Iterator[tuple[_RowRef, _ParsedRow]]:
     """Read a JSONL file one row at a time, retaining seekable binary offsets.
 
     Yields:
@@ -298,43 +266,7 @@ def _load_time_offsets() -> pa.Array:
     return _TIME_OFFSETS_US
 
 
-def _make_record(ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
-    """Build one six-channel IMU Record with its source provenance.
-
-    Returns:
-        A Record with lazy sensor values and annotations from the original row.
-    """
-    channels = _PAMAP2_CHANNELS if ref.file.partition == "pamap2_v2" else _CHANNELS
-    signals = tuple(
-        Signal.from_loader(
-            name=name,
-            spec=spec,
-            time_axis=_AXIS,
-            time_offsets_loader=_load_time_offsets,
-            n_values=len(row.values[sensor]),
-            loader=partial(loader, ref, sensor, dimension),
-        )
-        for spec, name, sensor, dimension in channels
-    )
-    record = Record(sources=(Source(name="IMU", signals=signals),))
-    source = ref.file.partition.rsplit("_", 1)[0]
-    metadata: dict[str, str | int] = {
-        "source_dataset": source,
-        "source_partition": ref.file.partition,
-        "source_file": ref.file.filename,
-        "source_row": ref.index,
-        "activity_summary": row.summary,
-    }
-    if row.location is not None:
-        metadata["sensor_location"] = row.location
-    for key, value in metadata.items():
-        record.annotate(Annotation(key=key, value=value))
-    return record
-
-
-def _iter_tasks(
-    files: tuple[SensorCapsFileRef, ...], records: Mapping[tuple[str, int], Record]
-) -> Iterator[AnswerTask]:
+def _iter_tasks(files: tuple[HubFileRef, ...], records: Mapping[tuple[str, int], Record]) -> Iterator[AnswerTask]:
     """Re-read original system prompts and caption targets without retaining the corpus.
 
     Yields:
@@ -357,40 +289,24 @@ def _iter_tasks(
             )
 
 
-class SensorCapsConnector(BaseConnector[SensorCapsFileRef]):
+class SensorCapsConnector(BaseHuggingFaceConnector):
     """Build SensorCaps with lazy values and streamed captions."""
 
-    def download(self, cache_dir: Path) -> list[SensorCapsFileRef]:  # noqa: PLR6301 — BaseConnector interface
-        """Download the original JSONL files at one immutable Hub revision.
+    HF_REPO = "BASH-Lab/SensorCaps"
+    SOURCE_REVISION = "4242e07feaacb0ee3aff86182a62914fa7abacef"
+    # Pinned inventory of the original captioning files.
+    SOURCE_ROWS: ClassVar[Mapping[str, int]] = {
+        "hhar_v2": 9166,
+        "motion_v2": 4534,
+        "pamap2_v2": 9672,
+        "shoaib_v2": 10500,
+        "uci_v2": 2088,
+    }
+    SOURCE_FILES: ClassVar[Mapping[str, str]] = {
+        partition: f"data/{partition}-00000-of-00001.jsonl" for partition in SOURCE_ROWS
+    }
 
-        Returns:
-            Lightweight local file references, with their source partitions intact.
-
-        Raises:
-            ImportError: If the connector's Hugging Face dependency is missing.
-        """
-        try:
-            snapshot = hub_snapshot(
-                HF_REPO,
-                SOURCE_REVISION,
-                cache_dir,
-                tuple(_source_filename(partition) for partition in SOURCE_ROWS),
-            )
-        except ImportError as exc:
-            raise ImportError(
-                "SensorCaps needs huggingface_hub from its requirements.txt; "
-                "run the build without --no-isolation or install the connector requirements with uv"
-            ) from exc
-        return [
-            SensorCapsFileRef(
-                snapshot / _source_filename(partition),
-                partition,
-                count,
-            )
-            for partition, count in SOURCE_ROWS.items()
-        ]
-
-    def convert(self, raw_refs: list[SensorCapsFileRef]) -> TimeFDataset:
+    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Index local rows into six-channel Records and a re-iterable caption stream.
 
         Returns:
@@ -399,14 +315,10 @@ class SensorCapsConnector(BaseConnector[SensorCapsFileRef]):
         Raises:
             TimeFValidationError: If references or source rows violate the SensorCaps mapping.
         """
-        if not raw_refs or len({ref.partition for ref in raw_refs}) != len(raw_refs):
-            raise TimeFValidationError("SensorCaps requires nonempty, distinct partition references")
-        if any(ref.partition not in SOURCE_ROWS for ref in raw_refs):
-            raise TimeFValidationError("unknown SensorCaps source partition")
         dataset = TimeFDataset(metadata=self.metadata())
         for key, value in (
-            ("source_repository", HF_REPO),
-            ("source_revision", SOURCE_REVISION),
+            ("source_repository", self.HF_REPO),
+            ("source_revision", self.SOURCE_REVISION),
             ("declared_sampling_rate_hz", DECLARED_SAMPLING_RATE_HZ),
             ("source_sampling_rate_hz", _SOURCE_SAMPLING_RATE_HZ),
             ("source_window_samples", _SOURCE_WINDOW_SAMPLES),
@@ -418,18 +330,49 @@ class SensorCapsConnector(BaseConnector[SensorCapsFileRef]):
         for file in raw_refs:
             count = 0
             for ref, row in _iter_rows(file):
-                record = _make_record(ref, row, loader)
+                record = self._make_record(ref, row, loader)
                 dataset.add_record(record=record)
                 records[ref.key] = record
                 count += 1
-            if not count:
-                raise TimeFValidationError(f"{file.path} ({file.partition}): empty source partition")
-            if file.expected_rows is not None and count != file.expected_rows:
-                raise TimeFValidationError(
-                    f"{file.path} ({file.partition}): expected {file.expected_rows} rows, found {count}"
-                )
+            # Every pinned count is nonzero, so this also rejects an empty partition.
+            expected = self.SOURCE_ROWS[file.part]
+            if count != expected:
+                raise TimeFValidationError(f"{file.path} ({file.part}): expected {expected} rows, found {count}")
         dataset.set_task_stream([AnswerTask], partial(_iter_tasks, tuple(raw_refs), records))
         return dataset
+
+    def _make_record(self, ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
+        """Build one six-channel IMU Record with its source provenance.
+
+        Returns:
+            A Record with lazy sensor values and annotations from the original row.
+        """
+        channels = _PAMAP2_CHANNELS if ref.file.part == "pamap2_v2" else _CHANNELS
+        signals = tuple(
+            Signal.from_loader(
+                name=name,
+                spec=spec,
+                time_axis=_AXIS,
+                time_offsets_loader=_load_time_offsets,
+                n_values=len(row.values[sensor]),
+                loader=partial(loader, ref, sensor, dimension),
+            )
+            for spec, name, sensor, dimension in channels
+        )
+        record = Record(sources=(Source(name="IMU", signals=signals),))
+        source = ref.file.part.rsplit("_", 1)[0]
+        metadata: dict[str, str | int] = {
+            "source_dataset": source,
+            "source_partition": ref.file.part,
+            "source_file": self.SOURCE_FILES[ref.file.part],
+            "source_row": ref.index,
+            "activity_summary": row.summary,
+        }
+        if row.location is not None:
+            metadata["sensor_location"] = row.location
+        for key, value in metadata.items():
+            record.annotate(Annotation(key=key, value=value))
+        return record
 
 
 CONNECTOR = SensorCapsConnector
