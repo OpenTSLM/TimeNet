@@ -1,18 +1,17 @@
 from collections import Counter
 import json
-from pathlib import Path
-import sys
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 import pytest
 
-from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
 from timenet.types import AnswerTask
 from timenet.types.splits import Split
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
+from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.chengsenwang.tsqa import TSQAConnector
 
 
@@ -62,14 +61,15 @@ def _fixture_rows():
     return rows
 
 
-def _convert() -> TimeFDataset:
-    # The Hub rows are plain dicts; the fixture is exactly that shape, so convert() takes it directly.
-    return TSQAConnector().convert(_fixture_rows())
+def _refs(tmp_path, rows):
+    # Write the rows to a parquet file shaped like the Hub's converted copy; convert() reads it back.
+    path = tmp_path / f"rows-{len(list(tmp_path.iterdir()))}.parquet"
+    pq.write_table(pa.Table.from_pylist(rows), path)
+    return [HubFileRef(path, "train")]
 
 
-def test_is_a_connector():
-    assert isinstance(TSQAConnector(), BaseConnector)
-    assert isinstance(TSQAConnector(), BaseHuggingFaceConnector)
+def _convert(tmp_path) -> TimeFDataset:
+    return TSQAConnector().convert(_refs(tmp_path, _fixture_rows()))
 
 
 def test_metadata():
@@ -78,19 +78,19 @@ def test_metadata():
     assert str(TSQAConnector().metadata().dataset_version) == "1.2.0"
 
 
-def test_conversion_rejects_too_few_signal_groups():
+def test_conversion_rejects_too_few_signal_groups(tmp_path):
     with pytest.raises(TimeFValidationError, match=r"10 folds.*found 3"):
-        TSQAConnector().convert(_FIXTURE_ROWS)
+        TSQAConnector().convert(_refs(tmp_path, _FIXTURE_ROWS))
 
 
-def test_convert_builds_one_record_per_row():
-    dataset = _convert()
+def test_convert_builds_one_record_per_row(tmp_path):
+    dataset = _convert(tmp_path)
     assert isinstance(dataset, TimeFDataset)
     assert len(dataset.records) == len(_fixture_rows())
 
 
-def test_qa_tasks_match_fixture():
-    dataset = _convert()
+def test_qa_tasks_match_fixture(tmp_path):
+    dataset = _convert(tmp_path)
     rows = _fixture_rows()
     qa = [t for t in dataset.tasks if isinstance(t, AnswerTask)]
     assert len(qa) == len(rows)
@@ -98,8 +98,8 @@ def test_qa_tasks_match_fixture():
     assert {t.targets[0] for t in qa if t.targets is not None} == {r["Answer"] for r in rows}
 
 
-def test_series_values_parsed_from_fixture():
-    dataset = _convert()
+def test_series_values_parsed_from_fixture(tmp_path):
+    dataset = _convert(tmp_path)
     expected = json.loads(_fixture_rows()[0]["Series"])
     task = next(task for task in dataset.tasks if task.prompt == _fixture_rows()[0]["Question"])
     (record,) = task.inputs
@@ -108,8 +108,8 @@ def test_series_values_parsed_from_fixture():
     assert float(got[0]) == pytest.approx(expected[0], rel=1e-5)
 
 
-def test_task_annotation_present():
-    keys = {ann.key for record in _convert().records for ann in record.annotations}
+def test_task_annotation_present(tmp_path):
+    keys = {ann.key for record in _convert(tmp_path).records for ann in record.annotations}
     assert "task" in keys
 
 
@@ -128,10 +128,10 @@ def _balanced_rows():
     return rows
 
 
-def test_generated_splits_balance_categories_and_keep_signals_together():
+def test_generated_splits_balance_categories_and_keep_signals_together(tmp_path):
     rows = _balanced_rows()
     rows_by_question = {row["Question"]: row for row in rows}
-    dataset = TSQAConnector().convert(rows)
+    dataset = TSQAConnector().convert(_refs(tmp_path, rows))
     partitions = {
         Split.TRAIN: dataset.get_train(),
         Split.VALIDATION: dataset.get_validation(),
@@ -157,10 +157,10 @@ def test_generated_splits_balance_categories_and_keep_signals_together():
         assert categories["Trend"] == categories["Volatility"]
 
 
-def test_split_assignments_are_repeatable():
+def test_split_assignments_are_repeatable(tmp_path):
     rows = _balanced_rows()
-    first = TSQAConnector().convert(rows)
-    second = TSQAConnector().convert(rows)
+    first = TSQAConnector().convert(_refs(tmp_path, rows))
+    second = TSQAConnector().convert(_refs(tmp_path, rows))
     assert [(task.prompt, task.split) for task in first.tasks] == [(task.prompt, task.split) for task in second.tasks]
     assert {task.prompt for task in first.tasks} == {row["Question"] for row in rows}
 
@@ -172,11 +172,11 @@ def test_split_assignments_are_repeatable():
         ["[[1,2],[3,4]]", "[[1.0, 2.0], [3.0, 4.0]]"],
     ],
 )
-def test_equivalent_series_encodings_share_a_split(series):
+def test_equivalent_series_encodings_share_a_split(series, tmp_path):
     rows = _balanced_rows()
     for encoded in series:
         rows.append({"Series": encoded, "Task": "Trend", "Question": "duplicate", "Answer": "a"})
-    dataset = TSQAConnector().convert(rows)
+    dataset = TSQAConnector().convert(_refs(tmp_path, rows))
     duplicates = [task for task in dataset.tasks if task.prompt == "duplicate"]
     assert len(duplicates) == len(series)
     assert len({task.split for task in duplicates}) == 1
@@ -184,7 +184,7 @@ def test_equivalent_series_encodings_share_a_split(series):
 
 
 def test_splits_survive_storage_round_trip(tmp_path):
-    original = TSQAConnector().convert(_balanced_rows())
+    original = TSQAConnector().convert(_refs(tmp_path, _balanced_rows()))
     registry = LocalRegistry(tmp_path / "registry")
     registry.store(original)
     with TimeFReader(registry.open_version("chengsenwang/tsqa", "1.2.0")) as reader:
@@ -192,38 +192,8 @@ def test_splits_survive_storage_round_trip(tmp_path):
     assert {task.prompt: task.split for task in restored.tasks} == {task.prompt: task.split for task in original.tasks}
 
 
-def test_missing_hf_library_raises_helpful_error(monkeypatch):
-    monkeypatch.setitem(sys.modules, "huggingface_hub", None)  # `import huggingface_hub` -> ImportError
-    with pytest.raises(ImportError, match="huggingface"):
-        TSQAConnector().download(Path("cache"))
-
-
-def test_real_download_reads_auto_converted_parquet(monkeypatch, tmp_path):
-    """The real path reads HF's auto-converted parquet branch, not the (CSV-only) main revision."""
-    import huggingface_hub  # noqa: PLC0415
-    import pyarrow as pa  # noqa: PLC0415
-    import pyarrow.parquet as pq  # noqa: PLC0415
-
-    table = pa.table({"Series": ["[1.0, 2.0]"], "Question": ["q"], "Answer": ["a"], "Task": ["t"], "Label": [""]})
-    parquet_path = tmp_path / "default" / "train" / "0000.parquet"
-    parquet_path.parent.mkdir(parents=True)
-    pq.write_table(table, parquet_path)
-
-    seen: dict[str, object] = {}
-
-    def fake_list(repo_id, repo_type=None, revision=None):
-        seen["list_revision"] = revision
-        return ["README.md", "default/train/0000.parquet"]
-
-    def fake_download(repo_id, filename, repo_type=None, revision=None, cache_dir=None):
-        seen["download_revision"] = revision
-        return str(parquet_path)
-
-    monkeypatch.setattr(huggingface_hub, "list_repo_files", fake_list)
-    monkeypatch.setattr(huggingface_hub, "hf_hub_download", fake_download)
-
-    rows = TSQAConnector().download(tmp_path / "cache")
-
-    assert seen["list_revision"] == "refs/convert/parquet"
-    assert seen["download_revision"] == "refs/convert/parquet"
-    assert rows == [{"Series": "[1.0, 2.0]", "Question": "q", "Answer": "a", "Task": "t", "Label": ""}]
+def test_source_is_pinned():
+    # Literal pins, so moving to another repo, commit, or file is a deliberate test edit.
+    assert TSQAConnector.HF_REPO == "ChengsenWang/TSQA"
+    assert TSQAConnector.SOURCE_REVISION == "22518209e3ee6302be4b4957f2692b3e8de849c3"
+    assert dict(TSQAConnector.SOURCE_FILES) == {"train": "default/train/0000.parquet"}

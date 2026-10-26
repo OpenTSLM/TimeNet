@@ -1,19 +1,21 @@
 """The TSQA connector: a time-series question-answering dataset from the HuggingFace Hub.
 
-Source repo ``ChengsenWang/TSQA``. Each row has the columns ``Task, Size, Question, Answer, Label,
-Series``. ``Series`` is a JSON float list. A univariate series is a flat list. A multivariate series
-is a list of lists. Each row becomes one record that carries the series and an
-:class:`~timenet.types.AnswerTask`.
+Source repo ``ChengsenWang/TSQA``. The connector reads the parquet copy the Hub converted the source CSV
+to, pinned to one commit. Each row has the columns ``Task, Size, Question, Answer, Label, Series``.
+``Series`` is a JSON float list. A univariate series is a flat list. A multivariate series is a list of
+lists. Each row becomes one record that carries the series and an :class:`~timenet.types.AnswerTask`.
 """
 
-from typing import Any
+from collections.abc import Mapping
+from typing import ClassVar
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet.types.splits import Split
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
+from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.datasets.chengsenwang.tsqa.sample import TSQASample, get_category, get_signal_id
+from timenet_connectors.sources.parquet import iter_parquet_rows
 from timenet_connectors.splitting import Splitter, StratifiedSplitter
 
 
@@ -28,6 +30,10 @@ class TSQAConnector(BaseHuggingFaceConnector):
     """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
 
     HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
+    # The commit refs/convert/parquet pointed to when this was pinned. The Hub rewrites that ref
+    # whenever it reconverts the dataset, so a rebuild reads this commit instead of the ref.
+    SOURCE_REVISION = "22518209e3ee6302be4b4957f2692b3e8de849c3"
+    SOURCE_FILES: ClassVar[Mapping[str, str]] = {"train": "default/train/0000.parquet"}
 
     def __init__(self) -> None:
         super().__init__()
@@ -43,16 +49,17 @@ class TSQAConnector(BaseHuggingFaceConnector):
             seed=42,
         )
 
-    def convert(self, raw_refs: list[dict[str, Any]]) -> TimeFDataset:
+    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Build one record per row: the parsed series plus its question-and-answer task.
 
         Args:
-            raw_refs: The rows from :meth:`download`.
+            raw_refs: The parquet files from :meth:`download`.
 
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
-        samples = [TSQASample.from_row(row) for row in raw_refs]
+        rows = (row for ref in raw_refs for row in iter_parquet_rows(ref.path))
+        samples = [TSQASample.from_row(row) for row in rows]
         splits = self.splitter.split(samples)
         dataset = TimeFDataset(metadata=self.metadata())
         for split_name, samples_in_split in splits.items():

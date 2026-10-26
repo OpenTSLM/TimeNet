@@ -1,2 +1,3 @@
-# Fetch the immutable upstream JSONL files without the datasets runtime.
-huggingface_hub>=0.24
+# Downloads the pinned JSONL files from the Hub without the datasets library.
+# 1.1 is the first version whose snapshot_download reports file bytes to tqdm_class.
+huggingface_hub>=1.1

@@ -1,2 +1,3 @@
-# huggingface_hub downloads the source dataset from the HuggingFace Hub.
-huggingface_hub>=0.24
+# Downloads the pinned parquet file from the Hub.
+# 1.1 is the first version whose snapshot_download reports file bytes to tqdm_class.
+huggingface_hub>=1.1
