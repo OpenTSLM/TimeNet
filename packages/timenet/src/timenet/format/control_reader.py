@@ -16,6 +16,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.duckdb import check_control_schema, connect_control
+from timenet.format.stored_array import ChunkLocation
 from timenet.format.stored_values import (
     ExternalObjectFieldKey,
     PackedField,
@@ -46,6 +47,7 @@ from timenet.types import (
     ureg,
 )
 from timenet.types.object_kind import ObjectKind
+from timenet.types.reference_keys import OwnerKey
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
@@ -122,6 +124,7 @@ class _ChunkRow(NamedTuple):
     chunk_major_index: int
     chunk_minor_index: int | None
     n_values: int
+    owner_key: OwnerKey | None
 
     @property
     def stored_chunk(self) -> StoredChunk:
@@ -777,25 +780,29 @@ class DuckDBControlReader:
             return ()
         return self._read_annotations((row[0],)).get((ObjectKind.DATASET, dataset_id), ())
 
-    def chunk_rows_by_key(self, signal_key: int, signal_id: str) -> list[StoredChunk]:
-        """Return one Signal's chunk locations in chunk order.
+    def chunk_location_by_key(self, signal_key: int, signal_id: str) -> ChunkLocation:
+        """Return where one Signal's chunks are stored, from its catalog rows.
 
         Raises:
             TimeFFormatError: If the Signal has no stored chunks.
         """
-        rows = self.chunk_rows_by_keys((signal_key,))[signal_key]
-        if not rows:
+        location = self.chunk_locations_by_keys((signal_key,))[signal_key]
+        if location is None:
             raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
-        return rows
+        return location
 
-    def chunk_rows_by_keys(self, signal_keys: Iterable[int]) -> dict[int, list[StoredChunk]]:
-        """Return chunk locators for a batch of internal Signal keys.
+    def chunk_locations_by_keys(self, signal_keys: Iterable[int]) -> dict[int, ChunkLocation | None]:
+        """Return where a batch of Signals' chunks are stored, from their catalog rows.
 
         Args:
             signal_keys: Internal integer Signal keys.
 
         Returns:
-            Chunk rows keyed by internal Signal key. Each Signal's rows are in chunk-index order.
+            Locations keyed by internal Signal key, each with the Signal's chunks in chunk-index
+            order, or ``None`` for a Signal without stored chunks.
+
+        Raises:
+            TimeFFormatError: If one Signal's chunks are stored by more than one release.
         """
         keys = tuple(signal_keys)
         if not keys:
@@ -810,10 +817,21 @@ class DuckDBControlReader:
             ),
             _ChunkRow._make,
         )
-        grouped: dict[int, list[StoredChunk]] = {key: [] for key in keys}
+        chunks: dict[int, list[StoredChunk]] = {key: [] for key in keys}
+        owners: dict[int, OwnerKey | None] = {}
         for row in rows:
-            grouped[row.signal_key].append(row.stored_chunk)
-        return grouped
+            # The writer stores or reuses a Signal's chunks as a unit, so one release stores them all.
+            if owners.setdefault(row.signal_key, row.owner_key) != row.owner_key:
+                found = self.connection.execute(
+                    "SELECT signal_id FROM signals WHERE signal_key = ?", [row.signal_key]
+                ).fetchone()
+                signal = row.signal_key if found is None else found[0]
+                raise TimeFFormatError(f"signal {signal!r} has chunks stored by more than one release")
+            chunks[row.signal_key].append(row.stored_chunk)
+        return {
+            key: ChunkLocation(owner=owners[key], chunks=tuple(stored)) if stored else None
+            for key, stored in chunks.items()
+        }
 
     def read_tasks(
         self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = ()

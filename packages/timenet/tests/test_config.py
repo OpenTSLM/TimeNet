@@ -16,6 +16,7 @@ def test_defaults_under_home():
     assert cfg.home_dir == Path("/base")
     assert cfg.storage_dir == Path("/base/storage")
     assert cfg.cache_dir == Path("/base/cache")
+    assert cfg.control_cache_dir == Path("/base/cache/control")
     assert cfg.registry_path == Path("/base/registry")
 
 
@@ -28,6 +29,7 @@ def test_home_env_relocates_everything(monkeypatch):
     cfg = settings()
     assert cfg.storage_dir == Path("/relocated/storage")
     assert cfg.cache_dir == Path("/relocated/cache")
+    assert cfg.control_cache_dir == Path("/relocated/cache/control")
     assert cfg.registry_path == Path("/relocated/registry")
 
 

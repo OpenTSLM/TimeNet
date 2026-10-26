@@ -1,4 +1,6 @@
 import json
+from pathlib import Path
+import shutil
 
 import duckdb
 import pyarrow as pa
@@ -9,6 +11,8 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
+from timenet.reader import TimeFReader
+from timenet.registry import open_local_version
 from timenet.testing import make_dataset
 from timenet.types import (
     Annotation,
@@ -191,6 +195,50 @@ def test_recommit_raises_file_exists(tmp_path):
     dataset.derive_schema()
     with pytest.raises(FileExistsError):
         TimeFWriter(tmp_path, dataset).__enter__()
+
+
+def _replacement():
+    dataset = make_dataset()
+    dataset.records[0].annotate(Annotation(key="replaced", value=1))
+    dataset.derive_schema()
+    return dataset
+
+
+def test_replace_publishes_over_a_committed_version_and_drops_the_old_one(tmp_path):
+    version_dir = _written(tmp_path)
+    with TimeFWriter(tmp_path, _replacement(), replace=True) as writer:
+        writer.write()
+
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        keys = {annotation.key for record in reader.read().records for annotation in record.annotations}
+    assert "replaced" in keys
+    assert [path.name for path in version_dir.parent.iterdir()] == [version_dir.name]
+
+
+def test_a_failed_publish_rename_moves_the_old_release_back(tmp_path, monkeypatch):
+    version_dir = _written(tmp_path)
+    before = (version_dir / "manifest.json").read_bytes()
+    rename = Path.replace
+
+    def replace(self, target):
+        if ".tmp-" in self.name:
+            raise OSError("rename failed")
+        return rename(self, target)
+
+    monkeypatch.setattr(Path, "replace", replace)
+    with pytest.raises(OSError, match="rename failed"), TimeFWriter(tmp_path, _replacement(), replace=True) as writer:
+        writer.write()
+    assert (version_dir / "manifest.json").read_bytes() == before
+    assert [path.name for path in version_dir.parent.iterdir()] == [version_dir.name]
+
+
+def test_the_staging_sweep_keeps_an_old_release_that_a_hard_kill_left(tmp_path):
+    version_dir = _written(tmp_path)
+    old = version_dir.with_name(f"{version_dir.name}.old-deadbeef")
+    shutil.copytree(version_dir, old)
+    with TimeFWriter(tmp_path, _replacement(), replace=True) as writer:
+        writer.write()
+    assert (old / "manifest.json").exists()
 
 
 def test_manifest_written_last(tmp_path):
