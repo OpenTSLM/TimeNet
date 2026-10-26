@@ -16,7 +16,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import DuckDBControlReader
-from timenet.types import DatasetMetadata, DatasetSchema, EntityId, InputModality, Task, TimeSeriesSpec
+from timenet.types import ArrayHandle, DatasetMetadata, DatasetSchema, EntityId, InputModality, Task, TimeSeriesSpec
 from timenet.types.splits import Split
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
@@ -367,7 +367,7 @@ class TimeFReader:
         return rows
 
     def _make_signal_loader(self, signal_id: EntityId, spec: TimeSeriesSpec) -> _SignalLoader:
-        """Return a picklable, range-aware Signal loader."""
+        """Return a picklable, range-aware handle to one Signal's stored values."""
         if signal_id not in self._chunk_locator_batch_by_id:
             if not self._chunk_locator_batches or len(self._chunk_locator_batches[-1]) >= _CHUNK_LOCATOR_BATCH_SIZE:
                 self._chunk_locator_batches.append([])
@@ -424,14 +424,19 @@ class TimeFReader:
 
 
 @dataclass(frozen=True)
-class _SignalLoader:
-    """Picklable values loader for one DuckDB-indexed Signal."""
+class _SignalLoader(ArrayHandle):
+    """Picklable handle to the stored values of one DuckDB-indexed Signal, read through on access."""
 
     reader: TimeFReader
     signal_id: EntityId
     spec: TimeSeriesSpec
 
-    def __call__(self) -> pa.Array:
+    @property
+    def is_loaded(self) -> bool:
+        """Return False, since every read goes through the reader."""
+        return False
+
+    def read(self) -> pa.Array:
         """Load all Signal values.
 
         Returns:

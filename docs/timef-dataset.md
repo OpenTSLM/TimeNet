@@ -54,21 +54,28 @@ lead_i = Signal(
 | `spec` | `TimeSeriesSpec` | Unit, dtype, shape, and modality contract. |
 | `time_axis` | `TimeAxis` | Regular, irregular, or ordinal placement of values. |
 | `data` | array-like | Eager values. Mutually exclusive with `loader`. |
-| `loader` | `ValuesLoader` | Common interface for Arrow, NumPy, and step-range access. |
+| `loader` | `ArrayHandle` or callable | Lazy values, passed to `Signal.from_loader()`. |
 | `n_values` | `int` | Required for a lazy Signal and inferred from eager data. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Signal. |
 | `metadata` | `dict[str, object]` | Optional JSON-compatible metadata. |
 
-`Signal` delegates `to_arrow()`, `to_numpy()`, and `read_steps()` to its values loader.
-NumPy and Arrow storage implement the same interface. Each implementation converts
-values only when the requested format requires conversion.
+Read values through `to_arrow()`, `to_numpy()`, and `read_steps()`. These accessors apply the
+spec: `to_numpy()` rejects nulls, and tensor values keep their trailing shape.
 
-`Signal.from_loader()` also accepts existing Arrow callables. It wraps each callable without a
-read and preserves its optional `read_steps()` method. The TimeF reader supplies a lazy storage
-loader. Reads of the hierarchy do not load the arrays.
+A Signal keeps its values behind an internal `ArrayHandle` from `timenet.types`, which library code
+such as the writer reads directly. The constructor holds eager data in memory. Numeric and boolean
+NumPy values stay NumPy, so `to_numpy()` builds no Arrow, and the first Arrow read converts them.
+Other values become an Arrow array. `from_loader()` keeps a handle as it is and calls a plain
+callable on every read. A loader that reads a step range on its own subclasses `ArrayHandle` and
+overrides `read_steps()`; `from_loader()` rejects a plain callable that has its own `read_steps()`.
+Two handles over the same function object are equal, so the writer reads time offsets shared
+through one function once. The TimeF reader supplies a stored handle, so reading the hierarchy
+does not load the arrays.
 
-Irregular Signals also provide `time_offsets_loader`. Regular axes calculate their offsets from
-their cadence, and ordinal axes describe order without a clock.
+An irregular Signal also needs its time offsets. Pass `time_offsets_us` to
+`Signal.from_irregular()` or `time_offsets_loader` to `Signal.from_loader()`, and read them with
+`time_offsets_us()`. Regular axes calculate their offsets from their cadence, and ordinal axes
+describe order without a clock.
 
 Call `signal.annotate(annotation)` to attach one occurrence to a Signal.
 

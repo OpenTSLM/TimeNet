@@ -79,8 +79,8 @@ dataset IDs, and tags. See [Registry search](registry.md#search) for their match
 
 ## Load or download
 
-`load()` returns a `TimeFDataset`. The hierarchy is in memory, but each Signal keeps a lazy values
-loader.
+`load()` returns a `TimeFDataset`. The hierarchy is in memory, but each Signal keeps a lazy handle
+to its stored values.
 
 ```python
 dataset = client.load("timenet/hello-world")
