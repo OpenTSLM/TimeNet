@@ -39,7 +39,7 @@ class _TextBehaviour(ABC):
     @property
     @abstractmethod
     def length(self) -> int:
-        """Return ``len(read())`` without reading the text.
+        """The value of ``len(read())``, known without reading the text.
 
         That is the string's number of code points, or the list's number of items. ``__eq__`` skips
         the read when lengths differ, so a stored handle must report its length the same way.
@@ -120,12 +120,12 @@ class InlineText(TextHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return True, since the string is held in memory."""
+        """Always True, since the string is held in memory."""
         return True
 
     @property
     def length(self) -> int:
-        """Return the string's length."""
+        """The string's length."""
         return len(self.value)
 
     def read(self) -> str:
@@ -149,12 +149,12 @@ class InlineTextList(TextListHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return True, since the list is held in memory."""
+        """Always True, since the list is held in memory."""
         return True
 
     @property
     def length(self) -> int:
-        """Return the number of strings in the list."""
+        """The number of strings in the list."""
         return len(self.value)
 
     def read(self) -> list[str]:

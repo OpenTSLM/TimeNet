@@ -102,7 +102,7 @@ class BaseRegistry(ABC):
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
 
-    def download_version(  # noqa: PLR0913
+    def download_version(  # ruff: ignore[too-many-arguments]
         self,
         dataset_id: str,
         version: str,
@@ -143,7 +143,7 @@ class BaseRegistry(ABC):
             progress_cb=progress_cb,
         )
 
-    def _download_release(  # noqa: PLR0913
+    def _download_release(  # ruff: ignore[too-many-arguments]
         self,
         dataset_id: str,
         version: str,
@@ -171,7 +171,7 @@ class BaseRegistry(ABC):
 
         Raises:
             TimeNetFileError: If a downloaded file's size or checksum differs from the manifest.
-        """  # noqa: DOC502 - raised by _check_staged_file
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_staged_file
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
         target = Path(dest_dir)
@@ -223,13 +223,13 @@ class BaseRegistry(ABC):
 
         Raises:
             TimeFFormatError: If ``relpath`` would escape ``staging`` (an absolute or ``..`` path).
-        """  # noqa: DOC502 - raised by safe_version_path
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by safe_version_path
         destination = safe_version_path(staging, relpath)
         destination.parent.mkdir(parents=True, exist_ok=True)
         with self.open_file(dataset_id, version, relpath) as source, destination.open("wb") as sink:
             shutil.copyfileobj(source, sink)
 
-    def search(  # noqa: PLR0913
+    def search(  # ruff: ignore[too-many-arguments]
         self,
         *,
         query: str | list[str] | None = None,

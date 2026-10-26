@@ -328,7 +328,7 @@ def read_annotations(file: EdfFile) -> tuple[EdfAnnotation, ...]:
 
     Raises:
         TimeFFormatError: If an onset or a duration is not a whole number of microseconds.
-    """  # noqa: DOC502 (raised by _seconds_to_microseconds, not directly here)
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _seconds_to_microseconds, not directly here)
     return tuple(
         EdfAnnotation(
             onset_microseconds=_seconds_to_microseconds(annotation.onset),

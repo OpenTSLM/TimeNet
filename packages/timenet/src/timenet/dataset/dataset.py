@@ -68,7 +68,7 @@ class _TaskValidationIndex:
         return known
 
 
-class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
+class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
     """Holds records and their tasks as Python objects. It does not do I/O. The writer handles persistence."""
 
     def __init__(self, *, metadata: DatasetMetadata) -> None:
@@ -100,7 +100,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
 
-    def import_from(  # noqa: PLR0913 - one argument per selection
+    def import_from(  # ruff: ignore[too-many-arguments] - one argument per selection
         self,
         parent: "TimeFReader",
         *,
@@ -163,7 +163,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 ``TSCorrespondenceTask`` without ``candidate_records``, or the task copies fail to
                 register.
             TimeFNotFoundError: If a selected ID names no parent object. This dataset does not change.
-        """  # noqa: DOC502 - raised by composition.import_from
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by composition.import_from
         try:
             return import_from(self, parent, alias=alias, records=records, signals=signals, tasks=tasks, load=load)
         finally:
@@ -284,7 +284,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 del self._signals_by_id[signal.id]
                 del self._records_by_signal_id[signal.id]
         for signal in added:
-            object.__setattr__(signal, "_id", self._ids.next(ObjectKind.SIGNAL))  # noqa: PLC2801 (Signal is frozen)
+            # ruff: ignore[unnecessary-dunder-call] (Signal is frozen)
+            object.__setattr__(signal, "_id", self._ids.next(ObjectKind.SIGNAL))
             self._signals_by_id[signal.id] = signal
             self._records_by_signal_id[signal.id] = record
         self._sources.difference_update(before_sources - sources.keys())
@@ -316,7 +317,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Returns:
             The committed version directory.
         """
-        from timenet.writer import TimeFWriter  # noqa: PLC0415
+        from timenet.writer import TimeFWriter  # ruff: ignore[import-outside-top-level]
 
         root = Path(path)
         if self.schema is None:
@@ -426,7 +427,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
         Raises:
             TimeFValidationError: If the selection is empty or contains an unknown split.
-        """  # noqa: DOC502 - raised by parse_splits
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by parse_splits
         required = frozenset(required_modalities or ())
         supported = None if supported_modalities is None else frozenset(supported_modalities)
         wanted = None if split is None else parse_splits(split)
@@ -460,7 +461,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
         Raises:
             TimeFValidationError: If a streamed task fails one of the per-task checks.
-        """  # noqa: DOC502 (raised by _validate_streamed_task, not directly here)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _validate_streamed_task, not directly here)
         index = _TaskValidationIndex(self)
         declared = set(self._streamed_task_types)
         for position, task in enumerate(self.iter_tasks(), start=1):
@@ -712,7 +713,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return self._schema
 
     @classmethod
-    def from_parts(  # noqa: PLR0913 - every part of a stored dataset
+    def from_parts(  # ruff: ignore[too-many-arguments] - every part of a stored dataset
         cls,
         *,
         metadata: DatasetMetadata,
@@ -901,7 +902,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
     @property
     def annotations(self) -> tuple[Annotation, ...]:
-        """Return annotations attached to the dataset itself."""
+        """Annotations attached to the dataset itself."""
         return tuple(self._annotations)
 
     @property
@@ -942,7 +943,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: If ``split`` is unknown, or if no task of the dataset belongs to any
                 split. Asking a partition of a dataset that has none is a mistake rather than an
                 empty selection, so it fails rather than returning nothing.
-        """  # noqa: DOC502 - raised by get_splits
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by get_splits
         return self.get_splits(split)
 
     def get_splits(self, *splits: Split | str) -> tuple[Task, ...]:

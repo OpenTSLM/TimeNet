@@ -29,7 +29,8 @@ _STORED_VALUES = (StoredArray, StoredOffsets, StoredText, StoredTextList)
 
 
 @singledispatch
-def _load_plan_children(item: object) -> tuple[object, ...]:  # noqa: ARG001 - dispatch picks a function by its type
+# ruff: ignore[unused-function-argument] - dispatch picks a function by its type
+def _load_plan_children(item: object) -> tuple[object, ...]:
     """Return the objects that a load plan visits next from ``item``: what it holds or references directly."""
     return ()
 

@@ -180,7 +180,7 @@ class Signal(SupportsAnnotate):
     """Optional JSON-compatible signal metadata."""
     _id: EntityId | None = field(default=None, init=False, repr=False)
 
-    def __init__(  # noqa: PLR0913 - a signal carries its complete public metadata
+    def __init__(  # ruff: ignore[too-many-arguments] - a signal carries its complete public metadata
         self,
         *,
         spec: TimeSeriesSpec,
@@ -203,7 +203,7 @@ class Signal(SupportsAnnotate):
         )
 
     @classmethod
-    def from_loader(  # noqa: PLR0913 - lazy signals carry their storage metadata
+    def from_loader(  # ruff: ignore[too-many-arguments] - lazy signals carry their storage metadata
         cls,
         *,
         spec: TimeSeriesSpec,
@@ -238,7 +238,7 @@ class Signal(SupportsAnnotate):
         )
         return instance
 
-    def _initialize(  # noqa: PLR0913 - shared eager and lazy field initialization
+    def _initialize(  # ruff: ignore[too-many-arguments] - shared eager and lazy field initialization
         self,
         *,
         spec: TimeSeriesSpec,
@@ -289,7 +289,7 @@ class Signal(SupportsAnnotate):
             The attached occurrence.
         """
         attached = annotation._new_occurrence()
-        object.__setattr__(self, "annotations", (*self.annotations, attached))  # noqa: PLC2801
+        object.__setattr__(self, "annotations", (*self.annotations, attached))  # ruff: ignore[unnecessary-dunder-call]
         return attached
 
     def __post_init__(self) -> None:
@@ -329,7 +329,7 @@ class Signal(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: If the signal's record is not in a dataset yet.
-        """  # noqa: DOC502 (raised by assigned_id)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by assigned_id)
         return assigned_id(self._id, "Signal")
 
     @property

@@ -140,7 +140,7 @@ def _parse_subject_id(study: str, recording_id: str, psg_path: Path) -> str:
     Raises:
         TimeFFormatError: If the study is not one this connector knows, if the name does not
             fit the shape the release uses, or if it states a night the release does not hold.
-    """  # noqa: DOC502 (raised by _parse_recording_number, not directly here)
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _parse_recording_number, not directly here)
     subject, _ = _parse_recording_number(study, recording_id, psg_path)
     return f"{study}-{subject:02d}"
 
@@ -194,7 +194,7 @@ def _iter_recordings(source: SleepEdfxSource) -> Iterator[SleepEdfxRecording]:
     Raises:
         TimeFFormatError: If a study directory holds a PSG file whose name this connector
             cannot read.
-    """  # noqa: DOC502 (raised by _parse_subject_id, not directly here)
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _parse_subject_id, not directly here)
     for study, study_dir in source.studies:
         for psg_path in sorted(study_dir.glob("*-PSG.edf")):
             # The filename is the only identifier. The EDF header names no subject, because the

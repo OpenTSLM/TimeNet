@@ -233,12 +233,12 @@ class Task(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: If the task is not in a dataset yet.
-        """  # noqa: DOC502 (raised by assigned_id)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by assigned_id)
         return assigned_id(self._id, type(self).__name__)
 
     @property
     def resolved_input_modalities(self) -> frozenset[InputModality]:
-        """Return the validated override, or infer kinds from the current inputs.
+        """The validated override, or kinds inferred from the current inputs.
 
         Inference reads Signal specs within the scope, the prompt, and text input annotations.
         It does not load values or inspect targets. NO_INPUT means there are no input Records.
@@ -329,7 +329,7 @@ class Task(SupportsAnnotate):
         Raises:
             TimeFValidationError: If a Record or Signal that the task references has no ID, or if
                 ``records`` or ``signals`` has no object for its ID.
-        """  # noqa: DOC502 (raised by _by_id and assigned_id)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _by_id and assigned_id)
         return replace(self, **self._references_by_id(records, signals))
 
     def _references_by_id(
@@ -491,14 +491,14 @@ class TSCorrespondenceTask(Task):
 
 def _is_record(value: object) -> TypeGuard["Record"]:
     """Return whether a target is a Record without importing Record at module load time."""
-    from timenet.dataset.record import Record  # noqa: PLC0415
+    from timenet.dataset.record import Record  # ruff: ignore[import-outside-top-level]
 
     return isinstance(value, Record)
 
 
 def _is_signal(value: object) -> TypeGuard["Signal"]:
     """Return whether a target is a Signal without importing Signal at module load time."""
-    from timenet.dataset.time_series import Signal  # noqa: PLC0415
+    from timenet.dataset.time_series import Signal  # ruff: ignore[import-outside-top-level]
 
     return isinstance(value, Signal)
 
@@ -554,8 +554,8 @@ def _target_by_id(
 
 def _is_target_item(value: object) -> bool:
     """Return whether value can form one item in a task's expected answer."""
-    from timenet.dataset.record import Record  # noqa: PLC0415
-    from timenet.dataset.time_series import Signal  # noqa: PLC0415
+    from timenet.dataset.record import Record  # ruff: ignore[import-outside-top-level]
+    from timenet.dataset.time_series import Signal  # ruff: ignore[import-outside-top-level]
 
     return isinstance(value, (TextHandle, int, float, bool, Record, Signal, Span))
 

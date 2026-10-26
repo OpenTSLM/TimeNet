@@ -25,7 +25,7 @@ from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
-def run_pipeline(  # noqa: PLR0913
+def run_pipeline(  # ruff: ignore[too-many-arguments]
     connector: BaseConnector,
     root: Path,
     *,
@@ -71,7 +71,7 @@ def run_pipeline(  # noqa: PLR0913
         TimeFValidationError: If the card declares parents and the connector does not override
             ``compose``, or the dataset that ``compose`` returns has another card than the one that
             the engine read. The build then stores no release.
-    """  # noqa: DOC502 - raised by _check_composes and _compose
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes and _compose
     resolved_backend = _resolve_values_backend(connector, values_backend)
     # Read only the connector's dataset.yaml card, a tiny local file, not the dataset itself. This lets
     # us resolve the version directory and skip the expensive download and convert when it exists.
@@ -107,7 +107,7 @@ def run_pipeline(  # noqa: PLR0913
     return version_dir
 
 
-def publish_pipeline(  # noqa: PLR0913
+def publish_pipeline(  # ruff: ignore[too-many-arguments]
     connector: BaseConnector,
     registry: WritableRegistry,
     *,
@@ -150,7 +150,7 @@ def publish_pipeline(  # noqa: PLR0913
             the engine read. Nothing is published then.
         TimeNetAccessError: If the registry is not local, and the card, or the composed dataset with
             its lineage, is not open.
-    """  # noqa: DOC502 - raised by _check_composes, _compose, and require_open_access
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, and require_open_access
     resolved_backend = _resolve_values_backend(connector, values_backend)
     metadata = connector.metadata()
     dataset_id = metadata.dataset_id
@@ -194,7 +194,7 @@ def open_parents(metadata: DatasetMetadata, registry: BaseRegistry) -> BuildCont
 
     Raises:
         TimeNetDatasetNotFoundError: If the registry does not hold a declared parent.
-    """  # noqa: DOC502 - registry preparation raises the documented error
+    """  # ruff: ignore[docstring-extraneous-exception] - registry preparation raises the documented error
     parents: dict[ParentAlias, TimeFReader] = {}
     # If a parent fails to open, the stack closes the readers that are already open. After the loop,
     # the stack lets the readers go, and the context closes them.
@@ -273,7 +273,7 @@ def _resolve_values_backend(connector: BaseConnector, override: str | None) -> s
     return backend
 
 
-def store_dataset(  # noqa: PLR0913
+def store_dataset(  # ruff: ignore[too-many-arguments]
     dataset: TimeFDataset,
     root: Path,
     *,

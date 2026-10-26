@@ -87,7 +87,8 @@ def _resolve_target(out: str | None) -> WritableRegistry | Path:
 
 
 @app.command()
-def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
+# ruff: ignore[too-many-arguments, too-many-positional-arguments] (a typer command: one parameter per option)
+def build(
     dataset_id: str,
     out: str | None = typer.Option(
         None,
@@ -200,7 +201,7 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
     typer.echo(result)
 
 
-def build_one(  # noqa: PLR0913
+def build_one(  # ruff: ignore[too-many-arguments]
     dataset_id: str,
     output: str | Path,
     *,
@@ -249,7 +250,7 @@ def build_one(  # noqa: PLR0913
     Raises:
         TimeFValidationError: If ``values_backend`` names a backend that TimeF does not support.
             This check comes first, before the plan prepares any parent.
-    """  # noqa: DOC502 - raised by _check_values_backend
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_values_backend
     _check_values_backend(values_backend)
     target = _resolve_target(str(output))
     registry = LocalRegistry(target) if isinstance(target, Path) else target
@@ -331,7 +332,7 @@ def _in_repo(builder: BuilderBackend) -> bool:
         its ``build()`` is the ``build()`` of ``ConnectorBuilder``.
     """
     # backend.py imports this module, so this import runs only at call time. TNET-157 removes the cycle.
-    from timenet_connectors.builder.backend import ConnectorBuilder  # noqa: PLC0415
+    from timenet_connectors.builder.backend import ConnectorBuilder  # ruff: ignore[import-outside-top-level]
 
     return isinstance(builder, ConnectorBuilder) and type(builder).build is ConnectorBuilder.build
 
@@ -371,7 +372,7 @@ def _committed(dataset_id: str, target: WritableRegistry | Path, registry: Writa
     return str(target / card.dataset_id / version) if isinstance(target, Path) else version
 
 
-def _build(  # noqa: PLR0913
+def _build(  # ruff: ignore[too-many-arguments]
     dataset_id: str,
     target: WritableRegistry | Path,
     forwarded: str | Path,

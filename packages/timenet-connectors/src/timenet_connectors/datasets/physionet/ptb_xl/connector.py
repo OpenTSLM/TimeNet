@@ -109,7 +109,7 @@ def _parse_patient_id(cells: dict[str, str]) -> str:
 class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
     """Preserve PTB-XL waveforms and clinical metadata without downstream tasks."""
 
-    async def download_async(self, cache_dir: Path) -> list[PtbXlSource]:  # noqa: PLR6301
+    async def download_async(self, cache_dir: Path) -> list[PtbXlSource]:  # ruff: ignore[no-self-use]
         """Return the extracted pinned PTB-XL release."""
         root = find_dir_containing(await ensure_archive(PTBXL_ZIP_URL, cache_dir), "ptbxl_database.csv")
         return [PtbXlSource(root, root / "ptbxl_database.csv")]
