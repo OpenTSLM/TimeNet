@@ -20,10 +20,10 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.refs import split_ref
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry.base import ProgressCallback
 from timenet.types import Access, DatasetMetadata, Domain, License, Task
+from timenet.types.references import is_latest, split_ref
 
 
 if TYPE_CHECKING:
@@ -213,7 +213,7 @@ class TimeNet:
             # A connector produces one declared version. Reject a pin it cannot satisfy before the
             # build runs, so a wrong pin fails fast instead of after a full build. Sentinels are
             # not pins, so a fresh build satisfies them.
-            if version not in {None, "", "latest"}:
+            if not is_latest(version):
                 declared = builder.declared_version(dataset_id)
                 if declared is not None and version != declared:
                     raise TimeNetDatasetNotFoundError(
