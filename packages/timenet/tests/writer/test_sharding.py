@@ -9,6 +9,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
+from timenet.storage.parquet import SignalRowGroupCache
 from timenet.testing import assert_datasets_equal
 from timenet.types import (
     Annotation,
@@ -19,7 +20,6 @@ from timenet.types import (
     Version,
     ureg,
 )
-import timenet.values_backends.parquet.reader as values_reader
 from timenet.writer import TimeFWriter
 
 
@@ -164,13 +164,13 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
     }
 
     read: list[tuple[str, int]] = []
-    original = values_reader.ParquetValuesReader._row_group
+    original = SignalRowGroupCache.read_values
 
-    def spy(self, root, rel_path, row_group):
+    def spy(self, version, rel_path, row_group):
         read.append((rel_path, row_group))
-        return original(self, root, rel_path, row_group)
+        return original(self, version, rel_path, row_group)
 
-    monkeypatch.setattr(values_reader.ParquetValuesReader, "_row_group", spy)
+    monkeypatch.setattr(SignalRowGroupCache, "read_values", spy)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         series = next(ts for s in reader.read().records for ts in s.signals if ts.id == _signal_id(6))
         series.to_arrow()
