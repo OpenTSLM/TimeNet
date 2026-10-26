@@ -32,9 +32,9 @@ Reusable content includes these fields:
 - `key`, `value`, `unit`, and `description`
 - `metadata`, which stores JSON-compatible content details
 
-Each occurrence adds its own source, confidence, and metadata. This design lets several objects
-share one long description without sharing occurrence details. The writer stores equal content
-once. Neither the content nor an occurrence has an ID in Python.
+Each occurrence adds its own `source`, `confidence`, and `occurrence_metadata`. This design lets
+several objects share one long description without sharing occurrence details. The writer stores
+equal content once. Neither the content nor an occurrence has an ID in Python.
 
 ## Static context
 
@@ -76,8 +76,9 @@ vibration.annotate(
 )
 ```
 
-The owner determines scope. A Signal annotation covers that Signal. A Source annotation covers its
-subtree. A Record annotation covers the Record. Annotation spans cannot specify Signal IDs.
+The owner determines scope. A Signal annotation covers that Signal. A
+[Source annotation](sources.md#annotate-a-source) covers its subtree. A Record annotation covers
+the Record. An annotation span cannot set `time_series`, because the owner sets the scope.
 
 Use `source.select(signals=(ecg, spo2)).annotate(annotation)` for a subset. Each selected Signal gets
 a separate occurrence with shared content. Other Signals remain unchanged.

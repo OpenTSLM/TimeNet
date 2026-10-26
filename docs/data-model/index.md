@@ -13,7 +13,8 @@ time-series datasets in one on-disk format ([TimeF](../timef-dataset.md)). Then 
 TimeNet is not a training toolkit. These pages show the shape of that data:
 
 - **[Datasets](datasets.md)**: versioned collections addressed by an `org/name` id.
-- **[Records](records.md)**: one recording with its signals, annotations, and tasks.
+- **[Records](records.md)**: one recording with its sources, signals, annotations, and tasks.
+- **[Sources](sources.md)**: the devices and sensors in a record. They group its signals.
 - **[Time series](time-series.md)**: one signal's values over time. A record has one or more.
 - **[Annotations](annotations.md)**: scoped side-information in three shapes.
 - **[Tasks](tasks.md)**: the labeled training targets built from a record.

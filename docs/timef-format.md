@@ -39,7 +39,8 @@ Task ──N:M── Record ──1:N── Source ──1:N── Signal ──
 
 `Source` is recursive. A `Record` can therefore represent a simple sensor or a machine containing
 subsystems and sensor packages. A `Signal` is a leaf and has exactly one owning `Source`. Several
-Signals can reference the same immutable `TimeAxis`.
+Signals can reference the same immutable `TimeAxis`. See
+[Sources](data-model/sources.md#storage-and-read-back) for how TimeF stores and reads back Sources.
 
 ## DuckDB control tables
 
@@ -47,9 +48,11 @@ Signals can reference the same immutable `TimeAxis`.
 
 | Table | Purpose |
 | --- | --- |
+| `control_metadata` | Schema version and the last entity ID used for each kind. |
+| `datasets` | The one dataset that the file describes, keyed by its `org/name` `dataset_id`. |
 | `records` | Recording sessions and session-level timing metadata. |
 | `clocks` | Record start times, shared by records that use the same `TimeOrigin`. |
-| `sources` | Recursive sources, linked to their record and parent source by ID. |
+| `sources` | Recursive [sources](data-model/sources.md#storage-and-read-back), linked to their record and parent source by ID. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
 | `axis_offsets` | Shared offsets for irregular axes. |
@@ -65,20 +68,19 @@ Signals can reference the same immutable `TimeAxis`.
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
 in either direction, so TimeF does not store duplicate reverse-index tables.
 
-Every table except `clocks` uses IDs as keys. Every relationship stores the ID that it refers to.
-The only internal key is `clocks.clock_id`, and `records.clock_id` refers to it. The writer numbers
-clocks from 1 on each write. As a result, the value has no meaning outside one file, and the Python
-API does not expose it.
+Every relationship stores the ID that it refers to. Only the entity IDs (`record_id`, `signal_id`,
+and `task_id`) stay the same across edits. The dataset assigns them, and users do not set them.
+The storage IDs (`clock_id`, `source_id`, `axis_id`, `content_id`, and `occurrence_id`) are
+internal row numbers. The writer numbers them from 1 on every write. As a result, a storage ID has
+no meaning outside one file, and the Python API does not expose it.
 
-Public IDs (`record_id`, `signal_id`, and `task_id`) and the writer's storage IDs (`source_id`,
-`axis_id`, `content_id`, and `occurrence_id`) are positive int64 values stored as `BIGINT`. The
-writer numbers storage IDs from 1 on every write, like clocks. Each ID is unique within its own
-kind, so a Record and a Signal can have the same ID. The `dataset_id` is the exception: it is the
-`org/name` string, stored as `VARCHAR`. Fixed-shape fields are typed columns, so SQL can filter
-spans, task configuration, target values, and annotation values. Only the free-form `metadata`
-dictionaries are JSON.
+Entity IDs and storage IDs are positive int64 values stored as `BIGINT`. Each ID is unique within
+its own kind, so a Record and a Signal can have the same ID. The `dataset_id` is the exception. It
+is the `org/name` string, stored as `VARCHAR`. Fixed-shape fields are typed columns, so SQL can
+filter spans, task configuration, target values, and annotation values. Only the free-form
+`metadata` dictionaries are JSON.
 
-The `control_metadata` table stores the last public ID used for each kind, under
+The `control_metadata` table stores the last entity ID used for each kind, under
 `last_id.Record`, `last_id.Signal`, and `last_id.Task`. A version edited from this one continues
 from these values. As a result, it never reuses the ID of a removed object.
 
@@ -129,7 +131,7 @@ the content through `content_id`. It also carries the span as `span_type`, `star
 `end_us`, plus provenance, confidence, and occurrence metadata.
 
 An occurrence can annotate a Dataset, Task, Record, Source, or Signal. It names its owner with
-`object_type` and `object_id`. For a Record, Signal, or Task, `object_id` is the public ID of the
+`object_type` and `object_id`. For a Record, Signal, or Task, `object_id` is the entity ID of the
 owner. For a Source, it is the storage ID of the Source. `object_id` is `NULL` exactly when the
 owner is the Dataset. IDs are unique only within one kind, so the type is part of the reference.
 
@@ -147,13 +149,13 @@ Python subclass. Four typed columns store the scope: `scope_type`, `scope_start`
 `unit`, `target_name`, `mode`). With these columns, SQL can filter tasks without parsing JSON.
 
 Each inline target is one row in `task_targets`. Its `target_kind` names the typed value column
-that is set. A target stores public IDs directly: `record_id` for a Record, `signal_id` for a
+that is set. A target stores entity IDs directly: `record_id` for a Record, `signal_id` for a
 Signal, and `span_signal_ids` for the series of a span target. A step target names one series. The
 relationship tables hold the references to Records, annotation occurrences, and parent Tasks.
 
 The `field` column distinguishes relationships such as `inputs` and `candidate_records`.
 `position` preserves tuple order. On read, TimeNet hydrates each object once and restores ordinary
-Python object references. It can also give back the same rows as Arrow tables of public IDs. See
+Python object references. It can also give back the same rows as Arrow tables of entity IDs. See
 [TimeFReader](timef-reader.md).
 
 ## Values plane

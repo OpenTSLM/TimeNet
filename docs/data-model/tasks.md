@@ -126,7 +126,7 @@ Use `add_tasks()` for an atomic batch. A parent in `from_tasks` can appear in th
 
 For a large task corpus, use `set_task_stream()`. The writer validates each streamed Task before it
 writes the Task. A stream does not keep the complete task set in memory. TimeNet therefore cannot
-check duplicate task IDs or `from_tasks` relationships across streamed Tasks.
+validate `from_tasks` relationships across streamed Tasks.
 
 ## Scope an input
 

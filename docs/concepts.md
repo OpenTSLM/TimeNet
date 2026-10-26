@@ -15,7 +15,7 @@ This page collects the vocabulary that appears across these docs. Follow a link 
 | **TimeF** | The one format for every dataset. It has one on-disk shape and one API, so an ECG, an accelerometer trace, and a market series all read the same way. |
 | **Dataset** | A named, versioned collection of records in TimeF, addressed as `org/name` (for example `chengsenwang/tsqa`). |
 | **Record** | One recording session containing a recursive hierarchy of Sources and Signals. |
-| **Source** | A device, sensor, or subsystem. A Source can contain child Sources and Signals. |
+| **[Source](data-model/sources.md)** | A device, sensor, or subsystem. A Source can contain child Sources and Signals. |
 | **Signal** | One named value stream with its own TimeAxis and TimeSeriesSpec. Values remain lazy until read. |
 | **Manifest** | The [`manifest.json`](manifest.md) entry point for a version. It contains metadata, schema, counts, checksums, and file paths. Its presence marks a committed version. |
 | **Connector** | One [`BaseConnector`](connectors.md) per dataset. `download()` fetches the raw source. `convert()` builds a `TimeFDataset`. It knows nothing about the engine or registry. |

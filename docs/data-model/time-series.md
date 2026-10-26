@@ -31,9 +31,9 @@ temperature = Signal(
 )
 ```
 
-A Signal has a read-only int64 `id` and a human-readable `name`. The dataset sets the `id` when you
-add the Record of the Signal. A Source owns the Signal, and a Record reaches it through that Source
-hierarchy.
+A Signal has a read-only int64 `id` and a human-readable `name`. When you add the Record of the
+Signal, the dataset sets the `id`. A [Source](sources.md) owns the Signal, and a Record reaches it
+through that Source hierarchy.
 
 ## Choose an axis
 
@@ -95,8 +95,8 @@ every Signal array.
 
 ## Ownership and reuse
 
-Each Signal belongs to one Source. Do not attach one Signal instance, or one Signal ID, to several
-Sources or Records.
+Each Signal belongs to [one Source](sources.md#ownership). Do not attach one Signal instance to
+several Sources or Records.
 
 Several Signals can share the same immutable `TimeAxis` or `TimeSeriesSpec`. TimeF stores the axis
 definition once. For an irregular axis, this includes its complete offset stream. Signal values

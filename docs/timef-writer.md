@@ -120,6 +120,6 @@ Python.
 
 ## Progress
 
-Pass `progress_cb` to receive `WriteProgressEvent` objects. Events report schema work, completed
-Signals, finalized value shards, and the final commit. The callback is observational: an exception
-from it aborts the write like any other failure.
+Pass `progress_cb` to receive `WriteProgressEvent` objects. Events report completed Signals
+(`time_series`), finalized value shards (`shard_finalized`), and the final commit (`commit`). The
+callback is observational: an exception from it aborts the write like any other failure.
