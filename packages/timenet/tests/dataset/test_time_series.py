@@ -1,3 +1,4 @@
+import pickle
 from typing import Any
 
 import numpy as np
@@ -5,9 +6,10 @@ import pyarrow as pa
 import pytest
 
 from timenet.dataset import Signal
-from timenet.dataset.axis import OrdinalAxis, RegularAxis
-from timenet.errors import TimeFValidationError
+from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
+from timenet.errors import TimeFNullValuesError, TimeFValidationError
 from timenet.types import StepInterval, StepPoint, TimeInterval, TimeSeriesSpec, ureg
+from timenet.types.handles import ArrowArray, CallableArray, NumpyArray
 
 
 def _spec():
@@ -210,3 +212,182 @@ def test_step_range_rejects_a_seconds_span_on_an_ordinal_series():
     ts = Signal.from_values([1.0, 2.0, 3.0], spec=_spec(), name="c", time_axis=OrdinalAxis())
     with pytest.raises(TimeFValidationError, match="no timeline"):
         ts.step_range(TimeInterval.seconds(0.0, 1.0))
+
+
+_VALUES = [1.0, 2.0, 3.0, 4.0]
+_OFFSETS_US = [0, 5, 9, 20]
+
+
+def _no_arrow(*_args, **_kwargs):
+    raise AssertionError("built Arrow")
+
+
+def _signal_from(source, *, irregular=False, nullable=False):
+    """Build the same series from NumPy values, a list, or a loader callable."""
+    spec = _spec().model_copy(update={"dtype": "float32", "nullable": nullable})
+    if source == "loader":
+        return Signal.from_loader(
+            spec=spec,
+            name="c",
+            time_axis=IrregularAxis.spanning(_OFFSETS_US) if irregular else RegularAxis.from_rate_hz(2),
+            n_values=len(_VALUES),
+            loader=lambda: pa.array(_VALUES, type=pa.float32()),
+            time_offsets_loader=(lambda: pa.array(_OFFSETS_US, type=pa.int64())) if irregular else None,
+        )
+    values = np.array(_VALUES) if source == "numpy" else list(_VALUES)
+    if irregular:
+        return Signal.from_irregular(values, time_offsets_us=_OFFSETS_US, spec=spec, name="c")
+    return Signal.from_values(values, spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(2))
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("irregular", [False, True])
+@pytest.mark.parametrize("source", ["numpy", "list", "loader"])
+def test_accessors_read_the_same_series_from_every_source(source, irregular, nullable):
+    ts = _signal_from(source, irregular=irregular, nullable=nullable)
+    assert ts.to_arrow().equals(pa.array(_VALUES, type=pa.float32()))
+    values = ts.to_numpy()
+    assert values.dtype == np.float32
+    assert values.tolist() == _VALUES
+    dense, valid = ts.to_numpy_and_mask()
+    assert dense.dtype == np.float32
+    assert dense.tolist() == _VALUES
+    assert valid.dtype == np.bool_
+    assert valid.tolist() == [True] * len(_VALUES)
+    assert ts.read_steps(1, 3).to_pylist() == [2.0, 3.0]
+    assert ts.read_steps(2, 99).to_pylist() == [3.0, 4.0]
+    if irregular:
+        assert ts.time_offsets_us().dtype == np.int64
+        assert ts.time_offsets_us().tolist() == _OFFSETS_US
+        assert ts.step_range(TimeInterval(start_us=5, end_us=20)) == (1, 3)
+    else:
+        with pytest.raises(TimeFValidationError, match="only an IrregularAxis"):
+            ts.time_offsets_us()
+
+
+def test_in_memory_values_stay_numpy_or_arrow_as_given():
+    assert isinstance(_signal_from("numpy")._values, NumpyArray)
+    assert isinstance(_signal_from("list")._values, ArrowArray)
+    arrow = pa.array(_VALUES, type=pa.float32())
+    signal = Signal(name="c", data=arrow, spec=_spec(), time_axis=RegularAxis.from_rate_hz(2))
+    assert isinstance(signal._values, ArrowArray)
+    assert signal.to_arrow() is arrow
+    assert isinstance(_signal_from("numpy", irregular=True)._time_offsets, NumpyArray)
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+def test_numpy_values_read_as_numpy_without_building_arrow(monkeypatch, nullable):
+    ts = _signal_from("numpy", irregular=True, nullable=nullable)
+    monkeypatch.setattr(pa, "array", _no_arrow)
+    assert ts.to_numpy().tolist() == _VALUES
+    assert ts.time_offsets_us().tolist() == _OFFSETS_US
+    if not nullable:
+        assert ts.to_numpy_and_mask()[0].tolist() == _VALUES
+
+
+@pytest.mark.parametrize(
+    ("dtype", "source"),
+    [("bool", np.array([True, False, True])), ("float64", np.arange(6.0)[::2])],
+)
+def test_values_that_arrow_copies_do_not_follow_later_changes_to_the_source(dtype, source):
+    spec = _spec().model_copy(update={"dtype": dtype})
+    ts = Signal.from_values(source, spec=spec, name="c", time_axis=OrdinalAxis())
+    expected = source.tolist()
+    source[0] = source[1]
+    assert ts.to_numpy().tolist() == expected
+    assert ts.to_arrow().to_pylist() == expected
+
+
+def test_from_loader_wraps_a_callable_to_read_through_it():
+    calls = []
+
+    def loader():
+        calls.append(None)
+        return pa.array([1.0, 2.0, 3.0], type=pa.float32())
+
+    ts = _series(loader=loader)
+    values = ts._values
+    assert isinstance(values, CallableArray)
+    assert values.function is loader
+    ts.to_arrow()
+    ts.to_numpy()
+    ts.read_steps(0, 1)
+    assert len(calls) == 3
+
+
+def test_from_loader_keeps_value_handles_as_they_are():
+    values = ArrowArray(pa.array([1.0, 2.0, 3.0], type=pa.float32()))
+    offsets = NumpyArray(np.array([0, 5, 9]))
+    ts = Signal.from_loader(
+        spec=_spec(),
+        name="c",
+        time_axis=IrregularAxis.spanning([0, 5, 9]),
+        n_values=3,
+        loader=values,
+        time_offsets_loader=offsets,
+    )
+    assert ts._values is values
+    assert ts._time_offsets is offsets
+    assert ts.to_arrow() is values.read()
+    assert ts.time_offsets_us().tolist() == [0, 5, 9]
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+def test_to_numpy_points_null_values_to_the_mask(nullable):
+    ts = _series(
+        spec=_spec().model_copy(update={"nullable": nullable}),
+        loader=lambda: pa.array([1.0, None, 3.0], type=pa.float32()),
+    )
+    with pytest.raises(TimeFNullValuesError, match=r"to_numpy_and_mask\(\) or to_arrow\(\)"):
+        ts.to_numpy()
+
+
+def test_to_numpy_and_mask_rejects_null_values_under_a_spec_without_nulls():
+    ts = _series(loader=lambda: pa.array([1.0, None, 3.0], type=pa.float32()))
+    with pytest.raises(TimeFNullValuesError, match="has null values but nullable=False"):
+        ts.to_numpy_and_mask()
+
+
+def _permuted_tensor():
+    frames = np.arange(24, dtype=np.float32).reshape(4, 6)
+    storage = pa.FixedSizeListArray.from_arrays(pa.array(frames.ravel()), 6)
+    tensor_type = pa.fixed_shape_tensor(pa.float32(), (3, 2), permutation=[1, 0])
+    return pa.ExtensionArray.from_storage(tensor_type, storage)
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+@pytest.mark.parametrize("sliced", [False, True])
+def test_permuted_and_sliced_tensors_read_as_pyarrow_converts_them(sliced, nullable):
+    tensor = _permuted_tensor()
+    if sliced:
+        tensor = tensor.slice(1, 2)
+    expected = tensor.to_numpy_ndarray()
+    spec = _spec().model_copy(update={"value_shape": expected.shape[1:], "nullable": nullable})
+    ts = Signal(name="c", data=tensor, spec=spec, time_axis=OrdinalAxis())
+    np.testing.assert_array_equal(ts.to_numpy(), expected)
+    np.testing.assert_array_equal(ts.to_numpy_and_mask()[0], expected)
+
+
+@pytest.mark.parametrize("nullable", [False, True])
+def test_boolean_tensors_read_as_numpy_with_their_value_shape(nullable):
+    frames = np.array([[True, False], [False, False], [True, True]])
+    storage = pa.FixedSizeListArray.from_arrays(pa.array(frames.ravel()), 2)
+    tensor = pa.ExtensionArray.from_storage(pa.fixed_shape_tensor(pa.bool_(), (2,)), storage)
+    spec = _spec().model_copy(update={"dtype": "bool", "value_shape": (2,), "nullable": nullable})
+    ts = Signal(name="c", data=tensor, spec=spec, time_axis=OrdinalAxis())
+    np.testing.assert_array_equal(ts.to_numpy(), frames)
+    dense, valid = ts.to_numpy_and_mask()
+    np.testing.assert_array_equal(dense, frames)
+    assert valid.tolist() == [True, True, True]
+
+
+@pytest.mark.parametrize("irregular", [False, True])
+@pytest.mark.parametrize("source", ["numpy", "list"])
+def test_a_signal_built_in_memory_survives_pickling(source, irregular):
+    ts = _signal_from(source, irregular=irregular)
+    back = pickle.loads(pickle.dumps(ts))
+    assert (back.id, back.name, back.n_values, back.time_axis) == (ts.id, ts.name, ts.n_values, ts.time_axis)
+    assert back.to_arrow().equals(ts.to_arrow())
+    np.testing.assert_array_equal(back.to_numpy(), ts.to_numpy())
+    if irregular:
+        np.testing.assert_array_equal(back.time_offsets_us(), ts.time_offsets_us())

@@ -47,16 +47,24 @@ lead_i = Signal(
 | `spec` | `TimeSeriesSpec` | Unit, dtype, shape, and modality contract. |
 | `time_axis` | `TimeAxis` | Regular, irregular, or ordinal placement of values. |
 | `data` | array-like | Eager values. Mutually exclusive with `loader`. |
-| `loader` | callable | Lazy Arrow value loader created by `Signal.from_loader()`. |
+| `loader` | `ArrayHandle` or callable | Lazy values, passed to `Signal.from_loader()`. |
 | `n_values` | `int` | Required for a lazy Signal and inferred from eager data. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Signal. |
 | `metadata` | `dict[str, object]` | Optional JSON-compatible metadata. |
 
-`to_arrow()`, `to_numpy()`, and `read_steps()` materialize values. The TimeF reader supplies a lazy
-storage loader, so reading the hierarchy does not load the arrays.
+Read values through `to_arrow()`, `to_numpy()`, `to_numpy_and_mask()`, and `read_steps()`. These
+accessors apply the spec: `to_numpy()` rejects nulls, and tensor values keep their trailing shape.
 
-Irregular Signals also provide `time_offsets_loader`. Regular axes calculate their offsets from
-their cadence, and ordinal axes describe order without a clock.
+A Signal keeps its values behind an internal `ArrayHandle` from `timenet.types`, which library code
+such as the writer reads directly. The constructor holds eager data in memory. NumPy values stay
+NumPy, so `to_numpy()` builds no Arrow, and other values become an Arrow array. `from_loader()`
+keeps a handle as it is and calls a plain callable on every read. The TimeF reader supplies a
+stored handle, so reading the hierarchy does not load the arrays.
+
+An irregular Signal also needs its time offsets. Pass `time_offsets_us` to
+`Signal.from_irregular()` or `time_offsets_loader` to `Signal.from_loader()`, and read them with
+`time_offsets_us()`. Regular axes calculate their offsets from their cadence, and ordinal axes
+describe order without a clock.
 
 Call `signal.annotate(annotation)` to attach one occurrence to a Signal.
 

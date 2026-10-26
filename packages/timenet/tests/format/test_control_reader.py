@@ -79,7 +79,7 @@ def test_shifted_regular_axis_round_trip(tmp_path):
             spec=signal.spec,
             time_axis=axis,
             n_values=signal.n_values,
-            loader=signal.loader,
+            loader=signal.to_arrow,
         )
         for signal in source.signals
     )
@@ -151,7 +151,7 @@ def test_unknown_unit_round_trips_distinct_from_dimensionless(tmp_path):
             spec=spec,
             time_axis=signal.time_axis,
             n_values=signal.n_values,
-            loader=signal.loader,
+            loader=signal.to_arrow,
         )
         for signal, spec in zip(
             old_signals,
