@@ -1,7 +1,7 @@
 """Read and write text, string lists, and time offsets stored in Parquet payloads."""
 
 from collections.abc import Iterable, Mapping
-from dataclasses import dataclass, field as dataclass_field
+from dataclasses import dataclass, field as dataclass_field, replace
 from enum import StrEnum, unique
 import hashlib
 import json
@@ -19,15 +19,18 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.constants import DEFAULT_COMPRESSION, PAYLOAD_TEMPLATE, check_relative_path, part_path
 from timenet.format.control_schema import EXTERNAL_VALUES
+from timenet.format.stored_array import ChunkLocation
 from timenet.format.table_writer import ModelTable
 from timenet.storage.parquet import PayloadTableCache
 from timenet.types._model import TimeFModel
 from timenet.types.handles import ArrayHandle
 from timenet.types.object_kind import ObjectKind
+from timenet.types.reference_keys import OwnerKey
 from timenet.types.text import TextHandle, TextListHandle, read_value
 
 
 if TYPE_CHECKING:
+    from timenet.format.storage import StorageSources
     from timenet.registry.version import DatasetVersion
 
 
@@ -109,12 +112,14 @@ class ExternalObjectFieldKey:
 class PackedLocation:
     """Locate one value packed in a Parquet payload file of a release.
 
-    The catalog records every field, so the value's kind, length, and digest are known without
-    opening the payload file.
+    The catalog records every field, so the value's release, kind, length, and digest are known
+    without opening the payload file.
     """
 
+    owner: OwnerKey | None = None
+    """Release that stores the payload file, or ``None`` for the release whose catalog records it."""
     path: str
-    """Payload file, relative to the release root."""
+    """Payload file, relative to the root of the release that stores it."""
     row: int
     """Row of the value in the payload file."""
     kind: PackedValueKind
@@ -125,8 +130,8 @@ class PackedLocation:
     """SHA-256 digest of time offsets, which identifies them without a read. ``None`` for text."""
 
 
-PayloadLocation = PackedLocation
-"""Where a stored value's bytes live."""
+PayloadLocation = PackedLocation | ChunkLocation
+"""Where a stored value's bytes live: packed text or time offsets, or a signal array's chunks."""
 
 
 class PackedValueLocator(TimeFModel):
@@ -136,6 +141,7 @@ class PackedValueLocator(TimeFModel):
     object_id: str = Field(strict=True, min_length=1)
     field: PackedField
     position: int = Field(strict=True, ge=0)
+    owner_key: OwnerKey | None = Field(default=None, strict=True, min_length=1)
     value_path: str = Field(strict=True, min_length=1)
     row_index: int = Field(strict=True, ge=0)
     value_kind: PackedValueKind
@@ -154,6 +160,7 @@ class PackedValueLocator(TimeFModel):
         """Return where the value is packed."""
         digest = self.value_digest
         return PackedLocation(
+            owner=self.owner_key,
             path=self.value_path,
             row=self.row_index,
             kind=self.value_kind,
@@ -270,8 +277,12 @@ class StoredText(TextHandle):
     """
 
     store: "PackedValueReader" = dataclass_field(repr=False)
-    # Required: without field(), the dataclass would take ValueHandle's None as the default.
-    _location: PackedLocation = dataclass_field()
+    _packed_location: PackedLocation
+
+    @property
+    def _location(self) -> PackedLocation:
+        """Return where the string is packed."""
+        return self._packed_location
 
     @property
     def is_loaded(self) -> bool:
@@ -309,8 +320,12 @@ class StoredTextList(TextListHandle):
     """
 
     store: "PackedValueReader" = dataclass_field(repr=False)
-    # Required: without field(), the dataclass would take ValueHandle's None as the default.
-    _location: PackedLocation = dataclass_field()
+    _packed_location: PackedLocation
+
+    @property
+    def _location(self) -> PackedLocation:
+        """Return where the list is packed."""
+        return self._packed_location
 
     @property
     def is_loaded(self) -> bool:
@@ -350,8 +365,7 @@ class StoredOffsets(ArrayHandle):
     """
 
     store: "PackedValueReader" = dataclass_field(repr=False)
-    # Required: without field(), the dataclass would take ValueHandle's None as the default.
-    _location: PackedLocation = dataclass_field()
+    _packed_location: PackedLocation
     axis_id: str
     """ID of the axis the time offsets belong to."""
     first: int
@@ -359,6 +373,11 @@ class StoredOffsets(ArrayHandle):
     last: int
     """Last time offset the axis declares, in microseconds."""
     _offsets: pa.Array | None = dataclass_field(default=None, init=False, repr=False)
+
+    @property
+    def _location(self) -> PackedLocation:
+        """Return where the time offsets are packed."""
+        return self._packed_location
 
     @property
     def is_loaded(self) -> bool:
@@ -424,14 +443,17 @@ class StoredOffsets(ArrayHandle):
 
 
 class PackedValueReader:
-    """Read one release's packed values through a bounded cache of decoded payload files."""
+    """Read one release's packed values through a bounded cache of decoded payload files.
+
+    A value whose location names an owner is read from that payload source of the release.
+    """
 
     def __init__(self, version: "DatasetVersion") -> None:
         self.version = version
         self._parquet = PayloadTableCache(_CACHE_FILES)
 
     def read_scalar(self, location: PackedLocation) -> pa.Scalar:
-        """Read a packed value from its physical file.
+        """Read a packed value from the payload file of the release that stores it.
 
         Returns:
             The Arrow scalar at the location's file and row: a string, or a list of strings or time offsets.
@@ -439,7 +461,7 @@ class PackedValueReader:
         Raises:
             TimeFFormatError: If the location or stored value is invalid.
         """
-        table = self._parquet.read_table(self.version, location.path)
+        table = self._parquet.read_table(self.version.resolve_payload_source(location.owner), location.path)
         where = f"{location.path}:{location.row}"
         if location.kind.value not in table.column_names:
             raise TimeFFormatError(f"unknown external value kind at {where}")
@@ -600,10 +622,11 @@ def materialize_table(
 
 
 class PackedValueWriter:
-    """Pack large local values into Parquet files and record their catalog locations."""
+    """Pack new values into Parquet payload files, and reuse the payloads that store read values."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: Path, sources: "StorageSources") -> None:
         self.root = root
+        self.sources = sources
         self.files: list[str] = []
         self.rows: list[dict] = []
         self.locators: list[PackedValueLocator] = []
@@ -619,7 +642,10 @@ class PackedValueWriter:
         *,
         digest: bytes | None = None,
     ) -> CatalogValue | ExternalValue:
-        """Keep a value inline or register its external location.
+        """Keep a value inline, pack it, or reuse the payload that stores it.
+
+        A stored text or time-offsets handle keeps its payload row, so its value is neither read nor
+        copied. Its locator names the row in the release that stores it.
 
         Args:
             digest: The ``offsets_digest()`` of time offsets, when the caller has it already.
@@ -630,9 +656,14 @@ class PackedValueWriter:
             the storage representation; this method never returns a placeholder.
 
         Raises:
-            TimeFValidationError: If the external locator is invalid for this field.
-        """
-        ExternalObjectFieldKey(object_kind=kind, object_id=identity, field=field, position=position)
+            TimeFValidationError: If the locator is invalid for this field, or a reused payload is
+                stored by the output release or missing from the release that stores it.
+        """  # noqa: DOC502 - raised by _add_locator and StorageSources.add
+        key = ExternalObjectFieldKey(object_kind=kind, object_id=identity, field=field, position=position)
+        if isinstance(value, StoredText | StoredTextList | StoredOffsets):
+            stored = value._location
+            owner = self.sources.add(value.store.version, stored)
+            return self._add_locator(key, replace(stored, owner=owner))
         classified = _classify_value(value)
         if isinstance(classified, CatalogValue):
             return classified
@@ -641,31 +672,52 @@ class PackedValueWriter:
         size = value.nbytes if isinstance(value, pa.Array) else len(json.dumps(value, ensure_ascii=False).encode())
         if value_kind != PackedValueKind.TIME_OFFSETS and size <= INLINE_LIMIT:
             return CatalogValue(value)
-        path = part_path(PAYLOAD_TEMPLATE, len(self.files))
-        row = len(self.rows)
-        length = len(value)
-        value_digest = None
-        if isinstance(value, pa.Array):
-            value_digest = CHECKSUM_PREFIX + (offsets_digest(value) if digest is None else digest).hex()
-        try:
-            locator = PackedValueLocator(
-                object_kind=kind,
-                object_id=identity,
-                field=field,
-                position=position,
-                value_path=path,
-                row_index=row,
-                value_kind=value_kind,
-                n_values=length,
-                value_digest=value_digest,
-            )
-        except ValidationError as exc:
-            raise TimeFValidationError(f"invalid external locator for {kind.value} {identity!r}: {exc}") from exc
+        if isinstance(value, pa.Array) and digest is None:
+            digest = offsets_digest(value)
+        external = self._add_locator(
+            key,
+            PackedLocation(
+                path=part_path(PAYLOAD_TEMPLATE, len(self.files)),
+                row=len(self.rows),
+                kind=value_kind,
+                length=len(value),
+                digest=digest if isinstance(value, pa.Array) else None,
+            ),
+        )
         self.rows.append({value_kind.value: value.to_pylist() if isinstance(value, pa.Array) else value})
         self.bytes += size
-        self.locators.append(locator)
         if self.bytes >= _PACK_BYTES:
             self.flush()
+        return external
+
+    def _add_locator(self, key: ExternalObjectFieldKey, location: PackedLocation) -> ExternalValue:
+        """Record the catalog locator that names a field's packed value.
+
+        Returns:
+            The recorded locator.
+
+        Raises:
+            TimeFValidationError: If the location is invalid for this field.
+        """
+        digest = location.digest
+        try:
+            locator = PackedValueLocator(
+                object_kind=key.object_kind,
+                object_id=key.object_id,
+                field=key.field,
+                position=key.position,
+                owner_key=location.owner,
+                value_path=location.path,
+                row_index=location.row,
+                value_kind=location.kind,
+                n_values=location.length,
+                value_digest=None if digest is None else CHECKSUM_PREFIX + digest.hex(),
+            )
+        except ValidationError as exc:
+            raise TimeFValidationError(
+                f"invalid external locator for {key.object_kind.value} {key.object_id!r}: {exc}"
+            ) from exc
+        self.locators.append(locator)
         return ExternalValue(locator)
 
     def flush(self) -> None:

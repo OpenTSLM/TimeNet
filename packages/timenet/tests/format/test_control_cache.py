@@ -2,18 +2,13 @@ import pyarrow.fs as pafs
 
 from timenet.format.checksums import file_checksum
 from timenet.format.control_cache import materialize_control
-from timenet.format.control_writer import DuckDBControlWriter
-from timenet.format.stored_values import PackedValueWriter
 from timenet.manifest import FilePart, Manifest, ManifestFiles
 from timenet.registry.version import DatasetVersion
 
-from .test_control_writer import _dataset
 
-
-def test_local_control_database_uses_its_existing_path(tmp_path):
-    path = tmp_path / "control.duckdb"
-    dataset = _dataset()
-    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
+def test_local_control_database_uses_its_existing_path(control_path, control_dataset):
+    path = control_path
+    dataset = control_dataset
     manifest = Manifest(
         dataset_id=dataset.metadata.dataset_id,
         metadata=dataset.metadata,
@@ -25,7 +20,7 @@ def test_local_control_database_uses_its_existing_path(tmp_path):
     version = DatasetVersion(
         manifest=manifest,
         filesystem=pafs.LocalFileSystem(),
-        root=str(tmp_path),
+        root=str(path.parent),
     )
 
     assert materialize_control(version) == path

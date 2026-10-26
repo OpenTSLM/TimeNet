@@ -20,6 +20,7 @@ from typing import ClassVar, assert_never
 import pyarrow as pa
 
 from timenet.dataset import Signal
+from timenet.types.reference_keys import OwnerKey
 from timenet.values_backends.parquet.config import ParquetValuesConfig
 from timenet.values_backends.types import ChunkDataIndex
 from timenet.values_backends.zarr.config import ZarrValuesConfig
@@ -39,6 +40,8 @@ class ChunkPlacement:
     """Signal name of the source series."""
     n_values: int
     """Number of values in the chunk."""
+    owner_key: OwnerKey | None = None
+    """Physical owner in the manifest; None denotes this release."""
 
 
 @dataclass
