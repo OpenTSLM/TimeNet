@@ -4,6 +4,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum, unique
+from functools import lru_cache
 from typing import TYPE_CHECKING, ClassVar, TypeAlias, TypeGuard, cast, final
 
 import pint
@@ -74,18 +75,37 @@ def validate_input_modalities(
         raise TimeFValidationError("input_modalities must be a non-empty collection of InputModality values")
     task = "task" if task_id is None else f"task {task_id!r}"
     try:
-        declared = frozenset(InputModality(value) for value in modalities)
+        return _validated_input_modalities(tuple(modalities), bool(prompt), has_record_inputs)
+    except TimeFValidationError as exc:
+        raise TimeFValidationError(f"{task} {exc}") from exc
     except (TypeError, ValueError) as exc:
         raise TimeFValidationError(f"invalid input_modalities for {task}") from exc
+
+
+@lru_cache(maxsize=256)
+def _validated_input_modalities(
+    modalities: tuple[InputModality, ...], has_prompt: bool, has_record_inputs: bool
+) -> frozenset[InputModality]:
+    """Cache validation of the small immutable modality vocabulary.
+
+    The messages name no task, so the caller prefixes them.
+
+    Returns:
+        The validated declaration.
+
+    Raises:
+        TimeFValidationError: If the declaration disagrees with the input shape.
+    """
+    declared = frozenset(InputModality(value) for value in modalities)
     if not declared:
-        raise TimeFValidationError(f"{task} must declare an input modality")
-    if prompt and InputModality.TEXT not in declared:
-        raise TimeFValidationError(f"{task} has a prompt but does not declare text input")
+        raise TimeFValidationError("must declare an input modality")
+    if has_prompt and InputModality.TEXT not in declared:
+        raise TimeFValidationError("has a prompt but does not declare text input")
     if InputModality.NO_INPUT in declared:
         if has_record_inputs or declared - {InputModality.NO_INPUT, InputModality.TEXT}:
-            raise TimeFValidationError(f"{task} cannot combine no_input with record or media inputs")
+            raise TimeFValidationError("cannot combine no_input with record or media inputs")
     elif not has_record_inputs and declared <= {InputModality.TEXT}:
-        raise TimeFValidationError(f"{task} needs no_input when it has only a text prompt")
+        raise TimeFValidationError("needs no_input when it has only a text prompt")
     return declared
 
 
