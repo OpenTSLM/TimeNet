@@ -86,12 +86,12 @@ class Table:
 
     @property
     def column_names(self) -> tuple[str, ...]:
-        """Return the column names in storage order."""
+        """The column names in storage order."""
         return tuple(column.name for column in self.columns)
 
     @property
     def arrow_schema(self) -> pa.Schema:
-        """Return the schema of a writer batch for this table, one Arrow field per column."""
+        """The schema of a writer batch for this table, one Arrow field per column."""
         return pa.schema([pa.field(column.name, column.type.arrow) for column in self.columns])
 
     def ddl(self) -> str:

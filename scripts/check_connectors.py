@@ -12,7 +12,7 @@ plain dev environment.
 
 import os
 from pathlib import Path
-import subprocess  # noqa: S404 - the commands are fixed argument vectors, never a shell string
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - the commands are fixed argument vectors, never a shell string
 
 
 ROOT = Path(__file__).resolve().parent.parent
@@ -70,7 +70,7 @@ def main() -> int:
         name = connector.relative_to(DATASETS)
         print(f"\n=== {name} ===", flush=True)
         for command in (["pytest", str(connector / "tests"), "-q"], ["ty", "check", str(connector)]):
-            result = subprocess.run(_overlay(connector, command), cwd=ROOT, env=_ENV, check=False)  # noqa: S603
+            result = subprocess.run(_overlay(connector, command), cwd=ROOT, env=_ENV, check=False)  # ruff: ignore[subprocess-without-shell-equals-true]
             if result.returncode != 0:
                 failures.append(f"{name}: {command[0]}")
     if failures:

@@ -104,7 +104,7 @@ def unit_axis(ax):
     bare(ax)
 
 
-def box(ax, text, *, cx=0.5, cy=0.5, w=0.8, h=0.42, ec=GREEN, fc=GREEN_FC, fs=10):  # noqa: PLR0913
+def box(ax, text, *, cx=0.5, cy=0.5, w=0.8, h=0.42, ec=GREEN, fc=GREEN_FC, fs=10):  # ruff: ignore[too-many-arguments]
     """Draw a centered rounded box with a label on a unit axis."""
     ax.add_patch(Rectangle((cx - w / 2, cy - h / 2), w, h, fc=fc, ec=ec, lw=1.3, joinstyle="round", capstyle="round"))
     ax.text(cx, cy, text, ha="center", va="center", fontsize=fs, color=INK)
@@ -215,7 +215,7 @@ def fig_cross_sensor():
 # --- tasks: an input series, an arrow, an output shape ---------------------------------------------
 
 
-def _io_fig(name, seeds, render_right, *, right_title, question=False, window=None, height=2.3):  # noqa: PLR0913
+def _io_fig(name, seeds, render_right, *, right_title, question=False, window=None, height=2.3):  # ruff: ignore[too-many-arguments]
     """Build a task exemplar: one axis per input signal, an arrow, and the output shape on the right.
 
     ``seeds`` gives one signal per entry (each its own stacked axis). ``question`` adds a ``+ ?`` panel

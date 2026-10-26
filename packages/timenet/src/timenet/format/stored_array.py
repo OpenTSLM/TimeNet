@@ -72,12 +72,12 @@ class StoredArray(ArrayHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return False, since every read goes to the chunks."""
+        """Always False, since every read goes to the chunks."""
         return False
 
     @property
     def _location(self) -> ChunkLocation:
-        """Return where the chunks are stored, without reading them.
+        """Where the chunks are stored, found without reading them.
 
         The reader finds them for a batch of signals at a time and keeps them until it closes. The
         handle keeps nothing.

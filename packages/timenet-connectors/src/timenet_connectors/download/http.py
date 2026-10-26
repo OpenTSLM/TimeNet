@@ -43,7 +43,7 @@ class Artifact:
     sha256: str | None = None
 
 
-async def download_http(  # noqa: PLR0913
+async def download_http(  # ruff: ignore[too-many-arguments]
     url: str,
     dest: str | Path,
     *,

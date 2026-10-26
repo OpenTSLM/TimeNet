@@ -62,7 +62,7 @@ class TargetValueRow(TimeFModel):
         return self
 
     @classmethod
-    def from_target(cls, target: object) -> Self:  # noqa: PLR0911 - one branch per target kind
+    def from_target(cls, target: object) -> Self:  # ruff: ignore[too-many-return-statements] - one branch per target kind
         """Construct a validated row for one public target.
 
         Returns:

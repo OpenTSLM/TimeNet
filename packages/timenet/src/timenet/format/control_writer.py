@@ -389,7 +389,7 @@ class DuckDBControlWriter:
             )
         chunks.flush()
 
-    def _write_tasks(  # noqa: PLR0913, PLR0917 - reference sets stay explicit
+    def _write_tasks(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] - reference sets stay explicit
         self,
         connection: duckdb.DuckDBPyConnection,
         dataset: TimeFDataset,

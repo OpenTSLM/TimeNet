@@ -57,7 +57,7 @@ class Source(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: If the graph contains a cycle or one source has two parents.
-        """  # noqa: DOC502 - raised by the nested traversal helper
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the nested traversal helper
         seen: set[int] = set()
         active: set[int] = set()
 
@@ -111,6 +111,6 @@ class Source(SupportsAnnotate):
         Returns:
             A selection that can be annotated as one declarative operation.
         """
-        from timenet.dataset.selection import SignalSelection  # noqa: PLC0415
+        from timenet.dataset.selection import SignalSelection  # ruff: ignore[import-outside-top-level]
 
         return SignalSelection.from_source(self, signals=signals, signal_names=signal_names)

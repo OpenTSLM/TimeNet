@@ -279,7 +279,7 @@ def test_enum_streaming_write_read(tmp_path):
 
 def test_torch_maps_enum_to_integer_codes():
     torch = pytest.importorskip("torch")
-    from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
+    from timenet.torch import TimeFTorchDataset  # ruff: ignore[import-outside-top-level]
 
     dataset = _dataset(["awake", "deep", "rem", "awake"])
     item = TimeFTorchDataset(dataset)[0]
@@ -299,7 +299,7 @@ def test_torch_maps_enum_to_integer_codes():
 )
 def test_enum_codes_are_stable_across_shards(tmp_path, write_kwargs):
     pytest.importorskip("torch")
-    from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
+    from timenet.torch import TimeFTorchDataset  # ruff: ignore[import-outside-top-level]
 
     spec = _spec(categories=("a", "b", "c", "d", "e"))
     dataset = TimeFDataset(

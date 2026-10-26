@@ -154,7 +154,7 @@ class Annotation:
 
     @property
     def _content_key(self) -> tuple[Hashable, ...]:
-        """Return the reusable payload, without occurrence-specific fields, as a hashable key.
+        """The reusable payload, without occurrence-specific fields, as a hashable key.
 
         The writer stores annotations with equal keys as one content row. The value type is part of
         the key, so ``True``, ``1`` and ``1.0`` differ. A float compares by its bits, so ``0.0`` and
@@ -174,7 +174,7 @@ class Annotation:
 
     @property
     def name(self) -> str:
-        """Return the annotation's public name."""
+        """The annotation's public name."""
         return self.key
 
     def _new_occurrence(self) -> "Annotation":
@@ -210,7 +210,7 @@ class SupportsAnnotate(Protocol):
 
     @property
     def annotations(self) -> tuple[Annotation, ...]:
-        """Return the occurrences attached to this object."""
+        """The occurrences attached to this object."""
         ...
 
     def annotate(self, annotation: Annotation) -> Annotation:

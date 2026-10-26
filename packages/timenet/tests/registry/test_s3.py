@@ -4,16 +4,16 @@ import pytest
 boto3 = pytest.importorskip("boto3")
 pytest.importorskip("moto")
 
-from moto.server import ThreadedMotoServer  # noqa: E402
-import pyarrow.fs as pafs  # noqa: E402
+from moto.server import ThreadedMotoServer  # ruff: ignore[module-import-not-at-top-of-file]
+import pyarrow.fs as pafs  # ruff: ignore[module-import-not-at-top-of-file]
 
-from timenet.client import TimeNet  # noqa: E402
-from timenet.dataset import TimeFDataset  # noqa: E402
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError  # noqa: E402
-from timenet.reader import TimeFReader  # noqa: E402
-from timenet.registry import LocalRegistry, S3Registry  # noqa: E402
-from timenet.testing import assert_datasets_equal, make_dataset  # noqa: E402
-from timenet.types import DatasetSchema  # noqa: E402
+from timenet.client import TimeNet  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.dataset import TimeFDataset  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.reader import TimeFReader  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.registry import LocalRegistry, S3Registry  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.testing import assert_datasets_equal, make_dataset  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.types import DatasetSchema  # ruff: ignore[module-import-not-at-top-of-file]
 
 
 @pytest.fixture
@@ -100,7 +100,7 @@ def test_download_then_load_serves_from_cache(s3_root, tmp_path):
 
 def test_get_bytes_reraises_non_404_client_errors(tmp_path, monkeypatch):
     # A missing object returns None, but any other S3 error (auth, throttling) must surface, not hide.
-    import botocore.exceptions  # noqa: PLC0415
+    import botocore.exceptions  # ruff: ignore[import-outside-top-level]
 
     registry = S3Registry("s3://tn-test/registry", cache_dir=tmp_path)
     denied = botocore.exceptions.ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "GetObject")

@@ -97,7 +97,7 @@ class _RegistryFile(AbstractBufferedFile):
 
         Raises:
             TimeNetRegistryError: If HTTP fails or the object server cannot serve byte ranges.
-        """  # noqa: DOC501 - the outer handler wraps ClientResponseError
+        """  # ruff: ignore[docstring-missing-exception] - the outer handler wraps ClientResponseError
         try:
             try:
                 return self._read_signed_range(start, end)

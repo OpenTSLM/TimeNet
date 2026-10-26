@@ -547,7 +547,7 @@ def test_invalid_external_locator_is_rejected_before_exposing_placeholders(tmp_p
     version = open_local_version(version_dir)
     with connect_control(version_dir / "control.duckdb") as connection:
         connection.execute(
-            f"UPDATE external_values SET {column} = ? WHERE field = 'prompt'",  # noqa: S608 - fixed test columns
+            f"UPDATE external_values SET {column} = ? WHERE field = 'prompt'",  # ruff: ignore[hardcoded-sql-expression] - fixed test columns
             [value],
         )
 

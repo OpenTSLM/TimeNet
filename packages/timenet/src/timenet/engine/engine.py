@@ -14,7 +14,7 @@ from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
-def run_pipeline(  # noqa: PLR0913
+def run_pipeline(  # ruff: ignore[too-many-arguments]
     connector: BaseConnector,
     root: Path,
     *,
@@ -75,7 +75,7 @@ def run_pipeline(  # noqa: PLR0913
     return version_dir
 
 
-def publish_pipeline(  # noqa: PLR0913
+def publish_pipeline(  # ruff: ignore[too-many-arguments]
     connector: BaseConnector,
     registry: WritableRegistry,
     *,

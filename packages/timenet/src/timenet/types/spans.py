@@ -45,7 +45,7 @@ def _check_signal(name: str, value: object) -> None:
     Raises:
         TimeFValidationError: If ``value`` is not a :class:`~timenet.dataset.Signal`.
     """
-    from timenet.dataset.time_series import Signal  # noqa: PLC0415
+    from timenet.dataset.time_series import Signal  # ruff: ignore[import-outside-top-level]
 
     if not isinstance(value, Signal):
         raise TimeFValidationError(f"{name} takes Signal objects, got {type(value).__name__}")

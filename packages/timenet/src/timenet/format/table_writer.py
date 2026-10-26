@@ -32,7 +32,7 @@ def insert_rows(connection: duckdb.DuckDBPyConnection, table: Table, rows: Seque
         connection.register(relation_name, pa.Table.from_pylist(rows, schema=table.arrow_schema))
         try:
             connection.execute(
-                f"INSERT INTO {table.name} ({names}) SELECT {names} FROM {relation_name}"  # noqa: S608
+                f"INSERT INTO {table.name} ({names}) SELECT {names} FROM {relation_name}"  # ruff: ignore[hardcoded-sql-expression]
             )
         finally:
             connection.unregister(relation_name)

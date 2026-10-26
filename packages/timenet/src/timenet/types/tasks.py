@@ -153,7 +153,7 @@ class Task(SupportsAnnotate, ABC):
     @property
     @abstractmethod
     def task_type(self) -> TaskType:
-        """Return the concrete task's stable storage tag."""
+        """The concrete task's stable storage tag."""
 
     inputs: tuple["Record", ...] = field(default=(), compare=False)
     """Records supplied to the model, in semantic order."""
@@ -227,12 +227,12 @@ class Task(SupportsAnnotate, ABC):
 
         Raises:
             TimeFValidationError: If the task is not in a dataset yet.
-        """  # noqa: DOC502 (raised by assigned_id)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by assigned_id)
         return assigned_id(self._id, type(self).__name__)
 
     @property
     def resolved_input_modalities(self) -> frozenset[InputModality]:
-        """Return the validated override, or infer kinds from the current inputs.
+        """The validated override, or the kinds inferred from the current inputs.
 
         Inference reads Signal specs within the scope, the prompt, and text input annotations.
         It does not load values or inspect targets. NO_INPUT means there are no input Records.
@@ -400,15 +400,15 @@ class TSCorrespondenceTask(Task):
 
 def _is_record(value: object) -> TypeGuard["Record"]:
     """Return whether a target is a Record without importing Record at module load time."""
-    from timenet.dataset.record import Record  # noqa: PLC0415
+    from timenet.dataset.record import Record  # ruff: ignore[import-outside-top-level]
 
     return isinstance(value, Record)
 
 
 def _is_target_item(value: object) -> bool:
     """Return whether value can form one item in a task's expected answer."""
-    from timenet.dataset.record import Record  # noqa: PLC0415
-    from timenet.dataset.time_series import Signal  # noqa: PLC0415
+    from timenet.dataset.record import Record  # ruff: ignore[import-outside-top-level]
+    from timenet.dataset.time_series import Signal  # ruff: ignore[import-outside-top-level]
 
     return isinstance(value, (TextHandle, int, float, bool, Record, Signal, Span))
 

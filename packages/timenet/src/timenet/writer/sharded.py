@@ -25,7 +25,7 @@ class RotatingPartWriter:
     it, so there is one sharding implementation.
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         staging_dir: Path,
         schema: pa.Schema,
@@ -129,7 +129,7 @@ class ShardedTableWriter:
     feed millions of rows from a stream. :meth:`finish` closes the last part.
     """
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         schema: pa.Schema,
         part_path: Callable[[int], str],
@@ -208,7 +208,7 @@ class ShardedTableWriter:
         return self._core.finish(write_empty_part=write_empty_part)
 
 
-def write_sharded_table(  # noqa: PLR0913
+def write_sharded_table(  # ruff: ignore[too-many-arguments]
     rows: Iterable[dict],
     schema: pa.Schema,
     part_path: Callable[[int], str],

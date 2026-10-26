@@ -81,7 +81,7 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             ImportError: If ``wfdb``, declared in this connector's requirements, is not installed.
         """
         try:
-            import wfdb  # noqa: PLC0415
+            import wfdb  # ruff: ignore[import-outside-top-level]
         except ImportError as exc:
             raise ImportError(
                 "reading PhysioNet records needs wfdb, declared in this connector's "

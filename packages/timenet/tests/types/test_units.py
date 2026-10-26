@@ -57,9 +57,9 @@ def test_normalize_unit_passes_none_through():
 
 def test_use_as_application_registry_is_opt_in_and_works():
     # The escape hatch for bare pint.Unit / Quantity pickling, which no per-type __getstate__ covers.
-    import pickle  # noqa: PLC0415
+    import pickle  # ruff: ignore[import-outside-top-level]
 
-    from timenet.types import use_as_application_registry  # noqa: PLC0415
+    from timenet.types import use_as_application_registry  # ruff: ignore[import-outside-top-level]
 
     previous = pint.get_application_registry().get()
     try:

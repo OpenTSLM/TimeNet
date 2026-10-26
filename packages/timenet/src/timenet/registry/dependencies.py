@@ -50,7 +50,7 @@ def open_local_version(path: str | Path, *, sources_root: str | Path | None = No
         FileNotFoundError: If ``path`` has no manifest.
         TimeFValidationError: If the release has payload sources, is not stored as
             ``<root>/<org>/<name>/<version>``, and no ``sources_root`` is given.
-    """  # noqa: DOC502 - the checks below raise TimeFFormatError and TimeNetDatasetNotFoundError
+    """  # ruff: ignore[docstring-extraneous-exception] - the checks below raise TimeFFormatError and TimeNetDatasetNotFoundError
     directory = Path(path).expanduser()
     manifest_path = directory / MANIFEST_FILE
     if not manifest_path.is_file():
@@ -80,7 +80,7 @@ def open_local_release(directory: Path, manifest: Manifest, *, sources_root: Pat
             differs from the files the release pins.
         TimeNetDatasetNotFoundError: If a payload source is not under ``sources_root``.
         TimeFValidationError: If the release has payload sources but no ``sources_root``.
-    """  # noqa: DOC502 - raised by the checks this function calls
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the checks this function calls
     version = DatasetVersion(manifest, pafs.LocalFileSystem(), str(directory))
     check_file_sizes(version, manifest.files.all_files(), owner=str(_reference(manifest)))
     if not manifest.payload_sources:
@@ -122,7 +122,7 @@ def attach_payload_sources(
         TimeNetDatasetNotFoundError: If a payload source is absent.
         TimeFFormatError: If a payload source's manifest names another release, lacks a pinned file,
             records it differently, or a pinned local file is missing or has another size.
-    """  # noqa: DOC502 - mismatches are raised by the checks this function calls
+    """  # ruff: ignore[docstring-extraneous-exception] - mismatches are raised by the checks this function calls
     release = _reference(version.manifest)
     sources: dict[SourceKey, DatasetVersion] = {}
     for key, pinned in version.manifest.payload_sources.items():
@@ -190,7 +190,7 @@ def check_file_sizes(version: DatasetVersion, parts: Iterable[FilePart], *, owne
             raise TimeFFormatError(f"{owner}: file {part.path!r} has {size} bytes; expected {part.size}")
 
 
-def prepare_local_copy(  # noqa: PLR0913
+def prepare_local_copy(  # ruff: ignore[too-many-arguments]
     root: str | Path,
     reference: DatasetRef,
     *,
@@ -265,7 +265,7 @@ def open_cached_or_remote(
     return attach_payload_sources(version, open_one, searched=f"{searched} or its cache {root}")
 
 
-def _ensure_dataset_version_available_locally(  # noqa: PLR0913
+def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-arguments]
     directory: Path,
     reference: DatasetRef,
     *,
@@ -282,7 +282,7 @@ def _ensure_dataset_version_available_locally(  # noqa: PLR0913
     Raises:
         TimeNetDatasetNotFoundError: If a complete release is unavailable.
         TimeFFormatError: If a manifest identifies a different release.
-    """  # noqa: DOC502 - helpers validate manifest references
+    """  # ruff: ignore[docstring-extraneous-exception] - helpers validate manifest references
     if manifest is not None:
         validate_manifest_reference(manifest, reference)
     if not force:

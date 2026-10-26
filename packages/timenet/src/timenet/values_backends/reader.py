@@ -74,12 +74,12 @@ def make_values_reader(name: str) -> BaseValuesReader:
         ModuleNotFoundError: If another dependency of the backend is missing.
     """
     if name == ValuesBackend.PARQUET:
-        from timenet.values_backends.parquet.reader import ParquetValuesReader  # noqa: PLC0415
+        from timenet.values_backends.parquet.reader import ParquetValuesReader  # ruff: ignore[import-outside-top-level]
 
         return ParquetValuesReader()
     if name == ValuesBackend.ZARR:
         try:
-            from timenet.values_backends.zarr.reader import ZarrValuesReader  # noqa: PLC0415
+            from timenet.values_backends.zarr.reader import ZarrValuesReader  # ruff: ignore[import-outside-top-level]
         except ModuleNotFoundError as error:
             if error.name != "zarr":
                 raise

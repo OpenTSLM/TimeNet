@@ -139,7 +139,7 @@ def test_load_reads_in_place_without_downloading(registry_root, tmp_path):
 
 def test_load_torch(registry_root, tmp_path):
     torch = pytest.importorskip("torch")
-    from torch.utils.data import Dataset  # noqa: PLC0415
+    from torch.utils.data import Dataset  # ruff: ignore[import-outside-top-level]
 
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
     ds = client.load_torch("timenet/hello-world")

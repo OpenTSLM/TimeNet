@@ -239,7 +239,7 @@ def test_stored_text_compares_by_content_with_inline_text_and_native_values(read
     prompt, reports = _stored(reader)
     assert prompt == InlineText(_TEXT)
     assert prompt == _TEXT
-    assert _TEXT == prompt  # noqa: SIM300 - the reflected comparison is the point
+    assert _TEXT == prompt  # ruff: ignore[yoda-conditions] - the reflected comparison is the point
     assert reports == InlineTextList(_TEXTS)
     assert reports == _TEXTS
     assert prompt != _TEXT[:-1] + "!"
@@ -367,7 +367,7 @@ def test_a_location_that_disagrees_with_its_payload_fails_the_read(tmp_path, ass
     # Opening checks the release's files, so open it before changing them.
     version = open_local_version(version_dir)
     with connect_control(version_dir / "control.duckdb") as connection:
-        connection.execute(f"UPDATE external_values SET {assignment} WHERE {condition}")  # noqa: S608 - fixed test SQL
+        connection.execute(f"UPDATE external_values SET {assignment} WHERE {condition}")  # ruff: ignore[hardcoded-sql-expression] - fixed test SQL
 
     with TimeFReader(version) as reader:
         handle = _stored(reader)[stored]
@@ -502,7 +502,7 @@ def test_locators_name_their_owner_by_kind_and_int_id(tmp_path):
 def test_the_audit_rejects_a_locator_without_its_owner(tmp_path, assignment, message):
     version_dir = _write(tmp_path)
     with connect_control(version_dir / "control.duckdb") as connection:
-        connection.execute(f"UPDATE external_values SET {assignment} WHERE field = 'prompt'")  # noqa: S608 - fixed test SQL
+        connection.execute(f"UPDATE external_values SET {assignment} WHERE field = 'prompt'")  # ruff: ignore[hardcoded-sql-expression] - fixed test SQL
         with pytest.raises(TimeFFormatError, match=message):
             audit_control_database(connection)
 

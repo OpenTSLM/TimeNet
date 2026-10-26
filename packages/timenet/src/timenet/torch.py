@@ -111,7 +111,7 @@ class TimeFTorchDataset(Dataset):
     def __getitem__(self, index: int) -> Any:
         return self.__getitems__([index])[0]
 
-    def __getitems__(self, indices: Sequence[int]) -> list[Any]:  # noqa: PLW3201 - DataLoader batch hook
+    def __getitems__(self, indices: Sequence[int]) -> list[Any]:  # ruff: ignore[bad-dunder-method-name] - DataLoader batch hook
         """Return the items at ``indices``, hydrating the whole batch together.
 
         Args:

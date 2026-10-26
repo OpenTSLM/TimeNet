@@ -230,7 +230,7 @@ def test_store_refuses_a_payload_source_the_service_does_not_hold_before_publish
 
 
 def test_store_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path):
-    import httpx  # noqa: PLC0415
+    import httpx  # ruff: ignore[import-outside-top-level]
 
     def handler(request):
         # The service omits every declared file from its upload list. store() must reject that before

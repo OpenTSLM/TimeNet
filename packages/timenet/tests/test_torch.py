@@ -6,14 +6,14 @@ from timenet.dataset import Record, Source
 
 torch = pytest.importorskip("torch")
 
-from torch.utils.data import Dataset  # noqa: E402
+from torch.utils.data import Dataset  # ruff: ignore[module-import-not-at-top-of-file]
 
-from timenet.dataset import Signal, TimeFDataset  # noqa: E402
-from timenet.dataset.axis import RegularAxis  # noqa: E402
-from timenet.errors import TimeFValidationError  # noqa: E402
-from timenet.testing import make_dataset  # noqa: E402
-from timenet.torch import TimeFTorchDataset  # noqa: E402
-from timenet.types import (  # noqa: E402
+from timenet.dataset import Signal, TimeFDataset  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.dataset.axis import RegularAxis  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.errors import TimeFValidationError  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.testing import make_dataset  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.torch import TimeFTorchDataset  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.types import (  # ruff: ignore[module-import-not-at-top-of-file]
     DatasetMetadata,
     Domain,
     License,
@@ -113,9 +113,9 @@ def test_str_series_has_no_tensor_representation():
 
 
 def test_reader_backed_view_hydrates_a_batch_with_the_same_items(tmp_path):
-    from timenet.reader import TimeFReader  # noqa: PLC0415
-    from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
-    from timenet.writer import TimeFWriter  # noqa: PLC0415
+    from timenet.reader import TimeFReader  # ruff: ignore[import-outside-top-level]
+    from timenet.registry.dependencies import open_local_version  # ruff: ignore[import-outside-top-level]
+    from timenet.writer import TimeFWriter  # ruff: ignore[import-outside-top-level]
 
     dataset = make_dataset()
     dataset.derive_schema()

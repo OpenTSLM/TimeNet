@@ -131,7 +131,7 @@ class S3Registry(LazyReadRegistry):
         Raises:
             TimeNetDatasetNotFoundError: If the object does not exist.
         """
-        import botocore.exceptions  # noqa: PLC0415
+        import botocore.exceptions  # ruff: ignore[import-outside-top-level]
 
         client = self._client()
         try:
@@ -214,7 +214,7 @@ class S3Registry(LazyReadRegistry):
         Returns:
             A configured random-access filesystem.
         """
-        import boto3  # noqa: PLC0415 - optional S3 dependency
+        import boto3  # ruff: ignore[import-outside-top-level] - optional S3 dependency
 
         session = boto3.Session()
         credentials = session.get_credentials()
@@ -240,12 +240,12 @@ class S3Registry(LazyReadRegistry):
         Returns:
             A boto3 S3 client.
         """
-        import boto3  # noqa: PLC0415 - optional S3 dependency
+        import boto3  # ruff: ignore[import-outside-top-level] - optional S3 dependency
 
         return boto3.client("s3")
 
     def _key(self, *parts: str) -> str:
-        """Build a bucket-relative key: the prefix, then ``datasets/``, then the path parts."""  # noqa: DOC201
+        """Build a bucket-relative key: the prefix, then ``datasets/``, then the path parts."""  # ruff: ignore[docstring-missing-returns]
         segments = [self._prefix, _DATASETS_PREFIX, *parts]
         return "/".join(segment.strip("/") for segment in segments if segment)
 
@@ -272,7 +272,7 @@ class S3Registry(LazyReadRegistry):
         Raises:
             TimeNetRegistryError: If S3 fails for a reason other than a missing object.
         """
-        import botocore.exceptions  # noqa: PLC0415
+        import botocore.exceptions  # ruff: ignore[import-outside-top-level]
 
         client = self._client()
         try:

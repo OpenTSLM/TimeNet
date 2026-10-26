@@ -63,7 +63,7 @@ class Backend(NamedTuple):
 def _s3_registry(request, tmp_path, monkeypatch) -> S3Registry:
     boto3 = pytest.importorskip("boto3")
     pytest.importorskip("moto")
-    from moto.server import ThreadedMotoServer  # noqa: PLC0415
+    from moto.server import ThreadedMotoServer  # ruff: ignore[import-outside-top-level]
 
     server = ThreadedMotoServer(port=0)
     try:

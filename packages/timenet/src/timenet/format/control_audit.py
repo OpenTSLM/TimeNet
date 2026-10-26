@@ -52,7 +52,7 @@ _ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
 """The primary id column of each entity table."""
 
 _ENTITY_ID_CHECKS = " UNION ALL ".join(
-    f"SELECT '{table}.{column}' FROM {table} WHERE {column} <= 0"  # noqa: S608 - fixed table names
+    f"SELECT '{table}.{column}' FROM {table} WHERE {column} <= 0"  # ruff: ignore[hardcoded-sql-expression] - fixed table names
     for table, column in _ENTITY_ID_COLUMNS
 )
 
@@ -95,26 +95,26 @@ _DOMAIN_CHECKS = f"""
     UNION ALL
     {_ENTITY_ID_CHECKS}
     LIMIT 1
-"""  # noqa: S608 - tags come only from internal enum values and fixed table names
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values and fixed table names
 
 _OWNERLESS = {
     object_type: (
         "object_id IS NOT NULL"
         if owner is None
-        else f"NOT EXISTS (SELECT 1 FROM {owner[0]} WHERE {owner[0]}.{owner[1]} = object_id)"  # noqa: S608
+        else f"NOT EXISTS (SELECT 1 FROM {owner[0]} WHERE {owner[0]}.{owner[1]} = object_id)"  # ruff: ignore[hardcoded-sql-expression]
     )
     for object_type, owner in ANNOTATED_OWNER_TABLES.items()
 }
 """Per object type, the predicate of an occurrence whose owner does not exist."""
 
 _OCCURRENCE_OWNER = " UNION ALL ".join(
-    f"SELECT occurrence_id, object_type, object_id FROM annotation_occurrences "  # noqa: S608
+    f"SELECT occurrence_id, object_type, object_id FROM annotation_occurrences "  # ruff: ignore[hardcoded-sql-expression]
     f"WHERE object_type = '{object_type}' AND {predicate}"
     for object_type, predicate in _OWNERLESS.items()
 )
 
 _EXTERNAL_OWNER = " UNION ALL ".join(
-    f"SELECT field, object_kind, object_id FROM external_values WHERE object_kind = '{kind}' "  # noqa: S608
+    f"SELECT field, object_kind, object_id FROM external_values WHERE object_kind = '{kind}' "  # ruff: ignore[hardcoded-sql-expression]
     f"AND NOT EXISTS (SELECT 1 FROM {table} WHERE {table}.{column} = external_values.object_id)"
     for kind, (table, column) in EXTERNAL_OWNER_TABLES.items()
 )
@@ -130,7 +130,7 @@ _EXTERNAL_TARGET = f"""
             AND targets.target_kind = '{TaskTargetKind.TEXT}'
       )
     LIMIT 1
-"""  # noqa: S608 - tags come only from internal enum values
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
 """A packed target whose task has no text target at its position."""
 
 _EXTERNAL_CONTENT_KIND = f"""
@@ -143,7 +143,7 @@ _EXTERNAL_CONTENT_KIND = f"""
           WHEN '{PackedValueKind.TEXT_LIST}' THEN '{AnnotationValueKind.TEXT_LIST}'
       END
     LIMIT 1
-"""  # noqa: S608 - tags come only from internal enum values
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
 """A packed annotation value whose content row holds another kind of value."""
 
 _EXTERNAL_AXIS_SHAPE = f"""
@@ -152,7 +152,7 @@ _EXTERNAL_AXIS_SHAPE = f"""
       AND (field <> '{PackedField.TIME_OFFSETS}' OR position <> 0
            OR value_kind <> '{PackedValueKind.TIME_OFFSETS}' OR value_digest IS NULL)
     LIMIT 1
-"""  # noqa: S608 - tags come only from internal enum values
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
 """An axis locator other than one digested time offsets array at position 0."""
 
 CROSS_RECORD_PARENT = """
@@ -220,7 +220,7 @@ _TASK_RECORD_SCOPE = f"""
         WHEN spans.signal_ids IS NULL OR list_contains(spans.signal_ids, signals.signal_id)
         THEN refs.record_id END) <> 1
     LIMIT 1
-"""  # noqa: S608 - tags come only from internal enum values
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
 
 
 def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool = True) -> None:
@@ -261,7 +261,7 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
                   AND (len(list_filter(input_modalities, x -> x NOT IN ('text', 'no_input'))) > 0
                        OR EXISTS (SELECT 1 FROM task_record_refs r
                                   WHERE r.task_id = tasks.task_id AND r.field = '{TaskRelationshipField.INPUTS}')))
-           LIMIT 1"""  # noqa: S608 - fixed field name
+           LIMIT 1"""  # ruff: ignore[hardcoded-sql-expression] - fixed field name
     ).fetchone()
     if invalid_modality is not None:
         raise TimeFFormatError(f"task {invalid_modality[0]!r} has invalid input_modalities")
@@ -340,7 +340,7 @@ def _audit_unique_keys(connection: duckdb.DuckDBPyConnection, table: Table) -> N
     for columns in table.unique:
         names = ", ".join(columns)
         duplicate = connection.execute(
-            f"SELECT {names} FROM {table.name} GROUP BY {names} HAVING count(*) > 1 LIMIT 1"  # noqa: S608
+            f"SELECT {names} FROM {table.name} GROUP BY {names} HAVING count(*) > 1 LIMIT 1"  # ruff: ignore[hardcoded-sql-expression]
         ).fetchone()
         if duplicate is not None:
             raise TimeFFormatError(f"{table.name} contains duplicate values for {names}: {duplicate!r}")
@@ -354,7 +354,7 @@ def _audit_foreign_keys(connection: duckdb.DuckDBPyConnection, table: Table) -> 
     """
     for key in table.foreign_keys:
         child = (
-            f"(SELECT unnest({key.column}) AS {key.column} FROM {table.name})" if key.many else table.name  # noqa: S608
+            f"(SELECT unnest({key.column}) AS {key.column} FROM {table.name})" if key.many else table.name  # ruff: ignore[hardcoded-sql-expression]
         )
         orphan = connection.execute(
             f"""SELECT child.{key.column}
@@ -363,7 +363,7 @@ def _audit_foreign_keys(connection: duckdb.DuckDBPyConnection, table: Table) -> 
                   ON parent.{key.references} = child.{key.column}
                 WHERE child.{key.column} IS NOT NULL
                   AND parent.{key.references} IS NULL
-                LIMIT 1"""  # noqa: S608
+                LIMIT 1"""  # ruff: ignore[hardcoded-sql-expression]
         ).fetchone()
         if orphan is not None:
             raise TimeFFormatError(

@@ -14,7 +14,7 @@ import json
 import os
 from pathlib import Path
 import shlex
-import subprocess  # noqa: S404 - the command is a fixed argument vector
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - the command is a fixed argument vector
 import sys
 import threading
 from urllib.parse import urlparse
@@ -57,7 +57,7 @@ def env_spec(dataset_id: str, *, values_backend: str | None = None) -> EnvSpec:
     Raises:
         LookupError: If no connector exists for the id.
         TimeNetBuildError: If a base distribution is not installed.
-    """  # noqa: DOC502 (raised by requirements_for and _base_args, not directly here)
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by requirements_for and _base_args, not directly here)
     base = _base_args()
     # The parent cannot import the connector before its dependencies exist. When its default is
     # unknown, include the optional backend too. An explicit Parquet build needs no Zarr dependency.
@@ -97,7 +97,7 @@ def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
     return [*command, *argv]
 
 
-def run_isolated(  # noqa: PLR0913
+def run_isolated(  # ruff: ignore[too-many-arguments]
     dataset_id: str,
     out: str | Path,
     *,
@@ -131,7 +131,7 @@ def run_isolated(  # noqa: PLR0913
     Raises:
         TimeNetBuildError: If the child failed, or printed nothing.
         LookupError: If no connector exists for the id.
-    """  # noqa: DOC502 (raised by env_spec, not directly here)
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by env_spec, not directly here)
     # --quiet belongs to timenet-build, not to build, so it goes before the subcommand.
     argv = ["timenet-build", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(out)]
     if force:
@@ -170,7 +170,7 @@ def _run_build(command: list[str], env: dict[str, str]) -> tuple[str, str, int]:
     Returns:
         The child's captured stdout, its captured stderr, and its exit code.
     """
-    process = subprocess.Popen(  # noqa: S603
+    process = subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true]
         command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     captured: list[str] = []
