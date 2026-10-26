@@ -11,6 +11,7 @@ import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
+from timenet.format.stored_values import PackedValueWriter
 from timenet.testing import make_dataset
 from timenet.types import (
     Annotation,
@@ -51,7 +52,7 @@ def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
     dataset.add_task(task=AnswerTask(inputs=(image_record,), prompt="Describe this image.", targets=("A chart.",)))
     dataset.add_task(task=TSGenerationTask(prompt="Make an ECG.", targets=(dataset.records[0],)))
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         assert reader.read_task_table(required_modalities=[InputModality.TIME_SERIES])["task_id"].to_pylist() == [
@@ -78,7 +79,7 @@ def test_annotations_keep_their_order_when_a_task_refers_to_a_later_one(tmp_path
     record.annotate(Annotation(key="age", value=70))
     task.input_annotations = (record.annotations[1],)
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         (stored_record,) = reader.read_records()
@@ -104,7 +105,7 @@ def test_shifted_regular_axis_round_trip(tmp_path):
     dataset = TimeFDataset(metadata=template.metadata)
     dataset.add_record(record=Record(sources=(Source(name="ECG", signals=signals),)))
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
     with DuckDBControlReader(path) as reader:
         (record,) = reader.read_records()
     restored = record.signals[0].time_axis
@@ -116,7 +117,7 @@ def test_shifted_regular_axis_round_trip(tmp_path):
 def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
     values = {
         LEAD_I_ID: pa.array([1.0, 2.0], type=pa.float32()),
         LEAD_II_ID: pa.array([3.0, 4.0], type=pa.float32()),
@@ -147,7 +148,7 @@ def test_reader_and_audit_reject_ambiguous_stored_task_time_span(tmp_path):
     dataset = _dataset()
     second = dataset.add_record(record=Record(sources=(Source(name="other"),)))
     dataset.tasks[0].inputs = (*dataset.tasks[0].inputs, second)
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
     with connect_control(path) as connection:
         connection.execute(
             "UPDATE tasks SET scope_type = 'time_interval', scope_start = 0, scope_end = 2000 WHERE task_id = ?",
@@ -179,7 +180,7 @@ def test_unknown_unit_round_trips_distinct_from_dimensionless(tmp_path):
     dataset = TimeFDataset(metadata=template.metadata)
     dataset.add_record(record=Record(sources=(Source(name="ECG", signals=signals),)))
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         (record,) = reader.read_records()
@@ -192,7 +193,7 @@ def test_input_modalities_round_trip_as_typed_task_data(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
     dataset.tasks[0].input_modalities = frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         (task,) = reader.read_tasks(reader.read_records())
@@ -238,7 +239,7 @@ def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path, mo
     required = frozenset({InputModality.TIME_SERIES})
     supported = frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         tasks = list(reader.iter_tasks(required_modalities=required, supported_modalities=supported))
@@ -268,7 +269,7 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
     record = dataset.records[0]
     signal = record.signals[0]
     dataset.tasks[0].targets = ("Yes", 7, 0.5, True, record, signal, *_spans_over(signal))
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
@@ -297,7 +298,7 @@ def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
     record = dataset.records[0]
     second = record.annotate(Annotation(key="patient_age", value=65, unit="year"))
     dataset.tasks[0].input_annotations = (second, record.annotations[0])
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
@@ -309,7 +310,7 @@ def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
 
 def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
 
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
@@ -327,7 +328,7 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
     dataset = make_dataset()
     selected_record, corrupt_record = dataset.records[:2]
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
     with connect_control(path) as connection:
         connection.execute(
             """UPDATE signals SET modality = 'corrupt'
@@ -360,7 +361,7 @@ def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path)
 )
 def test_control_reader_rejects_corrupt_relationships(tmp_path, statement, message):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
     with connect_control(path) as connection:
         connection.execute(statement)
 
@@ -393,7 +394,7 @@ def test_control_reader_rejects_corrupt_relationships(tmp_path, statement, messa
 )
 def test_full_reads_reject_occurrences_with_an_invalid_owner(tmp_path, statement, message):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
     with connect_control(path) as connection:
         connection.execute(statement)
 
@@ -403,7 +404,7 @@ def test_full_reads_reject_occurrences_with_an_invalid_owner(tmp_path, statement
 
 def test_full_task_read_rejects_an_unknown_owner_type_without_task_annotations(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
     with connect_control(path) as connection:
         connection.execute("DELETE FROM annotation_occurrences WHERE object_type = 'Task'")
         connection.execute("UPDATE annotation_occurrences SET object_type = 'Unknown' WHERE content_id = 1")
@@ -435,7 +436,7 @@ def test_annotations_stay_with_their_owner_when_ids_collide_across_kinds(tmp_pat
     shared_id = record.id
     assert signal.id == task.id == shared_id
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with connect_control(path, read_only=True) as connection:
         audit_control_database(connection, require_chunks=False)
@@ -460,7 +461,7 @@ def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tm
     (expected_parent,) = expected_answer.from_tasks
     expected_ids = sorted(task.id for task in dataset.tasks if expected_record in task.inputs)
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
@@ -484,7 +485,7 @@ def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, m
     child = AnswerTask(inputs=(record,), targets=("child",), from_tasks=(parent,))
     dataset.add_tasks(tasks=(child, parent))
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         (record,) = reader.read_records()
@@ -522,7 +523,7 @@ def test_read_tasks_rejects_corrupt_task_references(tmp_path, statement, message
     dataset.add_tasks(tasks=(parent, AnswerTask(inputs=(record,), targets=("child",), from_tasks=(parent,)), scoped))
     assert scoped.id == 4
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
     with connect_control(path) as connection:
         connection.execute(statement)
 
@@ -542,7 +543,7 @@ def test_read_tasks_rejects_duplicate_task_ids(tmp_path, read):
     dataset = _dataset()
     dataset.add_task(task=AnswerTask(inputs=dataset.tasks[0].inputs, targets=("No",)))
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
     with connect_control(path) as connection:
         connection.execute("UPDATE tasks SET task_id = ? WHERE task_id = 2", [TASK_ID])
 
@@ -552,7 +553,7 @@ def test_read_tasks_rejects_duplicate_task_ids(tmp_path, read):
 
 def test_read_tasks_rejects_records_the_database_does_not_store(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
 
     other = TimeFDataset(metadata=_dataset().metadata)
     for _ in range(2):
@@ -564,7 +565,7 @@ def test_read_tasks_rejects_records_the_database_does_not_store(tmp_path):
 def test_typed_scope_and_payload_columns_round_trip(tmp_path):
     dataset = make_dataset()
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         restored = {task.id: task for task in reader.read_tasks(reader.read_records())}
@@ -595,7 +596,7 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
     annotation = Annotation(key="probe", value=value, span=None if value is not None else TimePoint(start_us=0))
     record.annotate(annotation)
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         (restored,) = reader.read_records((record.id,))
@@ -618,7 +619,7 @@ def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
     (record,) = answer_task.inputs
     age_annotation = next(annotation for annotation in record.annotations if annotation.key == "age")
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         tasks = {task.id: task for task in reader.read_tasks(reader.read_records())}
@@ -659,7 +660,7 @@ def test_split_round_trips_and_filters_before_hydration(tmp_path, monkeypatch):
         )
     )
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         train = list(reader.iter_tasks(split="train"))
@@ -689,7 +690,7 @@ def test_annotations_read_back_in_the_order_they_were_attached(tmp_path):
     for key in keys:
         record.annotate(Annotation(key=key, value=1))
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         (restored,) = reader.read_records((record.id,))
@@ -699,7 +700,7 @@ def test_annotations_read_back_in_the_order_they_were_attached(tmp_path):
 
 def test_tasks_refer_to_the_annotations_of_the_records_passed_in(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
 
     with DuckDBControlReader(path) as reader:
         first = reader.read_records()
@@ -716,7 +717,7 @@ def test_tasks_find_the_annotations_of_records_from_another_reader(tmp_path):
     record = dataset.records[0]
     second = record.annotate(Annotation(key="patient_age", value=65, unit="year"))
     dataset.tasks[0].input_annotations = (second, record.annotations[0])
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as other:
         records = other.read_records()
@@ -734,7 +735,7 @@ def test_tasks_reject_a_record_from_another_reader_whose_annotation_was_replaced
     record = dataset.records[0]
     second = record.annotate(Annotation(key="patient_age", value=65, unit="year"))
     dataset.tasks[0].input_annotations = (second,)
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as other:
         records = other.read_records()
@@ -756,7 +757,7 @@ def test_full_range_int_ids_round_trip_as_python_ints(tmp_path):
     generated = dataset.add_record(record=Record(sources=(Source(name="generated"),)))
     dataset.add_record(record=Record(sources=(Source(name="largest"),)))
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
@@ -772,7 +773,7 @@ def test_full_range_int_ids_round_trip_as_python_ints(tmp_path):
 
 def test_read_records_rejects_a_non_int_id(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
 
     with DuckDBControlReader(path) as reader, pytest.raises(TimeFValidationError, match="positive int64 id"):
         reader.read_records((str(RECORD_ID),))  # ty: ignore[invalid-argument-type]
@@ -782,7 +783,7 @@ def test_annotation_table_gives_dataset_annotations_a_null_int64_object_id(tmp_p
     dataset = _dataset()
     dataset.annotate(Annotation(key="site", value="clinic"))
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
         (annotation,) = reader.read_dataset_annotations(dataset.metadata.dataset_id)

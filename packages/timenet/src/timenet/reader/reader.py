@@ -2,7 +2,6 @@
 
 from __future__ import annotations
 
-from collections import OrderedDict
 from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
@@ -11,7 +10,7 @@ from typing import TYPE_CHECKING
 
 import pyarrow as pa
 
-from timenet.dataset import IrregularAxis, Record, TimeFDataset
+from timenet.dataset import Record, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
@@ -44,9 +43,6 @@ if TYPE_CHECKING:
 
 
 _CHUNK_LOCATOR_BATCH_SIZE = 1_024
-_AXIS_OFFSETS_CACHE_SIZE = 64
-# The newest axis may exceed this target so Signals can still share one large offset array.
-_AXIS_OFFSETS_CACHE_TARGET_BYTES = 64 * 2**20
 
 
 class TimeFReader:
@@ -74,8 +70,6 @@ class TimeFReader:
         self._chunk_locator_batches: list[list[int]] = []
         self._chunk_locator_batch_by_id: dict[int, int] = {}
         self._chunk_rows_cache: dict[int, list[StoredChunk]] = {}
-        self._axis_offsets_cache: OrderedDict[int, pa.Array] = OrderedDict()
-        self._axis_offsets_cache_bytes = 0
 
     def __getstate__(self) -> dict:
         """Return picklable state without open connections or decoded object caches."""
@@ -85,8 +79,6 @@ class TimeFReader:
         state["_records"] = None
         state["_values"] = None
         state["_chunk_rows_cache"] = {}
-        state["_axis_offsets_cache"] = OrderedDict()
-        state["_axis_offsets_cache_bytes"] = 0
         return state
 
     def __enter__(self) -> TimeFReader:
@@ -115,8 +107,6 @@ class TimeFReader:
         if self._packed_value_reader is not None:
             self._packed_value_reader.close()
         self._chunk_rows_cache.clear()
-        self._axis_offsets_cache.clear()
-        self._axis_offsets_cache_bytes = 0
 
     def verify(self) -> None:
         """Verify the size and checksum of every artifact in the manifest.
@@ -343,7 +333,6 @@ class TimeFReader:
             self._control = DuckDBControlReader(
                 materialize_control(self._version),
                 value_loader_factory=self._make_signal_loader,
-                offsets_loader=self._load_offsets,
                 external=self._packed_value_reader,
             )
         return self._control
@@ -414,29 +403,6 @@ class TimeFReader:
             self._chunk_locator_batches[batch_index].append(signal_id)
             self._chunk_locator_batch_by_id[signal_id] = batch_index
         return _SignalLoader(self, signal_id, spec)
-
-    def _load_offsets(self, axis_id: int, axis: IrregularAxis, n_values: int) -> pa.Array:
-        """Load stored offsets and keep recently used shared axes in an LRU cache.
-
-        Returns:
-            The axis offsets in microseconds.
-        """
-        cached = self._axis_offsets_cache.get(axis_id)
-        if cached is not None:
-            self._axis_offsets_cache.move_to_end(axis_id)
-            return cached
-        offsets = self._control_reader().load_axis_offsets(axis_id, axis, n_values)
-        if _AXIS_OFFSETS_CACHE_SIZE == 0:
-            return offsets
-        self._axis_offsets_cache[axis_id] = offsets
-        self._axis_offsets_cache_bytes += offsets.nbytes
-        while len(self._axis_offsets_cache) > 1 and (
-            len(self._axis_offsets_cache) > _AXIS_OFFSETS_CACHE_SIZE
-            or self._axis_offsets_cache_bytes > _AXIS_OFFSETS_CACHE_TARGET_BYTES
-        ):
-            _, evicted = self._axis_offsets_cache.popitem(last=False)
-            self._axis_offsets_cache_bytes -= evicted.nbytes
-        return offsets
 
     @contextmanager
     def _as_format_error(self, *, preserve_validation: bool = False) -> Generator[None]:

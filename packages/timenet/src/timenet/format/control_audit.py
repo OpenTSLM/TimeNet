@@ -1,7 +1,7 @@
 """Audit a finished ``control.duckdb`` for relational integrity.
 
-The control database has no persisted constraints. ART indexes on the large ``axis_offsets`` and
-``signal_chunks`` tables make every write slower and the file larger. Instead, the writer keeps the
+The control database has no persisted constraints. ART indexes on large tables such as
+``signal_chunks`` make every write slower and the file larger. Instead, the writer keeps the
 invariants while it streams rows. It checks them in Python with ID sets. This module holds the SQL
 form of the same invariants. It scans every table, so it is not part of the write path. Tests run it
 after each round trip, and tooling can run it on a published version.
@@ -146,6 +146,15 @@ _EXTERNAL_CONTENT_KIND = f"""
 """  # noqa: S608 - tags come only from internal enum values
 """A packed annotation value whose content row holds another kind of value."""
 
+_EXTERNAL_AXIS_SHAPE = f"""
+    SELECT object_id FROM external_values
+    WHERE object_kind = '{ObjectKind.AXIS}'
+      AND (field <> '{PackedField.TIME_OFFSETS}' OR position <> 0
+           OR value_kind <> '{PackedValueKind.TIME_OFFSETS}' OR value_digest IS NULL)
+    LIMIT 1
+"""  # noqa: S608 - tags come only from internal enum values
+"""An axis locator other than one digested time offsets array at position 0."""
+
 CROSS_RECORD_PARENT = """
     SELECT child.source_id
     FROM sources child
@@ -172,11 +181,10 @@ _AXIS_LENGTH = """
     SELECT signals.signal_id
     FROM signals
     JOIN axes USING (axis_id)
-    LEFT JOIN (
-        SELECT axis_id, count(*) AS offset_count FROM axis_offsets GROUP BY axis_id
-    ) offsets USING (axis_id)
-    WHERE (axes.axis_type = 'irregular' AND coalesce(offset_count, 0) <> signals.n_values)
-       OR (axes.axis_type <> 'irregular' AND coalesce(offset_count, 0) <> 0)
+    LEFT JOIN external_values external
+      ON external.object_kind = 'Axis' AND external.object_id = axes.axis_id AND external.field = 'time_offsets'
+    WHERE (axes.axis_type = 'irregular' AND (external.n_values IS NULL OR external.n_values <> signals.n_values))
+       OR (axes.axis_type <> 'irregular' AND external.object_id IS NOT NULL)
     LIMIT 1
 """
 
@@ -296,7 +304,8 @@ def _audit_external_values(connection: duckdb.DuckDBPyConnection) -> None:
 
     Raises:
         TimeFFormatError: If a locator's owner row is missing, a packed target has no text target
-            row at its position, or a packed annotation value is of another kind than its content.
+            row at its position, a packed annotation value is of another kind than its content, or
+            an axis locator is not one digested time offsets array at position 0.
     """
     orphan_value = connection.execute(f"{_EXTERNAL_OWNER} LIMIT 1").fetchone()
     if orphan_value is not None:
@@ -313,6 +322,12 @@ def _audit_external_values(connection: duckdb.DuckDBPyConnection) -> None:
         content_id, packed_kind, content_kind = wrong_kind
         raise TimeFFormatError(
             f"external value of Content {content_id!r} is {packed_kind}, but the content holds {content_kind}"
+        )
+
+    wrong_axis = connection.execute(_EXTERNAL_AXIS_SHAPE).fetchone()
+    if wrong_axis is not None:
+        raise TimeFFormatError(
+            f"external value of Axis {wrong_axis[0]!r} is not one digested time offsets array at position 0"
         )
 
 
