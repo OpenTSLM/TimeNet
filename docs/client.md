@@ -110,6 +110,19 @@ with client.open("timenet/hello-world") as reader:
 `open()` and read what you need, such as one task with `reader.get()` or the tasks' text alone with
 a load plan.
 
+For sequential reads of many signals, use `scan()` to decode Parquet groups with four workers.
+Values remain lazy, and the reader keeps a bounded cache:
+
+```python
+with client.open("timenet/hello-world") as reader:
+    with reader.scan() as dataset:
+        for record in dataset.records:
+            for signal in record.signals:
+                values = signal.to_arrow()
+```
+
+The scan context releases its workers when it ends, including after an early exit or error.
+
 For a local registry, the reader opens the version in place. If the version is missing, `open()` and
 `load()` can build it from an installed connector.
 
