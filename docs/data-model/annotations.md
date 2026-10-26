@@ -60,7 +60,9 @@ record.annotate(quality_annotation("high"))
 
 Every occurrence of a constant shares its content. A builder call creates a new `Annotation`, and
 calls with equal arguments give equal content. The writer stores equal content once either way, and
-the reader rebuilds a plain `Annotation` that equals the one written.
+the reader rebuilds a plain `Annotation` that equals the one written. Large text read back from a
+release is compared by where it is stored, without a read. So annotations read from one content
+row are stored as one row again, but stored text and the same text in memory become two rows.
 
 ## Static context
 

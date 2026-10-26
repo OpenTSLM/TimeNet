@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Container, Hashable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Container, Hashable, Iterable, Iterator
 from hashlib import sha256
 from itertools import count, islice
 import json
@@ -13,7 +13,6 @@ from weakref import WeakValueDictionary
 
 import duckdb
 import numpy as np
-import pyarrow as pa
 from pydantic import ValidationError
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, TimeFDataset
@@ -25,6 +24,8 @@ from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.control_audit import CROSS_RECORD_PARENT, SOURCE_CYCLE
 from timenet.format.control_schema import LAST_ID_PREFIX, TABLES, Table
 from timenet.format.duckdb import connect_control, create_control_schema, transaction
+from timenet.format.stored_values import CatalogValue, PackedField, PackedValueKind, PackedValueWriter
+from timenet.format.table_writer import insert_rows
 from timenet.format.task_codec import TaskRelationshipField, encode_span, encode_task_payload
 from timenet.format.task_target_row import TargetValueRow
 from timenet.json import validate_json_value
@@ -48,6 +49,24 @@ if TYPE_CHECKING:
 _ROW_BATCH_SIZE = 10_000
 _TASK_BATCH_SIZE = _ROW_BATCH_SIZE
 _AnnotationRef = tuple[int, TaskRelationshipField, int, Annotation]
+
+
+def _packed_placeholder(kind: PackedValueKind) -> str | list[str]:
+    """Return the catalog value written in place of a packed value.
+
+    The placeholder is an empty string or an empty list, so the catalog column keeps its type. Only
+    the ``external_values`` locator tells packed text apart from genuinely empty text.
+
+    Returns:
+        The empty value of the packed value's catalog type.
+    """
+    match kind:
+        case PackedValueKind.TEXT:
+            return ""
+        case PackedValueKind.TEXT_LIST:
+            return []
+        case _:
+            assert_never(kind)
 
 
 def _json(value: object) -> str:
@@ -92,21 +111,6 @@ def _task_batches(tasks: Iterable[Task]) -> Iterator[tuple[Task, ...]]:
         yield batch
 
 
-def _insert_rows(connection: duckdb.DuckDBPyConnection, table: Table, rows: Sequence[Mapping[str, object]]) -> None:
-    """Insert one Arrow batch, typed by the table's schema, into a control table."""
-    if not rows:
-        return
-    relation_name = f"_timenet_{table.name}_batch"
-    names = ", ".join(table.column_names)
-    connection.register(relation_name, pa.Table.from_pylist(rows, schema=table.arrow_schema))
-    try:
-        connection.execute(
-            f"INSERT INTO {table.name} ({names}) SELECT {names} FROM {relation_name}"  # noqa: S608
-        )
-    finally:
-        connection.unregister(relation_name)
-
-
 class _TableBatch:
     """Insert bounded Arrow batches into one control table."""
 
@@ -123,7 +127,7 @@ class _TableBatch:
 
     def flush(self) -> None:
         """Write all buffered rows and clear the buffer."""
-        _insert_rows(self.connection, self.table, self.rows)
+        insert_rows(self.connection, self.table, self.rows)
         self.rows.clear()
 
 
@@ -177,16 +181,18 @@ class _HierarchyBatches:
 class DuckDBControlWriter:
     """Serialize the relational part of one immutable TimeF version."""
 
-    def __init__(self, path: Path) -> None:
+    def __init__(self, path: Path, *, external: PackedValueWriter | None = None) -> None:
         """Configure a new local control database.
 
         Args:
             path: Destination path. It must not already exist.
+            external: Payload writer for large text, or ``None`` to keep every value in the catalog.
 
         Raises:
             FileExistsError: If ``path`` already exists.
         """
         self.path = Path(path)
+        self.external = external
         if self.path.exists():
             raise FileExistsError(f"control database already exists at {self.path}")
         self._storage_ids: defaultdict[str, Iterator[int]] = defaultdict(lambda: count(1))
@@ -225,6 +231,8 @@ class DuckDBControlWriter:
                     )
                     self._write_chunks(connection, placements, signal_values)
                     self._check_source_tree(connection)
+                    if self.external is not None:
+                        self.external.finish(connection)
                 connection.execute("CHECKPOINT")
         except duckdb.Error as exc:
             self.path.unlink(missing_ok=True)
@@ -233,6 +241,26 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
         return task_counts
+
+    def _pack(self, kind: ObjectKind, object_id: int, field: PackedField, value: Any, position: int = 0) -> Any:
+        """Construct a catalog value from the explicit packing result.
+
+        Args:
+            kind: The kind of the object that owns the value.
+            object_id: The object's id in this write: a task id, or an annotation content id.
+            field: The object's field that holds the value.
+            value: The value to store.
+            position: The value's position in an ordered field, such as a task's targets.
+
+        Returns:
+            The original inline value, or the placeholder of a packed value's kind.
+        """
+        if self.external is None:
+            return read_value(value)
+        result = self.external.pack(kind, object_id, field, value, position)
+        if isinstance(result, CatalogValue):
+            return result.value
+        return _packed_placeholder(result.locator.value_kind)
 
     def _write_objects(
         self,
@@ -379,18 +407,24 @@ class DuckDBControlWriter:
                     {
                         "task_id": task_id,
                         "task_type": task_type,
-                        "prompt": read_value(task.prompt),
+                        "prompt": self._pack(ObjectKind.TASK, task_id, PackedField.PROMPT, task.prompt),
                         "input_modalities": sorted(item.value for item in task.resolved_input_modalities),
                         "split": None if task.split is None else parse_split(task.split).value,
                         **self._scope_columns(task, signal_ids),
                         "has_inline_targets": task.targets is not None,
                         **encode_task_payload(task),
-                        "rationale": read_value(task.rationale),
+                        "rationale": self._pack(ObjectKind.TASK, task_id, PackedField.RATIONALE, task.rationale),
                         "metadata": _json(task.metadata),
                     }
                 )
                 target_rows.extend(
-                    self._target_row(task_id, position, target, record_ids, signal_ids)
+                    self._target_row(
+                        task_id,
+                        position,
+                        self._pack(ObjectKind.TASK, task_id, PackedField.TARGETS, target, position),
+                        record_ids,
+                        signal_ids,
+                    )
                     for position, target in enumerate(task.targets or ())
                 )
                 annotations.extend((ObjectKind.TASK, task_id, annotation) for annotation in task.annotations)
@@ -409,9 +443,12 @@ class DuckDBControlWriter:
                 ):
                     annotation_refs.extend((task_id, field, position, item) for position, item in enumerate(values))
                 dependencies.extend((task_id, position, parent) for position, parent in enumerate(task.from_tasks))
-            _insert_rows(connection, TABLES["tasks"], task_rows)
-            _insert_rows(connection, TABLES["task_targets"], target_rows)
-            _insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
+            insert_rows(connection, TABLES["tasks"], task_rows)
+            insert_rows(connection, TABLES["task_targets"], target_rows)
+            insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
+            if self.external is not None:
+                # Store this batch's locators now, so a streamed task source never holds them all.
+                self.external.write_locators(connection)
         duplicate = connection.execute(
             "SELECT task_id FROM tasks GROUP BY task_id HAVING count(*) > 1 LIMIT 1"
         ).fetchone()
@@ -425,7 +462,7 @@ class DuckDBControlWriter:
             if parent.id == task_id:
                 raise TimeFValidationError(f"task {task_id!r} depends on itself")
             dependency_rows.append({"task_id": task_id, "position": position, "parent_task_id": parent.id})
-        _insert_rows(connection, TABLES["task_dependencies"], dependency_rows)
+        insert_rows(connection, TABLES["task_dependencies"], dependency_rows)
         return task_counts, annotation_refs
 
     @staticmethod
@@ -703,12 +740,17 @@ class DuckDBControlWriter:
                     {
                         "content_id": content_id,
                         "name": annotation.name,
-                        **encode_annotation_value(annotation.value, label=f"annotation {annotation.key!r}"),
+                        **encode_annotation_value(
+                            self._pack(ObjectKind.ANNOTATION_CONTENT, content_id, PackedField.VALUE, annotation.value),
+                            label=f"annotation {annotation.key!r}",
+                        ),
                         "unit": annotation.unit,
                         "description": annotation.description,
                         "metadata": _json(annotation.metadata),
                     }
                 )
+                if self.external is not None:
+                    self.external.write_locators(connection, at_least=_ROW_BATCH_SIZE)
             span = annotation.span
             occurrence_batch.add(
                 {
