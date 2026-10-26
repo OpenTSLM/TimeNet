@@ -176,13 +176,29 @@ class RecordingIdentity(Protocol):
     """What the filename of a recording states, as this module needs it.
 
     ``SleepEdfxRecording`` in ``connector.py`` matches this. The protocol keeps the import one
-    way: the connector knows this module, and this module knows no connector.
+    way: the connector knows this module, and this module knows no connector. The members are
+    read-only, so that a frozen dataclass matches.
     """
 
-    study: str
-    subject_number: int
-    night: int
-    recording_id: str
+    @property
+    def study(self) -> str:
+        """The study that made the recording: ``sleep-cassette`` or ``sleep-telemetry``."""
+        ...
+
+    @property
+    def subject_number(self) -> int:
+        """The number that identifies the subject inside its own study."""
+        ...
+
+    @property
+    def night(self) -> int:
+        """The night of the subject that the recording is, 1 or 2."""
+        ...
+
+    @property
+    def recording_id(self) -> str:
+        """The id that the recording filename states, for example ``SC4001E0``."""
+        ...
 
 
 class SubjectTables:

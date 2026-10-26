@@ -1,7 +1,7 @@
 """Hydrate the TimeF object hierarchy from ``control.duckdb``."""
 
 from collections import defaultdict
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Mapping
 from contextlib import contextmanager
 from fractions import Fraction
 from functools import partial
@@ -1068,7 +1068,7 @@ class DuckDBControlReader:
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
-    ) -> Iterator[duckdb.DuckDBPyConnection]:
+    ) -> Generator[duckdb.DuckDBPyConnection]:
         """Stream selected task rows in task ID order through a separate query cursor.
 
         Args:

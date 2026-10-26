@@ -1,6 +1,6 @@
 """An httpx.MockTransport fake of the registry, backed by a real on-disk TimeF version."""
 
-from collections.abc import Iterator
+from collections.abc import Generator
 import contextlib
 import http.server
 import json
@@ -93,7 +93,7 @@ def build_fake(version_dir: Path, *, token: str | None = None, blob_base: str = 
 
 
 @contextlib.contextmanager
-def range_server(version_dir: Path) -> Iterator[str]:
+def range_server(version_dir: Path) -> Generator[str]:
     """Serve ``version_dir`` over real HTTP with Range support; yield its base URL.
 
     The fsspec on-demand reader fetches presigned URLs over aiohttp, which a ``MockTransport`` cannot

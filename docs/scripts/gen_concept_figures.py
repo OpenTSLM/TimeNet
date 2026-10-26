@@ -1,6 +1,9 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["matplotlib>=3.8", "numpy>=2.1"]
+#
+# [tool.ty.rules]
+# unresolved-import = "ignore"
 # ///
 """Generate the TimeNet concept figures: schematic diagrams of the data model.
 

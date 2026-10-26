@@ -1,6 +1,9 @@
 # /// script
 # requires-python = ">=3.11"
 # dependencies = ["PyGithub>=2.9"]
+#
+# [tool.ty.rules]
+# unresolved-import = "ignore"
 # ///
 """Upsert the single sticky CI comment on a pull request.
 

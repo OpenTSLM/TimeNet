@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import OrderedDict
-from collections.abc import Iterable, Iterator
+from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 import types as _types
@@ -401,7 +401,7 @@ class TimeFReader:
         return offsets
 
     @contextmanager
-    def _as_format_error(self, *, preserve_validation: bool = False) -> Iterator[None]:
+    def _as_format_error(self, *, preserve_validation: bool = False) -> Generator[None]:
         """Add dataset context to unexpected decoding failures.
 
         Yields:

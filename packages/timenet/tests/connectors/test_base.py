@@ -16,7 +16,7 @@ def test_base_connector_is_abstract():
 
 def test_base_connector_cannot_instantiate():
     with pytest.raises(TypeError):
-        BaseConnector()
+        BaseConnector()  # ty: ignore[call-non-callable]
 
 
 def test_concrete_connector_implements_contract(tmp_path):

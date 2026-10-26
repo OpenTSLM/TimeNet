@@ -8,7 +8,7 @@ connector, the engine, or any intermediate function growing a ``progress`` param
 tasks. Concurrent downloads on the single event-loop thread deliver their events serially.
 """
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Generator
 from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
@@ -29,7 +29,7 @@ _sink: ContextVar[ProgressCallback | None] = ContextVar("download_progress_sink"
 
 
 @contextmanager
-def progress_sink(callback: ProgressCallback | None) -> Iterator[None]:
+def progress_sink(callback: ProgressCallback | None) -> Generator[None]:
     """Install ``callback`` as the download-progress sink for the duration of the block.
 
     Args:

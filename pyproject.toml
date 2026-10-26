@@ -15,7 +15,7 @@ dev = [
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
     "ruff>=0.15.12",
-    "ty>=0.0.34",
+    "ty>=0.0.92",
     "edfio>=0.4.14",
     "wfdb>=4.1",
     "xlrd>=2.0",
@@ -114,10 +114,10 @@ exclude = [".worktrees/**"]
 python-version = "3.13"
 
 [[tool.ty.overrides]]
-# examples/** imports scikit-learn; .github/scripts/** and docs/scripts/** declare their deps inline
-# (PEP 723) and run standalone under `uv run` (PyGithub for the CI report, matplotlib for the figure
-# generator). None is a project dependency, so don't fail type-checking on their unresolved imports.
-include = ["examples/**", ".github/scripts/**", "docs/scripts/**"]
+# examples/** imports scikit-learn, so don't fail type-checking on its unresolved imports. The PEP 723
+# scripts under .github/scripts/** and docs/scripts/** are checked in isolation and ignore these
+# overrides; each sets the same rule in its own inline metadata.
+include = ["examples/**"]
 
 [tool.ty.overrides.rules]
 unresolved-import = "ignore"

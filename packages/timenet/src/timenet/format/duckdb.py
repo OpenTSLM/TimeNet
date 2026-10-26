@@ -1,6 +1,6 @@
 """DuckDB schema and connection helpers for the TimeF relational control plane."""
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 
@@ -64,7 +64,7 @@ def check_control_schema(connection: duckdb.DuckDBPyConnection) -> int:
 
 
 @contextmanager
-def transaction(connection: duckdb.DuckDBPyConnection) -> Iterator[None]:
+def transaction(connection: duckdb.DuckDBPyConnection) -> Generator[None]:
     """Commit a block atomically or roll it back when any operation fails.
 
     Args:

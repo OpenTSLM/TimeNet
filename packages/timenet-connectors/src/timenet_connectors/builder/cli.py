@@ -6,7 +6,7 @@ time. To add one, drop a ``datasets/<org>/<name>/`` package with a ``connector.p
 ``CONNECTOR`` and a ``dataset.yaml`` card. You do not register it here.
 """
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 import sys
@@ -193,7 +193,7 @@ def _report_progress(event: WriteProgressEvent) -> None:
 
 
 @contextmanager
-def _download_progress() -> Iterator[Progress | None]:
+def _download_progress() -> Generator[Progress | None]:
     """Install the download-progress sink for a build and render it.
 
     In an interactive terminal, downloads show as live progress bars, one row per file, updating in

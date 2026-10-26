@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Iterator
+from collections.abc import Generator
 from contextlib import contextmanager
 import json
 from pathlib import Path
@@ -40,7 +40,7 @@ def resolve_revision(repo: Path, revision: str) -> str:
 
 
 @contextmanager
-def worktrees(before_revision: str, after_revision: str, *, keep: bool = False) -> Iterator[tuple[Path, Path, Path]]:
+def worktrees(before_revision: str, after_revision: str, *, keep: bool = False) -> Generator[tuple[Path, Path, Path]]:
     """Create isolated worktrees for two revisions and clean them on exit.
 
     Yields:

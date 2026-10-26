@@ -6,7 +6,7 @@ range, and let a lazy loader reread just that range with :func:`read_entry`.
 """
 
 import codecs
-from collections.abc import Iterator
+from collections.abc import Generator, Iterator
 from contextlib import contextmanager
 import io
 import json
@@ -66,7 +66,7 @@ class JsonCursor:
 
     @classmethod
     @contextmanager
-    def open(cls, path: Path) -> Iterator[Self]:
+    def open(cls, path: Path) -> Generator[Self]:
         """Open a file for reading from its first byte.
 
         Yields:
