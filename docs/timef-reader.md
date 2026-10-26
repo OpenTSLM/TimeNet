@@ -10,8 +10,8 @@ tags:
 
 `TimeFReader` opens a committed TimeF version and reconstructs a
 [`TimeFDataset`](timef-dataset.md). It reads through a [`DatasetVersion`](registry.md) handle. The
-handle contains the parsed manifest and access to the version files. The reader never imports or
-runs connector code.
+handle contains the parsed manifest and local or remote filesystems for the version and its physical sources.
+The reader never imports or runs connector code.
 
 ```python
 from timenet.reader import TimeFReader
@@ -47,6 +47,7 @@ raises `TimeFReaderError`. Use the `spawn` or `forkserver` start method there.
 
 ## What loads when
 
+Preparation finishes before the reader receives its version handle.
 Creating the reader does not open the control database. The first request for records, tasks, or
 annotations opens `control.duckdb` in read-only mode.
 
@@ -86,8 +87,11 @@ Irregular time offsets are packed as well, one array per axis. The first `time_o
 on a Signal reads its axis's array and checks it against the axis. Within one read, the Signals on
 one axis share the checked array, so later calls on any of them read nothing.
 
-`iter_records(record_ids=...)` yields records one at a time. It does not create a complete
-`TimeFDataset`.
+`iter_records(record_ids=...)` yields records one at a time. Its Signal values remain lazy.
+It does not create a complete `TimeFDataset`.
+
+The Arrow table APIs resolve external text automatically. The reader caches up to eight packed
+payload files. Time-offset payload reads validate their length, endpoints, ordering, and nulls.
 
 Tasks have four useful read paths:
 
@@ -257,9 +261,9 @@ and decoded Zarr chunks until it closes.
 `open_local_version()` and `open_version()` require a valid `manifest.json`. They raise
 `TimeFFormatError` for an invalid or unsupported manifest.
 
-Other files remain lazy. A missing `control.duckdb` therefore fails on the first control-plane
-request. A missing values file fails when a Signal reads the affected chunk. Errors include the
-relevant file or table context.
+Local preparation requires complete releases. Remote files remain lazy: a missing `control.duckdb`
+fails on the first structural read, and a missing values file fails when a Signal reads its chunk.
+Errors include the relevant file or table context.
 
 A catalog query raises `TimeFFormatError` when the catalog lacks a table, column, or type that the
 read expects, and `TimeFReaderError` when the reader's connection closed while the read ran, through
@@ -281,3 +285,16 @@ also restores task relationships and Signal values with their original dtype and
 are the durable references. Python object identity from the writer process is not preserved.
 
 See the [API reference for `timenet.reader`](api/reader.md) for all members.
+
+## Inherited storage
+
+Each child owns a complete catalog. Its chunk and external-value locators name the ultimate physical
+owner directly. Reads never attach parent databases or traverse inheritance chains.
+
+The writer computes record scan order from physical chunk locations. This keeps full scans close to
+storage order, even when imported IDs differ from parent IDs. Requested Record IDs retain the
+caller's order. `verify()` checks both child files and referenced payload files.
+
+Full reads that load signal values use a stored list of required Parquet groups. Four workers
+decode a bounded window in parallel. This list is computed during the write. Lazy handles, range
+reads, and loads through `get()` or `read_tasks()` do not prefetch.
