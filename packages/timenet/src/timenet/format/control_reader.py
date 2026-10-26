@@ -1160,6 +1160,30 @@ class DuckDBControlReader:
         )
         return found[0][0], dict(rows)
 
+    def _occurrence_record_ids(self, occurrence_ids: Collection[str]) -> dict[str, str]:
+        """Return the ID of the Record whose hierarchy holds each annotation occurrence, building no object.
+
+        An occurrence on the Dataset or a task, or one the catalog lacks, has no entry.
+
+        Returns:
+            The Record ID of each occurrence, by occurrence ID.
+        """
+        rows = self._query(
+            """SELECT occurrences.occurrence_id,
+                      coalesce(on_records.record_id, of_sources.record_id, of_signals.record_id)
+               FROM annotation_occurrences AS occurrences
+               LEFT JOIN records AS on_records
+                 ON occurrences.object_type = ? AND on_records.record_key = occurrences.object_key
+               LEFT JOIN sources ON occurrences.object_type = ? AND sources.source_key = occurrences.object_key
+               LEFT JOIN records AS of_sources ON of_sources.record_key = sources.record_key
+               LEFT JOIN signals ON occurrences.object_type = ? AND signals.signal_key = occurrences.object_key
+               LEFT JOIN sources AS signal_sources ON signal_sources.source_key = signals.source_key
+               LEFT JOIN records AS of_signals ON of_signals.record_key = signal_sources.record_key
+               WHERE occurrences.occurrence_id IN (SELECT unnest(?))""",
+            [ObjectKind.RECORD.value, ObjectKind.SOURCE.value, ObjectKind.SIGNAL.value, list(occurrence_ids)],
+        )
+        return {occurrence_id: record_id for occurrence_id, record_id in rows if record_id is not None}
+
     def signal_record_ids(self, signal_ids: Collection[str]) -> dict[str, str]:
         """Return the ID of the Record that holds each of the given Signals, building no object.
 

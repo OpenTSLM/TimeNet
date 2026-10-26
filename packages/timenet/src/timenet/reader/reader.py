@@ -570,6 +570,18 @@ class TimeFReader:
         with self._as_format_error(preserve_validation=True):
             return self._control_reader().signal_record_ids(signal_ids)
 
+    def _record_ids_of_occurrences(self, occurrence_ids: tuple[str, ...]) -> dict[str, str]:
+        """Return the ID of the Record whose hierarchy holds each annotation occurrence, building no object.
+
+        ``TimeFDataset.import_from`` uses it to read the Records that hold the annotations a task
+        references.
+
+        Returns:
+            The Record ID of each occurrence that a Record, Source, or Signal holds, by occurrence ID.
+        """
+        with self._as_format_error():
+            return self._control_reader()._occurrence_record_ids(occurrence_ids)
+
     def _read_by_id(self, kind: ObjectKind, ids: tuple[str, ...]) -> dict[str, Entity]:
         """Build the objects of one kind with these IDs, each once, with every value unloaded.
 
