@@ -1,5 +1,6 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 import pickle
+from typing import Literal
 
 from pydantic import ValidationError
 import pytest
@@ -15,6 +16,15 @@ from timenet.types import (
     ureg,
     value_type_of,
 )
+from timenet.types.text import InlineText, InlineTextList
+
+
+# A constant to reuse
+HEALTHY_ANNOTATION = Annotation(key="condition", value="healthy")
+
+
+def quality_annotation(level: Literal["low", "medium", "high"]) -> Annotation:
+    return Annotation(key="quality", value=level)
 
 
 def test_an_annotation_needs_a_value_or_a_span():
@@ -86,8 +96,8 @@ def test_sequence_value_canonicalized_to_list():
     # value_type is "list" for any sequence, and the manifest stores it as a JSON array that decodes
     # back to a list; normalizing at construction keeps an annotation equal to its read-back form.
     ann = Annotation(key="labels", value=("a", "b"))
-    assert ann.value == ["a", "b"]
-    assert isinstance(ann.value, list)
+    assert isinstance(ann.value, InlineTextList)
+    assert ann.value.read() == ["a", "b"]
 
 
 def test_frozen():
@@ -101,17 +111,45 @@ def test_picklable():
     assert pickle.loads(pickle.dumps(ann)) == ann
 
 
-def test_subclass_with_field_defaults_authoring():
-    @dataclass(frozen=True, kw_only=True)
-    class Age(Annotation):
-        key: str = "age"
-        unit: str | None = "years"
+def test_presets_are_constants_or_builder_functions():
+    # A constant is one piece of content: every occurrence shares its id.
+    assert type(HEALTHY_ANNOTATION) is Annotation
+    assert isinstance(HEALTHY_ANNOTATION.value, InlineText)
+    assert HEALTHY_ANNOTATION.value.read() == "healthy"
+    first, second = HEALTHY_ANNOTATION._new_occurrence(), HEALTHY_ANNOTATION._new_occurrence()
+    assert first == second == HEALTHY_ANNOTATION
+    assert first.content_id == second.content_id == HEALTHY_ANNOTATION.id
+    # A builder makes new content on every call, with its value normalized like any other.
+    high, low = quality_annotation("high"), quality_annotation("low")
+    assert (high.key, type(high)) == ("quality", Annotation)
+    assert isinstance(high.value, InlineText)
+    assert high.value.read() == "high"
+    assert high.id != quality_annotation("high").id
+    assert low.value == "low"
 
-    age = Age(value=64)
-    assert age.key == "age"
-    assert age.unit == "years"
-    assert age.value == 64
-    assert annotation_type_of(age) is AnnotationType.STATIC
+
+def test_annotation_cannot_be_subclassed():
+    # A preset subclass that redeclared value would replace the field that wraps text in a handle.
+    with pytest.raises(TypeError, match="Annotation can't be subclassed, so HealthyCondition is refused"):
+
+        @dataclass(frozen=True, kw_only=True)
+        class HealthyCondition(Annotation):  # ty: ignore[subclass-of-final-class]
+            key: str = "condition"
+
+
+def test_annotation_is_final_for_type_checkers():
+    assert getattr(Annotation, "__final__", False) is True
+
+
+def test_replace_and_pickle_keep_a_constant_annotation_intact():
+    sick = replace(HEALTHY_ANNOTATION, value="sick")
+    assert type(sick) is Annotation
+    assert isinstance(sick.value, InlineText)
+    assert sick.value.read() == "sick"
+    restored = pickle.loads(pickle.dumps(HEALTHY_ANNOTATION))
+    assert type(restored) is Annotation
+    assert isinstance(restored.value, InlineText)
+    assert restored == HEALTHY_ANNOTATION
 
 
 def test_annotation_descriptor():

@@ -19,6 +19,7 @@ import pyarrow as pa
 from benchmarks.end_to_end.corpus import build_corpus
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
+from timenet.types.text import TextHandle, TextListHandle
 from timenet.writer import TimeFWriter
 
 
@@ -50,6 +51,8 @@ def _canonical(value: Any) -> Any:  # noqa: PLR0911, RUF100 - explicit type case
     Returns:
         A recursively canonicalized value.
     """
+    if isinstance(value, TextHandle | TextListHandle):
+        return _canonical(value.read())
     if value is None or isinstance(value, str | int | bool):
         return value
     if isinstance(value, float):

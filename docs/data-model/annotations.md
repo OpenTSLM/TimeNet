@@ -36,6 +36,32 @@ Reusable content includes these fields:
 Each occurrence adds its own identity, source, confidence, and metadata. This design lets several
 objects share one long description without sharing occurrence details.
 
+## Reuse content
+
+`Annotation` is final, so it can't be subclassed. To reuse content, keep a constant. For content
+that varies, write a builder function that returns an `Annotation`:
+
+```python
+from typing import Literal
+
+from timenet.types import Annotation
+
+# A constant to reuse
+HEALTHY_ANNOTATION = Annotation(key="condition", value="healthy")
+
+
+def quality_annotation(level: Literal["low", "medium", "high"]) -> Annotation:
+    return Annotation(key="quality", value=level)
+
+
+record.annotate(HEALTHY_ANNOTATION)
+record.annotate(quality_annotation("high"))
+```
+
+A constant is one piece of content with one `id`. Every occurrence shares it, and the writer stores
+it once. Each builder call creates new content with its own `id`. Either way, the reader rebuilds a
+plain `Annotation` that equals the one written.
+
 ## Static context
 
 An Annotation without a `span` describes its complete owner:
