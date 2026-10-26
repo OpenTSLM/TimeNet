@@ -339,6 +339,7 @@ class DuckDBControlWriter:
                         dataset.iter_tasks() if tasks is None else tasks,
                     )
                     self._write_chunks(connection, placements)
+                    self._write_imports(connection, dataset)
                     self._check_source_tree(connection)
                     self.external.finish(connection)
                 connection.execute("CHECKPOINT")
@@ -349,6 +350,40 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
         return task_counts
+
+    @staticmethod
+    def _write_imports(connection: duckdb.DuckDBPyConnection, dataset: TimeFDataset) -> None:
+        """Store the input aliases, and the parent ID of each imported Record and Signal the dataset holds.
+
+        Raises:
+            TimeFValidationError: If the dataset holds objects imported under an alias that has no
+                parent card.
+        """
+        rows = []
+        if dataset._imports:
+            # The map may name copies the dataset no longer holds; only the ones it holds get a row.
+            held = {
+                kind: {row[0] for row in connection.execute(query).fetchall()}
+                for kind, query in (
+                    (ObjectKind.RECORD, "SELECT record_id FROM records"),
+                    (ObjectKind.SIGNAL, "SELECT signal_id FROM signals"),
+                )
+            }
+            rows = [
+                {"alias": alias, "object_kind": kind.value, "parent_id": parent_id, "object_id": object_id}
+                for (alias, kind, parent_id), object_id in dataset._imports.items()
+                if object_id in held[kind]
+            ]
+        cards = dataset.parent_cards
+        orphaned = sorted({row["alias"] for row in rows} - cards.keys())
+        if orphaned:
+            raise TimeFValidationError(f"objects are imported under input aliases {orphaned} without a parent card")
+        insert_rows(
+            connection,
+            TABLES["imports"],
+            [{"alias": alias, "parent_ref": str(card.source)} for alias, card in cards.items()],
+        )
+        insert_rows(connection, TABLES["imported_objects"], rows)
 
     def _pack(self, kind: ObjectKind, identity: str, field: PackedField, value: Any, position: int = 0) -> Any:
         """Construct a catalog value from the explicit packing result.

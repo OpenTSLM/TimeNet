@@ -1160,6 +1160,28 @@ class DuckDBControlReader:
         )
         return found[0][0], dict(rows)
 
+    def signal_record_ids(self, signal_ids: Collection[str]) -> dict[str, str]:
+        """Return the ID of the Record that holds each of the given Signals, building no object.
+
+        Args:
+            signal_ids: The Signals' IDs.
+
+        Returns:
+            The Record ID of each Signal, by Signal ID.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored Signal.
+        """  # noqa: DOC502 - raised by _require_found
+        owners: dict[str, str] = dict(
+            self._query(
+                "SELECT signal_id, record_id FROM signals JOIN sources USING (source_key) "
+                "JOIN records USING (record_key) WHERE signal_id IN (SELECT unnest(?))",
+                [list(signal_ids)],
+            )
+        )
+        _require_found(ObjectKind.SIGNAL, signal_ids, owners)
+        return owners
+
     def read_signals_by_id(self, signal_ids: Collection[str]) -> dict[str, Signal]:
         """Build the Records that hold the given Signals, and return those Signals.
 
@@ -1174,15 +1196,8 @@ class DuckDBControlReader:
 
         Raises:
             TimeFNotFoundError: If an ID names no stored Signal.
-        """  # noqa: DOC502 - raised by _require_found
-        owners: dict[str, str] = dict(
-            self._query(
-                "SELECT signal_id, record_id FROM signals JOIN sources USING (source_key) "
-                "JOIN records USING (record_key) WHERE signal_id IN (SELECT unnest(?))",
-                [list(signal_ids)],
-            )
-        )
-        _require_found(ObjectKind.SIGNAL, signal_ids, owners)
+        """  # noqa: DOC502 - raised by signal_record_ids
+        owners = self.signal_record_ids(signal_ids)
         signals: dict[str, Signal] = {}
         for record in self.read_records(list(dict.fromkeys(owners.values()))):
             signals.update((signal.id, signal) for signal in record.walk_signals() if signal.id in owners)

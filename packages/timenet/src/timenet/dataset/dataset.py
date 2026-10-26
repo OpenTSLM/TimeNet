@@ -9,6 +9,7 @@ from typing import TYPE_CHECKING, Literal, TextIO, TypeVar, cast, overload
 import numpy as np
 import pyarrow as pa
 
+from timenet.dataset.composition import ImportedDataset, ImportMap, import_from
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record
 from timenet.dataset.source import Source
@@ -30,6 +31,8 @@ from timenet.types import (
     read_value,
     value_type_of,
 )
+from timenet.types.parent_dataset_card import ParentDatasetCard
+from timenet.types.reference_keys import InputAlias
 from timenet.types.splits import Split, parse_split, parse_splits
 from timenet.values_backends import ValuesBackend
 
@@ -75,10 +78,16 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             metadata: The dataset's descriptive identity.
         """
         self._metadata = metadata
+        self._imports: ImportMap = {}
+        self.parent_cards: dict[InputAlias, ParentDatasetCard] = {}
+        """A copy of the card of each parent this dataset imports from, by input alias."""
+        self.lineage: dict[str, ParentDatasetCard] = {}
+        """The card of every ancestor release, parents included, keyed by ``org/name@version``."""
         self._records: list[Record] = []
         self._records_by_id: dict[str, Record] = {}
         self._sources_by_id: dict[str, Source] = {}
         self._signals_by_id: dict[str, Signal] = {}
+        self._sources_by_record_id: dict[str, tuple[Source, ...]] = {}
         self._signals_by_record_id: dict[str, tuple[Signal, ...]] = {}
         self._tasks: list[Task] = []
         self._task_ids: set[str] = set()
@@ -88,6 +97,73 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._task_stream: Callable[[], Iterator[Task]] | None = None
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
+
+    def import_from(
+        self,
+        parent: "TimeFReader",
+        *,
+        alias: InputAlias | None = None,
+        records: Iterable[str] = (),
+        signals: Iterable[str] = (),
+    ) -> ImportedDataset:
+        """Copy selected parent Records and Signals into this dataset, sharing their stored values.
+
+        The parent must be an input that ``metadata.inputs`` declares, by its exact release. The
+        alias comes from that declaration; pass ``alias`` only to choose among several aliases that
+        declare the same release. The call stores the parent's card in :attr:`parent_cards`, adds
+        the parent and its ancestors to :attr:`lineage`, and raises this dataset's access
+        requirement to the parent's when that is stricter.
+
+        A copy is this dataset's own object, with its own ID, metadata, and annotations: editing it
+        leaves the parent unchanged. Its stored values keep their handles, so reading the copy
+        reads the parent's payloads, and writing this dataset reuses them instead of copying them.
+
+        - ``records=`` brings each Record whole: its Sources, Signals, and annotations.
+        - ``signals=`` brings each Signal with its annotations, inside a copy of its Record and
+          the Sources above it. Such a partial copy drops each annotation of its Record and
+          Sources whose span falls outside the windows of the Signals it holds, since the span
+          lies only on Signals that were not imported. A Record with a ``time_span`` checks spans
+          against that session span instead, so its partial copy keeps every annotation inside
+          the session.
+        - Annotations on the parent dataset itself are not imported.
+
+        A later import extends the copies this dataset holds instead of copying them again: it
+        adds the Signals and Sources they lack and attaches the annotations that the added Signals
+        place and the Signals the copy holds did not. The copies' other annotations and edits stay
+        as they are. An object this dataset no longer holds is copied again. Removing a Signal from
+        a copy is meant to drop the annotations that only it placed, so that copying it back
+        attaches them once; other structural edits of a copy, such as assigning a Source's
+        ``signals`` or ``sources``, are not supported, and a later import may then attach an
+        annotation twice. A copy's Source that holds no imported Signal is found by its name, so
+        when sibling Sources share a name, an import that would add a Signal below one raises.
+
+        Each call reads the selected Records from the parent's catalog in one batch, with their
+        values unloaded, and reads no stored value. Import many Records in one call rather than one
+        call per Record. If a Record fails, it is left as it was; the Records before it in the call,
+        and the parent's card, stay. An import is idempotent, so repeating the call once the cause
+        is fixed completes it.
+
+        Args:
+            parent: A reader of the exact parent release.
+            alias: The input alias that declares the parent, when several do.
+            records: The parent IDs of the Records to import whole.
+            signals: The parent IDs of the Signals to import.
+
+        Returns:
+            The copies of the selected Records and Signals, by their parent IDs.
+
+        Raises:
+            TimeFValidationError: If ``metadata.inputs`` does not declare the parent, ``alias``
+                does not declare it, this dataset imports it under another alias already, the
+                alias already imports another release, a selection is a string or holds a
+                non-string, or the import would add a Signal below a copy's Source that only its
+                name, which a sibling shares, could identify.
+            TimeFNotFoundError: If a selected ID names no parent object. Nothing changes then.
+        """  # noqa: DOC502 - raised by composition.import_from
+        try:
+            return import_from(self, parent, alias=alias, records=records, signals=signals)
+        finally:
+            self._schema = None
 
     def add_record(self, *, record: Record) -> Record:
         """Register and return a complete record.
@@ -103,23 +179,59 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         """
         if record.record_id in self._records_by_id:
             raise TimeFValidationError(f"record id {record.record_id!r} is already registered")
+        self._index_record(record)
+        self._records.append(record)
+        self._records_by_id[record.record_id] = record
+        return record
+
+    def _index_record(self, record: Record, *, registered: bool = False) -> None:
+        """Index a Record's Sources and Signals by ID, rejecting IDs that another object holds.
+
+        Every check runs before an index changes.
+
+        Args:
+            record: The Record to index.
+            registered: Whether the Record is registered already and its hierarchy changed in
+                place. The entries indexed for it before are dropped, so a Source or Signal it no
+                longer holds frees its ID.
+
+        Raises:
+            TimeFValidationError: If the Record repeats an ID, or holds a Source or Signal whose ID
+                another object holds.
+        """
         record_sources, record_signals = self._index_record_hierarchy(record)
-        repeated_sources = sorted(self._sources_by_id.keys() & record_sources.keys())
+        freed_sources = {
+            source.id
+            for source in (self._sources_by_record_id.get(record.record_id, ()) if registered else ())
+            if self._sources_by_id.get(source.id) is source
+        }
+        freed_signals = {
+            signal.id
+            for signal in (self._signals_by_record_id.get(record.record_id, ()) if registered else ())
+            if self._signals_by_id.get(signal.id) is signal
+        }
+        repeated_sources = sorted(
+            identity for identity in record_sources if identity in self._sources_by_id and identity not in freed_sources
+        )
         if repeated_sources:
             raise TimeFValidationError(
                 f"source id(s) {repeated_sources} already belong to another record; each Source has one owner"
             )
-        repeated_signals = sorted(self._signals_by_id.keys() & record_signals.keys())
+        repeated_signals = sorted(
+            identity for identity in record_signals if identity in self._signals_by_id and identity not in freed_signals
+        )
         if repeated_signals:
             raise TimeFValidationError(
                 f"signal id(s) {repeated_signals} already belong to another Source; each Signal has one owner"
             )
-        self._records.append(record)
-        self._records_by_id[record.record_id] = record
+        for identity in freed_sources:
+            del self._sources_by_id[identity]
+        for identity in freed_signals:
+            del self._signals_by_id[identity]
         self._sources_by_id.update(record_sources)
         self._signals_by_id.update(record_signals)
+        self._sources_by_record_id[record.record_id] = tuple(record_sources.values())
         self._signals_by_record_id[record.record_id] = tuple(record_signals.values())
-        return record
 
     @staticmethod
     def _duplicate_ids(ids: Iterable[str]) -> list[str]:
