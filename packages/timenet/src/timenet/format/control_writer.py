@@ -355,6 +355,10 @@ class DuckDBControlWriter:
     @staticmethod
     def _write_scan_order(connection: duckdb.DuckDBPyConnection) -> None:
         """Precompute physical scan order so imported IDs do not scatter payload reads."""
+        connection.execute(
+            "INSERT INTO payload_scan_groups SELECT DISTINCT owner_key, value_path, chunk_major_index "
+            "FROM signal_chunks ORDER BY owner_key, value_path, chunk_major_index"
+        )
         # Only imported records get new IDs that sort apart from where their values are stored. Any
         # other release keeps the ID ranking from _write_objects: an edit keeps its base's IDs, and
         # the base stored its values in ID order within each spec type. Only a Record row whose copy

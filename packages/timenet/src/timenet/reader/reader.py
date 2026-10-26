@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterable, Iterator
+from concurrent.futures import ThreadPoolExecutor
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -25,12 +26,13 @@ from timenet.format.stored_values import (
     PackedValueReader,
     materialize_table,
 )
-from timenet.reader.load_plan import LoadPlan, ValueLoad
+from timenet.reader.load_plan import Loading, LoadPlan, ValueLoad
 from timenet.types import Annotation, DatasetMetadata, DatasetSchema, InputModality, Task, TimeSeriesSpec
 from timenet.types.object_kind import ObjectKind
 from timenet.types.reference_keys import InputAlias, OwnerKey
 from timenet.types.references import DatasetRef
 from timenet.types.splits import Split
+from timenet.values_backends.parquet.reader import ParquetValuesReader
 from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
@@ -498,7 +500,14 @@ class TimeFReader:
         with self._as_format_error():
             values = ValueLoad(load)
             values.add((*records, *tasks, *annotations))
-            values.run()
+            try:
+                if load.signal_values is Loading.EAGER:
+                    self._prepare_scan()
+                values.run()
+            finally:
+                for backend in (self._values, *self._owner_readers.values()):
+                    if isinstance(backend, ParquetValuesReader):
+                        backend.finish_scan()
         dataset = TimeFDataset.from_parts(
             metadata=self.metadata, records=records, tasks=tasks, schema=self.schema, annotations=annotations
         )
@@ -648,6 +657,30 @@ class TimeFReader:
         else:
             objects.update(control.read_signals_by_id(ids))
         return objects
+
+    def _prepare_scan(self) -> None:
+        """Use the write-time group plan for bounded parallel Parquet decoding."""
+        groups: dict[OwnerKey | None, list[tuple[str, int]]] = {}
+        for owner, path, group in self._control_reader().run(
+            lambda connection: connection.execute(
+                "SELECT * FROM payload_scan_groups ORDER BY owner_key, value_path, chunk_major_index"
+            ).fetchall()
+        ):
+            groups.setdefault(owner, []).append((path, group))
+        executor = None
+        for owner, locations in groups.items():
+            version = self._version.resolve_payload_source(owner)
+            if owner is None:
+                backend = self._values_reader()
+            else:
+                backend = self._owner_readers.get(owner)
+                if backend is None:
+                    backend = make_values_reader(version.manifest.values_backend)
+                    self._owner_readers[owner] = backend
+            if isinstance(backend, ParquetValuesReader):
+                if executor is None:
+                    executor = ThreadPoolExecutor(max_workers=4, thread_name_prefix="timef-scan")
+                backend.prepare_scan(version, locations, executor)
 
     def _control_reader(self) -> DuckDBControlReader:
         """Open and return the cached read-only control database.
