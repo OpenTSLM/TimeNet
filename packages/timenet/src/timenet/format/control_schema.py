@@ -196,13 +196,6 @@ AXES = Table(
     key_sequence=AXIS_KEYS,
 )
 
-AXIS_OFFSETS = Table(
-    "axis_offsets",
-    (_key("axis_key"), _key("position"), _key("offset_us")),
-    unique=(("axis_key", "position"),),
-    foreign_keys=(ForeignKey("axis_key", "axes", "axis_key"),),
-)
-
 SIGNALS = Table(
     "signals",
     (
@@ -375,6 +368,7 @@ EXTERNAL_VALUES = Table(
         _key("row_index"),
         _required("value_kind"),
         _key("n_values"),
+        Column("value_digest", ColumnType.VARCHAR),
     ),
     unique=(("object_kind", "object_id", "field", "position"),),
 )
@@ -387,7 +381,6 @@ CONTROL_TABLES: tuple[Table, ...] = (
     CLOCKS,
     SOURCES,
     AXES,
-    AXIS_OFFSETS,
     SIGNALS,
     SIGNAL_CHUNKS,
     ANNOTATION_CONTENTS,

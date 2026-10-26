@@ -72,7 +72,8 @@ A failed operation publishes nothing.
 | `value_encoding` | Parquet values-column encoding, or `"auto"`. |
 
 Multidimensional Signals use Zarr. Parquet supports scalar Signals. Both backends preserve nullable
-timesteps. Irregular-axis offsets live in `control.duckdb`, not in either values backend.
+timesteps. Irregular-axis time offsets live in packed Parquet payloads under `payloads/`, not in
+either values backend.
 
 ## Validation
 
