@@ -10,7 +10,9 @@ tags:
 
 A connector is the unit of dataset integration. Each dataset has one connector class. A connector
 fetches raw data and converts it into a [`TimeFDataset`](timef-dataset.md). A connector has no
-knowledge of the registry, the engine, or other connectors. The consumer SDK never runs a connector.
+knowledge of the registry, the engine, or other connectors. The consumer SDK never imports connector
+code. On a local registry, `TimeNet.load` builds a missing dataset through the `timenet.builders`
+entry point. Pass `auto_build=False` to turn this off.
 
 `BaseConnector` is the connector contract in the `timenet` package. Concrete connectors ship in
 `timenet-connectors`, beside their [dataset cards](manifest.md).
@@ -53,7 +55,7 @@ writer after conversion.
 
 A connector takes no constructor arguments. Configuration comes from environment variables that
 `__init__` reads. `TRaw` is the reference type that the connector defines, for example a path, a small
-dataclass, or an S3 key. The connector is generic through PEP 695:
+dataclass, or an S3 key. The connector is generic over `TRaw`:
 `class MyConnector(BaseConnector[MyRawRef])`.
 
 ---
@@ -81,7 +83,9 @@ directly. No splitter is needed:
 ```python
 from timenet.types.splits import Split
 
-task = make_task(sample, split=Split.TRAIN)
+record = make_record(sample)
+dataset.add_record(record=record)
+task = make_task(sample, record, split=Split.TRAIN)
 dataset.add_task(task=task)
 ```
 
@@ -153,13 +157,16 @@ When constructing TimeNet tasks, copy the partition name onto each task:
 ```python
 for split_name, samples_in_split in splits.items():
     for sample in samples_in_split:
-        task = make_task(sample, split=split_name)
+        record = make_record(sample)
+        dataset.add_record(record=record)
+        task = make_task(sample, record, split=split_name)
         dataset.add_task(task=task)
 ```
 
-Here `make_task` is the connector's own task-construction function. Consumers then select stored
-assignments through `dataset.get_train()`, `dataset.get_test()`, or `dataset.iter_tasks(split=...)`;
-they do not rerun the splitter.
+Here `make_record` and `make_task` are the connector's own construction functions. A task refers to
+its Record by object, so add the Record to the dataset before the task. Consumers then select stored
+assignments through `dataset.get_train()`, `dataset.get_test()`, or `dataset.iter_tasks(split=...)`.
+They do not run the splitter again.
 
 TSQA dataset version `1.1.0` introduced stored splits. Version `1.2.0` generates new assignments
 with scikit-learn 1.9.1: 80/10/10 train/validation/test using ten folds and seed 42, balanced by
@@ -264,8 +271,8 @@ pull their database archive.
 ## Example connectors
 
 - `timenet/hello-world` is a synthetic, offline reference connector. It needs no network and produces
-  a deterministic dataset for examples and round-trip tests. It covers nested Sources, shared
-  descriptors, windowed Signals, annotations, and several task types.
+  a deterministic dataset for examples and round-trip tests. It covers shared descriptors, windowed
+  Signals, annotations, and several task types.
 - `chengsenwang/tsqa` is a time-series QA dataset. Each row's series becomes a Signal, and each
   row's question and answer become an `AnswerTask`. It downloads data from the Hub, so its
   `requirements.txt` names `huggingface_hub`.

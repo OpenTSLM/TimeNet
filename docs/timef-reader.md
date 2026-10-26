@@ -51,10 +51,15 @@ Tasks have three useful read paths:
   `required_modalities`, and `supported_modalities` arguments filter in DuckDB before any task is
   built, as they do on `task_table()` and `target_table()`.
 - `task_table()`, `target_table()`, and `annotation_table()` return Arrow tables without creating
-  Python task objects. Their ID columns are `int64`.
+  Python task objects. Their ID columns are `int64`. The Record, Signal, and Task columns hold the
+  ids that the dataset assigned, for example `task_id`, `input_record_ids`, `from_task_ids`, and
+  `span_signal_ids`. `occurrence_id` and `content_id` are storage row numbers of this version. The
+  next write numbers them again. In `annotation_table()`, `object_id` is a Record, Signal, or Task
+  id, a storage row number for a Source, or `NULL` for the dataset.
 
-Objects keep their identity within one reader. For example, a task input is the same `Record`
-instance that `iter_records()` returned.
+Tasks from `tasks` and `read()` share their `Record` instances with `read().records`.
+`iter_tasks(records)` yields tasks whose inputs are the `Record` objects that you pass in, for
+example the ones from `iter_records()`. Each `iter_records()` call builds new `Record` objects.
 
 ## Type reconstruction
 
@@ -83,9 +88,9 @@ and decoded Zarr chunks until it closes.
 | `read()` | Create the complete `TimeFDataset`. |
 | `iter_records()` | Yield Records without building a dataset. |
 | `iter_tasks(records, split=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
-| `task_table()` | Return the task table with public IDs. |
-| `target_table()` | Return ordered task targets with public IDs. |
-| `annotation_table()` | Return annotation occurrences with public IDs. |
+| `task_table()` | Return one row per task. |
+| `target_table()` | Return the ordered task targets. |
+| `annotation_table()` | Return one row per annotation occurrence. |
 | `verify()` | Check every manifest-listed file against its size and checksum. |
 | `metadata` | Return the dataset metadata. |
 | `schema` | Return the dataset schema. |
@@ -107,8 +112,10 @@ missing or does not match the manifest.
 ## Round-trip guarantee
 
 For valid writer input, the reader restores Records, Sources, Signals, annotations, and tasks. It
-also restores task relationships and Signal values with their original dtype and shape. Public IDs
-are the durable references. Entity IDs are ints. The dataset ID is its `org/name` string. The
-reader does not keep the Python object identity from the writer process.
+also restores task relationships and Signal values with their original dtype and shape.
+Relationships return as object references: task inputs are Records, spans hold Signals, and
+`from_tasks` holds Tasks. Records, Signals, and Tasks keep the `id` that the dataset assigned.
+Sources, axes, and annotations have no id. The reader does not keep the Python object identity
+from the writer process.
 
 See the [API reference for `timenet.reader`](api/reader.md) for all members.
