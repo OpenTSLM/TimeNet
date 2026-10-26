@@ -1,4 +1,4 @@
-"""Bounded caches for Signal values row groups and shard file handles."""
+"""Bounded caches for packed payload tables and Signal values row groups."""
 
 from typing import TYPE_CHECKING, Self
 
@@ -11,6 +11,60 @@ from timenet.errors import TimeFFormatError
 
 if TYPE_CHECKING:
     from timenet.registry.version import DatasetVersion
+
+
+def _describe(schema: pa.Schema) -> str:
+    """Return a schema's fields on one line, for an error message."""
+    return ", ".join(f"{field.name}: {field.type}{'' if field.nullable else ' not null'}" for field in schema)
+
+
+class PayloadTableCache:
+    """Cache complete packed payload files without retaining file handles."""
+
+    def __init__(self, max_entries: int) -> None:
+        self._tables: LRUCache[tuple[str, str], pa.Table] = LRUCache(max_entries)
+
+    def __reduce__(self) -> tuple[type[Self], tuple[int]]:
+        # Recreate an empty cache in the receiving process.
+        return type(self), (int(self._tables.maxsize),)
+
+    def read_table(self, version: "DatasetVersion", path: str, schema: pa.Schema) -> pa.Table:
+        """Read a payload file once while it remains in the cache.
+
+        The file's schema is checked once, when the file enters the cache.
+
+        Args:
+            version: The release that holds the payload file.
+            path: The payload file, relative to the release root.
+            schema: The exact Arrow schema the payload file must have, including nullability.
+
+        Returns:
+            The cached payload table.
+
+        Raises:
+            TimeFFormatError: If the payload file cannot be read or has a different schema.
+        """
+        key = (version.root, path)
+        cached = self._tables.get(key)
+        if cached is not None:
+            return cached
+        try:
+            with pq.ParquetFile(version.path(path), filesystem=version.filesystem, pre_buffer=True) as source:
+                found = source.schema_arrow
+                if not found.equals(schema):
+                    raise TimeFFormatError(
+                        f"Parquet file {version.path(path)} has schema ({_describe(found)}), "
+                        f"expected ({_describe(schema)})"
+                    )
+                table = source.read(use_threads=False)
+        except (OSError, pa.ArrowException) as exc:
+            raise TimeFFormatError(f"cannot read Parquet file {version.path(path)}: {exc}") from exc
+        self._tables[key] = table
+        return table
+
+    def close(self) -> None:
+        """Release decoded payloads, keeping the cache reusable."""
+        self._tables.clear()
 
 
 class _OpenParquetFiles(LRUCache[tuple[str, str], pq.ParquetFile]):

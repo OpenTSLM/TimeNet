@@ -10,7 +10,7 @@ tags:
 
 TimeF separates relational structure from large signal arrays. One immutable DuckDB database
 stores the hierarchy, relationships, annotations, axes, and chunk locations. Parquet or Zarr stores
-the signal values.
+the signal values. Large text fields use packed Parquet payloads.
 
 ## Directory layout
 
@@ -20,7 +20,10 @@ A Parquet-backed version looks like this:
 org/name/version/
 ├── manifest.json
 ├── control.duckdb
-└── time_series/
+├── time_series/
+│   ├── part-00000000.parquet
+│   └── ...
+└── payloads/
     ├── part-00000000.parquet
     └── ...
 ```
@@ -52,6 +55,7 @@ Signals can reference the same immutable `TimeAxis`.
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
 | `axis_offsets` | Shared offsets for irregular axes. |
+| `external_values` | File and row locations for external text. |
 | `tasks` | Concrete task type, typed scope columns, and subclass configuration columns. |
 | `task_targets` | Ordered inline targets, one typed row each. |
 | `task_record_refs` | Ordered task-to-record object relationships. |
@@ -64,7 +68,7 @@ Signals can reference the same immutable `TimeAxis`.
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
 in either direction, so TimeF does not store duplicate reverse-index tables.
 
-Every table carries a `BIGINT` internal key drawn from a sequence, and relationships refer to those
+Object tables carry a `BIGINT` internal key drawn from a sequence, and relationships refer to those
 keys. Public IDs (`record_id`, `signal_id`, `task_id`, and so on) are stored once on the row that
 owns them. Fixed-shape fields are typed columns, so spans, task configuration, target values, and
 annotation values can be filtered in SQL. Only the free-form `metadata` dictionaries are JSON.
@@ -88,6 +92,21 @@ Regular axes store a rational microsecond period and origin. Ordinal axes need o
 Irregular axes store their endpoints in `axes` and their ordered microsecond offsets in
 `axis_offsets`. Signals that share an axis reference the same `axis_id`, so the offsets are stored
 once regardless of how many Signals use that timeline.
+
+## External values
+
+The writer keeps text and string lists inline when their encoded size is at most 4,096 bytes.
+Larger values go into Zstandard-compressed Parquet files under `payloads/`. This storage is
+independent of the Signal values backend. Each file targets about 4 MiB of encoded input, but one
+large value can exceed that target. Each row of a payload file fills exactly one of its two
+columns, `text` (string) or `texts` (list of non-null strings), and readers reject a file with any
+other schema.
+
+The `external_values` table identifies the object, field, ordered position, file, and row for each
+value, and records its value kind and length. The inline column keeps a placeholder: an empty string
+for text and an empty list for a string list. An empty inline value alone therefore does not mean
+empty text; readers look up `external_values` first. Direct SQL queries over inline columns do not
+resolve external values. The public Arrow table APIs return the complete text.
 
 ## Annotations
 
