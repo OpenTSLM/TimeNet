@@ -47,8 +47,22 @@ def _read(version_dir: Path) -> TimeFDataset:
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_full_round_trip(tmp_path, backend):
     original = make_dataset()
-    restored = _read(_write(tmp_path, dataset=make_dataset(), values_backend=backend))
+    answer = next(task for task in original.tasks if isinstance(task, AnswerTask))
+    text = "A detailed clinical report with café notes. " * 300
+    answer.prompt = text
+    answer.rationale = text + "Explanation."
+    answer.targets = (text + "Answer.", "short answer")
+    record = answer.inputs[0]
+    record.annotate(Annotation(key="report", value=text))
+    record.annotate(Annotation(key="reports", value=[text, "short report"]))
+
+    restored = _read(_write(tmp_path, dataset=original, values_backend=backend))
     assert_datasets_equal(original, restored)
+    restored_answer = next(task for task in restored.tasks if task.id == answer.id)
+    assert restored_answer.prompt == text
+    assert restored_answer.rationale == text + "Explanation."
+    # Targets are excluded from task equality, so compare them directly.
+    assert restored_answer.targets == (text + "Answer.", "short answer")
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -122,6 +136,39 @@ def test_annotation_occurrence_and_task_object_references_round_trip(tmp_path):
     assert_datasets_equal(original, restored)
     assert restored.tasks[0].inputs == (restored.records[0],)
     assert restored.tasks[0].input_annotations == restored.records[0].annotations
+
+
+# A constant to reuse
+HEALTHY_ANNOTATION = Annotation(key="condition", value="healthy", description="Reported by the source.")
+
+
+def test_a_read_back_annotation_equals_the_constant_it_was_written_from(tmp_path):
+    dataset = _referenced_annotation_dataset()
+    record = dataset.records[0]
+    record.annotate(HEALTHY_ANNOTATION)
+    record.signals[0].annotate(HEALTHY_ANNOTATION)
+
+    version_dir = _write(tmp_path, dataset=dataset)
+    restored = _read(version_dir).records[0]
+
+    occurrences = [
+        annotation
+        for annotation in (*restored.annotations, *restored.signals[0].annotations)
+        if annotation.key == "condition"
+    ]
+    assert len(occurrences) == 2
+    assert all(type(annotation) is Annotation for annotation in occurrences)
+    assert occurrences == [HEALTHY_ANNOTATION, HEALTHY_ANNOTATION]
+    assert occurrences[0] is not occurrences[1]
+    # Both occurrences share the constant's content, which the writer stores once.
+    assert {annotation._content_key for annotation in occurrences} == {HEALTHY_ANNOTATION._content_key}
+    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
+        stored = connection.execute(
+            """SELECT count(DISTINCT content_id), count(*)
+               FROM annotation_occurrences JOIN annotation_contents USING (content_id)
+               WHERE name = 'condition'"""
+        ).fetchone()
+    assert stored == (1, 2)
 
 
 def _tasks_dataset(*, streaming: bool) -> TimeFDataset:

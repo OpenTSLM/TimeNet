@@ -4,17 +4,19 @@ from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum, unique
-from typing import TYPE_CHECKING, ClassVar, TypeAlias, TypeGuard, cast
+from typing import TYPE_CHECKING, ClassVar, TypeAlias, TypeGuard, cast, final
 
 import pint
 
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
+from timenet.types._fields import ValueField
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import EntityId, assigned_id
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
+from timenet.types.text import InlineText, TextHandle, optional_text
 from timenet.types.units import normalize_unit
 
 
@@ -23,9 +25,14 @@ if TYPE_CHECKING:
     from timenet.dataset.record import Record
     from timenet.dataset.time_series import Signal
 
-    TargetItem: TypeAlias = str | int | float | bool | Record | Signal | Span
+    TargetItem: TypeAlias = TextHandle | int | float | bool | Record | Signal | Span
+    TargetInput: TypeAlias = str | TargetItem
+    # A target as read_value returns it: text handles read to strings.
+    TargetValue: TypeAlias = str | int | float | bool | Record | Signal | Span
 else:
     TargetItem = object
+    TargetInput = object
+    TargetValue = object
 
 
 @unique
@@ -46,7 +53,7 @@ def validate_input_modalities(
     modalities: Iterable[InputModality] | None,
     *,
     task_id: EntityId | None,
-    prompt: str | None,
+    prompt: str | TextHandle | None,
     has_record_inputs: bool,
 ) -> frozenset[InputModality]:
     """Normalize and validate the input kinds declared by a task.
@@ -90,6 +97,22 @@ class LocalizationMode(StrEnum):
     EXHAUSTIVE = "exhaustive"
 
 
+def _target_values(values: Iterable[TargetInput] | None) -> tuple[TargetItem, ...] | None:
+    """Wrap string targets while preserving native scalar and object targets.
+
+    Returns:
+        Ordered targets with text handles, or ``None`` for annotation-based answers.
+
+    Raises:
+        TimeFValidationError: If ``values`` is a bare string, which would split into characters.
+    """
+    if values is None:
+        return None
+    if isinstance(values, str):
+        raise TimeFValidationError("targets take a sequence of items; wrap a single string as (value,)")
+    return tuple(InlineText(value) if isinstance(value, str) else value for value in values)
+
+
 @dataclass(kw_only=True)
 class Task(SupportsAnnotate, ABC):
     """One modelling problem with ordered inputs and ordered output items.
@@ -98,6 +121,13 @@ class Task(SupportsAnnotate, ABC):
     modelling operation, but they do not impose a second hierarchy of target wrapper classes. None
     means that the answer is supplied through target annotations. An empty tuple is an explicit
     empty answer.
+
+    The task classes form a closed set. TimeF stores a task's ``task_type`` tag, and the reader maps
+    it back to a built-in class, so only this module defines subclasses, and each concrete class is
+    final. To reuse a prompt, write a function that builds a built-in task::
+
+        def age_question(record: Record, age: int) -> AnswerTask:
+            return AnswerTask(inputs=(record,), prompt="How old is the subject?", targets=(str(age),))
     """
 
     @property
@@ -107,10 +137,12 @@ class Task(SupportsAnnotate, ABC):
 
     inputs: tuple["Record", ...] = field(default=(), compare=False)
     """Records supplied to the model, in semantic order."""
-    targets: tuple[TargetItem, ...] | None = field(default=None, compare=False)
+    targets: ValueField[Iterable[TargetInput] | None, tuple[TargetItem, ...] | None] = field(
+        default=ValueField(_target_values, None), compare=False
+    )
     """Ordered native values and stored objects that form the expected output."""
-    prompt: str | None = None
-    """What the model is asked, or None for an unprompted task."""
+    prompt: ValueField[str | TextHandle | None, TextHandle | None] = field(default=ValueField(optional_text, None))
+    """Call ``read()`` for the prompt; ``None`` identifies an unprompted task."""
     split: Split | None = None
     """The partition the task belongs to: train, validation, or test. None when the dataset does not
     partition its tasks."""
@@ -122,8 +154,8 @@ class Task(SupportsAnnotate, ABC):
     """Existing annotation occurrences supplied to the model as context."""
     target_annotations: tuple[Annotation, ...] = field(default=(), compare=False)
     """Existing annotation occurrences that form the expected output."""
-    rationale: str | None = None
-    """Optional explanation associated with the answer."""
+    rationale: ValueField[str | TextHandle | None, TextHandle | None] = field(default=ValueField(optional_text, None))
+    """Call ``read()`` for the explanation; ``None`` means no rationale is present."""
     from_tasks: tuple["Task", ...] = field(default=(), compare=False)
     """Tasks from which this task was derived."""
     annotations: tuple[Annotation, ...] = ()
@@ -131,6 +163,20 @@ class Task(SupportsAnnotate, ABC):
     metadata: JsonMapping = field(default_factory=dict)
     """Optional JSON-compatible task metadata."""
     _id: EntityId | None = field(default=None, init=False, repr=False, compare=False)
+
+    def __init_subclass__(cls, **kwargs: object) -> None:
+        """Accept subclasses from this module only, since stored task types form a closed set.
+
+        Raises:
+            TypeError: If the subclass is defined outside ``timenet.types.tasks``.
+        """
+        if cls.__module__ != Task.__module__:
+            raise TypeError(
+                f"{cls.__name__} can't subclass a task class: TimeF stores a closed set of task "
+                "types, and the reader maps each one back to a built-in class. To reuse a prompt or "
+                "other settings, write a builder function that returns a built-in task"
+            )
+        super().__init_subclass__(**kwargs)
 
     def __post_init__(self) -> None:
         """Normalize caller-provided sequences and validate target item types and the split.
@@ -218,6 +264,7 @@ class Task(SupportsAnnotate, ABC):
         """Validate configuration that depends on the finalized scope."""
 
 
+@final
 @dataclass(kw_only=True)
 class ClassificationTask(Task):
     """Classify the inputs, optionally using a named label vocabulary."""
@@ -227,6 +274,7 @@ class ClassificationTask(Task):
     """Optional name of the label vocabulary."""
 
 
+@final
 @dataclass(kw_only=True)
 class AnswerTask(Task):
     """Answer a question or caption the inputs."""
@@ -234,6 +282,7 @@ class AnswerTask(Task):
     task_type: ClassVar[TaskType] = TaskType.ANSWER
 
 
+@final
 @dataclass(kw_only=True)
 class ScalarPredictionTask(Task):
     """Predict one or more quantities described by the task configuration."""
@@ -250,6 +299,7 @@ class ScalarPredictionTask(Task):
         self.unit = normalize_unit(self.unit)
 
 
+@final
 @dataclass(kw_only=True)
 class TemporalLocalizationTask(Task):
     """Locate events or regions in the inputs."""
@@ -273,6 +323,7 @@ class TemporalLocalizationTask(Task):
             ) from exc
 
 
+@final
 @dataclass(kw_only=True)
 class ForecastingTask(Task):
     """Predict future values from the supplied inputs."""
@@ -280,6 +331,7 @@ class ForecastingTask(Task):
     task_type: ClassVar[TaskType] = TaskType.FORECASTING
 
 
+@final
 @dataclass(kw_only=True)
 class TSEditingTask(Task):
     """Transform the input recording into the output described by targets."""
@@ -287,6 +339,7 @@ class TSEditingTask(Task):
     task_type: ClassVar[TaskType] = TaskType.TS_EDITING
 
 
+@final
 @dataclass(kw_only=True)
 class TSGenerationTask(Task):
     """Generate output described by the prompt, optionally without record inputs."""
@@ -294,6 +347,7 @@ class TSGenerationTask(Task):
     task_type: ClassVar[TaskType] = TaskType.TS_GENERATION
 
 
+@final
 @dataclass(kw_only=True)
 class TSCorrespondenceTask(Task):
     """Relate input recordings to an optional candidate pool."""
@@ -332,11 +386,11 @@ def _is_record(value: object) -> TypeGuard["Record"]:
 
 
 def _is_target_item(value: object) -> bool:
-    """Return whether value is supported in the public mixed target collection."""
+    """Return whether value can form one item in a task's expected answer."""
     from timenet.dataset.record import Record  # noqa: PLC0415
     from timenet.dataset.time_series import Signal  # noqa: PLC0415
 
-    return isinstance(value, (str, int, float, bool, Record, Signal, Span))
+    return isinstance(value, (TextHandle, int, float, bool, Record, Signal, Span))
 
 
 def _concrete_task_classes() -> list[type[Task]]:

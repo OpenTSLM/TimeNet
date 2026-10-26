@@ -167,6 +167,27 @@ TimeNet defines eight task classes:
 The target collection stays uniform across these classes. Each subclass adds only the configuration
 that its operation needs.
 
+The set is closed. TimeF stores each Task's type as a tag, and the reader maps that tag back to one
+of these classes. Each class is therefore final, and `Task` refuses subclasses defined outside
+TimeNet. To reuse a prompt or other settings, write a builder function that returns a built-in
+Task:
+
+```python
+from timenet.dataset import Record
+from timenet.types import AnswerTask
+
+
+def age_question(record: Record, age: int) -> AnswerTask:
+    return AnswerTask(
+        inputs=(record,),
+        prompt="How old is the subject?",
+        targets=(str(age),),
+    )
+
+
+dataset.add_task(task=age_question(record, 64))
+```
+
 ### Classification
 
 ```python

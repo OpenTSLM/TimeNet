@@ -26,6 +26,7 @@ from timenet.types import (
     TemporalLocalizationTask,
     TimeInterval,
 )
+from timenet.types.text import read_value
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey, Condition, Question
 
 
@@ -124,14 +125,13 @@ def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation])
     """
     schema = name_vocabulary(AnnotationKey.SLEEP_STAGE)
     for stage in span_annotations:
+        label = read_value(stage.value)
         if stage.span is None:
-            raise TimeFFormatError(
-                f"{recording_id}: a scored entry of {stage.value!r} states no span, so it holds no epoch"
-            )
+            raise TimeFFormatError(f"{recording_id}: a scored entry of {label!r} states no span, so it holds no epoch")
 
-        if stage.value not in STAGE_LABELS:
+        if not isinstance(label, str) or label not in STAGE_LABELS:
             raise TimeFFormatError(
-                f"{recording_id}: the scored entry at {stage.span.start_us} us states {stage.value!r}, "
+                f"{recording_id}: the scored entry at {stage.span.start_us} us states {label!r}, "
                 f"which is not a label this release writes"
             )
 
@@ -155,7 +155,7 @@ def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation])
             yield ClassificationTask(
                 # The label the technician wrote. Merging stage 3 with stage 4 is a decision
                 # for whoever trains.
-                targets=(stage.value,),
+                targets=(label,),
                 target_schema=schema,
                 scope=TimeInterval.micros(onset, onset + EPOCH_MICROSECONDS),
             )
@@ -192,7 +192,7 @@ def build_record_tasks(
         if one.key in stated:
             raise TimeFFormatError(f"{recording_id}: states {one.key!r} twice, so it has no one answer for it")
 
-        stated[one.key] = one.value
+        stated[one.key] = read_value(one.value)
 
     yield ScalarPredictionTask(
         # A float with a unit keeps the type a regression metric needs. As a string, a
@@ -239,7 +239,7 @@ def find_sleep_period(span_annotations: Sequence[Annotation]) -> TimeInterval | 
         The interval, or ``None`` where the scoring holds no sleep. TimeF refuses an interval of
         zero length, so a recording with no sleep carries no question about its night.
     """
-    spans = [one.span for one in span_annotations if one.value in ASLEEP_LABELS and one.span is not None]
+    spans = [one.span for one in span_annotations if read_value(one.value) in ASLEEP_LABELS and one.span is not None]
     if not spans:
         return None
 
@@ -252,8 +252,8 @@ def find_sleep_period(span_annotations: Sequence[Annotation]) -> TimeInterval | 
 def _whole_years(recording_id: str, stated: dict[str, object]) -> float:
     """Give the subject's age as a float, from the value the subject table stated.
 
-    ``Annotation.value`` is untyped, and the sheet decoder two modules away is what makes an
-    age a whole number. This states it again where the task is built.
+    Annotation values support several types. This task requires an integer age, so it checks
+    the value before it builds the numeric answer.
 
     Args:
         recording_id: The recording the age belongs to, for the error message.
@@ -329,7 +329,7 @@ def iter_tasks(records: Sequence[Record]) -> Iterator[Task]:
         # occurrence for each signal. The same span and label mean the same stage.
         stages = list(
             {
-                (one.span, one.value): one
+                (one.span, read_value(one.value)): one
                 for signal in record.signals
                 for one in signal.annotations
                 if one.key == AnnotationKey.SLEEP_STAGE

@@ -38,6 +38,7 @@ from timenet.types import (
 )
 from timenet.types.ids import EntityId
 from timenet.types.splits import parse_split
+from timenet.types.text import read_value
 
 
 if TYPE_CHECKING:
@@ -378,13 +379,13 @@ class DuckDBControlWriter:
                     {
                         "task_id": task_id,
                         "task_type": task_type,
-                        "prompt": task.prompt,
+                        "prompt": read_value(task.prompt),
                         "input_modalities": sorted(item.value for item in task.resolved_input_modalities),
                         "split": None if task.split is None else parse_split(task.split).value,
                         **self._scope_columns(task, signal_ids),
                         "has_inline_targets": task.targets is not None,
                         **encode_task_payload(task),
-                        "rationale": task.rationale,
+                        "rationale": read_value(task.rationale),
                         "metadata": _json(task.metadata),
                     }
                 )

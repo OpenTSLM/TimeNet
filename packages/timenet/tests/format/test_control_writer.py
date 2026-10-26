@@ -20,6 +20,7 @@ from timenet.types import (
     TimeInterval,
     TimeSeriesSpec,
     Version,
+    read_value,
     ureg,
 )
 
@@ -289,7 +290,7 @@ def test_a_streamed_parent_that_streams_after_its_child_is_stored(tmp_path):
 
     restored = TimeFDataset.open(path=dataset.write(path=tmp_path))
 
-    by_prompt = {task.prompt: task for task in restored.tasks}
+    by_prompt = {read_value(task.prompt): task for task in restored.tasks}
     assert by_prompt["Child?"].from_tasks == (by_prompt["Parent?"],)
 
 
@@ -386,6 +387,30 @@ def test_control_writer_stores_value_chunk_locations(tmp_path):
                WHERE signal_id = ?""",
             [LEAD_I_ID],
         ).fetchone() == ("values/part-00000000.parquet", 2, 3, 2)
+
+
+def test_control_writer_stores_equal_text_contents_once(tmp_path):
+    dataset = _dataset(with_task=False)
+    signal = Signal.from_values([1.0, 2.0], spec=SPEC, name="o", time_axis=OrdinalAxis())
+    other = Record(sources=(Source(name="ECG", signals=(signal,)),))
+    dataset.add_record(record=other)
+    for record, labels in zip(dataset.records, (["a", "b"], ("a", "b")), strict=True):
+        record.annotate(Annotation(key="labels", value=labels))
+        record.annotate(Annotation(key="note", value="same"))
+    other.annotate(Annotation(key="labels", value=["a", "c"]))
+    signal.annotate(Annotation(key="note", value="same"))
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path).write_hierarchy(dataset)
+
+    with connect_control(path, read_only=True) as connection:
+        rows = connection.execute(
+            """SELECT name, count(DISTINCT content_id), count(*)
+               FROM annotation_occurrences JOIN annotation_contents USING (content_id)
+               WHERE name IN ('labels', 'note')
+               GROUP BY name ORDER BY name"""
+        ).fetchall()
+    # Equal text, given as a list or a tuple, shares one row. Different text keeps its own.
+    assert rows == [("labels", 2, 3), ("note", 1, 3)]
 
 
 def test_control_writer_stores_equal_contents_and_regular_and_ordinal_axes_once(tmp_path):

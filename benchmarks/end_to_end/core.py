@@ -20,6 +20,7 @@ from benchmarks.end_to_end.corpus import build_corpus
 from timenet.dataset import Record, Signal
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
+from timenet.types.text import TextHandle, TextListHandle
 from timenet.writer import TimeFWriter
 
 
@@ -69,6 +70,8 @@ def _canonical(value: Any, positions: _Positions | None = None) -> Any:  # noqa:
     Returns:
         A recursively canonicalized value.
     """
+    if isinstance(value, TextHandle | TextListHandle):
+        return _canonical(value.read())
     if value is None or isinstance(value, str | int | bool):
         return value
     if isinstance(value, float):
