@@ -92,7 +92,7 @@ class RemoteRegistry(LazyReadRegistry):
 
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
-        """  # noqa: DOC502 (raised by the HTTP client on 404, not directly here)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by the HTTP client on 404, not directly here)
         resolved = self._resolve_latest(dataset_id) if is_latest(version) else version
         text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
         return Manifest.model_validate_json(text)
@@ -114,7 +114,7 @@ class RemoteRegistry(LazyReadRegistry):
         url = self._http.resolve_presigned(dataset_id, version, relpath)
         buffer = cast(
             BinaryIO,
-            tempfile.SpooledTemporaryFile(max_size=8 * 2**20),  # noqa: SIM115 (returned to the caller)
+            tempfile.SpooledTemporaryFile(max_size=8 * 2**20),  # ruff: ignore[open-file-with-context-handler] (returned to the caller)
         )
         self._http.stream_to(url, buffer)
         buffer.seek(0)
@@ -132,7 +132,7 @@ class RemoteRegistry(LazyReadRegistry):
         filesystem = RegistryFileSystem(self._base_url, files, token=self._http.token, transport=self._http.transport)
         return DatasetVersion(manifest, pafs.PyFileSystem(pafs.FSSpecHandler(filesystem)), root)
 
-    def _download_release(  # noqa: PLR0913
+    def _download_release(  # ruff: ignore[too-many-arguments]
         self,
         dataset_id: str,
         version: str,

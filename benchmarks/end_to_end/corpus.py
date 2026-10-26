@@ -436,7 +436,7 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             Annotation(key="scenario", value=scenario.name),
             Annotation(key="event", span=TimePoint.seconds(1.0)),
         ]
-        if scenario.steps / scenario.sampling_rate_hz > 2:  # noqa: PLR2004, RUF100 - minimum interval duration
+        if scenario.steps / scenario.sampling_rate_hz > 2:  # ruff: ignore[magic-value-comparison] - minimum interval duration
             annotations.append(
                 Annotation(
                     key="quality-window",

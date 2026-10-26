@@ -172,7 +172,7 @@ class _Graph:
 
         Raises:
             TimeFValidationError: If the releases depend on each other in a cycle.
-        """  # noqa: DOC502 - order() raises the cycle error
+        """  # ruff: ignore[docstring-extraneous-exception] - order() raises the cycle error
         steps: list[ParentStep] = []
         for reference in self.order():
             release = self.releases[reference]
@@ -244,7 +244,7 @@ def plan_parents(
         TimeNetAccessError: If the output is not local and the plan visits a release whose card, or
             a card in its lineage, does not declare ``access: open``. Also if ``fetch_from`` is not
             local and the plan would fetch such a release from it.
-    """  # noqa: DOC502 - raised by the helpers of the walk
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers of the walk
     if fetch_from is not None and not isinstance(output, LocalRegistry):
         # A registry that is not local accepts a child only if it already holds the parents. Also, a
         # fetch copies a parent into the local cache, not into the output.
@@ -279,7 +279,7 @@ def plan_parents(
     return graph.steps(root)
 
 
-def prepare_parents(  # noqa: PLR0913
+def prepare_parents(  # ruff: ignore[too-many-arguments]
     dataset_id: str,
     output: WritableRegistry,
     *,
@@ -359,7 +359,7 @@ def _locate(
         TimeNetAccessError: If the card of the release, or a card in its lineage, does not declare
             ``access: open``, and the output that holds the release, or the ``fetch_from`` registry
             to fetch it from, is not local.
-    """  # noqa: DOC502 - the damage is raised from a variable, the access error by require_open_access
+    """  # ruff: ignore[docstring-extraneous-exception] - the damage is raised from a variable, the access error by require_open_access
     manifest = _manifest(output, reference)
     damage = None
     if manifest is not None and isinstance(output, LocalRegistry):
@@ -388,7 +388,7 @@ def _locate(
     return None, None
 
 
-def _card_to_build(  # noqa: PLR0913
+def _card_to_build(  # ruff: ignore[too-many-arguments]
     reference: DatasetRef,
     needed_by: DatasetRef,
     output: WritableRegistry,
@@ -405,7 +405,7 @@ def _card_to_build(  # noqa: PLR0913
     Raises:
         TimeNetMissingParentError: If ``build_parents`` is not set.
         TimeNetAccessError: If the output is not local and the card does not declare ``access: open``.
-    """  # noqa: DOC502 - the access error is raised by require_open_access
+    """  # ruff: ignore[docstring-extraneous-exception] - the access error is raised by require_open_access
     if not build_parents:
         raise TimeNetMissingParentError(reference, needed_by, pinned, searched)
     card = _exact_card(reference)
@@ -424,7 +424,7 @@ def _exact_card(reference: DatasetRef) -> DatasetMetadata:
         TimeNetDatasetNotFoundError: If no installed connector builds the dataset.
         TimeFValidationError: If the installed connector declares another version.
         TimeNetInvalidCardError: If the card of the installed connector cannot be read.
-    """  # noqa: DOC502 - find_card raises the card error
+    """  # ruff: ignore[docstring-extraneous-exception] - find_card raises the card error
     card = find_card(reference.dataset_id)
     if card is None:
         raise TimeNetDatasetNotFoundError(f"parent release {reference} is missing and no installed connector builds it")

@@ -56,7 +56,6 @@ if TYPE_CHECKING:
 
     from timenet.manifest import FilePart
     from timenet.registry.version import DatasetVersion
-    from timenet.types.references import DatasetRef
 
 
 _CHUNK_LOCATOR_BATCH_SIZE = 1_024
@@ -87,7 +86,7 @@ class _ReaderState:
     chunk_batches: tuple[tuple[int, ...], ...]
 
 
-class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
+class TimeFReader:  # ruff: ignore[too-many-public-methods] - one public method per kind of read
     """Read a committed TimeF dataset through its DuckDB control plane."""
 
     def __init__(self, version: DatasetVersion) -> None:
@@ -136,7 +135,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
             TimeFValidationError: If the version has payload sources, is not stored as
                 ``<root>/<org>/<name>/<version>``, and no ``sources_root`` is given.
             TimeNetMissingParentError: If a payload source is not under the sources root.
-        """  # noqa: DOC502 - raised by open_local_version
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by open_local_version
         try:
             return cls(open_local_version(path, sources_root=sources_root))
         except TimeNetMissingParentError as error:
@@ -197,7 +196,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
         Raises:
             TimeNetFileError: If a file is missing, or its size or checksum differs from the manifest
                 record that describes it: its own record, or the pin of a payload source file.
-        """  # noqa: DOC502 - raised by _verify_files
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _verify_files
         release = DatasetRef(dataset_id=self._manifest.dataset_id, version=self._manifest.metadata.dataset_version)
         _verify_files(self._version, self._manifest.files.all_files(), release=release, owner=str(release))
         for key, pinned in self._manifest.payload_sources.items():
@@ -206,12 +205,12 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
 
     @property
     def metadata(self) -> DatasetMetadata:
-        """Return the dataset's descriptive metadata."""
+        """The dataset's descriptive metadata."""
         return self._manifest.metadata
 
     @property
     def schema(self) -> DatasetSchema:
-        """Return the dataset's type declaration."""
+        """The dataset's type declaration."""
         return self._manifest.dataset_schema
 
     def record_ids(self) -> tuple[EntityId, ...]:
@@ -267,7 +266,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
             values.run()
             return tasks
 
-    def iter_tasks(  # noqa: PLR0913 - one argument per task selection axis
+    def iter_tasks(  # ruff: ignore[too-many-arguments] - one argument per task selection axis
         self,
         *,
         inputs: Iterable[Record] | None = None,
@@ -364,7 +363,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
                 neither a ``ParentAlias`` nor a ``DatasetRef``, such as a plain string.
             TimeFFormatError: If the catalog names no parent release or another one for the alias
                 than the manifest does, or lists the alias or a parent ID more than once.
-        """  # noqa: DOC502 - raised by get_many
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by get_many
         return self.get_many(kind, (id,), parent=parent, load=load)[0]
 
     def get_many(
@@ -404,7 +403,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
                 string.
             TimeFFormatError: If the catalog names no parent release or another one for the alias
                 than the manifest does, or lists the alias or a parent ID more than once.
-        """  # noqa: DOC502 - TimeFFormatError is raised by _local_ids
+        """  # ruff: ignore[docstring-extraneous-exception] - TimeFFormatError is raised by _local_ids
         object_kind = _object_kind(kind)
         if isinstance(ids, str | bytes):
             raise TimeFValidationError(
@@ -513,7 +512,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
 
     @property
     def values_backend(self) -> str:
-        """Return the values-plane backend named by the manifest."""
+        """The values-plane backend named by the manifest."""
         return self._manifest.values_backend
 
     def read(self, *, load: LoadPlan = LoadPlan.ALL_LAZY) -> TimeFDataset:
@@ -535,7 +534,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
         Raises:
             TimeFFormatError: If the catalog's parent aliases or their parent releases differ from the
                 manifest's parent cards, or the catalog lists an alias or a parent ID more than once.
-        """  # noqa: DOC502 - raised by _import_state
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _import_state
         import_state = self._import_state()
         control = self._control_reader()
         records = control.read_records()
@@ -708,7 +707,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
 
         Raises:
             TimeFNotFoundError: If an ID names no stored Signal.
-        """  # noqa: DOC502 - raised by the control reader
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the control reader
         with self._as_format_error(preserve_validation=True):
             return self._control_reader().signal_record_ids(signal_ids)
 
@@ -732,7 +731,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
 
         Raises:
             TimeFNotFoundError: If an ID names no stored task.
-        """  # noqa: DOC502 - raised by the control reader
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the control reader
         with self._as_format_error(preserve_validation=True):
             tasks, records, on_dataset = self._control_reader()._read_tasks_with_records(task_ids)
             values = ValueLoad(load)

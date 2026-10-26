@@ -248,7 +248,7 @@ class ZarrValuesBackend(BaseValuesBackend):
             shard_len,
         )
 
-    def write_series(  # noqa: PLR0914
+    def write_series(  # ruff: ignore[too-many-locals]
         self,
         unique_series: list[Signal],
         *,
@@ -272,8 +272,8 @@ class ZarrValuesBackend(BaseValuesBackend):
             ImportError: If the ``zarr`` extra is not installed.
         """
         try:
-            import zarr  # noqa: PLC0415
-            from zarr.codecs import BloscCodec  # noqa: PLC0415
+            import zarr  # ruff: ignore[import-outside-top-level]
+            from zarr.codecs import BloscCodec  # ruff: ignore[import-outside-top-level]
         except ImportError as exc:  # pragma: no cover - exercised only without the extra
             raise ImportError("the zarr values backend needs the zarr extra: pip install 'timenet[zarr]'") from exc
 

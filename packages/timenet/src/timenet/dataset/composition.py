@@ -497,7 +497,7 @@ def _load_values(copies: Iterable[object], load: LoadPlan) -> None:
     its value from the storage of the reader that built it. Nothing outside the copies loads.
     """
     # The reader package imports the dataset package, so this import cannot be at the top.
-    from timenet.reader.load_plan import ValueLoad  # noqa: PLC0415
+    from timenet.reader.load_plan import ValueLoad  # ruff: ignore[import-outside-top-level]
 
     values = ValueLoad(load)
     values.add(copies)
@@ -646,7 +646,7 @@ def _set_annotations(owner: Record | Source | Signal, annotations: tuple[Annotat
     """Replace the annotations of a Record, Source, or Signal."""
     if isinstance(owner, Signal):
         # A Signal is frozen. Signal.annotate changes its annotations the same way.
-        object.__setattr__(owner, "annotations", annotations)  # noqa: PLC2801
+        object.__setattr__(owner, "annotations", annotations)  # ruff: ignore[unnecessary-dunder-call]
     else:
         owner.annotations = annotations
 
@@ -951,7 +951,7 @@ def _read_records(
     ]
 
 
-def import_from(  # noqa: PLR0913 - one argument per selection
+def import_from(  # ruff: ignore[too-many-arguments] - one argument per selection
     child: "TimeFDataset",
     parent: "TimeFReader",
     *,
@@ -973,7 +973,7 @@ def import_from(  # noqa: PLR0913 - one argument per selection
             ``TSCorrespondenceTask`` without ``candidate_records``, or ``add_tasks`` rejects the
             task copies.
         TimeFNotFoundError: If a selected ID names no parent object. The child does not change.
-    """  # noqa: DOC502 - raised by the helpers and the parent's reader
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers and the parent's reader
     record_ids = _parent_ids("records", records)
     signal_ids = _parent_ids("signals", signals)
     task_ids = _parent_ids("tasks", tasks)

@@ -55,7 +55,7 @@ def encode_annotation_value(value: object, *, label: str) -> dict[str, Any]:
     return columns
 
 
-def decode_annotation_value(  # noqa: PLR0913, PLR0917 - one positional argument per stored column
+def decode_annotation_value(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] - one positional argument per stored column
     value_kind: str | None,
     text_value: str | None,
     integer_value: int | None,

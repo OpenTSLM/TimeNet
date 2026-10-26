@@ -14,7 +14,7 @@ dev = [
     "packaging>=24.2",
     "pre-commit>=4.6.0",
     "pytest>=9.0.3",
-    "ruff>=0.15.12",
+    "ruff>=0.17.2",
     "ty>=0.0.92",
     "edfio>=0.4.14",
     "wfdb>=4.1",
@@ -40,6 +40,8 @@ extend-exclude = [".worktrees"]
 [tool.ruff.format]
 # quote-style (double) and indent-style (space) are ruff's defaults; only the non-default is set here.
 docstring-code-format = true
+# Keep the Python examples in the docs wrapped as written; ruff >= 0.17 formats Markdown code blocks.
+exclude = ["*.md"]
 
 [tool.ruff.lint]
 # Required for the DOC (pydoclint) rules, which are still in preview.
@@ -66,12 +68,13 @@ select = [
     "PL",     # Pylint — error/warning/convention rules (opinionated metrics dropped in `ignore`)
 ]
 ignore = [
-    "E501",  # Line too long — handled by the formatter
-    "F722",  # jaxtyping shape strings (e.g. Float32[np.ndarray, " time"]) read as forward references
-    "D417",  # Don't require documentation for every function parameter
-    "D105",  # Missing docstring in magic method
-    "D107",  # Missing docstring in __init__
-    "RET505",  # Allow elif/else after a return, for explicit if/elif/else branching
+    "line-too-long",  # Line too long — handled by the formatter
+    "forward-annotation-syntax-error",  # jaxtyping shape strings (e.g. Float32[np.ndarray, " time"]) read as forward references
+    "undocumented-param",  # Don't require documentation for every function parameter
+    "undocumented-magic-method",  # Missing docstring in magic method
+    "undocumented-public-init",  # Missing docstring in __init__
+    "superfluous-else-return",  # Allow elif/else after a return, for explicit if/elif/else branching
+    "too-many-statements-in-try-clause",  # Allow long try clauses; narrowing them is a refactor of its own
 ]
 
 [tool.ruff.lint.per-file-ignores]
@@ -81,10 +84,10 @@ ignore = [
 # Tests legitimately import private helpers to exercise them, assert self-equality, compare to "",
 # call context-manager dunders directly, and compare against literal fixture values. Async test
 # stubs (MockTransport handlers, awaited download fakes) must be `async` for their interface even
-# when their body doesn't await (RUF029).
-"**/tests/**/*.py" = ["S101", "S105", "S106", "D", "DOC", "S301", "S403", "S404", "S603", "ARG", "ASYNC240", "PLC2701", "PLR0124", "PLC1901", "PLC2801", "PLR2004", "PLR6301", "RUF029"]
+# when their body doesn't await (unused-async).
+"**/tests/**/*.py" = ["assert", "hardcoded-password-string", "hardcoded-password-func-arg", "D", "DOC", "suspicious-pickle-usage", "suspicious-pickle-import", "suspicious-subprocess-import", "subprocess-without-shell-equals-true", "ARG", "blocking-path-method-in-async-function", "import-private-name", "comparison-with-itself", "compare-to-empty-string", "unnecessary-dunder-call", "magic-value-comparison", "no-self-use", "unused-async"]
 # timenet.testing is a test-support subpackage; assert-based comparison helpers are its purpose.
-"**/src/timenet/testing/*.py" = ["S101"]
+"**/src/timenet/testing/*.py" = ["assert"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"

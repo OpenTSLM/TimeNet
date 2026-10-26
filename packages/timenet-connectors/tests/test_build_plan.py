@@ -151,7 +151,7 @@ def test_plan_uses_fetches_or_builds_each_parent_once_before_its_children(tmp_pa
     ],
     ids=["missing", "other-version", "cycle", "fetch-into-remote"],
 )
-def test_plan_rejects_unobtainable_parents_before_anything_runs(  # noqa: PLR0913, PLR0917
+def test_plan_rejects_unobtainable_parents_before_anything_runs(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
     tmp_path, monkeypatch, cards, options, error, match
 ):
     _install_cards(monkeypatch, **cards)

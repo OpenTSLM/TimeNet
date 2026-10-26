@@ -41,8 +41,8 @@ async def download_hub_files(repo: str, filenames: Sequence[str], *, revision: s
         TimeNetDownloadError: If the download fails, or a file is absent from the revision.
     """
     try:
-        from huggingface_hub import snapshot_download  # noqa: PLC0415 - optional connector dependency
-        from huggingface_hub.utils import tqdm  # noqa: PLC0415 - optional connector dependency
+        from huggingface_hub import snapshot_download  # ruff: ignore[import-outside-top-level] - optional connector dependency
+        from huggingface_hub.utils import tqdm  # ruff: ignore[import-outside-top-level] - optional connector dependency
     except ImportError as exc:
         raise ImportError(
             "downloading from the Hugging Face Hub needs huggingface_hub, declared in the connector's "

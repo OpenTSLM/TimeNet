@@ -54,7 +54,7 @@ class _Positions:
     signals: dict[int, tuple[int, int]] = field(default_factory=dict)
 
 
-def _canonical(value: Any, positions: _Positions | None = None) -> Any:  # noqa: PLR0911 - explicit type cases
+def _canonical(value: Any, positions: _Positions | None = None) -> Any:  # ruff: ignore[too-many-return-statements] - explicit type cases
     """Convert TimeF values into stable JSON-compatible structures.
 
     Args:
@@ -222,7 +222,7 @@ def capabilities() -> dict[str, bool]:
     Returns:
         Flags for selectable Zarr storage and rich dtype/N-D specs.
     """
-    from timenet.types import TimeSeriesSpec  # noqa: PLC0415
+    from timenet.types import TimeSeriesSpec  # ruff: ignore[import-outside-top-level]
 
     try:
         values_backends = importlib.import_module("timenet.values_backends")

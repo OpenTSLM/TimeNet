@@ -58,7 +58,7 @@ def build_fake(version_dir: Path, *, token: str | None = None, blob_base: str = 
     version = str(manifest.metadata.dataset_version)
     requests: list[httpx.Request] = []
 
-    def handler(request: httpx.Request) -> httpx.Response:  # noqa: PLR0911
+    def handler(request: httpx.Request) -> httpx.Response:  # ruff: ignore[too-many-return-statements]
         requests.append(request)
         if request.url.host == "blob.local":
             return read_file(version_dir, request)
@@ -176,7 +176,7 @@ def registry_server(
         yield server
 
 
-def build_publish_fake(*, token: str = "tok_rw"):  # noqa: S107
+def build_publish_fake(*, token: str = "tok_rw"):  # ruff: ignore[hardcoded-password-default]
     """A MockTransport that accepts a full publish flow into an in-memory store.
 
     Returns (transport, state) where state has: ``store`` (relpath -> bytes), ``published`` (list of
@@ -240,7 +240,7 @@ def _blob(request: httpx.Request, root: Path) -> httpx.Response:
     return read_file(root, request)
 
 
-def _service_read(local: LocalRegistry, root: Path, parts: list[str]) -> httpx.Response:  # noqa: PLR0911
+def _service_read(local: LocalRegistry, root: Path, parts: list[str]) -> httpx.Response:  # ruff: ignore[too-many-return-statements]
     """Serve the anonymous read endpoints from a LocalRegistry over ``root``."""
     if not parts:  # GET /api/v1/datasets
         summaries = [_summary(local.get_manifest(md.dataset_id)) for md in local.list_datasets()]

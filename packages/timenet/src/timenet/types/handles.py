@@ -52,7 +52,7 @@ class ValueHandle(ABC, Generic[_Value_co]):
     @property
     @abstractmethod
     def is_loaded(self) -> bool:
-        """Return whether the value is held in memory, so ``read()`` needs no storage access."""
+        """Whether the value is held in memory, so ``read()`` needs no storage access."""
 
     @abstractmethod
     def read(self) -> _Value_co:
@@ -187,7 +187,7 @@ class NumpyArray(ArrayHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return True, since the array is held in memory."""
+        """Always True, since the array is held in memory."""
         return True
 
     def read(self) -> pa.Array:
@@ -202,7 +202,7 @@ class NumpyArray(ArrayHandle):
                 arrow = self._arrow
                 if arrow is None:
                     arrow = _numpy_to_arrow(self.values)
-                    object.__setattr__(self, "_arrow", arrow)  # noqa: PLC2801 - fills the frozen handle's cache
+                    object.__setattr__(self, "_arrow", arrow)  # ruff: ignore[unnecessary-dunder-call] - fills the frozen handle's cache
         return arrow
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
@@ -240,7 +240,7 @@ class ArrowArray(ArrayHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return True, since the array is held in memory."""
+        """Always True, since the array is held in memory."""
         return True
 
     def read(self) -> pa.Array:
@@ -267,7 +267,7 @@ class CallableArray(ArrayHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return False, since every read calls the function."""
+        """Always False, since every read calls the function."""
         return False
 
     def read(self) -> pa.Array:

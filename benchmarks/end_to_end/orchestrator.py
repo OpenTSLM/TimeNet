@@ -7,7 +7,7 @@ from contextlib import contextmanager
 import json
 from pathlib import Path
 import shutil
-import subprocess  # noqa: S404 - commands use fixed argument vectors
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - commands use fixed argument vectors
 import tempfile
 from typing import Any
 
@@ -20,7 +20,7 @@ def run(command: list[str], *, cwd: Path, capture: bool = False) -> str:
     Returns:
         Captured stdout, or an empty string.
     """
-    result = subprocess.run(  # noqa: S603 - no shell; arguments are explicit
+    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - no shell; arguments are explicit
         command,
         cwd=cwd,
         check=True,
@@ -57,8 +57,8 @@ def worktrees(before_revision: str, after_revision: str, *, keep: bool = False) 
     finally:
         for worktree in (before, after):
             if worktree.exists():
-                subprocess.run(  # noqa: S603 - fixed cleanup command, no shell
-                    ["git", "worktree", "remove", "--force", str(worktree)],  # noqa: S607
+                subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true] - fixed cleanup command, no shell
+                    ["git", "worktree", "remove", "--force", str(worktree)],  # ruff: ignore[start-process-with-partial-path]
                     cwd=repo,
                     check=False,
                 )

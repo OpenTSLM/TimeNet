@@ -96,7 +96,7 @@ class _RecordRow(NamedTuple):
 
     @property
     def id(self) -> EntityId:
-        """Return the Record id."""
+        """The Record id."""
         return self.record_id
 
 
@@ -111,7 +111,7 @@ class _SourceRow(NamedTuple):
 
     @property
     def id(self) -> EntityId:
-        """Return the Source id."""
+        """The Source id."""
         return self.source_id
 
 
@@ -136,12 +136,12 @@ class _SignalRow(NamedTuple):
 
     @property
     def id(self) -> EntityId:
-        """Return the Signal id."""
+        """The Signal id."""
         return self.signal_id
 
     @property
     def spec_fields(self) -> tuple[Any, ...]:
-        """Return the columns that together identify one inline specification, as a hashable key."""
+        """The columns that together identify one inline specification, as a hashable key."""
         return (
             self.spec_type,
             self.spec_name,
@@ -254,7 +254,7 @@ class _TaskRow(NamedTuple):
 
     @property
     def payload_columns(self) -> dict[str, str | None]:
-        """Return the subclass configuration columns for the task codec."""
+        """The subclass configuration columns for the task codec."""
         return {
             "target_schema": self.target_schema,
             "unit": self.unit,
@@ -325,7 +325,7 @@ def _annotation_query(owners: Mapping[ObjectKind, Collection[int] | None]) -> tu
                c.float_value, c.boolean_value, c.text_list_value, c.unit, c.description, c.metadata
         FROM {occurrences} o
         LEFT JOIN annotation_contents c USING (content_id)
-        ORDER BY o.occurrence_id"""  # noqa: S608 - fixed fragments
+        ORDER BY o.occurrence_id"""  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
     return query, parameters
 
 
@@ -551,7 +551,7 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(before=_CONNECTIONS.before_fork, after_in_child=_CONNECTIONS.after_fork_in_child)
 
 
-class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of catalog read
+class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public method per kind of catalog read
     """Keep one read-only DuckDB connection and build requested records from it.
 
     The connection opens again on the next query after :meth:`close`, and after the process forks,
@@ -580,7 +580,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
-        """  # noqa: DOC502 - raised by _open
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _open
         self.path = Path(path)
         self._fetch = fetch
         self._connection: duckdb.DuckDBPyConnection | None = None
@@ -657,7 +657,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
-        """  # noqa: DOC502 - raised by _connect
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _connect
         connection = self._connection
         if connection is not None:
             return connection
@@ -742,7 +742,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFFormatError: If the catalog has no locator table.
-        """  # noqa: DOC502 - raised by _stores_locators
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _stores_locators
         if self._packed_values_stored is None:
             self._packed_values_stored = self.run(_stores_locators)
         return self._packed_values_stored
@@ -833,7 +833,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
             TimeFValidationError: If a requested ID is not an int.
             TimeFNotFoundError: If a requested record is absent.
             TimeFFormatError: If the stored hierarchy is inconsistent.
-        """  # noqa: DOC502 - row selection and hierarchy helpers validate the stored data
+        """  # ruff: ignore[docstring-extraneous-exception] - row selection and hierarchy helpers validate the stored data
         records = self._build_records(record_ids, with_annotations=with_annotations, shared_offsets=shared_offsets)
         self._known_record_ids.update(record.id for record in records)
         return records
@@ -913,7 +913,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
             TimeFValidationError: If a requested ID is not an int.
             TimeFNotFoundError: If a requested record is absent.
             TimeFFormatError: If the stored hierarchy is inconsistent.
-        """  # noqa: DOC502 - row selection and hierarchy helpers validate the stored data
+        """  # ruff: ignore[docstring-extraneous-exception] - row selection and hierarchy helpers validate the stored data
         requested = None if record_ids is None else tuple(check_id(item, "record id") for item in record_ids)
         hierarchy = self._read_record_hierarchy(requested, shared_offsets)
         occurrences: _AnnotationsByOccurrence = {}
@@ -1009,7 +1009,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         Raises:
             TimeFFormatError: If a signal refers to a missing axis, or its axis stores a different
                 number of time offsets.
-        """  # noqa: DOC502 - _signal_axis checks each signal's axis
+        """  # ruff: ignore[docstring-extraneous-exception] - _signal_axis checks each signal's axis
         axes = self._read_axes({row.axis_id for row in signal_rows})
         # Signals that share an axis share its handle, so its time offsets are read and checked once.
         time_offsets_by_axis = self._stored_offsets(axes, shared_offsets)
@@ -1102,7 +1102,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
                 annotations=annotations.get((ObjectKind.SIGNAL, row.signal_id), ()),
                 metadata=_decode_json(row.metadata, default={}),
             )
-            object.__setattr__(built, "_id", row.signal_id)  # noqa: PLC2801 (Signal is frozen)
+            object.__setattr__(built, "_id", row.signal_id)  # ruff: ignore[unnecessary-dunder-call] (Signal is frozen)
             signals_by_source[row.source_id].append(built)
         return signals_by_source
 
@@ -1138,7 +1138,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFFormatError: If a stored record span lacks its required end.
-        """  # noqa: DOC502 - the span helper rejects missing bounds
+        """  # ruff: ignore[docstring-extraneous-exception] - the span helper rejects missing bounds
         sources_by_id = hierarchy.sources
         children = hierarchy.children
         occurrence_ids = {id(annotation): key for key, annotation in occurrences.items()}
@@ -1198,7 +1198,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         table, order_column, relation_column, kind = _HIERARCHY_TABLES[row_type]
         columns = ", ".join(row_type._fields)
         query = (
-            f"SELECT {columns} FROM {table} WHERE ? OR {relation_column} "  # noqa: S608 - fixed identifiers
+            f"SELECT {columns} FROM {table} WHERE ? OR {relation_column} "  # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
             f"IN (SELECT unnest(?)) ORDER BY {order_column}"
         )
         rows = self._query_named(query, [related_ids is None, list(related_ids or ())], row_type._make)
@@ -1310,7 +1310,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         rows = self._query_named(
             f"""SELECT {columns} FROM signal_chunks
                WHERE signal_id IN (SELECT unnest(?))
-               ORDER BY signal_id, chunk_index""",  # noqa: S608 - fixed column names
+               ORDER BY signal_id, chunk_index""",  # ruff: ignore[hardcoded-sql-expression] - fixed column names
             [list(ids)],
             _ChunkRow._make,
         )
@@ -1339,7 +1339,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         Raises:
             TimeFFormatError: If the catalog lists a parent alias, or a parent ID under one alias and
                 kind, more than once.
-        """  # noqa: DOC502 - raised by _require_listed_once
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _require_listed_once
         releases = self._query("SELECT alias, parent_ref FROM imports")
         rows = self._query("SELECT alias, object_kind, parent_id, object_id FROM imported_objects")
         _require_listed_once(
@@ -1381,7 +1381,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         Raises:
             TimeFFormatError: If the catalog lists the alias more than once, or lists one of the
                 parent IDs more than once under the alias and kind.
-        """  # noqa: DOC502 - raised by _require_listed_once
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _require_listed_once
         found = self._query("SELECT parent_ref FROM imports WHERE alias = ?", [alias])
         if not found:
             return None, {}
@@ -1404,7 +1404,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFNotFoundError: If an ID names no stored Signal.
-        """  # noqa: DOC502 - raised by _require_found
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _require_found
         owners = self._record_ids_of_signals(signal_ids)
         _require_found(ObjectKind.SIGNAL, signal_ids, owners)
         return owners
@@ -1437,7 +1437,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFNotFoundError: If an ID names no stored Signal.
-        """  # noqa: DOC502 - raised by signal_record_ids
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by signal_record_ids
         owners = self.signal_record_ids(signal_ids)
         signals: dict[EntityId, Signal] = {}
         for record in self.read_records(list(dict.fromkeys(owners.values()))):
@@ -1457,7 +1457,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFNotFoundError: If an ID names no stored task.
-        """  # noqa: DOC502 - raised by _read_tasks_with_records
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_tasks_with_records
         return self._read_tasks_with_records(task_ids)[0]
 
     def _read_tasks_with_records(
@@ -1473,7 +1473,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFNotFoundError: If an ID names no stored task.
-        """  # noqa: DOC502 - raised by _require_found
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _require_found
         stored = {
             task_id
             for (task_id,) in self._query(
@@ -1485,7 +1485,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         tasks = builder.read_ids(list(task_ids))
         return {task.id: task for task in tasks}, dict(builder.records_by_id), tuple(builder.dataset_occurrences)
 
-    def read_tasks(  # noqa: PLR0913 - one argument per task selection axis
+    def read_tasks(  # ruff: ignore[too-many-arguments] - one argument per task selection axis
         self,
         records: Iterable[Record] | None = None,
         *,
@@ -1510,7 +1510,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
-        """  # noqa: DOC502 - raised by _TaskBuilder
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _TaskBuilder
         builder = _TaskBuilder(
             self,
             None if records is None else tuple(records),
@@ -1553,7 +1553,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
-        """  # noqa: DOC502 - raised by _TaskBuilder
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _TaskBuilder
         builder = _TaskBuilder(
             self,
             None if records is None else tuple(records),
@@ -1628,7 +1628,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
                 LEFT JOIN inputs USING (task_id)
                 LEFT JOIN parents USING (task_id)
                 {where}
-                ORDER BY t.task_id""",  # noqa: S608 - fixed fragments
+                ORDER BY t.task_id""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
             parameters,
         )
 
@@ -1659,7 +1659,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
                 FROM task_targets x
                 JOIN tasks t USING (task_id)
                 {where}
-                ORDER BY t.task_id, x.position""",  # noqa: S608 - fixed fragments
+                ORDER BY t.task_id, x.position""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
             parameters,
         )
 
@@ -1688,7 +1688,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
                 FROM annotation_occurrences o
                 JOIN annotation_contents c USING (content_id)
                 {where}
-                ORDER BY o.object_type, o.object_id, o.occurrence_id""",  # noqa: S608 - fixed fragments
+                ORDER BY o.object_type, o.object_id, o.occurrence_id""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
             [] if object_type is None else [object_type],
         )
 
@@ -1705,7 +1705,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
             f"""WHERE t.task_id IN (
                    SELECT task_id FROM task_record_refs
                    WHERE field = '{TaskRelationshipField.INPUTS}' AND record_id IN (SELECT unnest(?))
-               )""",  # noqa: S608 - fixed field name
+               )""",  # ruff: ignore[hardcoded-sql-expression] - fixed field name
             [[check_id(item, "record id") for item in record_ids]],
         )
 
@@ -1741,7 +1741,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFValidationError: If the split is unknown.
-        """  # noqa: DOC502 - raised by parse_split
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by parse_split
         if split is None:
             return "", []
         return "t.split = ?", [parse_split(split).value]
@@ -1784,7 +1784,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
             parameters.append(supported)
         return " AND ".join(predicates), parameters
 
-    def _selected_task_ids(  # noqa: PLR0913 - one argument per task selection axis, and the page
+    def _selected_task_ids(  # ruff: ignore[too-many-arguments] - one argument per task selection axis, and the page
         self,
         record_ids: list[int] | None,
         required_modalities: Iterable[InputModality] | None,
@@ -1812,7 +1812,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         if after is not None:
             where = f"{where} AND t.task_id > ?" if where else "WHERE t.task_id > ?"
             params = [*params, after]
-        sql = f"SELECT t.task_id FROM tasks t {where} ORDER BY t.task_id LIMIT ?"  # noqa: S608 - fixed predicates
+        sql = f"SELECT t.task_id FROM tasks t {where} ORDER BY t.task_id LIMIT ?"  # ruff: ignore[hardcoded-sql-expression] - fixed predicates
         return [task_id for (task_id,) in self._query(sql, [*params, limit])]
 
     @staticmethod
@@ -1835,7 +1835,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         columns = ", ".join(_TaskRow._fields)
         where, parameters = self._task_filter(task_ids)
         return self._query_named(
-            f"SELECT {columns} FROM tasks {where} ORDER BY task_id",  # noqa: S608 - fixed identifiers
+            f"SELECT {columns} FROM tasks {where} ORDER BY task_id",  # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
             parameters,
             _TaskRow._make,
         )
@@ -1849,7 +1849,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         columns = ", ".join(_TargetRow._fields)
         where, parameters = self._task_filter(task_ids)
         return self._query_named(
-            f"SELECT {columns} FROM task_targets {where} ORDER BY task_id, position",  # noqa: S608 - fixed identifiers
+            f"SELECT {columns} FROM task_targets {where} ORDER BY task_id, position",  # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
             parameters,
             _TargetRow._make,
         )
@@ -1865,7 +1865,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         stored = {
             row[0]
             for row in self._query(
-                f"SELECT {column} FROM {table} WHERE {column} IN (SELECT unnest(?))",  # noqa: S608 - fixed identifiers
+                f"SELECT {column} FROM {table} WHERE {column} IN (SELECT unnest(?))",  # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
                 [list(ids)],
             )
         }
@@ -1890,7 +1890,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         """
         where, parameters = self._task_filter(task_ids)
         rows = self._query(
-            f"SELECT task_id, field, {column} FROM {table} {where} ORDER BY task_id, field, position",  # noqa: S608
+            f"SELECT task_id, field, {column} FROM {table} {where} ORDER BY task_id, field, position",  # ruff: ignore[hardcoded-sql-expression]
             parameters,
         )
         grouped = self._group_relationships(rows)
@@ -1907,7 +1907,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         """
         where, parameters = self._task_filter(task_ids)
         rows = self._query(
-            f"SELECT task_id, parent_task_id FROM task_dependencies {where} ORDER BY task_id, position",  # noqa: S608
+            f"SELECT task_id, parent_task_id FROM task_dependencies {where} ORDER BY task_id, position",  # ruff: ignore[hardcoded-sql-expression]
             parameters,
         )
         parents: dict[int, list[int]] = defaultdict(list)
@@ -2193,7 +2193,7 @@ class _TaskBuilder:
     objects.
     """
 
-    def __init__(  # noqa: PLR0913 - one argument per task selection axis
+    def __init__(  # ruff: ignore[too-many-arguments] - one argument per task selection axis
         self,
         reader: DuckDBControlReader,
         records: tuple[Record, ...] | None,
@@ -2359,7 +2359,7 @@ class _TaskBuilder:
 
         Raises:
             TimeFFormatError: If the stored derivations contain a cycle.
-        """  # noqa: DOC502 - _check_derivations finds the cycle
+        """  # ruff: ignore[docstring-extraneous-exception] - _check_derivations finds the cycle
         pending = None if task_ids is None else [task_id for task_id in task_ids if task_id not in self.retained]
         if pending and self.parent_ids:
             ancestors = self.reader._task_ancestors(pending) - set(pending) - self.retained.keys()
@@ -2387,7 +2387,7 @@ class _TaskBuilder:
             raise TimeFFormatError(f"task dependency refers to missing task {task_id!r}")
         return task
 
-    def _build(self, task_ids: list[EntityId] | None) -> _TasksById:  # noqa: PLR0914 - one batch joins several tables
+    def _build(self, task_ids: list[EntityId] | None) -> _TasksById:  # ruff: ignore[too-many-locals] - one batch joins several tables
         """Read every table for one batch of task IDs and construct the tasks.
 
         Returns:

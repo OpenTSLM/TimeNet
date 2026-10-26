@@ -56,7 +56,7 @@ def open_local_version(path: str | Path, *, sources_root: str | Path | None = No
         FileNotFoundError: If ``path`` has no manifest.
         TimeFValidationError: If the release has payload sources, is not stored as
             ``<root>/<org>/<name>/<version>``, and no ``sources_root`` is given.
-    """  # noqa: DOC502 - the checks below raise TimeFFormatError and TimeNetDatasetNotFoundError
+    """  # ruff: ignore[docstring-extraneous-exception] - the checks below raise TimeFFormatError and TimeNetDatasetNotFoundError
     directory = Path(path).expanduser()
     manifest_path = directory / MANIFEST_FILE
     if not manifest_path.is_file():
@@ -87,7 +87,7 @@ def open_local_release(directory: Path, manifest: Manifest, *, sources_root: Pat
         TimeFFormatError: If a payload source differs from the files the release pins.
         TimeNetMissingParentError: If a payload source is not under ``sources_root``.
         TimeFValidationError: If the release has payload sources but no ``sources_root``.
-    """  # noqa: DOC502 - raised by the checks this function calls
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the checks this function calls
     version = DatasetVersion(manifest, pafs.LocalFileSystem(), str(directory))
     check_file_sizes(version, manifest.files.all_files(), owner=str(_reference(manifest)))
     if not manifest.payload_sources:
@@ -130,7 +130,7 @@ def attach_payload_sources(
         TimeNetFileError: If a pinned local file is missing or has another size.
         TimeFFormatError: If a payload source's manifest names another release, lacks a pinned file,
             or records it differently.
-    """  # noqa: DOC502 - mismatches are raised by the checks this function calls
+    """  # ruff: ignore[docstring-extraneous-exception] - mismatches are raised by the checks this function calls
     release = _reference(version.manifest)
     sources: dict[SourceKey, DatasetVersion] = {}
     for key, pinned in version.manifest.payload_sources.items():
@@ -197,7 +197,7 @@ def check_file_sizes(version: DatasetVersion, parts: Iterable[FilePart], *, owne
             raise TimeNetFileError(release, owner, part.path, f"{part.size:,} bytes", f"{size:,} bytes")
 
 
-def prepare_local_copy(  # noqa: PLR0913
+def prepare_local_copy(  # ruff: ignore[too-many-arguments]
     root: str | Path,
     reference: DatasetRef,
     *,
@@ -240,7 +240,7 @@ def prepare_local_copy(  # noqa: PLR0913
         TimeNetMissingParentError: If a payload source is absent and this function cannot fetch it.
         TimeNetFileError: If a local copy is damaged and ``fetch_from`` is not given, or if a
             fetched file does not match its manifest record.
-    """  # noqa: DOC502 - raised by the helpers
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     root = Path(root)
 
     def open_complete(ref: DatasetRef, *, requested: bool) -> DatasetVersion:
@@ -292,7 +292,7 @@ def open_cached_or_remote(
     return attach_payload_sources(version, open_one, searched=f"{searched} or its cache {root}")
 
 
-def _ensure_dataset_version_available_locally(  # noqa: PLR0913
+def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-arguments]
     directory: Path,
     reference: DatasetRef,
     *,
@@ -313,7 +313,7 @@ def _ensure_dataset_version_available_locally(  # noqa: PLR0913
             size, and ``fetch_from`` is not given. Also if a fetched file does not match its
             manifest record.
         TimeFFormatError: If a manifest identifies a different release.
-    """  # noqa: DOC502 - raised by the helpers
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     if manifest is not None:
         validate_manifest_reference(manifest, reference)
     if not force and (directory / MANIFEST_FILE).is_file():
@@ -360,7 +360,7 @@ def _load_complete_local_manifest(
     return manifest if complete_copy(directory, manifest) else None
 
 
-def _download_dataset_version(  # noqa: PLR0913
+def _download_dataset_version(  # ruff: ignore[too-many-arguments]
     directory: Path,
     reference: DatasetRef,
     registry: "BaseRegistry",
