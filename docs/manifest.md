@@ -97,8 +97,9 @@ The fields count `records`, `sources`, `signals`, `axes`, reusable `annotation_c
 
 ## `ManifestFiles`
 
-`ManifestFiles` lists the single `control.duckdb` artifact and the `time_series` values-plane
-artifacts. A reader uses this list and never uses a directory glob.
+`ManifestFiles` lists the single `control.duckdb` artifact, the `time_series` values-plane
+artifacts, and packed `payloads` files for large text. A reader uses this list and never uses a
+directory glob.
 
 Each entry is a `FilePart`. A `FilePart` carries the file's `path` (version-relative), its
 `checksum` (with the `sha256:` prefix), and its `size` in bytes. So the path and the digest never
