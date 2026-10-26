@@ -39,7 +39,7 @@ Manifest(
     counts=counts,              # ManifestCounts (default: empty)
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
-    build_env=None,             # environment provenance (see below)
+    build_env={},               # {"python", "packages"} (default: empty)
     timef_format_version=1,     # required; validated against the supported set {1}
 )
 ```
@@ -82,7 +82,9 @@ and `counts` default to empty. Unknown fields are rejected. A malformed block ra
 
 - Known units serialize to their pint names (`"hertz"`, `"millivolt"`, `"dimensionless"`). An
   unknown unit serializes as `null`. The field remains required.
-- Device and origin information belongs to the hierarchy's `Source`, not to `TimeSeriesSpec`.
+- Device information belongs to a [`Source`](data-model/sources.md), in its name, metadata, or
+  annotations. The time origin belongs to the Record's `start_time`. Neither belongs to
+  `TimeSeriesSpec`.
 - Tasks serialize as `{"task_type": ...}`. On read, the reader resolves them against the built-in
   `TASKS` registry. An unknown `task_type` raises Pydantic's `ValidationError`. The annotation
   `value_type` round-trips as a string. The reader uses it to decode values.
