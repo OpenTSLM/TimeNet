@@ -22,8 +22,12 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
     ("statement", "message"),
     [
         (
-            "INSERT INTO records (record_key, record_id, clock_id, metadata) SELECT record_key, record_id, clock_id, metadata FROM records",
+            "INSERT INTO records (record_key, record_id, clock_id, metadata, read_order) SELECT record_key, record_id, clock_id, metadata, read_order FROM records",
             "records contains duplicate values for record_key",
+        ),
+        (
+            "INSERT INTO records (record_key, record_id, clock_id, metadata, read_order) VALUES (-1, 'twin', 1, '{}', 0)",
+            "records contains duplicate values for read_order",
         ),
         (
             "UPDATE sources SET record_key = -1 WHERE source_id = 'monitor'",
@@ -38,7 +42,7 @@ def test_audit_requires_chunks_unless_told_otherwise(control_path):
             r"invalid signals\.n_values value",
         ),
         (
-            "INSERT INTO records (record_key, record_id, clock_id, metadata) VALUES (-1, 'ghost', 1, '{}'); "
+            "INSERT INTO records (record_key, record_id, clock_id, metadata, read_order) VALUES (-1, 'ghost', 1, '{}', -1); "
             "UPDATE sources SET record_key = -1 WHERE source_id = 'ecg'",
             "belong to different records",
         ),

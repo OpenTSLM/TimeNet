@@ -1,4 +1,4 @@
-"""Sharded values-plane round trips and targeted-read verification."""
+"""Sharded values-plane round trips, targeted-read verification, and record read order."""
 
 import duckdb
 import pyarrow.parquet as pq
@@ -6,6 +6,7 @@ import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
+from timenet.dataset.edit import edit_version
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
@@ -20,6 +21,8 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.types.reference_keys import InputAlias
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
 
@@ -171,3 +174,156 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
         series = reader.get(Signal, "ts-006")
         series.to_arrow()
     assert set(read) == expected  # only ts-006's chunks' row groups were decoded, not whole shards
+
+
+# ---- record order ----------------------------------------------------------------------------
+
+
+def _metadata(dataset_id, inputs=None):
+    return DatasetMetadata(
+        dataset_id=dataset_id,
+        dataset_version=Version(1, 0, 0),
+        name="Record order",
+        description="synthetic",
+        license=License.MIT,
+        inputs=inputs or {},
+    )
+
+
+_AXIS = RegularAxis.from_rate_hz(16)
+
+
+def _signal(spec_type):
+    spec = TimeSeriesSpec(spec_type=spec_type, name=spec_type.upper(), unit_value=ureg.dimensionless)
+    return Signal.from_values([float(i) for i in range(128)], spec=spec, name=spec_type, time_axis=_AXIS)
+
+
+def _stored_signal_ids(version_dir):
+    rows = _index_rows(version_dir)
+    return list(
+        dict.fromkeys(
+            row["signal_id"]
+            for row in sorted(rows, key=lambda row: (row["chunk_file"], row["chunk_major_idx"], row["chunk_minor_idx"]))
+        )
+    )
+
+
+def _child_of(tmp_path, parents, *local_records):
+    """Write ``parents``, then a child that imports all of their records and adds ``local_records``.
+
+    The child declares each parent as an input. Returns the child's version directory and, per
+    parent, the imported copies' IDs in the parent's record order. Each parent below stores its
+    records' earliest values in that order.
+    """
+    readers = [TimeFReader(open_local_version(_write(tmp_path, parent, **_SMALL_TARGETS))) for parent in parents]
+    try:
+        inputs = {
+            InputAlias(f"parent-{index}"): DatasetRef(
+                dataset_id=reader.metadata.dataset_id, version=reader.metadata.dataset_version
+            )
+            for index, reader in enumerate(readers)
+        }
+        child = TimeFDataset(metadata=_metadata("test/child", inputs=inputs))
+        imports = [
+            child.import_from(reader, records=[r.id for r in parent.records])
+            for reader, parent in zip(readers, parents, strict=True)
+        ]
+        for record in local_records:
+            child.add_record(record=record)
+        child_path = _write(tmp_path, child)
+    finally:
+        for reader in readers:
+            reader.close()
+    copies = [
+        tuple(imported.records[record.id].id for record in parent.records)
+        for imported, parent in zip(imports, parents, strict=True)
+    ]
+    return child_path, copies
+
+
+def test_a_release_without_imported_records_and_its_edits_order_records_by_id(tmp_path):
+    dataset = TimeFDataset(metadata=_metadata("timenet/own-values"))
+    for record_id, spec_type in (("record-a", "z"), ("record-b", "a"), ("record-c", "a")):
+        dataset.add_record(
+            record=Record(sources=(Source(name="Source", signals=(_signal(spec_type),)),), record_id=record_id)
+        )
+    base = _write(tmp_path, dataset, **_SMALL_TARGETS)
+    # The writer groups values by spec type first, so record-a's values are stored last.
+    signal_ids = [record.signals[0].id for record in dataset.records]
+    assert _stored_signal_ids(base) == [signal_ids[1], signal_ids[2], signal_ids[0]]
+    # An edit stores no values; it reads the base's, and keeps the base's IDs and their order.
+    edited = edit_version(base, dataset_version=Version(1, 0, 1), remove_record_ids=["record-c"])
+    for path, expected in ((base, ("record-a", "record-b", "record-c")), (edited, ("record-a", "record-b"))):
+        with TimeFReader(open_local_version(path)) as reader:
+            assert reader.record_ids() == expected
+
+
+def test_lazy_reads_of_imported_records_follow_storage_order(tmp_path, monkeypatch):
+    child_path, (copies,) = _child_of(tmp_path, [_sharded_dataset(12, 128)])
+    # The copies' new IDs sort differently from where their values are stored.
+    assert sorted(copies) != list(copies)
+    read = []
+    original = SignalRowGroupCache.read_values
+
+    def track(self, version, relpath, group):
+        read.append((relpath, group))
+        return original(self, version, relpath, group)
+
+    monkeypatch.setattr(SignalRowGroupCache, "read_values", track)
+    with TimeFReader(open_local_version(child_path)) as reader:
+        assert reader.record_ids() == copies
+        # Each Signal loads on its own, so only the record order keeps these reads sequential.
+        for record in reader.iter_records():
+            for signal in record.signals:
+                signal.to_arrow()
+    assert len(read) > len(copies)
+    assert read == sorted(read)
+
+
+def test_an_edit_of_an_imported_child_keeps_storage_order(tmp_path):
+    child_path, (copies,) = _child_of(tmp_path, [_sharded_dataset(6, 128)])
+    assert sorted(copies) != list(copies)
+    edited = edit_version(child_path, dataset_version=Version(1, 0, 1), remove_record_ids=[copies[2]])
+    with TimeFReader(open_local_version(edited)) as reader:
+        assert reader.record_ids() == (*copies[:2], *copies[3:])
+
+
+def test_an_edit_that_drops_every_imported_copy_orders_records_by_id(tmp_path):
+    local = [
+        Record(sources=(Source(name="Source", signals=(_signal(spec_type),)),), record_id=record_id)
+        for record_id, spec_type in (("record-a", "z"), ("record-b", "a"), ("record-c", "a"))
+    ]
+    child_path, (copies,) = _child_of(tmp_path, [_sharded_dataset(3, 128)], *local)
+    edited = edit_version(child_path, dataset_version=Version(1, 0, 1), remove_record_ids=list(copies))
+    with TimeFReader(open_local_version(edited)) as reader:
+        # Ranked by storage, record-a would come last: its spec type stores its values after the others'.
+        assert reader.record_ids() == ("record-a", "record-b", "record-c")
+
+
+def test_every_record_of_a_mixed_child_has_its_own_place_in_the_record_order(tmp_path):
+    # This parent's owner key sorts first, and both parents spread their records over several
+    # values files with the same names, so ranking by file before owner would interleave them.
+    first = TimeFDataset(metadata=_metadata("aaa/first"))
+    # The writer groups values by spec type, so first-0's earliest values belong to its second
+    # Signal, and its first Signal's values are stored after first-1's.
+    first.add_record(
+        record=Record(sources=(Source(name="Source", signals=(_signal("z"), _signal("s"))),), record_id="first-0")
+    )
+    first.add_record(record=Record(sources=(Source(name="Source", signals=(_signal("s"),)),), record_id="first-1"))
+    child_path, (first_copies, second_copies) = _child_of(
+        tmp_path,
+        [first, _sharded_dataset(4, 128)],
+        Record(sources=(Source(name="Source", signals=(_signal("s"),)),), record_id="local-values"),
+        # Added out of ID order: records without values follow by ID, not in the order they were added.
+        Record(sources=(Source(name="Empty"),), record_id="local-empty-b"),
+        Record(sources=(Source(name="Empty"),), record_id="local-empty-a"),
+    )
+    # The child's own values come first, then each parent's in turn; records without values come last.
+    expected = ("local-values", *first_copies, *second_copies, "local-empty-a", "local-empty-b")
+    with duckdb.connect(str(child_path / "control.duckdb"), read_only=True) as connection:
+        ranks = connection.execute("SELECT read_order FROM records ORDER BY read_order").fetchall()
+    assert [rank for (rank,) in ranks] == list(range(len(expected)))
+    for _ in range(2):
+        with TimeFReader(open_local_version(child_path)) as reader:
+            assert reader.record_ids() == expected
+            assert tuple(record.id for record in reader.iter_records()) == expected

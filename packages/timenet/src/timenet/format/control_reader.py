@@ -68,7 +68,7 @@ ValueLoaderFactory = Callable[[int, str, TimeSeriesSpec], ArrayHandle]
 
 
 class _RecordRow(NamedTuple):
-    """One ``records`` row in schema column order."""
+    """The ``records`` columns that hydrate one Record, in schema column order."""
 
     record_key: int
     record_id: str
@@ -350,11 +350,11 @@ _Ref = TypeVar("_Ref", Record, Annotation)
 _T = TypeVar("_T")
 
 _HIERARCHY_TABLES: dict[type[tuple[Any, ...]], tuple[str, str, str]] = {
-    _RecordRow: ("records", "record_id", "record_id"),
+    _RecordRow: ("records", "record_id", "read_order"),
     _SourceRow: ("sources", "record_key", "source_id"),
     _SignalRow: ("signals", "source_key", "signal_id"),
 }
-"""Table name, relation column, and public ID column of each hierarchy row type."""
+"""Table name, relation column, and ordering column of each hierarchy row type."""
 
 
 def _rows(cursor: duckdb.DuckDBPyConnection, make: Callable[[Iterable[Any]], _Row]) -> list[_Row]:
@@ -725,9 +725,9 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         """Return every stored Record ID in the order :meth:`read_records` yields them, without hydrating.
 
         Returns:
-            The Record IDs sorted by ID.
+            The Record IDs in their stored read order.
         """
-        return tuple(row[0] for row in self._query("SELECT record_id FROM records ORDER BY record_id"))
+        return tuple(row[0] for row in self._query("SELECT record_id FROM records ORDER BY read_order"))
 
     def read_records(
         self,
@@ -742,7 +742,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         built. No payload file is opened.
 
         Args:
-            record_ids: Requested IDs in result order, or ``None`` for every record.
+            record_ids: Requested IDs in result order, or ``None`` for every record in read order.
             with_annotations: Whether to hydrate annotations on records, sources, and signals.
             shared_offsets: Time-offset handles by axis key, shared with earlier record reads of
                 the same call, and extended with this read's new ones. ``None`` shares nothing.
@@ -797,7 +797,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         """Select and validate record rows, preserving the requested order.
 
         Args:
-            requested: Record IDs in result order, or ``None`` for every record.
+            requested: Record IDs in result order, or ``None`` for every record in read order.
 
         Returns:
             Record rows in result order, including repeated requests for the same record.
@@ -957,7 +957,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         """Read matching Record rows indexed by public ID.
 
         Returns:
-            Record rows in public-ID order, with duplicate IDs rejected.
+            Record rows in their stored read order, with duplicate IDs rejected.
         """
         return self._index_rows(
             self._read_rows(_RecordRow, record_ids),
@@ -1004,13 +1004,13 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
             related_ids: Values of the table's relation column to keep, or ``None`` for every row.
 
         Returns:
-            Rows from the requested hierarchy table.
+            Rows from the requested hierarchy table, sorted by its ordering column.
         """
-        table, relation_column, id_column = _HIERARCHY_TABLES[row_type]
+        table, relation_column, order_column = _HIERARCHY_TABLES[row_type]
         columns = ", ".join(row_type._fields)
         query = (
             f"SELECT {columns} FROM {table} WHERE ? OR {relation_column} "  # noqa: S608 - fixed identifiers
-            f"IN (SELECT unnest(?)) ORDER BY {id_column}"
+            f"IN (SELECT unnest(?)) ORDER BY {order_column}"
         )
         return self._query_rows(query, [related_ids is None, list(related_ids or ())], row_type._make)
 

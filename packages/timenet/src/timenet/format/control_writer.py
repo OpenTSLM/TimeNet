@@ -340,6 +340,7 @@ class DuckDBControlWriter:
                     )
                     self._write_chunks(connection, placements)
                     self._write_imports(connection, dataset)
+                    self._write_scan_order(connection)
                     self._check_source_tree(connection)
                     self.external.finish(connection)
                 connection.execute("CHECKPOINT")
@@ -350,6 +351,37 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
         return task_counts
+
+    @staticmethod
+    def _write_scan_order(connection: duckdb.DuckDBPyConnection) -> None:
+        """Precompute physical scan order so imported IDs do not scatter payload reads."""
+        # Only imported records get new IDs that sort apart from where their values are stored. Any
+        # other release keeps the ID ranking from _write_objects: an edit keeps its base's IDs, and
+        # the base stored its values in ID order within each spec type. Only a Record row whose copy
+        # the release holds counts.
+        if not connection.execute(
+            "SELECT 1 FROM imported_objects JOIN records ON object_id = record_id WHERE object_kind = ? LIMIT 1",
+            [ObjectKind.RECORD],
+        ).fetchone():
+            return
+        # Rank every record by its earliest-stored chunk across its Signals: this release's own
+        # values first, then by owner release, values file, and coordinates, with records that have
+        # no chunks last. Ties fall back to the record ID, so each rank is unique and depends only
+        # on what the catalog stores.
+        connection.execute(
+            """UPDATE records SET read_order = ranked.position FROM (
+                SELECT record_key, row_number() OVER (ORDER BY location NULLS LAST, record_id) - 1 AS position
+                FROM records LEFT JOIN (
+                    SELECT record_key, min(struct_pack(
+                        owner := coalesce(owner_key, ''), path := value_path,
+                        major := chunk_major_index, minor := coalesce(chunk_minor_index, 0)
+                    )) AS location
+                    FROM sources JOIN signals USING (source_key)
+                    JOIN signal_chunks USING (signal_key)
+                    GROUP BY record_key
+                ) USING (record_key)
+            ) ranked WHERE records.record_key = ranked.record_key"""
+        )
 
     @staticmethod
     def _write_imports(connection: duckdb.DuckDBPyConnection, dataset: TimeFDataset) -> None:
@@ -412,6 +444,7 @@ class DuckDBControlWriter:
             TimeFValidationError: If two records share an ID.
         """
         records = dataset.records
+        read_order = {identity: index for index, identity in enumerate(sorted(record.id for record in records))}
         object_keys, axis_keys = _reserve_hierarchy_keys(connection, records)
         batches = _HierarchyBatches(connection)
         axes: dict[str, _StoredAxis] = {}
@@ -441,6 +474,7 @@ class DuckDBControlWriter:
                 {
                     "record_key": record_key,
                     "record_id": record.record_id,
+                    "read_order": read_order[record.id],
                     "clock_id": clock_keys[identity],
                     "time_span_start_us": None if span is None else span.start_us,
                     "time_span_end_us": None if span is None else span.end_us,

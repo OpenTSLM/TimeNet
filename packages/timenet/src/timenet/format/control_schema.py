@@ -149,8 +149,9 @@ RECORDS = Table(
         Column("time_span_start_us", ColumnType.BIGINT),
         Column("time_span_end_us", ColumnType.BIGINT),
         _required("metadata", ColumnType.JSON),
+        _required("read_order", ColumnType.BIGINT),
     ),
-    unique=(("record_key",), ("record_id",)),
+    unique=(("record_key",), ("record_id",), ("read_order",)),
     foreign_keys=(ForeignKey("clock_id", "clocks", "clock_id"),),
     key_sequence=OBJECT_KEYS,
 )
