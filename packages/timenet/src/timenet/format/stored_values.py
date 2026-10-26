@@ -1,23 +1,29 @@
-"""Read and write text and string lists stored in Parquet payloads."""
+"""Read and write text, string lists, and time offsets stored in Parquet payloads."""
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field as dataclass_field
 from enum import StrEnum, unique
+import hashlib
+from itertools import accumulate
 import json
 from pathlib import Path
 from typing import TYPE_CHECKING, Self, assert_never, cast
 
 import duckdb
+import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 import pyarrow.parquet as pq
 from pydantic import Field, ValidationError, field_validator, model_validator
 
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.constants import DEFAULT_COMPRESSION, PAYLOAD_TEMPLATE, check_relative_path, part_path
 from timenet.format.control_schema import EXTERNAL_VALUES
 from timenet.format.table_writer import ModelTable
 from timenet.storage.parquet import PayloadTableCache
 from timenet.types._model import TimeFModel
+from timenet.types.handles import ArrayHandle
 from timenet.types.object_kind import ObjectKind
 from timenet.types.text import TextHandle, TextListHandle, read_value
 
@@ -40,13 +46,19 @@ This bounds writer memory and keeps payload files few enough to list in the mani
 """
 
 _CACHE_FILES = 8
-"""Payload files a reader keeps decoded, about 32 MiB of text at the packing target."""
+"""Payload files a reader keeps decoded, about 32 MiB of text and time offsets at the packing target."""
 
-_SCHEMA = pa.schema([("text", pa.string()), ("texts", pa.list_(pa.field("element", pa.string(), nullable=False)))])
+_SCHEMA = pa.schema(
+    [
+        ("text", pa.string()),
+        ("texts", pa.list_(pa.field("element", pa.string(), nullable=False))),
+        ("time_offsets", pa.list_(pa.field("element", pa.int64(), nullable=False))),
+    ]
+)
 """Exact schema of a payload file, which readers check once per file.
 
-A row holds a string in ``text`` or a list in ``texts``, so both columns are nullable. A list's
-strings are not.
+A row holds a string in ``text``, a list in ``texts``, or time offsets in ``time_offsets``, so every
+column is nullable. A list's items are not.
 """
 
 
@@ -56,6 +68,7 @@ class PackedValueKind(StrEnum):
 
     TEXT = "text"
     TEXT_LIST = "texts"
+    TIME_OFFSETS = "time_offsets"
 
 
 @unique
@@ -66,6 +79,7 @@ class PackedField(StrEnum):
     RATIONALE = "rationale"
     TARGETS = "targets"
     VALUE = "value"
+    TIME_OFFSETS = "time_offsets"
 
 
 _FIELD_OWNERS = {
@@ -73,6 +87,7 @@ _FIELD_OWNERS = {
     PackedField.RATIONALE: ObjectKind.TASK,
     PackedField.TARGETS: ObjectKind.TASK,
     PackedField.VALUE: ObjectKind.ANNOTATION,
+    PackedField.TIME_OFFSETS: ObjectKind.AXIS,
 }
 
 
@@ -81,6 +96,7 @@ _FIELD_VALUE_KINDS = {
     PackedField.RATIONALE: (PackedValueKind.TEXT,),
     PackedField.TARGETS: (PackedValueKind.TEXT,),
     PackedField.VALUE: (PackedValueKind.TEXT, PackedValueKind.TEXT_LIST),
+    PackedField.TIME_OFFSETS: (PackedValueKind.TIME_OFFSETS,),
 }
 
 
@@ -106,8 +122,8 @@ class ExternalObjectFieldKey:
 class PackedLocation:
     """Locate one value packed in a Parquet payload file of a release.
 
-    The catalog records every field, so the value's kind and length are known without opening the
-    payload file.
+    The catalog records every field, so the value's kind, length, and digest are known without
+    opening the payload file.
     """
 
     path: str
@@ -117,7 +133,9 @@ class PackedLocation:
     kind: PackedValueKind
     """Kind of the value, which names the payload column that holds it."""
     length: int
-    """Number of code points in a string, or of items in a string list."""
+    """Number of code points in a string, of items in a string list, or of time offsets."""
+    digest: bytes | None = None
+    """SHA-256 digest of time offsets, which identifies them without a read. ``None`` for text."""
 
 
 PayloadLocation = PackedLocation
@@ -135,6 +153,7 @@ class PackedValueLocator(TimeFModel):
     row_index: int = Field(strict=True, ge=0)
     value_kind: PackedValueKind
     n_values: int = Field(strict=True, ge=0)
+    value_digest: str | None = Field(default=None, pattern=rf"^{CHECKSUM_PREFIX}[0-9a-f]{{64}}$", strict=True)
 
     @property
     def key(self) -> ExternalObjectFieldKey:
@@ -146,7 +165,14 @@ class PackedValueLocator(TimeFModel):
     @property
     def location(self) -> PackedLocation:
         """Return where the value is packed."""
-        return PackedLocation(path=self.value_path, row=self.row_index, kind=self.value_kind, length=self.n_values)
+        digest = self.value_digest
+        return PackedLocation(
+            path=self.value_path,
+            row=self.row_index,
+            kind=self.value_kind,
+            length=self.n_values,
+            digest=None if digest is None else bytes.fromhex(digest.removeprefix(CHECKSUM_PREFIX)),
+        )
 
     @field_validator("value_path")
     @classmethod
@@ -158,6 +184,8 @@ class PackedValueLocator(TimeFModel):
         key = self.key
         if self.value_kind not in _FIELD_VALUE_KINDS[key.field]:
             raise TimeFValidationError(f"external field {key.field.value} cannot store {self.value_kind.value}")
+        if (self.value_kind == PackedValueKind.TIME_OFFSETS) != (self.value_digest is not None):
+            raise TimeFValidationError("external time offsets require a digest; text values must not store one")
         return self
 
 
@@ -175,7 +203,7 @@ class CatalogValue:
 class _PackableValue:
     """Pair a supported payload value with its storage kind before deciding where it fits."""
 
-    value: str | list[str]
+    value: str | list[str] | pa.Array
     kind: PackedValueKind
 
 
@@ -186,7 +214,7 @@ def _classify_value(value: object) -> CatalogValue | _PackableValue:
         A typed payload candidate or a catalog value, including an absent value.
 
     Raises:
-        TimeFValidationError: If a string list has an unsupported element type.
+        TimeFValidationError: If a string list or time offset array has an unsupported element type.
     """
     value = read_value(value)
     if isinstance(value, str):
@@ -195,6 +223,10 @@ def _classify_value(value: object) -> CatalogValue | _PackableValue:
         if not all(isinstance(item, str) for item in value):
             raise TimeFValidationError("packed string lists must contain only strings")
         return _PackableValue(cast("list[str]", value), PackedValueKind.TEXT_LIST)
+    if isinstance(value, pa.Array):
+        if value.type != pa.int64() or value.null_count:
+            raise TimeFValidationError("packed time offsets must be non-null int64 values")
+        return _PackableValue(value, PackedValueKind.TIME_OFFSETS)
     return CatalogValue(value)
 
 
@@ -203,6 +235,20 @@ class ExternalValue:
     """Identify a value written to a payload instead of the catalog."""
 
     locator: PackedValueLocator
+
+
+def offsets_digest(offsets: np.ndarray | pa.Array) -> bytes:
+    """Return the SHA-256 digest of an irregular axis's time offsets.
+
+    Every caller hashes the same bytes, contiguous little-endian int64, so one sequence of time
+    offsets has one digest whether it is held as NumPy or as Arrow.
+
+    Returns:
+        The 32-byte digest.
+    """
+    values = offsets.to_numpy(zero_copy_only=False) if isinstance(offsets, pa.Array) else offsets
+    canonical = np.ascontiguousarray(values, dtype="<i8")
+    return hashlib.sha256(memoryview(canonical)).digest()
 
 
 def _check_length(length: int, location: PackedLocation) -> None:
@@ -305,6 +351,91 @@ class StoredTextList(TextListHandle):
         return self
 
 
+@dataclass(frozen=True, slots=True, eq=False)
+class StoredOffsets(ArrayHandle):
+    """Refer to the time offsets of one irregular axis, packed in a Parquet payload.
+
+    The handle holds the reader of the release's payloads, the time offsets' location, and the axis's
+    ID and endpoints. Its first ``read()`` checks the time offsets against the location and the axis
+    and keeps a compact copy, so from then on the handle is loaded and reads need no payload access.
+    The location records the number of time offsets and their digest, so both are known without a
+    read.
+    """
+
+    store: "PackedValueReader" = dataclass_field(repr=False)
+    # Required: without field(), the dataclass would take ValueHandle's None as the default.
+    _location: PackedLocation = dataclass_field()
+    axis_id: str
+    """ID of the axis the time offsets belong to."""
+    first: int
+    """First time offset the axis declares, in microseconds."""
+    last: int
+    """Last time offset the axis declares, in microseconds."""
+    _offsets: pa.Array | None = dataclass_field(default=None, init=False, repr=False)
+
+    @property
+    def is_loaded(self) -> bool:
+        """Return whether a read has kept the time offsets."""
+        return self._offsets is not None
+
+    @property
+    def length(self) -> int:
+        """Return the number of time offsets, recorded in their location."""
+        return self._location.length
+
+    @property
+    def digest(self) -> bytes:
+        """Return the time offsets' SHA-256 digest, recorded in their location.
+
+        The catalog stores a digest with every axis's time offsets, so only a location built by hand
+        can lack one.
+
+        Raises:
+            TimeFFormatError: If the location records no digest.
+        """
+        digest = self._location.digest
+        if digest is None:
+            raise TimeFFormatError(f"axis {self.axis_id!r} has time offsets without a digest")
+        return digest
+
+    def read(self) -> pa.Array:
+        """Return the time offsets, read and checked on the first call and kept.
+
+        Returns:
+            One int64 microsecond offset per step.
+        """
+        offsets = self._offsets
+        if offsets is None:
+            stored = self.store.read_scalar(self._location).values
+            self._check(stored)
+            # The stored array views its payload file's whole column, so keep a copy of this axis only.
+            offsets = pa.concat_arrays([stored])
+            object.__setattr__(self, "_offsets", offsets)  # noqa: PLC2801 - keeps the checked time offsets
+        return offsets
+
+    def _check(self, offsets: pa.Array) -> None:
+        """Check time offsets read from the payload against their location and the axis.
+
+        The payload schema already guarantees non-null int64 offsets.
+
+        Raises:
+            TimeFFormatError: If their count differs from the location's, or they disagree with the
+                axis endpoints or decrease.
+        """
+        if len(offsets) != self.length:
+            raise TimeFFormatError(
+                f"axis {self.axis_id!r} stores {len(offsets)} offsets but its location records {self.length}"
+            )
+        endpoints = (self.first, self.last)
+        if not len(offsets) or (offsets[0].as_py(), offsets[-1].as_py()) != endpoints:
+            raise TimeFFormatError(f"axis {self.axis_id!r} has offsets disagreeing with its axis endpoints {endpoints}")
+        if len(offsets) > 1 and pc.any(pc.less(offsets.slice(1), offsets.slice(0, len(offsets) - 1))).as_py():  # ty: ignore[unresolved-attribute]
+            raise TimeFFormatError(f"axis {self.axis_id!r} has decreasing offsets")
+
+    def __deepcopy__(self, memo: dict) -> Self:
+        return self
+
+
 class PackedValueReader:
     """Read one release's packed values through a bounded cache of decoded payload files."""
 
@@ -316,7 +447,7 @@ class PackedValueReader:
         """Read a packed value from its physical file.
 
         Returns:
-            The Arrow string or string-list scalar at the location's file and row.
+            The Arrow scalar at the location's file and row: a string, or a list of strings or time offsets.
 
         Raises:
             TimeFFormatError: If the payload file's schema, the location, or the stored value is invalid.
@@ -331,10 +462,14 @@ class PackedValueReader:
         return value
 
     def handle(self, location: PackedLocation) -> StoredText | StoredTextList:
-        """Return a handle of the location's value kind, without reading the payload.
+        """Return a text handle of the location's value kind, without reading the payload.
 
         Returns:
             A ``StoredText`` for a string, or a ``StoredTextList`` for a list of strings.
+
+        Raises:
+            TimeFValidationError: If the location holds time offsets, whose ``StoredOffsets`` also
+                needs their axis.
         """
         kind = location.kind
         match kind:
@@ -342,6 +477,10 @@ class PackedValueReader:
                 return StoredText(self, location)
             case PackedValueKind.TEXT_LIST:
                 return StoredTextList(self, location)
+            case PackedValueKind.TIME_OFFSETS:
+                raise TimeFValidationError(
+                    f"time offsets at {location.path}:{location.row} are read through StoredOffsets, not a text handle"
+                )
             case _:
                 assert_never(kind)
 
@@ -349,13 +488,14 @@ class PackedValueReader:
         """Release cached payload tables."""
         self._parquet.close()
 
-    def handles(
-        self, connection: duckdb.DuckDBPyConnection, kind: ObjectKind, object_ids: Iterable[str]
-    ) -> dict[ExternalObjectFieldKey, StoredText | StoredTextList]:
-        """Return handles for one batch of objects' packed values without opening payload files.
+    @staticmethod
+    def locations(
+        connection: duckdb.DuckDBPyConnection, kind: ObjectKind, object_ids: Iterable[str]
+    ) -> dict[ExternalObjectFieldKey, PackedLocation]:
+        """Return where one batch of objects' values are packed, without opening payload files.
 
         Returns:
-            Handles keyed by entity kind, public ID, field, and position.
+            Locations keyed by entity kind, public ID, field, and position.
 
         Raises:
             TimeFFormatError: If a catalog locator is invalid or duplicated.
@@ -370,17 +510,27 @@ class PackedValueReader:
             "WHERE object_kind = ? AND object_id IN (SELECT unnest(?))",
             [kind.value, identities],
         ).fetchall()
-        handles: dict[ExternalObjectFieldKey, StoredText | StoredTextList] = {}
+        locations: dict[ExternalObjectFieldKey, PackedLocation] = {}
         for row in rows:
             try:
                 locator = PackedValueLocator.model_validate(dict(zip(EXTERNAL_VALUES.column_names, row, strict=True)))
             except ValueError as exc:
                 raise TimeFFormatError(f"invalid external locator: {exc}") from exc
             key = locator.key
-            if key in handles:
+            if key in locations:
                 raise TimeFFormatError(f"duplicate external locator for {key}")
-            handles[key] = self.handle(locator.location)
-        return handles
+            locations[key] = locator.location
+        return locations
+
+    def handles(
+        self, connection: duckdb.DuckDBPyConnection, kind: ObjectKind, object_ids: Iterable[str]
+    ) -> dict[ExternalObjectFieldKey, StoredText | StoredTextList]:
+        """Return text handles for one batch of objects' packed values without opening payload files.
+
+        Returns:
+            Handles keyed by entity kind, public ID, field, and position.
+        """
+        return {key: self.handle(location) for key, location in self.locations(connection, kind, object_ids).items()}
 
 
 @dataclass(frozen=True, slots=True, kw_only=True)
@@ -460,20 +610,50 @@ def materialize_table(
     return table
 
 
+def _time_offsets_column(rows: list[pa.Array | None]) -> pa.ListArray:
+    """Build a payload's time offsets column from packed Arrow arrays, without Python values.
+
+    Returns:
+        One list of time offsets per row, null in the rows that hold text.
+    """
+    arrays = [row for row in rows if row is not None]
+    ends = accumulate((0 if row is None else len(row) for row in rows), initial=0)
+    return pa.ListArray.from_arrays(
+        pa.array(list(ends), type=pa.int32()),
+        pa.concat_arrays(arrays) if arrays else pa.array([], type=pa.int64()),
+        type=_SCHEMA.field("time_offsets").type,
+        mask=pa.array([row is None for row in rows], type=pa.bool_()),
+    )
+
+
 class PackedValueWriter:
     """Pack large local values into Parquet files and record their catalog locations."""
 
     def __init__(self, root: Path) -> None:
         self.root = root
         self.files: list[str] = []
-        self.rows: list[dict] = []
+        # One buffer per payload column. Each row fills the column of its kind; the others hold None.
+        self.texts: list[str | None] = []
+        self.text_lists: list[list[str] | None] = []
+        self.time_offsets: list[pa.Array | None] = []
         self.locators: list[PackedValueLocator] = []
         self.bytes = 0
 
-    def pack(
-        self, kind: ObjectKind, identity: str, field: PackedField, value: object, position: int = 0
+    def pack(  # noqa: PLR0913 - a known digest spares hashing the time offsets twice
+        self,
+        kind: ObjectKind,
+        identity: str,
+        field: PackedField,
+        value: object,
+        position: int = 0,
+        *,
+        digest: bytes | None = None,
     ) -> CatalogValue | ExternalValue:
         """Keep a value inline or register its external location.
+
+        Args:
+            digest: The ``offsets_digest()`` of time offsets, when the caller has it already.
+                Without it, the time offsets are hashed here. Text takes none.
 
         Returns:
             An explicit catalog value or the locator of a packed value. Catalog writers choose
@@ -488,12 +668,15 @@ class PackedValueWriter:
             return classified
         value = classified.value
         value_kind = classified.kind
-        encoded = json.dumps(value, ensure_ascii=False).encode()
-        if len(encoded) <= INLINE_LIMIT:
+        size = value.nbytes if isinstance(value, pa.Array) else len(json.dumps(value, ensure_ascii=False).encode())
+        if value_kind != PackedValueKind.TIME_OFFSETS and size <= INLINE_LIMIT:
             return CatalogValue(value)
         path = part_path(PAYLOAD_TEMPLATE, len(self.files))
-        row = len(self.rows)
+        row = len(self.texts)
         length = len(value)
+        value_digest = None
+        if isinstance(value, pa.Array):
+            value_digest = CHECKSUM_PREFIX + (offsets_digest(value) if digest is None else digest).hex()
         try:
             locator = PackedValueLocator(
                 object_kind=kind,
@@ -504,27 +687,34 @@ class PackedValueWriter:
                 row_index=row,
                 value_kind=value_kind,
                 n_values=length,
+                value_digest=value_digest,
             )
         except ValidationError as exc:
             raise TimeFValidationError(f"invalid external locator for {kind.value} {identity!r}: {exc}") from exc
-        self.rows.append({value_kind.value: value})
-        self.bytes += len(encoded)
+        self.texts.append(value if isinstance(value, str) else None)
+        self.text_lists.append(value if isinstance(value, list) else None)
+        self.time_offsets.append(value if isinstance(value, pa.Array) else None)
+        self.bytes += size
         self.locators.append(locator)
         if self.bytes >= _PACK_BYTES:
             self.flush()
         return ExternalValue(locator)
 
     def flush(self) -> None:
-        """Write one packed group and release its decoded values."""
-        if not self.rows:
+        """Write one packed group and release its buffered values."""
+        if not self.texts:
             return
         path = part_path(PAYLOAD_TEMPLATE, len(self.files))
         (self.root / path).parent.mkdir(parents=True, exist_ok=True)
-        pq.write_table(
-            pa.Table.from_pylist(self.rows, schema=_SCHEMA), self.root / path, compression=DEFAULT_COMPRESSION
-        )
+        columns = [
+            pa.array(self.texts, type=_SCHEMA.field("text").type),
+            pa.array(self.text_lists, type=_SCHEMA.field("texts").type),
+            _time_offsets_column(self.time_offsets),
+        ]
+        pq.write_table(pa.Table.from_arrays(columns, schema=_SCHEMA), self.root / path, compression=DEFAULT_COMPRESSION)
         self.files.append(path)
-        self.rows.clear()
+        for buffer in (self.texts, self.text_lists, self.time_offsets):
+            buffer.clear()
         self.bytes = 0
 
     def finish(self, connection: duckdb.DuckDBPyConnection) -> None:
