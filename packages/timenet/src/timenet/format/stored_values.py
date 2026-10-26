@@ -284,13 +284,16 @@ def _same_payload(handle: "StoredText | StoredTextList", other: object) -> bool:
 class StoredText(TextHandle):
     """Refer to one string packed in a Parquet payload.
 
-    The handle holds the reader of the release's payloads and the string's location, not the string,
-    so it is never loaded and every ``read()`` reads the payload. Handles from one reader at the same
-    location are equal without a read.
+    The handle holds the reader of the release's payloads and the string's location. A loaded handle
+    also holds the string, which ``read()`` returns without payload access. An unloaded handle holds
+    no text, and every ``read()`` reads the payload. Handles from one reader at the same location
+    are equal without a read.
     """
 
     store: "PackedValueReader" = dataclass_field(repr=False)
     _packed_location: PackedLocation
+    _text: str | None = dataclass_field(default=None, init=False, repr=False)
+    """The string, kept once a read loads it."""
 
     @property
     def _location(self) -> PackedLocation:
@@ -299,8 +302,8 @@ class StoredText(TextHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return False, since every read goes to the payload."""
-        return False
+        """Return whether the handle keeps the string, so reads need no payload access."""
+        return self._text is not None
 
     @property
     def length(self) -> int:
@@ -308,10 +311,16 @@ class StoredText(TextHandle):
         return self._location.length
 
     def read(self) -> str:
-        """Return the string from its payload."""
-        text: str = self.store.read_scalar(self._location).as_py()
-        _check_length(len(text), self._location)
+        """Return the kept string, or the string from its payload."""
+        text = self._text
+        if text is None:
+            text = self.store.read_scalar(self._location).as_py()
+            _check_length(len(text), self._location)
         return text
+
+    def _fill(self) -> None:
+        """Read the string from its payload and hold it, so the handle is loaded from then on."""
+        object.__setattr__(self, "_text", self.read())  # noqa: PLC2801 - fills the frozen handle before it is handed out
 
     __hash__ = None
 
@@ -327,13 +336,16 @@ class StoredText(TextHandle):
 class StoredTextList(TextListHandle):
     """Refer to a list of strings packed in a Parquet payload.
 
-    The handle holds the reader of the release's payloads and the list's location, not the list, so
-    it is never loaded and every ``read()`` reads the payload. Handles from one reader at the same
-    location are equal without a read.
+    The handle holds the reader of the release's payloads and the list's location. A loaded handle
+    also holds the strings, and ``read()`` returns a new list of them without payload access. An
+    unloaded handle holds no text, and every ``read()`` reads the payload. Handles from one reader
+    at the same location are equal without a read.
     """
 
     store: "PackedValueReader" = dataclass_field(repr=False)
     _packed_location: PackedLocation
+    _texts: tuple[str, ...] | None = dataclass_field(default=None, init=False, repr=False)
+    """The strings, kept once a read loads them."""
 
     @property
     def _location(self) -> PackedLocation:
@@ -342,8 +354,8 @@ class StoredTextList(TextListHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return False, since every read goes to the payload."""
-        return False
+        """Return whether the handle keeps the strings, so reads need no payload access."""
+        return self._texts is not None
 
     @property
     def length(self) -> int:
@@ -351,10 +363,17 @@ class StoredTextList(TextListHandle):
         return self._location.length
 
     def read(self) -> list[str]:
-        """Return the list of strings from its payload."""
+        """Return the kept strings, or the list of strings from its payload, as a new list."""
+        kept = self._texts
+        if kept is not None:
+            return list(kept)
         texts: list[str] = self.store.read_scalar(self._location).as_py()
         _check_length(len(texts), self._location)
         return texts
+
+    def _fill(self) -> None:
+        """Read the strings from their payload and hold them, so the handle is loaded from then on."""
+        object.__setattr__(self, "_texts", tuple(self.read()))  # noqa: PLC2801 - fills the frozen handle before it is handed out
 
     __hash__ = None
 

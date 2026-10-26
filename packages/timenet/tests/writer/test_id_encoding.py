@@ -116,7 +116,7 @@ def test_forecasting_target_span_round_trips(tmp_path):
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        task = reader.tasks[0]
+        task = reader.read_tasks()[0]
     assert isinstance(task, ForecastingTask)
     assert task.targets == (span,)
     assert task.scope == scope
@@ -142,7 +142,7 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        task = reader.tasks[0]
+        task = reader.read_tasks()[0]
     assert isinstance(task, ForecastingTask)
     assert task.targets == (span,)
     assert task.scope == scope
@@ -167,7 +167,7 @@ def test_span_series_ids_round_trip(tmp_path):
     version_dir = _write(tmp_path, dataset)
 
     with TimeFReader(open_local_version(version_dir)) as reader:
-        (task,) = reader.tasks
+        (task,) = reader.read_tasks()
     assert task.scope == scope
 
 
@@ -196,7 +196,7 @@ def test_correspondence_record_targets_round_trip(tmp_path):
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        task = reader.tasks[0]
+        task = reader.read_tasks()[0]
     assert isinstance(task, TSCorrespondenceTask)
     assert task.targets is not None and isinstance(task.targets[0], Record)
     assert task.targets[0].id == match.id
@@ -226,7 +226,7 @@ def test_editing_and_generation_record_targets_round_trip(tmp_path):
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        tasks = {type(t): t for t in reader.tasks}
+        tasks = {type(t): t for t in reader.read_tasks()}
     edit = tasks[TSEditingTask]
     assert isinstance(edit, TSEditingTask)
     assert tuple(record.id for record in edit.inputs) == (source.id,)

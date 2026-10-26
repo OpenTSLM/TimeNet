@@ -1,3 +1,6 @@
+from functools import partial
+from itertools import chain
+
 import pyarrow as pa
 import pytest
 
@@ -24,6 +27,7 @@ from timenet.types import (
     TSGenerationTask,
     ureg,
 )
+from timenet.types.handles import CallableArray
 from timenet.types.object_kind import ObjectKind
 from timenet.types.text import read_value
 
@@ -108,7 +112,9 @@ def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
         "lead-ii": pa.array([3.0, 4.0], type=pa.float32()),
     }
 
-    with DuckDBControlReader(path, value_loader=lambda signal_id, _spec: values[signal_id]) as reader:
+    with DuckDBControlReader(
+        path, value_loader_factory=lambda _key, signal_id, _spec: CallableArray(partial(values.__getitem__, signal_id))
+    ) as reader:
         (record,) = reader.read_records()
         (task,) = reader.read_tasks((record,))
 
@@ -232,7 +238,9 @@ def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path, mo
     DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
-        tasks = list(reader.iter_tasks(required_modalities=required, supported_modalities=supported))
+        tasks = list(
+            chain.from_iterable(reader.iter_task_batches(required_modalities=required, supported_modalities=supported))
+        )
         task_rows = reader.read_task_table(required_modalities=required, supported_modalities=supported).to_pylist()
         target_rows = reader.read_target_table(required_modalities=required, supported_modalities=supported).to_pylist()
 
@@ -286,7 +294,8 @@ def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
     assert tuple(annotation.content_id for annotation in task.input_annotations) == ("age-65", "sex-male")
 
 
-def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stream", [False, True], ids=["read", "stream"])
+def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch, stream):
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(_dataset())
 
@@ -297,7 +306,7 @@ def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
             "signals",
             property(lambda _record: pytest.fail("text targets walked the Signal hierarchy")),
         )
-        (task,) = reader.read_tasks(records)
+        (task,) = list(chain.from_iterable(reader.iter_task_batches(records))) if stream else reader.read_tasks(records)
 
     assert task.targets == ("Yes",)
 
@@ -377,7 +386,7 @@ def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tm
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
         record0 = next(record for record in records if record.id == expected_record.id)
-        tasks = list(reader.iter_tasks((record0,)))
+        tasks = list(chain.from_iterable(reader.iter_task_batches((record0,))))
 
     assert [task.id for task in tasks] == expected_ids
     assert all(task.inputs[0] is record0 for task in tasks)
@@ -401,11 +410,18 @@ def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, m
 
     with DuckDBControlReader(path) as reader:
         record = next(record for record in reader.read_records() if record.id == expected_record.id)
-        tasks = reader.read_tasks((record,)) if materialize else list(reader.iter_tasks((record,)))
+        tasks = (
+            reader.read_tasks((record,))
+            if materialize
+            else list(chain.from_iterable(reader.iter_task_batches((record,))))
+        )
 
     by_id = {task.id: task for task in tasks}
     assert set(by_id) == expected_ids
-    assert by_id[answer_task.id].from_tasks[0] is by_id[parent_task.id]
+    (parent,) = by_id[answer_task.id].from_tasks
+    assert parent.id == parent_task.id
+    # One read returns the parent it built first; a stream builds it again for the batch that yields it.
+    assert (parent is by_id[parent_task.id]) is materialize
     assert tuple(sorted(by_id)) == tuple(task.id for task in tasks)
 
 
@@ -516,7 +532,7 @@ def test_split_round_trips_and_filters_before_hydration(tmp_path, monkeypatch):
     DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
-        train = list(reader.iter_tasks(split="train"))
+        train = list(chain.from_iterable(reader.iter_task_batches(split="train")))
         test_rows = reader.read_task_table(split=Split.TEST).to_pylist()
         train_targets = reader.read_target_table(split=Split.TRAIN).to_pylist()
         every = reader.read_task_table().to_pylist()

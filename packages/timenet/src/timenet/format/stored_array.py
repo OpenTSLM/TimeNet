@@ -58,9 +58,11 @@ class ChunkReader(Protocol):
 class StoredArray(ArrayHandle):
     """Refer to one signal's array, stored as chunks in the values files of a release.
 
-    The handle holds the release's reader and the signal's catalog key, ID, and spec, not the
-    values, so it is never loaded and every read goes to the chunks. ``read_steps`` reads only the
-    chunks that cover the range. Handles from one reader for one signal are equal.
+    The handle holds the release's reader and the signal's catalog key, ID, and spec. A loaded
+    handle also holds the array and the location of its chunks, so it reads, slices, and locates
+    them without storage access. An unloaded handle holds no values: every read goes to the chunks,
+    and ``read_steps`` reads only the chunks that cover the range. Handles from one reader for one
+    signal are equal, whether loaded or not.
     """
 
     reader: ChunkReader = dataclass_field(repr=False)
@@ -71,32 +73,54 @@ class StoredArray(ArrayHandle):
     """ID of the signal."""
     spec: TimeSeriesSpec
     """Spec that the stored values decode to."""
+    _array: pa.Array | None = dataclass_field(default=None, init=False, repr=False, compare=False)
+    """The values, kept once a read loads them."""
+    _chunks: ChunkLocation | None = dataclass_field(default=None, init=False, repr=False, compare=False)
+    """Where the kept values are stored, captured when they were loaded."""
 
     @property
     def is_loaded(self) -> bool:
-        """Return False, since every read goes to the chunks."""
-        return False
+        """Return whether the handle keeps the values, so reads need no storage access."""
+        return self._array is not None
 
     @property
     def _location(self) -> ChunkLocation:
         """Return where the chunks are stored, without reading them.
 
-        The reader finds them for a batch of signals at a time and keeps them until it closes. The
-        handle keeps nothing.
+        A loaded handle keeps its location. An unloaded one asks its reader, which finds the
+        locations of a batch of signals at a time and keeps them until it closes.
         """
-        return self.reader._chunk_location(self.signal_key, self.signal_id)
+        chunks = self._chunks
+        return self.reader._chunk_location(self.signal_key, self.signal_id) if chunks is None else chunks
 
     def read(self) -> pa.Array:
-        """Return the values of every chunk."""
-        return self.reader._read_array(self._location, self.spec)
+        """Return the kept values, or the values of every chunk."""
+        array = self._array
+        return self.reader._read_array(self._location, self.spec) if array is None else array
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
-        """Return the half-open step range ``[start, stop)``, reading only the chunks that cover it.
+        """Return the half-open step range ``[start, stop)``.
+
+        A loaded handle slices the values it keeps. An unloaded one reads only the chunks that
+        cover the range.
 
         Returns:
             The steps' values, in the form :meth:`read` returns.
         """
+        array = self._array
+        if array is not None:
+            return array.slice(start, stop - start)
         return self.reader._read_array_steps(self._location, self.spec, start, stop)
+
+    def _fill(self, array: pa.Array, location: ChunkLocation) -> None:
+        """Hold the values and their location, so the handle is loaded from then on.
+
+        Args:
+            array: The values, in buffers of their own.
+            location: Where the values are stored.
+        """
+        object.__setattr__(self, "_array", array)  # noqa: PLC2801 - fills the frozen handle before it is handed out
+        object.__setattr__(self, "_chunks", location)  # noqa: PLC2801 - fills the frozen handle before it is handed out
 
     def __deepcopy__(self, memo: dict) -> Self:
         return self

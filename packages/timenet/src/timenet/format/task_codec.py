@@ -206,8 +206,8 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
 def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding branch
     row: Mapping[str, object] | TargetValueRow,
     *,
-    records: dict[str, Record],
-    signals: dict[str, Signal],
+    records: Mapping[str, Record],
+    signals: Mapping[str, Signal],
 ) -> object:
     """Decode one typed target row and resolve stored object references.
 
@@ -256,7 +256,7 @@ def _required(value: _T | None, kind: TaskTargetKind, name: str) -> _T:
     return value
 
 
-def _resolve(objects: dict[str, _T], public_id: str, label: ObjectKind) -> _T:
+def _resolve(objects: Mapping[str, _T], public_id: str, label: ObjectKind) -> _T:
     try:
         return objects[public_id]
     except KeyError as exc:

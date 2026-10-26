@@ -1,5 +1,6 @@
 """Round-trips for a series whose time offsets are stored rather than computed (TimeF cases 3 and 4)."""
 
+from copy import deepcopy
 import dataclasses
 import re
 
@@ -18,7 +19,7 @@ import timenet.format.control_writer as control_writer_module
 import timenet.format.stored_values as stored_values_module
 from timenet.format.stored_values import PackedValueReader, StoredOffsets, offsets_digest
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
+from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import open_local_version
 from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 from timenet.types.references import DatasetRef
@@ -167,7 +168,7 @@ def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypat
 
         monkeypatch.setattr(pq.ParquetFile, "read", count_reads)
         assert [signal.time_offsets_us().tolist() for signal in back] == [shared_us, shared_us]
-        assert reader.tasks[0].prompt.read() == text
+        assert reader.read_tasks()[0].prompt.read() == text
         assert reader.read_annotation_table()["text_list_value"].to_pylist() == [labels]
         assert reader.read_task_table()["prompt"].to_pylist() == [text]
         assert reader.read_target_table()["text_value"].to_pylist() == [text]
@@ -422,7 +423,8 @@ def test_a_control_reader_without_a_payload_reader_refuses_packed_offsets(tmp_pa
         reader.read_records()
 
 
-def test_signals_sharing_an_axis_share_one_stored_offsets_handle(tmp_path, monkeypatch):
+def _shared_axis_release(tmp_path, monkeypatch):
+    """Write two Signals on one irregular axis and count payload reads of its time offsets."""
     dataset = _dataset()
     shared_us = [0, 5_000, 9_000]
     axis = IrregularAxis.spanning(shared_us)
@@ -448,6 +450,11 @@ def test_signals_sharing_an_axis_share_one_stored_offsets_handle(tmp_path, monke
         return original(self, location)
 
     monkeypatch.setattr(PackedValueReader, "read_scalar", counting_read)
+    return version, axis, shared_us, reads
+
+
+def test_signals_sharing_an_axis_share_one_stored_offsets_handle(tmp_path, monkeypatch):
+    version, axis, shared_us, reads = _shared_axis_release(tmp_path, monkeypatch)
     with TimeFReader(version) as reader:
         temp, humidity = next(reader.iter_records()).signals
         handle = temp._time_offsets
@@ -457,6 +464,52 @@ def test_signals_sharing_an_axis_share_one_stored_offsets_handle(tmp_path, monke
         for signal in (temp, humidity, temp):
             assert signal.time_offsets_us().tolist() == shared_us
     assert reads == [handle._location]
+
+
+def test_a_loaded_read_fills_the_one_stored_offsets_handle_its_axis_shares(tmp_path, monkeypatch):
+    version, axis, shared_us, reads = _shared_axis_release(tmp_path, monkeypatch)
+    with TimeFReader(version) as reader:
+        temp, humidity = reader.read(load=LoadPlan(time_offsets=Loading.EAGER)).records[0].signals
+        handle = temp._time_offsets
+        assert isinstance(handle, StoredOffsets)
+        assert handle is humidity._time_offsets
+        assert handle.axis_id == axis.axis_id
+        assert handle.is_loaded
+        # The plan asked for time offsets only.
+        assert not temp._values.is_loaded
+        assert reads == [handle._location]
+    # The loaded time offsets need no payload read after the reader closes.
+    assert [signal.time_offsets_us().tolist() for signal in (temp, humidity)] == [shared_us, shared_us]
+    assert reads == [handle._location]
+
+
+def test_writing_a_loaded_release_reuses_its_shared_time_offsets_without_hashing_them(tmp_path, monkeypatch):
+    version, _, shared_us, reads = _shared_axis_release(tmp_path, monkeypatch)
+    with TimeFReader(version) as reader:
+        loaded = reader.read(load=LoadPlan.ALL_EAGER)
+    (record,) = loaded.records
+    child = _dataset(_CHILD)
+    child.add_record(record=deepcopy(record))
+    child.derive_schema()
+    hashes = []
+    digest = stored_values_module.offsets_digest
+
+    def counting_digest(offsets):
+        hashes.append(len(offsets))
+        return digest(offsets)
+
+    monkeypatch.setattr(control_writer_module, "offsets_digest", counting_digest)
+    monkeypatch.setattr(stored_values_module, "offsets_digest", counting_digest)
+    target = _write_child(tmp_path, child)
+    # Both Signals hold the one loaded handle, so the child names its payload once and hashes nothing.
+    assert not hashes
+    assert len(reads) == 1
+    manifest = Manifest.model_validate_json((target / "manifest.json").read_text())
+    assert not manifest.files.payloads
+    assert not manifest.files.time_series
+    assert list(manifest.payload_sources.values()) == [DatasetRef(dataset_id="demo/irregular", version=_SOURCE)]
+    back = next(TimeFReader(open_local_version(target)).iter_records()).signals
+    assert [signal.time_offsets_us().tolist() for signal in back] == [shared_us, shared_us]
 
 
 def test_stored_offsets_digest_is_the_content_id_writers_compare(tmp_path):
