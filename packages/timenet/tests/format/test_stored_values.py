@@ -39,7 +39,7 @@ from timenet.format.stored_values import (
     offsets_digest,
 )
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
+from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import open_local_version
 from timenet.storage.parquet import PayloadTableCache
 from timenet.testing import make_dataset
@@ -116,8 +116,8 @@ def _content_ids(version_dir, key):
     return [content_id for (content_id,) in rows]
 
 
-def _stored(reader):
-    dataset = reader.read()
+def _stored(reader, load=LoadPlan.ALL_LAZY):
+    dataset = reader.read(load=load)
     (prompt,) = [task.prompt for task in dataset.tasks if isinstance(task.prompt, StoredText)]
     (reports,) = [
         annotation.value
@@ -205,7 +205,7 @@ def test_the_annotation_table_returns_a_packed_string_list(reader):
     assert reports["text_list_value"] == _TEXTS
 
 
-def test_stored_text_is_never_loaded_and_reads_through_every_time(reader, payload_reads):
+def test_unloaded_stored_text_reads_through_every_time(reader, payload_reads):
     prompt, reports = _stored(reader)
     assert not prompt.is_loaded
     assert not reports.is_loaded
@@ -224,8 +224,7 @@ def test_length_and_truth_read_no_payload(reader, payload_reads):
 
 def test_handles_from_one_reader_at_one_location_are_equal_without_a_read(reader, payload_reads):
     prompt, reports = _stored(reader)
-    # Closing drops the reader's cached objects, so the next read builds new handles.
-    reader.close()
+    # Every read builds new handles.
     again, reports_again = _stored(reader)
     assert again is not prompt
     assert again == prompt
@@ -275,6 +274,43 @@ def test_a_stored_handle_pickles_its_location_without_its_text(reader):
         assert back._location == handle._location
         assert not back.is_loaded
         assert back.read() == value
+
+
+def test_a_loaded_read_fills_stored_text_which_then_needs_no_payload(reader, payload_reads):
+    lazy_prompt, lazy_reports = _stored(reader)
+    prompt, reports = _stored(reader, load=LoadPlan(text=Loading.EAGER))
+    assert prompt.is_loaded
+    assert reports.is_loaded
+    assert sorted(payload_reads, key=lambda location: location.row) == sorted(
+        (prompt._location, reports._location), key=lambda location: location.row
+    )
+    payload_reads.clear()
+    reader.close()
+    assert prompt.read() == _TEXT
+    assert reports.read() == _TEXTS
+    # Each read returns a new list, so changing one leaves the kept strings as they are.
+    reports.read().append("changed")
+    assert reports.read() == _TEXTS
+    # A loaded handle keeps the content key of its payload row, so it equals the unloaded one.
+    assert prompt._content_key() == lazy_prompt._content_key()
+    assert prompt == lazy_prompt
+    assert reports == lazy_reports
+    assert not lazy_prompt.is_loaded
+    assert not payload_reads
+
+
+def test_a_loaded_stored_handle_pickles_its_text_with_its_location(reader, payload_reads):
+    prompt, reports = _stored(reader, load=LoadPlan(text=Loading.EAGER))
+    payload_reads.clear()
+    for handle, value in ((prompt, _TEXT), (reports, _TEXTS)):
+        pickled = pickle.dumps(handle)
+        assert b"clinical report" in pickled
+        back = pickle.loads(pickled)
+        assert type(back) is type(handle)
+        assert back._location == handle._location
+        assert back.is_loaded
+        assert back.read() == value
+    assert not payload_reads
 
 
 def test_a_deep_copy_shares_the_stored_handle(reader):

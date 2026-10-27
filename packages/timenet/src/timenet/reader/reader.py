@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager
+from dataclasses import dataclass
 from functools import partial
 import types as _types
 from typing import TYPE_CHECKING
@@ -24,7 +25,9 @@ from timenet.format.stored_values import (
     StoredValueColumns,
     materialize_table,
 )
+from timenet.reader.load_plan import LoadPlan, ValueLoad
 from timenet.types import (
+    Annotation,
     DatasetMetadata,
     DatasetSchema,
     EntityId,
@@ -45,6 +48,16 @@ if TYPE_CHECKING:
 
 
 _CHUNK_LOCATOR_BATCH_SIZE = 1_024
+
+
+@dataclass(frozen=True)
+class _ReaderState:
+    """Keep only prepared sources and the signals' chunk-location batches across worker processes."""
+
+    version: DatasetVersion
+    packed_values: PackedValueReader | None
+    """Preserve the shared reader referenced by text and time-offset handles; its cache resets on pickle."""
+    chunk_batches: tuple[tuple[int, ...], ...]
 
 
 class TimeFReader:
@@ -68,25 +81,27 @@ class TimeFReader:
         self._fs = version.filesystem
         self._root = version.root
         self._manifest = version.manifest
-        self._tasks: tuple[Task, ...] | None = None
         self._control: DuckDBControlReader | None = None
-        self._records: tuple[Record, ...] | None = None
         self._values: BaseValuesReader | None = None
         self._source_readers: dict[SourceKey, BaseValuesReader] = {}
         self._chunk_locator_batches: list[list[int]] = []
         self._chunk_locator_batch_by_id: dict[int, int] = {}
         self._chunk_locations: dict[int, ChunkLocation | None] = {}
 
-    def __getstate__(self) -> dict:
-        """Return picklable state without open connections or decoded object caches."""
-        state = self.__dict__.copy()
-        state["_tasks"] = None
-        state["_control"] = None
-        state["_records"] = None
-        state["_values"] = None
-        state["_source_readers"] = {}
-        state["_chunk_locations"] = {}
-        return state
+    def __getstate__(self) -> _ReaderState:
+        """Return picklable state without open connections or decoded caches."""
+        return _ReaderState(
+            self._version, self._packed_value_reader, tuple(tuple(batch) for batch in self._chunk_locator_batches)
+        )
+
+    def __setstate__(self, state: _ReaderState) -> None:
+        """Restore prepared sources with fresh connections and decoded caches."""
+        self.__init__(state.version)
+        self._packed_value_reader = state.packed_values
+        self._chunk_locator_batches = [list(batch) for batch in state.chunk_batches]
+        self._chunk_locator_batch_by_id = {
+            signal_id: index for index, batch in enumerate(self._chunk_locator_batches) for signal_id in batch
+        }
 
     def __enter__(self) -> TimeFReader:
         """Return this open reader."""
@@ -112,8 +127,6 @@ class TimeFReader:
         for backend in self._source_readers.values():
             backend.close()
         self._source_readers.clear()
-        self._records = None
-        self._tasks = None
         if self._packed_value_reader is not None:
             self._packed_value_reader.close()
         self._chunk_locations.clear()
@@ -140,14 +153,6 @@ class TimeFReader:
         """Return the dataset's type declaration."""
         return self._manifest.dataset_schema
 
-    @property
-    def tasks(self) -> tuple[Task, ...]:
-        """Return all tasks with their object references restored."""
-        if self._tasks is None:
-            with self._as_format_error():
-                self._tasks = self._control_reader().read_tasks(cached_records=self._all_records())
-        return self._tasks
-
     def record_ids(self) -> tuple[EntityId, ...]:
         """Return every Record ID without building a Record.
 
@@ -157,49 +162,84 @@ class TimeFReader:
         with self._as_format_error():
             return self._control_reader().record_ids()
 
-    def read_tasks(self, records: Iterable[Record] | None = None) -> tuple[Task, ...]:
-        """Build the tasks attached to ``records`` in one pass.
+    def read_tasks(
+        self, records: Iterable[Record] | None = None, *, load: LoadPlan = LoadPlan.ALL_LAZY
+    ) -> tuple[Task, ...]:
+        """Read the tasks attached to ``records`` in one pass.
+
+        Every call builds new tasks. A record a task uses that is not among ``records`` is read
+        once and shared by every task of the call.
 
         Args:
-            records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
+            records: Input Records to select, or ``None`` for every task. Tasks reuse these objects,
+                which the read leaves as they are.
+            load: Which kinds of stored values to load into the objects the read builds. The
+                default loads none.
 
         Returns:
             Concrete tasks in stable ID order.
         """
         with self._as_format_error(preserve_validation=True):
-            return self._control_reader().read_tasks(
-                records, cached_records=self._all_records() if records is None else ()
-            )
+            selected = None if records is None else tuple(records)
+            tasks = self._control_reader().read_tasks(selected)
+            values = ValueLoad(load, keep=selected or ())
+            values.add(tasks)
+            values.run()
+            return tasks
 
-    def iter_tasks(
+    def iter_tasks(  # noqa: PLR0913 - one argument per task selection axis
         self,
         records: Iterable[Record] | None = None,
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
+        load: LoadPlan = LoadPlan.ALL_LAZY,
+        batch_size: int = 5_000,
     ) -> Iterator[Task]:
-        """Yield tasks a bounded batch at a time instead of materializing the whole table.
+        """Yield tasks a bounded batch at a time instead of building the whole table.
+
+        Each batch is built and loaded on its own. Its tasks share the objects it builds: a record
+        that two of them use is one object, and the signals on one irregular axis share one
+        time-offsets handle. Batches share nothing but ``records``, so the stream keeps none of a
+        batch's objects once it has yielded them: it holds one batch of objects and that batch's
+        task IDs at a time, and selects the next batch's IDs after the last one, while the reader
+        keeps compact chunk locators for the signals it has resolved until it closes. A record or
+        parent task that tasks of several batches use is built once per batch, as separate objects
+        with the same ID, each loaded as far as its own batch's plan reaches it.
 
         Args:
             records: Records from :meth:`iter_records` whose input tasks to yield, or ``None`` for
-                every task of the dataset. Tasks reference these ``Record`` objects directly.
+                every task of the dataset. Tasks reference these ``Record`` objects directly, and
+                the read leaves them as they are.
             split: Keep only tasks of this split, or ``None`` for every task. The filter runs in
                 DuckDB, so a task outside the split is never built.
+            load: Which kinds of stored values to load into the objects each batch builds. The
+                default loads none. A batch builds but does not load what it reaches only through
+                its tasks' ``from_tasks`` parents, which is the parents and their records and
+                annotations; a record or annotation that a task of the batch uses as well loads.
+            batch_size: The most tasks a batch holds. The stream holds one batch at a time, with
+                every value its plan loaded, so with an eager plan a smaller batch holds fewer
+                arrays in memory.
 
         Yields:
             Concrete tasks in stable ID order.
         """
-        filtered = required_modalities is not None or supported_modalities is not None or split is not None
-        cached_records = self._all_records() if records is None and not filtered else ()
+        selected = None if records is None else tuple(records)
+        values = ValueLoad(load, keep=selected or ())
         with self._as_format_error(preserve_validation=True):
-            yield from self._control_reader().iter_tasks(
-                records,
+            for batch in self._control_reader().iter_task_batches(
+                selected,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
                 split=split,
-                cached_records=cached_records,
-            )
+                batch_size=batch_size,
+            ):
+                values.add(batch)
+                values.run()
+                yield from batch
+                # Hold no batch while the next one is built.
+                del batch
 
     def read_task_table(
         self,
@@ -287,19 +327,35 @@ class TimeFReader:
         """Return the values-plane backend named by the manifest."""
         return self._manifest.values_backend
 
-    def read(self) -> TimeFDataset:
-        """Build the dataset while keeping every Signal's values lazy.
+    def read(self, *, load: LoadPlan = LoadPlan.ALL_LAZY) -> TimeFDataset:
+        """Read the whole dataset, loading the kinds of stored values that ``load`` names.
+
+        Every call builds new objects. With the default, every stored value stays behind its value
+        handle and reads through to storage on access. With ``LoadPlan.ALL_EAGER``, the dataset
+        needs no storage after the reader closes.
+
+        Args:
+            load: Which kinds of stored values to load into the objects the read builds.
 
         Returns:
-            The reconstructed dataset.
+            The dataset.
         """
+        control = self._control_reader()
+        records = control.read_records()
+        occurrences: dict[int, Annotation] = {}
+        annotations = control.read_dataset_annotations(self._manifest.dataset_id, by_occurrence=occurrences)
+        with self._as_format_error():
+            tasks = control.read_tasks(cached_records=records, dataset_annotations=occurrences)
+            values = ValueLoad(load)
+            values.add((*records, *tasks, *annotations))
+            values.run()
         return TimeFDataset.from_parts(
             metadata=self.metadata,
-            records=self._all_records(),
-            tasks=self.tasks,
+            records=records,
+            tasks=tasks,
             schema=self.schema,
-            annotations=self._control_reader().read_dataset_annotations(self._manifest.dataset_id),
-            last_ids=self._control_reader().read_last_ids(),
+            annotations=annotations,
+            last_ids=control.read_last_ids(),
         )
 
     def iter_records(
@@ -315,7 +371,7 @@ class TimeFReader:
             with_annotations: Whether to build annotations on the records and descendants.
 
         Yields:
-            Records whose Signal values remain lazy.
+            Records whose stored values stay behind their value handles.
         """
         with self._as_format_error(preserve_validation=True):
             yield from self._control_reader().read_records(
@@ -341,12 +397,6 @@ class TimeFReader:
                 fetch=partial(materialize_control, self._version),
             )
         return self._control
-
-    def _all_records(self) -> tuple[Record, ...]:
-        """Return cached records so task inputs share their object identity."""
-        if self._records is None:
-            self._records = self._control_reader().read_records()
-        return self._records
 
     def _values_reader(self) -> BaseValuesReader:
         """Return the lazily opened values-plane reader."""
@@ -403,7 +453,7 @@ class TimeFReader:
         return location
 
     def _make_signal_loader(self, signal_id: EntityId, spec: TimeSeriesSpec) -> StoredArray:
-        """Return a picklable, range-aware handle to one Signal's stored values."""
+        """Return a picklable, range-aware handle to one Signal's stored values, unloaded."""
         if signal_id not in self._chunk_locator_batch_by_id:
             if not self._chunk_locator_batches or len(self._chunk_locator_batches[-1]) >= _CHUNK_LOCATOR_BATCH_SIZE:
                 self._chunk_locator_batches.append([])

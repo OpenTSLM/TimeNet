@@ -2,17 +2,20 @@ import copy
 import pickle
 from typing import get_type_hints
 
+import numpy as np
+import pyarrow as pa
 import pytest
 
+from timenet.dataset import TimeFDataset
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.stored_array import ChunkLocation, ChunkReader, StoredArray
-from timenet.reader import TimeFReader
+from timenet.reader import Loading, LoadPlan, TimeFReader
 import timenet.reader.reader as reader_module
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
-from timenet.types import ArrayHandle, TimeSeriesSpec
+from timenet.types import ArrayHandle, DatasetSchema, TimeSeriesSpec
 from timenet.types.reference_keys import SourceKey
-from timenet.values_backends.types import StoredChunk
+from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 from timenet.writer import TimeFWriter
 
 
@@ -147,3 +150,124 @@ def test_type_hints_resolve_on_the_stored_array():
     assert hints["reader"] is ChunkReader
     assert hints["spec"] is TimeSeriesSpec
     assert get_type_hints(ChunkLocation) == {"source": SourceKey | None, "chunks": tuple[StoredChunk, ...]}
+
+
+def _loaded(reader):
+    signals = [
+        signal
+        for record in reader.read(load=LoadPlan(signal_values=Loading.EAGER)).records
+        for signal in record.signals
+    ]
+    for signal in signals:
+        assert isinstance(signal._values, StoredArray)
+    return signals
+
+
+def test_a_loaded_array_reads_slices_and_locates_its_values_without_storage(stored, array_reads, monkeypatch):
+    reader, signals, expected = stored
+    locations = {signal.id: signal._values._location for signal in signals}
+    loaded = _loaded(reader)
+    assert len(array_reads) == len(loaded)
+    array_reads.clear()
+    reader.close()
+
+    def unexpected(*args):
+        pytest.fail("a loaded array needs no catalog query")
+
+    monkeypatch.setattr(DuckDBControlReader, "chunk_locations_by_ids", unexpected)
+    for signal in loaded:
+        handle = signal._values
+        assert handle.is_loaded
+        assert handle.read().equals(expected[signal.id])
+        assert handle.read_steps(3, 10).equals(expected[signal.id].slice(3, 7))
+        assert handle._location == locations[signal.id]
+    assert not array_reads
+
+
+def test_a_loaded_array_equals_an_unloaded_one_for_its_signal(stored):
+    reader, signals, _ = stored
+    loaded = {signal.id: signal._values for signal in _loaded(reader)}
+    for signal in signals:
+        assert loaded[signal.id] == signal._values
+        assert loaded[signal.id].is_loaded != signal._values.is_loaded
+
+
+def test_loaded_arrays_keep_their_chunk_locators_compactly(stored):
+    reader, _, _ = stored
+    chunks = [chunk for signal in _loaded(reader) for chunk in signal._values._location.chunks]
+    assert len({chunk.chunk_file for chunk in chunks}) < len(chunks)
+    # Chunks in one file share one path string, and their coordinates carry no instance dictionary.
+    files: dict[str, str] = {}
+    assert all(files.setdefault(chunk.chunk_file, chunk.chunk_file) is chunk.chunk_file for chunk in chunks)
+    assert all(not hasattr(chunk.data_index, "__dict__") for chunk in chunks)
+    assert "__slots__" in vars(ChunkDataIndex)
+
+
+def test_loaded_arrays_share_their_source_key_string(tmp_path):
+    dataset, parent_dir = _write(tmp_path)
+    with TimeFReader(open_local_version(parent_dir)) as reader:
+        parent = reader.read()
+        # A derived release keeps the read Records, whose arrays name the parent's chunks.
+        child = TimeFDataset.from_parts(
+            metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}),
+            records=parent.records,
+            tasks=(),
+            schema=DatasetSchema(),
+            last_ids=parent.last_ids,
+        )
+        child.derive_schema()
+        with TimeFWriter(tmp_path, child) as writer:
+            writer.write()
+    child_dir = tmp_path / "test/child" / str(dataset.metadata.dataset_version)
+    with TimeFReader(open_local_version(child_dir)) as reader:
+        locations = [signal._values._location for signal in _loaded(reader)]
+    sources = [location.source for location in locations]
+    assert len(sources) > 1
+    assert set(sources) == {f"{dataset.metadata.dataset_id}@{dataset.metadata.dataset_version}"}
+    # Every location names its source through one string.
+    assert all(source is sources[0] for source in sources)
+
+
+def _address_ranges(values):
+    if isinstance(values, np.ndarray):
+        start = values.__array_interface__["data"][0]
+        return [(start, start + values.nbytes)]
+    return [(buffer.address, buffer.address + buffer.size) for buffer in values.buffers() if buffer is not None]
+
+
+def test_loaded_arrays_keep_no_decoded_payload_alive(stored):
+    reader, _, _ = stored
+    loaded = _loaded(reader)
+    backend = reader._values_reader()
+    # The reader still caches the row groups or Zarr chunks it decoded for the load.
+    cached = [*getattr(backend, "_chunk_cache", {}).values()]
+    parquet = getattr(backend, "_parquet", None)
+    if parquet is not None:
+        cached.extend(parquet._groups.values())
+    assert cached
+    decoded = [address for values in cached for address in _address_ranges(values)]
+    for signal in loaded:
+        kept = signal._values._array
+        assert isinstance(kept, pa.Array)
+        for start, stop in _address_ranges(kept):
+            assert not any(start < end and begin < stop for begin, end in decoded), signal.id
+
+
+def test_a_loaded_array_pickles_its_values_and_unpickles_without_reads(stored, array_reads, monkeypatch):
+    reader, signals, expected = stored
+    (signal, *_) = _loaded(reader)
+    handle = signal._values
+    unloaded = next(item._values for item in signals if item.id == signal.id)
+    assert len(pickle.dumps(unloaded)) < len(pickle.dumps(handle))
+    array_reads.clear()
+    reader.close()
+
+    def unexpected(*args):
+        pytest.fail("an unpickled loaded array needs no catalog query")
+
+    monkeypatch.setattr(DuckDBControlReader, "chunk_locations_by_ids", unexpected)
+    back = pickle.loads(pickle.dumps(handle))
+    assert back.is_loaded
+    assert back.read().equals(expected[signal.id])
+    assert back._location == handle._location
+    assert not array_reads
