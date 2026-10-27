@@ -182,3 +182,13 @@ def test_invalid_parameters_use_the_structured_error(registry):
     invalid = client.get("/api/v1/manifest", params={"dataset_id": "../x", "version": "1.0.0"}, headers=headers)
     assert invalid.status_code == 422
     assert invalid.json()["detail"]["code"] == "invalid_parameters"
+
+
+def test_shell_and_packaged_assets(registry):
+    client = TestClient(create_app(registry, token="secret", origin="http://testserver"))
+    shell = client.get("/")
+    assert shell.status_code == 200
+    assert "/static/app.js" in shell.text
+    assert client.get("/static/app.js").status_code == 200
+    assert "MIT License" in client.get("/static/REACT-LICENSE").text
+    assert client.get("/static/unknown.js").status_code == 404
