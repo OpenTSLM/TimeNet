@@ -6,8 +6,9 @@ import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError
+from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.storage.parquet import PayloadTableCache, SignalRowGroupCache
 from timenet.testing import make_dataset
 from timenet.values_backends.parquet.reader import ParquetValuesReader
@@ -35,7 +36,7 @@ def test_row_group_cache_includes_dataset_root(tmp_path):
                 [value], spec=spec, name="sensor", time_axis=sample.records[0].signals[0].time_axis
             )
             dataset.add_record(record=Record(sources=(Source(name="sensor", signals=(signal,)),)))
-            version = DatasetVersion.open_local(_write(tmp_path / name, dataset))
+            version = open_local_version(_write(tmp_path / name, dataset))
             assert reader.load(version, rows, spec).to_pylist() == [value]
     finally:
         reader.close()
@@ -55,7 +56,7 @@ def test_a_loaded_series_does_not_pin_its_row_group(tmp_path):
         handle.close()
     assert widest_group > 1, "the fixture needs one row group to hold several chunks"
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         for record in reader.iter_records(with_annotations=False):
             for series in record.signals:
                 values = series.to_arrow()
@@ -66,11 +67,11 @@ def test_a_loaded_series_does_not_pin_its_row_group(tmp_path):
 def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch):
     # Time offsets belong to the shared control-plane axis, so every values read projects only values.
     version_dir = _write(tmp_path)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         record = next(iter(reader.iter_records(with_annotations=False)))
         series = record.signals[0]
         control = reader._control_reader()
-        rows = control.chunk_rows(series.id)
+        rows = control.chunk_location(series.id).chunks
 
     projections: list[list[str]] = []
     values_reader = ParquetValuesReader()
@@ -81,7 +82,7 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
         return original_read(handle, row_group, columns=columns)
 
     monkeypatch.setattr(pq.ParquetFile, "read_row_group", read_row_group)
-    version = DatasetVersion.open_local(version_dir)
+    version = open_local_version(version_dir)
     expected = values_reader.load(version, rows, series.spec)
     assert values_reader.load(version, rows, series.spec).equals(expected)
     values_reader.close()
@@ -90,7 +91,7 @@ def test_a_regular_row_group_reads_only_the_values_column(tmp_path, monkeypatch)
 
 
 def test_signal_cache_separates_files_and_groups(tmp_path, monkeypatch):
-    version = DatasetVersion.open_local(_write(tmp_path))
+    version = open_local_version(_write(tmp_path))
     opened = []
     original_open = pq.ParquetFile
 
@@ -103,7 +104,9 @@ def test_signal_cache_separates_files_and_groups(tmp_path, monkeypatch):
     cache = SignalRowGroupCache(2)
     try:
         for name, start in (("first.parquet", 0), ("second.parquet", 10), ("third.parquet", 20)):
-            pq.write_table(pa.table({"values": [[start], [start + 1]]}), version.path(name), row_group_size=1)
+            pq.write_table(
+                pa.table({"values": [[start], [start + 1]]}), version.resolve_file_path(name), row_group_size=1
+            )
         assert cache.read_values(version, "first.parquet", 0).to_pylist() == [[0]]
         assert cache.read_values(version, "first.parquet", 1).to_pylist() == [[1]]
         assert cache.read_values(version, "second.parquet", 0).to_pylist() == [[10]]
@@ -124,7 +127,7 @@ def test_signal_cache_separates_files_and_groups(tmp_path, monkeypatch):
 
 @pytest.mark.parametrize("cache_type", [PayloadTableCache, SignalRowGroupCache])
 def test_parquet_cache_reports_missing_files(tmp_path, cache_type):
-    version = DatasetVersion.open_local(_write(tmp_path))
+    version = open_local_version(_write(tmp_path))
     cache = cache_type(8)
     with pytest.raises(TimeFFormatError, match=r"cannot read Parquet file .*missing\.parquet"):
         if isinstance(cache, PayloadTableCache):
@@ -136,10 +139,31 @@ def test_parquet_cache_reports_missing_files(tmp_path, cache_type):
 
 @pytest.mark.parametrize("row_group", [0, 1])
 def test_signal_cache_rejects_missing_values_or_row_group(tmp_path, row_group):
-    version = DatasetVersion.open_local(_write(tmp_path))
-    pq.write_table(pa.table({"wrong_column": [1]}), version.path("broken.parquet"))
+    version = open_local_version(_write(tmp_path))
+    pq.write_table(pa.table({"wrong_column": [1]}), version.resolve_file_path("broken.parquet"))
     cache = SignalRowGroupCache(8)
     # Group 0 lacks values; group 1 is outside the file. Both must fail with file context.
     with pytest.raises(TimeFFormatError, match=rf"broken\.parquet.*row group {row_group}"):
         cache.read_values(version, "broken.parquet", row_group)
     cache.close()
+
+
+def test_a_signal_whose_chunks_name_two_source_releases_fails_the_read(tmp_path):
+    version_dir = _write(tmp_path, chunk_max_bytes=64)
+    # Opening checks the release's files, so open it before changing its catalog.
+    version = open_local_version(version_dir)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        row = connection.execute(
+            "SELECT signal_id FROM signal_chunks GROUP BY signal_id HAVING count(*) > 1 ORDER BY signal_id LIMIT 1"
+        ).fetchone()
+        assert row is not None, "the fixture needs a Signal with several chunks"
+        (signal_id,) = row
+        connection.execute(
+            "UPDATE signal_chunks SET source_key = 'org/parent@1.0.0' WHERE signal_id = ? AND chunk_index = 0",
+            [signal_id],
+        )
+
+    with TimeFReader(version) as reader:
+        (signal,) = [signal for record in reader.iter_records() for signal in record.signals if signal.id == signal_id]
+        with pytest.raises(TimeFFormatError, match=f"signal {signal_id} has chunks stored by more than one release"):
+            signal.to_arrow()

@@ -63,13 +63,11 @@ def run_pipeline(  # noqa: PLR0913
 
     raw_refs = connector.download(cache)
     dataset = connector.convert(raw_refs)
-    # Derive the schema here, before the force-rebuild rmtree below. A schema failure then aborts while
-    # the old committed version is still on disk. store_dataset() re-derives only if a caller reaches it
-    # directly with an underived dataset. This call is not redundant with that guard.
+    # Derive the schema before writing. store_dataset() derives one only for a dataset that has none.
     dataset.derive_schema()
-    if committed:  # force rebuild: drop the old committed version so the writer can republish it
-        shutil.rmtree(version_dir)
-    store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb)
+    # A forced rebuild replaces the committed version only once the new one is ready, so a failed
+    # write keeps the old one.
+    store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb, replace=force)
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
     if not keep_cache and cache_dir is None and cache.is_dir():
@@ -147,6 +145,7 @@ def store_dataset(
     *,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     values_backend: str = "parquet",
+    replace: bool = False,
 ) -> Path:
     """Serialize a populated dataset to the TimeF format under ``root``.
 
@@ -160,12 +159,14 @@ def store_dataset(
         root: Parent directory. This function creates the version directory beneath it.
         progress_cb: Optional writer progress callback.
         values_backend: Storage backend for the values plane.
+        replace: Replace the version if it is already committed, keeping it until the new one is
+            published.
 
     Returns:
         The committed version directory.
     """
     if dataset.schema is None:
         dataset.derive_schema()
-    with TimeFWriter(root, dataset, progress_cb=progress_cb, values_backend=values_backend) as writer:
+    with TimeFWriter(root, dataset, progress_cb=progress_cb, values_backend=values_backend, replace=replace) as writer:
         writer.write()
     return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)

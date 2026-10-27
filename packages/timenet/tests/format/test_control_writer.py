@@ -11,6 +11,7 @@ from timenet.format.control_audit import audit_control_database
 import timenet.format.control_writer as control_writer_module
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
+from timenet.format.storage import StorageSources
 from timenet.format.stored_values import PackedValueWriter
 from timenet.types import (
     Annotation,
@@ -89,7 +90,7 @@ def _dataset(*, with_task: bool = True) -> TimeFDataset:
 def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path, monkeypatch):
     monkeypatch.setattr(control_writer_module, "_ROW_BATCH_SIZE", 2)
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(_dataset())
 
     with connect_control(path, read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM records").fetchone() == (1,)
@@ -139,7 +140,9 @@ def test_control_writer_preserves_relationships_across_task_batches(tmp_path, mo
     path = tmp_path / "control.duckdb"
     first, *rest = dataset.tasks
 
-    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset, tasks=(*rest, first))
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(
+        dataset, tasks=(*rest, first)
+    )
 
     with connect_control(path, read_only=True) as connection:
         assert connection.execute("SELECT count(*) FROM tasks").fetchone() == (6,)
@@ -195,7 +198,7 @@ def test_control_writer_rejects_task_references_outside_the_dataset(tmp_path, fi
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match=message):
-        DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
+        DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
 
     assert not path.exists()
 
@@ -233,7 +236,7 @@ def test_control_writer_rejects_records_and_signals_of_another_dataset(tmp_path,
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match=message):
-        DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
+        DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
 
     assert not path.exists()
 
@@ -249,7 +252,7 @@ def test_control_writer_rejects_a_target_signal_that_left_the_hierarchy(tmp_path
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match=f"task 1 target 0 refers to unknown Signal {LEAD_II_ID}"):
-        DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
+        DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
 
     assert not path.exists()
 
@@ -262,7 +265,7 @@ def test_control_writer_rejects_two_tasks_with_one_id(tmp_path):
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match=f"task id {TASK_ID} is not unique"):
-        DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
+        DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
 
     assert not path.exists()
 
@@ -297,7 +300,7 @@ def test_a_streamed_parent_that_streams_after_its_child_is_stored(tmp_path):
 
 def test_control_writer_output_passes_the_relational_audit(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(_dataset())
 
     with connect_control(path, read_only=True) as connection:
         audit_control_database(connection, require_chunks=False)
@@ -316,7 +319,7 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match="belong to different records"):
-        DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
+        DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(_dataset())
 
     assert not path.exists()
 
@@ -335,7 +338,9 @@ def test_control_writer_rejects_an_irregular_axis_with_the_wrong_length(tmp_path
     dataset.add_record(record=Record(sources=(Source(name="ECG", signals=(signal,)),)))
 
     with pytest.raises(TimeFValidationError, match="returned 3 time offsets but it declares n_values=2"):
-        DuckDBControlWriter(tmp_path / "control.duckdb", external=PackedValueWriter(tmp_path)).write_hierarchy(dataset)
+        DuckDBControlWriter(
+            tmp_path / "control.duckdb", external=PackedValueWriter(tmp_path, StorageSources())
+        ).write_hierarchy(dataset)
 
 
 @pytest.mark.parametrize(
@@ -354,12 +359,16 @@ def test_control_writer_rejects_chunks_that_do_not_cover_each_signal(tmp_path, p
     path = tmp_path / "control.duckdb"
 
     with pytest.raises(TimeFValidationError, match=message):
-        DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset(), placements)
+        DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(
+            _dataset(), placements
+        )
 
     assert not path.exists()
 
 
-def test_control_writer_stores_value_chunk_locations(tmp_path):
+def test_control_writer_stores_value_chunk_locations(tmp_path, monkeypatch):
+    # One row per batch, so every chunk row is written by its own batch.
+    monkeypatch.setattr(control_writer_module, "_ROW_BATCH_SIZE", 1)
     path = tmp_path / "control.duckdb"
     placement = SimpleNamespace(
         chunk_file="values/part-00000000.parquet",
@@ -367,6 +376,7 @@ def test_control_writer_stores_value_chunk_locations(tmp_path):
         spec_type="voltage",
         signal="I",
         n_values=2,
+        source_key=None,
     )
     placements = {
         (LEAD_I_ID, 0): placement,
@@ -376,18 +386,24 @@ def test_control_writer_stores_value_chunk_locations(tmp_path):
             spec_type="voltage",
             signal="II",
             n_values=2,
+            source_key=None,
         ),
     }
 
-    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset(), placements)  # ty: ignore[invalid-argument-type]
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(
+        _dataset(),
+        placements,  # ty: ignore[invalid-argument-type]
+    )
 
     with connect_control(path, read_only=True) as connection:
         assert connection.execute(
-            """SELECT value_path, chunk_major_index, chunk_minor_index, signal_chunks.n_values
+            """SELECT signal_id, value_path, chunk_major_index, chunk_minor_index, signal_chunks.n_values
                FROM signal_chunks
-               WHERE signal_id = ?""",
-            [LEAD_I_ID],
-        ).fetchone() == ("values/part-00000000.parquet", 2, 3, 2)
+               ORDER BY signal_id"""
+        ).fetchall() == [
+            (LEAD_I_ID, "values/part-00000000.parquet", 2, 3, 2),
+            (LEAD_II_ID, "values/part-00000000.parquet", 2, 4, 2),
+        ]
 
 
 def test_control_writer_stores_equal_text_contents_once(tmp_path):
@@ -401,7 +417,7 @@ def test_control_writer_stores_equal_text_contents_once(tmp_path):
     other.annotate(Annotation(key="labels", value=["a", "c"]))
     signal.annotate(Annotation(key="note", value="same"))
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
 
     with connect_control(path, read_only=True) as connection:
         rows = connection.execute(
@@ -434,7 +450,7 @@ def test_control_writer_stores_equal_contents_and_regular_and_ordinal_axes_once(
     other.annotate(Annotation(key="patient_sex", value="male"))
     dataset.add_record(record=other)
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(dataset)
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
 
     with connect_control(path, read_only=True) as connection:
         contents = connection.execute(

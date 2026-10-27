@@ -7,7 +7,7 @@ import pyarrow as pa
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
@@ -66,7 +66,7 @@ def test_forecasting_target_span_round_trips(tmp_path):
     dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, ForecastingTask)
     restored = task.inputs[0].signals
@@ -92,7 +92,7 @@ def test_forecasting_step_horizon_round_trips(tmp_path):
     dataset.add_task(task=ForecastingTask(inputs=(record,), targets=(span,), scope=scope))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, ForecastingTask)
     (restored,) = task.inputs[0].signals
@@ -120,7 +120,7 @@ def test_a_span_reads_back_the_signals_of_its_record(tmp_path):
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         (task,) = reader.tasks
     assert isinstance(task.scope, TimeInterval)
     assert task.scope.time_series is not None
@@ -152,7 +152,7 @@ def test_correspondence_record_targets_round_trip(tmp_path):
     )
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         task = reader.tasks[0]
     assert isinstance(task, TSCorrespondenceTask)
     assert task.targets is not None and isinstance(task.targets[0], Record)
@@ -182,7 +182,7 @@ def test_editing_and_generation_record_targets_round_trip(tmp_path):
     dataset.add_task(task=TSGenerationTask(prompt="10 s of sinus rhythm.", targets=(edited,)))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         tasks = {type(t): t for t in reader.tasks}
     edit = tasks[TSEditingTask]
     assert isinstance(edit, TSEditingTask)
@@ -210,7 +210,7 @@ def test_time_span_round_trips(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(_series(),)),), time_span=time_span))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         record = next(reader.iter_records())
     assert record.time_span == time_span
     assert isinstance(record.time_span, TimeInterval)

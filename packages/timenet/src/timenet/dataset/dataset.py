@@ -195,9 +195,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             The hydrated dataset with lazy Signal values.
         """
         from timenet.reader import TimeFReader  # noqa: PLC0415
-        from timenet.registry.version import DatasetVersion  # noqa: PLC0415
+        from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
 
-        with TimeFReader(DatasetVersion.open_local(path)) as reader:
+        with TimeFReader(open_local_version(path)) as reader:
             return reader.read()
 
     def add_task(self, *, task: Task) -> Task:

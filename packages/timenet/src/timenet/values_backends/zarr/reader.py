@@ -19,36 +19,22 @@ from typing import TYPE_CHECKING, Any
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
+import zarr
+import zarr.storage
 
 from timenet.values_backends.reader import BaseValuesReader
+from timenet.values_backends.zarr.layout import validity_path
 
 
 if TYPE_CHECKING:
+    from collections.abc import Sequence
+
     from timenet.registry.version import DatasetVersion
     from timenet.types import TimeSeriesSpec
     from timenet.values_backends.types import StoredChunk
 
 
 _CHUNK_CACHE_MAX_BYTES = 64 * 2**20
-#: Group that marks present timesteps in nullable series. It matches the writer's layout.
-_VALIDITY_GROUP = "_validity"
-
-
-def _validity_path(values_rel_path: str) -> str:
-    """Return the path of the validity array for a values array.
-
-    The path preserves groups from the values locator. A legacy irregular path under
-    ``_irregular/`` therefore remains under that group below ``_validity/``. Current layouts put
-    every specification's values at the store root.
-
-    Args:
-        values_rel_path: The values array's path relative to the version directory.
-
-    Returns:
-        The parallel validity array's path.
-    """
-    parts = values_rel_path.split("/")
-    return "/".join([parts[0], _VALIDITY_GROUP, *parts[1:]])
 
 
 class ZarrValuesReader(BaseValuesReader):
@@ -60,7 +46,7 @@ class ZarrValuesReader(BaseValuesReader):
         self._chunk_cache: OrderedDict[tuple[str, int], Shaped[np.ndarray, " chunk *value"]] = OrderedDict()
         self._chunk_cache_bytes = 0
 
-    def load(self, version: DatasetVersion, rows: list[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
+    def load(self, version: DatasetVersion, rows: Sequence[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
         """Read a series' values. ``data_index.major_idx`` is the element start; ``n_values`` is the length.
 
         Args:
@@ -75,7 +61,7 @@ class ZarrValuesReader(BaseValuesReader):
         return _to_arrow(combined, spec, self._read_validity(version, rows, spec))
 
     def _read_validity(
-        self, version: DatasetVersion, rows: list[StoredChunk], spec: TimeSeriesSpec
+        self, version: DatasetVersion, rows: Sequence[StoredChunk], spec: TimeSeriesSpec
     ) -> np.ndarray | None:
         """Read the validity mask covering a series' index rows, or ``None`` when not nullable.
 
@@ -90,13 +76,13 @@ class ZarrValuesReader(BaseValuesReader):
         if not spec.nullable:
             return None
         parts = [
-            self._read_range(version, _validity_path(rel), start, stop) for rel, start, stop in _coalesce_runs(rows)
+            self._read_range(version, validity_path(rel), start, stop) for rel, start, stop in _coalesce_runs(rows)
         ]
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
         return combined.astype(bool, copy=False)
 
     def load_range(
-        self, version: DatasetVersion, rows: list[StoredChunk], start: int, stop: int, spec: TimeSeriesSpec
+        self, version: DatasetVersion, rows: Sequence[StoredChunk], start: int, stop: int, spec: TimeSeriesSpec
     ) -> pa.Array:
         """Read only the storage chunks that intersect a temporal step range.
 
@@ -123,9 +109,7 @@ class ZarrValuesReader(BaseValuesReader):
                 hi = min(bounded_stop - cursor, run_len)
                 parts.append(self._read_range(version, rel, run_start + lo, run_start + hi))
                 if spec.nullable:
-                    validity_parts.append(
-                        self._read_range(version, _validity_path(rel), run_start + lo, run_start + hi)
-                    )
+                    validity_parts.append(self._read_range(version, validity_path(rel), run_start + lo, run_start + hi))
             cursor += run_len
         combined = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
         validity = None
@@ -202,22 +186,14 @@ class ZarrValuesReader(BaseValuesReader):
         Returns:
             The opened read-only Zarr array.
 
-        Raises:
-            ImportError: If the ``zarr`` extra is not installed.
         """
         if rel_path not in self._array_cache:
-            try:
-                import zarr  # noqa: PLC0415
-            except ImportError as exc:  # pragma: no cover - exercised only without the extra
-                raise ImportError(
-                    "this dataset version stores values in Zarr; install the extra: pip install 'timenet[zarr]'"
-                ) from exc
-
-            self._array_cache[rel_path] = zarr.open_array(store=version.store_uri(rel_path), mode="r")
+            store = zarr.storage.FsspecStore.from_mapper(version.fsspec_mapper(rel_path), read_only=True)
+            self._array_cache[rel_path] = zarr.open_array(store=store, mode="r")
         return self._array_cache[rel_path]
 
 
-def _coalesce_runs(rows: list[StoredChunk]) -> list[tuple[str, int, int]]:
+def _coalesce_runs(rows: Sequence[StoredChunk]) -> list[tuple[str, int, int]]:
     """Merge adjacent index rows into contiguous ``(array path, start, stop)`` ranges.
 
     Consecutive placements of one series are contiguous by construction. Because of this, the merge

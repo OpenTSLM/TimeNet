@@ -4,6 +4,7 @@ from pydantic import ValidationError
 import pytest
 
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.reader import TimeFReader
 from timenet.registry import (
     TIMENET_REGISTRY_URL,
     BaseRegistry,
@@ -13,11 +14,13 @@ from timenet.registry import (
     S3Registry,
     WritableRegistry,
     local_registry_path,
+    open_local_version,
     open_registry,
     open_writable_registry,
 )
 from timenet.testing import make_dataset
-from timenet.types import AnswerTask, Domain, License
+from timenet.types import Annotation, AnswerTask, Domain, License
+from timenet.writer import TimeFWriter
 
 
 # ---- factory ----------------------------------------------------------------------------------
@@ -166,7 +169,7 @@ def test_open_version_resolves_latest_to_a_concrete_directory(registry_root):
 
 def test_open_version_filesystem_reads_a_file(registry_root):
     version = LocalRegistry(registry_root).open_version("demo/ecg")
-    with version.filesystem.open_input_file(version.path("manifest.json")) as handle:
+    with version.filesystem.open_input_file(version.resolve_file_path("manifest.json")) as handle:
         assert b"demo/ecg" in handle.read()
 
 
@@ -254,6 +257,36 @@ def test_store_derives_schema_if_absent(tmp_path):
     assert dataset.schema is None
     LocalRegistry(tmp_path).store(dataset)
     assert dataset.schema is not None
+
+
+def test_a_forced_store_replaces_the_committed_release(tmp_path):
+    registry = LocalRegistry(tmp_path)
+    registry.store(make_dataset())
+    replacement = make_dataset()
+    replacement.records[0].annotate(Annotation(key="replaced", value=1))
+    registry.store(replacement, force=True)
+
+    version_dir = tmp_path / "timenet/hello-world/1.0.0"
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        keys = {annotation.key for record in reader.read().records for annotation in record.annotations}
+    assert "replaced" in keys
+    assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]
+
+
+def test_a_failed_forced_store_keeps_the_committed_release(tmp_path, monkeypatch):
+    registry = LocalRegistry(tmp_path)
+    registry.store(make_dataset())
+    version_dir = tmp_path / "timenet/hello-world/1.0.0"
+    before = (version_dir / "manifest.json").read_bytes()
+
+    def fail(self):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(TimeFWriter, "write", fail)
+    with pytest.raises(RuntimeError, match="write failed"):
+        registry.store(make_dataset(), force=True)
+    assert (version_dir / "manifest.json").read_bytes() == before
+    assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]
 
 
 # ---- s3 catalog -------------------------------------------------------------------------------

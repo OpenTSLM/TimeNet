@@ -19,7 +19,7 @@ import pyarrow as pa
 from benchmarks.end_to_end.corpus import build_corpus
 from timenet.dataset import Record, Signal
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.types.text import TextHandle, TextListHandle
 from timenet.writer import TimeFWriter
 
@@ -130,7 +130,7 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
 
     digest = hashlib.sha256()
     started = time.perf_counter_ns()
-    with TimeFReader(DatasetVersion.open_local(_dataset_dir(root))) as reader:
+    with TimeFReader(open_local_version(_dataset_dir(root))) as reader:
         positions = _Positions()
         series_count = 0
         value_bytes = 0

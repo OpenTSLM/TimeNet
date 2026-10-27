@@ -18,6 +18,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
 from timenet.format.duckdb import check_control_schema, connect_control
+from timenet.format.stored_array import ChunkLocation
 from timenet.format.stored_values import (
     ExternalObjectFieldKey,
     PackedField,
@@ -53,6 +54,7 @@ from timenet.types import (
 )
 from timenet.types.ids import EntityId
 from timenet.types.object_kind import ObjectKind
+from timenet.types.reference_keys import SourceKey
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
@@ -138,6 +140,7 @@ class _ChunkRow(NamedTuple):
     signal_id: EntityId
     chunk_index: int
     value_path: str
+    source_key: SourceKey | None
     chunk_major_index: int
     chunk_minor_index: int | None
     n_values: int
@@ -746,25 +749,29 @@ class DuckDBControlReader:
             self._read_annotations({ObjectKind.DATASET: None}, self._dataset_occurrences)
         return self._dataset_occurrences
 
-    def chunk_rows(self, signal_id: int) -> list[StoredChunk]:
-        """Return one Signal's chunk locations in chunk order.
+    def chunk_location(self, signal_id: int) -> ChunkLocation:
+        """Return where one Signal's chunks are stored, from its catalog rows.
 
         Raises:
             TimeFFormatError: If the Signal has no stored chunks.
         """
-        rows = self.chunk_rows_by_ids((signal_id,))[signal_id]
-        if not rows:
+        location = self.chunk_locations_by_ids((signal_id,))[signal_id]
+        if location is None:
             raise TimeFFormatError(f"signal {signal_id!r} has no stored value chunks")
-        return rows
+        return location
 
-    def chunk_rows_by_ids(self, signal_ids: Iterable[int]) -> dict[int, list[StoredChunk]]:
-        """Return chunk locators for a batch of Signals.
+    def chunk_locations_by_ids(self, signal_ids: Iterable[int]) -> dict[int, ChunkLocation | None]:
+        """Return where a batch of Signals' chunks are stored, from their catalog rows.
 
         Args:
             signal_ids: Signal IDs.
 
         Returns:
-            Chunk rows keyed by Signal ID. Each Signal's rows are in chunk-index order.
+            Locations keyed by Signal ID, each with the Signal's chunks in chunk-index order, or
+            ``None`` for a Signal without stored chunks.
+
+        Raises:
+            TimeFFormatError: If one Signal's chunks are stored by more than one release.
         """
         ids = tuple(signal_ids)
         if not ids:
@@ -779,10 +786,17 @@ class DuckDBControlReader:
             ),
             _ChunkRow._make,
         )
-        grouped: dict[int, list[StoredChunk]] = {signal_id: [] for signal_id in ids}
+        chunks: dict[int, list[StoredChunk]] = {signal_id: [] for signal_id in ids}
+        sources: dict[int, SourceKey | None] = {}
         for row in rows:
-            grouped[row.signal_id].append(row.stored_chunk)
-        return grouped
+            # The writer stores or reuses a Signal's chunks as a unit, so one release stores them all.
+            if sources.setdefault(row.signal_id, row.source_key) != row.source_key:
+                raise TimeFFormatError(f"signal {row.signal_id!r} has chunks stored by more than one release")
+            chunks[row.signal_id].append(row.stored_chunk)
+        return {
+            signal_id: ChunkLocation(source=sources[signal_id], chunks=tuple(stored)) if stored else None
+            for signal_id, stored in chunks.items()
+        }
 
     def read_tasks(
         self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = ()

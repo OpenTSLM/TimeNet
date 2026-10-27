@@ -15,7 +15,7 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
 from timenet.types.wire import ValueDtype
 from timenet.writer import TimeFWriter
@@ -74,7 +74,7 @@ def test_each_dtype_persists_to_its_own_shard(tmp_path):
 
 def test_mixed_dtype_signals_read_back_typed(tmp_path):
     version_dir = _write(tmp_path, _dataset(_mixed_signals()))
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         record = reader.read().records[0]
     by_signal = {ts.name: ts for ts in record.signals}
     assert by_signal["acc"].to_arrow().type == pa.float32()

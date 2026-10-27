@@ -6,7 +6,7 @@ import pint
 from pydantic import BaseModel, ValidationError
 import pytest
 
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles
+from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles, PayloadSource
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
     AnnotationDescriptor,
@@ -224,6 +224,26 @@ def test_json_roundtrip():
         lineage=(card,),
     )
     assert Manifest.model_validate_json(m.to_json()) == m
+
+
+def test_payload_sources_pin_files_and_round_trip_through_json_and_the_schema():
+    m = _manifest()
+    ref = DatasetRef.parse("parent/ecg@1.0.0")
+    m = _replace(m, payload_sources={str(ref): PayloadSource(release=ref, files=m.files.time_series)})
+    jsonschema.validate(m.to_dict(), MANIFEST_SCHEMA)
+    assert Manifest.model_validate_json(m.to_json()) == m
+
+
+def test_a_payload_source_key_names_its_release_and_pins_each_file_once():
+    m = _manifest()
+    ref = DatasetRef.parse("parent/ecg@1.0.0")
+    pinned = PayloadSource(release=ref, files=m.files.time_series)
+    with pytest.raises(ValidationError, match="does not name its release"):
+        _replace(m, payload_sources={"parent": pinned}).to_dict()
+    with pytest.raises(ValidationError, match="pins one file more than once"):
+        PayloadSource(release=ref, files=(*m.files.time_series, m.files.time_series[0]))
+    with pytest.raises(ValidationError, match="at least 1"):
+        PayloadSource(release=ref, files=())
 
 
 def test_parent_dataset_card_names_the_release_of_its_metadata():

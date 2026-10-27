@@ -8,6 +8,7 @@ from timenet.errors import TimeFFormatError
 from timenet.format.control_audit import audit_control_database
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
+from timenet.format.storage import StorageSources
 from timenet.format.stored_values import PackedValueWriter
 from timenet.types import Annotation, AnswerTask, DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 
@@ -57,7 +58,7 @@ def _dataset(*, irregular: bool = False) -> TimeFDataset:
 @pytest.fixture
 def control_path(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset())
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(_dataset())
     return path
 
 
@@ -122,7 +123,8 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
             "contains a cycle",
         ),
         (
-            "INSERT INTO external_values "
+            "INSERT INTO external_values (object_kind, object_id, field, position, value_path, row_index, "
+            "value_kind, n_values, value_digest) "
             "SELECT 'Axis', axis_id, 'time_offsets', 0, 'payloads/part-00000000.parquet', 0, 'time_offsets', 2, "
             "'sha256:' || repeat('0', 64) FROM axes",
             "signal 1 has an axis length that does not match",
@@ -227,7 +229,9 @@ def test_audit_names_the_first_violated_invariant(control_path, statement, messa
 @pytest.fixture
 def irregular_control_path(tmp_path):
     path = tmp_path / "control.duckdb"
-    DuckDBControlWriter(path, external=PackedValueWriter(path.parent)).write_hierarchy(_dataset(irregular=True))
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(
+        _dataset(irregular=True)
+    )
     return path
 
 
@@ -252,8 +256,8 @@ def test_audit_accepts_packed_time_offsets(irregular_control_path):
             "external value 'time_offsets' refers to missing Axis 999",
         ),
         (
-            "INSERT INTO external_values SELECT object_kind, object_id, field, 1, value_path, row_index, value_kind, "
-            "n_values, value_digest FROM external_values WHERE object_kind = 'Axis'",
+            "INSERT INTO external_values SELECT object_kind, object_id, field, 1, source_key, value_path, row_index, "
+            "value_kind, n_values, value_digest FROM external_values WHERE object_kind = 'Axis'",
             "external value of Axis 2 is not one digested time offsets array at position 0",
         ),
         (

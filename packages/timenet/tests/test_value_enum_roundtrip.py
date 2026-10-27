@@ -17,7 +17,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
 from timenet.writer import TimeFWriter
 
@@ -125,7 +125,7 @@ def test_enum_rejects_values_outside_codebook():
 def test_enum_round_trips_labels(tmp_path):
     labels = ["awake", "deep", "awake", "rem"]
     version_dir = _write(tmp_path, _dataset(labels))
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         series = reader.read().records[0].signals[0]
     result = series.to_arrow()
     assert pa.types.is_dictionary(result.type)
@@ -152,7 +152,7 @@ def test_enum_manifest_records_dtype_and_categories(tmp_path):
 def test_enum_read_range_returns_labels(tmp_path):
     labels = ["awake", "light", "deep", "rem", "awake"]
     version_dir = _write(tmp_path, _dataset(labels))
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         series = reader.read().records[0].signals[0]
     result = series.read_steps(1, 4)
     assert result.cast(pa.string()).to_pylist() == ["light", "deep", "rem"]
@@ -162,7 +162,7 @@ def test_enum_zarr_round_trip(tmp_path):
     labels = ["awake", "deep", "awake", "rem"]
     dataset = _dataset(labels)
     version_dir = _write(tmp_path, dataset, values_backend="zarr")
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         series = reader.read().records[0].signals[0]
     result = series.to_arrow()
     assert pa.types.is_dictionary(result.type)
@@ -173,7 +173,7 @@ def test_enum_zarr_empty_range(tmp_path):
     labels = ["awake", "deep"]
     dataset = _dataset(labels)
     version_dir = _write(tmp_path, dataset, values_backend="zarr")
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         ts = reader.read().records[0].signals[0]
     empty = ts.read_steps(2, 2)
     assert len(empty) == 0
@@ -196,7 +196,7 @@ def test_enum_multi_shard_different_value_subsets(tmp_path):
     shards = sorted(version_dir.glob("time_series/part-*.parquet"))
     assert len(shards) > 1, f"expected multiple shards, got {len(shards)}"
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         loaded = reader.read()
     for i, record in enumerate(loaded.records):
         ts = record.signals[0]
@@ -222,7 +222,7 @@ def test_enum_multi_row_group_dictionary_consistency(tmp_path):
         chunk_max_bytes=32,
     )
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         loaded = reader.read()
     all_labels = []
     for record in loaded.records:
@@ -268,7 +268,7 @@ def test_enum_streaming_write_read(tmp_path):
         chunk_max_bytes=16,
     )
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         loaded = reader.read()
     for i, record in enumerate(loaded.records):
         ts = record.signals[0]
@@ -319,7 +319,7 @@ def test_enum_codes_are_stable_across_shards(tmp_path, write_kwargs):
     dataset.derive_schema()
 
     version_dir = _write(tmp_path, dataset, **write_kwargs)
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         loaded = reader.read()
 
     s0 = loaded.records[0].signals[0]

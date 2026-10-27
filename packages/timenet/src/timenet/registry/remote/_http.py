@@ -141,6 +141,16 @@ def _redirect_target(response: httpx.Response, path: str) -> str:
 class RegistryHttpClient:
     """A thin httpx wrapper for the registry API and its presigned object URLs."""
 
+    @property
+    def token(self) -> str | None:
+        """The bearer token sent to the registry API, if any."""
+        return self._token
+
+    @property
+    def transport(self) -> httpx.BaseTransport | None:
+        """The httpx transport override, used by tests."""
+        return self._transport
+
     def __init__(
         self,
         base_url: str,

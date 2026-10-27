@@ -81,7 +81,7 @@ Every backend implements this contract: four data-access methods and one shared 
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
 | `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
-| `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. |
+| `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files, with its [payload sources](#payload-sources) opened from this registry. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. |
 | `search(...)` | Filter datasets (shared implementation). |
 
 `LocalRegistry` serves a `<root>/<dataset_id>/<version>/` tree. `RemoteRegistry` serves the same layout
@@ -93,6 +93,27 @@ A dataset id is an `org/name` pair, for example `chengsenwang/tsqa`. The id nest
 disk, at `<root>/chengsenwang/tsqa/<version>/`. `list_datasets` finds these ids at any depth. Use
 lowercase ids to avoid casing clashes on case-insensitive filesystems.
 
+### Payload sources
+
+A version can reuse payload files that other versions store: its payload sources. Its manifest
+names each one and pins the files it reads from it (see
+[Shared payloads](timef-format.md#shared-payloads)). A registry serves a version together with its
+payload sources:
+
+- `open_version` opens each payload source from the same registry and checks it against the pins,
+  reading only manifests and, for local files, file sizes. A remote registry prefers complete
+  cached copies and otherwise reads remotely. See [Opening a version](timef-reader.md#opening-a-version)
+  for the checks and their errors.
+- `download_version` downloads complete copies of the version and of each payload source, and checks
+  each source against the pins.
+- `store` refuses a version whose payload sources the registry does not hold, holds in another form,
+  or that read payloads of the version itself. The [writer](timef-writer.md) checks this at the
+  first reuse of each source, and raises the errors that opening raises for a missing or differing
+  source.
+
+A version lists every payload source it reads from, so a registry resolves only those, never the
+sources' own sources.
+
 ## Writing to a registry
 
 A `WritableRegistry` adds one write method to the read contract. As a result,
@@ -100,13 +121,16 @@ A `WritableRegistry` adds one write method to the read contract. As a result,
 
 | Method | Description |
 | --- | --- |
-| `store(dataset, *, force=False, progress_cb=None)` | Compile a dataset and publish it; returns the stored version. Derives the schema first if absent, and skips an already-committed version unless `force`. |
+| `store(dataset, *, force=False, progress_cb=None)` | Compile a dataset and publish it; returns the stored version. Derives the schema first if absent, skips an already-committed version unless `force`, and checks every payload source in this registry. |
 | `exists(dataset_id, version)` | Whether a committed version already exists (shared implementation). |
 
 `LocalRegistry` implements `store` by streaming the dataset through a [`TimeFWriter`](timef-writer.md),
-which stages under `<version>.tmp-*` and publishes with a single atomic rename. `RemoteRegistry` runs
-the [publish flow](#remote-publishing) below. `S3Registry` uploads to a temporary prefix and moves each
-object into place (`manifest.json` last).
+which stages under `<version>.tmp-*` and publishes with a single atomic rename. With `force`, the old
+version stays in place until the new one is complete. A replace is not isolated from readers that
+already opened the old version, or from versions that reuse its payloads, which then fail to open.
+`RemoteRegistry` runs the [publish flow](#remote-publishing) below. `S3Registry` uploads to a temporary
+prefix and moves each object into place (`manifest.json` last). Each backend passes itself to the
+writer, which checks every payload source in that registry while it stages the release locally.
 `open_writable_registry(uri)` resolves a URI like `open_registry` but returns a `WritableRegistry`.
 
 ```python
@@ -133,6 +157,8 @@ anonymous or read-only caller is rejected by the service.
 
 1. Compile into a temporary staging directory with a [`TimeFWriter`](timef-writer.md), deriving the
    schema first if the dataset has none. An already-committed version returns early unless `force`.
+   The writer checks every payload source against the service, so a version whose sources the
+   service does not hold is refused before anything is published.
 2. `POST /datasets/{id}/{version}/publish` with the compiled `manifest.json` as the body. The service
    registers the pending version and returns the list of files it expects.
 3. For each file, `POST /datasets/{id}/{version}/publish/upload-url` with `{"path": relpath}` to get a

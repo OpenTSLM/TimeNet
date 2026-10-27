@@ -365,6 +365,7 @@ EXTERNAL_VALUES = Table(
         _required("object_id", ColumnType.BIGINT),
         _required("field"),
         _key("position"),
+        Column("source_key", ColumnType.VARCHAR),
         _required("value_path"),
         _key("row_index"),
         _required("value_kind"),

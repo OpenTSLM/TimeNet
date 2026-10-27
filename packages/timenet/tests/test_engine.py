@@ -12,6 +12,7 @@ from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.registry.writable import WritableRegistry
 from timenet.testing import make_dataset
+from timenet.writer import TimeFWriter
 
 
 def _write_demo_card() -> Path:
@@ -150,6 +151,22 @@ def test_run_pipeline_force_rebuilds(tmp_path):
     version_dir = run_pipeline(connector, tmp_path, cache_dir=tmp_path / "cache", force=True)
     assert connector.downloads == 2
     assert (version_dir / "manifest.json").exists()
+    assert [path.name for path in version_dir.parent.iterdir()] == [version_dir.name]
+
+
+def test_a_failed_forced_rebuild_keeps_the_committed_version(tmp_path, monkeypatch):
+    connector = _CountingConnector()
+    version_dir = run_pipeline(connector, tmp_path, cache_dir=tmp_path / "cache")
+    before = (version_dir / "manifest.json").read_bytes()
+
+    def fail(self):
+        raise RuntimeError("write failed")
+
+    monkeypatch.setattr(TimeFWriter, "write", fail)
+    with pytest.raises(RuntimeError, match="write failed"):
+        run_pipeline(connector, tmp_path, cache_dir=tmp_path / "cache", force=True)
+    assert (version_dir / "manifest.json").read_bytes() == before
+    assert [path.name for path in version_dir.parent.iterdir()] == [version_dir.name]
 
 
 @pytest.mark.parametrize("use_default", [False, True])

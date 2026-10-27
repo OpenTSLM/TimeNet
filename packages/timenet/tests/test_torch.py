@@ -114,7 +114,7 @@ def test_str_series_has_no_tensor_representation():
 
 def test_reader_backed_view_hydrates_a_batch_with_the_same_items(tmp_path):
     from timenet.reader import TimeFReader  # noqa: PLC0415
-    from timenet.registry.version import DatasetVersion  # noqa: PLC0415
+    from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
     from timenet.writer import TimeFWriter  # noqa: PLC0415
 
     dataset = make_dataset()
@@ -122,8 +122,8 @@ def test_reader_backed_view_hydrates_a_batch_with_the_same_items(tmp_path):
     with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
     version_dir = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
-    materialized = TimeFTorchDataset(TimeFReader(DatasetVersion.open_local(version_dir)).read())
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    materialized = TimeFTorchDataset(TimeFReader(open_local_version(version_dir)).read())
+    with TimeFReader(open_local_version(version_dir)) as reader:
         lazy = TimeFTorchDataset.from_reader(reader)
         assert len(lazy) == len(materialized) == len(dataset.records)
         batch = lazy.__getitems__([0, 2])

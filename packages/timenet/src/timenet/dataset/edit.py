@@ -17,8 +17,10 @@ from timenet.dataset.dataset import TimeFDataset
 from timenet.dataset.record import Record
 from timenet.errors import TimeFEditError
 from timenet.reader import TimeFReader
-from timenet.registry.version import DatasetVersion
+from timenet.registry._paths import release_dir, split_release_dir
+from timenet.registry.dependencies import open_local_version
 from timenet.types import DatasetSchema, EntityId, Task, Version
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
 
@@ -263,18 +265,21 @@ def _rebuild_tasks(
 
 def edit_version(
     base_dir: Path,
-    out_root: Path,
     *,
     dataset_version: Version,
     remove_record_ids: Iterable[EntityId] = (),
     cascade: bool = False,
     **writer_kwargs: object,
 ) -> Path:
-    """Read a committed version, remove records, and publish a new version (copy-on-write).
+    """Read a committed version, remove records, and write the derived version next to it.
+
+    The derived version reuses the base's payload files, so it is written into the base's registry
+    as ``<root>/<id>/<dataset_version>/``, where readers find the base. To derive a version in
+    another registry, copy the base there first, for example with ``download_version``, then edit
+    the copy.
 
     Args:
-        base_dir: The committed version directory to derive from.
-        out_root: The parent directory for the new version (``<out_root>/<id>/<version>/``).
+        base_dir: The committed version directory ``<root>/<org>/<name>/<version>`` to derive from.
         dataset_version: The semantic version for the derived dataset. This must differ from
             the base version.
         remove_record_ids: The record ids to remove.
@@ -293,7 +298,8 @@ def edit_version(
     # values. If the reader's `with` block exits first, the write happens through a closed
     # reader. That only worked because close() silently reopened the shards and leaked the
     # handles.
-    with TimeFReader(DatasetVersion.open_local(base_dir)) as reader:
+    root, _ = split_release_dir(base_dir)
+    with TimeFReader(open_local_version(base_dir)) as reader:
         base_version = str(reader.metadata.dataset_version)
         if str(dataset_version) == base_version:
             raise TimeFEditError(f"derived version {dataset_version} must differ from the base version {base_version}")
@@ -311,6 +317,6 @@ def edit_version(
         )
         edited.derive_schema()
 
-        with TimeFWriter(out_root, edited, **writer_kwargs) as writer:  # ty: ignore[invalid-argument-type]
+        with TimeFWriter(root, edited, **writer_kwargs) as writer:  # ty: ignore[invalid-argument-type]
             writer.write()
-    return out_root / edited.metadata.dataset_id / str(dataset_version)
+    return release_dir(root, DatasetRef(dataset_id=edited.metadata.dataset_id, version=dataset_version))

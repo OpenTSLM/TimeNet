@@ -21,9 +21,10 @@ from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetData
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
+from timenet.registry._paths import release_dir
 from timenet.registry.base import ProgressCallback
 from timenet.types import Access, DatasetMetadata, Domain, License, Task
-from timenet.types.references import is_latest, split_ref
+from timenet.types.references import DatasetRef, is_latest, split_ref
 
 
 if TYPE_CHECKING:
@@ -153,7 +154,9 @@ class TimeNet:
         force: bool = False,
         progress_cb: ProgressCallback | None = None,
     ) -> Path:
-        """Fetch a dataset version's files into local storage. Return its directory.
+        """Fetch a version and each of its payload sources into local storage.
+
+        Build-only inputs remain recorded in the manifest and are not downloaded.
 
         Args:
             dataset_id: The dataset id.
@@ -168,7 +171,7 @@ class TimeNet:
         self._reject_unhosted_access(dataset_id, version)
         manifest = self._registry.get_manifest(dataset_id, version)
         resolved = str(manifest.metadata.dataset_version)
-        target = self._storage / dataset_id / resolved
+        target = release_dir(self._storage, DatasetRef.parse(f"{dataset_id}@{resolved}"))
         # The registry owns the fetch: the base implementation stages each file and swaps atomically,
         # and a remote registry overrides it to resolve and stream every file in parallel.
         self._registry.download_version(
@@ -179,9 +182,8 @@ class TimeNet:
     def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
         """Read the dataset into memory through the registry's storage handle.
 
-        Series values stay lazy per-series once the handle is open. A local or S3 registry reads them in
-        place; a remote registry materializes the version to local storage first (see
-        :meth:`~timenet.registry.BaseRegistry.open_version`), so a remote load fetches the whole version.
+        Series values stay lazy once the handle is open. Remote backends open payload sources from
+        their manifests upfront and read payload ranges on demand, reusing complete cached releases.
 
         Against a local registry, a dataset the registry does not have is built first, if some
         installed package registers a connector for its id. Set ``auto_build`` false to fail fast

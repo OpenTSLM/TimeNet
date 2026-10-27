@@ -17,7 +17,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.dataset.edit import edit_version
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.types import DatasetMetadata, Domain, License, TimeSeriesSpec, Version, ureg
 from timenet.types.wire import ValueDtype
 from timenet.writer import TimeFWriter
@@ -85,7 +85,7 @@ def _write(tmp_path, dataset, **kwargs) -> Path:
 
 
 def _first_series(version_dir):
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         return reader.read().records[0].signals[0]
 
 
@@ -162,8 +162,8 @@ def test_copy_on_write_edit_keeps_bool_and_str(tmp_path):
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(bool1, str1)),)))
     dataset.derive_schema()
     version_dir = _write(tmp_path / "base", dataset)
-    edited = edit_version(version_dir, tmp_path / "out", dataset_version=Version(1, 1, 0), remove_record_ids=[2])
-    with TimeFReader(DatasetVersion.open_local(edited)) as reader:
+    edited = edit_version(version_dir, dataset_version=Version(1, 1, 0), remove_record_ids=[2])
+    with TimeFReader(open_local_version(edited)) as reader:
         record = reader.read().records[0]
     series = {ts.name: ts for ts in record.signals}
     assert series["active"].to_arrow().type == pa.bool_()
@@ -191,7 +191,7 @@ def test_log_book_strings_round_trip_byte_identical(tmp_path):
     original = pa.array(entries, type=pa.string())
 
     version_dir = _write(tmp_path, _dataset(_spec(dtype="str"), entries), values_backend="parquet")
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         series = reader.read().records[0].signals[0]
 
     # Byte-identical: the whole series and a ranged read must equal the original utf-8 bytes.
@@ -228,7 +228,7 @@ def test_mixed_dtypes_byte_identical_across_backends(tmp_path, values_backend):
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset, values_backend=values_backend)
 
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         record = reader.read().records[0]
     by_signal = {ts.name: ts for ts in record.signals}
     for name, spec, values in signals:
