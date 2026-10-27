@@ -13,9 +13,15 @@ A read-only browser view of a TimeNet registry, or of one dataset version. Start
   storage failures to safe responses, and dataset reference validation.
 - `tasks.py` serves the task list and one task's detail; `models.py` holds their response
   models and the projections from TimeF objects.
+- `records.py` serves one record's structure with bounded hierarchy, annotation, and response
+  sizes, leaving signal values lazy.
 - `app.py` builds the application: the catalog and manifest API, the page, and its assets.
 - `static/` holds the built frontend. It is committed, so installing `timenet[viewer]` needs no
   Node.js.
+
+Record, signal, and task IDs are int64. Query parameters take them as integers, and responses
+return them as decimal strings, because JavaScript numbers lose precision above 2^53. Sources
+carry no ID, so a record response keys each source by its position path, such as `0.1`.
 
 ## Frontend
 
