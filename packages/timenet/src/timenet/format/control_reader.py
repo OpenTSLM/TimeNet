@@ -1159,15 +1159,43 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         Raises:
             TimeFNotFoundError: If an ID names no stored Signal.
         """  # noqa: DOC502 - raised by _require_found
-        owners: dict[EntityId, EntityId] = dict(
+        owners = self._record_ids_of_signals(signal_ids)
+        _require_found(ObjectKind.SIGNAL, signal_ids, owners)
+        return owners
+
+    def _record_ids_of_signals(self, signal_ids: Collection[EntityId]) -> dict[EntityId, EntityId]:
+        """Return the ID of the Record that holds each stored Signal of the given IDs.
+
+        Returns:
+            The Record ID of each Signal, by Signal ID. An ID that names no Signal is absent.
+        """
+        return dict(
             self._query(
                 "SELECT signals.signal_id, sources.record_id FROM signals JOIN sources USING (source_id) "
                 "WHERE signals.signal_id IN (SELECT unnest(?))",
                 [list(signal_ids)],
             )
         )
-        _require_found(ObjectKind.SIGNAL, signal_ids, owners)
-        return owners
+
+    def _record_ids_of_occurrences(self, occurrence_ids: Collection[int]) -> set[EntityId]:
+        """Return the IDs of the Records whose hierarchy holds the given annotation occurrences.
+
+        An occurrence on the Dataset or a task has no Record.
+
+        Returns:
+            The Record IDs, each once.
+        """
+        rows = self._query(
+            """SELECT DISTINCT coalesce(records.record_id, sources.record_id, signal_sources.record_id)
+               FROM annotation_occurrences AS occurrences
+               LEFT JOIN records ON occurrences.object_type = ? AND records.record_id = occurrences.object_id
+               LEFT JOIN sources ON occurrences.object_type = ? AND sources.source_id = occurrences.object_id
+               LEFT JOIN signals ON occurrences.object_type = ? AND signals.signal_id = occurrences.object_id
+               LEFT JOIN sources AS signal_sources ON signal_sources.source_id = signals.source_id
+               WHERE occurrences.occurrence_id IN (SELECT unnest(?))""",
+            [ObjectKind.RECORD.value, ObjectKind.SOURCE.value, ObjectKind.SIGNAL.value, sorted(occurrence_ids)],
+        )
+        return {record_id for (record_id,) in rows if record_id is not None}
 
     def read_signals_by_id(self, signal_ids: Collection[EntityId]) -> dict[EntityId, Signal]:
         """Build the Records that hold the given Signals, and return those Signals.
@@ -2295,23 +2323,28 @@ class _TaskHydration:
             self._index_record(record)
 
     def _ensure_signals(self, signal_ids: set[int]) -> None:
-        """Index the Signals of the hydrated Records when one batch's targets or scopes refer to Signals.
+        """Index the Signals one batch's targets or scopes refer to, hydrating the Records that hold them.
+
+        A Signal target can lie on a Record that the task references in no other way.
 
         Args:
             signal_ids: Every Signal ID the batch refers to.
 
         Raises:
-            TimeFFormatError: If an ID names no stored Signal, or no Signal on the hydrated Records.
+            TimeFFormatError: If an ID names no stored Signal.
         """
         if not signal_ids:
             return
         self._index_signals()
-        outside = sorted(signal_ids - self.signals_by_id.keys())
-        if outside:
-            missing = self.reader._missing_ids("signals", "signal_id", outside)
-            if missing:
-                raise TimeFFormatError(f"task refers to missing signal {missing[0]!r}")
-            raise TimeFFormatError(f"task target refers to Signal {outside[0]!r} on a Record outside the hydrated set")
+        outside = signal_ids - self.signals_by_id.keys()
+        if not outside:
+            return
+        owners = self.reader._record_ids_of_signals(outside)
+        missing = sorted(outside - owners.keys())
+        if missing:
+            raise TimeFFormatError(f"task refers to missing signal {missing[0]!r}")
+        self._ensure_records(set(owners.values()))
+        self._index_signals()
 
     def _index_signals(self) -> None:
         """Add the Signals of the Records indexed since the last walk to the lookup by ID."""
@@ -2328,16 +2361,18 @@ class _TaskHydration:
         self._records_without_signal_index.clear()
 
     def _annotations_by_occurrence(self, occurrence_ids: set[int]) -> dict[int, Annotation]:
-        """Resolve referenced annotation occurrences to the objects on the hydrated Records or the Dataset.
+        """Resolve referenced annotation occurrences, hydrating the Records that hold them.
 
-        An occurrence on no hydrated Record is looked up among the Dataset's occurrences: the
-        scope reads only those its tasks reference, unless the caller gave every one of them.
+        A task can reference an annotation on a Record that it references in no other way: one
+        catalog query finds the Records that hold the occurrences outside what the scope has built.
+        An occurrence on no Record is looked up among the Dataset's occurrences: the scope reads
+        only those its tasks reference, unless the caller gave every one of them.
 
         Returns:
             Annotations by occurrence ID.
 
         Raises:
-            TimeFFormatError: If an ID names no occurrence on the hydrated Records or the Dataset.
+            TimeFFormatError: If an ID names no occurrence on a Record or the Dataset.
         """
         resolved: dict[int, Annotation] = {}
         unresolved: list[int] = []
@@ -2350,6 +2385,13 @@ class _TaskHydration:
                 unresolved.append(occurrence_id)
             else:
                 resolved[occurrence_id] = annotation
+        if unresolved:
+            self._ensure_records(self.reader._record_ids_of_occurrences(unresolved))
+            for occurrence_id in unresolved:
+                annotation = self.annotations_by_id.get(occurrence_id)
+                if annotation is not None:
+                    resolved[occurrence_id] = annotation
+            unresolved = [occurrence_id for occurrence_id in unresolved if occurrence_id not in resolved]
         if unresolved and not self._dataset_annotations_indexed:
             # The scope's own lookup keeps them, so a later batch of a stream reads its own copies.
             self.reader._read_annotations({ObjectKind.DATASET: unresolved}, self.annotations_by_id)
