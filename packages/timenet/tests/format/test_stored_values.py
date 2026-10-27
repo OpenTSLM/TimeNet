@@ -116,7 +116,7 @@ def _content_ids(version_dir, key):
     return [content_id for (content_id,) in rows]
 
 
-def _stored(reader):
+def _stored(reader, fill=False):
     dataset = reader.read()
     (prompt,) = [task.prompt for task in dataset.tasks if isinstance(task.prompt, StoredText)]
     (reports,) = [
@@ -125,6 +125,9 @@ def _stored(reader):
         for annotation in record.annotations
         if annotation.key == "reports"
     ]
+    if fill:
+        prompt._fill()
+        reports._fill()
     return prompt, reports
 
 
@@ -205,7 +208,7 @@ def test_the_annotation_table_returns_a_packed_string_list(reader):
     assert reports["text_list_value"] == _TEXTS
 
 
-def test_stored_text_is_never_loaded_and_reads_through_every_time(reader, payload_reads):
+def test_unloaded_stored_text_reads_through_every_time(reader, payload_reads):
     prompt, reports = _stored(reader)
     assert not prompt.is_loaded
     assert not reports.is_loaded
@@ -274,6 +277,43 @@ def test_a_stored_handle_pickles_its_location_without_its_text(reader):
         assert back._location == handle._location
         assert not back.is_loaded
         assert back.read() == value
+
+
+def test_filled_stored_text_needs_no_payload(reader, payload_reads):
+    lazy_prompt, lazy_reports = _stored(reader)
+    prompt, reports = _stored(reader, fill=True)
+    assert prompt.is_loaded
+    assert reports.is_loaded
+    assert sorted(payload_reads, key=lambda location: location.row) == sorted(
+        (prompt._location, reports._location), key=lambda location: location.row
+    )
+    payload_reads.clear()
+    reader.close()
+    assert prompt.read() == _TEXT
+    assert reports.read() == _TEXTS
+    # Each read returns a new list, so changing one leaves the kept strings as they are.
+    reports.read().append("changed")
+    assert reports.read() == _TEXTS
+    # A loaded handle keeps the content key of its payload row, so it equals the unloaded one.
+    assert prompt._content_key() == lazy_prompt._content_key()
+    assert prompt == lazy_prompt
+    assert reports == lazy_reports
+    assert not lazy_prompt.is_loaded
+    assert not payload_reads
+
+
+def test_a_loaded_stored_handle_pickles_its_text_with_its_location(reader, payload_reads):
+    prompt, reports = _stored(reader, fill=True)
+    payload_reads.clear()
+    for handle, value in ((prompt, _TEXT), (reports, _TEXTS)):
+        pickled = pickle.dumps(handle)
+        assert b"clinical report" in pickled
+        back = pickle.loads(pickled)
+        assert type(back) is type(handle)
+        assert back._location == handle._location
+        assert back.is_loaded
+        assert back.read() == value
+    assert not payload_reads
 
 
 def test_a_deep_copy_shares_the_stored_handle(reader):
