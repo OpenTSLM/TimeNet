@@ -25,6 +25,7 @@ from timenet.format.stored_values import (
     materialize_table,
 )
 from timenet.types import (
+    Annotation,
     DatasetMetadata,
     DatasetSchema,
     EntityId,
@@ -68,9 +69,7 @@ class TimeFReader:
         self._fs = version.filesystem
         self._root = version.root
         self._manifest = version.manifest
-        self._tasks: tuple[Task, ...] | None = None
         self._control: DuckDBControlReader | None = None
-        self._records: tuple[Record, ...] | None = None
         self._values: BaseValuesReader | None = None
         self._source_readers: dict[SourceKey, BaseValuesReader] = {}
         self._chunk_locator_batches: list[list[int]] = []
@@ -78,11 +77,9 @@ class TimeFReader:
         self._chunk_locations: dict[int, ChunkLocation | None] = {}
 
     def __getstate__(self) -> dict:
-        """Return picklable state without open connections or decoded object caches."""
+        """Return picklable state without open connections or decoded caches."""
         state = self.__dict__.copy()
-        state["_tasks"] = None
         state["_control"] = None
-        state["_records"] = None
         state["_values"] = None
         state["_source_readers"] = {}
         state["_chunk_locations"] = {}
@@ -112,8 +109,6 @@ class TimeFReader:
         for backend in self._source_readers.values():
             backend.close()
         self._source_readers.clear()
-        self._records = None
-        self._tasks = None
         if self._packed_value_reader is not None:
             self._packed_value_reader.close()
         self._chunk_locations.clear()
@@ -140,14 +135,6 @@ class TimeFReader:
         """Return the dataset's type declaration."""
         return self._manifest.dataset_schema
 
-    @property
-    def tasks(self) -> tuple[Task, ...]:
-        """Return all tasks with their object references restored."""
-        if self._tasks is None:
-            with self._as_format_error():
-                self._tasks = self._control_reader().read_tasks(cached_records=self._all_records())
-        return self._tasks
-
     def record_ids(self) -> tuple[EntityId, ...]:
         """Return every Record ID without building a Record.
 
@@ -160,6 +147,9 @@ class TimeFReader:
     def read_tasks(self, records: Iterable[Record] | None = None) -> tuple[Task, ...]:
         """Build the tasks attached to ``records`` in one pass.
 
+        Every call builds new tasks. A record a task uses that is not among ``records`` is read
+        once and shared by every task of the call.
+
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
 
@@ -167,9 +157,7 @@ class TimeFReader:
             Concrete tasks in stable ID order.
         """
         with self._as_format_error(preserve_validation=True):
-            return self._control_reader().read_tasks(
-                records, cached_records=self._all_records() if records is None else ()
-            )
+            return self._control_reader().read_tasks(records)
 
     def iter_tasks(
         self,
@@ -190,15 +178,12 @@ class TimeFReader:
         Yields:
             Concrete tasks in stable ID order.
         """
-        filtered = required_modalities is not None or supported_modalities is not None or split is not None
-        cached_records = self._all_records() if records is None and not filtered else ()
         with self._as_format_error(preserve_validation=True):
             yield from self._control_reader().iter_tasks(
                 records,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
                 split=split,
-                cached_records=cached_records,
             )
 
     def read_task_table(
@@ -290,16 +275,24 @@ class TimeFReader:
     def read(self) -> TimeFDataset:
         """Build the dataset while keeping every Signal's values lazy.
 
+        Every call builds new objects.
+
         Returns:
             The reconstructed dataset.
         """
+        control = self._control_reader()
+        records = control.read_records()
+        occurrences: dict[int, Annotation] = {}
+        annotations = control.read_dataset_annotations(self._manifest.dataset_id, by_occurrence=occurrences)
+        with self._as_format_error():
+            tasks = control.read_tasks(cached_records=records, dataset_annotations=occurrences)
         return TimeFDataset.from_parts(
             metadata=self.metadata,
-            records=self._all_records(),
-            tasks=self.tasks,
+            records=records,
+            tasks=tasks,
             schema=self.schema,
-            annotations=self._control_reader().read_dataset_annotations(self._manifest.dataset_id),
-            last_ids=self._control_reader().read_last_ids(),
+            annotations=annotations,
+            last_ids=control.read_last_ids(),
         )
 
     def iter_records(
@@ -341,12 +334,6 @@ class TimeFReader:
                 fetch=partial(materialize_control, self._version),
             )
         return self._control
-
-    def _all_records(self) -> tuple[Record, ...]:
-        """Return cached records so task inputs share their object identity."""
-        if self._records is None:
-            self._records = self._control_reader().read_records()
-        return self._records
 
     def _values_reader(self) -> BaseValuesReader:
         """Return the lazily opened values-plane reader."""

@@ -389,10 +389,50 @@ def test_read_dataset_and_lazy_loaders_are_picklable(tmp_path, backend):
     assert restored.records[0].signals[0].to_arrow().equals(expected)
 
 
-def test_tasks_are_cached_after_first_access(tmp_path):
+def test_every_read_builds_new_objects(tmp_path):
     with TimeFReader(open_local_version(_write(tmp_path))) as reader:
-        first = reader.tasks
-        assert reader.tasks is first
+        first = reader.read_tasks()
+        again = reader.read_tasks()
+        assert [task.id for task in again] == [task.id for task in first]
+        assert not any(task is other for task, other in zip(first, again, strict=True))
+        dataset = reader.read()
+        assert reader.read().records[0] is not dataset.records[0]
+
+
+def test_task_reads_read_only_the_dataset_annotations_their_tasks_reference(tmp_path, monkeypatch):
+    dataset = make_dataset()
+    note = dataset.annotate(Annotation(key="note", value="referenced"))
+    dataset.annotate(Annotation(key="unused", value="unreferenced"))
+    added = dataset.add_task(task=AnswerTask(inputs=(dataset.records[0],), targets=("yes",), input_annotations=(note,)))
+    version_dir = _write(tmp_path, dataset)
+    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
+        rows = connection.execute(
+            """SELECT c.name, o.occurrence_id FROM annotation_occurrences o JOIN annotation_contents c USING (content_id)
+               WHERE o.object_type = 'Dataset'"""
+        ).fetchall()
+    occurrences = dict(rows)
+    requested = []
+    read_annotations = DuckDBControlReader._read_annotations
+
+    def recording(self, owners, by_occurrence=None):
+        if ObjectKind.DATASET in owners:
+            requested.append(owners[ObjectKind.DATASET])
+        return read_annotations(self, owners, by_occurrence)
+
+    monkeypatch.setattr(DuckDBControlReader, "_read_annotations", recording)
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        tasks = [*reader.read_tasks(), *reader.iter_tasks()]
+        # Each task read asks only for the occurrence its tasks reference.
+        assert requested == [[occurrences["note"]], [occurrences["note"]]]
+        requested.clear()
+        first, again = reader.read(), reader.read()
+    assert [task.input_annotations[0].value for task in tasks if task.id == added.id] == ["referenced"] * 2
+    # A whole-dataset read builds all of the Dataset's annotations, and its tasks reference them.
+    assert requested == [None, None]
+    assert [annotation.key for annotation in first.annotations] == ["note", "unused"]
+    (task,) = (task for task in first.tasks if task.id == added.id)
+    assert task.input_annotations[0] is first.annotations[0]
+    assert again.annotations[0] is not first.annotations[0]
 
 
 def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
@@ -429,9 +469,7 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
     with reader:
         assert text in reader.read_task_table()["prompt"].to_pylist()
     assert read_calls == 3
-    assert state["_tasks"] is None
     assert state["_control"] is None
-    assert state["_records"] is None
     assert state["_values"] is None
 
 
@@ -527,7 +565,7 @@ def test_iter_tasks_streams_one_record_and_points_at_its_built_objects(tmp_path)
     with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
         record0 = next(reader.iter_records((record.id,)))
         tasks = list(reader.iter_tasks((record0,)))
-        every = reader.tasks
+        every = reader.read_tasks()
 
     assert {task.id for task in tasks} == {
         task.id for task in every if any(item.id == record.id for item in task.inputs)

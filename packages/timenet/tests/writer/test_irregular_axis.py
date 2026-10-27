@@ -166,7 +166,7 @@ def test_signals_sharing_an_axis_store_and_load_offsets_once(tmp_path, monkeypat
 
         monkeypatch.setattr(pq.ParquetFile, "read", count_reads)
         assert [signal.time_offsets_us().tolist() for signal in back] == [shared_us, shared_us]
-        assert reader.tasks[0].prompt == text
+        assert reader.read_tasks()[0].prompt == text
         assert reader.read_annotation_table()["text_list_value"].to_pylist() == [labels]
         assert reader.read_task_table()["prompt"].to_pylist() == [text]
         assert reader.read_target_table()["text_value"].to_pylist() == [text]
