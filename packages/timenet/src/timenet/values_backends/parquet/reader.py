@@ -18,6 +18,7 @@ from timenet.values_backends.reader import BaseValuesReader
 
 if TYPE_CHECKING:
     from collections.abc import Sequence
+    from concurrent.futures import ThreadPoolExecutor
 
     from timenet.registry.version import DatasetVersion
     from timenet.types import TimeSeriesSpec
@@ -61,6 +62,12 @@ class ParquetValuesReader(BaseValuesReader):
         """Start with empty per-process shard, row-group, and target-type caches."""
         self._parquet = SignalRowGroupCache(_ROW_GROUP_CACHE_SIZE)
         self._target_types: dict[str, pa.DataType] = {}
+
+    def prepare_scan(
+        self, version: DatasetVersion, groups: list[tuple[str, int]], executor: ThreadPoolExecutor
+    ) -> None:
+        """Prefetch required Signal groups through the shared Parquet cache."""
+        self._parquet.prepare_scan(version, groups, executor)
 
     def load(self, version: DatasetVersion, rows: Sequence[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
         """Read a series' chunks using row-group and row coordinates in ``data_index``.
@@ -120,6 +127,10 @@ class ParquetValuesReader(BaseValuesReader):
                 parts.append(values.slice(lo, hi - lo).cast(target))
             cursor = row_stop
         return pa.concat_arrays(parts)
+
+    def finish_scan(self) -> None:
+        """Release scan workers and pending groups after an eager read, including errors."""
+        self._parquet.finish_scan()
 
     def close(self) -> None:
         """Close cached shard files and release decoded row groups."""
