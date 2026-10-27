@@ -1,4 +1,7 @@
 import { useEffect, useState } from "react";
+import { TaskRecordWorkspace } from "./records";
+import { changeSelection, selectRecord, selectTask } from "./navigation";
+import type { ViewerProps } from "./navigation";
 
 const TASK_PAGE_SIZE = 20;
 
@@ -58,13 +61,8 @@ function Json({ value }: { value: unknown }) {
   return <pre className="task-json">{JSON.stringify(value, null, 2)}</pre>;
 }
 
-export function TasksBrowser({ dataset, version, search, navigate, getJson }: {
-  dataset: string;
-  version: string;
-  search: string;
-  navigate: (params: URLSearchParams) => void;
-  getJson: <T>(path: string, signal: AbortSignal) => Promise<T>;
-}) {
+export function TasksBrowser(props: ViewerProps) {
+  const { dataset, version, search, navigate, getJson } = props;
   const params = new URLSearchParams(search);
   const split = params.get("split") || "";
   const rawOffset = Number(params.get("offset") || 0);
@@ -102,17 +100,16 @@ export function TasksBrowser({ dataset, version, search, navigate, getJson }: {
   }, [dataset, version, split, offset, taskId, retry, getJson]);
 
   function go(changes: Record<string, string | null>) {
-    const next = new URLSearchParams(search);
-    for (const [key, value] of Object.entries(changes)) {
-      if (value === null || value === "") next.delete(key);
-      else next.set(key, value);
-    }
-    navigate(next);
+    navigate(changeSelection(search, changes));
+  }
+
+  function openRecord(id: string) {
+    navigate(selectRecord(search, id));
   }
 
   return <main className="layout task-layout">
     <button className="back" onClick={() => taskId
-      ? go({ task: null })
+      ? navigate(selectTask(search, null))
       : go({ view: null, task: null, split: null, offset: null })}>
       ← {taskId ? "Task list" : "Dataset overview"}
     </button>
@@ -151,7 +148,7 @@ export function TasksBrowser({ dataset, version, search, navigate, getJson }: {
       : <div className="task-table-wrap"><table className="task-table">
         <thead><tr><th scope="col">Task ID</th><th scope="col">Task type</th><th scope="col">Split</th><th scope="col">Prompt preview</th></tr></thead>
         <tbody>{page.items.map(item => <tr key={item.id}>
-          <td data-label="Task ID"><button className="task-link task-id" onClick={() => go({ task: item.id })}>
+          <td data-label="Task ID"><button className="task-link task-id" onClick={() => navigate(selectTask(search, item.id))}>
             {item.id}<span aria-hidden="true" className="task-open">↗</span>
           </button></td>
           <td data-label="Task type"><span className="task-type">{label(item.task_type)}</span></td>
@@ -160,7 +157,7 @@ export function TasksBrowser({ dataset, version, search, navigate, getJson }: {
             title={item.prompt_preview ?? undefined}>{item.prompt_preview ?? "No prompt"}</p></td>
         </tr>)}</tbody>
       </table></div>)}
-    {detail && <>
+    {detail?.id === taskId && <>
       <section className="raw task-prompt"><h2>Prompt</h2>
         <p>{detail.prompt ?? "No prompt"}</p>
       </section>
@@ -170,7 +167,8 @@ export function TasksBrowser({ dataset, version, search, navigate, getJson }: {
       <section className="facts task-facts" aria-label="Task facts">
         <div><h2>Task type</h2><p className="task-type">{label(detail.task_type)}</p></div>
         <div><h2>Split</h2><p>{detail.split || "Unassigned"}</p></div>
-        <div><h2>Input record IDs</h2><p>{detail.input_record_ids.join(", ") || "None"}</p></div>
+        <div><h2>Input record IDs</h2><p>{detail.input_record_ids.length ? detail.input_record_ids.map(id =>
+          <button className="task-link record-task" key={id} onClick={() => openRecord(id)}>{id}</button>) : "None"}</p></div>
         <div><h2>Parent task IDs</h2><p>{detail.parent_task_ids.join(", ") || "None"}</p></div>
         <div><h2>Input modalities</h2><p>{detail.input_modalities.join(", ")}</p></div>
         <div><h2>Scope</h2>{detail.scope ? <Json value={detail.scope} /> : <p>None</p>}</div>
@@ -180,16 +178,26 @@ export function TasksBrowser({ dataset, version, search, navigate, getJson }: {
           : detail.targets.length === 0 ? <p>Explicit empty answer.</p>
           : <ul className="task-targets">{detail.targets.map((target, index) =>
             <li key={index}><span className="task-target-kind">{label(target.kind)}</span>
-              {"id" in target ? <code>{target.id}</code>
+              {"id" in target ? target.kind === "record"
+                ? <button className="task-link" onClick={() => openRecord(target.id)}>{target.id}</button>
+                : <code>{target.id}</code>
                 : target.kind === "span" ? <Json value={target.value} />
                 : <p>{String(target.value)}</p>}
             </li>)}</ul>}
       </section>
+      {Array.isArray(detail.configuration.candidate_record_ids) && <section className="raw"><h2>Candidate records</h2>
+        {detail.configuration.candidate_record_ids.map((id: string) => <button className="task-link record-task" key={id}
+          onClick={() => openRecord(id)}>{id}</button>)}
+      </section>}
       <details className="raw"><summary>Task configuration</summary><Json value={detail.configuration} /></details>
       <details className="raw"><summary>Metadata</summary><Json value={detail.metadata} /></details>
       {([ ["Attached task annotations", detail.annotations], ["Input annotations", detail.input_annotations],
         ["Target annotations", detail.target_annotations] ] as const).map(([label, annotations]) =>
         annotations.length > 0 && <details className="raw" key={label}><summary>{label} ({annotations.length})</summary><Json value={annotations} /></details>)}
+      <TaskRecordWorkspace key={detail.id} {...props} inputs={detail.input_record_ids}
+        targets={detail.targets?.flatMap(target => target.kind === "record" ? [target.id] : []) ?? []}
+        candidates={Array.isArray(detail.configuration.candidate_record_ids)
+          ? detail.configuration.candidate_record_ids.filter((id): id is string => typeof id === "string") : []} />
     </>}
   </main>;
 }

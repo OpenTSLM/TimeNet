@@ -48,6 +48,11 @@ hydrates all records before yielding tasks. Split filtering can still hydrate re
 and dependencies. Opening a remote version may download the full dataset. Signal values remain
 lazy.
 
+Opening a record hydrates the entire record hierarchy and annotations; signal windows repeat that
+hydration. Selecting a signal loads its first window; values and irregular offsets are read only
+when a window is requested. Windows return at most `RecordLimits.window` steps (2,000 by
+default), but storage may read entire intersecting chunks.
+
 ## TODO
 
 - **Remote access through an HTTPS reverse proxy.** v0 accepts only the `127.0.0.1` origin.
