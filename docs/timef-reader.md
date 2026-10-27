@@ -94,10 +94,20 @@ Tasks have three useful read paths:
 - `read_task_table()`, `read_target_table()`, and `read_annotation_table()` return Arrow tables
   without creating Python task objects. Their ID columns are `int64`.
 
-One call returns one consistent set of objects. A Record that two tasks use is one object.
-`read_tasks(records)` and `iter_tasks(records)` reuse the Record objects you pass: a task input is
-the same `Record` instance that `iter_records()` returned. Separate calls build separate objects,
-because the reader keeps no object caches; keep a result if you need it again.
+One call returns one consistent set of objects. A Record that two tasks use is one object, and the
+Signals on one irregular axis share one handle to its time offsets. `read_tasks(records)` and
+`iter_tasks(records)` reuse the Record objects you pass: a task input is the same `Record` instance
+that `iter_records()` returned. Separate calls build separate objects, because the reader keeps no
+object caches; keep a result if you need it again.
+
+`iter_tasks()` builds each batch on its own. The tasks of one batch share the objects the batch
+builds, as one call does, and batches share nothing but the Records you pass. A Record that tasks
+of two batches use arrives as two separate objects with the same ID. So does a parent task that
+one batch builds for a task's `from_tasks` and a later batch yields. In return, the stream keeps
+none of a batch's objects once it has yielded the batch: it holds one batch of objects and that
+batch's task IDs at a time, and selects each next batch after the last task ID it yielded. The
+reader itself keeps compact chunk locators for the Signals it has resolved until it closes. A batch
+holds up to 5,000 tasks; `iter_tasks(batch_size=...)` sets another limit.
 
 ## Type reconstruction
 
@@ -127,7 +137,7 @@ and decoded Zarr chunks until it closes.
 | `read()` | Create the complete `TimeFDataset`. |
 | `iter_records()` | Yield Records without building a dataset. |
 | `read_tasks(records)` | Build the tasks of selected Records, or every task, in one pass. |
-| `iter_tasks(records, split=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
+| `iter_tasks(records, split=..., batch_size=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
 | `read_task_table()` | Return the task table with public IDs. |
 | `read_target_table()` | Return ordered task targets with public IDs. |
 | `read_annotation_table()` | Return annotation occurrences with public IDs. |
