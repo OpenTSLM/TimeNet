@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from collections.abc import Generator, Iterable, Iterator
 from contextlib import contextmanager
+from functools import partial
 import types as _types
 from typing import TYPE_CHECKING
 
@@ -106,8 +107,8 @@ class TimeFReader:
             self._values.close()
             self._values = None
         if self._control is not None:
+            # The control reader stays, so it reopens its verified local catalog without checking it again.
             self._control.close()
-            self._control = None
         for backend in self._source_readers.values():
             backend.close()
         self._source_readers.clear()
@@ -276,9 +277,10 @@ class TimeFReader:
         Returns:
             The table with native values.
         """
-        if self._packed_value_reader is None:
+        packed = self._packed_value_reader
+        if packed is None:
             return table
-        return materialize_table(table, self._packed_value_reader, self._control_reader().connection, columns)
+        return self._control_reader().run(lambda connection: materialize_table(table, packed, connection, columns))
 
     @property
     def values_backend(self) -> str:
@@ -324,6 +326,10 @@ class TimeFReader:
     def _control_reader(self) -> DuckDBControlReader:
         """Open and return the cached read-only control database.
 
+        A remote catalog is fetched and verified once, and again only if its cached copy is gone
+        when the connection reopens. The connection opens again on demand after :meth:`close` or a
+        fork.
+
         Returns:
             The cached control reader.
         """
@@ -332,6 +338,7 @@ class TimeFReader:
                 materialize_control(self._version),
                 value_loader_factory=self._make_signal_loader,
                 external=self._packed_value_reader,
+                fetch=partial(materialize_control, self._version),
             )
         return self._control
 

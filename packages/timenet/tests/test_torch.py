@@ -1,3 +1,5 @@
+import multiprocessing
+
 import numpy as np
 import pytest
 
@@ -135,3 +137,27 @@ def test_reader_backed_view_builds_a_batch_with_the_same_items(tmp_path):
         assert all(torch.equal(a, b) for a, b in zip(item["series"], expected["series"], strict=True))
     assert single["record_id"] == batch[0]["record_id"]
     assert all(task.inputs[0] is batch[0]["tasks"][0].inputs[0] for task in batch[0]["tasks"])
+
+
+@pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="needs the fork start method")
+def test_forked_workers_open_their_own_catalog_after_len(tmp_path):
+    from torch.utils.data import DataLoader  # noqa: PLC0415
+
+    from timenet.reader import TimeFReader  # noqa: PLC0415
+    from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
+    from timenet.writer import TimeFWriter  # noqa: PLC0415
+
+    dataset = make_dataset()
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    version_dir = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        view = TimeFTorchDataset.from_reader(reader)
+        # len() opens the catalog in this process, before the workers fork.
+        assert len(view) == len(dataset.records)
+        loader = DataLoader(
+            view, batch_size=2, num_workers=2, multiprocessing_context="fork", collate_fn=list, timeout=60
+        )
+        record_ids = [item["record_id"] for batch in loader for item in batch]
+    assert sorted(record_ids) == sorted(record.id for record in dataset.records)

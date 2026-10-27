@@ -253,6 +253,7 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeFValidationError` | Input violates a TimeF invariant. |
 | `TimeFNullValuesError` | Values contain nulls that NumPy cannot hold. A `TimeFValidationError`. |
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
+| `TimeFReaderError` | A reader could not complete a read, e.g. its connection was closed while the read ran. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
 
 Pydantic `ValidationError` reports field and schema errors in a dataset card. The error includes the

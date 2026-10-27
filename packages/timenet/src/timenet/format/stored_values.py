@@ -20,6 +20,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.constants import DEFAULT_COMPRESSION, PAYLOAD_TEMPLATE, check_relative_path, part_path
 from timenet.format.control_schema import EXTERNAL_VALUES
+from timenet.format.duckdb import CATALOG_ERRORS
 from timenet.format.stored_array import ChunkLocation
 from timenet.format.table_writer import ModelTable
 from timenet.storage.parquet import PayloadTableCache
@@ -626,7 +627,7 @@ class PackedValueReader:
             Locations keyed by object kind, object id, field, and position.
 
         Raises:
-            TimeFFormatError: If the locator table cannot be read, or a locator is invalid or duplicated.
+            TimeFFormatError: If the catalog has no locator table, or a locator is invalid or duplicated.
         """
         identities = list(dict.fromkeys(object_ids))
         if not identities:
@@ -639,7 +640,7 @@ class PackedValueReader:
                 "WHERE object_kind = ? AND object_id IN (SELECT unnest(?))",
                 [kind.value, identities],
             ).fetchall()
-        except duckdb.Error as exc:
+        except CATALOG_ERRORS as exc:
             # A release written before packed values has no locator table.
             raise TimeFFormatError(f"cannot read external values: {exc}") from exc
         locations: dict[ExternalObjectFieldKey, PackedLocation] = {}
