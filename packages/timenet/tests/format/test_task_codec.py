@@ -4,6 +4,7 @@ import pytest
 from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError
 from timenet.format.task_codec import (
+    decode_input_modalities,
     decode_span,
     decode_target,
     encode_span,
@@ -103,3 +104,18 @@ def test_target_decoder_rejects_a_missing_record_reference():
     row = TargetValueRow(target_kind=TaskTargetKind.RECORD, record_id=99)
     with pytest.raises(TimeFFormatError, match="missing Record 99"):
         decode_target(row, records={}, signals={})
+
+
+@pytest.mark.parametrize(
+    ("stored", "message"),
+    [
+        ([], "no stored input modalities"),
+        (["time_series", "smell"], "unknown stored input modality"),
+        (["text", "text"], "repeated stored input modalities"),
+    ],
+)
+def test_invalid_stored_input_modalities_are_format_errors(stored, message):
+    # Each call re-validates: the decoder cache never stores a failure.
+    for _ in range(2):
+        with pytest.raises(TimeFFormatError, match=message):
+            decode_input_modalities(stored)

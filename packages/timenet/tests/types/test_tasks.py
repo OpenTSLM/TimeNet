@@ -6,6 +6,7 @@ import pytest
 
 from timenet.dataset import Record
 from timenet.errors import TimeFValidationError
+from timenet.testing import make_dataset
 from timenet.types import (
     TASKS,
     AnswerTask,
@@ -165,3 +166,38 @@ def test_replace_and_pickle_keep_a_task_and_its_text_handles():
     assert type(restored) is AnswerTask
     assert isinstance(restored.prompt, InlineText)
     assert restored == task
+
+
+_TIME_SERIES = frozenset({InputModality.TIME_SERIES})
+
+
+@pytest.mark.parametrize(
+    ("with_record", "prompt", "modalities", "message"),
+    [
+        (True, None, frozenset(), "must declare an input modality"),
+        (True, "Question?", _TIME_SERIES, "has a prompt but does not declare text input"),
+        (True, None, NO_INPUT, "cannot combine no_input with record or media inputs"),
+        (False, "Question?", frozenset({InputModality.TEXT}), "needs no_input when it has only a text prompt"),
+    ],
+)
+def test_an_inconsistent_input_declaration_names_the_task(with_record, prompt, modalities, message):
+    inputs = (Record(),) if with_record else ()
+    # A task outside a dataset has no id yet.
+    with pytest.raises(TimeFValidationError, match=f"^task {message}$"):
+        AnswerTask(inputs=inputs, prompt=prompt, input_modalities=modalities)
+
+
+def test_an_inconsistent_input_declaration_names_the_task_id():
+    task = make_dataset().tasks[0]
+    task.input_modalities = _TIME_SERIES
+    task.prompt = "Question?"
+    with pytest.raises(TimeFValidationError, match=rf"^task {task.id} has a prompt but does not declare text input$"):
+        _ = task.resolved_input_modalities
+
+
+def test_a_cached_valid_declaration_does_not_hide_a_later_error():
+    record = Record()
+    AnswerTask(inputs=(record,), input_modalities=_TIME_SERIES)
+    # Same modalities, now with a prompt: the cache key includes the prompt, so this still fails.
+    with pytest.raises(TimeFValidationError, match=r"^task has a prompt but does not declare text input$"):
+        AnswerTask(inputs=(record,), prompt="Question?", input_modalities=_TIME_SERIES)
