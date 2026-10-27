@@ -20,6 +20,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.constants import DEFAULT_COMPRESSION, PAYLOAD_TEMPLATE, check_relative_path, part_path
 from timenet.format.control_schema import EXTERNAL_VALUES
+from timenet.format.duckdb import CATALOG_ERRORS
 from timenet.format.stored_array import ChunkLocation
 from timenet.format.table_writer import ModelTable
 from timenet.storage.parquet import PayloadTableCache
@@ -318,13 +319,16 @@ def _stored_content_key(handle: "StoredText | StoredTextList") -> PackedContentK
 class StoredText(TextHandle):
     """Refer to one string packed in a Parquet payload.
 
-    The handle holds the reader of the release's payloads and the string's location, not the string,
-    so it is never loaded and every ``read()`` reads the payload. Handles at one location of one
-    payload file are equal without a read.
+    The handle holds the reader of the release's payloads and the string's location. A loaded handle
+    also holds the string, which ``read()`` returns without payload access. An unloaded handle holds
+    no text, and every ``read()`` reads the payload. Handles at one location of one payload file are
+    equal without a read, whether loaded or not.
     """
 
     store: "PackedValueReader" = dataclass_field(repr=False)
     _packed_location: PackedLocation
+    _text: str | None = dataclass_field(default=None, init=False, repr=False)
+    """The string, kept once a read loads it."""
 
     @property
     def _location(self) -> PackedLocation:
@@ -333,8 +337,8 @@ class StoredText(TextHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return False, since every read goes to the payload."""
-        return False
+        """Return whether the handle keeps the string, so reads need no payload access."""
+        return self._text is not None
 
     @property
     def length(self) -> int:
@@ -342,10 +346,16 @@ class StoredText(TextHandle):
         return self._location.length
 
     def read(self) -> str:
-        """Return the string from its payload."""
-        text: str = self.store.read_scalar(self._location).as_py()
-        _check_length(len(text), self._location)
+        """Return the kept string, or the string from its payload."""
+        text = self._text
+        if text is None:
+            text = self.store.read_scalar(self._location).as_py()
+            _check_length(len(text), self._location)
         return text
+
+    def _fill(self) -> None:
+        """Read the string from its payload and hold it, so the handle is loaded from then on."""
+        object.__setattr__(self, "_text", self.read())  # noqa: PLC2801 - fills the frozen handle before it is handed out
 
     def _content_key(self) -> Hashable:
         """Return the payload file's checksum, the row, and the kind, which name the string unread."""
@@ -365,13 +375,16 @@ class StoredText(TextHandle):
 class StoredTextList(TextListHandle):
     """Refer to a list of strings packed in a Parquet payload.
 
-    The handle holds the reader of the release's payloads and the list's location, not the list, so
-    it is never loaded and every ``read()`` reads the payload. Handles at one location of one payload
-    file are equal without a read.
+    The handle holds the reader of the release's payloads and the list's location. A loaded handle
+    also holds the strings, and ``read()`` returns a new list of them without payload access. An
+    unloaded handle holds no text, and every ``read()`` reads the payload. Handles at one location
+    of one payload file are equal without a read, whether loaded or not.
     """
 
     store: "PackedValueReader" = dataclass_field(repr=False)
     _packed_location: PackedLocation
+    _texts: tuple[str, ...] | None = dataclass_field(default=None, init=False, repr=False)
+    """The strings, kept once a read loads them."""
 
     @property
     def _location(self) -> PackedLocation:
@@ -380,8 +393,8 @@ class StoredTextList(TextListHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return False, since every read goes to the payload."""
-        return False
+        """Return whether the handle keeps the strings, so reads need no payload access."""
+        return self._texts is not None
 
     @property
     def length(self) -> int:
@@ -389,10 +402,17 @@ class StoredTextList(TextListHandle):
         return self._location.length
 
     def read(self) -> list[str]:
-        """Return the list of strings from its payload."""
+        """Return the kept strings, or the list of strings from its payload, as a new list."""
+        kept = self._texts
+        if kept is not None:
+            return list(kept)
         texts: list[str] = self.store.read_scalar(self._location).as_py()
         _check_length(len(texts), self._location)
         return texts
+
+    def _fill(self) -> None:
+        """Read the strings from their payload and hold them, so the handle is loaded from then on."""
+        object.__setattr__(self, "_texts", tuple(self.read()))  # noqa: PLC2801 - fills the frozen handle before it is handed out
 
     def _content_key(self) -> Hashable:
         """Return the payload file's checksum, the row, and the kind, which name the list unread."""
@@ -626,7 +646,7 @@ class PackedValueReader:
             Locations keyed by object kind, object id, field, and position.
 
         Raises:
-            TimeFFormatError: If the locator table cannot be read, or a locator is invalid or duplicated.
+            TimeFFormatError: If the catalog has no locator table, or a locator is invalid or duplicated.
         """
         identities = list(dict.fromkeys(object_ids))
         if not identities:
@@ -639,7 +659,7 @@ class PackedValueReader:
                 "WHERE object_kind = ? AND object_id IN (SELECT unnest(?))",
                 [kind.value, identities],
             ).fetchall()
-        except duckdb.Error as exc:
+        except CATALOG_ERRORS as exc:
             # A release written before packed values has no locator table.
             raise TimeFFormatError(f"cannot read external values: {exc}") from exc
         locations: dict[ExternalObjectFieldKey, PackedLocation] = {}

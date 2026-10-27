@@ -1,20 +1,29 @@
+from dataclasses import replace
 from fractions import Fraction
 import json
+import os
 from pathlib import Path
 import pickle
+import shutil
+import signal
+import threading
+import time
 
+import duckdb
+import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError
+import timenet.format.control_cache as control_cache_module
 import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
 from timenet.format.stored_values import PackedValueLocator
-from timenet.reader import TimeFReader
+from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
@@ -42,9 +51,12 @@ def _write(tmp_path, dataset=None, **kwargs) -> Path:
     return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
 
 
-def _read(version_dir: Path) -> TimeFDataset:
+def _read(version_dir: Path, load: LoadPlan) -> TimeFDataset:
     with TimeFReader(open_local_version(version_dir)) as reader:
-        return reader.read()
+        return reader.read(load=load)
+
+
+_PLANS = pytest.mark.parametrize("load", [LoadPlan.ALL_LAZY, LoadPlan.ALL_EAGER], ids=["lazy", "eager"])
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -59,7 +71,17 @@ def test_full_round_trip(tmp_path, backend):
     record.annotate(Annotation(key="report", value=text))
     record.annotate(Annotation(key="reports", value=[text, "short report"]))
 
-    restored = _read(_write(tmp_path, dataset=original, values_backend=backend))
+    irregular = Signal.from_irregular(
+        [1.0, 2.0, 3.0],
+        time_offsets_us=[0, 2, 5],
+        spec=record.signals[0].spec,
+        name="irregular",
+    )
+    original.add_record(record=Record(sources=(Source(name="irregular", signals=(irregular,)),)))
+    version_dir = _write(tmp_path, dataset=original, values_backend=backend)
+    # A fully loaded dataset needs no storage, so the comparison runs after the release is gone.
+    restored = _read(version_dir, LoadPlan.ALL_EAGER)
+    shutil.rmtree(version_dir)
     assert_datasets_equal(original, restored)
     restored_answer = next(task for task in restored.tasks if task.id == answer.id)
     assert restored_answer.prompt == text
@@ -146,15 +168,14 @@ def test_filtered_reads_validate_only_selected_text_locators(tmp_path, validated
         assert set(validated_locators) == {task_report}
 
 
-def test_task_stream_reads_text_locators_one_batch_at_a_time(tmp_path, monkeypatch, validated_locators):
+def test_task_stream_reads_text_locators_one_batch_at_a_time(tmp_path, validated_locators):
     dataset, _, text = _dataset_with_packed_text()
     version = open_local_version(_write(tmp_path, dataset))
     validated_locators.clear()
-    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
     first_batch_ids = {task.id for task in sorted(dataset.tasks, key=lambda task: task.id)[:2]}
 
     with TimeFReader(version) as reader:
-        stream = reader.iter_tasks()
+        stream = reader.iter_tasks(batch_size=2)
         first = next(stream)
         assert first.prompt == f"{text}{first.id}"
         assert {identity for kind, identity in validated_locators if kind == ObjectKind.TASK} == first_batch_ids
@@ -228,9 +249,10 @@ def _referenced_annotation_dataset(*, with_task: bool = True) -> TimeFDataset:
     return dataset
 
 
-def test_annotation_occurrence_and_task_object_references_round_trip(tmp_path):
+@_PLANS
+def test_annotation_occurrence_and_task_object_references_round_trip(tmp_path, load):
     original = _referenced_annotation_dataset()
-    restored = _read(_write(tmp_path, dataset=_referenced_annotation_dataset()))
+    restored = _read(_write(tmp_path, dataset=_referenced_annotation_dataset()), load)
     assert_datasets_equal(original, restored)
     assert restored.tasks[0].inputs == (restored.records[0],)
     assert restored.tasks[0].input_annotations == restored.records[0].annotations
@@ -240,14 +262,15 @@ def test_annotation_occurrence_and_task_object_references_round_trip(tmp_path):
 HEALTHY_ANNOTATION = Annotation(key="condition", value="healthy", description="Reported by the source.")
 
 
-def test_a_read_back_annotation_equals_the_constant_it_was_written_from(tmp_path):
+@_PLANS
+def test_a_read_back_annotation_equals_the_constant_it_was_written_from(tmp_path, load):
     dataset = _referenced_annotation_dataset()
     record = dataset.records[0]
     record.annotate(HEALTHY_ANNOTATION)
     record.signals[0].annotate(HEALTHY_ANNOTATION)
 
     version_dir = _write(tmp_path, dataset=dataset)
-    restored = _read(version_dir).records[0]
+    restored = _read(version_dir, load).records[0]
 
     occurrences = [
         annotation
@@ -290,17 +313,19 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
     return dataset
 
 
-def test_streamed_tasks_round_trip_and_back_populate_records(tmp_path):
-    restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)))
+@_PLANS
+def test_streamed_tasks_round_trip_and_back_populate_records(tmp_path, load):
+    restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)), load)
     task = next(task for task in restored.tasks if task.prompt == "Question 3?")
     assert task.rationale == "reason 3"
     assert task.inputs == (restored.records[0],)
     assert {task.id for task in restored.tasks_for(restored.records[0])} == {task.id for task in restored.tasks}
 
 
-def test_streamed_and_batched_tasks_read_back_equally(tmp_path):
-    batched = _read(_write(tmp_path / "batch", dataset=_tasks_dataset(streaming=False)))
-    streamed = _read(_write(tmp_path / "stream", dataset=_tasks_dataset(streaming=True)))
+@_PLANS
+def test_streamed_and_batched_tasks_read_back_equally(tmp_path, load):
+    batched = _read(_write(tmp_path / "batch", dataset=_tasks_dataset(streaming=False)), load)
+    streamed = _read(_write(tmp_path / "stream", dataset=_tasks_dataset(streaming=True)), load)
     assert {task.id: task for task in batched.tasks} == {task.id: task for task in streamed.tasks}
 
 
@@ -350,7 +375,8 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         assert opens >= 1
 
 
-def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
+@pytest.mark.parametrize("load", [LoadPlan.ALL_LAZY, LoadPlan(signal_values=Loading.EAGER)])
+def test_signal_values_batch_chunk_locator_queries(tmp_path, monkeypatch, load):
     version_dir = _write(tmp_path)
     original = DuckDBControlReader.chunk_locations_by_ids
     calls = []
@@ -361,9 +387,10 @@ def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
 
     monkeypatch.setattr(DuckDBControlReader, "chunk_locations_by_ids", counting_batch)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        records = tuple(reader.iter_records())
+        records = reader.read(load=load).records
         signals = tuple(signal for record in records for signal in record.signals)
-        assert calls == []
+        # A loaded read finds every signal's chunks in one query; a lazy read waits for the first access.
+        assert len(calls) == (0 if load == LoadPlan.ALL_LAZY else 1)
 
         for signal in signals:
             signal.to_arrow()
@@ -373,17 +400,34 @@ def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
-def test_read_dataset_and_lazy_loaders_are_picklable(tmp_path, backend):
-    dataset = TimeFReader(open_local_version(_write(tmp_path, values_backend=backend))).read()
-    expected = dataset.records[0].signals[0].to_arrow()
+@pytest.mark.parametrize("eager", [False, True])
+def test_loaded_and_lazy_datasets_are_picklable(tmp_path, monkeypatch, backend, eager):
+    with TimeFReader(open_local_version(_write(tmp_path, values_backend=backend))) as reader:
+        dataset = reader.read(load=LoadPlan.ALL_EAGER if eager else LoadPlan.ALL_LAZY)
+        expected = [signal.to_arrow() for record in dataset.records for signal in record.signals]
+    original = DuckDBControlReader.chunk_locations_by_ids
+    calls = []
+
+    def counting_batch(reader, signal_ids):
+        calls.append(tuple(signal_ids))
+        return original(reader, signal_ids)
+
+    monkeypatch.setattr(DuckDBControlReader, "chunk_locations_by_ids", counting_batch)
     restored = pickle.loads(pickle.dumps(dataset))
-    assert restored.records[0].signals[0].to_arrow().equals(expected)
+    actual = [signal.to_arrow() for record in restored.records for signal in record.signals]
+    assert len(actual) == len(expected)
+    assert all(left.equals(right) for left, right in zip(actual, expected, strict=True))
+    assert len(calls) == (0 if eager else 1)
 
 
-def test_tasks_are_cached_after_first_access(tmp_path):
+def test_every_read_builds_new_objects(tmp_path):
     with TimeFReader(open_local_version(_write(tmp_path))) as reader:
-        first = reader.tasks
-        assert reader.tasks is first
+        first = reader.read_tasks()
+        again = reader.read_tasks()
+        assert [task.id for task in again] == [task.id for task in first]
+        assert not any(task is other for task, other in zip(first, again, strict=True))
+        dataset = reader.read()
+        assert reader.read().records[0] is not dataset.records[0]
 
 
 def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
@@ -413,25 +457,43 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
         loaded.records[0].signals[0].to_arrow()
         assert text in reader.read_task_table()["prompt"].to_pylist()
         assert read_calls == 1
-        state = reader.__getstate__()
-        with pickle.loads(pickle.dumps(reader)) as restored:
+        restored, prompt = pickle.loads(pickle.dumps((reader, task.prompt)))
+        with restored:
+            assert prompt.read() == text
             assert text in restored.read_task_table()["prompt"].to_pylist()
         assert read_calls == 2
     with reader:
         assert text in reader.read_task_table()["prompt"].to_pylist()
     assert read_calls == 3
-    assert state["_tasks"] is None
-    assert state["_control"] is None
-    assert state["_records"] is None
-    assert state["_values"] is None
+
+
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("UPDATE records SET clock_id = -1", "missing clocks"),
+        ("UPDATE sources SET parent_source_id = source_id", "source hierarchy contains a cycle"),
+    ],
+)
+def test_a_loaded_read_rejects_an_invalid_hierarchy_before_opening_payloads(tmp_path, statement, message):
+    dataset = make_dataset()
+    dataset.records[0].annotate(Annotation(key="report", value="A detailed clinical report. " * 300))
+    version_dir = _write(tmp_path, dataset)
+    version = open_local_version(version_dir)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        connection.execute(statement)
+    for part in (*version.manifest.files.time_series, *version.manifest.files.payloads):
+        (version_dir / part.path).unlink()
+
+    with TimeFReader(version) as reader, pytest.raises(TimeFFormatError, match=message):
+        reader.read(load=LoadPlan.ALL_EAGER)
 
 
 def test_iter_records_preserves_requested_order(tmp_path):
     dataset = make_dataset()
     ordered_records = sorted(dataset.records, key=lambda record: record.id)
-    requested = (ordered_records[-1].id, ordered_records[0].id)
+    requested = (ordered_records[-1].id, ordered_records[0].id, ordered_records[-1].id)
     with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
-        selected = tuple(reader.iter_records(record_ids=requested))
+        selected = tuple(reader.iter_records(record_ids=iter(requested)))
     assert tuple(record.id for record in selected) == requested
 
 
@@ -497,7 +559,7 @@ def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_pa
     with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
         record0 = next(reader.iter_records((record.id,)))
         tasks = list(reader.iter_tasks((record0,)))
-        every = reader.tasks
+        every = reader.read_tasks()
 
     assert {task.id for task in tasks} == {
         task.id for task in every if any(item.id == record.id for item in task.inputs)
@@ -556,3 +618,232 @@ def test_invalid_external_locator_is_rejected_before_exposing_placeholders(tmp_p
         pytest.raises(TimeFFormatError, match="invalid external locator"),
     ):
         reader.read_task_table()
+
+
+def _in_forked_child(work, seconds: int = 20) -> tuple[int, str]:
+    """Run ``work`` in a forked child process that ends itself after ``seconds``.
+
+    Returns:
+        The child's exit status and the text ``work`` returned.
+    """
+    read_end, write_end = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - runs in the child
+        # A child that hangs ends itself, and the parent sees it fail.
+        signal.alarm(seconds)
+        code = 1
+        try:
+            os.write(write_end, work().encode())
+            code = 0
+        finally:
+            os._exit(code)
+    os.close(write_end)
+    deadline = time.monotonic() + seconds + 10
+    done, status = os.waitpid(pid, os.WNOHANG)
+    while not done:
+        if time.monotonic() > deadline:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            os.close(read_end)
+            pytest.fail(f"the forked child did not exit within {seconds + 10} s")
+        time.sleep(0.01)
+        done, status = os.waitpid(pid, os.WNOHANG)
+    with os.fdopen(read_end) as pipe:
+        return status, pipe.read()
+
+
+def _joined(*ids: int) -> str:
+    return ",".join(str(item) for item in ids)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+def test_a_task_stream_continues_after_the_process_forks_between_batches(tmp_path):
+    dataset, _, text = _dataset_with_packed_text()
+    version = open_local_version(_write(tmp_path, dataset))
+
+    def child_record_ids():
+        # The child reads through the reader it inherited and through one of its own.
+        with TimeFReader(version) as own:
+            return _joined(*reader.record_ids(), *own.record_ids())
+
+    with TimeFReader(version) as reader:
+        # One task a batch, so each later batch selects its page after the fork.
+        stream = reader.iter_tasks(load=LoadPlan(text=Loading.EAGER), batch_size=1)
+        first = next(stream)
+        status, child = _in_forked_child(child_record_ids)
+        # The next batch reopens the catalog that the fork closed.
+        tasks = [first, *stream]
+    assert status == 0
+    record_ids = sorted(record.id for record in dataset.records)
+    assert child == _joined(*record_ids, *record_ids)
+    assert [task.id for task in tasks] == sorted(task.id for task in dataset.tasks)
+    assert all(task.prompt == f"{text}{task.id}" for task in tasks)
+    # Batches after the fork load their text too, and each builds the parents its tasks derive from.
+    parents = {id(parent) for task in tasks for parent in task.from_tasks}
+    assert parents
+    assert parents.isdisjoint(id(task) for task in tasks)
+    assert all(task.prompt is not None and task.prompt.is_loaded for task in tasks)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+def test_a_fork_closes_catalog_connections_and_each_process_opens_its_own(tmp_path):
+    version = open_local_version(_write(tmp_path))
+
+    def child_record_ids():
+        # The child reads through the reader it inherited and through one of its own.
+        with TimeFReader(version) as own:
+            return _joined(*reader.record_ids(), *own.record_ids())
+
+    with TimeFReader(version) as reader:
+        expected = reader.record_ids()
+        control = reader._control
+        assert control is not None
+        assert control._connection is not None
+        status, child = _in_forked_child(child_record_ids)
+        # The fork closed the parent's connection; its next read opens a new one.
+        assert control._connection is None
+        assert reader.record_ids() == expected
+        assert control._connection is not None
+    assert status == 0
+    assert child == _joined(*expected, *expected)
+
+
+class _HeldInTheChild:
+    """Stand in for the connection lock while another parent thread holds it as the process forks.
+
+    The parent sees a free lock. The thread holding it does not exist in the child, so there the
+    lock never frees.
+    """
+
+    def __init__(self) -> None:
+        self._parent = os.getpid()
+        self._held = threading.Lock()
+        self._held.acquire()
+
+    def __enter__(self) -> None:
+        if os.getpid() != self._parent:
+            self._held.acquire()
+
+    def __exit__(self, *_: object) -> None:
+        if os.getpid() != self._parent:
+            self._held.release()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+def test_a_forked_child_opens_readers_under_a_fresh_connection_lock(tmp_path, monkeypatch):
+    version = open_local_version(_write(tmp_path))
+    with TimeFReader(version) as reader:
+        expected = reader.record_ids()
+    monkeypatch.setattr(control_reader_module._CONNECTIONS, "lock", _HeldInTheChild())
+
+    def child_record_ids():
+        # Opening a reader registers its connection under the lock, which hangs unless the child's is fresh.
+        with TimeFReader(version) as own:
+            return _joined(*own.record_ids())
+
+    status, child = _in_forked_child(child_record_ids, seconds=5)
+    assert status == 0
+    assert child == _joined(*expected)
+
+
+@pytest.mark.parametrize("closer", ["close", "fork-hook"])
+def test_a_read_whose_connection_another_thread_closes_raises_a_reader_error(tmp_path, closer):
+    path = _write(tmp_path) / "control.duckdb"
+    executed, resumed = threading.Event(), threading.Event()
+    outcome = {}
+
+    def query(connection):
+        connection.execute("SELECT record_id FROM records ORDER BY record_id")
+        executed.set()
+        assert resumed.wait(10)
+        return connection.fetchall()
+
+    with DuckDBControlReader(path) as reader:
+
+        def read():
+            try:
+                outcome["rows"] = reader.run(query)
+            except Exception as exc:
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=read, daemon=True)
+        thread.start()
+        try:
+            # The connection closes between the read's execute and its fetch.
+            assert executed.wait(10)
+            if closer == "close":
+                reader.close()
+            else:
+                control_reader_module._CONNECTIONS.before_fork()
+        finally:
+            resumed.set()
+            thread.join(10)
+        assert not thread.is_alive()
+        error = outcome.get("error")
+        assert isinstance(error, TimeFReaderError)
+        assert "closed while a read was running" in str(error)
+        assert "spawn or forkserver" in str(error)
+        assert isinstance(error.__cause__, duckdb.Error)
+        # The read opened nothing behind the close.
+        assert reader._connection is None
+
+
+def test_a_catalog_query_that_duckdb_cannot_bind_raises_a_format_error(tmp_path):
+    version_dir = _write(tmp_path)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        connection.execute("ALTER TABLE task_dependencies RENAME TO gone")
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        assert reader.record_ids()
+        with pytest.raises(TimeFFormatError, match="could not read control database") as raised:
+            reader.read_tasks()
+        assert isinstance(raised.value.__cause__, duckdb.CatalogException)
+        with pytest.raises(TimeFFormatError, match="could not read control database"):
+            list(reader.iter_tasks())
+
+
+def test_other_duckdb_errors_propagate_unchanged(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    failure = duckdb.IOException("the disk went away")
+
+    def failing(connection):
+        raise failure
+
+    with DuckDBControlReader(version_dir / "control.duckdb") as reader:
+        with pytest.raises(duckdb.IOException) as raised:
+            reader.run(failing)
+        assert raised.value is failure
+    run = DuckDBControlReader.run
+    monkeypatch.setattr(DuckDBControlReader, "run", lambda self, query: run(self, failing))
+    with TimeFReader(open_local_version(version_dir)) as reader, pytest.raises(duckdb.IOException):
+        reader.record_ids()
+
+
+def test_a_reader_verifies_a_remote_catalog_once_and_again_after_its_copy_is_gone(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("TIMENET_CACHE", raising=False)
+    version_dir = _write(tmp_path)
+    local = open_local_version(version_dir)
+    # A filesystem other than the local one makes the reader fetch the catalog into its cache.
+    remote = replace(
+        local, filesystem=pafs.SubTreeFileSystem("/", pafs.LocalFileSystem()), root=str(version_dir).lstrip("/")
+    )
+    checks = []
+    original = control_cache_module.file_checksum
+
+    def counting_checksum(path):
+        checks.append(path)
+        return original(path)
+
+    monkeypatch.setattr(control_cache_module, "file_checksum", counting_checksum)
+    with TimeFReader(remote) as reader:
+        expected = reader.record_ids()
+        reader.close()
+        assert reader.record_ids() == expected
+        control_reader_module._CONNECTIONS.before_fork()
+        assert reader.record_ids() == expected
+        assert len(checks) == 1
+        # The cached copy disappears while the reader is closed; the reopen fetches and checks it again.
+        reader.close()
+        shutil.rmtree(tmp_path / "home" / "cache" / "control")
+        assert reader.record_ids() == expected
+    assert len(checks) == 2
