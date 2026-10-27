@@ -139,14 +139,19 @@ def test_preparation_needs_only_the_direct_payload_sources(registry_root, tmp_pa
     cache = tmp_path / "prepared"
     shutil.copytree(child_dir, cache / "demo/ecg/2.0.0")
     reference = DatasetRef.parse("demo/ecg@2.0.0")
-    with pytest.raises(TimeNetDatasetNotFoundError, match=rf"payload source {parent_ref} of {reference} is not in"):
+    with pytest.raises(
+        TimeNetDatasetNotFoundError,
+        match=rf"payload source {parent_ref} of {reference} is not in {cache}; fetch it with --fetch-parents",
+    ):
         prepare_local_copy(cache, reference)
 
     def missing_remote(ref):
         raise TimeNetDatasetNotFoundError(f"no remote release {ref}")
 
     with pytest.raises(
-        TimeNetDatasetNotFoundError, match=rf"payload source {parent_ref} .* is not in remote or its cache"
+        # A remote read has no --fetch-parents to suggest.
+        TimeNetDatasetNotFoundError,
+        match=rf"payload source {parent_ref} .* is not in remote or its cache {cache}$",
     ):
         open_cached_or_remote(cache, reference, missing_remote, searched="remote")
 

@@ -46,13 +46,26 @@ class BuilderBackend(Protocol):
         """
         ...
 
-    def build(self, dataset_id: str, root: Path, *, force: bool = False) -> Path:
+    def build(
+        self,
+        dataset_id: str,
+        root: Path,
+        *,
+        force: bool = False,
+        build_parents: bool = False,
+        fetch_parents: str | None = None,
+    ) -> Path:
         """Build the dataset into a registry directory.
+
+        Missing parent releases are prepared before the build starts, or the build fails before
+        any download.
 
         Args:
             dataset_id: The dataset id.
             root: The output registry directory.
             force: Rebuild even if the version is already built.
+            build_parents: Build missing parent releases from their installed connectors.
+            fetch_parents: Registry URI to fetch missing parent releases from.
 
         Returns:
             The committed version directory.
