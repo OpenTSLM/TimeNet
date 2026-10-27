@@ -23,6 +23,7 @@ from timenet.types import (
     ureg,
 )
 from timenet.types.parent_dataset_card import ParentDatasetCard
+from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
 from timenet.values_backends import ValuesBackend
 
@@ -219,11 +220,13 @@ def test_json_roundtrip():
     card = ParentDatasetCard(metadata=parent)
     m = _replace(
         m,
-        metadata=_replace(m.metadata, inputs={"parent": ref}),
+        metadata=_replace(m.metadata, parents={"parent": ref}),
         parent_cards={"parent": card},
         lineage=(card,),
     )
-    assert Manifest.model_validate_json(m.to_json()) == m
+    restored = Manifest.model_validate_json(m.to_json())
+    assert restored == m
+    assert [type(alias) for alias in (*restored.parent_cards, *restored.metadata.parents)] == [ParentAlias] * 2
 
 
 def test_payload_sources_pin_files_and_round_trip_through_json_and_the_schema():

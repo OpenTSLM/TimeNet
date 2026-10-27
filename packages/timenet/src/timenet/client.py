@@ -156,7 +156,7 @@ class TimeNet:
     ) -> Path:
         """Fetch a version and each of its payload sources into local storage.
 
-        Build-only inputs remain recorded in the manifest and are not downloaded.
+        Build-only parents remain recorded in the manifest and are not downloaded.
 
         Args:
             dataset_id: The dataset id.

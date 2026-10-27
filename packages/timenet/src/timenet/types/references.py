@@ -1,4 +1,4 @@
-"""Exact dataset releases used by build inputs and payload sources."""
+"""Exact dataset releases used by declared parents and payload sources."""
 
 from pydantic import ValidationError
 

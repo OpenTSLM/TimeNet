@@ -116,7 +116,7 @@
           "pattern": "^\\d+\\.\\d+\\.\\d+$",
           "type": "string"
         },
-        "inputs": {
+        "parents": {
           "additionalProperties": {
             "anyOf": [
               {
@@ -127,7 +127,7 @@
               }
             ]
           },
-          "title": "Inputs",
+          "title": "Parents",
           "type": "object"
         },
         "source_revision": {
@@ -501,7 +501,7 @@
     },
     "ParentDatasetCard": {
       "additionalProperties": false,
-      "description": "A copy of the card for a parent dataset used by a build.\n\nA child manifest stores these cards in ``parent_cards``, indexed by input alias.\nThe card records the parent's exact release, license, citation, and access requirements.\nReaders can inspect this information without opening the parent dataset.",
+      "description": "A copy of the card for a parent dataset used by a build.\n\nA child manifest stores these cards in ``parent_cards``, indexed by parent alias.\nThe card records the parent's exact release, license, citation, and access requirements.\nReaders can inspect this information without opening the parent dataset.",
       "properties": {
         "metadata": {
           "$ref": "#/$defs/DatasetMetadata"

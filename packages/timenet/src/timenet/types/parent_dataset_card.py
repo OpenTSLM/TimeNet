@@ -8,7 +8,7 @@ from timenet.types.references import DatasetRef
 class ParentDatasetCard(TimeFModel):
     """A copy of the card for a parent dataset used by a build.
 
-    A child manifest stores these cards in ``parent_cards``, indexed by input alias.
+    A child manifest stores these cards in ``parent_cards``, indexed by parent alias.
     The card records the parent's exact release, license, citation, and access requirements.
     Readers can inspect this information without opening the parent dataset.
     """
