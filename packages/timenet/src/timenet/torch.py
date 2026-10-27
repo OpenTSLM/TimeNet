@@ -56,7 +56,7 @@ class TimeFTorchDataset(Dataset):
     Uniform tensors with empty tasks and annotations support default batching.
 
     Build it from a materialized :class:`~timenet.dataset.TimeFDataset`, or with
-    :meth:`from_reader` from a :class:`~timenet.reader.TimeFReader` so records and tasks hydrate
+    :meth:`from_reader` from a :class:`~timenet.reader.TimeFReader` so records and tasks are built
     per batch instead of all at once. A ``DataLoader`` calls :meth:`__getitems__` with a whole batch
     of indices, and the reader-backed view answers it with one round of queries for the batch.
     """
@@ -92,7 +92,7 @@ class TimeFTorchDataset(Dataset):
     ) -> TimeFTorchDataset:
         """View an open reader without materializing its records or tasks.
 
-        Each ``__getitems__`` call hydrates the batch's records in one query round and their tasks
+        Each ``__getitems__`` call builds the batch's records in one query round and their tasks
         in another, so memory stays proportional to the batch. The reader pickles without its
         connection, so ``DataLoader`` workers each reopen the control database.
 
@@ -112,7 +112,7 @@ class TimeFTorchDataset(Dataset):
         return self.__getitems__([index])[0]
 
     def __getitems__(self, indices: Sequence[int]) -> list[Any]:  # noqa: PLW3201 - DataLoader batch hook
-        """Return the items at ``indices``, hydrating the whole batch together.
+        """Return the items at ``indices``, building the whole batch together.
 
         Args:
             indices: Record positions, in the order the items are returned.
@@ -155,7 +155,7 @@ class _DatasetItems:
 
 
 class _ReaderItems:
-    """Items hydrated from a reader per batch: one query round for the records, one for their tasks."""
+    """Items built from a reader per batch: one query round for the records, one for their tasks."""
 
     def __init__(self, reader: TimeFReader) -> None:
         self._reader = reader

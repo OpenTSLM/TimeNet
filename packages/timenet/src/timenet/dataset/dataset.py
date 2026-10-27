@@ -192,7 +192,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             path: Directory containing ``manifest.json`` and ``control.duckdb``.
 
         Returns:
-            The hydrated dataset with lazy Signal values.
+            The dataset, with lazy Signal values.
         """
         from timenet.reader import TimeFReader  # noqa: PLC0415
         from timenet.registry.dependencies import open_local_version  # noqa: PLC0415

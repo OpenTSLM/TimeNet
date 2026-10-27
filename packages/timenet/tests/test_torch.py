@@ -112,7 +112,7 @@ def test_str_series_has_no_tensor_representation():
         TimeFTorchDataset(dataset)[0]
 
 
-def test_reader_backed_view_hydrates_a_batch_with_the_same_items(tmp_path):
+def test_reader_backed_view_builds_a_batch_with_the_same_items(tmp_path):
     from timenet.reader import TimeFReader  # noqa: PLC0415
     from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
     from timenet.writer import TimeFWriter  # noqa: PLC0415

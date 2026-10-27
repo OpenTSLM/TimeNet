@@ -129,7 +129,7 @@ def test_a_span_reads_back_the_signals_of_its_record(tmp_path):
 
 
 def test_correspondence_record_targets_round_trip(tmp_path):
-    """Correspondence Record targets and candidates return as hydrated objects."""
+    """Correspondence Record targets and candidates return as built objects."""
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/id-test",

@@ -180,7 +180,7 @@ Signal, and `span_signal_ids` for the series of a span target. A step target nam
 relationship tables hold the references to Records, annotation occurrences, and parent Tasks.
 
 The `field` column distinguishes relationships such as `inputs` and `candidate_records`.
-`position` preserves tuple order. On read, TimeNet hydrates each object once and restores ordinary
+`position` preserves tuple order. On read, TimeNet builds each object once and restores ordinary
 Python object references. It can also give back the same rows as Arrow tables of public IDs. See
 [TimeFReader](timef-reader.md).
 
