@@ -90,8 +90,10 @@ even when `nullable=True`. Consumers must handle missing data before tensor conv
 A connector can construct a Signal from in-memory `data`. It can also use `Signal.from_loader()` for
 a source that must remain lazy.
 
-The TimeF reader always supplies lazy handles to the stored values. Reading a dataset therefore
-does not load every Signal array.
+The TimeF reader leaves stored values behind lazy handles unless the read's
+[load plan](../timef-reader.md#loading-values-at-read-time) loads them. The reader from
+`TimeNet.open()` therefore reads a dataset without loading its Signal arrays, while
+`TimeNet.load()` loads every value.
 
 ## Ownership and reuse
 
