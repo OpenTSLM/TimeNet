@@ -345,9 +345,9 @@ class TimeFWriter:
     ) -> tuple[dict[tuple[EntityId, int], ChunkPlacement], list[Signal]]:
         """Separate signals whose stored chunks the new release reuses from signals it writes out.
 
-        A signal read from a release holds a ``StoredArray``, whose location names its chunks and
-        the release that stores them, so the new catalog names the same chunks. Values built in
-        memory or read through a connector's function are written to new value files.
+        A signal read from a release holds a ``StoredArray``, loaded or not, whose location names its
+        chunks and the release that stores them, so the new catalog names the same chunks. Values
+        built in memory or read through a connector's function are written to new value files.
 
         Args:
             unique_series: The deduplicated signals to serialize.
