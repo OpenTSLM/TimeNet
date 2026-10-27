@@ -67,10 +67,11 @@ uv add 'timenet[s3]'
 
 The layout under the prefix mirrors the local one, `org/name/version/…` with `manifest.json` beside the
 data files. `store` uploads to a temporary `version.tmp-<uuid>` prefix and moves each object into place
-(`manifest.json` last), so a failed publish never leaves a partial version. `load` reads lazily through
-a pyarrow `S3FileSystem` (range reads, no whole-version download), or from the local cache when a prior
-`download` populated it. The backend has no catalog, so `list` and `search` are unsupported: publish and
-fetch by an explicit `org/name@version`.
+(`manifest.json` last), so a failed publish never leaves a partial version. `open` reads lazily and
+`load` reads every value, both through a pyarrow `S3FileSystem` (range reads, no whole-version
+download), or from the local cache when a prior `download` populated it. The backend has no
+catalog, so `list` and `search` are unsupported: publish and fetch by an explicit
+`org/name@version`.
 
 ## `BaseRegistry`
 

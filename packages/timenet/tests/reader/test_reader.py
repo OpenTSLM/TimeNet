@@ -15,6 +15,7 @@ import pyarrow.parquet as pq
 from pydantic import ValidationError
 import pytest
 
+from timenet.client import TimeNet
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError
@@ -356,7 +357,8 @@ def test_iter_records_matches_full_read(tmp_path):
     assert streamed == materialized
 
 
-def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
+@pytest.mark.parametrize("entry_point", ["reader", "client", "dataset"])
+def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch, entry_point):
     version_dir = _write(tmp_path)
     original_open = pq.ParquetFile
     opens = 0
@@ -366,24 +368,22 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         opens += 1
         return original_open(*args, **kwargs)
 
-    with TimeFReader(open_local_version(version_dir)) as reader:
-        signal_id = next(reader.iter_records()).signals[0].id
-        monkeypatch.setattr(pq, "ParquetFile", counting_open)
-        signal = reader.get(Signal, signal_id)
+    monkeypatch.setattr(pq, "ParquetFile", counting_open)
+    if entry_point == "reader":
+        reader = TimeFReader(open_local_version(version_dir))
+    elif entry_point == "client":
+        reader = TimeNet(tmp_path, storage_path=tmp_path / "store").open("timenet/hello-world")
+    else:
+        reader = TimeFDataset.open(path=version_dir)
+    with reader:
+        assert isinstance(reader, TimeFReader)
+        assert reader.metadata.dataset_id == "timenet/hello-world"
+        # Opening reads neither the catalog nor a value file.
+        assert reader._control is None
+        signal = reader.get(Signal, make_dataset().records[0].signals[0].id)
         assert opens == 0
         signal.to_arrow()
         assert opens >= 1
-
-
-def test_a_dataset_handle_reads_the_whole_dataset_with_every_value_loaded(tmp_path):
-    with TimeFReader(open_local_version(_write(tmp_path))) as reader:
-        handle = reader.get_handle()
-        assert handle.metadata == reader.metadata
-        assert reader._control is None
-        dataset = handle.read()
-    signals = [signal for record in dataset.records for signal in record.signals]
-    assert signals
-    assert all(signal._values.is_loaded for signal in signals)
 
 
 @pytest.mark.parametrize("load", [LoadPlan.ALL_LAZY, LoadPlan(signal_values=Loading.EAGER)])

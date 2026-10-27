@@ -3,7 +3,7 @@
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 import sys
-from typing import Literal, TextIO, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Literal, TextIO, TypeVar, cast, overload
 
 import numpy as np
 import pyarrow as pa
@@ -33,6 +33,10 @@ from timenet.types import (
 from timenet.types.ids import IdCounters
 from timenet.types.splits import Split, parse_split, parse_splits
 from timenet.values_backends import ValuesBackend
+
+
+if TYPE_CHECKING:
+    from timenet.reader import TimeFReader
 
 
 T = TypeVar("T")
@@ -185,20 +189,22 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return root / self.metadata.dataset_id / str(self.metadata.dataset_version)
 
     @classmethod
-    def open(cls, *, path: str | Path) -> "TimeFDataset":
-        """Open one local TimeF version directory.
+    def open(cls, *, path: str | Path) -> "TimeFReader":
+        """Open one local TimeF version directory for reading.
+
+        Opening reads neither the catalog nor any value, and the reader's ``read()`` returns the
+        dataset. Close the reader after use, or use it as a context manager.
 
         Args:
             path: Directory containing ``manifest.json`` and ``control.duckdb``.
 
         Returns:
-            The hydrated dataset with lazy Signal values.
+            A reader for the version.
         """
         from timenet.reader import TimeFReader  # noqa: PLC0415
         from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
 
-        with TimeFReader(open_local_version(path)) as reader:
-            return reader.read()
+        return TimeFReader(open_local_version(path))
 
     def add_task(self, *, task: Task) -> Task:
         """Validate and register one fully constructed task.

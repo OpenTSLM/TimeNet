@@ -25,7 +25,6 @@ from timenet.format.stored_values import (
     StoredValueColumns,
     materialize_table,
 )
-from timenet.reader.handles import DatasetHandle
 from timenet.reader.load_plan import LoadPlan, ValueLoad
 from timenet.types import (
     Annotation,
@@ -78,7 +77,7 @@ class _ReaderState:
     chunk_batches: tuple[tuple[int, ...], ...]
 
 
-class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
+class TimeFReader:
     """Read a committed TimeF dataset through its DuckDB control plane."""
 
     def __init__(self, version: DatasetVersion) -> None:
@@ -469,10 +468,6 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
     def values_backend(self) -> str:
         """Return the values-plane backend named by the manifest."""
         return self._manifest.values_backend
-
-    def get_handle(self) -> DatasetHandle:
-        """Return a dataset handle over this reader, without reading the catalog or payloads."""
-        return DatasetHandle(self)
 
     def read(self, *, load: LoadPlan = LoadPlan.ALL_LAZY) -> TimeFDataset:
         """Read the whole dataset, loading the kinds of stored values that ``load`` names.
