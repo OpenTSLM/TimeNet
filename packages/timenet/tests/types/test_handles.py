@@ -12,6 +12,7 @@ import pytest
 from timenet.errors import TimeFNullValuesError, TimeFValidationError
 from timenet.types import ArrayHandle, ValueHandle, handles
 from timenet.types.handles import ArrowArray, CallableArray, NumpyArray
+from timenet.types.text import InlineText, InlineTextList
 
 
 @dataclass(eq=False)
@@ -302,6 +303,22 @@ def test_in_memory_handles_survive_pickling_and_copies(handle):
     for back in (pickle.loads(pickle.dumps(handle)), copy.copy(handle), copy.deepcopy(handle)):
         assert type(back) is type(handle)
         assert back.read().equals(handle.read())
+
+
+@pytest.mark.parametrize(
+    "handle",
+    [
+        NumpyArray(np.array([1.0])),
+        ArrowArray(pa.array([1.0])),
+        CallableArray(partial(pa.array, [1.0])),
+        InlineText("note"),
+        InlineTextList(["a"]),
+    ],
+)
+def test_in_memory_handles_have_no_stored_location(handle):
+    assert isinstance(handle, ValueHandle)
+    assert handle._location is None
+    assert not hasattr(handle, "__dict__")
 
 
 def test_callable_array_reads_through_its_function_on_every_read():

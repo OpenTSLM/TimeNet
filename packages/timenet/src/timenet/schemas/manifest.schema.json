@@ -436,6 +436,14 @@
           },
           "title": "Time Series",
           "type": "array"
+        },
+        "payloads": {
+          "default": [],
+          "items": {
+            "$ref": "#/$defs/FilePart"
+          },
+          "title": "Payloads",
+          "type": "array"
         }
       },
       "required": [

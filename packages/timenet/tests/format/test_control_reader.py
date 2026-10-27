@@ -54,9 +54,11 @@ def test_inferred_modalities_survive_storage_and_sql_filtering(tmp_path):
     DuckDBControlWriter(path).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
-        assert reader.task_table(required_modalities=[InputModality.TIME_SERIES])["task_id"].to_pylist() == [TASK_ID]
-        assert reader.task_table(required_modalities=[InputModality.IMAGE])["task_id"].to_pylist() == [2]
-        assert reader.task_table(supported_modalities=[InputModality.TEXT, InputModality.NO_INPUT])[
+        assert reader.read_task_table(required_modalities=[InputModality.TIME_SERIES])["task_id"].to_pylist() == [
+            TASK_ID
+        ]
+        assert reader.read_task_table(required_modalities=[InputModality.IMAGE])["task_id"].to_pylist() == [2]
+        assert reader.read_task_table(supported_modalities=[InputModality.TEXT, InputModality.NO_INPUT])[
             "task_id"
         ].to_pylist() == [3]
         records = reader.read_records()
@@ -194,7 +196,7 @@ def test_input_modalities_round_trip_as_typed_task_data(tmp_path):
 
     with DuckDBControlReader(path) as reader:
         (task,) = reader.read_tasks(reader.read_records())
-        rows = reader.task_table().to_pylist()
+        rows = reader.read_task_table().to_pylist()
 
     assert task.input_modalities == frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
     assert rows[0]["input_modalities"] == ["text", "time_series"]
@@ -240,8 +242,8 @@ def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path, mo
 
     with DuckDBControlReader(path) as reader:
         tasks = list(reader.iter_tasks(required_modalities=required, supported_modalities=supported))
-        task_rows = reader.task_table(required_modalities=required, supported_modalities=supported).to_pylist()
-        target_rows = reader.target_table(required_modalities=required, supported_modalities=supported).to_pylist()
+        task_rows = reader.read_task_table(required_modalities=required, supported_modalities=supported).to_pylist()
+        target_rows = reader.read_target_table(required_modalities=required, supported_modalities=supported).to_pylist()
 
     assert [task.id for task in tasks] == expected
     assert [row["task_id"] for row in task_rows] == expected
@@ -271,7 +273,7 @@ def test_control_reader_hydrates_each_target_storage_type(tmp_path):
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
         (task,) = reader.read_tasks(records)
-        rows = reader.target_table().to_pylist()
+        rows = reader.read_target_table().to_pylist()
 
     assert task.targets is not None
     text, integer, floating, boolean, target_record, target_signal, *target_spans = task.targets
@@ -620,10 +622,10 @@ def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
 
     with DuckDBControlReader(path) as reader:
         tasks = {task.id: task for task in reader.read_tasks(reader.read_records())}
-        table = reader.task_table().to_pylist()
-        targets = reader.target_table().to_pylist()
-        subset = reader.task_table(record_ids=(record.id,)).to_pylist()
-        annotations = reader.annotation_table(object_type=ObjectKind.RECORD).to_pylist()
+        table = reader.read_task_table().to_pylist()
+        targets = reader.read_target_table().to_pylist()
+        subset = reader.read_task_table(record_ids=(record.id,)).to_pylist()
+        annotations = reader.read_annotation_table(object_type=ObjectKind.RECORD).to_pylist()
 
     assert [row["task_id"] for row in table] == sorted(tasks)
     answer = next(row for row in table if row["task_id"] == answer_task.id)
@@ -661,11 +663,11 @@ def test_split_round_trips_and_filters_before_hydration(tmp_path, monkeypatch):
 
     with DuckDBControlReader(path) as reader:
         train = list(reader.iter_tasks(split="train"))
-        test_rows = reader.task_table(split=Split.TEST).to_pylist()
-        train_targets = reader.target_table(split=Split.TRAIN).to_pylist()
-        every = reader.task_table().to_pylist()
+        test_rows = reader.read_task_table(split=Split.TEST).to_pylist()
+        train_targets = reader.read_target_table(split=Split.TRAIN).to_pylist()
+        every = reader.read_task_table().to_pylist()
         with pytest.raises(TimeFValidationError, match="unknown split 'holdout'"):
-            reader.task_table(split="holdout")
+            reader.read_task_table(split="holdout")
 
     assert [task.id for task in train] == [2, 3, 4]
     assert all(task.split is Split.TRAIN for task in train)
@@ -759,7 +761,7 @@ def test_full_range_int_ids_round_trip_as_python_ints(tmp_path):
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
         (task,) = reader.read_tasks(records)
-        task_rows = reader.task_table().to_pylist()
+        task_rows = reader.read_task_table().to_pylist()
 
     assert [record.id for record in records] == sorted([RECORD_ID, largest, generated.id])
     ids = [*(record.id for record in records), task.id]
@@ -784,7 +786,7 @@ def test_annotation_table_gives_dataset_annotations_a_null_int64_object_id(tmp_p
 
     with DuckDBControlReader(path) as reader:
         (annotation,) = reader.read_dataset_annotations(dataset.metadata.dataset_id)
-        table = reader.annotation_table()
+        table = reader.read_annotation_table()
         rows = {row["object_type"]: row for row in table.to_pylist()}
 
     assert annotation.value == "clinic"

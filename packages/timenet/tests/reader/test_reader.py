@@ -10,8 +10,10 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
+import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
+from timenet.format.stored_values import PackedValueLocator
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.testing import assert_datasets_equal, make_dataset
@@ -22,6 +24,7 @@ from timenet.types import (
     DatasetMetadata,
     Domain,
     License,
+    ObjectKind,
     ScalarPredictionTask,
     Split,
     TimeSeriesSpec,
@@ -63,6 +66,101 @@ def test_full_round_trip(tmp_path, backend):
     assert restored_answer.rationale == text + "Explanation."
     # Targets are excluded from task equality, so compare them directly.
     assert restored_answer.targets == (text + "Answer.", "short answer")
+
+
+def _dataset_with_packed_text():
+    dataset = make_dataset()
+    text = "A detailed clinical report with café notes. " * 300
+    for task in dataset.tasks:
+        task.prompt = f"{text}{task.id}"
+        task.rationale = text + "Explanation."
+        task.split = Split.TEST
+    answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
+    answer.targets = (text + "Answer.",)
+    answer.split = Split.TRAIN
+    for record in dataset.records:
+        record.annotate(Annotation(key="report", value=f"{text}{record.id}"))
+    answer.annotate(Annotation(key="report", value=text))
+    return dataset, answer, text
+
+
+def _report_content_ids(version_dir: Path) -> dict[tuple[str, int], int]:
+    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
+        rows = connection.execute(
+            """SELECT o.object_type, o.object_id, o.content_id
+               FROM annotation_occurrences o JOIN annotation_contents c USING (content_id)
+               WHERE c.name = 'report'"""
+        ).fetchall()
+    return {(object_type, object_id): content_id for object_type, object_id, content_id in rows}
+
+
+@pytest.fixture
+def validated_locators(monkeypatch):
+    validated = []
+    original = PackedValueLocator.model_validate
+
+    def validate(row):
+        locator = original(row)
+        validated.append((locator.object_kind, locator.object_id))
+        return locator
+
+    monkeypatch.setattr(PackedValueLocator, "model_validate", validate)
+    return validated
+
+
+def test_filtered_reads_validate_only_selected_text_locators(tmp_path, validated_locators):
+    dataset, answer, text = _dataset_with_packed_text()
+    (record,) = answer.inputs
+    version_dir = _write(tmp_path, dataset)
+    contents = _report_content_ids(version_dir)
+    record_report = (ObjectKind.ANNOTATION_CONTENT, contents[ObjectKind.RECORD, record.id])
+    task_report = (ObjectKind.ANNOTATION_CONTENT, contents[ObjectKind.TASK, answer.id])
+    validated_locators.clear()
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        loaded_record = next(reader.iter_records((record.id,)))
+        (report,) = [annotation for annotation in loaded_record.annotations if annotation.key == "report"]
+        assert report.value == f"{text}{record.id}"
+        assert set(validated_locators) == {record_report}
+
+        validated_locators.clear()
+        (loaded_task,) = reader.iter_tasks((loaded_record,), split=Split.TRAIN)
+        assert loaded_task.prompt == f"{text}{answer.id}"
+        assert loaded_task.rationale == text + "Explanation."
+        assert loaded_task.targets is not None
+        assert loaded_task.targets[0] == text + "Answer."
+        assert loaded_task.annotations[0].value == text
+        assert set(validated_locators) == {
+            (ObjectKind.TASK, answer.id),
+            task_report,
+            *((ObjectKind.TASK, parent.id) for parent in answer.from_tasks),
+        }
+
+        validated_locators.clear()
+        assert reader.read_task_table((record.id,), split=Split.TRAIN)["prompt"].to_pylist() == [f"{text}{answer.id}"]
+        assert reader.read_target_table((record.id,), split=Split.TRAIN)["text_value"].to_pylist() == [text + "Answer."]
+        assert set(validated_locators) == {(ObjectKind.TASK, answer.id)}
+
+        validated_locators.clear()
+        assert reader.read_annotation_table(ObjectKind.TASK)["text_value"].to_pylist() == [text]
+        assert set(validated_locators) == {task_report}
+
+
+def test_task_stream_reads_text_locators_one_batch_at_a_time(tmp_path, monkeypatch, validated_locators):
+    dataset, _, text = _dataset_with_packed_text()
+    version = DatasetVersion.open_local(_write(tmp_path, dataset))
+    validated_locators.clear()
+    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
+    first_batch_ids = {task.id for task in sorted(dataset.tasks, key=lambda task: task.id)[:2]}
+
+    with TimeFReader(version) as reader:
+        stream = reader.iter_tasks()
+        first = next(stream)
+        assert first.prompt == f"{text}{first.id}"
+        assert {identity for kind, identity in validated_locators if kind == ObjectKind.TASK} == first_batch_ids
+        remaining = list(stream)
+        assert {task.id for task in [first, *remaining]} == {task.id for task in dataset.tasks}
+        assert all(task.prompt == f"{text}{task.id}" for task in remaining)
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -288,11 +386,40 @@ def test_tasks_are_cached_after_first_access(tmp_path):
         assert reader.tasks is first
 
 
-def test_pickling_drops_connections_and_decoded_caches(tmp_path):
-    with TimeFReader(DatasetVersion.open_local(_write(tmp_path))) as reader:
-        _ = reader.tasks
-        reader.read().records[0].signals[0].to_arrow()
+def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
+    dataset = make_dataset()
+    text = "A detailed clinical report. " * 300
+    dataset.tasks[0].prompt = text
+    assert dataset.tasks[0].prompt is not None
+    assert dataset.tasks[0].prompt.read() == text
+    with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
+        original = pq.ParquetFile.read
+        read_calls = 0
+
+        def count_reads(*args, **kwargs):
+            nonlocal read_calls
+            read_calls += 1
+            return original(*args, **kwargs)
+
+        monkeypatch.setattr(pq.ParquetFile, "read", count_reads)
+        loaded = reader.read()
+        loaded.derive_schema()
+        task = next(task for task in loaded.tasks if task.id == dataset.tasks[0].id)
+        assert task.prompt is not None
+        assert task.prompt.length == len(text)
+        assert read_calls == 0
+        assert task.prompt.read() == text
+        assert read_calls == 1
+        loaded.records[0].signals[0].to_arrow()
+        assert text in reader.read_task_table()["prompt"].to_pylist()
+        assert read_calls == 1
         state = reader.__getstate__()
+        with pickle.loads(pickle.dumps(reader)) as restored:
+            assert text in restored.read_task_table()["prompt"].to_pylist()
+        assert read_calls == 2
+    with reader:
+        assert text in reader.read_task_table()["prompt"].to_pylist()
+    assert read_calls == 3
     assert state["_tasks"] is None
     assert state["_control"] is None
     assert state["_records"] is None
@@ -391,8 +518,8 @@ def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
 
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         assert [task.id for task in reader.iter_tasks(split="train")] == [train_task.id]
-        assert reader.task_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
-        assert reader.target_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
+        assert reader.read_task_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
+        assert reader.read_target_table(split=Split.TEST)["task_id"].to_pylist() == [test_task.id]
         loaded = reader.read()
 
     assert {task.id: task.split for task in loaded.tasks if task.split is not None} == {
@@ -405,6 +532,26 @@ def test_task_views_reject_a_non_int_record_id(tmp_path):
     dataset = make_dataset()
     record0 = dataset.records[0]
     with TimeFReader(DatasetVersion.open_local(_write(tmp_path, dataset))) as reader:
-        for view in (reader.task_table, reader.target_table):
+        for view in (reader.read_task_table, reader.read_target_table):
             with pytest.raises(TimeFValidationError, match="positive int64 id"):
                 view(record_ids=(str(record0.id),))  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize(
+    "column,value", [("field", "promtp"), ("field", "offsets"), ("row_index", -1), ("value_kind", "texts")]
+)
+def test_invalid_external_locator_is_rejected_before_exposing_placeholders(tmp_path, column, value):
+    dataset = make_dataset()
+    dataset.tasks[0].prompt = "A detailed clinical report. " * 300
+    version_dir = _write(tmp_path, dataset)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        connection.execute(
+            f"UPDATE external_values SET {column} = ? WHERE field = 'prompt'",  # noqa: S608 - fixed test columns
+            [value],
+        )
+
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="invalid external locator"),
+    ):
+        reader.read_task_table()

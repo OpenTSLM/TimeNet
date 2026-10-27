@@ -9,12 +9,17 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from dataclasses import dataclass, field
 from threading import Lock
-from typing import Generic, TypeVar
+from typing import TYPE_CHECKING, Generic, TypeVar
 
 import numpy as np
 import pyarrow as pa
 
 from timenet.errors import TimeFNullValuesError, TimeFValidationError
+
+
+if TYPE_CHECKING:
+    # Stored values and their locations live in timenet.format, which imports this module.
+    from timenet.format.stored_values import PayloadLocation
 
 
 _Value_co = TypeVar("_Value_co", covariant=True)
@@ -29,6 +34,15 @@ class ValueHandle(ABC, Generic[_Value_co]):
 
     # Empty slots let slotted subclasses stay free of a per-instance __dict__.
     __slots__ = ()
+
+    # Declared for type checkers only, so get_type_hints() needs no import of timenet.format.
+    if TYPE_CHECKING:
+        _location: PayloadLocation | None
+    _location = None
+    """Internal: where the value's bytes are stored, known without reading them.
+
+    ``None`` for a value that exists only in memory or behind a function. A stored handle sets it.
+    """
 
     @property
     @abstractmethod

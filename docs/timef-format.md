@@ -10,7 +10,7 @@ tags:
 
 TimeF separates relational structure from large signal arrays. One immutable DuckDB database
 stores the hierarchy, relationships, annotations, axes, and chunk locations. Parquet or Zarr stores
-the signal values.
+the signal values. Large text fields use packed Parquet payloads.
 
 ## Directory layout
 
@@ -20,7 +20,10 @@ A Parquet-backed version looks like this:
 org/name/version/
 ├── manifest.json
 ├── control.duckdb
-└── time_series/
+├── time_series/
+│   ├── part-00000000.parquet
+│   └── ...
+└── payloads/
     ├── part-00000000.parquet
     └── ...
 ```
@@ -53,6 +56,7 @@ Signals can reference the same immutable `TimeAxis`.
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
 | `axis_offsets` | Shared offsets for irregular axes. |
+| `external_values` | File and row locations for external text. |
 | `tasks` | Concrete task type, typed scope columns, and subclass configuration columns. |
 | `task_targets` | Ordered inline targets, one typed row each. |
 | `task_record_refs` | Ordered task-to-record object relationships. |
@@ -102,6 +106,24 @@ Regular axes store a rational microsecond period and origin. Ordinal axes need o
 Irregular axes store their endpoints in `axes` and their ordered microsecond offsets in
 `axis_offsets`. Signals that share an axis reference the same `axis_id`, so the offsets are stored
 once regardless of how many Signals use that timeline.
+
+## External values
+
+The writer keeps text and string lists inline when their encoded size is at most 4,096 bytes.
+Larger values go into Zstandard-compressed Parquet files under `payloads/`. This storage is
+independent of the Signal values backend. Each file targets about 4 MiB of encoded input, but one
+large value can exceed that target. Each row of a payload file fills exactly one of its two
+columns, `text` (string) or `texts` (list of non-null strings), and readers reject a file with any
+other schema.
+
+The `external_values` table identifies the owner, field, ordered position, file, and row for each
+value, and records its value kind and length. Like an annotation occurrence, it names its owner by
+kind and ID: `object_kind` is `Task` with the public `task_id`, or `Content` with the `content_id`
+of the annotation content row that holds the value. Content that several occurrences share is
+packed once. The inline column keeps a placeholder: an empty string for text and an empty list for
+a string list. An empty inline value alone therefore does not mean empty text; readers look up
+`external_values` first. Direct SQL queries over inline columns do not resolve external values.
+The public Arrow table APIs return the complete text.
 
 ## Annotations
 

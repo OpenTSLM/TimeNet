@@ -19,6 +19,13 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
 from timenet.format.duckdb import check_control_schema, connect_control
+from timenet.format.stored_values import (
+    ExternalObjectFieldKey,
+    PackedField,
+    PackedValueReader,
+    StoredText,
+    StoredTextList,
+)
 from timenet.format.task_codec import (
     ANNOTATION_FIELDS,
     RECORD_FIELDS,
@@ -210,9 +217,10 @@ class _TaskRow(NamedTuple):
 
 
 class _TargetRow(NamedTuple):
-    """One ``task_targets`` row, without its position, which the query orders by."""
+    """One ``task_targets`` row in schema column order."""
 
     task_id: int
+    position: int
     target_kind: str
     text_value: str | None
     integer_value: int | None
@@ -379,6 +387,7 @@ class DuckDBControlReader:
         value_loader: ValueLoader | None = None,
         value_loader_factory: ValueLoaderFactory | None = None,
         offsets_loader: OffsetsLoader | None = None,
+        external: PackedValueReader | None = None,
     ) -> None:
         """Open and validate an immutable control database.
 
@@ -387,6 +396,7 @@ class DuckDBControlReader:
             value_loader: Lazy values-plane resolver keyed by signal ID.
             value_loader_factory: Factory for range-aware per-Signal value handles.
             offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
+            external: Payload reader used to resolve locators for each requested object batch.
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
@@ -397,6 +407,7 @@ class DuckDBControlReader:
             check_control_schema(self.connection)
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
+        self.external = external
         self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
         self._offsets_loader = offsets_loader
@@ -406,6 +417,22 @@ class DuckDBControlReader:
         """The occurrences on each live hydrated Record by occurrence id, keyed by ``id(record)``."""
         self._task_facts: _TaskFacts | None = None
         self._known_record_ids: set[int] = set()
+
+    def _external_values(
+        self, kind: ObjectKind, object_ids: Iterable[int]
+    ) -> dict[ExternalObjectFieldKey, StoredText | StoredTextList]:
+        """Return validated payload handles for only the objects in this read.
+
+        Args:
+            kind: The kind of the objects that own the values.
+            object_ids: The objects' catalog ids: task ids, or annotation content ids.
+
+        Returns:
+            Handles indexed by object, field, and position, or no handles for an inline catalog.
+        """
+        if self.external is None:
+            return {}
+        return self.external.handles(self.connection, kind, object_ids)
 
     def close(self) -> None:
         """Close the reader's DuckDB connection."""
@@ -786,7 +813,7 @@ class DuckDBControlReader:
             self._task_facts = _TaskFacts(frozenset(parent_ids), annotated > 0)
         return self._task_facts
 
-    def task_table(
+    def read_task_table(
         self,
         record_ids: Iterable[int] | None = None,
         *,
@@ -798,7 +825,7 @@ class DuckDBControlReader:
 
         The table has one row per task. Each row holds the type, prompt, rationale, the four scope
         columns, the configuration columns, ordered ``input_record_ids``, ordered ``from_task_ids``,
-        and the metadata JSON string. Targets are in :meth:`target_table`.
+        and the metadata JSON string. Targets are in :meth:`read_target_table`.
 
         Args:
             record_ids: Keep only tasks whose inputs include one of these Records, or ``None`` for all.
@@ -835,7 +862,7 @@ class DuckDBControlReader:
             parameters,
         ).to_arrow_table()
 
-    def target_table(
+    def read_target_table(
         self,
         record_ids: Iterable[int] | None = None,
         *,
@@ -866,7 +893,7 @@ class DuckDBControlReader:
             parameters,
         ).to_arrow_table()
 
-    def annotation_table(self, object_type: str | None = None) -> pa.Table:
+    def read_annotation_table(self, object_type: ObjectKind | None = None) -> pa.Table:
         """Return every annotation occurrence joined with its content as Arrow.
 
         Args:
@@ -1344,6 +1371,7 @@ class DuckDBControlReader:
             return {}
         query, parameters = _annotation_query(owners)
         rows = _rows(self.connection.execute(query, parameters), _OccurrenceRow._make)
+        external = self._external_values(ObjectKind.ANNOTATION_CONTENT, {row.content_id for row in rows})
         grouped: dict[tuple[str, int | None], list[Annotation]] = defaultdict(list)
         for row in rows:
             if row.name is None:
@@ -1354,9 +1382,16 @@ class DuckDBControlReader:
                 raise TimeFFormatError(
                     f"annotation occurrence {row.occurrence_id!r} on {row.object_type} has object id {row.object_id!r}"
                 )
+            handle = external.get(
+                ExternalObjectFieldKey(
+                    object_kind=ObjectKind.ANNOTATION_CONTENT, object_id=row.content_id, field=PackedField.VALUE
+                )
+            )
             annotation = Annotation(
                 key=row.name,
-                value=decode_annotation_value(
+                value=handle
+                if handle is not None
+                else decode_annotation_value(
                     row.value_kind,
                     row.text_value,
                     row.integer_value,
@@ -1526,6 +1561,7 @@ class _TaskHydration:
         reader = self.reader
         if task_rows is None:
             task_rows = reader._task_rows(task_ids)
+        external = reader._external_values(ObjectKind.TASK, (row.task_id for row in task_rows))
         record_refs = reader._task_relationships("task_record_refs", "record_id", RECORD_FIELDS, task_ids)
         annotation_refs = reader._task_relationships(
             "task_annotation_refs", "occurrence_id", ANNOTATION_FIELDS, task_ids
@@ -1554,8 +1590,17 @@ class _TaskHydration:
         for target in target_rows:
             values = target._asdict()
             task_id = values.pop("task_id")
+            # A locator names the target's stored position, which need not be its index in the task.
+            position = values.pop("position")
+            handle = external.get(
+                ExternalObjectFieldKey(
+                    object_kind=ObjectKind.TASK, object_id=task_id, field=PackedField.TARGETS, position=position
+                )
+            )
             targets_by_task[task_id].append(
-                decode_target(values, records=self.records_by_id, signals=self.signals_by_id)
+                handle
+                if handle is not None
+                else decode_target(values, records=self.records_by_id, signals=self.signals_by_id)
             )
 
         tasks: dict[int, Task] = {}
@@ -1571,13 +1616,23 @@ class _TaskHydration:
                     row.task_id, TaskRelationshipField.INPUTS, refs, self.records_by_id, "record"
                 ),
                 "targets": tuple(targets_by_task.get(row.task_id, ())) if row.has_inline_targets else None,
-                "prompt": row.prompt,
+                "prompt": external.get(
+                    ExternalObjectFieldKey(
+                        object_kind=ObjectKind.TASK, object_id=row.task_id, field=PackedField.PROMPT
+                    ),
+                    row.prompt,
+                ),
                 "input_modalities": decode_input_modalities(row.input_modalities),
                 "split": decode_split(row.split),
                 "scope": decode_span(
                     row.scope_type, row.scope_start, row.scope_end, row.scope_signal_ids, signals=self.signals_by_id
                 ),
-                "rationale": row.rationale,
+                "rationale": external.get(
+                    ExternalObjectFieldKey(
+                        object_kind=ObjectKind.TASK, object_id=row.task_id, field=PackedField.RATIONALE
+                    ),
+                    row.rationale,
+                ),
                 "annotations": task_annotations.get((ObjectKind.TASK, row.task_id), ()),
                 "metadata": _decode_json(row.metadata, default={}),
                 **decode_task_payload(task_type, row.payload_columns),

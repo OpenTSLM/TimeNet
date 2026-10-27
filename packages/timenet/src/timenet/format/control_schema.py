@@ -357,8 +357,33 @@ TASK_DEPENDENCIES = Table(
     ),
 )
 
+EXTERNAL_OWNER_TABLES: dict[ObjectKind, tuple[str, str]] = {
+    ObjectKind.TASK: ("tasks", "task_id"),
+    ObjectKind.ANNOTATION_CONTENT: ("annotation_contents", "content_id"),
+}
+"""The owner table and key column of each object kind whose text can be stored externally."""
+
+EXTERNAL_VALUES = Table(
+    "external_values",
+    (
+        _required("object_kind"),
+        _required("object_id", ColumnType.BIGINT),
+        _required("field"),
+        _key("position"),
+        _required("value_path"),
+        _key("row_index"),
+        _required("value_kind"),
+        _key("n_values"),
+    ),
+    unique=(("object_kind", "object_id", "field", "position"),),
+)
+"""The owner is ``(object_kind, object_id)``: a Task by its public id, or an annotation content row
+by the storage id that this write gave it. Ids are unique only within one kind, so the kind is part
+of the reference."""
+
 CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
+    EXTERNAL_VALUES,
     DATASETS,
     RECORDS,
     CLOCKS,

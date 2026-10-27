@@ -140,7 +140,7 @@ def test_manifest_data_files_are_lists_of_parts(tmp_path):
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert len(manifest.files.control) == 1
     raw_files = json.loads((version_dir / "manifest.json").read_text())["files"]
-    assert set(raw_files) == {"control", "time_series"}
+    assert set(raw_files) == {"control", "time_series", "payloads"}
     for key in ("control", "time_series"):
         assert isinstance(raw_files[key], list), f"{key} should serialize as a JSON array"
         for entry in raw_files[key]:
