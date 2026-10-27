@@ -28,11 +28,18 @@ from timenet.cli.ui import console
 from timenet.config import settings
 from timenet.engine import publish_pipeline, run_pipeline
 from timenet.errors import TimeNetRegistryError
-from timenet.registry import WritableRegistry, local_registry_path, open_writable_registry
+from timenet.registry import (
+    LocalRegistry,
+    WritableRegistry,
+    local_registry_path,
+    open_registry,
+    open_writable_registry,
+)
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.builder.env import run_isolated
-from timenet_connectors.discovery import resolve
+from timenet_connectors.builder.plan import prepare_parents
+from timenet_connectors.discovery import connector_dir, resolve
 from timenet_connectors.download import DownloadProgress, ProgressCallback, progress_sink
 
 
@@ -78,6 +85,14 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
         "(default: $TIMENET_REGISTRY, else the local registry).",
     ),
     force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the version is already built."),
+    fetch_parents: str | None = typer.Option(
+        None,
+        "--fetch-parents",
+        help="Fetch missing parent releases from this registry URI (local --out only).",
+    ),
+    build_parents: bool = typer.Option(
+        False, "--build-parents", help="Build missing parent releases from their installed connectors."
+    ),
     keep_cache: bool = typer.Option(
         False, "--keep-cache", help="Keep the raw download cache after building (default: remove it)."
     ),
@@ -103,6 +118,12 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
     ``--no-isolation`` (or set ``TIMENET_ISOLATION=off``) to run it in the current interpreter
     instead, which is what you want while writing a connector.
 
+    A dataset whose card declares ``inputs`` needs those exact parent releases in the output
+    registry. Missing ones fail the build before any download, unless ``--fetch-parents`` names a
+    registry to fetch them from or ``--build-parents`` builds them from their own connectors. Every
+    parent is prepared before the dataset itself builds, and a parent is never rebuilt over a
+    release the output already holds.
+
     ``--values-backend`` overrides the values-plane storage the connector declares. This process
     resolves the connector's default for an in-process build; an isolated child resolves its own,
     because importing the connector there would need the dependencies it is about to install.
@@ -117,43 +138,86 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
         raise typer.BadParameter(
             f"unknown values backend {values_backend!r}; supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
         )
+    try:
+        connector_dir(dataset_id)  # import-free, so an unknown id fails before any environment exists
+    except LookupError as exc:
+        raise typer.BadParameter(str(exc)) from exc
     # The flag is tri-state. An explicit --isolation wins over TIMENET_ISOLATION=off. An isolated
     # child exports that variable as its recursion guard and never forwards it as a flag.
     override = None if isolation is None else ("on" if isolation else "off")
-    if settings(isolation=override).isolation == "on":
+    isolated = settings(isolation=override).isolation == "on"
+    forwarded = out if out is not None else settings().registry
+    if forwarded is None:
+        forwarded = str(settings().registry_path)
+    target = _resolve_target(out)
+    # Parents are prepared here, before the build, and each built parent runs like the build itself.
+    # An isolated child re-plans, finds every parent in place, and only opens them.
+    prepare_parents(
+        dataset_id,
+        LocalRegistry(target) if isinstance(target, Path) else target,
+        build=lambda parent: _build_one(parent, target, forwarded, isolated=isolated, keep_cache=keep_cache),
+        fetch_from=open_registry(fetch_parents) if fetch_parents is not None else None,
+        build_parents=build_parents,
+        force=force,
+    )
+    typer.echo(
+        _build_one(
+            dataset_id,
+            target,
+            forwarded,
+            isolated=isolated,
+            force=force,
+            keep_cache=keep_cache,
+            values_backend=values_backend,
+        )
+    )
+
+
+def _build_one(  # noqa: PLR0913
+    dataset_id: str,
+    target: WritableRegistry | Path,
+    forwarded: str,
+    *,
+    isolated: bool,
+    force: bool = False,
+    keep_cache: bool = False,
+    values_backend: str | None = None,
+) -> str:
+    """Build one dataset into the output and return its result line.
+
+    Args:
+        dataset_id: The dataset id.
+        target: The resolved output for an in-process build.
+        forwarded: The output as given, for an isolated child's ``--out``.
+        isolated: Build in an environment built from the connector's requirements.
+        force: Rebuild even if the version is already built.
+        keep_cache: Keep the raw download cache after building.
+        values_backend: Values-plane backend, or ``None`` for the connector's declared backend.
+
+    Returns:
+        The committed version directory for a local output, or the published version.
+    """
+    if isolated:
         # The child is this same CLI and inherits stderr, so it is the only narrator: it prints the
         # status lines and the richer download and shard progress. This branch stays quiet and only
         # relays what the child printed on stdout. Do not call resolve() here; it imports the connector
-        # module, which needs the dependencies the child is about to install. run_isolated validates the
-        # id import-free and forwards --out unchanged, so a remote target publishes from inside the
-        # environment exactly as a local one writes to a directory.
-        forwarded = out if out is not None else settings().registry
-        if forwarded is None:
-            forwarded = str(settings().registry_path)
-        try:
-            version = run_isolated(
-                dataset_id,
-                forwarded,
-                force=force,
-                keep_cache=keep_cache,
-                values_backend=values_backend,
-                quiet=console.quiet,
-            )
-        except LookupError as exc:
-            raise typer.BadParameter(str(exc)) from exc
-        typer.echo(version)
-        return
+        # module, which needs the dependencies the child is about to install. run_isolated forwards
+        # --out unchanged, so a remote target publishes from inside the environment exactly as a local
+        # one writes to a directory.
+        return run_isolated(
+            dataset_id,
+            forwarded,
+            force=force,
+            keep_cache=keep_cache,
+            values_backend=values_backend,
+            quiet=console.quiet,
+        )
     console.status("🔧", f"Building '{dataset_id}'…")
-    try:
-        connector_cls = resolve(dataset_id)
-    except LookupError as exc:
-        raise typer.BadParameter(str(exc)) from exc
     # Resolve the connector's declared backend here, so the in-process path and the isolated child
     # agree on what "no --values-backend" means. An isolated build cannot resolve it: importing the
     # connector needs the dependencies the child is about to install.
-    connector = connector_cls()
+    connector = resolve(dataset_id)()
     resolved_backend = values_backend if values_backend is not None else connector.values_backend
-    target = _resolve_target(out)
     # A connector's downloads report through the ambient progress sink. _download_progress renders them.
     with _download_progress():
         if isinstance(target, Path):
@@ -166,18 +230,17 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
                 keep_cache=keep_cache,
             )
             console.success(f"Built '{dataset_id}' → {version_dir.name}")
-            typer.echo(str(version_dir))
-        else:
-            version = publish_pipeline(
-                connector,
-                target,
-                values_backend=resolved_backend,
-                progress_cb=_report_progress,
-                force=force,
-                keep_cache=keep_cache,
-            )
-            console.success(f"Published '{dataset_id}' → {version}")
-            typer.echo(version)
+            return str(version_dir)
+        version = publish_pipeline(
+            connector,
+            target,
+            values_backend=resolved_backend,
+            progress_cb=_report_progress,
+            force=force,
+            keep_cache=keep_cache,
+        )
+        console.success(f"Published '{dataset_id}' → {version}")
+        return version
 
 
 def _report_progress(event: WriteProgressEvent) -> None:
