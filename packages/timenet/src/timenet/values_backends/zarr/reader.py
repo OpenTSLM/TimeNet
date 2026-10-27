@@ -49,6 +49,9 @@ class ZarrValuesReader(BaseValuesReader):
     def load(self, version: DatasetVersion, rows: Sequence[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
         """Read a series' values. ``data_index.major_idx`` is the element start; ``n_values`` is the length.
 
+        The result holds copies of the values, not views of the decoded storage chunks, which
+        neighboring series share.
+
         Args:
             version: The opened version handle.
             rows: The series' index rows, sorted by ``chunk_idx``.
@@ -57,7 +60,8 @@ class ZarrValuesReader(BaseValuesReader):
             The series' canonical scalar or fixed-shape tensor Arrow array.
         """
         parts = [self._read_range(version, rel, start, stop) for rel, start, stop in _coalesce_runs(rows)]
-        combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
+        # One part is a view of a decoded chunk, and Arrow would wrap it without a copy.
+        combined = parts[0].copy() if len(parts) == 1 else np.concatenate(parts)
         return _to_arrow(combined, spec, self._read_validity(version, rows, spec))
 
     def _read_validity(

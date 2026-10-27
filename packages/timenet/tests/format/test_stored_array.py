@@ -2,6 +2,8 @@ import copy
 import pickle
 from typing import get_type_hints
 
+import numpy as np
+import pyarrow as pa
 import pytest
 
 from timenet.format.control_reader import DuckDBControlReader
@@ -147,3 +149,27 @@ def test_type_hints_resolve_on_the_stored_array():
     assert hints["reader"] is ChunkReader
     assert hints["spec"] is TimeSeriesSpec
     assert get_type_hints(ChunkLocation) == {"source": SourceKey | None, "chunks": tuple[StoredChunk, ...]}
+
+
+def _address_ranges(values):
+    if isinstance(values, np.ndarray):
+        start = values.__array_interface__["data"][0]
+        return [(start, start + values.nbytes)]
+    return [(buffer.address, buffer.address + buffer.size) for buffer in values.buffers() if buffer is not None]
+
+
+def test_read_arrays_keep_no_decoded_payload_alive(stored):
+    reader, signals, _ = stored
+    arrays = {signal.id: signal._values.read() for signal in signals}
+    backend = reader._values_reader()
+    # The reader still caches the row groups or Zarr chunks it decoded for the reads.
+    cached = [*getattr(backend, "_chunk_cache", {}).values()]
+    parquet = getattr(backend, "_parquet", None)
+    if parquet is not None:
+        cached.extend(parquet._groups.values())
+    assert cached
+    decoded = [address for values in cached for address in _address_ranges(values)]
+    for signal_id, kept in arrays.items():
+        assert isinstance(kept, pa.Array)
+        for start, stop in _address_ranges(kept):
+            assert not any(start < end and begin < stop for begin, end in decoded), signal_id
