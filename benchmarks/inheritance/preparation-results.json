@@ -1,0 +1,135 @@
+{
+  "comparison": {
+    "previous_commit": "e97a8947e7299b5c63e9d1d45844bd7dfeb0612c",
+    "method": "Three interleaved fresh-process runs after one warmup per variant; warm filesystem cache. Full-read times include preparation. Access times exclude preparation.",
+    "dataset": "ECG-QA with PTB-XL shared payloads; identical catalog and payload files; ID/version-only manifests in an isolated copy for the prepared variant."
+  },
+  "runs": {
+    "previous": {
+      "full": [
+        {
+          "read_seconds": 7.333586417000333,
+          "materialization_seconds": 0.05244525000307476,
+          "full_read_seconds": 7.386031667003408,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5961007104
+        },
+        {
+          "read_seconds": 7.39230945899908,
+          "materialization_seconds": 0.052417416001844686,
+          "full_read_seconds": 7.444726875000924,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5978439680
+        },
+        {
+          "read_seconds": 7.371959167001478,
+          "materialization_seconds": 0.05267604199616471,
+          "full_read_seconds": 7.424635208997643,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5969756160
+        }
+      ],
+      "access": [
+        {
+          "records": 64,
+          "window_seconds": 0.8484753750017262,
+          "training_seconds": 0.5463501659978647,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        },
+        {
+          "records": 64,
+          "window_seconds": 0.8378394579995074,
+          "training_seconds": 0.5216642909945222,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        },
+        {
+          "records": 64,
+          "window_seconds": 0.8479064999992261,
+          "training_seconds": 0.5260574169951724,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        }
+      ]
+    },
+    "prepared": {
+      "full": [
+        {
+          "read_seconds": 7.336114042002009,
+          "materialization_seconds": 0.05203724999591941,
+          "full_read_seconds": 7.388151291997929,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5969641472
+        },
+        {
+          "read_seconds": 7.410579167000833,
+          "materialization_seconds": 0.05245712499890942,
+          "full_read_seconds": 7.463036291999742,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5964644352
+        },
+        {
+          "read_seconds": 7.449215792003088,
+          "materialization_seconds": 0.05288687499705702,
+          "full_read_seconds": 7.502102667000145,
+          "records": 16024,
+          "signals": 192288,
+          "values": 961440000,
+          "tasks": 231543,
+          "payload_sha256": "eacacfc614b46a914a9cb0e4bdb20ca32908454d6b62b292e90b6974e8d2e7a2",
+          "text_sha256": "b65f62804d2bf26e169938a05696cb1a29180a6b49fa546d67e1845933be1322",
+          "peak_rss_platform_units": 5986975744
+        }
+      ],
+      "access": [
+        {
+          "records": 64,
+          "window_seconds": 0.846046667000337,
+          "training_seconds": 0.5293992920051096,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        },
+        {
+          "records": 64,
+          "window_seconds": 0.847164792001422,
+          "training_seconds": 0.5253778749975027,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        },
+        {
+          "records": 64,
+          "window_seconds": 0.8457551669998793,
+          "training_seconds": 0.5216327909947722,
+          "window_sha256": "6fb119474fe7fad12952bc7c9f232f6963735ba2f6e327b1b1f72301d8bc017b",
+          "training_sha256": "f3cd2017877dcd82b814486eed5415d54b7be38e4e9884682079670888eab043"
+        }
+      ]
+    }
+  }
+}
