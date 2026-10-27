@@ -5,10 +5,11 @@ from pathlib import Path
 import shutil
 
 from timenet.config import settings
-from timenet.connectors import BaseConnector
+from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.registry.local import LocalRegistry
 from timenet.registry.writable import WritableRegistry
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
@@ -28,10 +29,12 @@ def run_pipeline(  # noqa: PLR0913
 
     This function is idempotent. If the target version is already committed, it skips the expensive
     ``download``, ``convert``, and ``store`` stages and returns the existing directory. Pass ``force``
-    to rebuild it. Otherwise the stages run in order: create the cache directory, ``download`` raw
-    references into it, ``convert`` them into a dataset, ``derive_schema``, ``store``, then delete
-    the cache directory. The engine only writes local files. Publishing to a remote registry is a
-    separate step.
+    to rebuild it. Otherwise the stages run in order: create the cache directory, open the declared
+    parents from ``root``, ``download`` raw references into the cache, ``compose`` them into a
+    dataset, check that it imports exactly the declared parents, ``derive_schema``, ``store``, then
+    delete the cache directory. Parents must already be in ``root``; the engine never fetches or
+    builds them. The engine only writes local files. Publishing to a remote registry is a separate
+    step.
 
     Args:
         connector: The connector to build.
@@ -61,13 +64,16 @@ def run_pipeline(  # noqa: PLR0913
     cache = cache_dir if cache_dir is not None else settings().cache_dir / metadata.dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
-    raw_refs = connector.download(cache)
-    dataset = connector.convert(raw_refs)
-    # Derive the schema before writing. store_dataset() derives one only for a dataset that has none.
-    dataset.derive_schema()
-    # A forced rebuild replaces the committed version only once the new one is ready, so a failed
-    # write keeps the old one.
-    store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb, replace=force)
+    # Open the declared parents before downloading, so a missing parent fails before any raw I/O.
+    with BuildContext.open(metadata, LocalRegistry(root)) as context:
+        raw_refs = connector.download(cache)
+        dataset = connector.compose(raw_refs, context)
+        context.check_imports(dataset)
+        # Derive the schema before writing. store_dataset() derives one only for a dataset that has none.
+        dataset.derive_schema()
+        # A forced rebuild replaces the committed version only once the new one is ready, so a failed
+        # write keeps the old one.
+        store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb, replace=force)
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
     if not keep_cache and cache_dir is None and cache.is_dir():
@@ -114,9 +120,11 @@ def publish_pipeline(  # noqa: PLR0913
     cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
-    dataset = connector.convert(connector.download(cache))
-    dataset.derive_schema()
-    registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
+    with BuildContext.open(metadata, registry) as context:
+        dataset = connector.compose(connector.download(cache), context)
+        context.check_imports(dataset)
+        dataset.derive_schema()
+        registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version
