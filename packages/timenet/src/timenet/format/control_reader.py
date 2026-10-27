@@ -19,6 +19,7 @@ import duckdb
 import pyarrow as pa
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeAxis, TimeFDataset
+from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
@@ -60,7 +61,7 @@ from timenet.types import (
 from timenet.types.handles import CallableArray
 from timenet.types.ids import EntityId
 from timenet.types.object_kind import ObjectKind
-from timenet.types.reference_keys import SourceKey
+from timenet.types.reference_keys import ParentAlias, SourceKey
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
@@ -1146,6 +1147,19 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
             [alias, kind.value, list(parent_ids)],
         )
         return found[0][0], dict(rows)
+
+    def import_map(self) -> tuple[dict[str, str], ImportMap]:
+        """Return the parent release of each parent alias, and the import map of the catalog.
+
+        Returns:
+            The parent release that ``imports`` names for each parent alias, and the local ID of each
+            object in ``imported_objects``, keyed by parent alias, kind, and parent ID.
+        """
+        releases: dict[str, str] = dict(self._query("SELECT alias, parent_ref FROM imports"))
+        rows = self._query("SELECT alias, object_kind, parent_id, object_id FROM imported_objects")
+        return releases, {
+            (ParentAlias(alias), ObjectKind(kind), parent_id): object_id for alias, kind, parent_id, object_id in rows
+        }
 
     def signal_record_ids(self, signal_ids: Collection[EntityId]) -> dict[EntityId, EntityId]:
         """Return the ID of the Record that holds each of the given Signals, building no object.
