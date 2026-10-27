@@ -222,6 +222,7 @@ SIGNAL_CHUNKS = Table(
         _key("signal_id"),
         _key("chunk_index"),
         _required("value_path"),
+        Column("source_key", ColumnType.VARCHAR),
         _key("chunk_major_index"),
         Column("chunk_minor_index", ColumnType.BIGINT),
         _key("n_values"),
@@ -377,9 +378,31 @@ or an irregular axis by the storage id that this write gave its row. Ids are uni
 kind, so the kind is part of the reference. Signals that share an axis share its row, so the axis's
 time offsets are stored once."""
 
+IMPORTS = Table(
+    "imports",
+    (_required("alias"), _required("parent_ref")),
+    unique=(("alias",), ("parent_ref",)),
+)
+"""Catalog lookup projection of the aliases and exact releases in ``Manifest.parent_cards``."""
+
+IMPORTED_OBJECTS = Table(
+    "imported_objects",
+    (
+        _required("alias"),
+        _required("object_kind"),
+        _required("parent_id", ColumnType.BIGINT),
+        _required("object_id", ColumnType.BIGINT),
+    ),
+    unique=(("alias", "object_kind", "parent_id"),),
+    foreign_keys=(ForeignKey("alias", "imports", "alias"),),
+)
+"""Local object IDs indexed by input alias, object kind, and original parent ID."""
+
 CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
+    IMPORTS,
     EXTERNAL_VALUES,
+    IMPORTED_OBJECTS,
     DATASETS,
     RECORDS,
     CLOCKS,

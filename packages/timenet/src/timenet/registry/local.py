@@ -15,6 +15,7 @@ from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
+from timenet.types.references import is_latest
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -80,7 +81,7 @@ class LocalRegistry(WritableRegistry):
             TimeFFormatError: If the stored manifest declares a dataset id that differs from its
                 directory. This means a misplaced or corrupt artifact.
         """
-        resolved = self._latest_version(dataset_id) if version in {None, "", "latest"} else version
+        resolved = self._latest_version(dataset_id) if is_latest(version) else version
         if resolved is None:
             known = ", ".join(m.dataset_id for m in self.list_datasets()) or "(none)"
             raise TimeNetDatasetNotFoundError(

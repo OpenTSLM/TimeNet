@@ -29,6 +29,7 @@ from timenet.registry.remote.models import (
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
+from timenet.types.references import is_latest
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -82,7 +83,7 @@ class RemoteRegistry(WritableRegistry):
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """  # noqa: DOC502 (raised by the HTTP client on 404, not directly here)
-        resolved = self._resolve_latest(dataset_id) if version in {None, "", "latest"} else version
+        resolved = self._resolve_latest(dataset_id) if is_latest(version) else version
         text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
         return Manifest.model_validate_json(text)
 
