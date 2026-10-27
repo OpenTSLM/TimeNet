@@ -1,11 +1,10 @@
 """Declarative modelling tasks over records and signals."""
 
-from abc import ABC, abstractmethod
 from collections.abc import Iterable
 from dataclasses import dataclass, field
 from enum import StrEnum, unique
 from functools import lru_cache
-from typing import TYPE_CHECKING, ClassVar, TypeAlias, TypeGuard, cast, final
+from typing import TYPE_CHECKING, ClassVar, TypeAlias, TypeGuard, final
 
 import pint
 
@@ -134,13 +133,15 @@ def _target_values(values: Iterable[TargetInput] | None) -> tuple[TargetItem, ..
 
 
 @dataclass(kw_only=True)
-class Task(SupportsAnnotate, ABC):
+class Task(SupportsAnnotate):
     """One modelling problem with ordered inputs and ordered output items.
 
     Targets deliberately accept a mixture of supported values. Concrete task classes describe the
     modelling operation, but they do not impose a second hierarchy of target wrapper classes. None
     means that the answer is supplied through target annotations. An empty tuple is an explicit
     empty answer.
+
+    Only a concrete task class, one that sets ``task_type``, can be built; ``Task`` itself cannot.
 
     The task classes form a closed set. TimeF stores a task's ``task_type`` tag, and the reader maps
     it back to a built-in class, so only this module defines subclasses, and each concrete class is
@@ -150,10 +151,8 @@ class Task(SupportsAnnotate, ABC):
             return AnswerTask(inputs=(record,), prompt="How old is the subject?", targets=(str(age),))
     """
 
-    @property
-    @abstractmethod
-    def task_type(self) -> TaskType:
-        """Return the concrete task's stable storage tag."""
+    task_type: ClassVar[TaskType]
+    """The concrete task class's stable storage tag."""
 
     inputs: tuple["Record", ...] = field(default=(), compare=False)
     """Records supplied to the model, in semantic order."""
@@ -202,8 +201,13 @@ class Task(SupportsAnnotate, ABC):
         """Normalize caller-provided sequences and validate target item types and the split.
 
         Raises:
-            TimeFValidationError: If one target item has an unsupported type, or the split is unknown.
+            TimeFValidationError: If the class sets no ``task_type``, one target item has an
+                unsupported type, or the split is unknown.
         """
+        if not isinstance(getattr(type(self), "task_type", None), TaskType):
+            raise TimeFValidationError(
+                f"{type(self).__name__} sets no task_type; build a concrete task class such as AnswerTask"
+            )
         self.inputs = tuple(self.inputs)
         self.targets = None if self.targets is None else tuple(self.targets)
         self.input_annotations = tuple(self.input_annotations)
@@ -440,7 +444,7 @@ def _build_task_registry(classes: Iterable[type[Task]] | None = None) -> dict[Ta
     """
     registry: dict[TaskType, type[Task]] = {}
     for cls in classes if classes is not None else _concrete_task_classes():
-        task_type = cast("TaskType", cls.task_type)
+        task_type = cls.task_type
         if task_type in registry:
             raise TimeFValidationError(
                 f"both {registry[task_type].__name__} and {cls.__name__} claim task_type {task_type!r}"

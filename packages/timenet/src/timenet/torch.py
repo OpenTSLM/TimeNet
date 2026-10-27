@@ -20,6 +20,7 @@ from torch.utils.data import Dataset
 
 from timenet.dataset import Record, Signal, TimeFDataset
 from timenet.errors import TimeFValidationError
+from timenet.reader.load_plan import LoadPlan
 from timenet.types import EntityId, Task
 
 
@@ -55,10 +56,10 @@ class TimeFTorchDataset(Dataset):
     ``batch_size=1`` still combines records into a batch and needs the same handling.
     Uniform tensors with empty tasks and annotations support default batching.
 
-    Build it from a materialized :class:`~timenet.dataset.TimeFDataset`, or with
-    :meth:`from_reader` from a :class:`~timenet.reader.TimeFReader` so records and tasks hydrate
-    per batch instead of all at once. A ``DataLoader`` calls :meth:`__getitems__` with a whole batch
-    of indices, and the reader-backed view answers it with one round of queries for the batch.
+    Build it from a :class:`~timenet.dataset.TimeFDataset`, or with :meth:`from_reader` from a
+    :class:`~timenet.reader.TimeFReader` so records and tasks are read and loaded per batch instead
+    of all at once. A ``DataLoader`` calls :meth:`__getitems__` with a whole batch of indices, and
+    the reader-backed view answers it with one read of the batch's records and one of their tasks.
     """
 
     def __init__(
@@ -90,10 +91,11 @@ class TimeFTorchDataset(Dataset):
         *,
         transform: Callable[[dict[str, Any]], Any] | None = None,
     ) -> TimeFTorchDataset:
-        """View an open reader without materializing its records or tasks.
+        """View an open reader without reading all its records or tasks up front.
 
-        Each ``__getitems__`` call hydrates the batch's records in one query round and their tasks
-        in another, so memory stays proportional to the batch. The reader pickles without its
+        Each ``__getitems__`` call reads the batch's records and then their tasks, each read loading
+        every value its objects hold in one batch, so memory stays proportional to the batch. The
+        tasks in an item reference the item's loaded records. The reader pickles without its
         connection, so ``DataLoader`` workers each reopen the control database.
 
         Args:
@@ -155,11 +157,12 @@ class _DatasetItems:
 
 
 class _ReaderItems:
-    """Items hydrated from a reader per batch: one query round for the records, one for their tasks."""
+    """Items read from a reader per batch, loaded: one read for the records, one for their tasks."""
 
     def __init__(self, reader: TimeFReader) -> None:
         self._reader = reader
         self._record_ids: tuple[EntityId, ...] | None = None
+        self._plan = LoadPlan.ALL_EAGER
 
     def _ids(self) -> tuple[EntityId, ...]:
         if self._record_ids is None:
@@ -172,9 +175,10 @@ class _ReaderItems:
     def fetch(self, indices: Sequence[int]) -> list[tuple[Record, tuple[Task, ...]]]:
         """Return the records at ``indices`` with their tasks, in order."""
         ids = self._ids()
-        records = tuple(self._reader.iter_records([ids[index] for index in indices]))
+        records = self._reader.get_many(Record, [ids[index] for index in indices], load=self._plan)
         tasks_by_record: dict[EntityId, list[Task]] = {record.id: [] for record in records}
-        for task in self._reader.read_tasks(records):
+        # The tasks reference these same Record objects; the plan loads the tasks' text.
+        for task in self._reader.read_tasks(inputs=records, load=self._plan):
             for record in task.inputs:
                 attached = tasks_by_record.get(record.id)
                 if attached is not None:
