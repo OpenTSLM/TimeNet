@@ -8,7 +8,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
-from timenet.storage.parquet import SignalRowGroupCache
+from timenet.storage.parquet import PayloadTableCache, SignalRowGroupCache
 from timenet.testing import make_dataset
 from timenet.values_backends.parquet.reader import ParquetValuesReader
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
@@ -122,11 +122,15 @@ def test_signal_cache_separates_files_and_groups(tmp_path, monkeypatch):
     assert all(handle.closed for handle in opened)
 
 
-def test_parquet_cache_reports_missing_files(tmp_path):
+@pytest.mark.parametrize("cache_type", [PayloadTableCache, SignalRowGroupCache])
+def test_parquet_cache_reports_missing_files(tmp_path, cache_type):
     version = DatasetVersion.open_local(_write(tmp_path))
-    cache = SignalRowGroupCache(8)
+    cache = cache_type(8)
     with pytest.raises(TimeFFormatError, match=r"cannot read Parquet file .*missing\.parquet"):
-        cache.read_values(version, "missing.parquet", 0)
+        if isinstance(cache, PayloadTableCache):
+            cache.read_table(version, "missing.parquet", pa.schema([]))
+        else:
+            cache.read_values(version, "missing.parquet", 0)
     cache.close()
 
 

@@ -49,6 +49,14 @@ rationales remain `None` when absent; numeric and boolean values remain native P
 `read_values(values)` does the same for each item, such as a task's targets, and returns a tuple, or
 `None` for `None`.
 
+Text read from a release uses the same handle types. Packed text stays in its payload file until
+`read()` or a comparison of content needs it, and its handle keeps nothing: `is_loaded` is false,
+and each read goes to the payload again. Schema derivation and modality inference do not read
+packed text. The Arrow `read_task_table()`, `read_target_table()`, and `read_annotation_table()`
+APIs return native values. The reader keeps up to 64 MiB of decoded payload files, the newest one
+even when it is larger, and rejects a locator whose payload file the manifest does not list. A
+release whose manifest lists no payload files is read without any locator lookups.
+
 Empty text handles are false in truth tests. An empty prompt remains a handle whose `read()`
 returns `""`. An absent prompt remains `None`. Truth tests use the handle's length without reading
 its value.
@@ -57,8 +65,9 @@ Text handles compare by content, with handles of the same kind and with native v
 type: a `TextHandle` with strings, a `TextListHandle` with lists. A task therefore equals its
 read-back copy regardless of where its text is stored. A `TextHandle` never equals a
 `TextListHandle` or a list. A handle equals itself, and handles of different lengths compare
-unequal, without a read. Comparing handles of equal length reads both values. Text handles are not
-hashable.
+unequal, without a read. Two handles for the same row of one payload file are also equal without
+a read, even from different readers, since the manifest's checksum identifies the file. Comparing
+other handles of equal length reads both values. Text handles are not hashable.
 
 `iter_records(record_ids=...)` yields records one at a time. It takes int record IDs. It does not
 create a complete `TimeFDataset`.
@@ -68,9 +77,9 @@ Tasks have three useful read paths:
 - `tasks` loads and caches every task.
 - `iter_tasks(records)` yields tasks for selected Records in bounded batches. Its `split`,
   `required_modalities`, and `supported_modalities` arguments filter in DuckDB before any task is
-  built, as they do on `task_table()` and `target_table()`.
-- `task_table()`, `target_table()`, and `annotation_table()` return Arrow tables without creating
-  Python task objects. Their ID columns are `int64`.
+  built, as they do on `read_task_table()` and `read_target_table()`.
+- `read_task_table()`, `read_target_table()`, and `read_annotation_table()` return Arrow tables
+  without creating Python task objects. Their ID columns are `int64`.
 
 Objects keep their identity within one reader. For example, a task input is the same `Record`
 instance that `iter_records()` returned.
@@ -81,8 +90,9 @@ The manifest describes the dataset schema and its files. The DuckDB control data
 object hierarchy and relationships. The reader combines both sources to rebuild standard TimeNet
 types.
 
-Annotation values return with their stored types. Spans return as `TimePoint`, `TimeInterval`,
-`StepPoint`, or `StepInterval`. The task type selects a built-in task class, and `from_tasks`
+Reading an annotation text handle returns its stored string or string list. Scalar annotation
+values retain their native types. Spans return as `TimePoint`, `TimeInterval`, `StepPoint`, or
+`StepInterval`. The task type selects a built-in task class, and `from_tasks`
 contains resolved Task objects.
 
 ## Value reads
@@ -102,9 +112,9 @@ and decoded Zarr chunks until it closes.
 | `read()` | Create the complete `TimeFDataset`. |
 | `iter_records()` | Yield Records without building a dataset. |
 | `iter_tasks(records, split=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
-| `task_table()` | Return the task table with public IDs. |
-| `target_table()` | Return ordered task targets with public IDs. |
-| `annotation_table()` | Return annotation occurrences with public IDs. |
+| `read_task_table()` | Return the task table with public IDs. |
+| `read_target_table()` | Return ordered task targets with public IDs. |
+| `read_annotation_table()` | Return annotation occurrences with public IDs. |
 | `verify()` | Check every manifest-listed file against its size and checksum. |
 | `metadata` | Return the dataset metadata. |
 | `schema` | Return the dataset schema. |

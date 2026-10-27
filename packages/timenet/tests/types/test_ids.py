@@ -140,7 +140,7 @@ def test_an_edit_continues_the_stored_counters_and_never_reuses_an_id(tmp_path):
 
 def _storage_ids(version_dir):
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
-        table = reader.annotation_table().to_pylist()
+        table = reader.read_annotation_table().to_pylist()
     return {(row["object_id"], row["key"]): (row["content_id"], row["occurrence_id"]) for row in table}
 
 

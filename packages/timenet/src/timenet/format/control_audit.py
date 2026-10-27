@@ -13,8 +13,15 @@ import duckdb
 
 from timenet.errors import TimeFFormatError
 from timenet.format.annotation_value_kind import AnnotationValueKind
-from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, ANNOTATED_OWNER_TABLES, CONTROL_TABLES, Table
+from timenet.format.control_schema import (
+    ANNOTATED_OBJECT_TYPES,
+    ANNOTATED_OWNER_TABLES,
+    CONTROL_TABLES,
+    EXTERNAL_OWNER_TABLES,
+    Table,
+)
 from timenet.format.duckdb import check_control_schema
+from timenet.format.stored_values import PackedField, PackedValueKind
 from timenet.format.task_codec import ANNOTATION_FIELDS, RECORD_FIELDS, TaskRelationshipField
 from timenet.format.task_target_kind import SPAN_KINDS, TaskTargetKind
 from timenet.types import ObjectKind
@@ -31,6 +38,7 @@ _SPAN_KINDS = _sql_in(SPAN_KINDS)
 _RECORD_FIELDS = _sql_in(RECORD_FIELDS)
 _ANNOTATION_FIELDS = _sql_in(ANNOTATION_FIELDS)
 _OBJECT_TYPES_SQL = _sql_in(ANNOTATED_OBJECT_TYPES)
+_EXTERNAL_KINDS_SQL = _sql_in(EXTERNAL_OWNER_TABLES)
 
 _ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
     ("records", "record_id"),
@@ -60,6 +68,9 @@ _DOMAIN_CHECKS = f"""
     UNION ALL
     SELECT 'annotation_occurrences.object_type' FROM annotation_occurrences
     WHERE object_type NOT IN ({_OBJECT_TYPES_SQL})
+    UNION ALL
+    SELECT 'external_values.object_kind' FROM external_values
+    WHERE object_kind NOT IN ({_EXTERNAL_KINDS_SQL})
     UNION ALL
     SELECT 'annotation_occurrences.span_type' FROM annotation_occurrences
     WHERE span_type NOT IN ('static', 'point', 'interval')
@@ -101,6 +112,39 @@ _OCCURRENCE_OWNER = " UNION ALL ".join(
     f"WHERE object_type = '{object_type}' AND {predicate}"
     for object_type, predicate in _OWNERLESS.items()
 )
+
+_EXTERNAL_OWNER = " UNION ALL ".join(
+    f"SELECT field, object_kind, object_id FROM external_values WHERE object_kind = '{kind}' "  # noqa: S608
+    f"AND NOT EXISTS (SELECT 1 FROM {table} WHERE {table}.{column} = external_values.object_id)"
+    for kind, (table, column) in EXTERNAL_OWNER_TABLES.items()
+)
+"""The external values whose owner row does not exist."""
+
+_EXTERNAL_TARGET = f"""
+    SELECT external.object_id, external.position
+    FROM external_values external
+    WHERE external.object_kind = '{ObjectKind.TASK}' AND external.field = '{PackedField.TARGETS}'
+      AND NOT EXISTS (
+          SELECT 1 FROM task_targets targets
+          WHERE targets.task_id = external.object_id AND targets.position = external.position
+            AND targets.target_kind = '{TaskTargetKind.TEXT}'
+      )
+    LIMIT 1
+"""  # noqa: S608 - tags come only from internal enum values
+"""A packed target whose task has no text target at its position."""
+
+_EXTERNAL_CONTENT_KIND = f"""
+    SELECT external.object_id, external.value_kind, contents.value_kind
+    FROM external_values external
+    JOIN annotation_contents contents ON contents.content_id = external.object_id
+    WHERE external.object_kind = '{ObjectKind.ANNOTATION_CONTENT}'
+      AND contents.value_kind IS DISTINCT FROM CASE external.value_kind
+          WHEN '{PackedValueKind.TEXT}' THEN '{AnnotationValueKind.TEXT}'
+          WHEN '{PackedValueKind.TEXT_LIST}' THEN '{AnnotationValueKind.TEXT_LIST}'
+      END
+    LIMIT 1
+"""  # noqa: S608 - tags come only from internal enum values
+"""A packed annotation value whose content row holds another kind of value."""
 
 CROSS_RECORD_PARENT = """
     SELECT child.source_id
@@ -199,7 +243,11 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
               OR EXISTS (SELECT 1 FROM unnest(input_modalities) AS m(value)
                          WHERE value NOT IN ('text', 'time_series', 'image', 'audio', 'no_input'))
               OR len(input_modalities) <> len(list_distinct(input_modalities))
-              OR (prompt IS NOT NULL AND prompt <> ''
+              OR ((prompt IS NOT NULL AND prompt <> ''
+                   OR EXISTS (SELECT 1 FROM external_values external
+                              WHERE external.object_kind = '{ObjectKind.TASK}'
+                                AND external.object_id = tasks.task_id
+                                AND external.field = '{PackedField.PROMPT}'))
                   AND NOT list_contains(input_modalities, 'text'))
               OR (list_contains(input_modalities, 'no_input')
                   AND (len(list_filter(input_modalities, x -> x NOT IN ('text', 'no_input'))) > 0
@@ -218,6 +266,8 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
                 f"annotation occurrence {occurrence_id!r} on the Dataset has object id {object_id!r}"
             )
         raise TimeFFormatError(f"annotation occurrence {occurrence_id!r} refers to missing {object_type} {object_id!r}")
+
+    _audit_external_values(connection)
 
     invalid_clock_scope = connection.execute(_TASK_RECORD_SCOPE).fetchone()
     if invalid_clock_scope is not None:
@@ -239,6 +289,31 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
         bad_chunks = connection.execute(_CHUNK_COVERAGE).fetchone()
         if bad_chunks is not None:
             raise TimeFFormatError(f"signal {bad_chunks[0]!r} has value chunks whose lengths do not match n_values")
+
+
+def _audit_external_values(connection: duckdb.DuckDBPyConnection) -> None:
+    """Raise on the first external value that does not fit the row it belongs to.
+
+    Raises:
+        TimeFFormatError: If a locator's owner row is missing, a packed target has no text target
+            row at its position, or a packed annotation value is of another kind than its content.
+    """
+    orphan_value = connection.execute(f"{_EXTERNAL_OWNER} LIMIT 1").fetchone()
+    if orphan_value is not None:
+        field, object_kind, object_id = orphan_value
+        raise TimeFFormatError(f"external value {field!r} refers to missing {object_kind} {object_id!r}")
+
+    orphan_target = connection.execute(_EXTERNAL_TARGET).fetchone()
+    if orphan_target is not None:
+        task_id, position = orphan_target
+        raise TimeFFormatError(f"external target {position} of Task {task_id!r} has no text target row")
+
+    wrong_kind = connection.execute(_EXTERNAL_CONTENT_KIND).fetchone()
+    if wrong_kind is not None:
+        content_id, packed_kind, content_kind = wrong_kind
+        raise TimeFFormatError(
+            f"external value of Content {content_id!r} is {packed_kind}, but the content holds {content_kind}"
+        )
 
 
 def _audit_unique_keys(connection: duckdb.DuckDBPyConnection, table: Table) -> None:
