@@ -1,7 +1,7 @@
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion, LocalRegistry
+from timenet.registry import LocalRegistry, open_local_version
 from timenet.testing import assert_datasets_equal, make_dataset, sine_loader
 from timenet.types import (
     ClassificationTask,
@@ -72,7 +72,7 @@ def test_namespaced_round_trip(tmp_path):
     _write(tmp_path, _namespaced_dataset())
     version_dir = tmp_path / "ChengsenWang" / "TSQA" / "1.0.0"
     assert version_dir.exists()
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         assert_datasets_equal(original, reader.read())
 
 

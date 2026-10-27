@@ -15,7 +15,7 @@ runs connector code.
 
 ```python
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion, open_registry
+from timenet.registry import open_local_version, open_registry
 
 # Read through a registry.
 version = open_registry("~/timenet/registry").open_version(
@@ -23,7 +23,7 @@ version = open_registry("~/timenet/registry").open_version(
 )
 
 # You can also open a version directory directly.
-local_version = DatasetVersion.open_local(version_dir)
+local_version = open_local_version(version_dir)
 
 with TimeFReader(version) as reader:
     dataset = reader.read()
@@ -120,23 +120,58 @@ and decoded Zarr chunks until it closes.
 | `read_task_table()` | Return the task table with public IDs. |
 | `read_target_table()` | Return ordered task targets with public IDs. |
 | `read_annotation_table()` | Return annotation occurrences with public IDs. |
-| `verify()` | Check every manifest-listed file against its size and checksum. |
+| `verify()` | Hash every file the release reads, its own and its pinned payload source files. |
 | `metadata` | Return the dataset metadata. |
 | `schema` | Return the dataset schema. |
 | `tasks` | Return all reconstructed tasks. |
 | `values_backend` | Return the selected values backend. |
 
+## Opening a version
+
+`open_local_version()` and a registry's `open_version()` open a version eagerly, but read only
+metadata. Opening checks that:
+
+- `manifest.json` is valid, with a supported format version;
+- every file the manifest lists, `control.duckdb` included, is present with its recorded size;
+- each payload source, a release whose payload files this version reuses, is found and still
+  records each pinned file as the version pins it; and
+- each pinned file of a local payload source is present with its recorded size.
+
+Opening hashes nothing and reads no values. A remote version's file sizes come from its manifest,
+and its reads and downloads check them.
+
+A version lists every payload source it reads from, so opening resolves only those. A source's own
+sources are not opened: a version that reads only files its source stores opens without the
+releases that source reuses.
+
+| Problem | Error | The message names |
+| --- | --- | --- |
+| A payload source is missing | `TimeNetDatasetNotFoundError` | The source and the root searched |
+| A payload source differs from its pins | `TimeFFormatError` | The source and the first differing file |
+| A file is missing or has another size | `TimeFFormatError` | The file, its expected size, and its actual size |
+
+An invalid or unsupported manifest raises a validation error, and a missing one raises
+`FileNotFoundError`.
+
+### Where payload sources are found
+
+Payload sources resolve relative to a registry root. By default, `open_local_version()` takes the
+root that holds the version as `<root>/<org>/<name>/<version>`, so a version and its sources keep
+working when they move to another root together. Pass `sources_root=` to find them under another
+root. A registry's `open_version()` finds them in that registry.
+
+A version without payload sources opens from any directory. A version with payload sources that is
+not stored as `<root>/<org>/<name>/<version>` needs `sources_root=`, and opening it without one
+raises `TimeFValidationError`.
+
 ## Errors and integrity
 
-`DatasetVersion.open_local()` and `open_version()` require a valid `manifest.json`. They raise
-`TimeFFormatError` for an invalid or unsupported manifest.
+Values remain lazy. A values file that changes after opening fails when a Signal reads the affected
+chunk. Errors include the relevant file or table context.
 
-Other files remain lazy. A missing `control.duckdb` therefore fails on the first control-plane
-request. A missing values file fails when a Signal reads the affected chunk. Errors include the
-relevant file or table context.
-
-Call `verify()` to check all files before reading data. It raises `TimeFFormatError` when a file is
-missing or does not match the manifest.
+Call `verify()` to hash every file before reading data: the version's own files, and the files it
+pins on each payload source. It raises `TimeFFormatError` when a file is missing or does not match
+its manifest record or pin.
 
 ## Round-trip guarantee
 

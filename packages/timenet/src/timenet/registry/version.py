@@ -1,86 +1,73 @@
-"""The :class:`DatasetVersion` handle: a random-access, picklable view of one committed version.
+"""Opened dataset handles with payload-source and file-path lookups."""
 
-The registry hands one of these back from :meth:`~timenet.registry.BaseRegistry.open_version`, and the
-reader (with the values backends) reads straight through it. It bundles the already-parsed manifest with
-a pyarrow filesystem and the version's root prefix on that filesystem. A read never re-opens the registry
-or re-parses ``manifest.json``. The filesystem is config-only (a
-:class:`pyarrow.fs.LocalFileSystem` today, a :class:`pyarrow.fs.S3FileSystem` later), so the whole handle
-pickles and a torch ``DataLoader`` can ship it to a worker.
-"""
+from dataclasses import dataclass, field
 
-from dataclasses import dataclass
-from pathlib import Path
-
+from fsspec import FSMap
+from fsspec.implementations.arrow import ArrowFSWrapper
+from fsspec.implementations.local import LocalFileSystem
 import pyarrow.fs as pafs
 
-from timenet.format.constants import MANIFEST_FILE, check_relative_path
+from timenet.errors import TimeFFormatError
+from timenet.format.constants import check_relative_path
 from timenet.manifest import Manifest
+from timenet.types.reference_keys import SourceKey
 
 
 @dataclass(frozen=True)
 class DatasetVersion:
-    """An opened dataset version: its manifest plus a filesystem-rooted handle to its files."""
+    """An opened release: its manifest, filesystem, and its already-opened payload sources."""
 
     manifest: Manifest
-    """The version's parsed manifest. The reader trusts it rather than re-reading ``manifest.json``."""
     filesystem: pafs.FileSystem
-    """The filesystem the version's files live on (``LocalFileSystem`` now, ``S3FileSystem`` later). It
-    MUST serve range reads. The reader pulls Parquet footers and value slices out of order through
-    ``open_input_file``, so a forward-only download stream does not qualify."""
     root: str
-    """The version's root prefix on :attr:`filesystem`. An example is ``/abs/ds/1.0.0``."""
+    payload_sources: dict[SourceKey, "DatasetVersion"] = field(default_factory=dict, compare=False, repr=False)
+    """The opened release behind each key of ``manifest.payload_sources``. Each was checked against
+    its pins when this release was opened, and its own payload sources are not opened."""
 
-    def path(self, relpath: str) -> str:
-        """Return the filesystem path of a version-relative file.
-
-        Args:
-            relpath: A path relative to the version root.
-
-        Returns:
-            The path to hand a pyarrow reader alongside :attr:`filesystem`.
-        """
-        check_relative_path("relpath", relpath)
-        return f"{self.root}/{relpath}"
-
-    def store_uri(self, relpath: str) -> str:
-        """Return a version-relative file as a store location for a store-oriented backend.
-
-        The Parquet backend reads through ``(filesystem, path)``. The Zarr backend opens a *store*
-        instead, which is what this method hands it. For a local version, the store is the plain
-        filesystem path, which Zarr opens as a ``LocalStore``. An object-store version needs a
-        scheme-qualified URI, such as ``s3://…``, because Zarr uses only this value and ignores
-        :attr:`filesystem`. The S3 backend will supply that scheme once it exists. The two accessors
-        stay distinct even though they return the same value for a local version.
+    def resolve_payload_source(self, source_key: SourceKey | None) -> "DatasetVersion":
+        """Return the opened release that stores a payload file.
 
         Args:
-            relpath: A path relative to the version root.
+            source_key: The ``source_key`` of a catalog row, a key of ``manifest.payload_sources``.
+                ``None`` means this release stores the file.
 
         Returns:
-            The store location for ``relpath``.
-        """
-        return self.path(relpath)
-
-    @classmethod
-    def open_local(cls, root: str | Path) -> "DatasetVersion":
-        """Open a committed version directory on the local filesystem.
-
-        Reads the version's ``manifest.json`` and pairs it with a :class:`pyarrow.fs.LocalFileSystem`.
-        A caller builds this handle when it already holds a version directory on disk, such as
-        build's copy-on-write edit or a downloaded copy. It does not go through a registry's
-        ``open_version``.
-
-        Args:
-            root: The version directory (``<...>/<dataset_id>/<version>``).
-
-        Returns:
-            A handle rooted at ``root``.
+            This release or one of its already-opened payload sources. No files are opened here.
 
         Raises:
-            FileNotFoundError: If ``root`` has no ``manifest.json``.
+            TimeFFormatError: If the catalog names a payload source the manifest does not list.
         """
-        root_path = Path(root)
-        manifest_path = root_path / MANIFEST_FILE
-        if not manifest_path.exists():
-            raise FileNotFoundError(f"no manifest at {manifest_path}")
-        manifest = Manifest.model_validate_json(manifest_path.read_text())
-        return cls(manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root_path))
+        if source_key is None:
+            return self
+        try:
+            return self.payload_sources[source_key]
+        except KeyError as error:
+            raise TimeFFormatError(f"unknown payload source {source_key!r} in {self.manifest.dataset_id}") from error
+
+    def resolve_file_path(self, relative_path: str) -> str:
+        """Return a file's filesystem path without checking or downloading the file.
+
+        Args:
+            relative_path: A path within this version, such as ``time_series/part-000.parquet``.
+                Absolute paths and paths that escape the version directory are rejected.
+
+        Returns:
+            The path to use with :attr:`filesystem`.
+        """
+        check_relative_path("relative_path", relative_path)
+        return f"{self.root}/{relative_path}"
+
+    def fsspec_mapper(self, relpath: str) -> FSMap:
+        """Return an fsspec mapping for a version-relative directory.
+
+        The mapping uses the prepared filesystem, including its credentials and caching.
+        Consumers choose the store's read-only policy when opening it.
+        """
+        path = self.resolve_file_path(relpath)
+        if isinstance(self.filesystem, pafs.LocalFileSystem):
+            filesystem = LocalFileSystem()
+        elif isinstance(self.filesystem, pafs.PyFileSystem) and isinstance(self.filesystem.handler, pafs.FSSpecHandler):
+            filesystem = self.filesystem.handler.fs
+        else:
+            filesystem = ArrowFSWrapper(self.filesystem)
+        return filesystem.get_mapper(path)

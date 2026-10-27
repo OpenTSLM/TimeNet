@@ -13,10 +13,15 @@ import shutil
 from typing import BinaryIO, TypeVar
 import uuid
 
+from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format.checksums import file_checksum
 from timenet.manifest import Manifest
-from timenet.registry._paths import safe_version_path
+from timenet.registry._paths import safe_version_path, split_release_dir
+from timenet.registry.dependencies import prepare_local_copy
+from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, Task
+from timenet.types.references import DatasetRef
 
 
 T = TypeVar("T")
@@ -28,6 +33,14 @@ ProgressCallback = Callable[[int], None]
 
 class BaseRegistry(ABC):
     """A source of TimeF datasets: their manifests, files, and searchable metadata."""
+
+    def __str__(self) -> str:
+        return type(self).__name__
+
+    @property
+    @abstractmethod
+    def local_root(self) -> Path:
+        """The local registry or cache directory that holds prepared releases."""
 
     @abstractmethod
     def list_datasets(self) -> list[DatasetMetadata]:
@@ -99,6 +112,47 @@ class BaseRegistry(ABC):
         manifest: Manifest | None = None,
         progress_cb: ProgressCallback | None = None,
     ) -> None:
+        """Download complete local copies of a release and of each of its payload sources.
+
+        Only the release's own payload sources are downloaded: it lists every release whose files it
+        reads. Each is checked against the files the release pins.
+
+        Args:
+            dataset_id: The dataset ID.
+            version: The exact release version.
+            dest_dir: The local ``<registry>/<org>/<name>/<version>`` directory.
+            force: Download the requested release again.
+            manifest: An already-loaded manifest for the requested release.
+            progress_cb: Report transferred bytes.
+
+        Raises:
+            TimeFValidationError: If the destination does not identify the requested release.
+        """
+        reference = DatasetRef.parse(f"{dataset_id}@{version}")
+        root, destination_ref = split_release_dir(Path(dest_dir))
+        if destination_ref != reference:
+            raise TimeFValidationError(
+                f"download destination {dest_dir} identifies {destination_ref}, expected {reference}"
+            )
+        prepare_local_copy(
+            root,
+            reference,
+            fetch_from=self,
+            manifest=manifest,
+            force=force,
+            progress_cb=progress_cb,
+        )
+
+    def _download_release(  # noqa: PLR0913
+        self,
+        dataset_id: str,
+        version: str,
+        dest_dir: str | Path,
+        *,
+        force: bool = False,
+        manifest: Manifest | None = None,
+        progress_cb: ProgressCallback | None = None,
+    ) -> None:
         """Download a version's files into ``dest_dir``, swapping the directory in atomically.
 
         Fetches every file through :meth:`open_file` into a sibling ``<version>.tmp-*`` staging
@@ -114,11 +168,14 @@ class BaseRegistry(ABC):
             force: Re-download even if a copy already exists.
             manifest: The parsed manifest, passed to avoid re-fetching it. Fetched if ``None``.
             progress_cb: Called with each staged file's byte count, for a progress display.
+
+        Raises:
+            TimeFFormatError: If a downloaded file's size or checksum differs from the manifest.
         """
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
         target = Path(dest_dir)
-        if (target / "manifest.json").exists() and not force:
+        if complete_copy(target, manifest) and not force:
             return  # already downloaded and current
         parent = target.parent
         parent.mkdir(parents=True, exist_ok=True)
@@ -128,10 +185,14 @@ class BaseRegistry(ABC):
         # sweeping it would break that download mid-write. A rare orphaned dir is the lesser evil.
         staging = parent / f"{target.name}.tmp-{uuid.uuid4().hex}"
         try:
-            for relpath in (*manifest.files.all_parts(), "manifest.json"):
-                self._stage_file(dataset_id, version, relpath, staging)
-                if progress_cb is not None and relpath != "manifest.json":
-                    progress_cb((staging / relpath).stat().st_size)
+            for part in manifest.files.all_files():
+                self._stage_file(dataset_id, version, part.path, staging)
+                path = staging / part.path
+                if path.stat().st_size != part.size or file_checksum(path) != part.checksum:
+                    raise TimeFFormatError(f"checksum or size mismatch for {part.path!r} in {dataset_id}@{version}")
+                if progress_cb is not None:
+                    progress_cb(part.size)
+            (staging / "manifest.json").write_text(manifest.to_json())
             if target.exists():
                 shutil.rmtree(target)
             staging.replace(target)

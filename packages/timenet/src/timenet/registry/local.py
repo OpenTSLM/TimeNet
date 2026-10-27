@@ -2,20 +2,19 @@
 
 from collections.abc import Callable
 from pathlib import Path
-import shutil
 from typing import BinaryIO
-
-import pyarrow.fs as pafs
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest
+from timenet.registry._paths import release_dir
+from timenet.registry.dependencies import open_local_release
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
-from timenet.types.references import is_latest
+from timenet.types.references import DatasetRef, is_latest
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -33,9 +32,17 @@ class LocalRegistry(WritableRegistry):
         # reads, for example list_datasets then search's schema filter. An mtime change invalidates it.
         self._manifest_cache: dict[tuple[str, str], tuple[float, Manifest]] = {}
 
+    def __str__(self) -> str:
+        return f"local registry {self._root}"
+
     @property
     def root(self) -> Path:
         """The directory this registry reads from and writes to."""
+        return self._root
+
+    @property
+    def local_root(self) -> Path:
+        """The directory that holds complete local releases."""
         return self._root
 
     def list_datasets(self) -> list[DatasetMetadata]:
@@ -88,7 +95,7 @@ class LocalRegistry(WritableRegistry):
                 f"no committed version for dataset {dataset_id!r}; this registry has: {known}. "
                 "Build one with `timenet-build build <id>`."
             )
-        path = self._dataset_dir(dataset_id) / resolved / MANIFEST_FILE
+        path = release_dir(self._root, DatasetRef.parse(f"{dataset_id}@{resolved}")) / MANIFEST_FILE
         if not path.exists():
             raise TimeNetDatasetNotFoundError(f"no manifest for {dataset_id!r} version {resolved!r}")
         mtime = path.stat().st_mtime
@@ -119,7 +126,7 @@ class LocalRegistry(WritableRegistry):
             TimeNetDatasetNotFoundError: If the dataset version directory does not exist.
             ValueError: If ``relpath`` escapes the dataset version directory.
         """
-        version_dir = self._dataset_dir(dataset_id) / version
+        version_dir = release_dir(self._root, DatasetRef.parse(f"{dataset_id}@{version}"))
         if not version_dir.is_dir():
             raise TimeNetDatasetNotFoundError(f"no dataset {dataset_id!r} version {version!r}")
         base = version_dir.resolve()
@@ -140,29 +147,35 @@ class LocalRegistry(WritableRegistry):
 
         Stream the dataset through a :class:`~timenet.writer.TimeFWriter`. The writer stages under
         ``<version>.tmp-*`` and publishes with a single atomic rename. It skips an already-committed
-        version unless the caller sets ``force``.
+        version unless the caller sets ``force``, which replaces it only once the new release is
+        ready, so a failed write keeps the old one. The writer checks every payload source of the
+        release against this registry, since its readers find them here.
 
         Args:
             dataset: The populated dataset to store.
-            force: Overwrite an already-committed version instead of skipping it.
+            force: Replace an already-committed version instead of skipping it.
             values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
             progress_cb: Optional writer progress callback.
 
         Returns:
             The stored version string.
-        """
+
+        Raises:
+            TimeNetDatasetNotFoundError: If the dataset reuses payloads stored by a release that this
+                registry does not hold.
+            TimeFFormatError: If this registry holds such a release in another form.
+        """  # noqa: DOC502 - the writer checks payload sources before it publishes
         if dataset.schema is None:
             dataset.derive_schema()
         version = str(dataset.metadata.dataset_version)
         dataset_id = dataset.metadata.dataset_id
-        # _dataset_dir validates the id. This rejects any ``..`` that would let the write or the
-        # force rmtree escape the root. dataset.metadata already enforces this at construction.
-        final_dir = self._dataset_dir(dataset_id) / version
+        # DatasetRef validates the release before a write can touch its directory.
+        DatasetRef.parse(f"{dataset_id}@{version}")
         if self.exists(dataset_id, version) and not force:
             return version
-        if force and final_dir.exists():
-            shutil.rmtree(final_dir)
-        with TimeFWriter(self._root, dataset, values_backend=values_backend, progress_cb=progress_cb) as writer:
+        with TimeFWriter(
+            self._root, dataset, values_backend=values_backend, progress_cb=progress_cb, replace=force, registry=self
+        ) as writer:
             writer.write()
         return version
 
@@ -171,7 +184,9 @@ class LocalRegistry(WritableRegistry):
 
         Reuses the manifest :meth:`get_manifest` already parsed and validated, so a missing version or a
         misplaced artifact surfaces there. Roots the handle at the version's directory over a
-        :class:`pyarrow.fs.LocalFileSystem`, which is zero network and already seekable.
+        :class:`pyarrow.fs.LocalFileSystem`, which is zero network and already seekable. Opening reads
+        only metadata, as :func:`~timenet.registry.open_local_version` does, and finds payload sources
+        in this registry.
 
         Args:
             dataset_id: The dataset id.
@@ -181,9 +196,8 @@ class LocalRegistry(WritableRegistry):
             A handle to the committed version's manifest and files.
         """
         manifest = self.get_manifest(dataset_id, version)
-        resolved = str(manifest.metadata.dataset_version)
-        root = self._dataset_dir(dataset_id) / resolved
-        return DatasetVersion(manifest=manifest, filesystem=pafs.LocalFileSystem(), root=str(root))
+        reference = DatasetRef(dataset_id=dataset_id, version=manifest.metadata.dataset_version)
+        return open_local_release(release_dir(self._root, reference), manifest, sources_root=self._root)
 
     def _dataset_dir(self, dataset_id: str) -> Path:
         """Return the directory holding a dataset's versions.

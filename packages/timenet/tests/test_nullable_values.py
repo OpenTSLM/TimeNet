@@ -7,7 +7,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.reader import TimeFReader
-from timenet.registry import DatasetVersion
+from timenet.registry import open_local_version
 from timenet.testing import make_dataset
 from timenet.types import DatasetMetadata, License, TimeSeriesSpec, Version, ureg
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
@@ -177,7 +177,7 @@ def _write_read(tmp_path, series, *, values_backend, leading_series=None, **writ
     with TimeFWriter(tmp_path, dataset, values_backend=values_backend, **writer_kwargs) as writer:
         writer.write()
     version_dir = tmp_path / "timenet/nullable/1.0.0"
-    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+    with TimeFReader(open_local_version(version_dir)) as reader:
         return reader.read().records[0].signals[-1]
 
 
@@ -337,7 +337,7 @@ def test_zarr_nullable_range_combines_noncontiguous_runs_in_order(tmp_path, monk
         [9.0, 0.0, None, 99.0, 99.0, None, 0.0, 7.0], spec=spec, name="x", time_axis=OrdinalAxis()
     )
     _write_read(tmp_path, series, values_backend="zarr", chunk_max_bytes=4, shard_target_bytes=32)
-    version = DatasetVersion.open_local(tmp_path / "timenet/nullable/1.0.0")
+    version = open_local_version(tmp_path / "timenet/nullable/1.0.0")
     rows = [
         StoredChunk(0, "time_series.zarr/x", ChunkDataIndex(0, None), 3),
         StoredChunk(1, "time_series.zarr/x", ChunkDataIndex(5, None), 3),

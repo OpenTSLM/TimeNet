@@ -8,9 +8,12 @@ from moto.server import ThreadedMotoServer  # noqa: E402
 import pyarrow.fs as pafs  # noqa: E402
 
 from timenet.client import TimeNet  # noqa: E402
-from timenet.errors import TimeNetRegistryError  # noqa: E402
-from timenet.registry import S3Registry  # noqa: E402
+from timenet.dataset import TimeFDataset  # noqa: E402
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError  # noqa: E402
+from timenet.reader import TimeFReader  # noqa: E402
+from timenet.registry import LocalRegistry, S3Registry  # noqa: E402
 from timenet.testing import assert_datasets_equal, make_dataset  # noqa: E402
+from timenet.types import DatasetSchema  # noqa: E402
 
 
 @pytest.fixture
@@ -37,13 +40,40 @@ def s3_root(monkeypatch):
     server.stop()
 
 
-def test_store_and_lazy_load_round_trip(s3_root, tmp_path):
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_store_and_remote_load_round_trip(s3_root, tmp_path, backend):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    version = registry.store(make_dataset())
+    version = registry.store(make_dataset(), values_backend=backend)
     assert version == str(make_dataset().metadata.dataset_version)
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
-    loaded = client.load(make_dataset().metadata.dataset_id)  # lazy S3 range reads
+    loaded = client.load(make_dataset().metadata.dataset_id)
     assert_datasets_equal(make_dataset(), loaded)
+    assert isinstance(registry.open_version(make_dataset().metadata.dataset_id).filesystem, pafs.S3FileSystem)
+    assert not (tmp_path / "cache" / make_dataset().metadata.dataset_id).exists()
+
+
+def test_store_checks_payload_sources_against_the_bucket(s3_root, tmp_path):
+    local = LocalRegistry(tmp_path / "local")
+    local.store(make_dataset())
+    # moto keeps one bucket state per process, so this test uses a prefix no other test writes.
+    registry = S3Registry("s3://tn-test/payload-sources", cache_dir=tmp_path / "cache")
+    with TimeFReader(local.open_version(make_dataset().metadata.dataset_id)) as reader:
+        parent = reader.read()
+        child = TimeFDataset.from_parts(
+            metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}),
+            records=parent.records,
+            tasks=(),
+            schema=DatasetSchema(),
+            last_ids=parent.last_ids,
+        )
+        with pytest.raises(
+            TimeNetDatasetNotFoundError,
+            match=r"of test/child@1\.0\.0 is not in S3 registry s3://tn-test/payload-sources",
+        ):
+            registry.store(child)
+    assert not registry.exists("test/child", "1.0.0")
+    keys = [obj["Key"] for obj in boto3.client("s3").list_objects_v2(Bucket="tn-test").get("Contents", [])]
+    assert not [key for key in keys if "test/child" in key]
 
 
 def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
