@@ -2,7 +2,7 @@ from fractions import Fraction
 import gc
 import weakref
 
-from _task_release import _SPEC, _metadata, _streamed, _write
+from _task_release import _SPEC, _all, _handles, _metadata, _streamed, _write
 import pyarrow as pa
 import pytest
 
@@ -11,7 +11,7 @@ from timenet.errors import TimeFValidationError
 import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.stored_values import StoredOffsets
-from timenet.reader import TimeFReader
+from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import open_local_version
 from timenet.types import AnswerTask, Split, Task
 
@@ -26,6 +26,10 @@ def test_the_tasks_of_one_stream_batch_share_its_objects(release):
     assert child.from_tasks[0] is parent
     assert other.inputs[0] is parent.inputs[0]
     assert other.input_annotations[0] is parent.input_annotations[0]
+    # The parent is a task of the batch, so it loads with its record and annotation.
+    reached = _handles(*tasks.values(), *(record for task in tasks.values() for record in task.inputs))
+    assert _all(reached, loaded=True)
+    assert _all(_handles(*other.input_annotations), loaded=True)
 
 
 def _values(record: Record) -> list[list[float]]:
@@ -50,7 +54,7 @@ def test_stream_batches_build_separate_objects_for_what_they_share(release):
     # One task read shares them across its batches: the parent it builds for a-child is the one it returns.
     with TimeFReader(open_local_version(release.path)) as reader:
         records = tuple(reader.iter_records())
-        read = release.named(reader.read_tasks(records))
+        read = release.named(reader.read_tasks(records, load=LoadPlan.ALL_EAGER))
     assert read["a-child"].from_tasks[0] is read["p-parent"]
 
 
@@ -83,7 +87,7 @@ def test_a_task_stream_holds_nothing_of_a_batch_it_has_yielded(release, monkeypa
     monkeypatch.setattr(DuckDBControlReader, "_task_rows", task_rows)
     ids = []
     with TimeFReader(open_local_version(release.path)) as reader:
-        stream = reader.iter_tasks(batch_size=1)
+        stream = reader.iter_tasks(load=LoadPlan.ALL_EAGER, batch_size=1)
         # Each task is dropped before the next batch is built; b-edit's batch walks its record's Signals.
         while (task := next(stream, None)) is not None:
             ids.append(task.id)
@@ -124,7 +128,7 @@ def test_a_stream_takes_only_a_positive_int_batch_size(release, batch_size):
         next(reader.iter_tasks(batch_size=batch_size))
 
 
-def test_signals_share_one_time_offsets_handle_per_axis_per_task_read_and_stream_batch(tmp_path, monkeypatch):
+def test_signals_share_one_time_offsets_handle_per_axis_per_task_read_and_stream_batch(tmp_path, monkeypatch, reads):
     """Each task takes a selector record and a record on one shared irregular axis."""
     dataset = TimeFDataset(metadata=_metadata())
     axis = IrregularAxis.spanning([0, 2, 5])
@@ -144,16 +148,20 @@ def test_signals_share_one_time_offsets_handle_per_axis_per_task_read_and_stream
         tasks.append(AnswerTask(inputs=(selector, shared), targets=("yes",), split=Split.TRAIN))
     dataset.add_tasks(tasks=tasks)
     monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
+    plan = LoadPlan(time_offsets=Loading.EAGER)
     with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
         selectors = tuple(reader.iter_records(task.inputs[0].id for task in tasks))
+        reads.clear()
         # Both reads run two batches of two tasks, and each batch reads its tasks' shared records.
-        by_records = reader.read_tasks(selectors)
-        by_split = list(reader.iter_tasks(split=Split.TRAIN, batch_size=2))
+        by_records = reader.read_tasks(selectors, load=plan)
+        by_split = list(reader.iter_tasks(split=Split.TRAIN, load=plan, batch_size=2))
 
     def offsets(task):
         return task.inputs[1].signals[0]._time_offsets
 
-    assert all(isinstance(offsets(task), StoredOffsets) for task in (*by_records, *by_split))
+    assert all(
+        isinstance(offsets(task), StoredOffsets) and offsets(task).is_loaded for task in (*by_records, *by_split)
+    )
     # One task read shares one handle per axis across its batches.
     assert len({id(offsets(task)) for task in by_records}) == 1
     # A stream shares one within each batch, and each batch has its own.
@@ -161,3 +169,5 @@ def test_signals_share_one_time_offsets_handle_per_axis_per_task_read_and_stream
     assert offsets(first) is offsets(second)
     assert offsets(third) is offsets(fourth)
     assert offsets(first) is not offsets(third)
+    # The task read loads the shared axis once, and the stream once per batch.
+    assert len(reads) == 3
