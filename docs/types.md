@@ -251,6 +251,7 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeNetRegistryError` | A registry cannot complete an operation. |
 | `TimeNetDatasetNotFoundError` | A dataset ID or version does not exist. |
 | `TimeFValidationError` | Input violates a TimeF invariant. |
+| `TimeFNullValuesError` | Values contain nulls that NumPy cannot hold. A `TimeFValidationError`. |
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
 

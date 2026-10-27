@@ -94,7 +94,8 @@ def test_a_mixed_record_keeps_each_series_on_its_own_axis(tmp_path):
     assert back["hatch"].time_offsets_us().tolist() == _HATCH_US
     assert back["z"].time_axis == RegularAxis.from_rate_hz(500)
     # The regular series computes its time offsets and stores none, in the same shard as those that do.
-    assert back["z"].time_offsets_loader is None
+    with pytest.raises(TimeFValidationError, match="only an IrregularAxis"):
+        back["z"].time_offsets_us()
     assert back["z"].span_us == (0, 1_000_000)
 
 
@@ -286,7 +287,8 @@ def test_zarr_keeps_only_values_in_the_values_plane(tmp_path):
     back = {ts.name: ts for ts in next(iter(TimeFReader(DatasetVersion.open_local(version)).iter_records())).signals}
     assert back["hatch"].time_offsets_us().tolist() == _HATCH_US
     assert back["steady"].to_numpy().tolist() == list(range(8))
-    assert back["steady"].time_offsets_loader is None
+    with pytest.raises(TimeFValidationError, match="only an IrregularAxis"):
+        back["steady"].time_offsets_us()
 
 
 def test_a_spec_type_cannot_collide_with_the_zarr_groups():

@@ -36,6 +36,10 @@ class TimeFEditError(TimeFValidationError):
     """An edit would leave a dataset referentially inconsistent (for example, a dangling reference)."""
 
 
+class TimeFNullValuesError(TimeFValidationError):
+    """Values contain nulls where the requested form, such as a NumPy array, cannot hold them."""
+
+
 class TimeNetInvalidCardError(TimeNetError, ValueError):
     """A dataset card YAML is malformed or fails schema validation (raised while building)."""
 

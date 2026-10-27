@@ -104,11 +104,12 @@ through boto3, so it names `boto3` too.
 Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, TimeFDataset`):
 
 - `Signal.from_values(values, *, spec, name, time_axis)`
-  is the shortcut when you already hold the values in memory. It wraps them in a loader for the
-  spec's dtype and takes `n_values` from the array length. If the source has one arbitrary time
-  offset per point, use `Signal.from_irregular(values, *, time_offsets_us, spec, name)` instead.
-  It derives the axis from the stream. Use `Signal.from_loader(..., loader=<Callable[[], pa.Array]>,
-  n_values=...)` only for lazy sources (files, remote shards).
+  is the shortcut when you already hold the values in memory. It checks them against the spec,
+  keeps them in memory, and takes `n_values` from the array length. If the source has one
+  arbitrary time offset per point, use
+  `Signal.from_irregular(values, *, time_offsets_us, spec, name)` instead. It derives the axis
+  from the stream. Use `Signal.from_loader(..., loader=<Callable[[], pa.Array]>, n_values=...)`
+  only for lazy sources (files, remote shards).
 - `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_value=ureg.<unit>, data_source=...)`.
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.

@@ -98,11 +98,11 @@ can read it directly.
 - Wire-facing types are immutable Pydantic models. Runtime objects use typed dataclasses. Specs and
   annotation content are typed [descriptors](types.md), so they pickle and round-trip through the
   reader with no runtime class synthesis. That keeps multiprocessing `DataLoader` workers safe.
-- NumPy and Arrow values share one loader interface. A [`Signal`](timef-dataset.md#signal) delegates
-  `to_arrow()`, `to_numpy()`, and `read_steps()` to its loader. NumPy conversion rejects null values.
-  Arrow reads preserve them. Its spec declares the scalar dtype and per-timestep shape. The writer
-  stores typed scalar values in Parquet by default and uses Zarr for dtype-preserving
-  multidimensional values.
+- NumPy and Arrow values share one array handle interface. A [`Signal`](timef-dataset.md#signal)
+  reads `to_arrow()`, `to_numpy()`, and `read_steps()` through a private array handle. NumPy
+  conversion rejects null values. Arrow reads preserve them. Its spec declares the scalar dtype and
+  per-timestep shape. The writer stores typed scalar values in Parquet by default and uses Zarr for
+  dtype-preserving multidimensional values.
 - Units go through [pint](https://pint.readthedocs.io). One shared registry owns every definition
   and conversion.
 - Commits are atomic. The writer stages a version into a temp directory and publishes it with a

@@ -1,22 +1,16 @@
-"""The :class:`Signal` leaf type: one logical stream with a lazy values loader."""
+"""The :class:`Signal` leaf type: one logical stream whose values sit behind an array handle."""
 
-from collections.abc import Callable, Sequence
+from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import assert_never
+from typing import TypeGuard, assert_never
 
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
-from timenet.dataset.materialized_values import (
-    NumpyMaterializedValues,
-    ValuesLoader,
-    as_values_loader,
-    materialized_values,
-)
 from timenet.dataset.span_validation import check_span_within_window
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFNullValuesError, TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import (
     Annotation,
@@ -26,16 +20,136 @@ from timenet.types import (
     TimeInterval,
     TimeSeriesSpec,
 )
+from timenet.types.handles import ArrayHandle, ArrowArray, CallableArray, NumpyArray
 from timenet.types.ids import EntityId, assigned_id
+
+
+def _validate_enum_values(
+    spec: TimeSeriesSpec,
+    values: Iterable[object],
+) -> None:
+    """Reject enum values outside the spec's codebook.
+
+    Args:
+        spec: The series' spec with its ``categories``.
+        values: The label values to check.
+
+    Raises:
+        TimeFValidationError: If any value is not in ``spec.categories``.
+    """
+    allowed = set(spec.categories)
+    unknown = {v for v in values if v not in allowed and not (v is None and spec.nullable)}
+    if unknown:
+        raise TimeFValidationError(
+            f"enum series for {spec.spec_type!r} has values outside its categories "
+            f"({list(spec.categories)!r}): {sorted(unknown, key=str)}"
+        )
+
+
+def _can_use_numpy_storage(
+    values: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array,
+    spec: TimeSeriesSpec,
+) -> TypeGuard[np.ndarray]:
+    """Check whether in-memory values can stay NumPy under this spec.
+
+    Object arrays go through Arrow, since they can hold ``None``. Text and enum specs go through
+    Arrow for its string and dictionary encodings.
+
+    Returns:
+        Whether the values are a NumPy array that a :class:`~timenet.types.handles.NumpyArray` can hold.
+    """
+    return isinstance(values, np.ndarray) and values.dtype.kind != "O" and spec.dtype not in {"str", "enum"}
+
+
+def _arrow_from_values(
+    spec: TimeSeriesSpec, values: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array
+) -> pa.Array:
+    """Build a scalar Arrow array in the spec's dtype and preserve missing values supplied as ``None``.
+
+    Returns:
+        Values converted to the spec's dtype, with a separate bit that marks whether each timestep is present.
+
+    Raises:
+        TimeFValidationError: If a non-nullable spec receives a null value, or an enum value is
+            outside the spec's categories.
+    """
+    arrow_type = pa.string() if spec.dtype in {"str", "enum"} else pa.from_numpy_dtype(np.dtype(spec.dtype))
+    if isinstance(values, pa.Array):
+        array = values.cast(arrow_type)
+    elif spec.dtype == "bool":
+        # Convert present values to booleans as NumPy does. Preserve None as an Arrow null.
+        array = pa.array([None if value is None else bool(value) for value in values], type=arrow_type)
+    else:
+        # pa.array preserves None as a null. The null count below avoids a separate scan.
+        array = pa.array(values, type=arrow_type)
+    if array.null_count and not spec.nullable:
+        raise TimeFValidationError(f"series for {spec.spec_type!r} has null values but nullable=False")
+    if spec.dtype == "enum":
+        # Encode the labels first. The dictionary stores each distinct label once.
+        # Compare these labels with the allowed categories, without creating an object for every value.
+        array = array.dictionary_encode()
+        _validate_enum_values(spec, array.dictionary.to_pylist())
+    return array
+
+
+def _in_memory(
+    spec: TimeSeriesSpec,
+    values: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array,
+    *,
+    validate_arrow: bool = False,
+) -> NumpyArray | ArrowArray:
+    """Hold in-memory values in the spec's dtype, as NumPy where they can stay NumPy.
+
+    Numeric and boolean NumPy values stay NumPy, so a NumPy read builds no Arrow. Other values
+    become an Arrow array. Arrow values are kept as they are unless ``validate_arrow`` asks for the
+    same conversion and checks.
+
+    Returns:
+        A :class:`~timenet.types.handles.NumpyArray` or an :class:`~timenet.types.handles.ArrowArray`.
+
+    Raises:
+        TimeFValidationError: If NumPy values do not have the spec's per-timestep shape, a
+            non-nullable spec receives a null value, or an enum value is outside the categories.
+    """
+    if isinstance(values, pa.Array) and not validate_arrow:
+        return ArrowArray(values)
+    if _can_use_numpy_storage(values, spec):
+        if values.ndim == 0 or values.shape[1:] != spec.value_shape:
+            raise TimeFValidationError(
+                f"series for {spec.spec_type!r} needs shape (n_steps, *{spec.value_shape}), got {values.shape}"
+            )
+        # Keep NumPy conversion rules, including truncation that pa.array rejects.
+        return NumpyArray(np.asarray(values, dtype=np.dtype(spec.dtype)))
+    return ArrowArray(_arrow_from_values(spec, values))
+
+
+def _array_handle(values: ArrayHandle | Callable[[], pa.Array]) -> ArrayHandle:
+    """Keep a value handle as it is, and wrap a plain callable to read through it on every read.
+
+    Returns:
+        The handle, or a :class:`~timenet.types.handles.CallableArray` over the callable.
+
+    Raises:
+        TimeFValidationError: If a plain callable has its own ``read_steps``, which a
+            ``CallableArray`` would never call.
+    """
+    if isinstance(values, ArrayHandle):
+        return values
+    if hasattr(values, "read_steps"):
+        raise TimeFValidationError(
+            f"{type(values).__name__} has its own read_steps(); subclass ArrayHandle to keep its range reads"
+        )
+    return CallableArray(values)
 
 
 @dataclass(frozen=True, eq=False, init=False, kw_only=True)
 class Signal(SupportsAnnotate):
-    """Reference to one logical stream of time-series data, with optional windowing and a lazy loader.
+    """Reference to one logical stream of time-series data, with optional windowing and lazy values.
 
     Each Signal has exactly one owning Source. Several Signals can share an immutable TimeAxis or
-    TimeSeriesSpec. Consumers read values through :meth:`to_arrow` or :meth:`to_numpy`. The connector
-    supplies ``loader`` at build, or :class:`~timenet.reader.TimeFReader` supplies it on read-back.
+    TimeSeriesSpec. Consumers read values through :meth:`to_arrow` or :meth:`to_numpy`, which apply the
+    spec. The values sit behind an internal :class:`~timenet.types.ArrayHandle`: the constructor holds
+    them in memory, and :meth:`from_loader` takes a handle or a callable.
     """
 
     spec: TimeSeriesSpec
@@ -46,13 +160,13 @@ class Signal(SupportsAnnotate):
     """Where this series' values sit in time. A :class:`~timenet.dataset.axis.RegularAxis` gives a
     cadence, an :class:`~timenet.dataset.axis.IrregularAxis` stores per-value time offsets, and an
     :class:`~timenet.dataset.axis.OrdinalAxis` marks a sequence with no time at all."""
-    loader: ValuesLoader
-    """Values loader with explicit Arrow, NumPy, and step-range access."""
-    time_offsets_loader: ValuesLoader | None = None
-    """Values loader returning one int64 microsecond time offset per value, for an irregular series only.
+    _values: ArrayHandle = field(repr=False)
+    """Internal handle to the series' values. The accessors read it and apply the spec."""
+    _time_offsets: ArrayHandle | None = field(default=None, repr=False)
+    """Internal handle to one int64 microsecond time offset per value, for an irregular series only.
 
-    An :class:`~timenet.dataset.axis.IrregularAxis` requires this loader, and any other axis
-    rejects it. A regular axis computes its time offsets and an ordinal one has none. A stream attached to
+    An :class:`~timenet.dataset.axis.IrregularAxis` requires these time offsets, and any other axis
+    rejects them. A regular axis computes its time offsets and an ordinal one has none. A stream attached to
     either gives a second, conflicting answer to the same question."""
     n_values: int
     """The number of values the series holds, one per timestep. If ``spec`` gives each timestep a shape,
@@ -77,13 +191,13 @@ class Signal(SupportsAnnotate):
         metadata: JsonMapping | None = None,
     ) -> None:
         """Build a signal from values that are already in memory."""
-        loader = materialized_values(spec, data)
+        held = _in_memory(spec, data)
         self._initialize(
             spec=spec,
             time_axis=time_axis,
             name=name,
-            loader=loader,
-            n_values=len(loader),
+            values=held,
+            n_values=len(held.values),
             annotations=annotations,
             metadata=metadata,
         )
@@ -95,28 +209,30 @@ class Signal(SupportsAnnotate):
         spec: TimeSeriesSpec,
         time_axis: TimeAxis,
         name: str,
-        loader: ValuesLoader | Callable[[], pa.Array],
+        loader: ArrayHandle | Callable[[], pa.Array],
         n_values: int,
-        time_offsets_loader: ValuesLoader | Callable[[], pa.Array] | None = None,
+        time_offsets_loader: ArrayHandle | Callable[[], pa.Array] | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
     ) -> "Signal":
         """Build a signal whose values are loaded only when they are read.
 
-        Accept a values loader or an existing Arrow callable. Callables are adapted to the common
-        interface without reading them. A callable's optional ``read_steps`` method stays available.
+        ``loader`` and ``time_offsets_loader`` each take a value handle, which the signal keeps as it
+        is, or a plain callable returning an Arrow array, which the signal calls on every read. A
+        callable with its own ``read_steps()`` is rejected: subclass ``ArrayHandle`` to keep its range
+        reads.
 
         Returns:
-            A signal backed by ``loader`` without calling it.
+            A signal backed by ``loader`` without reading it.
         """
         instance = cls.__new__(cls)
         instance._initialize(
             spec=spec,
             time_axis=time_axis,
             name=name,
-            loader=loader,
+            values=_array_handle(loader),
             n_values=n_values,
-            time_offsets_loader=time_offsets_loader,
+            time_offsets=None if time_offsets_loader is None else _array_handle(time_offsets_loader),
             annotations=annotations,
             metadata=metadata,
         )
@@ -128,9 +244,9 @@ class Signal(SupportsAnnotate):
         spec: TimeSeriesSpec,
         time_axis: TimeAxis,
         name: str,
-        loader: ValuesLoader | Callable[[], pa.Array],
+        values: ArrayHandle,
         n_values: int,
-        time_offsets_loader: ValuesLoader | Callable[[], pa.Array] | None = None,
+        time_offsets: ArrayHandle | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
     ) -> None:
@@ -139,10 +255,8 @@ class Signal(SupportsAnnotate):
         set_field(self, "spec", spec)
         set_field(self, "name", name)
         set_field(self, "time_axis", time_axis)
-        set_field(self, "loader", as_values_loader(loader))
-        set_field(
-            self, "time_offsets_loader", None if time_offsets_loader is None else as_values_loader(time_offsets_loader)
-        )
+        set_field(self, "_values", values)
+        set_field(self, "_time_offsets", time_offsets)
         set_field(self, "_id", None)
         set_field(self, "n_values", n_values)
         set_field(self, "annotations", tuple(annotations))
@@ -182,9 +296,9 @@ class Signal(SupportsAnnotate):
         """Validate the intrinsic per-series invariants.
 
         Raises:
-            TimeFValidationError: If ``n_values`` is not a positive integer. Also if
-                ``time_offsets_loader`` and the axis shape disagree about whether this series stores
-                per-value time offsets.
+            TimeFValidationError: If ``n_values`` is not a positive integer. Also if the time
+                offsets and the axis shape disagree about whether this series stores per-value time
+                offsets.
             ValueError: If ``signal`` is empty. The axis validates itself.
         """
         if not self.name:
@@ -193,12 +307,12 @@ class Signal(SupportsAnnotate):
         if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
             raise TimeFValidationError(f"Signal.n_values must be a positive integer, got {self.n_values!r}")
         irregular = isinstance(self.time_axis, IrregularAxis)
-        if irregular and self.time_offsets_loader is None:
+        if irregular and self._time_offsets is None:
             raise TimeFValidationError(
                 "an IrregularAxis series must carry time_offsets_loader: the axis states no cadence, so "
                 "nothing else can say where its values sit. Build it with Signal.from_irregular()"
             )
-        if not irregular and self.time_offsets_loader is not None:
+        if not irregular and self._time_offsets is not None:
             raise TimeFValidationError(
                 f"time_offsets_loader is only for an IrregularAxis series, but this one has "
                 f"{type(self.time_axis).__name__}, which already determines every time offset"
@@ -248,11 +362,10 @@ class Signal(SupportsAnnotate):
         name: str,
         time_axis: TimeAxis,
     ) -> "Signal":
-        """Build a series from already-materialized values and wrap them in a loader for the spec's dtype.
+        """Build a series from already-materialized values and hold them in memory in the spec's dtype.
 
         Numeric NumPy arrays retain their buffers when dtype and layout already match the spec.
         NumPy reads return fresh read-only views; treat the input buffers as read-only while in use.
-        Boolean inputs are copied, and NumPy reads return writable copies to keep Arrow reads consistent.
         Arrow conversion happens only on an Arrow read. Other inputs become Arrow arrays immediately.
         The array length sets ``n_values``.
 
@@ -291,9 +404,9 @@ class Signal(SupportsAnnotate):
         The axis endpoints come from the stream itself, so the two cannot disagree. You cannot state a
         first or last time offset that the time offsets do not have. To convert wall-clock moments, use
         :func:`~timenet.dataset.axis.time_offsets_from_datetimes` before you call.
-        Numeric NumPy values and normalized time offsets retain their buffers for NumPy reads.
-        Arrow conversion happens only on an Arrow read. Treat retained input buffers as read-only.
-        Boolean inputs are copied, and NumPy reads return writable copies.
+        Numeric NumPy values and normalized time offsets retain their buffers for NumPy reads, which
+        return read-only arrays. Arrow conversion happens only on an Arrow read. Treat retained input
+        buffers as read-only.
 
         Args:
             values: The signal values to convert to the spec's dtype. Text and enum specs take
@@ -314,19 +427,20 @@ class Signal(SupportsAnnotate):
         """
         if not isinstance(full_validation, bool):
             raise TimeFValidationError("full_validation must be a bool")
-        loader = materialized_values(spec, values, validate_arrow=True)
+        held = _in_memory(spec, values, validate_arrow=True)
+        n_values = len(held.values)
         time_offsets = to_time_offsets_us(time_offsets_us, validate_order=full_validation)
-        if len(time_offsets) != len(loader):
+        if len(time_offsets) != n_values:
             raise TimeFValidationError(
-                f"an irregular series needs one time offset per value, got {len(time_offsets)} time offsets for {len(loader)} values"
+                f"an irregular series needs one time offset per value, got {len(time_offsets)} time offsets for {n_values} values"
             )
         return cls.from_loader(
             spec=spec,
             name=name,
             time_axis=IrregularAxis(first_us=int(time_offsets[0]), last_us=int(time_offsets[-1])),
-            loader=loader,
-            time_offsets_loader=NumpyMaterializedValues(time_offsets),
-            n_values=len(loader),
+            loader=held,
+            time_offsets_loader=NumpyArray(time_offsets),
+            n_values=n_values,
         )
 
     def time_offsets_us(self) -> np.ndarray:
@@ -342,11 +456,11 @@ class Signal(SupportsAnnotate):
             TimeFValidationError: If this series' axis is not an
                 :class:`~timenet.dataset.axis.IrregularAxis`.
         """
-        if self.time_offsets_loader is None:
+        if self._time_offsets is None:
             raise TimeFValidationError(
                 f"only an IrregularAxis series stores time offsets, and this one has {type(self.time_axis).__name__}"
             )
-        return self.time_offsets_loader.to_numpy()
+        return self._time_offsets.read_numpy()
 
     def to_arrow(self) -> pa.Array:
         """Read the series' values as an Arrow array.
@@ -354,26 +468,32 @@ class Signal(SupportsAnnotate):
         Returns:
             A primitive array for scalar values or a fixed-shape tensor array for N-D values.
         """
-        return self.loader.to_arrow()
+        return self._values.read()
 
     def to_numpy(self) -> Shaped[np.ndarray, " time *value"]:
-        """Read the series' values as a NumPy array.
+        """Read the series' values as a read-only NumPy array.
 
         Returns:
             The series' values with shape ``(n_steps, *spec.value_shape)``.
 
         Raises:
-            TimeFValidationError: If a timestep is missing or only partially present. Use
+            TimeFNullValuesError: If a timestep is missing or only partially present. Use
                 :meth:`to_arrow` to preserve missingness. A nullable spec without actual nulls
                 remains supported, as do NaN and infinity values.
-        """  # noqa: DOC502 - raised by the values loader
-        return self.loader.to_numpy()
+        """
+        try:
+            return self._values.read_numpy()
+        except TimeFNullValuesError as error:
+            detail = str(error)
+            raise TimeFNullValuesError(
+                f"series contains null values. {detail[:1].upper()}{detail[1:]}. Use to_arrow() to preserve missingness"
+            ) from error
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Read a half-open temporal step range as Arrow without forcing a NumPy conversion.
 
-        Range-aware storage loaders read only the intersecting chunks. A connector loader that implements
-        only the no-argument callable stays compatible through a full-read slice.
+        A stored series reads only the chunks that intersect the range. A series held in memory is
+        sliced, and one from a loader callable is read in full first.
 
         Args:
             start: First temporal step, inclusive.
@@ -387,7 +507,7 @@ class Signal(SupportsAnnotate):
         """
         if start < 0 or stop < start:
             raise TimeFValidationError(f"expected 0 <= start <= stop, got start={start}, stop={stop}")
-        return self.loader.read_steps(start, stop)
+        return self._values.read_steps(start, stop)
 
     def step_range(self, span: Span) -> tuple[int, int]:
         """Return the half-open step range ``(start, stop)`` of this series that ``span`` covers.

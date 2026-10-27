@@ -19,7 +19,6 @@ from pydantic import ValidationError
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
 from timenet.dataset.dataset import _TaskValidationIndex
-from timenet.dataset.materialized_values import ValuesLoader
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
 from timenet.format.checksums import CHECKSUM_PREFIX
@@ -31,6 +30,7 @@ from timenet.format.task_target_row import TargetValueRow
 from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
+    ArrayHandle,
     ObjectKind,
     Task,
     TSCorrespondenceTask,
@@ -66,14 +66,14 @@ def _validated_irregular_offsets(signal: Signal) -> np.ndarray:
         TimeFValidationError: If the offsets are absent, malformed, a different length from the
             Signal, or disagree with the axis endpoints.
     """
-    loader = signal.time_offsets_loader
+    time_offsets = signal._time_offsets
     axis = signal.time_axis
-    if loader is None or not isinstance(axis, IrregularAxis):
-        raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
-    offsets = to_time_offsets_us(loader.to_numpy())
+    if time_offsets is None or not isinstance(axis, IrregularAxis):
+        raise TimeFValidationError(f"irregular signal {signal.id!r} has no time offsets")
+    offsets = to_time_offsets_us(time_offsets.read_numpy())
     if len(offsets) != signal.n_values:
         raise TimeFValidationError(
-            f"series {signal.id!r}: its time_offsets_loader returned {len(offsets)} time offsets "
+            f"series {signal.id!r}: reading its time offsets returned {len(offsets)} time offsets "
             f"but it declares n_values={signal.n_values}"
         )
     if int(offsets[0]) != axis.first_us or int(offsets[-1]) != axis.last_us:
@@ -150,7 +150,7 @@ class _StoredAxis(NamedTuple):
     axis_id: EntityId
     signal_name: str
     offsets: _OffsetSignature | None
-    offsets_loader: ValuesLoader | None
+    offsets_handle: ArrayHandle | None
 
 
 class _HierarchyBatches:
@@ -561,12 +561,13 @@ class DuckDBControlWriter:
         if existing is None:
             axis_id = next(self._storage_ids["axis"])
             offsets = self._write_axis(signal, axis_id, batches)
-            axes[identity] = _StoredAxis(axis_id, signal.name, offsets, signal.time_offsets_loader)
+            axes[identity] = _StoredAxis(axis_id, signal.name, offsets, signal._time_offsets)
         else:
             axis_id = existing.axis_id
             if isinstance(axis, IrregularAxis):
                 stored_offsets = cast("_OffsetSignature", existing.offsets)
-                if signal.time_offsets_loader != existing.offsets_loader:
+                # Handles over one callable compare equal, so offsets shared through it are read once.
+                if signal._time_offsets != existing.offsets_handle:
                     candidate = _validated_irregular_offsets(signal)
                     candidate_signature = _offset_signature(candidate)
                     if candidate_signature != stored_offsets:
@@ -610,7 +611,7 @@ class DuckDBControlWriter:
             A bounded signature of the irregular offsets, or ``None`` for other axis types.
 
         Raises:
-            TimeFValidationError: If an irregular signal has no offsets loader.
+            TimeFValidationError: If an irregular signal has no time offsets.
         """
         axis = signal.time_axis
         if isinstance(axis, RegularAxis):
@@ -640,8 +641,8 @@ class DuckDBControlWriter:
                     "last_us": axis.last_us,
                 }
             )
-            if signal.time_offsets_loader is None:
-                raise TimeFValidationError(f"irregular signal {signal.id!r} has no time-offset loader")
+            if signal._time_offsets is None:
+                raise TimeFValidationError(f"irregular signal {signal.id!r} has no time offsets")
             offsets = _validated_irregular_offsets(signal)
             for position, offset in enumerate(offsets):
                 batches.axis_offsets.add({"axis_id": axis_id, "position": position, "offset_us": int(offset)})

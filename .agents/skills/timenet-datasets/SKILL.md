@@ -63,9 +63,9 @@ dataset = tn.load("chengsenwang/tsqa")                    # download-if-needed, 
 
 - `TimeNet(registry=None, *, storage_path=None)`. `registry` accepts a `BaseRegistry`, a URL, a
   `file://` URI, or a local path.
-- `load(...)` returns a `TimeFDataset` with lazy per-series loaders. Call `dataset.describe()` for a
-  text summary; iterate `dataset.records` and `dataset.tasks`; get values with
-  `record.time_series[i].to_numpy()` / `.to_arrow()` (they load only when asked).
+- `load(...)` returns a `TimeFDataset` whose series read their values lazily. Call
+  `dataset.describe()` for a text summary; iterate `dataset.records` and `dataset.tasks`; get values
+  with `record.time_series[i].to_numpy()` / `.to_arrow()` (they load only when asked).
 - `load_torch(...)` returns a read-only PyTorch `Dataset`; needs the `torch` extra (`timenet[torch]`).
 - `search` task filter takes the task **class** (e.g. `from timenet.types import AnswerTask`), not a string.
 
