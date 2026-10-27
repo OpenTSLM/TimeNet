@@ -378,7 +378,7 @@ def test_child_tasks_find_parent_owned_annotations_on_records_from_another_reade
         records = list(first.iter_records())
         second = TimeFReader(version) if second_reader == "opened" else pickle.loads(pickle.dumps(first))
         with second:
-            tasks = {task.id: task for task in second.iter_tasks(records)}
+            tasks = {task.id: task for task in second.iter_tasks(inputs=records)}
 
     (child_record,) = records
     (stored,) = [annotation for annotation in child_record.annotations if annotation.key == "report"]
@@ -626,7 +626,7 @@ def test_tasks_find_packed_annotations_on_records_from_another_reader(tmp_path, 
         records = list(first.iter_records())
         second = TimeFReader(version) if second_reader == "opened" else pickle.loads(pickle.dumps(first))
         with second:
-            tasks = {task.id: task for task in second.iter_tasks(records)}
+            tasks = {task.id: task for task in second.iter_tasks(inputs=records)}
 
     (record,) = [record for record in records if record.id == answer.inputs[0].id]
     (stored,) = [annotation for annotation in record.annotations if annotation.key == "report"]
