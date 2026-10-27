@@ -208,7 +208,8 @@ inserts that stream once without retaining every Task in memory.
 The same `Annotation` type can annotate a Dataset, Task, Record, Source, or Signal. Annotation
 content is immutable and reusable. Every call to `annotate()` creates a separate occurrence, so a
 long payload can be stored once while its occurrences carry independent placement, confidence, and
-provenance.
+provenance. `Annotation` is final: reuse content through a constant, or a builder function for
+content that varies, as [Annotations](data-model/annotations.md#reuse-content) shows.
 
 ```python
 from timenet.types import Annotation, TimePoint

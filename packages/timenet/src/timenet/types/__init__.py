@@ -11,6 +11,7 @@ from timenet.types.annotations import (
 )
 from timenet.types.clock import US_PER_S, TimeOrigin, offset_us, seconds_to_us, unix_us, us_to_seconds
 from timenet.types.domains import Domain
+from timenet.types.handles import ValueHandle
 from timenet.types.ids import EntityId, check_id
 from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema
@@ -42,6 +43,7 @@ from timenet.types.tasks import (
     TSEditingTask,
     TSGenerationTask,
 )
+from timenet.types.text import TextHandle, TextListHandle, read_value, read_values
 from timenet.types.units import normalize_unit, ureg, use_as_application_registry
 from timenet.types.version import Version
 
@@ -78,17 +80,22 @@ __all__ = [
     "Task",
     "TaskType",
     "TemporalLocalizationTask",
+    "TextHandle",
+    "TextListHandle",
     "TimeInterval",
     "TimeOrigin",
     "TimePoint",
     "TimeSeriesSpec",
     "TimeSpan",
+    "ValueHandle",
     "Version",
     "annotation_type_of",
     "check_id",
     "normalize_unit",
     "offset_us",
     "parse_split",
+    "read_value",
+    "read_values",
     "seconds_to_us",
     "unix_us",
     "ureg",

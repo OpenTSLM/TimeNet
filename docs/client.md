@@ -132,6 +132,7 @@ use it.
 
 ```python
 from timenet.client import TimeNet
+from timenet.types import read_value, read_values
 
 dataset = TimeNet(".timenet-registry").load_torch("timenet/hello-world")
 item = dataset[0]
@@ -139,7 +140,9 @@ item = dataset[0]
 signal = item["series"][0]
 mask = item["series_masks"][0]
 task = item["tasks"][0]
-print(task.prompt, task.targets)
+# read_value reads a text handle and passes other values, None included,
+# through unchanged; read_values does the same for each target.
+print(read_value(task.prompt), read_values(task.targets))
 ```
 
 Each item also contains the int `record_id` and record-level `annotations`. Signal lengths and

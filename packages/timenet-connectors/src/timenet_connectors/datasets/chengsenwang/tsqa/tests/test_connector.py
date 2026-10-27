@@ -11,6 +11,7 @@ from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
 from timenet.types import AnswerTask
 from timenet.types.splits import Split
+from timenet.types.text import read_value
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.chengsenwang.tsqa import TSQAConnector
 
@@ -94,8 +95,8 @@ def test_qa_tasks_match_fixture(tmp_path):
     rows = _fixture_rows()
     qa = [t for t in dataset.tasks if isinstance(t, AnswerTask)]
     assert len(qa) == len(rows)
-    assert {t.prompt for t in qa} == {r["Question"] for r in rows}
-    assert {t.targets[0] for t in qa if t.targets is not None} == {r["Answer"] for r in rows}
+    assert {read_value(t.prompt) for t in qa} == {r["Question"] for r in rows}
+    assert {read_value(t.targets[0]) for t in qa if t.targets is not None} == {r["Answer"] for r in rows}
 
 
 def test_series_values_parsed_from_fixture(tmp_path):
@@ -148,7 +149,7 @@ def test_generated_splits_balance_categories_and_keep_signals_together(tmp_path)
         signals = set()
         categories = Counter()
         for task in tasks:
-            row = rows_by_question[task.prompt]
+            row = rows_by_question[read_value(task.prompt)]
             signals.add(row["Series"])
             categories[row["Task"]] += 1
             assert task.split == split
@@ -162,7 +163,7 @@ def test_split_assignments_are_repeatable(tmp_path):
     first = TSQAConnector().convert(_refs(tmp_path, rows))
     second = TSQAConnector().convert(_refs(tmp_path, rows))
     assert [(task.prompt, task.split) for task in first.tasks] == [(task.prompt, task.split) for task in second.tasks]
-    assert {task.prompt for task in first.tasks} == {row["Question"] for row in rows}
+    assert {read_value(task.prompt) for task in first.tasks} == {row["Question"] for row in rows}
 
 
 @pytest.mark.parametrize(
@@ -189,7 +190,9 @@ def test_splits_survive_storage_round_trip(tmp_path):
     registry.store(original)
     with TimeFReader(registry.open_version("chengsenwang/tsqa", "1.2.0")) as reader:
         restored = reader.read()
-    assert {task.prompt: task.split for task in restored.tasks} == {task.prompt: task.split for task in original.tasks}
+    assert {read_value(task.prompt): task.split for task in restored.tasks} == {
+        read_value(task.prompt): task.split for task in original.tasks
+    }
 
 
 def test_source_is_pinned():

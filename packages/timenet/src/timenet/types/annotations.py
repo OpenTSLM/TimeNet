@@ -4,9 +4,10 @@ One :class:`Annotation` class covers every case. Its optional ``span`` says how 
 in time. An absent span marks record-scoped context with no place in time, such as demographics or a
 ticker symbol. A :class:`~timenet.types.spans.TimePoint` marks one time offset. A
 :class:`~timenet.types.spans.TimeInterval` marks a bounded region of the original recording timeline.
-:class:`Annotation` is a flat frozen dataclass. It carries ``key``, ``unit``, and ``description`` as
-instance fields. A connector can author it directly, or subclass it with field defaults for reuse.
-:class:`~timenet.reader.TimeFReader` can rebuild identical instances from the manifest without runtime
+:class:`Annotation` is a flat, frozen, final dataclass. It carries ``key``, ``unit``, and
+``description`` as instance fields. A connector authors it directly, and reuses content through a
+constant, or a builder function for content that varies. Because no subclass exists,
+:class:`~timenet.reader.TimeFReader` rebuilds instances equal to the ones written, without runtime
 class synthesis. :class:`AnnotationDescriptor` is the type-level projection stored in the schema and
 manifest.
 """
@@ -15,15 +16,17 @@ from collections.abc import Hashable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 import json
-from typing import Annotated, Any, Protocol
+from typing import Annotated, Any, Protocol, final
 
 import pint
 from pydantic import BeforeValidator, StrictStr
 
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
+from timenet.types._fields import ValueField
 from timenet.types._model import TimeFModel
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
+from timenet.types.text import InlineText, InlineTextList, TextHandle, TextListHandle
 from timenet.types.units import normalize_unit
 from timenet.types.wire import ValueType
 
@@ -37,6 +40,24 @@ class AnnotationType(StrEnum):
     INTERVAL = "interval"
 
 
+AnnotationValue = TextHandle | TextListHandle | bool | int | float | None
+
+
+def _annotation_value(value: Any) -> AnnotationValue:
+    """Normalize text values to handles and reject unsupported annotation values.
+
+    Returns:
+        A text handle, a native scalar, or an absent marker value.
+    """
+    value_type_of(value)
+    if isinstance(value, str):
+        return InlineText(value)
+    if isinstance(value, list | tuple):
+        return InlineTextList(list(value))
+    return value
+
+
+@final
 @dataclass(frozen=True, kw_only=True)
 class Annotation:
     """Contextual metadata attached to a record, optionally anchored to a region of its timeline.
@@ -49,13 +70,23 @@ class Annotation:
         Annotation(key="age", value=64)
         Annotation(key="stimulus", span=TimePoint.seconds(0.5))
         Annotation(key="artifact", value="motion", span=TimeInterval.seconds(0.0, 0.25))
+
+    The class is final. Reuse content as a constant, or build content that varies with a function::
+
+        HEALTHY_ANNOTATION = Annotation(key="condition", value="healthy")
+
+
+        def quality_annotation(level: Literal["low", "medium", "high"]) -> Annotation:
+            return Annotation(key="quality", value=level)
     """
 
     key: str
     """Name identifying the annotation."""
-    value: Any = None
-    """The annotation's payload value. ``None`` makes it a pure marker, which needs a ``span`` to
-    mark something."""
+    value: ValueField[Any, AnnotationValue] = field(default=ValueField(_annotation_value, None))
+    """A native scalar or a text handle. Call ``read()`` for string and string-list values.
+
+    ``None`` makes it a pure marker, which needs a ``span`` to mark something.
+    """
     span: TimePoint | TimeInterval | None = None
     """Where on the Record timeline this annotation applies. Its owner determines its scope.
     ``None`` means it is record-scoped context with no place in time."""
@@ -76,20 +107,29 @@ class Annotation:
     occurrence_metadata: JsonMapping = field(default_factory=dict, compare=False)
     """Optional metadata for this particular application."""
 
-    def __post_init__(self) -> None:
-        """Canonicalize a sequence ``value`` to a list and normalize ``unit`` against the registry.
+    # cls is typed as a plain type: with the class final, a checker would otherwise report a
+    # subclass twice, once as a final-class error and once as a bad argument to this method.
+    def __init_subclass__(cls: type) -> None:
+        """Refuse every subclass. Field defaults on a subclass would bypass value normalization.
 
-        ``value_type`` is ``"list"`` for any sequence, and the manifest stores it as a JSON array that
-        decodes back to a list. This method converts a tuple to a list and the unit to a string. That
-        keeps an in-memory annotation equal to its read-back form, the reader's field-for-field
-        guarantee.
+        Raises:
+            TypeError: Always, naming the refused subclass.
+        """
+        raise TypeError(
+            f"Annotation can't be subclassed, so {cls.__name__} is refused. Reuse a constant "
+            "Annotation, or write a builder function that returns one"
+        )
+
+    def __post_init__(self) -> None:
+        """Normalize units and validate the annotation's span and content.
+
+        The value field wraps strings and string sequences in text handles. Call ``value.read()``
+        to obtain the native string or list. Numeric and boolean values remain native scalars.
 
         Raises:
             TimeFValidationError: If the caller sets ``span`` to something that is not a span, or
                 the annotation has neither a value nor a span.
         """
-        if isinstance(self.value, tuple):
-            object.__setattr__(self, "value", list(self.value))
         object.__setattr__(self, "unit", normalize_unit(self.unit))
         object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
         object.__setattr__(
@@ -118,15 +158,19 @@ class Annotation:
 
         The writer stores annotations with equal keys as one content row. The value type is part of
         the key, so ``True``, ``1`` and ``1.0`` differ. A float compares by its bits, so ``0.0`` and
-        ``-0.0`` differ, and every NaN is equal.
+        ``-0.0`` differ, and every NaN is equal. A text value gives its handle's content key, which
+        needs no read, so equal keys still mean equal text.
         """
         value = self.value
-        if isinstance(value, float):
-            value = float.hex(value)
-        elif isinstance(value, list):
-            value = tuple(value)
+        content: Hashable
+        if isinstance(value, TextHandle | TextListHandle):
+            content = value._content_key()
+        elif isinstance(value, float):
+            content = float.hex(value)
+        else:
+            content = value
         metadata = json.dumps(self.metadata, sort_keys=True)
-        return (self.key, value_type_of(self.value), value, self.unit, self.description, metadata)
+        return (self.key, value_type_of(value), content, self.unit, self.description, metadata)
 
     @property
     def name(self) -> str:
@@ -202,6 +246,10 @@ def value_type_of(value: Any) -> ValueType | None:
     Raises:
         TimeFValidationError: If ``value`` is a non-null value of an unsupported type.
     """
+    if isinstance(value, TextHandle):
+        return "str"
+    if isinstance(value, TextListHandle):
+        return "list"
     if value is None:
         return None
     # bool before int, since bool is an int subclass.

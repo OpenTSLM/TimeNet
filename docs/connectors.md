@@ -66,6 +66,11 @@ TimeNet rejects that ambiguous ownership.
 Signals can share immutable `TimeAxis` and `TimeSeriesSpec` objects. Annotation content can also be
 reused. Each call to `annotate()` creates a separate occurrence for the selected owner.
 
+`Annotation` and the Task classes are final. To reuse an annotation, keep a constant or write a
+builder function, as [Reuse content](data-model/annotations.md#reuse-content) shows. To reuse a
+prompt, write a function that builds the Task, as
+[Built-in task types](data-model/tasks.md#built-in-task-types) shows.
+
 ---
 
 ## Assigning dataset splits

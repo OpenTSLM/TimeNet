@@ -13,7 +13,7 @@ from timenet.format.control_audit import audit_control_database
 from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
-from timenet.types import AnswerTask, InputModality, Split, TimeSeriesSpec
+from timenet.types import AnswerTask, InputModality, Split, TimeSeriesSpec, read_value
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.bash_lab.sensorcaps import SensorCapsConnector, connector as module
 from timenet_connectors.datasets.bash_lab.sensorcaps.connector import DECLARED_SAMPLING_RATE_HZ
@@ -112,7 +112,7 @@ def _refs(tmp_path):
 
 
 def _annotations(owner):
-    return {annotation.key: annotation.value for annotation in owner.annotations}
+    return {annotation.key: read_value(annotation.value) for annotation in owner.annotations}
 
 
 def _write_row(tmp_path, row):
