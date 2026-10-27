@@ -6,6 +6,8 @@ from typing import NamedTuple
 import pytest
 
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.format.stored_values import PackedValueReader
+from timenet.reader import TimeFReader
 from timenet.types import Annotation, AnswerTask, Task, TSCorrespondenceTask, TSEditingTask
 
 
@@ -84,3 +86,18 @@ def release(tmp_path) -> _Release:
     )
     assert list(release.tasks.values()) == sorted(release.tasks.values())
     return release
+
+
+@pytest.fixture
+def reads(monkeypatch):
+    """Record every payload and array read."""
+    reads = []
+    for owner, name in ((PackedValueReader, "read_scalar"), (TimeFReader, "_read_array")):
+        original = getattr(owner, name)
+
+        def counting(self, location, *args, original=original):
+            reads.append(location)
+            return original(self, location, *args)
+
+        monkeypatch.setattr(owner, name, counting)
+    return reads

@@ -9,7 +9,7 @@ import pytest
 from timenet.dataset import TimeFDataset
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.stored_array import ChunkLocation, ChunkReader, StoredArray
-from timenet.reader import TimeFReader
+from timenet.reader import Loading, LoadPlan, TimeFReader
 import timenet.reader.reader as reader_module
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
@@ -153,9 +153,13 @@ def test_type_hints_resolve_on_the_stored_array():
 
 
 def _loaded(reader):
-    signals = _arrays(reader)
+    signals = [
+        signal
+        for record in reader.read(load=LoadPlan(signal_values=Loading.EAGER)).records
+        for signal in record.signals
+    ]
     for signal in signals:
-        signal._values._fill(signal._values.read(), signal._values._location)
+        assert isinstance(signal._values, StoredArray)
     return signals
 
 
