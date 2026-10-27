@@ -315,6 +315,10 @@ class DuckDBControlWriter:
         an edit keeps its base's IDs, and the base stored its values in ID order within each spec
         type.
         """
+        connection.execute(
+            "INSERT INTO payload_scan_groups SELECT DISTINCT source_key, value_path, chunk_major_index "
+            "FROM signal_chunks ORDER BY source_key, value_path, chunk_major_index"
+        )
         # Only a Record row whose copy the release holds counts.
         if not connection.execute(
             "SELECT 1 FROM imported_objects JOIN records ON object_id = record_id WHERE object_kind = ? LIMIT 1",
