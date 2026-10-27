@@ -1,10 +1,10 @@
 """The :class:`TimeNet` class is the SDK's single entry point for using TimeNet from code.
 
 This class wraps a :class:`~timenet.registry.BaseRegistry` (the catalog) and a local storage path
-(the download cache). It exposes these methods: ``list``, ``get``, ``search``, ``download``, and
-``load``. Against a local registry, ``load`` builds a dataset the registry does not have when an
-installed package registers a connector for its id; against a remote registry it never runs connector
-code.
+(the download cache). It exposes these methods: ``list``, ``get``, ``search``, ``download``,
+``open``, ``load``, and ``load_torch``. Against a local registry, ``open`` and ``load`` build a
+dataset the registry does not have when an installed package registers a connector for its id;
+against a remote registry they never run connector code.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -19,7 +19,7 @@ from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
+from timenet.reader import LoadPlan, TimeFReader
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry._paths import release_dir
 from timenet.registry.base import ProgressCallback
@@ -179,11 +179,14 @@ class TimeNet:
         )
         return target
 
-    def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
-        """Read the dataset into memory through the registry's storage handle.
+    def open(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFReader:
+        """Open a dataset version for lazy reads through the registry's storage handle.
 
-        Series values stay lazy once the handle is open. Remote backends open payload sources from
-        their manifests upfront and read payload ranges on demand, reusing complete cached releases.
+        Opening prepares the version and reads its manifest, but neither its catalog nor any value.
+        The reader's reads leave stored values behind value handles unless their load plan names
+        them. Close the reader after use, or use it as a context manager. Remote backends open
+        payload sources from their manifests upfront and read payload ranges on demand, reusing
+        complete cached releases.
 
         Against a local registry, a dataset the registry does not have is built first, if some
         installed package registers a connector for its id. Set ``auto_build`` false to fail fast
@@ -195,7 +198,7 @@ class TimeNet:
             auto_build: Build a missing local dataset from its connector. Set false to raise instead.
 
         Returns:
-            The dataset with lazy, per-series loaders that use the registry handle.
+            A reader for the version.
 
         Raises:
             TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
@@ -223,7 +226,29 @@ class TimeNet:
                     ) from miss
             builder.build(dataset_id, self._registry.root)
             handle = self._registry.open_version(dataset_id, version)
-        return TimeFReader(handle).read()
+        return TimeFReader(handle)
+
+    def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
+        """Read a whole dataset version into memory, with every stored value loaded.
+
+        The dataset needs no storage afterwards: its reader is closed before it is returned. For a
+        large dataset, use :meth:`open` and read what you need instead.
+
+        Args:
+            dataset_id: The dataset id.
+            version: The version string, or ``None`` for the latest.
+            auto_build: Build a missing local dataset from its connector. Set false to raise instead.
+
+        Returns:
+            The dataset with every signal array, time offset, and text value loaded.
+
+        Raises:
+            TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
+                declares a different version than the one asked for.
+            TimeNetBuildError: If the build runs but fails.
+        """  # noqa: DOC502 (both come from open())
+        with self.open(dataset_id, version, auto_build=auto_build) as reader:
+            return reader.read(load=LoadPlan.ALL_EAGER)
 
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
         """Raise for a non-open dataset read from a registry that does not host its data.
@@ -250,18 +275,20 @@ class TimeNet:
         )
 
     def load_torch(self, dataset_id: str, version: str | None = None) -> TimeFTorchDataset:
-        """Download the dataset if needed, then return it as a read-only PyTorch ``Dataset``.
+        """Open a dataset version as a read-only PyTorch ``Dataset`` that reads it a batch at a time.
 
-        This method needs the ``torch`` extra (``pip install 'timenet[torch]'``). The code
-        imports the torch view lazily, so base users do not need torch installed.
+        The view holds the reader from :meth:`open`, which lives as long as the view does. This
+        method needs the ``torch`` extra (``pip install 'timenet[torch]'``). The code imports the
+        torch view lazily, so base users do not need torch installed.
 
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
 
         Returns:
-            A :class:`~timenet.torch.TimeFTorchDataset` over the loaded dataset.
+            A :class:`~timenet.torch.TimeFTorchDataset` over a reader of the version, which reads
+            and loads one batch of records at a time.
         """
         from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
-        return TimeFTorchDataset(self.load(dataset_id, version))
+        return TimeFTorchDataset.from_reader(self.open(dataset_id, version))

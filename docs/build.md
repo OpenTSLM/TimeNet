@@ -111,8 +111,8 @@ The local check keeps build and load paths explicit:
 ```python
 from timenet.client import TimeNet
 
-dataset = TimeNet(".timenet-registry").load("org/name")
-dataset.describe()
+with TimeNet(".timenet-registry").open("org/name") as reader:
+    reader.read().describe()
 ```
 
 See [Connectors](connectors.md) for the `download()` and `convert()` contract. See the

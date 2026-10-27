@@ -30,6 +30,10 @@ with TimeFReader(version) as reader:
     values = dataset.records[0].signals[0].to_arrow()
 ```
 
+[`TimeNet.open()`](client.md#open-load-or-download) returns a `TimeFReader` for a dataset in a
+registry, and `TimeFDataset.open(path=...)` returns one for a version directory. `TimeNet.load()`
+opens a reader, reads the dataset with every value loaded, and closes the reader.
+
 Use the reader as a context manager when possible. `close()` releases open value files and decoded
 chunk caches. For a remote release, the reader fetches and verifies `control.duckdb` once, and after
 `close()` its next read reopens the verified local copy. If that copy has been removed in the
