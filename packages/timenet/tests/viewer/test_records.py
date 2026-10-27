@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import Record, Signal, Source
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import (
     TimeFFormatError,
@@ -21,11 +21,12 @@ from timenet.types import Annotation, TimeSeriesSpec
 from timenet.viewer import records as routes
 from timenet.viewer.app import create_app
 from timenet.viewer.records import RecordLimits
+from timenet.writer import TimeFWriter
 
 
 HEADERS = {"Authorization": "Bearer secret"}
 IDENTITY = {"dataset_id": "timenet/hello-world", "version": "1.0.0"}
-OPERATIONS = ["record"]
+OPERATIONS = ["record", "signal-window"]
 
 
 def _spec(**fields):
@@ -52,7 +53,9 @@ def dataset():
         ),
     )
     child.annotate(Annotation(key="label", value=True))
-    regular = Signal(name="Regular", spec=spec, time_axis=RegularAxis.from_rate_hz(2), data=[1.0, 2.0])
+    regular = Signal(
+        name="Regular", spec=spec, time_axis=RegularAxis.from_rate_hz(2), data=[float(n) for n in range(16)]
+    )
     record = Record(
         start_time=dataset.records[0].start_time,
         sources=(Source(name="Monitor", signals=(regular,), sources=(child,)),),
@@ -65,7 +68,9 @@ def dataset():
 
 @pytest.fixture
 def record_params(dataset):
-    return {**IDENTITY, "record_id": dataset.records[-1].id}
+    record = dataset.records[-1]
+    regular = next(signal for signal in record.signals if signal.name == "Regular")
+    return {**IDENTITY, "record_id": record.id, "signal_id": regular.id, "start": 0, "stop": 4}
 
 
 @pytest.fixture
@@ -142,9 +147,30 @@ def test_record_metadata_remains_lazy(get, dataset, monkeypatch, no_global_reads
 
 
 @pytest.mark.parametrize(
+    "extra,status",
+    [
+        ({"start": -1}, 422),
+        ({"stop": 2, "start": 2}, 422),
+        ({"stop": 2001}, 413),
+    ],
+)
+def test_invalid_windows_rejected_before_open(get, registry, monkeypatch, extra, status):
+    opener = MagicMock(side_effect=AssertionError("opened"))
+    monkeypatch.setattr(registry, "open_version", opener)
+    response = get("signal-window", extra)
+    assert response.status_code == status
+    assert response.json()["detail"]["operation"] == "signal-window"
+    opener.assert_not_called()
+
+
+@pytest.mark.parametrize(
     "operation,params,status",
     [
         ("record", {"record_id": 999_999}, 404),
+        ("signal-window", {"record_id": 999_999}, 404),
+        # Signal 1 belongs to the first record, not the requested one.
+        ("signal-window", {"signal_id": 1}, 404),
+        ("signal-window", {"stop": 17}, 422),
         ("record", {"record_id": ""}, 422),
         ("record", {"record_id": "absent"}, 422),
         ("record", {"record_id": 0}, 422),
@@ -178,7 +204,8 @@ def test_collection_and_response_caps(get, reads, operation, field, limit):
     assert response.status_code == 413
     assert response.json()["detail"]["code"] == "operation_limit"
     assert response.json()["detail"]["limit"] == limit
-    assert reads == []
+    windowed = operation == "signal-window" and field == "response_bytes"
+    assert [(start, stop) for _, start, stop in reads] == ([(0, 4)] if windowed else [])
 
 
 @pytest.mark.parametrize(
@@ -224,11 +251,64 @@ def test_same_worker_cleanup(get, monkeypatch, operation, failure, expected):
 
     monkeypatch.setattr(routes, "TimeFReader", TrackingReader)
     if failure == "projection":
-        monkeypatch.setattr(routes, "_signal", MagicMock(side_effect=TimeFFormatError("private")))
+        monkeypatch.setattr(
+            routes,
+            "_signal" if operation == "record" else "_window",
+            MagicMock(side_effect=TimeFFormatError("private")),
+        )
     response = get(operation)
     assert response.status_code == expected
     assert [event for event, _ in events] == ["open", "iterator", "reader"]
     assert len({thread for _, thread in events}) == 1
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        ("int32", (), [2**31 - 1, None], None),
+        ("bool", (), [True], "unsupported_plot"),
+        ("str", (), ["a"], "unsupported_plot"),
+        ("enum", (), ["a"], "unsupported_plot"),
+        ("float32", (2,), [[1, 2]], "unsupported_plot"),
+    ],
+)
+def test_plot_eligibility(get, select_record, reads, case):
+    dtype, shape, values, code = case
+    spec = _spec(dtype=dtype, value_shape=shape, categories=("a",) if dtype == "enum" else ())
+    data = pa.array(values, type=pa.list_(pa.float32(), 2)) if shape else values
+    signal = Signal(name="Test", spec=spec, time_axis=OrdinalAxis(), data=data)
+    record = TimeFDataset(metadata=make_dataset().metadata).add_record(
+        record=Record(sources=(Source(name="source", signals=(signal,)),))
+    )
+    select_record(record)
+    response = get("signal-window", {"record_id": record.id, "signal_id": signal.id, "stop": len(values)})
+    assert response.status_code == (422 if code else 200)
+    if code:
+        assert response.json()["detail"]["code"] == code
+        assert reads == []
+    else:
+        assert response.json()["values"] == values
+        assert reads == [(signal.id, 0, len(values))]
+
+
+@pytest.mark.parametrize(
+    "values,status,code",
+    [
+        ([None, float("nan"), float("inf"), -float("inf")], 200, None),
+        ([2**53 - 1, None, 1, 2], 200, None),
+        ([2**53, 1, 2, 3], 422, "unsupported_plot"),
+        ([1.0], 500, "corrupt_artifact"),
+    ],
+)
+def test_window_value_validation(get, monkeypatch, *, values, status, code):
+    monkeypatch.setattr(Signal, "read_steps", lambda *args: pa.array(values))
+    response = get("signal-window", {"start": 4, "stop": 8})
+    assert response.status_code == status
+    if code:
+        assert response.json()["detail"]["code"] == code
+    else:
+        assert response.json()["values"] == ([None] * 4 if isinstance(values[1], float) else values)
+        assert response.json()["nonfinite_steps"] == ([5, 6, 7] if isinstance(values[1], float) else [])
 
 
 def test_large_metadata_rejected_before_projection(get, select_record, monkeypatch):
@@ -238,6 +318,27 @@ def test_large_metadata_rejected_before_projection(get, select_record, monkeypat
     monkeypatch.setattr(routes, "_signal", MagicMock(side_effect=AssertionError("projected before byte guard")))
     response = get(params={"record_id": record.id}, record_limits=RecordLimits(response_bytes=100))
     assert response.status_code == 413
+
+
+def test_real_window_across_storage_chunks(tmp_path, reads, no_global_reads, monkeypatch):
+    dataset = make_dataset()
+    record = dataset.records[1]
+    signal = max(record.signals, key=lambda item: item.n_values)
+    expected = signal.to_arrow().slice(5, 20).to_pylist()
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path / "registry", dataset, chunk_max_bytes=32) as writer:
+        writer.write()
+    monkeypatch.setattr(Signal, "time_offsets_us", MagicMock(side_effect=AssertionError("loaded offsets")))
+    client = TestClient(create_app(LocalRegistry(tmp_path / "registry"), token="secret", origin="http://testserver"))
+    response = client.get(
+        "/api/v1/signal-window",
+        params={**IDENTITY, "record_id": record.id, "signal_id": signal.id, "start": 5, "stop": 25},
+        headers=HEADERS,
+    )
+    assert response.status_code == 200
+    assert response.json()["values"] == expected
+    assert response.json()["nonfinite_steps"] == []
+    assert reads == [(signal.id, 5, 25)]
 
 
 @pytest.mark.parametrize("operation", OPERATIONS)
