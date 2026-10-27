@@ -1231,6 +1231,22 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFNotFoundError: If an ID names no stored task.
+        """  # noqa: DOC502 - raised by _read_tasks_with_records
+        return self._read_tasks_with_records(task_ids)[0]
+
+    def _read_tasks_with_records(
+        self, task_ids: Collection[EntityId]
+    ) -> tuple[dict[EntityId, Task], dict[EntityId, Record], tuple[Annotation, ...]]:
+        """Build the given tasks as :meth:`read_tasks_by_id` does, with every Record and dataset occurrence the read built.
+
+        Returns:
+            The tasks by ID; by ID, the Records the read built for them and the tasks they derive
+            from: the Records they reference, and those that hold their Signal targets and the
+            annotations they reference; and the occurrences of the dataset itself that they
+            reference.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored task.
         """  # noqa: DOC502 - raised by _require_found
         stored = {
             task_id
@@ -1239,8 +1255,9 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
             )
         }
         _require_found(ObjectKind.TASK, task_ids, stored)
-        tasks = _TaskHydration(self, None).read_ids(list(task_ids))
-        return {task.id: task for task in tasks}
+        hydration = _TaskHydration(self, None)
+        tasks = hydration.read_ids(list(task_ids))
+        return {task.id: task for task in tasks}, dict(hydration.records_by_id), tuple(hydration.dataset_occurrences)
 
     def read_tasks(  # noqa: PLR0913 - one argument per task selection axis
         self,
@@ -1964,6 +1981,8 @@ class _TaskHydration:
         self._records_without_signal_index: list[Record] = []
         self.annotations_by_id: MutableMapping[int, Annotation] = {}
         self._foreign_records: list[Record] = []
+        self.dataset_occurrences: list[Annotation] = []
+        """The occurrences of the dataset itself that the scope read for its tasks' references."""
         self.retained: dict[int, Task] = {}
         self._hydrating: set[int] = set()
         # The lookups of the caller's objects that a stream's batches share, or None for one pass.
@@ -2073,6 +2092,7 @@ class _TaskHydration:
         self._foreign_records = given.foreign
         self._dataset_annotations_indexed = given.dataset_annotations_indexed
         self.retained = {}
+        self.dataset_occurrences = []
 
     def _hydrate_scope(self, task_ids: list[int], given: _Lookups) -> list[Task]:
         """Build one batch in a scope of its own, which ends when the batch is built.
@@ -2394,7 +2414,8 @@ class _TaskHydration:
             unresolved = [occurrence_id for occurrence_id in unresolved if occurrence_id not in resolved]
         if unresolved and not self._dataset_annotations_indexed:
             # The scope's own lookup keeps them, so a later batch of a stream reads its own copies.
-            self.reader._read_annotations({ObjectKind.DATASET: unresolved}, self.annotations_by_id)
+            read = self.reader._read_annotations({ObjectKind.DATASET: unresolved}, self.annotations_by_id)
+            self.dataset_occurrences.extend(annotation for annotations in read.values() for annotation in annotations)
         for occurrence_id in unresolved:
             annotation = self.annotations_by_id.get(occurrence_id)
             if annotation is None:
