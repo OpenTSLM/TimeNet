@@ -270,7 +270,7 @@ class Record(SupportsAnnotate):
         return self.signals[0].to_arrow()
 
     def to_numpy(self) -> np.ndarray:
-        """Read the sole signal's values through its NumPy loader.
+        """Read the sole signal's values as NumPy, without building Arrow when they are NumPy.
 
         Returns:
             The single :class:`Signal`' values as an ``np.ndarray``.

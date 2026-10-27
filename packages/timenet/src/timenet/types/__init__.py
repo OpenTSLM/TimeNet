@@ -11,7 +11,7 @@ from timenet.types.annotations import (
 )
 from timenet.types.clock import US_PER_S, TimeOrigin, offset_us, seconds_to_us, unix_us, us_to_seconds
 from timenet.types.domains import Domain
-from timenet.types.handles import ValueHandle
+from timenet.types.handles import ArrayHandle, ValueHandle
 from timenet.types.ids import EntityId, check_id
 from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema
@@ -56,6 +56,7 @@ __all__ = [
     "AnnotationDescriptor",
     "AnnotationType",
     "AnswerTask",
+    "ArrayHandle",
     "ClassificationTask",
     "DatasetMetadata",
     "DatasetSchema",

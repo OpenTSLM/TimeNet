@@ -46,11 +46,6 @@ MATRIX = (
 """Default matrix covering both backends, two chunking regimes, and rich Zarr values."""
 
 
-_SKIPPED = frozenset({"loader", "time_offsets_loader"})
-"""Executable fields that the fingerprint skips. The fingerprint also skips private fields, which
-hold the ids. It names a referenced object by its position."""
-
-
 @dataclass
 class _Positions:
     """Where each record and each signal sits in the read order, keyed by id."""
@@ -88,7 +83,8 @@ def _canonical(value: Any, positions: _Positions | None = None) -> Any:  # noqa:
         return {
             item.name: _canonical(getattr(value, item.name), positions)
             for item in fields(value)
-            if item.name not in _SKIPPED and not item.name.startswith("_")
+            # Private fields hold the ids and a Signal's value handles.
+            if not item.name.startswith("_")
         }
     if isinstance(value, dict):
         return {

@@ -1,14 +1,18 @@
+from dataclasses import dataclass
 import json
 
 import duckdb
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset.axis import IrregularAxis, RegularAxis
 from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
+from timenet.reader import TimeFReader
+from timenet.registry import DatasetVersion
 from timenet.testing import make_dataset
 from timenet.types import (
     Annotation,
@@ -30,6 +34,47 @@ def _written(tmp_path, dataset=None, **kwargs):
     with TimeFWriter(tmp_path, dataset, **kwargs) as writer:
         writer.write()
     return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+
+
+@dataclass
+class _Offsets:
+    """An offsets loader whose dataclass ``==`` compares NumPy arrays, which have no single truth value."""
+
+    us: np.ndarray
+
+    def __call__(self) -> pa.Array:
+        return pa.array(self.us)
+
+
+def test_signals_that_share_an_irregular_axis_through_separate_array_loaders_write(tmp_path):
+    offsets = np.array([0, 5_000, 9_000], dtype=np.int64)
+    axis = IrregularAxis.spanning(offsets.tolist())
+    spec = TimeSeriesSpec(spec_type="env", name="Environment", unit_value=ureg.dimensionless)
+    signals = tuple(
+        Signal.from_loader(
+            name=name,
+            spec=spec,
+            time_axis=axis,
+            n_values=3,
+            loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
+            time_offsets_loader=_Offsets(offsets.copy()),
+        )
+        for name in ("temperature", "humidity")
+    )
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="demo/shared-axis",
+            dataset_version=Version(1, 0, 0),
+            name="Shared axis",
+            description="d",
+            license=License.MIT,
+        )
+    )
+    dataset.add_record(record=Record(sources=(Source(name="Station", signals=signals),)))
+
+    with TimeFReader(DatasetVersion.open_local(_written(tmp_path, dataset))) as reader:
+        (record,) = reader.read().records
+    assert [signal.time_offsets_us().tolist() for signal in record.signals] == [offsets.tolist()] * 2
 
 
 # ---- layout & manifest ------------------------------------------------------------------------

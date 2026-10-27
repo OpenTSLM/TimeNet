@@ -259,7 +259,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
                 spec=signal.spec,
                 name=signal.name,
                 time_axis=signal.time_axis,
-                loader=signal.loader,
+                loader=signal._values,
                 n_values=signal.n_values,
             )
             for signal in ecg.signals
