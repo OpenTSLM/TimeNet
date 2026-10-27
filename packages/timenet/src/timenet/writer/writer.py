@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 class TimeFWriter:
     """Context manager that serializes a dataset into the TimeF format and commits it atomically."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         root: Path,
         dataset: TimeFDataset,
@@ -139,7 +139,7 @@ class TimeFWriter:
         self._written = False
         if registry is None:
             # The registry package imports the writer, so the default is resolved here.
-            from timenet.registry.local import LocalRegistry  # noqa: PLC0415
+            from timenet.registry.local import LocalRegistry  # ruff: ignore[import-outside-top-level]
 
             registry = LocalRegistry(self._root)
         self._storage_sources = StorageSources(
@@ -272,7 +272,7 @@ class TimeFWriter:
 
     @property
     def payload_sources(self) -> Mapping[SourceKey, PayloadSource]:
-        """Return the releases that store the payloads this release reuses, pinned to their files.
+        """The releases that store the payloads this release reuses, pinned to their files.
 
         :meth:`write` fills it, and the manifest records it as ``payload_sources``.
         """
@@ -380,7 +380,7 @@ class TimeFWriter:
                 )
         return shared, owned
 
-    def _read_and_validate(self, ts: Signal) -> pa.Array:  # noqa: PLR6301
+    def _read_and_validate(self, ts: Signal) -> pa.Array:  # ruff: ignore[no-self-use]
         """Read a series' values and enforce the per-series array contract.
 
         Args:
@@ -466,7 +466,7 @@ class TimeFWriter:
         with connect_control(self._staging_dir / CONTROL_FILE, read_only=True) as connection:
 
             def count(table: str) -> int:
-                row = connection.execute(f"SELECT count(*) FROM {table}").fetchone()  # noqa: S608
+                row = connection.execute(f"SELECT count(*) FROM {table}").fetchone()  # ruff: ignore[hardcoded-sql-expression]
                 if row is None:
                     raise TimeFValidationError(f"could not count rows in control table {table!r}")
                 return int(row[0])

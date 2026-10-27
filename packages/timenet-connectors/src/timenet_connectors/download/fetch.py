@@ -104,7 +104,7 @@ async def download_files(
     return [artifact.dest for artifact in items]
 
 
-async def ensure_archive(  # noqa: PLR0913
+async def ensure_archive(  # ruff: ignore[too-many-arguments]
     url: str,
     target: str | Path,
     *,

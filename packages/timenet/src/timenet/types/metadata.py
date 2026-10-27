@@ -107,11 +107,11 @@ class DatasetMetadata(TimeFModel):
             TimeNetInvalidCardError: If the build extra is missing, or the card is unreadable or is
                 not a mapping.
         """
-        from timenet.errors import TimeNetInvalidCardError  # noqa: PLC0415
+        from timenet.errors import TimeNetInvalidCardError  # ruff: ignore[import-outside-top-level]
 
         card_path = Path(path)
         try:
-            import yaml  # noqa: PLC0415
+            import yaml  # ruff: ignore[import-outside-top-level]
         except ModuleNotFoundError as exc:
             raise TimeNetInvalidCardError(
                 "reading a dataset card needs PyYAML; install the 'timenet[build]' extra"

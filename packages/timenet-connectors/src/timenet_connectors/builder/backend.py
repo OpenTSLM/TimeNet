@@ -11,7 +11,7 @@ from timenet_connectors.discovery import connector_dir, has_connector, resolve
 class ConnectorBuilder:
     """Builds a dataset by running its connector in an environment built from its requirements."""
 
-    def knows(self, dataset_id: str) -> bool:  # noqa: PLR6301 (BuilderBackend protocol method)
+    def knows(self, dataset_id: str) -> bool:  # ruff: ignore[no-self-use] (BuilderBackend protocol method)
         """Report whether a connector package exists for the id, without importing it.
 
         Args:
@@ -22,7 +22,7 @@ class ConnectorBuilder:
         """
         return has_connector(dataset_id)
 
-    def declared_version(self, dataset_id: str) -> str | None:  # noqa: PLR6301 (protocol)
+    def declared_version(self, dataset_id: str) -> str | None:  # ruff: ignore[no-self-use] (protocol)
         """Read the version the connector's card declares, without importing or building it.
 
         Args:
@@ -31,8 +31,8 @@ class ConnectorBuilder:
         Returns:
             The declared version string, or ``None`` if no readable card exists.
         """
-        from timenet.errors import TimeNetInvalidCardError  # noqa: PLC0415
-        from timenet.types import DatasetMetadata  # noqa: PLC0415
+        from timenet.errors import TimeNetInvalidCardError  # ruff: ignore[import-outside-top-level]
+        from timenet.types import DatasetMetadata  # ruff: ignore[import-outside-top-level]
 
         try:
             card = DatasetMetadata.from_yaml(connector_dir(dataset_id) / "dataset.yaml")
@@ -40,7 +40,7 @@ class ConnectorBuilder:
             return None
         return str(card.dataset_version)
 
-    def build(  # noqa: PLR6301 (protocol)
+    def build(  # ruff: ignore[no-self-use] (protocol)
         self,
         dataset_id: str,
         root: Path,

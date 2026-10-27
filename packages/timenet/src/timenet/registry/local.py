@@ -164,7 +164,7 @@ class LocalRegistry(WritableRegistry):
             TimeNetDatasetNotFoundError: If the dataset reuses payloads stored by a release that this
                 registry does not hold.
             TimeFFormatError: If this registry holds such a release in another form.
-        """  # noqa: DOC502 - the writer checks payload sources before it publishes
+        """  # ruff: ignore[docstring-extraneous-exception] - the writer checks payload sources before it publishes
         if dataset.schema is None:
             dataset.derive_schema()
         version = str(dataset.metadata.dataset_version)

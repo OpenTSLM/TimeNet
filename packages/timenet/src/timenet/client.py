@@ -108,7 +108,7 @@ class TimeNet:
         dataset_id, version = _resolve_ref(dataset_id, version)
         return self._registry.get_manifest(dataset_id, version)
 
-    def search(  # noqa: PLR0913
+    def search(  # ruff: ignore[too-many-arguments]
         self,
         *,
         query: _OrList[str] = None,
@@ -201,7 +201,7 @@ class TimeNet:
             TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
                 declares a different version than the one asked for.
             TimeNetBuildError: If the build runs but fails.
-        """  # noqa: DOC502 (TimeNetBuildError comes from the builder, not from here)
+        """  # ruff: ignore[docstring-extraneous-exception] (TimeNetBuildError comes from the builder, not from here)
         dataset_id, version = _resolve_ref(dataset_id, version)
         self._reject_unhosted_access(dataset_id, version)
         try:
@@ -262,6 +262,6 @@ class TimeNet:
         Returns:
             A :class:`~timenet.torch.TimeFTorchDataset` over the loaded dataset.
         """
-        from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
+        from timenet.torch import TimeFTorchDataset  # ruff: ignore[import-outside-top-level]
 
         return TimeFTorchDataset(self.load(dataset_id, version))

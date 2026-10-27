@@ -97,7 +97,7 @@ class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
         Raises:
             ImportError: If ``huggingface_hub``, declared in the connector's requirements, is missing.
             TimeNetDownloadError: If a declared file is absent from the revision or cannot be downloaded.
-        """  # noqa: DOC502 - both are raised by download_hub_files
+        """  # ruff: ignore[docstring-extraneous-exception] - both are raised by download_hub_files
         paths = await download_hub_files(
             self.HF_REPO, list(self.SOURCE_FILES.values()), revision=self.SOURCE_REVISION, cache_dir=cache_dir
         )

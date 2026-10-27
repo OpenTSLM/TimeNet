@@ -97,7 +97,7 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[EntityId], *, cas
     return edited
 
 
-def _tasks_to_remove(  # noqa: PLR0913 - each collection represents one part of edit reachability
+def _tasks_to_remove(  # ruff: ignore[too-many-arguments] - each collection represents one part of edit reachability
     dataset: TimeFDataset,
     remove: set[EntityId],
     removed_signal_ids: set[EntityId],
@@ -195,8 +195,8 @@ def _task_invalidated(
     are the answer and therefore cannot be stripped. Input annotations are context, so
     :func:`_rebuild_tasks` removes the ones that are no longer reachable.
     """
-    from timenet.dataset.record import Record  # noqa: PLC0415
-    from timenet.dataset.time_series import Signal  # noqa: PLC0415
+    from timenet.dataset.record import Record  # ruff: ignore[import-outside-top-level]
+    from timenet.dataset.time_series import Signal  # ruff: ignore[import-outside-top-level]
 
     targets = task.targets or ()
     target_record_ids = {target.id for target in targets if isinstance(target, Record)}

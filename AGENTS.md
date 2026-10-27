@@ -112,11 +112,11 @@ run every `gh stack` command non-interactively (always pass branch names to `ini
 ## Docstrings
 - Write Google-style docstrings; ruff enforces them via `D` (pydocstyle) and `DOC`
   (pydoclint), so every public module, class, and function needs one.
-- Document arguments and return values when they aren't obvious; `D417` is relaxed,
-  so you don't have to document every parameter, but `DOC` checks that any
-  documented args/returns match the signature.
-- `__init__` and magic methods are exempt (`D107`, `D105`). Tests skip docstring
-  rules entirely.
+- Document arguments and return values when they aren't obvious; `undocumented-param`
+  (`D417`) is relaxed, so you don't have to document every parameter, but `DOC` checks
+  that any documented args/returns match the signature.
+- `__init__` and magic methods are exempt (`undocumented-public-init` (`D107`),
+  `undocumented-magic-method` (`D105`)). Tests skip docstring rules entirely.
 
 ## Implementation Guidelines
 - Prefer small, reviewable changes.

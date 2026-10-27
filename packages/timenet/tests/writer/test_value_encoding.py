@@ -371,8 +371,8 @@ def test_self_check_tolerates_the_dictionary_to_plain_fallback():
 def test_a_wrong_column_path_is_caught(tmp_path):
     # Proves the self-check has teeth: ask for BYTE_STREAM_SPLIT on a path that does not exist and
     # pyarrow silently writes its default instead.
-    from timenet.format.schemas import shard_schema  # noqa: PLC0415
-    from timenet.writer import encodings  # noqa: PLC0415
+    from timenet.format.schemas import shard_schema  # ruff: ignore[import-outside-top-level]
+    from timenet.writer import encodings  # ruff: ignore[import-outside-top-level]
 
     schema = shard_schema()
     path = tmp_path / "typo.parquet"

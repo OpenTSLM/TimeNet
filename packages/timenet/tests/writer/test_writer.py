@@ -386,6 +386,6 @@ def test_per_series_array_contract_enforced(tmp_path):
 
 def test_int32_guard_is_exposed():
     # The guard is a documented invariant; verify the constant/limit exists.
-    from timenet.values_backends.parquet.writer import MAX_ELEMENTS_PER_ROW_GROUP  # noqa: PLC0415
+    from timenet.values_backends.parquet.writer import MAX_ELEMENTS_PER_ROW_GROUP  # ruff: ignore[import-outside-top-level]
 
     assert MAX_ELEMENTS_PER_ROW_GROUP == 2**31

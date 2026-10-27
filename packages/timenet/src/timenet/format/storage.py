@@ -62,7 +62,7 @@ class StorageSources:
                 output release.
             TimeNetDatasetNotFoundError: If the target registry does not hold the source.
             TimeFFormatError: If the target registry's source records a reused file differently.
-        """  # noqa: DOC502 - the registry check raises in a helper
+        """  # ruff: ignore[docstring-extraneous-exception] - the registry check raises in a helper
         manifest = release.resolve_payload_source(location.source).manifest
         ref = DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
         if ref == self.target:
@@ -90,7 +90,7 @@ class StorageSources:
 
     @property
     def sources(self) -> dict[SourceKey, PayloadSource]:
-        """Return each payload source with the files the new release reads from it, for the manifest."""
+        """Each payload source with the files the new release reads from it, for the manifest."""
         sources: dict[SourceKey, PayloadSource] = {}
         for key in sorted(self._releases):
             pins = self._pins[key]

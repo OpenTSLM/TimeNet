@@ -134,9 +134,9 @@ def test_handles_of_one_kind_compare_by_content():
 
 def test_handles_compare_with_native_values_of_their_kind_from_either_side():
     assert InlineText("note") == "note"
-    assert "note" == InlineText("note")  # noqa: SIM300 - the reflected comparison is the point
+    assert "note" == InlineText("note")  # ruff: ignore[yoda-conditions] - the reflected comparison is the point
     assert InlineTextList(["a", "b"]) == ["a", "b"]
-    assert ["a", "b"] == InlineTextList(["a", "b"])  # noqa: SIM300 - the reflected comparison is the point
+    assert ["a", "b"] == InlineTextList(["a", "b"])  # ruff: ignore[yoda-conditions] - the reflected comparison is the point
     assert InlineText("note") != "other"
     assert InlineTextList(["a"]) != ["b"]
 
@@ -160,8 +160,8 @@ def test_handles_of_different_kinds_compare_unequal_without_a_read():
 
 def test_a_handle_never_equals_a_non_text_value():
     assert InlineText("1") != 1
-    assert InlineText("note") != None  # noqa: E711
-    assert InlineTextList([]) != None  # noqa: E711
+    assert InlineText("note") != None  # ruff: ignore[none-comparison]
+    assert InlineTextList([]) != None  # ruff: ignore[none-comparison]
 
 
 def test_stored_and_inline_text_with_the_same_content_are_equal():
@@ -329,7 +329,7 @@ def test_a_text_annotation_equals_its_copies():
 def test_annotations_sharing_a_key_can_be_found_in_a_list():
     sleep = Annotation(key="label", value="sleep")
     wake = Annotation(key="label", value="wake")
-    assert wake in [sleep, wake]  # noqa: PLR6201 - annotations are unhashable, so a set cannot hold them
+    assert wake in [sleep, wake]  # ruff: ignore[literal-membership] - annotations are unhashable, so a set cannot hold them
     assert [sleep, wake].index(wake) == 1
 
 

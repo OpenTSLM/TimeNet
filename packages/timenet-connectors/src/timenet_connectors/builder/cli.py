@@ -69,7 +69,7 @@ def _resolve_target(out: str | None) -> WritableRegistry | Path:
 
 
 @app.command()
-def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
+def build(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] (a typer command: one parameter per option)
     dataset_id: str,
     out: str | None = typer.Option(
         None,

@@ -75,7 +75,7 @@ class _RecordRow(NamedTuple):
 
     @property
     def id(self) -> EntityId:
-        """Return the Record id."""
+        """The Record id."""
         return self.record_id
 
 
@@ -90,7 +90,7 @@ class _SourceRow(NamedTuple):
 
     @property
     def id(self) -> EntityId:
-        """Return the Source id."""
+        """The Source id."""
         return self.source_id
 
 
@@ -115,12 +115,12 @@ class _SignalRow(NamedTuple):
 
     @property
     def id(self) -> EntityId:
-        """Return the Signal id."""
+        """The Signal id."""
         return self.signal_id
 
     @property
     def spec_fields(self) -> tuple[Any, ...]:
-        """Return the columns that together identify one inline specification, as a hashable key."""
+        """The columns that together identify one inline specification, as a hashable key."""
         return (
             self.spec_type,
             self.spec_name,
@@ -147,7 +147,7 @@ class _ChunkRow(NamedTuple):
 
     @property
     def stored_chunk(self) -> StoredChunk:
-        """Return the value-reader locator represented by this catalog row."""
+        """The value-reader locator represented by this catalog row."""
         return StoredChunk(
             chunk_idx=self.chunk_index,
             chunk_file=self.value_path,
@@ -203,7 +203,7 @@ class _TaskRow(NamedTuple):
 
     @property
     def payload_columns(self) -> dict[str, str | None]:
-        """Return the subclass configuration columns for the task codec."""
+        """The subclass configuration columns for the task codec."""
         return {
             "target_schema": self.target_schema,
             "unit": self.unit,
@@ -267,7 +267,7 @@ def _annotation_query(owners: Mapping[ObjectKind, Collection[int] | None]) -> tu
                c.float_value, c.boolean_value, c.text_list_value, c.unit, c.description, c.metadata
         FROM {occurrences} o
         LEFT JOIN annotation_contents c USING (content_id)
-        ORDER BY o.occurrence_id"""  # noqa: S608 - fixed fragments
+        ORDER BY o.occurrence_id"""  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
     return query, parameters
 
 
@@ -515,7 +515,7 @@ class DuckDBControlReader:
             row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY record_id").fetchall()
         )
 
-    def read_records(  # noqa: PLR0912, PLR0914, PLR0915 - related row sets stay together
+    def read_records(  # ruff: ignore[too-many-branches, too-many-locals, too-many-statements] - related row sets stay together
         self,
         record_ids: Iterable[int] | None = None,
         *,
@@ -597,7 +597,7 @@ class DuckDBControlReader:
                 annotations=annotations.get((ObjectKind.SIGNAL, signal_row.signal_id), ()),
                 metadata=_decode_json(signal_row.metadata, default={}),
             )
-            object.__setattr__(signal, "_id", signal_row.signal_id)  # noqa: PLC2801 (Signal is frozen)
+            object.__setattr__(signal, "_id", signal_row.signal_id)  # ruff: ignore[unnecessary-dunder-call] (Signal is frozen)
             signals_by_source[signal_row.source_id].append(signal)
 
         missing_clocks = {row.clock_id for row in records_by_id.values()} - self._clock_cache.keys()
@@ -679,7 +679,7 @@ class DuckDBControlReader:
         table, id_column, relation_column, kind = _HIERARCHY_TABLES[row_type]
         columns = ", ".join(row_type._fields)
         query = (
-            f"SELECT {columns} FROM {table} WHERE ? OR {relation_column} "  # noqa: S608 - fixed identifiers
+            f"SELECT {columns} FROM {table} WHERE ? OR {relation_column} "  # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
             f"IN (SELECT unnest(?)) ORDER BY {id_column}"
         )
         cursor = self.connection.execute(query, [related_ids is None, list(related_ids or ())])
@@ -781,7 +781,7 @@ class DuckDBControlReader:
             self.connection.execute(
                 f"""SELECT {columns} FROM signal_chunks
                    WHERE signal_id IN (SELECT unnest(?))
-                   ORDER BY signal_id, chunk_index""",  # noqa: S608 - fixed column names
+                   ORDER BY signal_id, chunk_index""",  # ruff: ignore[hardcoded-sql-expression] - fixed column names
                 [list(ids)],
             ),
             _ChunkRow._make,
@@ -812,7 +812,7 @@ class DuckDBControlReader:
 
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
-        """  # noqa: DOC502 - raised by _TaskHydration
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _TaskHydration
         hydration = _TaskHydration(self, None if records is None else tuple(records), cached_records=cached_records)
         return tuple(hydration.read_all())
 
@@ -845,7 +845,7 @@ class DuckDBControlReader:
 
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
-        """  # noqa: DOC502 - raised by _TaskHydration
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _TaskHydration
         hydration = _TaskHydration(
             self,
             None if records is None else tuple(records),
@@ -923,7 +923,7 @@ class DuckDBControlReader:
                 LEFT JOIN inputs USING (task_id)
                 LEFT JOIN parents USING (task_id)
                 {where}
-                ORDER BY t.task_id""",  # noqa: S608 - fixed fragments
+                ORDER BY t.task_id""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
             parameters,
         ).to_arrow_table()
 
@@ -954,7 +954,7 @@ class DuckDBControlReader:
                 FROM task_targets x
                 JOIN tasks t USING (task_id)
                 {where}
-                ORDER BY t.task_id, x.position""",  # noqa: S608 - fixed fragments
+                ORDER BY t.task_id, x.position""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
             parameters,
         ).to_arrow_table()
 
@@ -983,7 +983,7 @@ class DuckDBControlReader:
                 FROM annotation_occurrences o
                 JOIN annotation_contents c USING (content_id)
                 {where}
-                ORDER BY o.object_type, o.object_id, o.occurrence_id""",  # noqa: S608 - fixed fragments
+                ORDER BY o.object_type, o.object_id, o.occurrence_id""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
             [] if object_type is None else [object_type],
         ).to_arrow_table()
 
@@ -1000,7 +1000,7 @@ class DuckDBControlReader:
             f"""WHERE t.task_id IN (
                    SELECT task_id FROM task_record_refs
                    WHERE field = '{TaskRelationshipField.INPUTS}' AND record_id IN (SELECT unnest(?))
-               )""",  # noqa: S608 - fixed field name
+               )""",  # ruff: ignore[hardcoded-sql-expression] - fixed field name
             [[check_id(item, "record id") for item in record_ids]],
         )
 
@@ -1036,7 +1036,7 @@ class DuckDBControlReader:
 
         Raises:
             TimeFValidationError: If the split is unknown.
-        """  # noqa: DOC502 - raised by parse_split
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by parse_split
         if split is None:
             return "", []
         return "t.split = ?", [parse_split(split).value]
@@ -1098,7 +1098,7 @@ class DuckDBControlReader:
         """
         where, params = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
         columns = ", ".join(f"t.{name}" for name in _TaskRow._fields)
-        sql = f"SELECT {columns} FROM tasks t {where} ORDER BY t.task_id"  # noqa: S608 - fixed identifiers and predicates
+        sql = f"SELECT {columns} FROM tasks t {where} ORDER BY t.task_id"  # ruff: ignore[hardcoded-sql-expression] - fixed identifiers and predicates
         # Hydration runs other queries while this result is open, so it needs its own cursor.
         with self.connection.cursor() as selection:
             selection.execute(sql, params)
@@ -1125,7 +1125,7 @@ class DuckDBControlReader:
         where, parameters = self._task_filter(task_ids)
         return _rows(
             self.connection.execute(
-                f"SELECT {columns} FROM tasks {where} ORDER BY task_id",  # noqa: S608 - fixed identifiers
+                f"SELECT {columns} FROM tasks {where} ORDER BY task_id",  # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
                 parameters,
             ),
             _TaskRow._make,
@@ -1141,7 +1141,7 @@ class DuckDBControlReader:
         where, parameters = self._task_filter(task_ids)
         return _rows(
             self.connection.execute(
-                f"SELECT {columns} FROM task_targets {where} ORDER BY task_id, position",  # noqa: S608 - fixed identifiers
+                f"SELECT {columns} FROM task_targets {where} ORDER BY task_id, position",  # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
                 parameters,
             ),
             _TargetRow._make,
@@ -1158,7 +1158,7 @@ class DuckDBControlReader:
         stored = {
             row[0]
             for row in self.connection.execute(
-                f"SELECT {column} FROM {table} WHERE {column} IN (SELECT unnest(?))",  # noqa: S608 - fixed identifiers
+                f"SELECT {column} FROM {table} WHERE {column} IN (SELECT unnest(?))",  # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
                 [list(ids)],
             ).fetchall()
         }
@@ -1183,7 +1183,7 @@ class DuckDBControlReader:
         """
         where, parameters = self._task_filter(task_ids)
         rows = self.connection.execute(
-            f"SELECT task_id, field, {column} FROM {table} {where} ORDER BY task_id, field, position",  # noqa: S608
+            f"SELECT task_id, field, {column} FROM {table} {where} ORDER BY task_id, field, position",  # ruff: ignore[hardcoded-sql-expression]
             parameters,
         ).fetchall()
         grouped = self._group_relationships(rows)
@@ -1200,7 +1200,7 @@ class DuckDBControlReader:
         """
         where, parameters = self._task_filter(task_ids)
         rows = self.connection.execute(
-            f"SELECT task_id, parent_task_id FROM task_dependencies {where} ORDER BY task_id, position",  # noqa: S608
+            f"SELECT task_id, parent_task_id FROM task_dependencies {where} ORDER BY task_id, position",  # ruff: ignore[hardcoded-sql-expression]
             parameters,
         ).fetchall()
         parents: dict[int, list[int]] = defaultdict(list)
@@ -1449,7 +1449,7 @@ class _TaskHydration:
     from until its dependants are built.
     """
 
-    def __init__(  # noqa: PLR0913 - one argument per task selection axis
+    def __init__(  # ruff: ignore[too-many-arguments] - one argument per task selection axis
         self,
         reader: DuckDBControlReader,
         records: tuple[Record, ...] | None,
@@ -1573,7 +1573,7 @@ class _TaskHydration:
             raise TimeFFormatError(f"task dependency refers to missing task {task_id!r}")
         return task
 
-    def _build(  # noqa: PLR0914 - one batch joins several tables
+    def _build(  # ruff: ignore[too-many-locals] - one batch joins several tables
         self, task_ids: list[int] | None, *, task_rows: list[_TaskRow] | None = None
     ) -> dict[int, Task]:
         """Read every table for one batch of task IDs and construct the tasks.

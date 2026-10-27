@@ -89,7 +89,7 @@ class Record(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: If the record is not in a dataset yet.
-        """  # noqa: DOC502 (raised by assigned_id)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by assigned_id)
         return assigned_id(self._id, "Record")
 
     @property
@@ -99,7 +99,7 @@ class Record(SupportsAnnotate):
 
     @property
     def signals(self) -> tuple[Signal, ...]:
-        """Return every signal in this record's hierarchy."""
+        """Every signal in this record's hierarchy."""
         return tuple(self.walk_signals())
 
     def walk_sources(self) -> Iterable[Source]:
@@ -110,7 +110,7 @@ class Record(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: If a source is attached twice or the hierarchy contains a cycle.
-        """  # noqa: DOC502 - raised by the nested traversal helper
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the nested traversal helper
         seen: set[int] = set()
         active: set[int] = set()
 
@@ -198,7 +198,7 @@ class Record(SupportsAnnotate):
                 scoped span names a timeless series. If the span falls outside the window its scope
                 selects: the intersection of named series, the record's ``time_span``, or the union of
                 the series' windows and ``warn_when_outside`` is False.
-        """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _validate_annotation, not directly here)
         self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
         attached = annotation._new_occurrence()
         self.annotations = (*self.annotations, attached)
@@ -222,7 +222,7 @@ class Record(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: as documented on :meth:`annotate`.
-        """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _validate_annotation, not directly here)
         batch = tuple(annotations)
         for annotation in batch:
             self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
@@ -242,7 +242,7 @@ class Record(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: as documented on :meth:`annotate`.
-        """  # noqa: DOC502 (raised by check_span_within_window, not directly here)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by check_span_within_window, not directly here)
         if annotation.span is not None:
             check_span_within_window(
                 f"annotation {annotation.key!r}",

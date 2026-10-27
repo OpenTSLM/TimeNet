@@ -49,7 +49,7 @@ class StratifiedSplitter(Splitter[T]):
     This is not a temporal split strategy.
     """
 
-    def __init__(  # noqa: PLR0913 -- keep partition fold counts and callbacks explicit.
+    def __init__(  # ruff: ignore[too-many-arguments] -- keep partition fold counts and callbacks explicit.
         self,
         *,
         train_folds: int,

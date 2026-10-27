@@ -30,7 +30,7 @@ from timenet.registry.shared import complete_copy
 _CHUNK_BYTES = 1 << 20
 
 
-def download_version_files(  # noqa: PLR0913
+def download_version_files(  # ruff: ignore[too-many-arguments]
     http: RegistryHttpClient,
     manifest: Manifest,
     dataset_id: str,
@@ -78,7 +78,7 @@ def download_version_files(  # noqa: PLR0913
     return dest_dir
 
 
-async def _download_all(  # noqa: PLR0913, PLR0917
+async def _download_all(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
     http: RegistryHttpClient,
     dataset_id: str,
     version: str,
@@ -129,7 +129,7 @@ async def _resolve(client: httpx.AsyncClient, headers: dict, dataset_id: str, ve
 
     Raises:
         TimeNetRegistryError: If the download endpoint does not redirect.
-    """  # noqa: DOC502 - raised by _redirect_target
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _redirect_target
     path = _download_path(dataset_id, version, relpath)
     response = await client.get(path, headers=headers, follow_redirects=False)
     return _redirect_target(response, path)

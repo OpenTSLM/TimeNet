@@ -124,24 +124,24 @@ class TimeFReader:
 
         Raises:
             TimeFFormatError: If a file is missing or does not match its manifest entry or pin.
-        """  # noqa: DOC502 - raised by _verify_files
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _verify_files
         _verify_files(self._version, self._manifest.files.all_files())
         for key, pinned in self._manifest.payload_sources.items():
             _verify_files(self._version.resolve_payload_source(key), pinned.files, source=pinned.release)
 
     @property
     def metadata(self) -> DatasetMetadata:
-        """Return the dataset's descriptive metadata."""
+        """The dataset's descriptive metadata."""
         return self._manifest.metadata
 
     @property
     def schema(self) -> DatasetSchema:
-        """Return the dataset's type declaration."""
+        """The dataset's type declaration."""
         return self._manifest.dataset_schema
 
     @property
     def tasks(self) -> tuple[Task, ...]:
-        """Return all tasks with their object references restored."""
+        """All tasks with their object references restored."""
         if self._tasks is None:
             with self._as_format_error():
                 self._tasks = self._control_reader().read_tasks(cached_records=self._all_records())
@@ -282,7 +282,7 @@ class TimeFReader:
 
     @property
     def values_backend(self) -> str:
-        """Return the values-plane backend named by the manifest."""
+        """The values-plane backend named by the manifest."""
         return self._manifest.values_backend
 
     def read(self) -> TimeFDataset:

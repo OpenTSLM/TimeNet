@@ -58,7 +58,7 @@ class _TaskValidationIndex:
         return known
 
 
-class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
+class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
     """Holds records and their tasks as Python objects. It does not do I/O. The writer handles persistence."""
 
     def __init__(self, *, metadata: DatasetMetadata) -> None:
@@ -175,7 +175,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Returns:
             The committed version directory.
         """
-        from timenet.writer import TimeFWriter  # noqa: PLC0415
+        from timenet.writer import TimeFWriter  # ruff: ignore[import-outside-top-level]
 
         root = Path(path)
         if self.schema is None:
@@ -194,8 +194,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Returns:
             The hydrated dataset with lazy Signal values.
         """
-        from timenet.reader import TimeFReader  # noqa: PLC0415
-        from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
+        from timenet.reader import TimeFReader  # ruff: ignore[import-outside-top-level]
+        from timenet.registry.dependencies import open_local_version  # ruff: ignore[import-outside-top-level]
 
         with TimeFReader(open_local_version(path)) as reader:
             return reader.read()
@@ -301,7 +301,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
         Raises:
             TimeFValidationError: If the selection is empty or contains an unknown split.
-        """  # noqa: DOC502 - raised by parse_splits
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by parse_splits
         required = frozenset(required_modalities or ())
         supported = None if supported_modalities is None else frozenset(supported_modalities)
         wanted = None if split is None else parse_splits(split)
@@ -335,7 +335,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
         Raises:
             TimeFValidationError: If a streamed task fails one of the per-task checks.
-        """  # noqa: DOC502 (raised by _validate_streamed_task, not directly here)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _validate_streamed_task, not directly here)
         index = _TaskValidationIndex(self)
         declared = set(self._streamed_task_types)
         for position, task in enumerate(self.iter_tasks(), start=1):
@@ -587,7 +587,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return self._schema
 
     @classmethod
-    def from_parts(  # noqa: PLR0913 - every part of a stored dataset
+    def from_parts(  # ruff: ignore[too-many-arguments] - every part of a stored dataset
         cls,
         *,
         metadata: DatasetMetadata,
@@ -754,7 +754,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
     @property
     def annotations(self) -> tuple[Annotation, ...]:
-        """Return annotations attached to the dataset itself."""
+        """Annotations attached to the dataset itself."""
         return tuple(self._annotations)
 
     @property
@@ -795,7 +795,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: If ``split`` is unknown, or if no task of the dataset belongs to any
                 split. Asking a partition of a dataset that has none is a mistake rather than an
                 empty selection, so it fails rather than returning nothing.
-        """  # noqa: DOC502 - raised by get_splits
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by get_splits
         return self.get_splits(split)
 
     def get_splits(self, *splits: Split | str) -> tuple[Task, ...]:

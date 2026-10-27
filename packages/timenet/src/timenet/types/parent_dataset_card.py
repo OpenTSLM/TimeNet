@@ -18,5 +18,5 @@ class ParentDatasetCard(TimeFModel):
 
     @property
     def source(self) -> DatasetRef:
-        """Return the exact parent release, as identified by the copied metadata."""
+        """The exact parent release, as identified by the copied metadata."""
         return DatasetRef(dataset_id=self.metadata.dataset_id, version=self.metadata.dataset_version)

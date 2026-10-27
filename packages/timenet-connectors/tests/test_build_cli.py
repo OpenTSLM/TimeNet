@@ -20,7 +20,7 @@ runner = CliRunner()
 def test_build_runs_isolated_by_default(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
+    def _fake_isolated(  # ruff: ignore[too-many-arguments] (mirrors run_isolated's full keyword surface)
         dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
     ):
         captured["dataset_id"] = dataset_id
@@ -116,7 +116,7 @@ def test_build_forwards_an_explicit_values_backend_in_process(monkeypatch, tmp_p
 def test_build_forwards_an_explicit_values_backend_to_an_isolated_child(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
+    def _fake_isolated(  # ruff: ignore[too-many-arguments] (mirrors run_isolated's full keyword surface)
         dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
     ):
         captured["values_backend"] = values_backend
@@ -146,7 +146,7 @@ def test_build_isolates_when_the_flag_overrides_the_setting(monkeypatch, tmp_pat
     called = {"isolated": False}
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
 
-    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
+    def _fake_isolated(  # ruff: ignore[too-many-arguments] (mirrors run_isolated's full keyword surface)
         dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
     ):
         called["isolated"] = True
@@ -185,7 +185,7 @@ def test_build_forwards_quiet_to_the_isolated_child(monkeypatch, tmp_path):
     # The console is a process-wide singleton; monkeypatch restores it for the tests that follow.
     monkeypatch.setattr(cli_module.console, "quiet", False)
 
-    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
+    def _fake_isolated(  # ruff: ignore[too-many-arguments] (mirrors run_isolated's full keyword surface)
         dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
     ):
         captured["quiet"] = quiet

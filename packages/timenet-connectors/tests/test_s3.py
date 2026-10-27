@@ -70,7 +70,7 @@ def test_missing_boto3_raises_helpful_error(monkeypatch):
 
 def test_download_s3_object_writes_atomically(monkeypatch, tmp_path):
     class _FakeClient:
-        def download_file(self, Bucket, Key, Filename, Callback=None):  # noqa: N803 (boto3's kwarg names)
+        def download_file(self, Bucket, Key, Filename, Callback=None):  # ruff: ignore[invalid-argument-name] (boto3's kwarg names)
             assert Filename.endswith(".part")  # boto3 writes to the temp file, not the final dest
             Path(Filename).write_bytes(b"payload")
 
@@ -83,7 +83,7 @@ def test_download_s3_object_writes_atomically(monkeypatch, tmp_path):
 
 def test_download_s3_object_cleans_up_part_on_failure(monkeypatch, tmp_path):
     class _FailingClient:
-        def download_file(self, Bucket, Key, Filename, Callback=None):  # noqa: N803
+        def download_file(self, Bucket, Key, Filename, Callback=None):  # ruff: ignore[invalid-argument-name]
             Path(Filename).write_bytes(b"partial")  # a partial landed before the failure
             raise RuntimeError("connection reset")
 
@@ -97,10 +97,10 @@ def test_download_s3_object_cleans_up_part_on_failure(monkeypatch, tmp_path):
 
 def test_download_s3_object_reports_progress(monkeypatch, tmp_path):
     class _FakeClient:
-        def head_object(self, Bucket, Key):  # noqa: N803 (boto3's kwarg names)
+        def head_object(self, Bucket, Key):  # ruff: ignore[invalid-argument-name] (boto3's kwarg names)
             return {"ContentLength": 100}
 
-        def download_file(self, Bucket, Key, Filename, Callback=None):  # noqa: N803
+        def download_file(self, Bucket, Key, Filename, Callback=None):  # ruff: ignore[invalid-argument-name]
             Path(Filename).parent.mkdir(parents=True, exist_ok=True)
             Path(Filename).write_bytes(b"x" * 100)
             if Callback is None:
