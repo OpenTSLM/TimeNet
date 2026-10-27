@@ -31,6 +31,7 @@ from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
+from timenet.types.references import is_latest
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -99,7 +100,7 @@ class S3Registry(WritableRegistry):
             TimeNetDatasetNotFoundError: If the dataset id or version has no manifest in the bucket.
         """
         validate_dataset_id(dataset_id)
-        resolved = self._latest_version(dataset_id) if version in {None, "", "latest"} else version
+        resolved = self._latest_version(dataset_id) if is_latest(version) else version
         if resolved is None:
             raise TimeNetDatasetNotFoundError(
                 f"no committed version for dataset {dataset_id!r} under {self._display_root()}"
