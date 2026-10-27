@@ -4,6 +4,7 @@ from collections import defaultdict
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from fractions import Fraction
 from functools import partial
+from graphlib import CycleError, TopologicalSorter
 import json
 import os
 from pathlib import Path
@@ -133,6 +134,30 @@ class _SignalRow(NamedTuple):
             self.nullable,
             self.modality,
         )
+
+
+class _PreparedSignal(NamedTuple):
+    """A signal row with its axis, specification, and value handles."""
+
+    row: _SignalRow
+    axis: TimeAxis
+    spec: TimeSeriesSpec
+    values: ArrayHandle | Callable[[], pa.Array]
+    time_offsets: StoredOffsets | None
+
+
+class _RecordHierarchy(NamedTuple):
+    """Selected rows with checked relationships and the signals' value handles."""
+
+    records: list[_RecordRow]
+    """The record rows in result order, a row again for each repeated request."""
+    sources: dict[EntityId, _SourceRow]
+    children: dict[EntityId, list[EntityId]]
+    roots_by_record: dict[EntityId, list[EntityId]]
+    signals: list[_PreparedSignal]
+    owners: dict[ObjectKind, Collection[EntityId]]
+    """The IDs of the selected Records, Sources, and Signals, the owners of their annotations."""
+    read_all: bool
 
 
 class _ChunkRow(NamedTuple):
@@ -653,13 +678,16 @@ class DuckDBControlReader:
         """
         return tuple(row[0] for row in self._query("SELECT record_id FROM records ORDER BY record_id"))
 
-    def read_records(  # noqa: PLR0912, PLR0914, PLR0915 - related row sets stay together
+    def read_records(
         self,
         record_ids: Iterable[int] | None = None,
         *,
         with_annotations: bool = True,
     ) -> tuple[Record, ...]:
         """Build complete recursive records while leaving signal values lazy.
+
+        Source links, clocks, axes, and time-offset locations are checked before any object is
+        built. No payload file is opened.
 
         Args:
             record_ids: Requested IDs in result order, or ``None`` for every record.
@@ -671,74 +699,161 @@ class DuckDBControlReader:
         Raises:
             TimeFValidationError: If a requested record is absent.
             TimeFFormatError: If the stored hierarchy is inconsistent.
-        """
+        """  # noqa: DOC502 - row selection and hierarchy helpers validate the stored data
         requested = None if record_ids is None else tuple(check_id(item, "record id") for item in record_ids)
-        read_all = requested is None
-        records_by_id = self._query_rows(_RecordRow, requested)
-        order = tuple(records_by_id) if requested is None else requested
-        missing = [record_id for record_id in order if record_id not in records_by_id]
-        if missing:
-            raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
-
-        sources_by_id = self._query_rows(_SourceRow, None if read_all else records_by_id)
-        signals_by_id = self._query_rows(_SignalRow, None if read_all else sources_by_id)
-        for signal_row in signals_by_id.values():
-            if signal_row.source_id not in sources_by_id:
-                raise TimeFFormatError(
-                    f"signal {signal_row.signal_id!r} refers to missing source {signal_row.source_id!r}"
-                )
-        annotations: dict[tuple[str, int | None], tuple[Annotation, ...]] = {}
+        hierarchy = self._read_record_hierarchy(requested)
         occurrences: dict[int, Annotation] = {}
-        if with_annotations:
-            owner_ids: dict[ObjectKind, Collection[int]] = {
-                ObjectKind.RECORD: records_by_id.keys(),
+        annotations = self._read_record_annotations(hierarchy, occurrences) if with_annotations else {}
+        signals_by_source = self._read_signals(hierarchy.signals, annotations)
+        records = self._assemble_records(hierarchy, signals_by_source, annotations, occurrences)
+        self._known_record_ids.update(hierarchy.owners[ObjectKind.RECORD])
+        return records
+
+    def _read_record_hierarchy(self, requested: tuple[EntityId, ...] | None) -> _RecordHierarchy:
+        """Read and validate the catalog rows without opening payload files.
+
+        Returns:
+            Selected rows, source links, annotation owners, and the signals' value handles.
+
+        Raises:
+            TimeFFormatError: If a signal names a missing source.
+        """
+        read_all = requested is None
+        record_rows = self._read_record_rows(requested)
+        record_ids = dict.fromkeys(row.record_id for row in record_rows).keys()
+        sources_by_id = self._query_rows(_SourceRow, None if read_all else record_ids)
+        signals_by_id = self._query_rows(_SignalRow, None if read_all else sources_by_id)
+        for row in signals_by_id.values():
+            if row.source_id not in sources_by_id:
+                raise TimeFFormatError(f"signal {row.signal_id!r} refers to missing source {row.source_id!r}")
+        children, roots = self._group_sources(sources_by_id, record_ids)
+        self._cache_record_clocks(record_rows)
+        return _RecordHierarchy(
+            records=record_rows,
+            sources=sources_by_id,
+            children=children,
+            roots_by_record=roots,
+            signals=self._prepare_signals(list(signals_by_id.values())),
+            owners={
+                ObjectKind.RECORD: record_ids,
                 ObjectKind.SOURCE: sources_by_id.keys(),
                 ObjectKind.SIGNAL: signals_by_id.keys(),
-            }
-            if read_all:
-                annotations = self._read_annotations(dict.fromkeys(owner_ids), occurrences)
-                self._check_owners(annotations.keys(), owner_ids)
-            else:
-                annotations = self._read_annotations(owner_ids, occurrences)
-        occurrence_ids = {id(annotation): key for key, annotation in occurrences.items()}
-        axes = self._read_axes({row.axis_id for row in signals_by_id.values()})
+            },
+            read_all=read_all,
+        )
+
+    def _read_record_rows(self, requested: tuple[EntityId, ...] | None) -> list[_RecordRow]:
+        """Select and validate record rows, preserving the requested order.
+
+        Args:
+            requested: Record IDs in result order, or ``None`` for every record.
+
+        Returns:
+            Record rows in result order, including repeated requests for the same record.
+
+        Raises:
+            TimeFValidationError: If a requested record is absent.
+        """
+        records_by_id = self._query_rows(_RecordRow, requested)
+        if requested is None:
+            return list(records_by_id.values())
+        missing = [record_id for record_id in requested if record_id not in records_by_id]
+        if missing:
+            raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
+        return [records_by_id[record_id] for record_id in requested]
+
+    def _prepare_signals(self, signal_rows: list[_SignalRow]) -> list[_PreparedSignal]:
+        """Validate axes and create the signals' value handles without reading payloads.
+
+        Returns:
+            Signal metadata and value handles, ready to build the signals.
+
+        Raises:
+            TimeFFormatError: If a signal refers to a missing axis, or its axis stores a different
+                number of time offsets.
+        """
+        axes = self._read_axes({row.axis_id for row in signal_rows})
         # Signals that share an axis share its handle, so its time offsets are read and checked once.
         time_offsets_by_axis = self._stored_offsets(axes)
-
-        signals_by_source: dict[int, list[Signal]] = defaultdict(list)
         specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
-        for signal_row in signals_by_id.values():
-            axis = axes.get(signal_row.axis_id)
+        prepared: list[_PreparedSignal] = []
+        for row in signal_rows:
+            axis = axes.get(row.axis_id)
             if axis is None:
-                raise TimeFFormatError(f"signal {signal_row.signal_id!r} refers to missing axis {signal_row.axis_id!r}")
-            spec = specs.get(signal_row.spec_fields)
+                raise TimeFFormatError(f"signal {row.signal_id!r} refers to missing axis {row.axis_id!r}")
+            spec = specs.get(row.spec_fields)
             if spec is None:
-                spec = self._spec_from_row(signal_row)
-                specs[signal_row.spec_fields] = spec
-            time_offsets = time_offsets_by_axis.get(signal_row.axis_id)
-            if time_offsets is not None and time_offsets.length != signal_row.n_values:
+                spec = self._spec_from_row(row)
+                specs[row.spec_fields] = spec
+            time_offsets = time_offsets_by_axis.get(row.axis_id)
+            if time_offsets is not None and time_offsets.length != row.n_values:
                 raise TimeFFormatError(
-                    f"axis {signal_row.axis_id!r} stores {time_offsets.length} offsets but signal "
-                    f"{signal_row.signal_id!r} declares {signal_row.n_values} values"
+                    f"axis {row.axis_id!r} stores {time_offsets.length} offsets but signal "
+                    f"{row.signal_id!r} declares {row.n_values} values"
                 )
-            signal = Signal.from_loader(
-                name=signal_row.name,
-                spec=spec,
-                time_axis=axis,
-                n_values=signal_row.n_values,
-                loader=(
-                    self._value_loader_factory(signal_row.signal_id, spec)
-                    if self._value_loader_factory is not None
-                    else partial(self._value_loader, signal_row.signal_id, spec)
-                ),
-                time_offsets_loader=time_offsets,
-                annotations=annotations.get((ObjectKind.SIGNAL, signal_row.signal_id), ()),
-                metadata=_decode_json(signal_row.metadata, default={}),
+            values = (
+                self._value_loader_factory(row.signal_id, spec)
+                if self._value_loader_factory is not None
+                else partial(self._value_loader, row.signal_id, spec)
             )
-            object.__setattr__(signal, "_id", signal_row.signal_id)  # noqa: PLC2801 (Signal is frozen)
-            signals_by_source[signal_row.source_id].append(signal)
+            prepared.append(_PreparedSignal(row, axis, spec, values, time_offsets))
+        return prepared
 
-        missing_clocks = {row.clock_id for row in records_by_id.values()} - self._clock_cache.keys()
+    def _read_record_annotations(
+        self, hierarchy: _RecordHierarchy, by_occurrence: dict[int, Annotation]
+    ) -> dict[tuple[str, int | None], tuple[Annotation, ...]]:
+        """Build the annotations on the selected Records, Sources, and Signals.
+
+        A full read fetches every occurrence on those object types, so it also rejects any it cannot
+        attach.
+
+        Args:
+            hierarchy: The selected rows.
+            by_occurrence: Filled with every occurrence it builds, by its occurrence id.
+
+        Returns:
+            Attached occurrences keyed by object type and object ID.
+        """
+        if hierarchy.read_all:
+            annotations = self._read_annotations(dict.fromkeys(hierarchy.owners), by_occurrence)
+            self._check_owners(annotations.keys(), hierarchy.owners)
+            return annotations
+        return self._read_annotations(hierarchy.owners, by_occurrence)
+
+    @staticmethod
+    def _read_signals(
+        prepared: list[_PreparedSignal],
+        annotations: Mapping[tuple[str, int | None], tuple[Annotation, ...]],
+    ) -> dict[EntityId, list[Signal]]:
+        """Build signals from validated metadata and their value handles.
+
+        Returns:
+            Signals grouped by their source ID.
+        """
+        signals_by_source: dict[EntityId, list[Signal]] = defaultdict(list)
+        for signal in prepared:
+            row = signal.row
+            built = Signal.from_loader(
+                name=row.name,
+                spec=signal.spec,
+                time_axis=signal.axis,
+                n_values=row.n_values,
+                loader=signal.values,
+                time_offsets_loader=signal.time_offsets,
+                annotations=annotations.get((ObjectKind.SIGNAL, row.signal_id), ()),
+                metadata=_decode_json(row.metadata, default={}),
+            )
+            object.__setattr__(built, "_id", row.signal_id)  # noqa: PLC2801 (Signal is frozen)
+            signals_by_source[row.source_id].append(built)
+        return signals_by_source
+
+    def _cache_record_clocks(self, rows: list[_RecordRow]) -> None:
+        """Cache the selected records' clock origins in one query.
+
+        Raises:
+            TimeFFormatError: If a record refers to a missing clock.
+        """
+        missing_clocks = {row.clock_id for row in rows} - self._clock_cache.keys()
         if missing_clocks:
             for clock_id, timestamp in self._query(
                 "SELECT clock_id, start_time_us FROM clocks WHERE clock_id IN (SELECT unnest(?))",
@@ -750,34 +865,46 @@ class DuckDBControlReader:
                 f"records reference missing clocks {sorted(missing_clocks - self._clock_cache.keys())}"
             )
 
-        children, roots_by_record = self._group_sources(sources_by_id.values())
-        built_sources: set[int] = set()
+    def _assemble_records(
+        self,
+        hierarchy: _RecordHierarchy,
+        signals_by_source: dict[EntityId, list[Signal]],
+        annotations: Mapping[tuple[str, int | None], tuple[Annotation, ...]],
+        occurrences: Mapping[int, Annotation],
+    ) -> tuple[Record, ...]:
+        """Attach signals and annotations to the recursive source trees and records.
 
-        def build_source(source_id: int, record_id: int) -> Source:
+        Returns:
+            Records in the supplied row order.
+
+        Raises:
+            TimeFFormatError: If a stored record span lacks its required end.
+        """  # noqa: DOC502 - the span helper rejects missing bounds
+        sources_by_id = hierarchy.sources
+        children = hierarchy.children
+        occurrence_ids = {id(annotation): key for key, annotation in occurrences.items()}
+
+        def build_source(source_id: EntityId) -> Source:
             source_row = sources_by_id[source_id]
-            if source_row.record_id != record_id:
-                raise TimeFFormatError(f"source {source_id!r} crosses record boundaries")
-            built_sources.add(source_id)
             return Source(
                 name=source_row.name,
-                sources=tuple(build_source(child, record_id) for child in children[source_id]),
+                sources=tuple(build_source(child) for child in children[source_id]),
                 signals=tuple(signals_by_source[source_id]),
-                annotations=annotations.get((ObjectKind.SOURCE, source_row.source_id), ()),
+                annotations=annotations.get((ObjectKind.SOURCE, source_id), ()),
                 metadata=_decode_json(source_row.metadata, default={}),
             )
 
         records: list[Record] = []
-        for record_id in order:
-            record_row = records_by_id[record_id]
+        for record_row in hierarchy.records:
+            record_id = record_row.record_id
             span = None
             if record_row.time_span_start_us is not None:
                 span = TimeInterval(
                     start_us=record_row.time_span_start_us,
                     end_us=_required(record_row.time_span_end_us, f"the time span end of record {record_id!r}"),
                 )
-            root_sources = tuple(build_source(source_id, record_id) for source_id in roots_by_record[record_id])
             record = Record(
-                sources=root_sources,
+                sources=tuple(build_source(source_id) for source_id in hierarchy.roots_by_record[record_id]),
                 start_time=self._clock_cache[record_row.clock_id],
                 annotations=annotations.get((ObjectKind.RECORD, record_id), ()),
                 time_span=span,
@@ -789,12 +916,6 @@ class DuckDBControlReader:
                 occurrence_ids[id(annotation)]: annotation for annotation in record.walk_annotations()
             }
             weakref.finalize(record, self._record_occurrences.pop, id(record), None)
-        unreachable = sources_by_id.keys() - built_sources
-        if unreachable:
-            raise TimeFFormatError(
-                f"source hierarchy contains a missing record, missing parent, or cycle: {sorted(unreachable)}"
-            )
-        self._known_record_ids.update(order)
         return tuple(records)
 
     def _query_rows(
@@ -828,20 +949,40 @@ class DuckDBControlReader:
 
     @staticmethod
     def _group_sources(
-        rows: Iterable[_SourceRow],
-    ) -> tuple[dict[int, list[int]], dict[int, list[int]]]:
-        """Group child and root Source IDs.
+        rows: Mapping[EntityId, _SourceRow], record_ids: Collection[EntityId]
+    ) -> tuple[dict[EntityId, list[EntityId]], dict[EntityId, list[EntityId]]]:
+        """Validate source relationships and group child and root Source IDs.
 
         Returns:
             Child IDs by parent Source ID and root IDs by Record ID.
+
+        Raises:
+            TimeFFormatError: If a source names a missing record or parent, crosses record
+                boundaries, or forms a cycle.
         """
-        children: dict[int, list[int]] = defaultdict(list)
-        roots: dict[int, list[int]] = defaultdict(list)
-        for row in rows:
+        children: dict[EntityId, list[EntityId]] = defaultdict(list)
+        roots: dict[EntityId, list[EntityId]] = defaultdict(list)
+        parents: dict[EntityId, tuple[EntityId, ...]] = {}
+        for row in rows.values():
+            if row.record_id not in record_ids:
+                raise TimeFFormatError(f"source {row.source_id!r} refers to missing record {row.record_id!r}")
             if row.parent_source_id is None:
                 roots[row.record_id].append(row.source_id)
+                parents[row.source_id] = ()
             else:
+                parent = rows.get(row.parent_source_id)
+                if parent is None:
+                    raise TimeFFormatError(
+                        f"source {row.source_id!r} refers to missing parent source {row.parent_source_id!r}"
+                    )
+                if parent.record_id != row.record_id:
+                    raise TimeFFormatError(f"source {row.source_id!r} crosses record boundaries")
                 children[row.parent_source_id].append(row.source_id)
+                parents[row.source_id] = (row.parent_source_id,)
+        try:
+            TopologicalSorter(parents).prepare()
+        except CycleError as error:
+            raise TimeFFormatError("source hierarchy contains a cycle") from error
         return children, roots
 
     def read_last_ids(self) -> dict[ObjectKind, int]:
