@@ -39,7 +39,7 @@ from timenet.format.stored_values import (
     offsets_digest,
 )
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
+from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import open_local_version
 from timenet.storage.parquet import PayloadTableCache
 from timenet.testing import make_dataset
@@ -116,8 +116,8 @@ def _content_ids(version_dir, key):
     return [content_id for (content_id,) in rows]
 
 
-def _stored(reader, fill=False):
-    dataset = reader.read()
+def _stored(reader, load=LoadPlan.ALL_LAZY):
+    dataset = reader.read(load=load)
     (prompt,) = [task.prompt for task in dataset.tasks if isinstance(task.prompt, StoredText)]
     (reports,) = [
         annotation.value
@@ -125,9 +125,6 @@ def _stored(reader, fill=False):
         for annotation in record.annotations
         if annotation.key == "reports"
     ]
-    if fill:
-        prompt._fill()
-        reports._fill()
     return prompt, reports
 
 
@@ -279,9 +276,9 @@ def test_a_stored_handle_pickles_its_location_without_its_text(reader):
         assert back.read() == value
 
 
-def test_filled_stored_text_needs_no_payload(reader, payload_reads):
+def test_a_loaded_read_fills_stored_text_which_then_needs_no_payload(reader, payload_reads):
     lazy_prompt, lazy_reports = _stored(reader)
-    prompt, reports = _stored(reader, fill=True)
+    prompt, reports = _stored(reader, load=LoadPlan(text=Loading.EAGER))
     assert prompt.is_loaded
     assert reports.is_loaded
     assert sorted(payload_reads, key=lambda location: location.row) == sorted(
@@ -303,7 +300,7 @@ def test_filled_stored_text_needs_no_payload(reader, payload_reads):
 
 
 def test_a_loaded_stored_handle_pickles_its_text_with_its_location(reader, payload_reads):
-    prompt, reports = _stored(reader, fill=True)
+    prompt, reports = _stored(reader, load=LoadPlan(text=Loading.EAGER))
     payload_reads.clear()
     for handle, value in ((prompt, _TEXT), (reports, _TEXTS)):
         pickled = pickle.dumps(handle)
