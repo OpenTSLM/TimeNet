@@ -10,7 +10,7 @@ tags:
 
 TimeF separates relational structure from large signal arrays. One immutable DuckDB database
 stores the hierarchy, relationships, annotations, axes, and chunk locations. Parquet or Zarr stores
-the signal values. Large text fields use packed Parquet payloads.
+the signal values. Large text fields and irregular time offsets use packed Parquet payloads.
 
 ## Directory layout
 
@@ -55,8 +55,7 @@ Signals can reference the same immutable `TimeAxis`.
 | `sources` | Recursive sources, linked to their record and parent source by ID. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
-| `axis_offsets` | Shared offsets for irregular axes. |
-| `external_values` | File and row locations for external text. |
+| `external_values` | File and row locations for external text and irregular time offsets. |
 | `tasks` | Concrete task type, typed scope columns, and subclass configuration columns. |
 | `task_targets` | Ordered inline targets, one typed row each. |
 | `task_record_refs` | Ordered task-to-record object relationships. |
@@ -103,25 +102,31 @@ compress well in DuckDB. `categories` and `dimension_names` are `VARCHAR[]` and 
 it between the Signals that use it.
 
 Regular axes store a rational microsecond period and origin. Ordinal axes need only their type.
-Irregular axes store their endpoints in `axes` and their ordered microsecond offsets in
-`axis_offsets`. Signals that share an axis reference the same `axis_id`, so the offsets are stored
-once regardless of how many Signals use that timeline.
+Irregular axes store their endpoints in `axes` and their ordered microsecond time offsets in
+packed Parquet files. The `external_values` table locates each array. Signals that share an axis
+reference the same `axis_id`, so the time offsets are stored once for that timeline.
 
 ## External values
 
 The writer keeps text and string lists inline when their encoded size is at most 4,096 bytes.
-Larger values go into Zstandard-compressed Parquet files under `payloads/`. This storage is
-independent of the Signal values backend. Each file targets about 4 MiB of encoded input, but one
-large value can exceed that target. Each row of a payload file fills exactly one of its two
-columns, `text` (string) or `texts` (list of non-null strings), and readers reject a file with any
-other schema.
+Larger values and the time offsets of every irregular axis go into Zstandard-compressed Parquet
+files under `payloads/`. This storage is independent of the Signal values backend. Each file
+targets about 4 MiB of encoded input, but one large value can exceed that target. Each row of a
+payload file fills exactly one of its three columns, `text` (string), `texts` (list of non-null
+strings), or `time_offsets` (list of non-null int64), and readers reject a file with any other
+schema.
 
 The `external_values` table identifies the owner, field, ordered position, file, and row for each
 value, and records its value kind and length. Like an annotation occurrence, it names its owner by
-kind and ID: `object_kind` is `Task` with the public `task_id`, or `Content` with the `content_id`
-of the annotation content row that holds the value. Content that several occurrences share is
-packed once. The inline column keeps a placeholder: an empty string for text and an empty list for
-a string list. An empty inline value alone therefore does not mean empty text; readers look up
+kind and ID: `object_kind` is `Task` with the public `task_id`, `Content` with the `content_id` of
+the annotation content row that holds the value, or `Axis` with the `axis_id` of an irregular axis.
+Content that several occurrences share is packed once, and so are the time offsets of an axis that
+several Signals share. An irregular axis's time offsets use the field and value kind
+`time_offsets` and sit in the payload column of that name. For them, `value_digest` also records
+the SHA-256 digest of the time offsets as contiguous little-endian int64 values, stored as
+`sha256:<hex>`, so a writer can compare a stored axis with other time offsets without reading it.
+The inline column keeps a placeholder: an empty string for text and an empty list for a string
+list. An empty inline value alone therefore does not mean empty text; readers look up
 `external_values` first. Direct SQL queries over inline columns do not resolve external values.
 The public Arrow table APIs return the complete text.
 
@@ -189,8 +194,9 @@ chunk_minor_index, n_values
 
 For Parquet, the locator identifies a shard row group and row. For Zarr, it identifies an array and
 element range. The reader resolves only the requested Signal's rows and keeps its values lazy. Range
-reads load only intersecting chunks. The values plane does not duplicate irregular offsets; the
-reader obtains them from the shared axis in `control.duckdb` and caches each loaded axis once.
+reads load only intersecting chunks. The values plane does not duplicate irregular time offsets.
+Within one read, the Signals on one axis share one handle to its packed time offsets, which checks
+them against the axis on its first read and keeps them.
 
 ## Integrity
 

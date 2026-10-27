@@ -12,9 +12,8 @@ import weakref
 
 import duckdb
 import pyarrow as pa
-import pyarrow.compute as pc
 
-from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeAxis, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
@@ -22,7 +21,9 @@ from timenet.format.duckdb import check_control_schema, connect_control
 from timenet.format.stored_values import (
     ExternalObjectFieldKey,
     PackedField,
+    PackedLocation,
     PackedValueReader,
+    StoredOffsets,
     StoredText,
     StoredTextList,
 )
@@ -59,14 +60,6 @@ from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 
 ValueLoader = Callable[[int, TimeSeriesSpec], pa.Array]
 ValueLoaderFactory = Callable[[int, TimeSeriesSpec], ArrayHandle]
-OffsetsLoader = Callable[[int, IrregularAxis, int], pa.Array]
-
-
-class _LoadedAxis(NamedTuple):
-    """One hydrated axis and the shared length of its stored offsets."""
-
-    axis: RegularAxis | IrregularAxis | OrdinalAxis
-    n_values: int | None
 
 
 class _RecordRow(NamedTuple):
@@ -386,7 +379,6 @@ class DuckDBControlReader:
         *,
         value_loader: ValueLoader | None = None,
         value_loader_factory: ValueLoaderFactory | None = None,
-        offsets_loader: OffsetsLoader | None = None,
         external: PackedValueReader | None = None,
     ) -> None:
         """Open and validate an immutable control database.
@@ -395,8 +387,8 @@ class DuckDBControlReader:
             path: Local path to ``control.duckdb``.
             value_loader: Lazy values-plane resolver keyed by signal ID.
             value_loader_factory: Factory for range-aware per-Signal value handles.
-            offsets_loader: Lazy irregular-axis resolver keyed by axis ID.
             external: Payload reader used to resolve locators for each requested object batch.
+                Required when the selected objects have packed values.
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
@@ -408,9 +400,9 @@ class DuckDBControlReader:
         except duckdb.Error as exc:
             raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
         self.external = external
+        self._packed_values_stored: bool | None = None
         self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
-        self._offsets_loader = offsets_loader
         self._clock_cache: dict[int, TimeOrigin] = {}
         self._dataset_occurrences: dict[int, Annotation] | None = None
         self._record_occurrences: dict[int, dict[int, Annotation]] = {}
@@ -421,7 +413,7 @@ class DuckDBControlReader:
     def _external_values(
         self, kind: ObjectKind, object_ids: Iterable[int]
     ) -> dict[ExternalObjectFieldKey, StoredText | StoredTextList]:
-        """Return validated payload handles for only the objects in this read.
+        """Return text handles for the packed values of only the objects in this read.
 
         Args:
             kind: The kind of the objects that own the values.
@@ -430,9 +422,68 @@ class DuckDBControlReader:
         Returns:
             Handles indexed by object, field, and position, or no handles for an inline catalog.
         """
-        if self.external is None:
-            return {}
-        return self.external.handles(self.connection, kind, object_ids)
+        locations = self._external_locations(kind, object_ids)
+        external = self.external
+        return {} if external is None else {key: external.handle(location) for key, location in locations.items()}
+
+    def _external_locations(
+        self, kind: ObjectKind, object_ids: Iterable[int]
+    ) -> dict[ExternalObjectFieldKey, PackedLocation]:
+        """Return the packed-value locations of only the objects in this read.
+
+        A release that lists no payload files has no payload reader, so nothing is looked up per
+        batch. The catalog is checked once for any locator instead.
+
+        Returns:
+            Locations indexed by object, field, and position, or none for an inline catalog.
+
+        Raises:
+            TimeFFormatError: If packed values need a payload reader that was not configured.
+        """
+        if self.external is not None:
+            return PackedValueReader.locations(self.connection, kind, object_ids)
+        if self._stores_packed_values():
+            raise TimeFFormatError("control.duckdb stores packed values, but the release lists no payload files")
+        return {}
+
+    def _stores_packed_values(self) -> bool:
+        """Return whether the catalog stores any packed-value locator, checked once per reader.
+
+        Raises:
+            TimeFFormatError: If the locator table cannot be read.
+        """
+        if self._packed_values_stored is None:
+            try:
+                stored = self.connection.execute("SELECT 1 FROM external_values LIMIT 1").fetchone()
+            except duckdb.Error as exc:
+                raise TimeFFormatError(f"cannot read external values: {exc}") from exc
+            self._packed_values_stored = stored is not None
+        return self._packed_values_stored
+
+    def _stored_offsets(self, axes: Mapping[int, TimeAxis]) -> dict[int, StoredOffsets]:
+        """Return one handle to the packed time offsets of each irregular axis, without reading them.
+
+        Returns:
+            Handles keyed by axis ID. Each checks its time offsets against the axis on its first read
+            and keeps them.
+
+        Raises:
+            TimeFFormatError: If an irregular axis has no packed time offsets, or another axis has some.
+        """
+        locations = self._external_locations(ObjectKind.AXIS, axes)
+        handles: dict[int, StoredOffsets] = {}
+        for axis_id, axis in axes.items():
+            location = locations.get(
+                ExternalObjectFieldKey(object_kind=ObjectKind.AXIS, object_id=axis_id, field=PackedField.TIME_OFFSETS)
+            )
+            if not isinstance(axis, IrregularAxis):
+                if location is not None:
+                    raise TimeFFormatError(f"axis {axis_id!r} is not irregular but stores packed offsets")
+                continue
+            if location is None or self.external is None:
+                raise TimeFFormatError(f"irregular axis {axis_id!r} has no packed offsets")
+            handles[axis_id] = self.external.offsets(location, axis_id=axis_id, first=axis.first_us, last=axis.last_us)
+        return handles
 
     def close(self) -> None:
         """Close the reader's DuckDB connection."""
@@ -510,24 +561,24 @@ class DuckDBControlReader:
                 annotations = self._read_annotations(owner_ids, occurrences)
         occurrence_ids = {id(annotation): key for key, annotation in occurrences.items()}
         axes = self._read_axes({row.axis_id for row in signals_by_id.values()})
+        # Signals that share an axis share its handle, so its time offsets are read and checked once.
+        time_offsets_by_axis = self._stored_offsets(axes)
 
         signals_by_source: dict[int, list[Signal]] = defaultdict(list)
         specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
         for signal_row in signals_by_id.values():
-            loaded_axis = axes.get(signal_row.axis_id)
-            if loaded_axis is None:
+            axis = axes.get(signal_row.axis_id)
+            if axis is None:
                 raise TimeFFormatError(f"signal {signal_row.signal_id!r} refers to missing axis {signal_row.axis_id!r}")
-            axis = loaded_axis.axis
             spec = specs.get(signal_row.spec_fields)
             if spec is None:
                 spec = self._spec_from_row(signal_row)
                 specs[signal_row.spec_fields] = spec
-            offsets_loader = None
-            if isinstance(axis, IrregularAxis):
-                if loaded_axis.n_values is None:
-                    raise TimeFFormatError(f"irregular axis {signal_row.axis_id!r} has no Signal length")
-                offsets_loader = partial(
-                    self._offsets_loader or self.load_axis_offsets, signal_row.axis_id, axis, loaded_axis.n_values
+            time_offsets = time_offsets_by_axis.get(signal_row.axis_id)
+            if time_offsets is not None and time_offsets.length != signal_row.n_values:
+                raise TimeFFormatError(
+                    f"axis {signal_row.axis_id!r} stores {time_offsets.length} offsets but signal "
+                    f"{signal_row.signal_id!r} declares {signal_row.n_values} values"
                 )
             signal = Signal.from_loader(
                 name=signal_row.name,
@@ -539,7 +590,7 @@ class DuckDBControlReader:
                     if self._value_loader_factory is not None
                     else partial(self._value_loader, signal_row.signal_id, spec)
                 ),
-                time_offsets_loader=offsets_loader,
+                time_offsets_loader=time_offsets,
                 annotations=annotations.get((ObjectKind.SIGNAL, signal_row.signal_id), ()),
                 metadata=_decode_json(signal_row.metadata, default={}),
             )
@@ -1193,19 +1244,20 @@ class DuckDBControlReader:
     def _read_axes(
         self,
         axis_ids: Iterable[int] | None = None,
-    ) -> dict[int, _LoadedAxis]:
+    ) -> dict[int, TimeAxis]:
         """Hydrate each shared axis exactly once.
 
         Returns:
-            Axes and irregular offset lengths keyed by axis ID.
+            Axes keyed by axis ID.
 
         Raises:
-            TimeFFormatError: If an axis has an unknown type.
+            TimeFFormatError: If an axis has an unknown type, or an irregular axis has no Signals or
+                Signals of different lengths.
         """
         requested = None if axis_ids is None else tuple(axis_ids)
         if requested == ():
             return {}
-        axes: dict[int, _LoadedAxis] = {}
+        axes: dict[int, TimeAxis] = {}
         query = """SELECT axis_id, axis_type, period_numerator_us, period_denominator,
                           start_index, offset_us, first_us, last_us,
                           lengths.min_n_values, lengths.max_n_values
@@ -1238,7 +1290,7 @@ class DuckDBControlReader:
                 regular = RegularAxis(
                     period_us=Fraction(numerator, denominator), start_index=start_index, offset_us=offset
                 )
-                axes[axis_id] = _LoadedAxis(regular, None)
+                axes[axis_id] = regular
             elif axis_type == "irregular":
                 if min_n_values is None or max_n_values is None:
                     raise TimeFFormatError(f"irregular axis {axis_id!r} has no Signals")
@@ -1247,50 +1299,12 @@ class DuckDBControlReader:
                         f"axis {axis_id!r} is shared by Signals with different lengths "
                         f"{sorted((min_n_values, max_n_values))}"
                     )
-                irregular = IrregularAxis(first_us=first, last_us=last)
-                axes[axis_id] = _LoadedAxis(irregular, int(min_n_values))
+                axes[axis_id] = IrregularAxis(first_us=first, last_us=last)
             elif axis_type == "ordinal":
-                axes[axis_id] = _LoadedAxis(OrdinalAxis(), None)
+                axes[axis_id] = OrdinalAxis()
             else:
                 raise TimeFFormatError(f"axis {axis_id!r} has unknown type {axis_type!r}")
         return axes
-
-    def load_axis_offsets(self, axis_id: int, axis: IrregularAxis, n_values: int) -> pa.Array:
-        """Load the offsets of one shared irregular axis.
-
-        Returns:
-            The axis offsets as Arrow int64 values.
-
-        Raises:
-            TimeFFormatError: If the offsets disagree with the axis or its Signals.
-        """
-        column = (
-            self.connection.execute(
-                """SELECT offsets.offset_us
-               FROM axis_offsets offsets
-               WHERE axis_id = ? ORDER BY offsets.position""",
-                [axis_id],
-            )
-            .to_arrow_table()
-            .column(0)
-        )
-        offsets = column.chunk(0) if column.num_chunks == 1 else column.combine_chunks()
-        if len(offsets) != n_values:
-            raise TimeFFormatError(
-                f"axis {axis_id!r} stores {len(offsets)} offsets but its Signals declare length {n_values}"
-            )
-        if offsets.null_count:
-            raise TimeFFormatError(f"axis {axis_id!r} stores null offsets")
-        endpoints = (axis.first_us, axis.last_us)
-        if len(offsets) == 0 or (offsets[0].as_py(), offsets[-1].as_py()) != endpoints:
-            raise TimeFFormatError(f"axis {axis_id!r} has offsets disagreeing with its axis endpoints {endpoints}")
-        if len(offsets) > 1:
-            decreasing = pc.less(  # ty: ignore[unresolved-attribute]
-                offsets.slice(1), offsets.slice(0, len(offsets) - 1)
-            )
-            if pc.any(decreasing).as_py():  # ty: ignore[unresolved-attribute]
-                raise TimeFFormatError(f"axis {axis_id!r} has decreasing offsets")
-        return offsets
 
     @staticmethod
     def _spec_from_row(row: _SignalRow) -> TimeSeriesSpec:

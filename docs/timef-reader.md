@@ -69,6 +69,11 @@ unequal, without a read. Two handles for the same row of one payload file are al
 a read, even from different readers, since the manifest's checksum identifies the file. Comparing
 other handles of equal length reads both values. Text handles are not hashable.
 
+Irregular time offsets are packed as well, one array per axis. The first `time_offsets_us()` call
+on a Signal reads its axis's array and checks it against the axis and against the digest its
+locator records. Within one read, the Signals on one axis share the checked array, so later calls
+on any of them read nothing.
+
 `iter_records(record_ids=...)` yields records one at a time. It takes int record IDs. It does not
 create a complete `TimeFDataset`.
 

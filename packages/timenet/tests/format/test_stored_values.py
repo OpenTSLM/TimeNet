@@ -1,4 +1,6 @@
 import copy
+import dataclasses
+import json
 from pathlib import Path
 import pickle
 import re
@@ -6,12 +8,13 @@ import shutil
 from typing import get_type_hints
 
 import duckdb
+import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError
+from timenet.dataset import IrregularAxis, Record, Signal, Source, TimeFDataset
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.control_audit import audit_control_database
 import timenet.format.control_writer as control_writer_module
@@ -24,16 +27,29 @@ from timenet.format.stored_values import (
     PackedField,
     PackedLocation,
     PackedValueKind,
+    PackedValueLocator,
     PackedValueReader,
     PackedValueWriter,
+    StoredOffsets,
     StoredText,
     StoredTextList,
+    offsets_digest,
 )
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.storage.parquet import PayloadTableCache
 from timenet.testing import make_dataset
-from timenet.types import Annotation, AnswerTask, ObjectKind, TextHandle, TextListHandle, ValueHandle
+from timenet.types import (
+    Annotation,
+    AnswerTask,
+    ArrayHandle,
+    ObjectKind,
+    TextHandle,
+    TextListHandle,
+    TimeSeriesSpec,
+    ValueHandle,
+    ureg,
+)
 from timenet.types.annotations import value_type_of
 from timenet.types.handles import ArrowArray, CallableArray, NumpyArray
 from timenet.types.text import InlineText, InlineTextList, read_value
@@ -47,7 +63,11 @@ _AT_LIMIT = "a" * 4094
 _PAST_LIMIT = "a" * 4095
 # Spelled out rather than imported, so a change to the format's payload schema fails a test.
 _PAYLOAD_SCHEMA = pa.schema(
-    [("text", pa.string()), ("texts", pa.list_(pa.field("element", pa.string(), nullable=False)))]
+    [
+        ("text", pa.string()),
+        ("texts", pa.list_(pa.field("element", pa.string(), nullable=False))),
+        ("time_offsets", pa.list_(pa.field("element", pa.int64(), nullable=False))),
+    ]
 )
 
 
@@ -155,6 +175,7 @@ def test_a_stored_handle_carries_its_packed_location(reader):
         (InlineTextList, None),
         (StoredText, PackedLocation),
         (StoredTextList, PackedLocation),
+        (StoredOffsets, PackedLocation),
     ],
 )
 def test_type_hints_resolve_on_every_handle_class(handle_type, location_type):
@@ -311,12 +332,12 @@ def test_a_payload_rebuilt_with_the_payload_schema_still_reads(tmp_path):
     [
         pytest.param(
             lambda table: table.cast(table.schema.set(0, pa.field("text", pa.binary()))),
-            "text: binary, texts: list<element: string not null>",
+            "text: binary, texts: list<element: string not null>, time_offsets: list<element: int64 not null>",
             id="binary-text",
         ),
         pytest.param(
             lambda table: table.cast(table.schema.set(1, pa.field("texts", pa.list_(pa.string())))),
-            "text: string, texts: list<element: string>",
+            "text: string, texts: list<element: string>, time_offsets: list<element: int64 not null>",
             id="nullable-list-elements",
         ),
         pytest.param(lambda table: table.select(["text"]), "text: string", id="missing-texts"),
@@ -640,6 +661,7 @@ def test_a_release_without_payloads_reads_no_locators(tmp_path, monkeypatch):
         raise AssertionError("looked up locators")
 
     monkeypatch.setattr(PackedValueReader, "handles", no_locators)
+    monkeypatch.setattr(PackedValueReader, "locations", no_locators)
     with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
         reader.read()
         list(reader.iter_tasks())
@@ -781,3 +803,455 @@ def test_the_payload_cache_evicts_the_least_recently_read_file(tmp_path, monkeyp
     cache.read_table(version, first, _PAYLOAD_SCHEMA)
     cache.read_table(version, third, _PAYLOAD_SCHEMA)
     assert list(cache._tables) == [(version.root, first), (version.root, third)]
+
+
+_OFFSETS_US = [0, 5_000, 9_000]
+
+
+def _write_irregular(root):
+    dataset = make_dataset()
+    axis = IrregularAxis.spanning(_OFFSETS_US)
+    spec = TimeSeriesSpec(spec_type="env", name="env", unit_value=ureg.dimensionless)
+    signals = tuple(
+        Signal.from_loader(
+            name=name,
+            spec=spec,
+            time_axis=axis,
+            loader=lambda: pa.array([1.0, 2.0, 3.0], type=pa.float32()),
+            n_values=len(_OFFSETS_US),
+            time_offsets_loader=lambda: pa.array(_OFFSETS_US, type=pa.int64()),
+        )
+        for name in ("temp", "humidity")
+    )
+    dataset.add_record(record=Record(sources=(Source(name="env", signals=signals),)))
+    dataset.derive_schema()
+    with TimeFWriter(root, dataset) as writer:
+        writer.write()
+    return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+
+
+def test_time_offsets_are_keyed_by_their_axis_row_and_packed_once_for_a_shared_axis(tmp_path):
+    version_dir = _write_irregular(tmp_path)
+    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
+        (axis_id,) = connection.execute(
+            "SELECT DISTINCT axis_id FROM signals WHERE name IN ('temp', 'humidity')"
+        ).fetchone() or (None,)
+        assert connection.execute(
+            "SELECT count(DISTINCT axis_id) FROM signals WHERE name IN ('temp', 'humidity')"
+        ).fetchone() == (1,)
+        audit_control_database(connection)
+    assert [row for row in _external_rows(version_dir) if row[2] == PackedField.TIME_OFFSETS.value] == [
+        (ObjectKind.AXIS.value, axis_id, PackedField.TIME_OFFSETS.value, 0)
+    ]
+    (payload,) = (version_dir / "payloads").iterdir()
+    assert pq.read_table(payload)["time_offsets"].drop_null().to_pylist() == [_OFFSETS_US]
+
+
+def _irregular_record(reader):
+    (record,) = [record for record in reader.iter_records() if record.sources[0].name == "env"]
+    return record
+
+
+def _stored_offsets(reader):
+    record = _irregular_record(reader)
+    temp, humidity = record.signals
+    assert isinstance(temp._time_offsets, StoredOffsets)
+    assert temp._time_offsets is humidity._time_offsets
+    return temp._time_offsets
+
+
+@pytest.fixture
+def irregular_reader(tmp_path):
+    with TimeFReader(DatasetVersion.open_local(_write_irregular(tmp_path))) as reader:
+        yield reader
+
+
+def test_stored_offsets_carry_their_packed_location(irregular_reader, payload_reads):
+    handle = _stored_offsets(irregular_reader)
+    assert isinstance(handle, ArrayHandle)
+    assert handle._location.kind is PackedValueKind.TIME_OFFSETS
+    assert handle._location.digest == offsets_digest(np.asarray(_OFFSETS_US, dtype=np.int64))
+    assert handle.length == handle._location.length == len(_OFFSETS_US)
+    assert (handle.first, handle.last) == (_OFFSETS_US[0], _OFFSETS_US[-1])
+    assert not hasattr(handle, "__dict__")
+    assert "PackedValueReader" not in repr(handle)
+    assert not payload_reads
+
+
+def test_stored_offsets_give_the_digest_their_location_records(irregular_reader, payload_reads):
+    handle = _stored_offsets(irregular_reader)
+    assert handle.digest == handle._location.digest == offsets_digest(np.asarray(_OFFSETS_US, dtype=np.int64))
+    assert not payload_reads
+
+    digestless = dataclasses.replace(handle, _location=dataclasses.replace(handle._location, digest=None))
+    with pytest.raises(TimeFFormatError, match="has time offsets without a digest"):
+        _ = digestless.digest
+
+
+def test_stored_offsets_are_loaded_by_their_first_read_and_keep_the_checked_time_offsets(
+    irregular_reader, payload_reads, monkeypatch
+):
+    checks = []
+    check = StoredOffsets._check
+
+    def counting_check(self, offsets):
+        checks.append(self.axis_id)
+        check(self, offsets)
+
+    monkeypatch.setattr(StoredOffsets, "_check", counting_check)
+    handle = _stored_offsets(irregular_reader)
+    assert not handle.is_loaded
+
+    time_offsets = handle.read()
+    assert handle.is_loaded
+    assert time_offsets.to_pylist() == _OFFSETS_US
+    assert handle.read() is time_offsets
+    assert handle.read_numpy().tolist() == _OFFSETS_US
+    assert handle.read_steps(1, 3).to_pylist() == _OFFSETS_US[1:]
+    assert len(payload_reads) == 1
+    assert checks == [handle.axis_id]
+
+
+def test_stored_offsets_pickle_their_location_and_only_kept_time_offsets(irregular_reader, payload_reads):
+    handle = _stored_offsets(irregular_reader)
+    unloaded = pickle.loads(pickle.dumps(handle))
+    assert type(unloaded) is StoredOffsets
+    assert unloaded._location == handle._location
+    assert not unloaded.is_loaded
+
+    handle.read()
+    loaded = pickle.loads(pickle.dumps(handle))
+    assert loaded.is_loaded
+    assert loaded.read().to_pylist() == _OFFSETS_US
+    assert len(payload_reads) == 1
+    assert unloaded.read().to_pylist() == _OFFSETS_US
+    assert len(payload_reads) == 2
+
+
+def test_a_deep_copy_shares_the_stored_offsets(irregular_reader):
+    handle = _stored_offsets(irregular_reader)
+    assert copy.deepcopy(handle) is handle
+
+
+def test_text_handles_are_not_built_for_stored_time_offsets(irregular_reader):
+    handle = _stored_offsets(irregular_reader)
+    with pytest.raises(TimeFValidationError, match="read through StoredOffsets"):
+        handle.store.handle(handle._location)
+
+
+def test_time_offsets_that_disagree_with_their_location_fail_the_read(tmp_path):
+    version_dir = _write_irregular(tmp_path)
+    for payload in (version_dir / "payloads").iterdir():
+        table = pq.read_table(payload)
+        rows = table.to_pylist()
+        for row in rows:
+            if row["time_offsets"] is not None:
+                del row["time_offsets"][1]
+        pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), payload)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        handle = _stored_offsets(reader)
+        with pytest.raises(TimeFFormatError, match="stores 2 offsets but its location records 3"):
+            handle.read()
+        assert not handle.is_loaded
+
+
+@pytest.mark.parametrize(
+    ("element", "found"),
+    [
+        pytest.param(pa.field("element", pa.int32(), nullable=False), "list<element: int32 not null>", id="int32"),
+        pytest.param(pa.field("element", pa.int64()), "list<element: int64>", id="nullable"),
+    ],
+)
+def test_time_offsets_of_another_element_type_fail_the_read(tmp_path, element, found):
+    version_dir = _write_irregular(tmp_path)
+    (payload,) = (version_dir / "payloads").iterdir()
+    table = pq.read_table(payload)
+    index = table.schema.get_field_index("time_offsets")
+    pq.write_table(table.cast(table.schema.set(index, pa.field("time_offsets", pa.list_(element)))), payload)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        handle = _stored_offsets(reader)
+        message = re.escape(f"payloads/{payload.name} has schema (") + ".*" + re.escape(f"time_offsets: {found}), ")
+        with pytest.raises(TimeFFormatError, match=message):
+            handle.read()
+        assert not handle.is_loaded
+
+
+def test_kept_time_offsets_hold_only_their_axis(tmp_path):
+    # Every axis lands in one payload file, whose time offset column the kept array must not pin.
+    n_steps = 10_000
+    dataset = make_dataset()
+    signals = tuple(
+        Signal.from_irregular(
+            np.zeros(n_steps, dtype=np.float32),
+            time_offsets_us=np.arange(n_steps, dtype=np.int64) * 1_000 + axis,
+            spec=TimeSeriesSpec(spec_type="env", name="env", unit_value=ureg.dimensionless),
+            name=f"axis-{axis}",
+        )
+        for axis in range(5)
+    )
+    dataset.add_record(record=Record(sources=(Source(name="env", signals=signals),)))
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    version_dir = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+    (payload,) = (version_dir / "payloads").iterdir()
+    assert pq.read_table(payload)["time_offsets"].combine_chunks().flatten().nbytes == 5 * n_steps * 8
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        record = _irregular_record(reader)
+        handle = record.signals[2]._time_offsets
+        assert isinstance(handle, StoredOffsets)
+        kept = handle.read()
+        assert kept.to_numpy()[0] == 2
+        assert kept.offset == 0
+        assert kept.get_total_buffer_size() == kept.nbytes == n_steps * 8
+        assert len(pickle.dumps(handle)) < 2 * n_steps * 8
+
+
+@pytest.mark.parametrize(
+    ("object_kind", "field", "value_kind", "digest"),
+    [
+        (ObjectKind.AXIS, PackedField.TIME_OFFSETS, PackedValueKind.TIME_OFFSETS, None),
+        (ObjectKind.TASK, PackedField.PROMPT, PackedValueKind.TEXT, "sha256:" + "0" * 64),
+    ],
+)
+def test_only_time_offset_locators_carry_a_digest(object_kind, field, value_kind, digest):
+    with pytest.raises(ValueError, match="time offsets require a digest; text values must not store one"):
+        PackedValueLocator(
+            object_kind=object_kind,
+            object_id=1,
+            field=field,
+            position=0,
+            value_path="payloads/part-00000000.parquet",
+            row_index=0,
+            value_kind=value_kind,
+            n_values=1,
+            value_digest=digest,
+        )
+
+
+@pytest.mark.parametrize(
+    "offsets",
+    [pa.array([0.0, 1.0]), pa.array([0, 1], type=pa.int32()), pa.array([0, None], type=pa.int64())],
+)
+def test_only_non_null_int64_time_offsets_are_packed(tmp_path, offsets):
+    with pytest.raises(TimeFValidationError, match="time offsets must be non-null int64 values"):
+        PackedValueWriter(tmp_path).pack(ObjectKind.AXIS, 1, PackedField.TIME_OFFSETS, offsets)
+
+
+_LARGE_OFFSETS_US = [2**53 + 1, 2**62, 2**62 + 1]
+
+
+def test_a_payload_of_interleaved_text_lists_and_time_offsets_round_trips_exactly(tmp_path):
+    values = [
+        (ObjectKind.TASK, PackedField.PROMPT, _TEXT),
+        (ObjectKind.AXIS, PackedField.TIME_OFFSETS, pa.array(_OFFSETS_US, type=pa.int64())),
+        (ObjectKind.ANNOTATION_CONTENT, PackedField.VALUE, _TEXTS),
+        (ObjectKind.AXIS, PackedField.TIME_OFFSETS, pa.array(_LARGE_OFFSETS_US, type=pa.int64())),
+        (ObjectKind.TASK, PackedField.RATIONALE, _TEXT.upper()),
+    ]
+    writer = PackedValueWriter(tmp_path)
+    packed = [writer.pack(kind, index, field, value) for index, (kind, field, value) in enumerate(values, start=1)]
+    writer.flush()
+
+    locators = [item.locator for item in packed if isinstance(item, ExternalValue)]
+    assert [locator.row_index for locator in locators] == list(range(len(values)))
+    (path,) = writer.files
+    table = pq.read_table(tmp_path / path)
+    assert table.schema.equals(_PAYLOAD_SCHEMA)
+    assert table.to_pylist() == [
+        {"text": _TEXT, "texts": None, "time_offsets": None},
+        {"text": None, "texts": None, "time_offsets": _OFFSETS_US},
+        {"text": None, "texts": _TEXTS, "time_offsets": None},
+        {"text": None, "texts": None, "time_offsets": _LARGE_OFFSETS_US},
+        {"text": _TEXT.upper(), "texts": None, "time_offsets": None},
+    ]
+
+
+def test_large_time_offsets_round_trip_as_non_null_int64(tmp_path):
+    dataset = make_dataset()
+    signal = Signal.from_irregular(
+        np.zeros(len(_LARGE_OFFSETS_US), dtype=np.float32),
+        time_offsets_us=np.array(_LARGE_OFFSETS_US, dtype=np.int64),
+        spec=TimeSeriesSpec(spec_type="env", name="env", unit_value=ureg.dimensionless),
+        name="large",
+    )
+    dataset.add_record(record=Record(sources=(Source(name="env", signals=(signal,)),)))
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    version_dir = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+    (payload,) = (version_dir / "payloads").iterdir()
+    assert str(pq.read_schema(payload).field("time_offsets").type) == "list<element: int64 not null>"
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        record = _irregular_record(reader)
+        assert record.signals[0].time_offsets_us().tolist() == _LARGE_OFFSETS_US
+
+
+def test_packed_time_offsets_reach_the_payload_as_the_arrays_packed(tmp_path, monkeypatch):
+    # Arrow's array types can't be patched to spy on to_pylist, so follow the packed arrays instead.
+    concatenated = []
+    concat_arrays = pa.concat_arrays
+
+    def spy(arrays, *args, **kwargs):
+        concatenated.append(list(arrays))
+        return concat_arrays(concatenated[-1], *args, **kwargs)
+
+    monkeypatch.setattr(pa, "concat_arrays", spy)
+    first, second = pa.array(_OFFSETS_US, type=pa.int64()), pa.array(_LARGE_OFFSETS_US, type=pa.int64())
+    writer = PackedValueWriter(tmp_path)
+    writer.pack(ObjectKind.AXIS, 1, PackedField.TIME_OFFSETS, first)
+    writer.pack(ObjectKind.ANNOTATION_CONTENT, 1, PackedField.VALUE, _TEXTS)
+    writer.pack(ObjectKind.AXIS, 2, PackedField.TIME_OFFSETS, second)
+    writer.flush()
+
+    (arrays,) = concatenated
+    assert len(arrays) == 2
+    assert arrays[0] is first
+    assert arrays[1] is second
+
+
+def test_the_writer_stores_axis_locators_in_bounded_batches(tmp_path, monkeypatch):
+    monkeypatch.setattr(control_writer_module, "_ROW_BATCH_SIZE", 2)
+    held = []
+    pack = PackedValueWriter.pack
+
+    def counting_pack(self, *args, **kwargs):
+        packed = pack(self, *args, **kwargs)
+        held.append(len(self.locators))
+        return packed
+
+    monkeypatch.setattr(PackedValueWriter, "pack", counting_pack)
+    dataset = make_dataset()
+    spec = TimeSeriesSpec(spec_type="env", name="env", unit_value=ureg.dimensionless)
+    for index in range(5):
+        signal = Signal.from_irregular(
+            np.zeros(3, dtype=np.float32), time_offsets_us=[0, 5_000 + index, 9_000], spec=spec, name="env"
+        )
+        dataset.add_record(record=Record(sources=(Source(name="env", signals=(signal,)),)))
+
+    version_dir = _write_dataset(tmp_path, dataset)
+    assert max(held) <= 2
+    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
+        assert connection.execute("SELECT count(*) FROM external_values WHERE object_kind = 'Axis'").fetchone() == (5,)
+        audit_control_database(connection)
+
+
+def _rewrite_time_offsets(version_dir, change):
+    for payload in (version_dir / "payloads").iterdir():
+        table = pq.read_table(payload)
+        rows = table.to_pylist()
+        for row in rows:
+            if row["time_offsets"] is not None:
+                change(row["time_offsets"])
+        pq.write_table(pa.Table.from_pylist(rows, schema=table.schema), payload)
+
+
+def test_time_offsets_whose_digest_differs_from_their_locator_fail_the_read(tmp_path):
+    version_dir = _write_irregular(tmp_path)
+    # Same length, endpoints and order: only the digest tells the change apart.
+    _rewrite_time_offsets(version_dir, lambda offsets: offsets.__setitem__(1, offsets[1] - 1_000))
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        handle = _stored_offsets(reader)
+        with pytest.raises(TimeFFormatError, match="time offsets whose digest differs from their locator's"):
+            handle.read()
+        assert not handle.is_loaded
+
+
+def test_repeated_time_offsets_round_trip(tmp_path):
+    dataset = make_dataset()
+    offsets = [0, 5_000, 5_000, 9_000]
+    signal = Signal.from_irregular(
+        np.zeros(len(offsets), dtype=np.float32),
+        time_offsets_us=offsets,
+        spec=TimeSeriesSpec(spec_type="env", name="env", unit_value=ureg.dimensionless),
+        name="env",
+    )
+    dataset.add_record(record=Record(sources=(Source(name="env", signals=(signal,)),)))
+    version_dir = _write_dataset(tmp_path, dataset)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        assert _irregular_record(reader).signals[0].time_offsets_us().tolist() == offsets
+
+
+def test_time_offsets_in_a_payload_file_outside_the_manifest_are_rejected(tmp_path):
+    version_dir = _write_irregular(tmp_path)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        connection.execute(
+            "UPDATE external_values SET value_path = 'payloads/part-00000099.parquet' WHERE object_kind = 'Axis'"
+        )
+
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match=r"payloads/part-00000099\.parquet.* not listed in the manifest"),
+    ):
+        _irregular_record(reader)
+
+
+def test_a_catalog_written_before_packed_values_fails_as_a_format_error(tmp_path):
+    # A catalog with irregular axes but no locator table and no payload files.
+    version_dir = _write_irregular(tmp_path)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        connection.execute("DROP TABLE external_values")
+    manifest_path = version_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["payloads"] = []
+    manifest_path.write_text(json.dumps(manifest))
+
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="cannot read external values") as raised,
+    ):
+        list(reader.iter_records())
+    assert isinstance(raised.value.__cause__, duckdb.Error)
+
+
+def test_packed_values_in_a_release_that_lists_no_payload_files_are_refused(tmp_path):
+    version_dir = _write_irregular(tmp_path)
+    manifest_path = version_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    manifest["files"]["payloads"] = []
+    manifest_path.write_text(json.dumps(manifest))
+
+    with (
+        TimeFReader(DatasetVersion.open_local(version_dir)) as reader,
+        pytest.raises(TimeFFormatError, match="stores packed values, but the release lists no payload files"),
+    ):
+        list(reader.iter_records())
+
+
+def test_a_reader_keeps_decoded_time_offsets_within_its_byte_budget(tmp_path, monkeypatch):
+    # Each axis lands in a payload file of its own, and each Record is read on its own.
+    monkeypatch.setattr(stored_values_module, "_PACK_BYTES", 1)
+    n_steps = 5_000
+    dataset = make_dataset()
+    spec = TimeSeriesSpec(spec_type="env", name="env", unit_value=ureg.dimensionless)
+    for index in range(6):
+        signal = Signal.from_irregular(
+            np.zeros(n_steps, dtype=np.float32),
+            time_offsets_us=np.arange(n_steps, dtype=np.int64) * (index + 1),
+            spec=spec,
+            name="env",
+        )
+        dataset.add_record(record=Record(sources=(Source(name="env", signals=(signal,)),)))
+    version_dir = _write_dataset(tmp_path, dataset)
+    budget = 2 * n_steps * 8
+    monkeypatch.setattr(stored_values_module, "_CACHE_BYTES", budget)
+
+    with TimeFReader(DatasetVersion.open_local(version_dir)) as reader:
+        packed = reader._packed_value_reader
+        assert packed is not None
+        record_ids = [record.id for record in reader.iter_records(with_annotations=False)]
+        read = 0
+        for record_id in record_ids:
+            (record,) = reader.iter_records([record_id], with_annotations=False)
+            for signal in record.signals:
+                if signal.name == "env":
+                    signal.time_offsets_us()
+                    read += 1
+            assert packed._parquet.nbytes <= budget
+        assert read == 6
