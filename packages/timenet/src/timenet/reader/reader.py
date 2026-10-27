@@ -174,6 +174,13 @@ class TimeFReader:
     def record_ids(self) -> tuple[EntityId, ...]:
         """Return every Record ID without hydrating a Record.
 
+        The order is fixed when the release is written, so every reader of one release returns the
+        same IDs in the same order. A release without imported records orders its records by ID.
+        Imported records take IDs in the order an import selects them, which need not follow where
+        their parent stores their values, so a release with imported records orders every record
+        by the location of its earliest-stored Signal values: its own values first, then by source
+        release, values file, and position. Records without Signal values come last, by ID.
+
         Returns:
             The IDs in the order :meth:`iter_records` yields them when called without arguments.
         """
@@ -539,10 +546,11 @@ class TimeFReader:
         *,
         with_annotations: bool = True,
     ) -> Iterator[Record]:
-        """Yield complete records, optionally in a requested ID order.
+        """Yield complete records, in a requested ID order or in the release's record order.
 
         Args:
-            record_ids: IDs to read in result order, or ``None`` for every record.
+            record_ids: IDs to read in result order, or ``None`` for every record in the order of
+                :meth:`record_ids`.
             with_annotations: Whether to hydrate annotations on the records and descendants.
 
         Yields:
