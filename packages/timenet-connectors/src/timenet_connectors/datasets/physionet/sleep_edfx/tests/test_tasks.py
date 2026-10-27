@@ -78,7 +78,7 @@ def _stage(label, onset_s, end_s):
 def test_a_run_expands_into_one_task_for_each_epoch():
     built = list(tasks.build_epoch_tasks(_RECORDING_ID, [_stage("Sleep stage W", 0, 900)]))
     assert len(built) == 30
-    assert {one.targets for one in built} == {("Sleep stage W",)}
+    assert all(one.targets == ("Sleep stage W",) for one in built)
 
 
 def test_an_entry_of_one_epoch_gives_one_task():

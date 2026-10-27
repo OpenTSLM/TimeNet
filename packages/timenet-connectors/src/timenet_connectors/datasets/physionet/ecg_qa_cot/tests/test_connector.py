@@ -2,6 +2,7 @@ import csv
 from pathlib import Path
 import shutil
 import sys
+from typing import cast
 
 import numpy as np
 import pytest
@@ -13,6 +14,7 @@ from timenet.engine import store_dataset
 from timenet.reader import TimeFReader
 from timenet.registry import DatasetVersion
 from timenet.types import AnswerTask, Split
+from timenet.types.text import read_value
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import EcgQaCotConnector, EcgQaCotSource
 
@@ -156,9 +158,11 @@ def test_each_question_is_an_answer_task_on_its_recording(tmp_path, records_dir)
     tasks = list(dataset.iter_tasks())
     assert len(tasks) == len(rows)
     assert all(isinstance(task, AnswerTask) for task in tasks)
-    assert {task.targets[0] for task in tasks if task.targets is not None} == {row["answer"] for row in rows}
-    assert {task.rationale for task in tasks} == {row["rationale"] for row in rows}
-    assert sorted((task.prompt, task.inputs[0].metadata["ecg_id"]) for task in tasks) == sorted(
+    assert {read_value(task.targets[0]) for task in tasks if task.targets is not None} == {
+        row["answer"] for row in rows
+    }
+    assert {read_value(task.rationale) for task in tasks} == {row["rationale"] for row in rows}
+    assert sorted((read_value(task.prompt), task.inputs[0].metadata["ecg_id"]) for task in tasks) == sorted(
         (row["question"], row["ecg_id"]) for row in rows
     )
     # The answer is the short label, not the chain of thought.
@@ -177,8 +181,9 @@ def test_question_metadata_is_deduped_dataset_annotations(tmp_path, records_dir)
     keys = {ann.key for ann in dataset.annotations}
     assert {"question_type", "template_id", "answer_options", "clinical_context"} <= keys
     # template 0 appears in two rows but is attached once
-    template_values = sorted(ann.value for ann in dataset.annotations if ann.key == "template_id")
-    assert template_values == [0, 1]
+    template_values = [ann.value for ann in dataset.annotations if ann.key == "template_id"]
+    # Annotation values are a union with no order; template IDs are ints.
+    assert sorted(cast("list[int]", template_values)) == [0, 1]
 
 
 def test_task_annotation_refs_all_resolve_to_registered(tmp_path, records_dir):

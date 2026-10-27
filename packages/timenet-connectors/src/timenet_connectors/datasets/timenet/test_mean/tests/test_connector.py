@@ -6,6 +6,7 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.testing import assert_datasets_equal
 from timenet.types import ClassificationTask
+from timenet.types.text import read_value
 from timenet_connectors.datasets.timenet.test_mean import TestMeanConnector
 
 
@@ -15,7 +16,7 @@ def _convert() -> TimeFDataset:
 
 def _labels_by_record(dataset: TimeFDataset) -> dict[int | None, str | None]:
     return {
-        record.id: cast(str, task.targets[0])
+        record.id: cast(str, read_value(task.targets[0]))
         for task in dataset.tasks
         if isinstance(task, ClassificationTask) and task.targets is not None
         for record in task.inputs

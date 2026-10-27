@@ -10,6 +10,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.task_target_kind import TaskTargetKind, is_step_span
 from timenet.types import StepInterval, StepPoint, TimeInterval, TimePoint
 from timenet.types._model import TimeFModel
+from timenet.types.text import read_value
 
 
 _REQUIRED_COLUMNS: dict[TaskTargetKind, frozenset[str]] = {
@@ -70,6 +71,7 @@ class TargetValueRow(TimeFModel):
         Raises:
             TimeFFormatError: If the target type is unsupported.
         """
+        target = read_value(target)
         if isinstance(target, bool):
             return cls(target_kind=TaskTargetKind.BOOLEAN, boolean_value=target)
         elif isinstance(target, str):

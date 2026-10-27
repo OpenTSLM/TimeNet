@@ -1,5 +1,7 @@
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
+import math
 import pickle
+from typing import Literal
 
 from pydantic import ValidationError
 import pytest
@@ -15,6 +17,15 @@ from timenet.types import (
     ureg,
     value_type_of,
 )
+from timenet.types.text import InlineText, InlineTextList
+
+
+# A constant to reuse
+HEALTHY_ANNOTATION = Annotation(key="condition", value="healthy")
+
+
+def quality_annotation(level: Literal["low", "medium", "high"]) -> Annotation:
+    return Annotation(key="quality", value=level)
 
 
 def test_an_annotation_needs_a_value_or_a_span():
@@ -80,8 +91,8 @@ def test_sequence_value_canonicalized_to_list():
     # value_type is "list" for any sequence, and the manifest stores it as a JSON array that decodes
     # back to a list; normalizing at construction keeps an annotation equal to its read-back form.
     ann = Annotation(key="labels", value=("a", "b"))
-    assert ann.value == ["a", "b"]
-    assert isinstance(ann.value, list)
+    assert isinstance(ann.value, InlineTextList)
+    assert ann.value.read() == ["a", "b"]
 
 
 def test_frozen():
@@ -95,17 +106,73 @@ def test_picklable():
     assert pickle.loads(pickle.dumps(ann)) == ann
 
 
-def test_subclass_with_field_defaults_authoring():
-    @dataclass(frozen=True, kw_only=True)
-    class Age(Annotation):
-        key: str = "age"
-        unit: str | None = "years"
+def test_presets_are_constants_or_builder_functions():
+    # A constant is one piece of content: every occurrence shares its content key.
+    assert type(HEALTHY_ANNOTATION) is Annotation
+    assert isinstance(HEALTHY_ANNOTATION.value, InlineText)
+    assert HEALTHY_ANNOTATION.value.read() == "healthy"
+    first, second = HEALTHY_ANNOTATION._new_occurrence(), HEALTHY_ANNOTATION._new_occurrence()
+    assert first == second == HEALTHY_ANNOTATION
+    assert first._content_key == second._content_key == HEALTHY_ANNOTATION._content_key
+    # A builder makes a new annotation on every call, with its value normalized like any other.
+    # Equal arguments give equal content, which the writer stores once.
+    high, low = quality_annotation("high"), quality_annotation("low")
+    assert (high.key, type(high)) == ("quality", Annotation)
+    assert isinstance(high.value, InlineText)
+    assert high.value.read() == "high"
+    assert quality_annotation("high")._content_key == high._content_key != low._content_key
+    assert low.value == "low"
 
-    age = Age(value=64)
-    assert age.key == "age"
-    assert age.unit == "years"
-    assert age.value == 64
-    assert annotation_type_of(age) is AnnotationType.STATIC
+
+def test_annotation_cannot_be_subclassed():
+    # A preset subclass that redeclared value would replace the field that wraps text in a handle.
+    with pytest.raises(TypeError, match="Annotation can't be subclassed, so HealthyCondition is refused"):
+
+        @dataclass(frozen=True, kw_only=True)
+        class HealthyCondition(Annotation):  # ty: ignore[subclass-of-final-class]
+            key: str = "condition"
+
+
+def test_annotation_is_final_for_type_checkers():
+    assert getattr(Annotation, "__final__", False) is True
+
+
+def test_replace_and_pickle_keep_a_constant_annotation_intact():
+    sick = replace(HEALTHY_ANNOTATION, value="sick")
+    assert type(sick) is Annotation
+    assert isinstance(sick.value, InlineText)
+    assert sick.value.read() == "sick"
+    restored = pickle.loads(pickle.dumps(HEALTHY_ANNOTATION))
+    assert type(restored) is Annotation
+    assert isinstance(restored.value, InlineText)
+    assert restored == HEALTHY_ANNOTATION
+
+
+def test_equal_text_gives_equal_content_keys():
+    labels = Annotation(key="labels", value=["a", "b"])._content_key
+    assert labels == Annotation(key="labels", value=("a", "b"))._content_key
+    assert hash(labels) == hash(Annotation(key="labels", value=["a", "b"])._content_key)
+    assert labels != Annotation(key="labels", value=["a", "c"])._content_key
+    assert HEALTHY_ANNOTATION._content_key == Annotation(key="condition", value="healthy")._content_key
+    assert HEALTHY_ANNOTATION._content_key != Annotation(key="condition", value="sick")._content_key
+    # A string and a list holding only that string are different content.
+    assert Annotation(key="x", value="a")._content_key != Annotation(key="x", value=["a"])._content_key
+
+
+@pytest.mark.parametrize(
+    ("first", "second", "equal"),
+    [
+        (True, 1, False),
+        (1, 1.0, False),
+        (0.0, -0.0, False),
+        (float("nan"), -math.nan, True),
+        (1.5, 1.5, True),
+        ("1", 1, False),
+    ],
+)
+def test_scalar_content_keys_compare_type_and_bits(first, second, equal):
+    key = Annotation(key="x", value=first)._content_key
+    assert (key == Annotation(key="x", value=second)._content_key) is equal
 
 
 def test_annotation_descriptor():

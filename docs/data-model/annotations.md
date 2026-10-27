@@ -36,6 +36,32 @@ Each occurrence adds its own source, confidence, and metadata. This design lets 
 share one long description without sharing occurrence details. The writer stores equal content
 once. Neither the content nor an occurrence has an ID in Python.
 
+## Reuse content
+
+`Annotation` is final, so it can't be subclassed. To reuse content, keep a constant. For content
+that varies, write a builder function that returns an `Annotation`:
+
+```python
+from typing import Literal
+
+from timenet.types import Annotation
+
+# A constant to reuse
+HEALTHY_ANNOTATION = Annotation(key="condition", value="healthy")
+
+
+def quality_annotation(level: Literal["low", "medium", "high"]) -> Annotation:
+    return Annotation(key="quality", value=level)
+
+
+record.annotate(HEALTHY_ANNOTATION)
+record.annotate(quality_annotation("high"))
+```
+
+Every occurrence of a constant shares its content. A builder call creates a new `Annotation`, and
+calls with equal arguments give equal content. The writer stores equal content once either way, and
+the reader rebuilds a plain `Annotation` that equals the one written.
+
 ## Static context
 
 An Annotation without a `span` describes its complete owner:

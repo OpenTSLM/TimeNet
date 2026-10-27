@@ -17,6 +17,7 @@ from timenet.types import (
     ScalarPredictionTask,
     TemporalLocalizationTask,
     TimeInterval,
+    read_value,
 )
 from timenet_connectors.bases import excel
 from timenet_connectors.datasets.physionet.sleep_edfx import tables
@@ -304,7 +305,7 @@ def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
     assert lights_off.value == "22:30:00"
     assert lights_off.span is not None
     assert lights_off.span.start_us == 1800 * US_PER_S
-    stages = {(one.span, one.value) for one in record.walk_annotations() if one.key == "sleep_stage"}
+    stages = {(one.span, read_value(one.value)) for one in record.walk_annotations() if one.key == "sleep_stage"}
     assert len(stages) == len(_SCORING)
     # The tasks stream, so the writer reads them one time as it writes. No other test proves
     # that they survive the round trip. The writer wrote the ids of the pass it consumed, and a
@@ -367,7 +368,9 @@ def test_an_epoch_task_covers_each_scored_epoch(release, monkeypatch):
     scored = sum(
         (one.span.exclusive_end - one.span.start_us) // (30 * US_PER_S)
         for record in dataset.records
-        for one in {(a.span, a.value): a for a in record.walk_annotations() if a.key == "sleep_stage"}.values()
+        for one in {
+            (a.span, read_value(a.value)): a for a in record.walk_annotations() if a.key == "sleep_stage"
+        }.values()
         if one.span is not None
     )
     assert len(epochs) == scored

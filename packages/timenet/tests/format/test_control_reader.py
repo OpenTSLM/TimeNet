@@ -26,6 +26,7 @@ from timenet.types import (
     ureg,
 )
 from timenet.types.object_kind import ObjectKind
+from timenet.types.text import read_value
 
 from .test_control_writer import LEAD_I_ID, LEAD_II_ID, RECORD_ID, SPEC, TASK_ID, _dataset
 
@@ -604,7 +605,7 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
     )
 
     assert back.value == value
-    assert type(back.value) is type(value)
+    assert type(read_value(back.value)) is type(value)
     assert stored == (kind,)
 
 
