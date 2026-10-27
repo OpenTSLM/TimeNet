@@ -486,7 +486,7 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(before=_CONNECTIONS.before_fork, after_in_child=_CONNECTIONS.after_fork_in_child)
 
 
-class DuckDBControlReader:
+class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of catalog read
     """Keep one read-only DuckDB connection and hydrate requested records from it.
 
     The connection opens again on the next query after :meth:`close`, and after the process forks,
@@ -1147,6 +1147,28 @@ class DuckDBControlReader:
         )
         return found[0][0], dict(rows)
 
+    def signal_record_ids(self, signal_ids: Collection[EntityId]) -> dict[EntityId, EntityId]:
+        """Return the ID of the Record that holds each of the given Signals, building no object.
+
+        Args:
+            signal_ids: The Signals' IDs.
+
+        Returns:
+            The Record ID of each Signal, by Signal ID.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored Signal.
+        """  # noqa: DOC502 - raised by _require_found
+        owners: dict[EntityId, EntityId] = dict(
+            self._query(
+                "SELECT signals.signal_id, sources.record_id FROM signals JOIN sources USING (source_id) "
+                "WHERE signals.signal_id IN (SELECT unnest(?))",
+                [list(signal_ids)],
+            )
+        )
+        _require_found(ObjectKind.SIGNAL, signal_ids, owners)
+        return owners
+
     def read_signals_by_id(self, signal_ids: Collection[EntityId]) -> dict[EntityId, Signal]:
         """Build the Records that hold the given Signals, and return those Signals.
 
@@ -1161,15 +1183,8 @@ class DuckDBControlReader:
 
         Raises:
             TimeFNotFoundError: If an ID names no stored Signal.
-        """  # noqa: DOC502 - raised by _require_found
-        owners: dict[EntityId, EntityId] = dict(
-            self._query(
-                "SELECT signals.signal_id, sources.record_id FROM signals JOIN sources USING (source_id) "
-                "WHERE signals.signal_id IN (SELECT unnest(?))",
-                [list(signal_ids)],
-            )
-        )
-        _require_found(ObjectKind.SIGNAL, signal_ids, owners)
+        """  # noqa: DOC502 - raised by signal_record_ids
+        owners = self.signal_record_ids(signal_ids)
         signals: dict[EntityId, Signal] = {}
         for record in self.read_records(list(dict.fromkeys(owners.values()))):
             signals.update((signal.id, signal) for signal in record.signals if signal.id in owners)
