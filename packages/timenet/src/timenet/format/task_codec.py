@@ -9,6 +9,7 @@ Signals up by id.
 
 from collections.abc import Iterable, Mapping
 from enum import StrEnum, unique
+from functools import lru_cache
 from typing import Any, TypeVar, cast
 
 from pydantic import ValidationError
@@ -68,6 +69,19 @@ def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality
 
     Raises:
         TimeFFormatError: If a stored input kind is unknown or repeated.
+    """  # noqa: DOC502 - raised by cached validation
+    return _decode_input_modalities(tuple(values or ()))
+
+
+@lru_cache(maxsize=256)
+def _decode_input_modalities(values: tuple[str, ...]) -> frozenset[InputModality]:
+    """Decode and validate one immutable modality declaration.
+
+    Returns:
+        The validated input kinds.
+
+    Raises:
+        TimeFFormatError: If the declaration is empty, repeated, or unknown.
     """
     if not values:
         raise TimeFFormatError("task has no stored input modalities")
