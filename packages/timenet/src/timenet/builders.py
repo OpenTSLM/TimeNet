@@ -10,6 +10,9 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Protocol
 
+from timenet.errors import TimeFValidationError
+from timenet.types.references import DatasetRef
+
 
 ENTRY_POINT_GROUP = "timenet.builders"
 
@@ -87,3 +90,23 @@ def find_builder(dataset_id: str) -> BuilderBackend | None:
         if backend.knows(dataset_id):
             return backend
     return None
+
+
+def build_exact(reference: DatasetRef, root: Path, *, fetch_parents: str | None = None) -> None:
+    """Build a missing payload source from a connector that declares the exact release.
+
+    The dependency resolver checks the resulting release for completeness. Existing committed
+    releases are never forced over; an incomplete release must be restored or explicitly rebuilt.
+
+    Args:
+        reference: The required dataset ID and version.
+        root: The local registry directory to build into.
+        fetch_parents: Registry URI to fetch the build's missing parents from.
+
+    Raises:
+        TimeFValidationError: If no installed connector declares the required version.
+    """
+    builder = find_builder(reference.dataset_id)
+    if builder is None or builder.declared_version(reference.dataset_id) != str(reference.version):
+        raise TimeFValidationError(f"no installed connector builds exact parent {reference}")
+    builder.build(reference.dataset_id, root, build_parents=True, fetch_parents=fetch_parents)
