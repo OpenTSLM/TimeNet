@@ -46,8 +46,10 @@ raises `TimeFReaderError`. Use the `spawn` or `forkserver` start method there.
 Creating the reader does not open the control database. The first request for records, tasks, or
 annotations opens `control.duckdb` in read-only mode.
 
-Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy. A call to
-`to_arrow()`, `to_numpy()`, or `read_steps()` reads only the required chunks from Parquet or Zarr.
+Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy unless the
+read's load plan asks for them, as [Loading values at read time](#loading-values-at-read-time)
+describes. A call to `to_arrow()`, `to_numpy()`, or `read_steps()` on a lazy Signal reads only the
+required chunks from Parquet or Zarr.
 
 Task prompts, rationales, and text targets use `TextHandle`, which holds one string. Annotation
 values use `TextHandle` for a string and `TextListHandle` for a list of strings; `isinstance` tells
@@ -57,13 +59,14 @@ rationales remain `None` when absent; numeric and boolean values remain native P
 `read_values(values)` does the same for each item, such as a task's targets, and returns a tuple, or
 `None` for `None`.
 
-Text read from a release uses the same handle types. Packed text stays in its payload file until
-`read()` or a comparison of content needs it, and its handle keeps nothing: `is_loaded` is false,
-and each read goes to the payload again. Schema derivation and modality inference do not read
-packed text. The Arrow `read_task_table()`, `read_target_table()`, and `read_annotation_table()`
-APIs return native values. The reader keeps up to 64 MiB of decoded payload files, the newest one
-even when it is larger, and rejects a locator whose payload file the manifest does not list. A
-release whose manifest lists no payload files is read without any locator lookups.
+Text read from a release uses the same handle types. Unless the read loads text, packed text
+stays in its payload file until `read()` or a comparison of content needs it, and its handle keeps
+nothing: `is_loaded` is false, and each read goes to the payload again. Schema derivation and
+modality inference do not read packed text. The Arrow `read_task_table()`, `read_target_table()`,
+and `read_annotation_table()` APIs return native values. The reader keeps up to 64 MiB of decoded
+payload files, the newest one even when it is larger, and rejects a locator whose payload file the
+manifest does not list. A release whose manifest lists no payload files is read without any locator
+lookups.
 
 Empty text handles are false in truth tests. An empty prompt remains a handle whose `read()`
 returns `""`. An absent prompt remains `None`. Truth tests use the handle's length without reading
@@ -94,10 +97,65 @@ Tasks have three useful read paths:
 - `read_task_table()`, `read_target_table()`, and `read_annotation_table()` return Arrow tables
   without creating Python task objects. Their ID columns are `int64`.
 
-One call returns one consistent set of objects. A Record that two tasks use is one object.
-`read_tasks(records)` and `iter_tasks(records)` reuse the Record objects you pass: a task input is
-the same `Record` instance that `iter_records()` returned. Separate calls build separate objects,
-because the reader keeps no object caches; keep a result if you need it again.
+One call returns one consistent set of objects. A Record that two tasks use is one object, and the
+Signals on one irregular axis share one handle to its time offsets. `read_tasks(records)` and
+`iter_tasks(records)` reuse the Record objects you pass: a task input is the same `Record` instance
+that `iter_records()` returned. Separate calls build separate objects, because the reader keeps no
+object caches; keep a result if you need it again.
+
+`iter_tasks()` builds each batch on its own. The tasks of one batch share the objects the batch
+builds, as one call does, and batches share nothing but the Records you pass. A Record that tasks
+of two batches use arrives as two separate objects with the same ID. So does a parent task that
+one batch builds for a task's `from_tasks` and a later batch yields. In return, the stream keeps
+none of a batch's objects once it has yielded the batch: it holds one batch of objects and that
+batch's task IDs at a time, and selects each next batch after the last task ID it yielded. The
+reader itself keeps compact chunk locators for the Signals it has resolved until it closes. A batch
+holds up to 5,000 tasks; `iter_tasks(batch_size=...)` sets another limit. With an eager plan the
+stream holds every value one batch loaded, so a smaller batch bounds the memory its arrays take.
+
+## Loading values at read time
+
+`read()`, `read_tasks()`, and `iter_tasks()` take a `load=` plan that says which kinds of stored
+values the read loads into the objects it builds. A `LoadPlan` has one field per kind of value:
+`signal_values`, `time_offsets` for irregular axes, and `text` for packed prompts, rationales, text
+targets, and annotation values. Each field is `Loading.LAZY`, the default, or `Loading.EAGER`.
+
+```python
+from timenet.reader import Loading, LoadPlan, TimeFReader
+
+with TimeFReader(version) as reader:
+    # Every value loads; the dataset needs no storage once the reader closes.
+    dataset = reader.read(load=LoadPlan.ALL_EAGER)
+    # Prompts and targets load; signal arrays stay lazy.
+    tasks = reader.read_tasks(load=LoadPlan(text=Loading.EAGER))
+```
+
+The read loads the values it needs in one batch before it returns. Arrays find their chunk
+locations a batch of Signals at a time and load grouped by source release and file. The time
+offsets of an axis load once. A loaded handle has `is_loaded` set and keeps its value in a compact
+copy, so the decoded files and chunks it came from are not kept alive with it.
+
+A plan applies only to the objects the read builds and to what they reference directly. A task's
+plan reaches its text and annotations, the records it uses as inputs, candidates, or targets, the
+Signals it targets, and the annotations it references. It does not reach tasks the read builds only
+as another task's `from_tasks`, nor the Records you pass to `read_tasks(records)` or
+`iter_tasks(records)`, which stay as they are. A read never changes objects you already hold. To
+load more of them, read again with a larger plan; the new read returns new objects. A failed read
+returns nothing.
+
+`iter_tasks()` loads each batch before it yields the batch, as far as the plan reaches from the
+batch's tasks. What a batch reaches only through its tasks' `from_tasks` parents, which is the
+parents, their records, and their annotations, it builds but does not load, unless a task of the
+batch uses it too. A later batch that yields such a parent, or uses such a record or annotation,
+builds its own copy and loads it.
+
+Values on lazy handles stay readable. `to_numpy()`, `read_steps()`, and a text handle's `read()`
+read them through the reader, which reopens its files on demand after `close()`.
+
+Writing a read dataset reuses its stored payloads, whether they were loaded or not: array chunks,
+time offsets, and packed text keep their files in the release that stores them. The new release
+therefore depends on its source even when every value was loaded, and its readers must be able to
+find the source release.
 
 ## Type reconstruction
 
@@ -124,10 +182,10 @@ and decoded Zarr chunks until it closes.
 
 | Member | Description |
 | --- | --- |
-| `read()` | Create the complete `TimeFDataset`. |
+| `read(load=...)` | Create the complete `TimeFDataset`, loading the values the plan names. |
 | `iter_records()` | Yield Records without building a dataset. |
-| `read_tasks(records)` | Build the tasks of selected Records, or every task, in one pass. |
-| `iter_tasks(records, split=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
+| `read_tasks(records, load=...)` | Build the tasks of selected Records, or every task, in one pass. |
+| `iter_tasks(records, split=..., load=..., batch_size=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
 | `read_task_table()` | Return the task table with public IDs. |
 | `read_target_table()` | Return ordered task targets with public IDs. |
 | `read_annotation_table()` | Return annotation occurrences with public IDs. |
