@@ -9,14 +9,18 @@ import pytest
 import wfdb
 
 from timenet.connectors import BaseConnector
+from timenet.connectors.context import BuildContext
 from timenet.dataset import TimeFDataset
 from timenet.engine import store_dataset
+from timenet.errors import TimeFValidationError
 from timenet.reader import TimeFReader
-from timenet.registry import open_local_version
-from timenet.types import AnswerTask, Split
+from timenet.registry import LocalRegistry, open_local_version
+from timenet.types import AnswerTask, ObjectKind, Split
+from timenet.types.reference_keys import InputAlias
 from timenet.types.text import read_value
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import EcgQaCotConnector, EcgQaCotSource
+from timenet_connectors.datasets.physionet.ptb_xl.connector import PtbXlConnector, PtbXlSource
 
 
 _CSV_COLUMNS = ["ecg_id", "question", "answer", "rationale", "template_id", "question_type", "clinical_context"]
@@ -122,19 +126,42 @@ def _source(tmp_path: Path, records_dir: Path, split: str = "train") -> EcgQaCot
         for row in _rows():
             writer.writerow({column: row.get(column, "") for column in _CSV_COLUMNS})
     return EcgQaCotSource(
-        records_root=records_root,
         answers_path=_write_answers(tmp_path),
         cot_csvs=((split, csv_path),),
     )
 
 
-def _convert(tmp_path: Path, records_dir: Path) -> TimeFDataset:
-    return EcgQaCotConnector().convert([_source(tmp_path, records_dir)])
+def _convert(
+    tmp_path: Path,
+    records_dir: Path,
+    registry_root: Path | None = None,
+    *,
+    split: str = "train",
+    parent_ecg_ids: tuple[int, ...] = (1, 2),
+) -> TimeFDataset:
+    """Build the PTB-XL parent from the fixture recordings, then compose ECG-QA from it."""
+    source = _source(tmp_path, records_dir, split=split)
+    root = registry_root or tmp_path / "registry"
+    database = tmp_path / "ptbxl_database.csv"
+    with database.open("w", newline="") as stream:
+        writer = csv.DictWriter(stream, fieldnames=["ecg_id", "filename_hr", "age", "strat_fold"])
+        writer.writeheader()
+        # Listed in reverse, so PTB-XL's record IDs differ from the ecg_ids: only the metadata finds a recording.
+        writer.writerows(
+            {"ecg_id": identity, "filename_hr": f"records500/00000/{identity:05d}_hr", "age": 56, "strat_fold": 10}
+            for identity in sorted(parent_ecg_ids, reverse=True)
+        )
+    parent = PtbXlConnector().convert([PtbXlSource(tmp_path, database)])
+    store_dataset(parent, root)
+    connector = EcgQaCotConnector()
+    with BuildContext.open(connector.metadata(), LocalRegistry(root)) as context:
+        dataset = connector.compose([source], context)
+        context.check_imports(dataset)
+    return dataset
 
 
 def test_is_a_connector():
     assert isinstance(EcgQaCotConnector(), BaseConnector)
-    assert isinstance(EcgQaCotConnector(), BasePhysioNetConnector)
 
 
 def test_metadata():
@@ -146,6 +173,18 @@ def test_one_record_per_ecg_not_per_question(tmp_path, records_dir):
     dataset = _convert(tmp_path, records_dir)
     # 3 rows over 2 recordings -> 2 records, not one per question
     assert {record.metadata["ecg_id"] for record in dataset.records} == {1, 2}
+    # Each is a copy of the PTB-XL Record with that ecg_id, linked by the import map.
+    copies = {
+        child_id
+        for (alias, kind, _), child_id in dataset._imports.items()
+        if alias == InputAlias("ptbxl") and kind is ObjectKind.RECORD
+    }
+    assert copies == {record.id for record in dataset.records}
+
+
+def test_a_recording_the_parent_lacks_is_rejected(tmp_path, records_dir):
+    with pytest.raises(TimeFValidationError, match=r"no recording with ecg_id \[2\]"):
+        _convert(tmp_path, records_dir, parent_ecg_ids=(1,))
 
 
 def test_twelve_leads_per_record(tmp_path, records_dir):
@@ -170,7 +209,7 @@ def test_each_question_is_an_answer_task_on_its_recording(tmp_path, records_dir)
 
 
 def test_records_and_tasks_carry_their_split(tmp_path, records_dir):
-    dataset = EcgQaCotConnector().convert([_source(tmp_path, records_dir, split="validation")])
+    dataset = _convert(tmp_path, records_dir, split="validation")
     for record in dataset.records:
         assert [ann.value for ann in record.annotations if ann.key == "split"] == ["validation"]
     assert {task.split for task in dataset.iter_tasks()} == {Split.VALIDATION}
@@ -215,18 +254,21 @@ def test_convert_needs_no_wfdb_for_format16(tmp_path, records_dir, monkeypatch):
     # Format-16 records are read straight from the .hea/.dat, so convert and lead loading work with no
     # wfdb installed. wfdb is only a fallback for other signal formats.
     monkeypatch.setitem(sys.modules, "wfdb", None)  # `import wfdb` -> ImportError if anything reaches for it
-    dataset = EcgQaCotConnector().convert([_source(tmp_path, records_dir)])
+    dataset = _convert(tmp_path, records_dir)
     assert dataset.records
     assert len(dataset.records[0].signals[0].to_numpy())  # runs the direct loader, no wfdb
 
 
 def test_convert_round_trips_through_the_writer(tmp_path, records_dir):
-    dataset = _convert(tmp_path / "src", records_dir)
+    dataset = _convert(tmp_path / "src", records_dir, registry_root=tmp_path / "out")
     dataset.derive_schema()
     version_dir = store_dataset(dataset, tmp_path / "out")
     with TimeFReader(open_local_version(version_dir)) as reader:
         restored = reader.read()
     assert {record.metadata["ecg_id"] for record in restored.records} == {1, 2}
+    # The child reuses its parent's signal values, so it writes no values files of its own.
+    assert not list(version_dir.glob("time_series/**/*"))
+    assert open_local_version(version_dir).manifest.payload_sources
     assert len(restored.tasks) == 3  # streamed to disk and back
     assert {ann.key for ann in restored.annotations} >= {
         "question_type",
