@@ -206,6 +206,7 @@ def prepare_local_copy(  # noqa: PLR0913
     manifest: Manifest | None = None,
     force: bool = False,
     progress_cb: Callable[[int], None] | None = None,
+    build: Callable[[DatasetRef], object] | None = None,
 ) -> DatasetVersion:
     """Ensure complete local copies of a release and of each of its payload sources.
 
@@ -219,6 +220,8 @@ def prepare_local_copy(  # noqa: PLR0913
         manifest: An already-loaded manifest for the requested release.
         force: Fetch the requested release again, even if it is cached.
         progress_cb: Report downloaded bytes.
+        build: Build a missing release into ``root`` by its exact reference, after fetching fails.
+            ``None`` disables building.
 
     Returns:
         The requested release with its payload sources attached and checked against its pins.
@@ -234,6 +237,7 @@ def prepare_local_copy(  # noqa: PLR0913
             manifest=manifest if requested else None,
             force=force and requested,
             progress_cb=progress_cb,
+            build=build,
         )
         return DatasetVersion(release, pafs.LocalFileSystem(), str(directory))
 
@@ -242,8 +246,9 @@ def prepare_local_copy(  # noqa: PLR0913
         version,
         lambda ref: open_complete(ref, requested=False),
         searched=str(root),
-        # A source that a fetch registry lacks is not obtained by fetching again.
-        hint=_FETCH_HINT if fetch_from is None else None,
+        # A source that a fetch registry lacks, or a build does not produce, is not obtained by
+        # fetching or building again.
+        hint=_FETCH_HINT if fetch_from is None and build is None else None,
     )
 
 
@@ -287,8 +292,9 @@ def _ensure_dataset_version_available_locally(  # noqa: PLR0913
     manifest: Manifest | None,
     force: bool,
     progress_cb: Callable[[int], None] | None,
+    build: Callable[[DatasetRef], object] | None = None,
 ) -> Manifest:
-    """Reuse or fetch one complete release.
+    """Reuse, fetch, or build one complete release.
 
     Returns:
         The release manifest. File hashes are checked during transfer, not on every read.
@@ -304,7 +310,18 @@ def _ensure_dataset_version_available_locally(  # noqa: PLR0913
         if cached is not None:
             return cached
     if fetch_from is not None:
-        return _download_dataset_version(directory, reference, fetch_from, manifest=manifest, progress_cb=progress_cb)
+        try:
+            return _download_dataset_version(
+                directory, reference, fetch_from, manifest=manifest, progress_cb=progress_cb
+            )
+        except TimeNetDatasetNotFoundError:
+            if build is None:
+                raise
+    if build is not None:
+        build(reference)
+        built = _load_complete_local_manifest(directory, reference)
+        if built is not None:
+            return built
     raise TimeNetDatasetNotFoundError(f"complete release {reference} is missing at {directory}")
 
 
