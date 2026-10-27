@@ -178,10 +178,12 @@ from whichever release stores them.
 
 An ID that names nothing, an unknown alias or parent, and a stored object of another kind, such as
 `get(AnswerTask, ...)` on a classification task, raise `TimeFNotFoundError`, which subclasses both
-`TimeFValidationError` and `LookupError`. `get_many` raises it, naming every missing ID, before it
-returns anything. `Source`, `Annotation`, and any other kind not listed above, an ID that is not a
-positive int64, a single string passed to `get_many`, a `parent` that is neither a `ParentAlias`
-nor a `DatasetRef`, and a release that several aliases import raise `TimeFValidationError`.
+`TimeFValidationError` and `LookupError`. A parent's ID whose copy an edit such as `remove_records`
+removed names nothing, since the edit drops that import. `get_many` raises it, naming every missing
+ID, before it returns anything. `Source`, `Annotation`, and any other kind not listed above, an ID
+that is not a positive int64, a single string passed to `get_many`, a `parent` that is neither a
+`ParentAlias` nor a `DatasetRef`, and a release that several aliases import raise
+`TimeFValidationError`.
 
 ## Loading values at read time
 
@@ -319,7 +321,8 @@ memory, or an interrupt, propagate unchanged.
 
 A request for an object, ID, or parent alias that the dataset does not have raises
 `TimeFNotFoundError`, a `TimeFValidationError`. A catalog that disagrees with its manifest, such as
-one that names another parent release for a parent alias, raises `TimeFFormatError`.
+one that names no parent release, or another one, for a parent alias of the manifest, raises
+`TimeFFormatError`.
 
 Call `verify()` to hash every file before reading data: the version's own files, and the files it
 pins on each payload source. It raises `TimeFFormatError` when a file is missing or does not match
