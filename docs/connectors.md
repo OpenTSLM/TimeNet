@@ -10,7 +10,7 @@ tags:
 
 A connector is the unit of dataset integration. Each dataset has one connector class. A connector
 fetches raw data and converts it into a [`TimeFDataset`](timef-dataset.md). A connector has no
-knowledge of the registry, the engine, or other connectors. The consumer SDK never runs a connector.
+responsibility for storage or dependency resolution. The consumer SDK never runs a connector.
 
 `BaseConnector` is the connector contract in the `timenet` package. Concrete connectors ship in
 `timenet-connectors`, beside their [dataset cards](manifest.md).
@@ -299,3 +299,59 @@ spec, and a record preview.
 ---
 
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
+
+## Compose a child dataset
+
+A dataset card declares exact parent releases under `inputs`:
+
+```yaml
+inputs:
+  ptbxl: physionet/ptb-xl@1.0.0
+```
+
+The engine resolves these inputs before conversion. A composed connector overrides
+`compose(raw_refs, context)`. The default implementation calls `convert(raw_refs)`.
+
+```python
+from timenet.connectors.context import BuildContext
+from timenet.dataset import TimeFDataset
+from timenet.types.reference_keys import InputAlias
+
+
+def compose(self, raw_refs, context: BuildContext) -> TimeFDataset:
+    dataset = TimeFDataset(metadata=self.metadata())
+    ptbxl = context.inputs[InputAlias("ptbxl")]
+    # Select parent Records by an upstream key in their metadata, then import them by parent ID.
+    selected = [
+        record.id
+        for record in ptbxl.iter_records(with_annotations=False)
+        if record.metadata["ecg_id"] in {1, 2}
+    ]
+    imported = dataset.import_from(ptbxl, records=selected)
+    for copy in imported.records.values():
+        copy.metadata["cohort"] = "selected"
+    return dataset
+```
+
+`import_from()` accepts `records`, `signals`, and `tasks`. All selections use the int IDs the parent
+gives its objects; a connector finds them by upstream keys in the parent's metadata. Required
+dependencies enter the child automatically, and each copy takes the child's next ID. The returned
+maps expose the copies of the objects that call selected, by parent ID.
+
+An input alias names one immediate parent release. `import_from()` infers the alias from the dataset
+card and rejects a parent the card does not declare. `alias=InputAlias(...)` only chooses among the
+aliases that declare that release.
+
+Parents that share an ancestor remain distinct. Repeated imports under the same alias preserve
+existing child edits. To take Signals out of a copy, use `remove_signals` from
+`timenet.dataset.edit`: it also drops the annotations that only those Signals placed, so a later
+import that copies them back attaches each annotation once. Other structural edits of a copy, such
+as assigning a Source's `signals`, are not supported.
+Imported metadata is editable. Stored payloads remain shared until the connector replaces their values.
+
+The child manifest records exact input releases, ancestor metadata, and direct payload sources.
+The child inherits the strictest input access restriction. Conflicting snapshots fail during the build.
+
+`physionet/ptb-xl` supplies taskless recordings and clinical metadata from PTB-XL 1.0.3.
+`physionet/ecg-qa-cot` imports its selected recordings, replaces record annotations with its split,
+and adds question tasks. It does not download or duplicate the parent waveforms.

@@ -68,10 +68,27 @@ uv add 'timenet[s3]'
 The layout under the prefix mirrors the local one, `org/name/version/…` with `manifest.json` beside the
 data files. `store` uploads to a temporary `version.tmp-<uuid>` prefix and moves each object into place
 (`manifest.json` last), so a failed publish never leaves a partial version. `open` reads lazily and
-`load` reads every value, both through a pyarrow `S3FileSystem` (range reads, no whole-version
-download), or from the local cache when a prior `download` populated it. The backend has no
-catalog, so `list` and `search` are unsupported: publish and fetch by an explicit
-`org/name@version`.
+`load` reads every value. Both reuse complete local copies where available and otherwise read
+remote payload ranges through a pyarrow `S3FileSystem`. The backend has no catalog, so `list` and
+`search` are unsupported: publish and fetch by an explicit `org/name@version`.
+
+## Prepare payload sources before reading
+
+`open_version()` resolves the manifests of payload sources before returning a handle.
+HTTP and S3 reads reuse complete cached releases or fetch remote payload ranges on demand.
+The first structural read downloads and verifies the child catalog. Reads do not open parent catalogs.
+HTTP reads use fsspec's range reader and read-ahead cache. The object server must support byte ranges.
+Signed URLs are refreshed after expiry, and registry credentials stay on API requests.
+
+`download()` and `download_version()` prepare complete local copies of the release and its payload
+sources. Downloads verify file sizes and checksums. Partial remote reads cannot verify whole-file
+checksums; an explicit `verify()` reads all declared files to check them.
+Preparation checks cached releases against the pins by manifest, without a full checksum scan.
+
+Local reads require the release and its payload sources to be present.
+The `fetch_parents` and `build_parents` options can fetch or build missing payload sources.
+Build-only inputs in `parent_cards` remain provenance and are not fetched for reads or downloads.
+When a connector runs, it prepares its declared build inputs before conversion.
 
 ## `BaseRegistry`
 
@@ -82,6 +99,7 @@ Every backend implements this contract: four data-access methods and one shared 
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
 | `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
+| `local_root` | The local registry or cache directory for complete releases. |
 | `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files, with its [payload sources](#payload-sources) opened from this registry. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. |
 | `search(...)` | Filter datasets (shared implementation). |
 

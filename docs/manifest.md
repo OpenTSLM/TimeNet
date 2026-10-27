@@ -110,3 +110,20 @@ live in separate structures.
 ---
 
 See the [API reference for `timenet.manifest`](api/manifest.md) for the full symbol listing.
+
+## Input and storage pins
+
+`metadata.inputs` declares exact parent releases by alias. `parent_cards` records those releases with
+validated metadata snapshots. `lineage` records transitive provenance.
+
+`payload_sources` maps each source key, `org/name@version`, to the release that stores shared bytes
+and pins the files this release reads from it, as copies of that release's `FilePart` records (see
+[shared payloads](timef-format.md#shared-payloads)). These releases can differ from the immediate
+parents. The registry treats each ID/version pair as immutable, and opening compares the pins with
+the source's manifest without hashing files.
+`files.payloads` lists the packed text and time-offset files owned by this release.
+
+Read preparation follows only `payload_sources`. Inputs in `parent_cards` are needed when building
+the release; they remain provenance after its values have been copied or transformed.
+The reader uses the child catalog and prepared local or remote payload sources without opening
+parent catalogs. Explicit downloads copy the release and its payload sources for offline use.

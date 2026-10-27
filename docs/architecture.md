@@ -120,3 +120,17 @@ can read it directly.
 4. **Publish** the complete TimeF version to a registry.
 5. **Consume**: use `TimeNet.open()` for lazy access, `TimeNet.load()` for a dataset with every
    value in memory, or `timenet download` for a local copy.
+
+## Independent child catalogs
+
+A child copies selected parent metadata into its own DuckDB catalog during the build. It references
+unchanged payload files through dataset ID/version references.
+Opening resolves the payload sources upfront. Reads use complete local copies or remote byte
+ranges without opening parent catalogs. Local reads can fetch or build missing payload sources when
+enabled. Build-only inputs are prepared when a connector runs.
+
+The writer resolves dependencies, gives copies the child's own IDs, flattens storage ownership, and
+computes a storage scan order. Namespace tables map parent IDs to the copies: `get(..., alias=)`
+looks a copy up in them, and `read()` reads them to restore what the child imported. Other object
+reads do not touch them.
+See [connector composition](connectors.md#compose-a-child-dataset) for the build API.
