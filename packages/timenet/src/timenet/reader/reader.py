@@ -586,6 +586,25 @@ class TimeFReader:
         with self._as_format_error(preserve_validation=True):
             return self._control_reader().signal_record_ids(signal_ids)
 
+    def _read_tasks_with_records(
+        self, task_ids: tuple[EntityId, ...]
+    ) -> tuple[dict[EntityId, Task], dict[EntityId, Record], tuple[Annotation, ...]]:
+        """Read tasks by ID, as :meth:`get_many` does, with every Record and dataset occurrence the read built for them.
+
+        ``TimeFDataset.import_from`` uses it, so the Records it copies are the objects that the tasks
+        reference, and every annotation the tasks reference lies on one of those Records or is one
+        of the dataset occurrences.
+
+        Returns:
+            The tasks by ID, the Records by ID, with every value unloaded, and the dataset's own
+            occurrences that the tasks reference.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored task.
+        """  # noqa: DOC502 - raised by the control reader
+        with self._as_format_error(preserve_validation=True):
+            return self._control_reader()._read_tasks_with_records(task_ids)
+
     def _read_by_id(self, kind: ObjectKind, ids: tuple[EntityId, ...]) -> dict[EntityId, Entity]:
         """Build the objects of one kind with these IDs, each once, with every value unloaded.
 
