@@ -98,11 +98,19 @@ def open_local_release(directory: Path, manifest: Manifest, *, sources_root: Pat
             Manifest.model_validate_json(source_manifest.read_text()), version.filesystem, str(source_dir)
         )
 
-    return attach_payload_sources(version, open_source, searched=str(root))
+    return attach_payload_sources(version, open_source, searched=str(root), hint=_FETCH_HINT)
+
+
+_FETCH_HINT = "fetch it with --fetch-parents <registry> or build it with --build-parents"
+"""How to obtain a payload source that a local registry lacks, for the error that names it."""
 
 
 def attach_payload_sources(
-    version: DatasetVersion, open_source: Callable[[DatasetRef], DatasetVersion], *, searched: str
+    version: DatasetVersion,
+    open_source: Callable[[DatasetRef], DatasetVersion],
+    *,
+    searched: str,
+    hint: str | None = None,
 ) -> DatasetVersion:
     """Open a release's payload sources and check each against the files the release pins.
 
@@ -114,6 +122,7 @@ def attach_payload_sources(
         open_source: Open one exact release, without its payload sources. It raises
             :class:`~timenet.errors.TimeNetDatasetNotFoundError` when the release is absent.
         searched: Where ``open_source`` looks, for the error that names a missing source.
+        hint: How to obtain a missing source, appended to that error, or ``None``.
 
     Returns:
         The release with each payload source attached.
@@ -129,9 +138,8 @@ def attach_payload_sources(
         try:
             source = open_source(pinned.release)
         except TimeNetDatasetNotFoundError as error:
-            raise TimeNetDatasetNotFoundError(
-                f"payload source {pinned.release} of {release} is not in {searched}"
-            ) from error
+            message = f"payload source {pinned.release} of {release} is not in {searched}"
+            raise TimeNetDatasetNotFoundError(message if hint is None else f"{message}; {hint}") from error
         validate_manifest_reference(source.manifest, pinned.release)
         check_pins(release, pinned, source.manifest)
         check_file_sizes(source, pinned.files, owner=f"payload source {pinned.release} of {release}")
@@ -230,7 +238,13 @@ def prepare_local_copy(  # noqa: PLR0913
         return DatasetVersion(release, pafs.LocalFileSystem(), str(directory))
 
     version = open_complete(reference, requested=True)
-    return attach_payload_sources(version, lambda ref: open_complete(ref, requested=False), searched=str(root))
+    return attach_payload_sources(
+        version,
+        lambda ref: open_complete(ref, requested=False),
+        searched=str(root),
+        # A source that a fetch registry lacks is not obtained by fetching again.
+        hint=_FETCH_HINT if fetch_from is None else None,
+    )
 
 
 def open_cached_or_remote(
