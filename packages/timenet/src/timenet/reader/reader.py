@@ -12,6 +12,7 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar, cast
 import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
+from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFValidationError
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
@@ -312,8 +313,8 @@ class TimeFReader:
             TimeFValidationError: If ``kind`` is ``Source``, ``Annotation``, or another kind not
                 listed above, ``id`` is not a positive int64, such as a string, or both ``alias``
                 and ``parent`` are given.
-            TimeFFormatError: If the catalog names another parent release for ``alias`` than the
-                manifest does.
+            TimeFFormatError: If the catalog names no parent release or another one for ``alias``
+                than the manifest does.
         """  # noqa: DOC502 - raised by get_many
         return self.get_many(kind, (id,), alias=alias, parent=parent, load=load)[0]
 
@@ -353,8 +354,8 @@ class TimeFReader:
             TimeFValidationError: If ``kind`` is ``Source``, ``Annotation``, or another kind not
                 listed above, ``ids`` is a string or holds anything but positive int64s, or both
                 ``alias`` and ``parent`` are given.
-            TimeFFormatError: If the catalog names another parent release for ``alias`` than the
-                manifest does.
+            TimeFFormatError: If the catalog names no parent release or another one for ``alias``
+                than the manifest does.
         """  # noqa: DOC502 - TimeFFormatError is raised by _local_ids
         object_kind = _object_kind(kind)
         if isinstance(ids, str | bytes):
@@ -476,12 +477,19 @@ class TimeFReader:
         handle and reads through to storage on access. With ``LoadPlan.ALL_EAGER``, the dataset
         needs no storage after the reader closes.
 
+        The dataset gets the parent cards and the lineage of the manifest, and the import map of the
+        catalog, so a later import into it extends the copies it holds instead of copying them again.
+
         Args:
             load: Which kinds of stored values to load into the objects the read builds.
 
         Returns:
             The dataset.
-        """
+
+        Raises:
+            TimeFFormatError: If the catalog's input aliases or their parent releases differ from the
+                manifest's parent cards.
+        """  # noqa: DOC502 - raised by _import_map
         control = self._control_reader()
         records = control.read_records()
         occurrences: dict[int, Annotation] = {}
@@ -491,7 +499,7 @@ class TimeFReader:
             values = ValueLoad(load)
             values.add((*records, *tasks, *annotations))
             values.run()
-        return TimeFDataset.from_parts(
+        dataset = TimeFDataset.from_parts(
             metadata=self.metadata,
             records=records,
             tasks=tasks,
@@ -499,6 +507,31 @@ class TimeFReader:
             annotations=annotations,
             last_ids=control.read_last_ids(),
         )
+        dataset.parent_cards = dict(self._manifest.parent_cards)
+        dataset.lineage = {str(card.source): card for card in self._manifest.lineage}
+        dataset._imports = self._import_map()
+        return dataset
+
+    def _import_map(self) -> ImportMap:
+        """Return the import map of the catalog, checked against the manifest's parent cards.
+
+        Returns:
+            The child ID of each imported object the catalog lists, keyed by input alias, kind, and
+            parent ID.
+
+        Raises:
+            TimeFFormatError: If the catalog's input aliases or their parent releases differ from the
+                manifest's parent cards.
+        """
+        with self._as_format_error():
+            releases, imports = self._control_reader().import_map()
+        cards = {alias: str(card.source) for alias, card in self._manifest.parent_cards.items()}
+        if releases != cards:
+            raise TimeFFormatError(
+                f"the input aliases and parent releases in the catalog at {self._root} differ from its manifest's "
+                f"parent cards: {releases} and {cards}"
+            )
+        return imports
 
     def iter_records(
         self,
@@ -557,12 +590,16 @@ class TimeFReader:
             The local IDs, one per parent ID, in order.
 
         Raises:
-            TimeFFormatError: If the catalog names another parent release for ``alias`` than the
-                manifest does.
+            TimeFFormatError: If the catalog names no parent release or another one for ``alias``
+                than the manifest does.
             TimeFNotFoundError: If a parent ID names no object imported under ``alias``.
         """
         parent_ref, imported = self._control_reader().imported_ids(alias, kind, dict.fromkeys(parent_ids))
-        if parent_ref is not None and parent_ref != str(self._manifest.parent_cards[alias].source):
+        if parent_ref is None:
+            raise TimeFFormatError(
+                f"the catalog names no parent release for input alias {alias!r}, which its manifest declares"
+            )
+        if parent_ref != str(self._manifest.parent_cards[alias].source):
             raise TimeFFormatError(f"the catalog's parent release for input alias {alias!r} differs from its manifest")
         missing = [identity for identity in parent_ids if identity not in imported]
         if missing:
