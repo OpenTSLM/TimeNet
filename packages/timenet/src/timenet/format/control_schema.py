@@ -190,13 +190,6 @@ AXES = Table(
     unique=(("axis_id",),),
 )
 
-AXIS_OFFSETS = Table(
-    "axis_offsets",
-    (_key("axis_id"), _key("position"), _key("offset_us")),
-    unique=(("axis_id", "position"),),
-    foreign_keys=(ForeignKey("axis_id", "axes", "axis_id"),),
-)
-
 SIGNALS = Table(
     "signals",
     (
@@ -360,8 +353,9 @@ TASK_DEPENDENCIES = Table(
 EXTERNAL_OWNER_TABLES: dict[ObjectKind, tuple[str, str]] = {
     ObjectKind.TASK: ("tasks", "task_id"),
     ObjectKind.ANNOTATION_CONTENT: ("annotation_contents", "content_id"),
+    ObjectKind.AXIS: ("axes", "axis_id"),
 }
-"""The owner table and key column of each object kind whose text can be stored externally."""
+"""The owner table and key column of each object kind whose values can be stored externally."""
 
 EXTERNAL_VALUES = Table(
     "external_values",
@@ -374,12 +368,14 @@ EXTERNAL_VALUES = Table(
         _key("row_index"),
         _required("value_kind"),
         _key("n_values"),
+        Column("value_digest", ColumnType.VARCHAR),
     ),
     unique=(("object_kind", "object_id", "field", "position"),),
 )
 """The owner is ``(object_kind, object_id)``: a Task by its public id, or an annotation content row
-by the storage id that this write gave it. Ids are unique only within one kind, so the kind is part
-of the reference."""
+or an irregular axis by the storage id that this write gave its row. Ids are unique only within one
+kind, so the kind is part of the reference. Signals that share an axis share its row, so the axis's
+time offsets are stored once."""
 
 CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,
@@ -389,7 +385,6 @@ CONTROL_TABLES: tuple[Table, ...] = (
     CLOCKS,
     SOURCES,
     AXES,
-    AXIS_OFFSETS,
     SIGNALS,
     SIGNAL_CHUNKS,
     ANNOTATION_CONTENTS,
