@@ -4,6 +4,7 @@ import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
+from timenet.dataset.dataset import _TaskValidationIndex
 from timenet.errors import SpanOutsideWindowWarning, TimeFValidationError
 from timenet.types import (
     Annotation,
@@ -23,6 +24,7 @@ from timenet.types import (
     TimePoint,
     TimeSeriesSpec,
     TSCorrespondenceTask,
+    TSEditingTask,
     Version,
     ureg,
 )
@@ -396,6 +398,57 @@ def test_add_task_rejects_an_annotation_ref_the_records_do_not_carry(make_series
         dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), input_annotations=(detached,)))
 
 
+def test_add_task_accepts_an_annotation_ref_on_another_registered_record(make_series):
+    dataset = _dataset()
+    record, other = (
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),))) for _ in range(2)
+    )
+    (source,) = other.sources
+    references = (
+        other.annotate(Annotation(key="context", value="record")),
+        source.annotate(Annotation(key="device", value="source")),
+        other.signals[0].annotate(Annotation(key="quality", value="signal")),
+    )
+    task = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), input_annotations=references))
+    assert task.input_annotations == references
+    # The Record that holds the annotations counts among the task's Records, but is no input.
+    assert dataset.tasks_for(record) == (task,)
+    assert dataset.tasks_for(other) == ()
+
+
+def test_a_tasks_records_are_those_it_names_and_those_that_hold_what_it_references(make_series):
+    dataset = _dataset()
+    record, candidate, target, holder, unrelated = (
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),))) for _ in range(5)
+    )
+    note = dataset.annotate(Annotation(key="release", value="first"))
+    (holder_source,) = holder.sources
+    context = holder_source.annotate(Annotation(key="device", value="m1"))
+    task = dataset.add_task(
+        task=TSCorrespondenceTask(
+            inputs=(record,),
+            candidate_records=(candidate, target),
+            targets=(target,),
+            input_annotations=(context, note),
+        )
+    )
+    edit = dataset.add_task(task=TSEditingTask(inputs=(record,), targets=(unrelated.signals[0], "denoised")))
+    index = _TaskValidationIndex(dataset)
+    # The dataset's own annotation adds no Record.
+    assert TimeFDataset._task_records(task, index) == (record, candidate, target, holder)
+    assert TimeFDataset._task_records(edit, index) == (record, unrelated)
+
+
+def test_add_task_rejects_an_annotation_ref_on_an_unregistered_record(make_series):
+    dataset = _dataset()
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    unregistered = Record(sources=(Source(name="Source", signals=(make_series(),)),))
+    annotation = unregistered.annotate(Annotation(key="context", value="elsewhere"))
+    with pytest.raises(TimeFValidationError, match="not attached to its dataset or a registered Record"):
+        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), input_annotations=(annotation,)))
+    assert dataset.tasks == ()
+
+
 def test_set_task_stream_rejects_after_add_task(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
@@ -419,6 +472,21 @@ def test_streamed_task_validation_rejects_an_unknown_record(make_series):
     task = AnswerTask(prompt="q", targets=("a",), inputs=(unknown,))
     dataset.set_task_stream([AnswerTask], lambda: iter((task,)))
     with pytest.raises(TimeFValidationError, match="not registered"):
+        list(dataset.iter_streamed_tasks_validated())
+
+
+def test_streamed_task_validation_accepts_an_annotation_ref_on_another_registered_record(make_series):
+    dataset = _dataset()
+    record, other = (
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),))) for _ in range(2)
+    )
+    context = other.signals[0].annotate(Annotation(key="quality", value="signal"))
+    detached = Annotation(key="quality", value="nowhere")
+    task = AnswerTask(prompt="q", targets=("a",), inputs=(record,), input_annotations=(context,))
+    dataset.set_task_stream([AnswerTask], lambda: iter((task,)))
+    assert list(dataset.iter_streamed_tasks_validated()) == [task]
+    task.input_annotations = (detached,)
+    with pytest.raises(TimeFValidationError, match="not attached to its dataset or a registered Record"):
         list(dataset.iter_streamed_tasks_validated())
 
 
