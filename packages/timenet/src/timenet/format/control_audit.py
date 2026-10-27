@@ -201,26 +201,28 @@ _CHUNK_COVERAGE = """
 
 _TASK_RECORD_SCOPE = f"""
     WITH spans AS (
-        SELECT row_number() OVER () AS span_number, task_id, signal_ids
-        FROM (
-            SELECT task_id, scope_signal_ids AS signal_ids FROM tasks
-            WHERE scope_type IN ({_TIME_TARGET_KINDS})
-            UNION ALL
-            SELECT task_id, span_signal_ids FROM task_targets
-            WHERE target_kind IN ({_TIME_TARGET_KINDS})
-        )
+        SELECT task_id, scope_signal_ids AS signal_ids FROM tasks
+        WHERE scope_type IN ({_TIME_TARGET_KINDS})
+        UNION ALL
+        SELECT task_id, span_signal_ids FROM task_targets
+        WHERE target_kind IN ({_TIME_TARGET_KINDS})
     )
     SELECT spans.task_id
     FROM spans
     LEFT JOIN task_record_refs refs ON refs.task_id = spans.task_id AND refs.field = '{TaskRelationshipField.INPUTS}'
     LEFT JOIN sources ON sources.record_id = refs.record_id
     LEFT JOIN signals USING (source_id)
-    GROUP BY spans.span_number, spans.task_id, spans.signal_ids
+    GROUP BY spans.task_id, spans.signal_ids
     HAVING count(DISTINCT CASE
         WHEN spans.signal_ids IS NULL OR list_contains(spans.signal_ids, signals.signal_id)
         THEN refs.record_id END) <> 1
     LIMIT 1
 """  # noqa: S608 - tags come only from internal enum values
+"""A time span of a Task whose Signals do not resolve to exactly one input Record.
+
+Spans of one Task with the same Signal ids resolve to the same Records, so each such group is
+checked once.
+"""
 
 
 def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool = True) -> None:
