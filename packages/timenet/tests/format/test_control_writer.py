@@ -292,7 +292,8 @@ def test_a_streamed_parent_that_streams_after_its_child_is_stored(tmp_path):
     child = AnswerTask(inputs=(record,), prompt="Child?", targets=("Yes",), from_tasks=(parent,))
     dataset.set_task_stream([AnswerTask], lambda: iter((child, parent)))
 
-    restored = TimeFDataset.open(path=dataset.write(path=tmp_path))
+    with TimeFDataset.open(path=dataset.write(path=tmp_path)) as reader:
+        restored = reader.read()
 
     by_prompt = {read_value(task.prompt): task for task in restored.tasks}
     assert by_prompt["Child?"].from_tasks == (by_prompt["Parent?"],)
