@@ -58,6 +58,54 @@ dataclass, or an S3 key. The connector is generic through PEP 695:
 
 ---
 
+## Loaders and source tasks
+
+A connector that parses several files, or defines several kinds of task, can put that work in a
+loader. `timenet_connectors.bases.loader` holds two generic bases. The connector keeps the outside
+world: its card, its download, and its pinned source. The loader keeps the downloaded files.
+
+```python
+from timenet_connectors.bases.loader import DatasetLoader, DatasetTask
+
+
+class MyRetrievalTask(DatasetTask):
+    TIMENET_TYPE = TSCorrespondenceTask
+    # split (a property) and to_timenet_task() build the TimeNet task.
+
+
+class MyDatasetLoader(DatasetLoader[MyRetrievalTask]):
+    """The dataset's tasks: one retrieval task per published row."""
+
+    TASK_KINDS = (MyRetrievalTask,)
+    # parse_from(refs), records() and tasks() are the dataset's own.
+
+
+class MyConnector(BaseConnector[MyRawRef]):
+    def convert(self, raw_refs: list[MyRawRef]) -> TimeFDataset:
+        loader = MyDatasetLoader.parse_from(raw_refs)
+        dataset = TimeFDataset(metadata=self.metadata())
+        return loader.populate(dataset)
+```
+
+| Member | Provided by | Contract |
+| --- | --- | --- |
+| `parse_from(refs)` | the dataset | Parse and check the downloaded files once. |
+| `records()` | the dataset | Every Record, in a stable order. |
+| `tasks()` | the dataset | Every source task. Each call starts again from the first. |
+| `dataset_annotations()` | the dataset, optional | Annotations of the whole dataset, such as a label vocabulary. |
+| `tasks_of(kind, split=)` | the base | The source tasks of one kind, optionally of one split. |
+| `timenet_tasks()` | the base | Every task as TimeNet stores it, in the order of `tasks()`. |
+| `populate(dataset)` | the base | Add the annotations and Records, and stream the tasks. |
+
+A source task is the dataset's own: TRACE has an event-type, a retrieval and a forecasting task.
+`tasks_of` selects by that kind, which a TimeNet task type can't tell apart when two kinds become
+the same type. To select stored tasks by TimeNet type or split, use `TimeFDataset.tasks_of` and
+`TimeFDataset.get_split` instead. A loader declares its kinds in `TASK_KINDS` and lists them in its
+docstring. `populate` declares their TimeNet types, so the writer rejects a task of a kind missing
+from `TASK_KINDS`.
+
+---
+
 ## Reusing descriptors
 
 Each Signal has exactly one owning Source. Do not attach one Signal to several Sources or Records.
