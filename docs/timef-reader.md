@@ -87,15 +87,17 @@ create a complete `TimeFDataset`.
 
 Tasks have three useful read paths:
 
-- `tasks` loads and caches every task.
+- `read_tasks(records)` builds the tasks of selected Records, or every task, in one pass.
 - `iter_tasks(records)` yields tasks for selected Records in bounded batches. Its `split`,
   `required_modalities`, and `supported_modalities` arguments filter in DuckDB before any task is
   built, as they do on `read_task_table()` and `read_target_table()`.
 - `read_task_table()`, `read_target_table()`, and `read_annotation_table()` return Arrow tables
   without creating Python task objects. Their ID columns are `int64`.
 
-Objects keep their identity within one reader. For example, a task input is the same `Record`
-instance that `iter_records()` returned.
+One call returns one consistent set of objects. A Record that two tasks use is one object.
+`read_tasks(records)` and `iter_tasks(records)` reuse the Record objects you pass: a task input is
+the same `Record` instance that `iter_records()` returned. Separate calls build separate objects,
+because the reader keeps no object caches; keep a result if you need it again.
 
 ## Type reconstruction
 
@@ -124,6 +126,7 @@ and decoded Zarr chunks until it closes.
 | --- | --- |
 | `read()` | Create the complete `TimeFDataset`. |
 | `iter_records()` | Yield Records without building a dataset. |
+| `read_tasks(records)` | Build the tasks of selected Records, or every task, in one pass. |
 | `iter_tasks(records, split=...)` | Yield tasks for selected Records in bounded batches, optionally one split. |
 | `read_task_table()` | Return the task table with public IDs. |
 | `read_target_table()` | Return ordered task targets with public IDs. |
@@ -131,7 +134,6 @@ and decoded Zarr chunks until it closes.
 | `verify()` | Hash every file the release reads, its own and its pinned payload source files. |
 | `metadata` | Return the dataset metadata. |
 | `schema` | Return the dataset schema. |
-| `tasks` | Return all reconstructed tasks. |
 | `values_backend` | Return the selected values backend. |
 
 ## Opening a version
