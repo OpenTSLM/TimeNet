@@ -6,15 +6,16 @@ import numpy as np
 import pyarrow as pa
 import pytest
 
+from timenet.dataset import TimeFDataset
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.stored_array import ChunkLocation, ChunkReader, StoredArray
 from timenet.reader import TimeFReader
 import timenet.reader.reader as reader_module
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
-from timenet.types import ArrayHandle, TimeSeriesSpec
+from timenet.types import ArrayHandle, DatasetSchema, TimeSeriesSpec
 from timenet.types.reference_keys import SourceKey
-from timenet.values_backends.types import StoredChunk
+from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 from timenet.values_backends.zarr.reader import ZarrValuesReader
 from timenet.writer import TimeFWriter
 
@@ -150,6 +151,42 @@ def test_type_hints_resolve_on_the_stored_array():
     assert hints["reader"] is ChunkReader
     assert hints["spec"] is TimeSeriesSpec
     assert get_type_hints(ChunkLocation) == {"source": SourceKey | None, "chunks": tuple[StoredChunk, ...]}
+
+
+def test_the_reader_keeps_chunk_locators_compactly(stored):
+    reader, _, _ = stored
+    chunks = [chunk for signal in _arrays(reader) for chunk in signal._values._location.chunks]
+    assert len({chunk.chunk_file for chunk in chunks}) < len(chunks)
+    # Chunks in one file share one path string, and their coordinates carry no instance dictionary.
+    files: dict[str, str] = {}
+    assert all(files.setdefault(chunk.chunk_file, chunk.chunk_file) is chunk.chunk_file for chunk in chunks)
+    assert all(not hasattr(chunk.data_index, "__dict__") for chunk in chunks)
+    assert "__slots__" in vars(ChunkDataIndex)
+
+
+def test_chunk_locations_share_their_source_key_string(tmp_path):
+    dataset, parent_dir = _write(tmp_path)
+    with TimeFReader(open_local_version(parent_dir)) as reader:
+        parent = reader.read()
+        # A derived release keeps the read Records, whose arrays name the parent's chunks.
+        child = TimeFDataset.from_parts(
+            metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}),
+            records=parent.records,
+            tasks=(),
+            schema=DatasetSchema(),
+            last_ids=parent.last_ids,
+        )
+        child.derive_schema()
+        with TimeFWriter(tmp_path, child) as writer:
+            writer.write()
+    child_dir = tmp_path / "test/child" / str(dataset.metadata.dataset_version)
+    with TimeFReader(open_local_version(child_dir)) as reader:
+        locations = [signal._values._location for signal in _arrays(reader)]
+    sources = [location.source for location in locations]
+    assert len(sources) > 1
+    assert set(sources) == {f"{dataset.metadata.dataset_id}@{dataset.metadata.dataset_version}"}
+    # Every location names its source through one string.
+    assert all(source is sources[0] for source in sources)
 
 
 def _address_ranges(values):
