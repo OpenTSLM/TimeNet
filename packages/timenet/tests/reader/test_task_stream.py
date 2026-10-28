@@ -54,7 +54,7 @@ def test_stream_batches_build_separate_objects_for_what_they_share(release):
     # One task read shares them across its batches: the parent it builds for a-child is the one it returns.
     with TimeFReader(open_local_version(release.path)) as reader:
         records = tuple(reader.iter_records())
-        read = release.named(reader.read_tasks(records, load=LoadPlan.ALL_EAGER))
+        read = release.named(reader.read_tasks(inputs=records, load=LoadPlan.ALL_EAGER))
     assert read["a-child"].from_tasks[0] is read["p-parent"]
 
 
@@ -153,7 +153,7 @@ def test_signals_share_one_time_offsets_handle_per_axis_per_task_read_and_stream
         selectors = tuple(reader.iter_records(task.inputs[0].id for task in tasks))
         reads.clear()
         # Both reads run two batches of two tasks, and each batch reads its tasks' shared records.
-        by_records = reader.read_tasks(selectors, load=plan)
+        by_records = reader.read_tasks(inputs=selectors, load=plan)
         by_split = list(reader.iter_tasks(split=Split.TRAIN, load=plan, batch_size=2))
 
     def offsets(task):

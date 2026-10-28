@@ -4,7 +4,7 @@ The objects hold their stored values behind value handles, unloaded.
 """
 
 from collections import ChainMap, defaultdict
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, MutableMapping
+from collections.abc import Callable, Collection, Container, Iterable, Iterator, Mapping, MutableMapping
 from fractions import Fraction
 from functools import partial
 from graphlib import CycleError, TopologicalSorter
@@ -19,7 +19,7 @@ import duckdb
 import pyarrow as pa
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeAxis, TimeFDataset
-from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
 from timenet.format.duckdb import CATALOG_ERRORS, check_control_schema, connect_control
@@ -403,6 +403,17 @@ def _occurrence_span(row: _OccurrenceRow) -> TimePoint | TimeInterval | None:
     raise TimeFFormatError(f"annotation occurrence {row.occurrence_id!r} has unknown span type {row.span_type!r}")
 
 
+def _require_found(kind: ObjectKind, requested: Iterable[EntityId], found: Container[EntityId]) -> None:
+    """Check that every requested ID names a stored object of one kind.
+
+    Raises:
+        TimeFNotFoundError: If an ID names none, listing every such ID.
+    """
+    missing = [identity for identity in requested if identity not in found]
+    if missing:
+        raise TimeFNotFoundError(f"no {kind.value} {', '.join(map(repr, missing))}")
+
+
 def _missing_values(signal_id: int, _spec: TimeSeriesSpec) -> pa.Array:
     """Fail when a metadata-only read is asked to load values.
 
@@ -753,7 +764,8 @@ class DuckDBControlReader:
             The built records.
 
         Raises:
-            TimeFValidationError: If a requested record is absent.
+            TimeFValidationError: If a requested ID is not an int.
+            TimeFNotFoundError: If a requested record is absent.
             TimeFFormatError: If the stored hierarchy is inconsistent.
         """  # noqa: DOC502 - row selection and hierarchy helpers validate the stored data
         requested = None if record_ids is None else tuple(check_id(item, "record id") for item in record_ids)
@@ -810,14 +822,14 @@ class DuckDBControlReader:
             Record rows in result order, including repeated requests for the same record.
 
         Raises:
-            TimeFValidationError: If a requested record is absent.
+            TimeFNotFoundError: If a requested record is absent.
         """
         records_by_id = self._query_rows(_RecordRow, requested)
         if requested is None:
             return list(records_by_id.values())
         missing = [record_id for record_id in requested if record_id not in records_by_id]
         if missing:
-            raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
+            raise TimeFNotFoundError(f"no such record(s) in control.duckdb: {missing}")
         return [records_by_id[record_id] for record_id in requested]
 
     def _prepare_signals(
@@ -1126,14 +1138,93 @@ class DuckDBControlReader:
             for signal_id, stored in chunks.items()
         }
 
-    def read_tasks(
+    def imported_ids(
+        self, alias: str, kind: ObjectKind, parent_ids: Iterable[EntityId]
+    ) -> tuple[str | None, dict[EntityId, EntityId]]:
+        """Return the parent release of a parent alias and the local IDs of objects imported under it.
+
+        Args:
+            alias: The parent alias the objects were imported under.
+            kind: The kind of the objects.
+            parent_ids: The objects' IDs in the parent release.
+
+        Returns:
+            The parent release the catalog names for the alias, or ``None`` if it names none, and
+            the local object ID of each parent ID the catalog knows.
+        """
+        found = self._query("SELECT parent_ref FROM imports WHERE alias = ?", [alias])
+        if not found:
+            return None, {}
+        rows = self._query(
+            "SELECT parent_id, object_id FROM imported_objects "
+            "WHERE alias = ? AND object_kind = ? AND parent_id IN (SELECT unnest(?))",
+            [alias, kind.value, list(parent_ids)],
+        )
+        return found[0][0], dict(rows)
+
+    def read_signals_by_id(self, signal_ids: Collection[EntityId]) -> dict[EntityId, Signal]:
+        """Build the Records that hold the given Signals, and return those Signals.
+
+        Each Record is built once, however many of its Signals are asked for, and the Records of
+        one call share one time-offsets handle per axis.
+
+        Args:
+            signal_ids: The Signals' IDs.
+
+        Returns:
+            The Signals by ID, each inside its Record, with stored values behind unloaded handles.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored Signal.
+        """  # noqa: DOC502 - raised by _require_found
+        owners: dict[EntityId, EntityId] = dict(
+            self._query(
+                "SELECT signals.signal_id, sources.record_id FROM signals JOIN sources USING (source_id) "
+                "WHERE signals.signal_id IN (SELECT unnest(?))",
+                [list(signal_ids)],
+            )
+        )
+        _require_found(ObjectKind.SIGNAL, signal_ids, owners)
+        signals: dict[EntityId, Signal] = {}
+        for record in self.read_records(list(dict.fromkeys(owners.values()))):
+            signals.update((signal.id, signal) for signal in record.signals if signal.id in owners)
+        return signals
+
+    def read_tasks_by_id(self, task_ids: Collection[EntityId]) -> dict[EntityId, Task]:
+        """Build the given tasks, sharing the Records they reference, a bounded batch at a time.
+
+        The tasks they derive from through ``from_tasks`` are built too.
+
+        Args:
+            task_ids: The task IDs, each once.
+
+        Returns:
+            The tasks by ID.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored task.
+        """  # noqa: DOC502 - raised by _require_found
+        stored = {
+            task_id
+            for (task_id,) in self._query(
+                "SELECT task_id FROM tasks WHERE task_id IN (SELECT unnest(?))", [list(task_ids)]
+            )
+        }
+        _require_found(ObjectKind.TASK, task_ids, stored)
+        tasks = _TaskBuilder(self, None).read_ids(list(task_ids))
+        return {task.id: task for task in tasks}
+
+    def read_tasks(  # noqa: PLR0913 - one argument per task selection axis
         self,
         records: Iterable[Record] | None = None,
         *,
         cached_records: Iterable[Record] = (),
         dataset_annotations: Mapping[int, Annotation] | None = None,
+        required_modalities: Iterable[InputModality] | None = None,
+        supported_modalities: Iterable[InputModality] | None = None,
+        split: Split | str | None = None,
     ) -> tuple[Task, ...]:
-        """Build every task attached to ``records`` and restore all in-memory object references.
+        """Build every selected task and restore all in-memory object references.
 
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
@@ -1141,6 +1232,7 @@ class DuckDBControlReader:
             dataset_annotations: The dataset's annotations, already built, by occurrence id, which tasks
                 then reference instead of their own copies, or ``None`` to read them when a task
                 needs them.
+            split: Keep only tasks of this split, or ``None`` for every task.
 
         Returns:
             Concrete tasks in stable ID order.
@@ -1153,6 +1245,9 @@ class DuckDBControlReader:
             None if records is None else tuple(records),
             cached_records=cached_records,
             dataset_annotations=dataset_annotations,
+            required_modalities=required_modalities,
+            supported_modalities=supported_modalities,
+            split=split,
         )
         return tuple(builder.read_all())
 
@@ -1824,8 +1919,8 @@ class _TaskBuilder:
         """Index the caller's Records and decide whether the task table needs filtering.
 
         Raises:
-            TimeFValidationError: If ``batch_size`` is not a positive int, or one of ``records`` is
-                not stored in the control database.
+            TimeFValidationError: If ``batch_size`` is not a positive int.
+            TimeFNotFoundError: If one of ``records`` is not stored in the control database.
         """
         if batch_size is not None and (type(batch_size) is not int or batch_size < 1):
             raise TimeFValidationError(f"batch_size must be a positive int, got {batch_size!r}")
@@ -1854,7 +1949,7 @@ class _TaskBuilder:
         given.update((record.id, record) for record in records or ())
         missing = reader._missing_ids("records", "record_id", given.keys() - reader._known_record_ids)
         if missing:
-            raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
+            raise TimeFNotFoundError(f"no such record(s) in control.duckdb: {missing}")
         for record in given.values():
             self._index_record(record)
         self.record_ids: list[int] | None = None if records is None else [record.id for record in records]
@@ -1873,6 +1968,18 @@ class _TaskBuilder:
         self._start_scope(given)
         for task_ids in self._pages():
             yield self._build_scope(task_ids, given)
+
+    def read_ids(self, task_ids: list[int]) -> list[Task]:
+        """Build the tasks with these IDs, each given once, in one scope, a bounded batch at a time.
+
+        Returns:
+            The tasks in the order of ``task_ids``.
+        """
+        return [
+            task
+            for start in range(0, len(task_ids), _TASK_BATCH_SIZE)
+            for task in self._build_batch(task_ids[start : start + _TASK_BATCH_SIZE])
+        ]
 
     def read_all(self) -> list[Task]:
         """Build all selected tasks in one scope, using batches for filtered reads.
