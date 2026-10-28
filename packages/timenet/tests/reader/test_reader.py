@@ -148,7 +148,7 @@ def test_filtered_reads_validate_only_selected_text_locators(tmp_path, validated
         assert set(validated_locators) == {record_report}
 
         validated_locators.clear()
-        (loaded_task,) = reader.iter_tasks((loaded_record,), split=Split.TRAIN)
+        (loaded_task,) = reader.iter_tasks(inputs=(loaded_record,), split=Split.TRAIN)
         assert loaded_task.prompt == f"{text}{answer.id}"
         assert loaded_task.rationale == text + "Explanation."
         assert loaded_task.targets is not None
@@ -369,9 +369,9 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         return original_open(*args, **kwargs)
 
     with TimeFReader(open_local_version(version_dir)) as reader:
-        dataset = reader.read()
+        signal_id = next(reader.iter_records()).signals[0].id
         monkeypatch.setattr(pq, "ParquetFile", counting_open)
-        signal = dataset.records[0].signals[0]
+        signal = reader.get(Signal, signal_id)
         assert opens == 0
         signal.to_arrow()
         assert opens >= 1
@@ -560,7 +560,7 @@ def test_iter_tasks_streams_one_record_and_points_at_its_built_objects(tmp_path)
     (expected_context,) = expected_answer.input_annotations
     with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
         record0 = next(reader.iter_records((record.id,)))
-        tasks = list(reader.iter_tasks((record0,)))
+        tasks = list(reader.iter_tasks(inputs=(record0,)))
         every = reader.read_tasks()
 
     assert {task.id for task in tasks} == {
