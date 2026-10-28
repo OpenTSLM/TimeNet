@@ -16,6 +16,9 @@ CONTROL_FILE = "control.duckdb"
 CONTROL_SCHEMA_VERSION = 1
 """Schema version written into :data:`CONTROL_FILE`."""
 
+CATALOG_ERRORS = (duckdb.CatalogException, duckdb.BinderException, duckdb.ConversionException)
+"""DuckDB errors that mean a catalog lacks a table, column, or type that a read expects."""
+
 
 def connect_control(path: Path, *, read_only: bool = False) -> duckdb.DuckDBPyConnection:
     """Open a TimeF control database.

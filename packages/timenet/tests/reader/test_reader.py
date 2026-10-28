@@ -1,15 +1,25 @@
+from dataclasses import replace
 from fractions import Fraction
 import json
+import os
 from pathlib import Path
 import pickle
+import shutil
+import signal
+import threading
+import time
+from typing import NoReturn
 
+import duckdb
+import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError
+import timenet.format.control_cache as control_cache_module
 import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
@@ -28,6 +38,7 @@ from timenet.types import (
     ScalarPredictionTask,
     Split,
     TimeSeriesSpec,
+    TSGenerationTask,
     Version,
     ureg,
 )
@@ -380,10 +391,50 @@ def test_read_dataset_and_lazy_loaders_are_picklable(tmp_path, backend):
     assert restored.records[0].signals[0].to_arrow().equals(expected)
 
 
-def test_tasks_are_cached_after_first_access(tmp_path):
+def test_every_read_builds_new_objects(tmp_path):
     with TimeFReader(open_local_version(_write(tmp_path))) as reader:
-        first = reader.tasks
-        assert reader.tasks is first
+        first = reader.read_tasks()
+        again = reader.read_tasks()
+        assert [task.id for task in again] == [task.id for task in first]
+        assert not any(task is other for task, other in zip(first, again, strict=True))
+        dataset = reader.read()
+        assert reader.read().records[0] is not dataset.records[0]
+
+
+def test_task_reads_read_only_the_dataset_annotations_their_tasks_reference(tmp_path, monkeypatch):
+    dataset = make_dataset()
+    note = dataset.annotate(Annotation(key="note", value="referenced"))
+    dataset.annotate(Annotation(key="unused", value="unreferenced"))
+    added = dataset.add_task(task=AnswerTask(inputs=(dataset.records[0],), targets=("yes",), input_annotations=(note,)))
+    version_dir = _write(tmp_path, dataset)
+    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
+        rows = connection.execute(
+            """SELECT c.name, o.occurrence_id FROM annotation_occurrences o JOIN annotation_contents c USING (content_id)
+               WHERE o.object_type = 'Dataset'"""
+        ).fetchall()
+    occurrences = dict(rows)
+    requested = []
+    read_annotations = DuckDBControlReader._read_annotations
+
+    def recording(self, owners, by_occurrence=None):
+        if ObjectKind.DATASET in owners:
+            requested.append(owners[ObjectKind.DATASET])
+        return read_annotations(self, owners, by_occurrence)
+
+    monkeypatch.setattr(DuckDBControlReader, "_read_annotations", recording)
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        tasks = [*reader.read_tasks(), *reader.iter_tasks()]
+        # Each task read asks only for the occurrence its tasks reference.
+        assert requested == [[occurrences["note"]], [occurrences["note"]]]
+        requested.clear()
+        first, again = reader.read(), reader.read()
+    assert [task.input_annotations[0].value for task in tasks if task.id == added.id] == ["referenced"] * 2
+    # A whole-dataset read builds all of the Dataset's annotations, and its tasks reference them.
+    assert requested == [None, None]
+    assert [annotation.key for annotation in first.annotations] == ["note", "unused"]
+    (task,) = (task for task in first.tasks if task.id == added.id)
+    assert task.input_annotations[0] is first.annotations[0]
+    assert again.annotations[0] is not first.annotations[0]
 
 
 def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
@@ -420,18 +471,37 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
     with reader:
         assert text in reader.read_task_table()["prompt"].to_pylist()
     assert read_calls == 3
-    assert state["_tasks"] is None
     assert state["_control"] is None
-    assert state["_records"] is None
     assert state["_values"] is None
+
+
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("UPDATE records SET clock_id = -1", "missing clocks"),
+        ("UPDATE sources SET parent_source_id = source_id", "source hierarchy contains a cycle"),
+    ],
+)
+def test_a_read_rejects_an_invalid_hierarchy_before_building_signals(tmp_path, monkeypatch, statement, message):
+    version_dir = _write(tmp_path)
+    version = open_local_version(version_dir)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        connection.execute(statement)
+
+    def unexpected(cls, **_):
+        pytest.fail("a Signal was built before the hierarchy was checked")
+
+    monkeypatch.setattr(Signal, "from_loader", classmethod(unexpected))
+    with TimeFReader(version) as reader, pytest.raises(TimeFFormatError, match=message):
+        reader.read()
 
 
 def test_iter_records_preserves_requested_order(tmp_path):
     dataset = make_dataset()
     ordered_records = sorted(dataset.records, key=lambda record: record.id)
-    requested = (ordered_records[-1].id, ordered_records[0].id)
+    requested = (ordered_records[-1].id, ordered_records[0].id, ordered_records[-1].id)
     with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
-        selected = tuple(reader.iter_records(record_ids=requested))
+        selected = tuple(reader.iter_records(record_ids=iter(requested)))
     assert tuple(record.id for record in selected) == requested
 
 
@@ -489,7 +559,7 @@ def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_pat
         reader.verify()
 
 
-def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_path):
+def test_iter_tasks_streams_one_record_and_points_at_its_built_objects(tmp_path):
     dataset = make_dataset()
     expected_answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
     (record,) = expected_answer.inputs
@@ -497,7 +567,7 @@ def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_pa
     with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
         record0 = next(reader.iter_records((record.id,)))
         tasks = list(reader.iter_tasks((record0,)))
-        every = reader.tasks
+        every = reader.read_tasks()
 
     assert {task.id for task in tasks} == {
         task.id for task in every if any(item.id == record.id for item in task.inputs)
@@ -506,6 +576,22 @@ def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_pa
     answer = next(task for task in tasks if task.id == expected_answer.id)
     cohort = next(annotation for annotation in record0.annotations if annotation == expected_context)
     assert answer.input_annotations[0] is cohort
+
+
+@pytest.mark.parametrize("read", ["read_tasks", "iter_tasks"])
+def test_a_task_read_builds_the_record_that_holds_a_signal_target_the_task_names_in_no_other_way(tmp_path, read):
+    dataset = make_dataset()
+    # No task names record1, so only the Signal target leads to it.
+    heartbeat = dataset.records[1].signals[1]
+    expected = dataset.add_task(task=TSGenerationTask(prompt="Generate a heartbeat.", inputs=(), targets=(heartbeat,)))
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        (task,) = (task for task in getattr(reader, read)() if task.id == expected.id)
+        assert task.inputs == ()
+        assert task.targets is not None
+        (target,) = task.targets
+        assert isinstance(target, Signal)
+        assert target.id == heartbeat.id
+        assert target.to_arrow().equals(heartbeat.to_arrow())
 
 
 def test_split_filters_run_in_duckdb_and_survive_a_full_read(tmp_path):
@@ -556,3 +642,271 @@ def test_invalid_external_locator_is_rejected_before_exposing_placeholders(tmp_p
         pytest.raises(TimeFFormatError, match="invalid external locator"),
     ):
         reader.read_task_table()
+
+
+def _run_in_child(work, write_end: int, seconds: int) -> NoReturn:  # pragma: no cover - runs in the child
+    """Run ``work`` in a forked child, write the text it returns to ``write_end``, and exit.
+
+    The child exits with status 0 if ``work`` returns, and with status 1 if it raises.
+    """
+    # A child that hangs ends itself, and the parent sees it fail.
+    signal.alarm(seconds)
+    code = 1
+    try:
+        os.write(write_end, work().encode())
+        code = 0
+    finally:
+        os._exit(code)
+
+
+def _wait_for_child(pid: int, read_end: int, timeout: int) -> tuple[int, str]:
+    """Wait for the child ``pid`` to exit, then read what it wrote to ``read_end``.
+
+    If the child runs longer than ``timeout`` seconds, the parent kills it and fails the test.
+
+    Returns:
+        The child's exit status and the text it wrote.
+    """
+    deadline = time.monotonic() + timeout
+    done, status = os.waitpid(pid, os.WNOHANG)
+    while not done:
+        if time.monotonic() > deadline:
+            os.kill(pid, signal.SIGKILL)
+            os.waitpid(pid, 0)
+            os.close(read_end)
+            pytest.fail(f"the forked child did not exit within {timeout} s")
+        time.sleep(0.01)
+        done, status = os.waitpid(pid, os.WNOHANG)
+    with os.fdopen(read_end) as pipe:
+        return status, pipe.read()
+
+
+def _in_forked_child(work, seconds: int = 20) -> tuple[int, str]:
+    """Run ``work`` in a forked child process that ends itself after ``seconds``.
+
+    Returns:
+        The child's exit status and the text ``work`` returned.
+    """
+    read_end, write_end = os.pipe()
+    pid = os.fork()
+    if pid == 0:  # pragma: no cover - runs in the child
+        _run_in_child(work, write_end, seconds)
+    os.close(write_end)
+    # The parent waits 10 seconds longer than the child's alarm.
+    return _wait_for_child(pid, read_end, seconds + 10)
+
+
+def _joined(*ids: int) -> str:
+    return ",".join(str(item) for item in ids)
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+def test_a_task_stream_continues_after_the_process_forks_between_batches(tmp_path, monkeypatch):
+    # One task a batch, so each later batch selects its page after the fork.
+    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 1)
+    dataset, _, text = _dataset_with_packed_text()
+    version = open_local_version(_write(tmp_path, dataset))
+
+    def child_record_ids():
+        # The child reads through the reader it inherited and through one of its own.
+        with TimeFReader(version) as own:
+            return _joined(*reader.record_ids(), *own.record_ids())
+
+    with TimeFReader(version) as reader:
+        stream = reader.iter_tasks()
+        first = next(stream)
+        status, child = _in_forked_child(child_record_ids)
+        # The next batch reopens the catalog that the fork closed.
+        tasks = [first, *stream]
+        assert all(task.prompt == f"{text}{task.id}" for task in tasks)
+    assert status == 0
+    record_ids = sorted(record.id for record in dataset.records)
+    assert child == _joined(*record_ids, *record_ids)
+    assert [task.id for task in tasks] == sorted(task.id for task in dataset.tasks)
+
+
+def test_a_stream_selects_its_task_rows_one_page_at_a_time(tmp_path, monkeypatch):
+    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
+    dataset = make_dataset()
+    ids = sorted(task.id for task in dataset.tasks)
+    pages = []
+    select = DuckDBControlReader._task_row_page
+
+    def recording(self, *selection, after, limit):
+        rows = select(self, *selection, after=after, limit=limit)
+        pages.append((after, limit, [row.task_id for row in rows]))
+        return rows
+
+    monkeypatch.setattr(DuckDBControlReader, "_task_row_page", recording)
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        stream = reader.iter_tasks()
+        next(stream)
+        # The first batch selects only its own page; each later page starts after the last task ID.
+        assert pages == [(None, 2, ids[:2])]
+        rest = list(stream)
+    assert [task.id for task in rest] == ids[1:]
+    assert pages == [(None, 2, ids[:2]), (ids[1], 2, ids[2:4]), (ids[3], 2, ids[4:])]
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+def test_a_fork_closes_catalog_connections_and_each_process_opens_its_own(tmp_path):
+    version = open_local_version(_write(tmp_path))
+
+    def child_record_ids():
+        # The child reads through the reader it inherited and through one of its own.
+        with TimeFReader(version) as own:
+            return _joined(*reader.record_ids(), *own.record_ids())
+
+    with TimeFReader(version) as reader:
+        expected = reader.record_ids()
+        control = reader._control
+        assert control is not None
+        assert control._connection is not None
+        status, child = _in_forked_child(child_record_ids)
+        # The fork closed the parent's connection; its next read opens a new one.
+        assert control._connection is None
+        assert reader.record_ids() == expected
+        assert control._connection is not None
+    assert status == 0
+    assert child == _joined(*expected, *expected)
+
+
+class _HeldInTheChild:
+    """Stand in for the connection lock while another parent thread holds it as the process forks.
+
+    The parent sees a free lock. The thread holding it does not exist in the child, so there the
+    lock never frees.
+    """
+
+    def __init__(self) -> None:
+        self._parent = os.getpid()
+        self._held = threading.Lock()
+        self._held.acquire()
+
+    def __enter__(self) -> None:
+        if os.getpid() != self._parent:
+            self._held.acquire()
+
+    def __exit__(self, *_: object) -> None:
+        if os.getpid() != self._parent:
+            self._held.release()
+
+
+@pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
+def test_a_forked_child_opens_readers_under_a_fresh_connection_lock(tmp_path, monkeypatch):
+    version = open_local_version(_write(tmp_path))
+    with TimeFReader(version) as reader:
+        expected = reader.record_ids()
+    monkeypatch.setattr(control_reader_module._CONNECTIONS, "lock", _HeldInTheChild())
+
+    def child_record_ids():
+        # Opening a reader registers its connection under the lock, which hangs unless the child's is fresh.
+        with TimeFReader(version) as own:
+            return _joined(*own.record_ids())
+
+    status, child = _in_forked_child(child_record_ids, seconds=5)
+    assert status == 0
+    assert child == _joined(*expected)
+
+
+@pytest.mark.parametrize("closer", ["close", "fork-hook"])
+def test_a_read_whose_connection_another_thread_closes_raises_a_reader_error(tmp_path, closer):
+    path = _write(tmp_path) / "control.duckdb"
+    executed, resumed = threading.Event(), threading.Event()
+    outcome = {}
+
+    def query(connection):
+        connection.execute("SELECT record_id FROM records ORDER BY record_id")
+        executed.set()
+        assert resumed.wait(10)
+        return connection.fetchall()
+
+    with DuckDBControlReader(path) as reader:
+
+        def read():
+            try:
+                outcome["rows"] = reader.run(query)
+            except Exception as exc:
+                outcome["error"] = exc
+
+        thread = threading.Thread(target=read, daemon=True)
+        thread.start()
+        try:
+            # The connection closes between the read's execute and its fetch.
+            assert executed.wait(10)
+            if closer == "close":
+                reader.close()
+            else:
+                control_reader_module._CONNECTIONS.before_fork()
+        finally:
+            resumed.set()
+            thread.join(10)
+        assert not thread.is_alive()
+        error = outcome.get("error")
+        assert isinstance(error, TimeFReaderError)
+        assert "closed while a read was running" in str(error)
+        assert "spawn or forkserver" in str(error)
+        assert isinstance(error.__cause__, duckdb.Error)
+        # The read opened nothing behind the close.
+        assert reader._connection is None
+
+
+def test_a_catalog_query_that_duckdb_cannot_bind_raises_a_format_error(tmp_path):
+    version_dir = _write(tmp_path)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        connection.execute("ALTER TABLE task_dependencies RENAME TO gone")
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        assert reader.record_ids()
+        with pytest.raises(TimeFFormatError, match="could not read control database") as raised:
+            reader.read_tasks()
+        assert isinstance(raised.value.__cause__, duckdb.CatalogException)
+        with pytest.raises(TimeFFormatError, match="could not read control database"):
+            list(reader.iter_tasks())
+
+
+def test_other_duckdb_errors_propagate_unchanged(tmp_path, monkeypatch):
+    version_dir = _write(tmp_path)
+    failure = duckdb.IOException("the disk went away")
+
+    def failing(connection):
+        raise failure
+
+    with DuckDBControlReader(version_dir / "control.duckdb") as reader:
+        with pytest.raises(duckdb.IOException) as raised:
+            reader.run(failing)
+        assert raised.value is failure
+    run = DuckDBControlReader.run
+    monkeypatch.setattr(DuckDBControlReader, "run", lambda self, query: run(self, failing))
+    with TimeFReader(open_local_version(version_dir)) as reader, pytest.raises(duckdb.IOException):
+        reader.record_ids()
+
+
+def test_a_reader_verifies_a_remote_catalog_once_and_again_after_its_copy_is_gone(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("TIMENET_CACHE", raising=False)
+    version_dir = _write(tmp_path)
+    local = open_local_version(version_dir)
+    # A filesystem other than the local one makes the reader fetch the catalog into its cache.
+    remote = replace(
+        local, filesystem=pafs.SubTreeFileSystem("/", pafs.LocalFileSystem()), root=str(version_dir).lstrip("/")
+    )
+    checks = []
+    original = control_cache_module.file_checksum
+
+    def counting_checksum(path):
+        checks.append(path)
+        return original(path)
+
+    monkeypatch.setattr(control_cache_module, "file_checksum", counting_checksum)
+    with TimeFReader(remote) as reader:
+        expected = reader.record_ids()
+        reader.close()
+        assert reader.record_ids() == expected
+        control_reader_module._CONNECTIONS.before_fork()
+        assert reader.record_ids() == expected
+        assert len(checks) == 1
+        # The cached copy disappears while the reader is closed; the reopen fetches and checks it again.
+        reader.close()
+        shutil.rmtree(tmp_path / "home" / "cache" / "control")
+        assert reader.record_ids() == expected
+    assert len(checks) == 2

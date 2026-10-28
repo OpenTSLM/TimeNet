@@ -20,7 +20,7 @@ from timenet.types.annotations import AnnotationDescriptor
 from timenet.types.domains import Domain
 from timenet.types.licenses import License
 from timenet.types.metadata_fields import DatasetId, NonEmptyText, SemanticVersion
-from timenet.types.reference_keys import InputAliasField
+from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
 from timenet.types.specs import TimeSeriesSpec
 from timenet.types.tasks import TASKS, Task, TaskType
@@ -40,7 +40,7 @@ class DatasetMetadata(TimeFModel):
     """HuggingFace-style ``org/name`` pair, case-sensitive, exactly one slash."""
     dataset_version: SemanticVersion
     """Semantic version of the compiled TimeNet release."""
-    inputs: dict[InputAliasField, DatasetRef] = Field(default_factory=dict)
+    parents: dict[ParentAlias, DatasetRef] = Field(default_factory=dict)
     """Exact parent releases indexed by connector-local aliases."""
     source_revision: StrictStr | None = None
     """Upstream release, tag, or commit, separate from the compiled dataset version."""
@@ -67,9 +67,9 @@ class DatasetMetadata(TimeFModel):
     yaml_schema_version: Annotated[int, Field(strict=True, ge=1, le=1)] = 1
     """Version of the card's own field schema."""
 
-    @field_validator("inputs", mode="before", json_schema_input_type=dict[InputAliasField, DatasetRef | str])
+    @field_validator("parents", mode="before", json_schema_input_type=dict[ParentAlias, DatasetRef | str])
     @classmethod
-    def _parse_inputs(cls, value: Any) -> Any:
+    def _parse_parents(cls, value: Any) -> Any:
         if isinstance(value, dict):
             return {key: DatasetRef.parse(ref) if isinstance(ref, str) else ref for key, ref in value.items()}
         return value

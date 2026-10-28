@@ -397,7 +397,7 @@ IMPORTED_OBJECTS = Table(
     unique=(("alias", "object_kind", "parent_id"),),
     foreign_keys=(ForeignKey("alias", "imports", "alias"),),
 )
-"""Local object IDs indexed by input alias, object kind, and original parent ID."""
+"""Local object IDs indexed by parent alias, object kind, and original parent ID."""
 
 CONTROL_TABLES: tuple[Table, ...] = (
     CONTROL_METADATA,

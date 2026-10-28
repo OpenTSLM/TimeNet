@@ -34,6 +34,9 @@ class BaseValuesReader(ABC):
     def load(self, version: DatasetVersion, rows: Sequence[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
         """Read and concatenate one series' chunk values.
 
+        The result holds buffers of its own, not views of decoded files or chunks that the reader
+        caches, so keeping it keeps only this series' values.
+
         Args:
             version: The opened version handle. Reads flow through its filesystem/store.
             rows: The series' index rows, sorted by ``chunk_idx``. Each holds a file path
@@ -49,6 +52,9 @@ class BaseValuesReader(ABC):
         self, version: DatasetVersion, rows: Sequence[StoredChunk], start: int, stop: int, spec: TimeSeriesSpec
     ) -> pa.Array:
         """Read only the steps of one series in the half-open step range ``[start, stop)``.
+
+        The result holds buffers of its own, not views of decoded files or chunks that the reader
+        caches. Keeping it keeps only the requested steps.
 
         Returns:
             The requested steps in their canonical Arrow representation.

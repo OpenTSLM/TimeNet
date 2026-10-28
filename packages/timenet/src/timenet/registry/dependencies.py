@@ -201,7 +201,7 @@ def prepare_local_copy(  # noqa: PLR0913
 ) -> DatasetVersion:
     """Ensure complete local copies of a release and of each of its payload sources.
 
-    Only the release's own payload sources are prepared, never their sources. Build inputs stay
+    Only the release's own payload sources are prepared, never their sources. Build-only parents stay
     recorded in the manifest and are not prepared.
 
     Args:

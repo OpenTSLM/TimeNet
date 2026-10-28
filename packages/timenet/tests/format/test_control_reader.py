@@ -115,7 +115,7 @@ def test_shifted_regular_axis_round_trip(tmp_path):
     assert record.signals[0].span_us == (273268, 273313)
 
 
-def test_control_reader_hydrates_recursive_hierarchy_and_annotations(tmp_path):
+def test_control_reader_builds_recursive_hierarchy_and_annotations(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
     DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
@@ -204,7 +204,7 @@ def test_input_modalities_round_trip_as_typed_task_data(tmp_path):
     assert rows[0]["input_modalities"] == ["text", "time_series"]
 
 
-def test_modality_filters_select_tasks_and_targets_before_hydration(tmp_path, monkeypatch):
+def test_modality_filters_select_tasks_and_targets_before_building(tmp_path, monkeypatch):
     monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
     dataset = _dataset()
     record = dataset.records[0]
@@ -264,7 +264,7 @@ def _spans_over(signal):
     )
 
 
-def test_control_reader_hydrates_each_target_storage_type(tmp_path):
+def test_control_reader_builds_each_target_storage_type(tmp_path):
     path = tmp_path / "control.duckdb"
     dataset = _dataset()
     record = dataset.records[0]
@@ -325,7 +325,42 @@ def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
     assert task.targets == ("Yes",)
 
 
-def test_selected_record_hydration_does_not_read_unrelated_hierarchies(tmp_path):
+def test_a_full_read_rejects_a_source_whose_parent_belongs_to_another_record(tmp_path):
+    path = tmp_path / "control.duckdb"
+    dataset = make_dataset()
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
+    with connect_control(path) as connection:
+        connection.execute(
+            """UPDATE sources SET parent_source_id = (SELECT min(source_id) FROM sources WHERE record_id = ?)
+               WHERE source_id = (SELECT min(source_id) FROM sources WHERE record_id = ?)""",
+            [dataset.records[1].id, dataset.records[0].id],
+        )
+
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match="crosses record boundaries"):
+        reader.read_records()
+
+
+def _source_row(source_id, record_id, parent_source_id=None):
+    return control_reader_module._SourceRow(
+        source_id=source_id, record_id=record_id, parent_source_id=parent_source_id, name="s", metadata="{}"
+    )
+
+
+@pytest.mark.parametrize(
+    ("rows", "message"),
+    [
+        ((_source_row(1, 9),), "source 1 refers to missing record 9"),
+        ((_source_row(1, 1), _source_row(2, 1, parent_source_id=7)), "source 2 refers to missing parent source 7"),
+    ],
+    ids=["missing-record", "missing-parent"],
+)
+def test_source_rows_that_name_a_missing_record_or_parent_are_rejected(rows, message):
+    # The catalog's foreign keys keep both out of a written release; a catalog from elsewhere may hold them.
+    with pytest.raises(TimeFFormatError, match=message):
+        DuckDBControlReader._group_sources({row.source_id: row for row in rows}, {1})
+
+
+def test_building_selected_records_does_not_read_unrelated_hierarchies(tmp_path):
     dataset = make_dataset()
     selected_record, corrupt_record = dataset.records[:2]
     path = tmp_path / "control.duckdb"
@@ -478,7 +513,7 @@ def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tm
 
 
 @pytest.mark.parametrize("materialize", [False, True])
-def test_iter_tasks_hydrates_a_parent_that_sorts_after_its_dependant(tmp_path, monkeypatch, materialize):
+def test_iter_tasks_builds_a_parent_that_sorts_after_its_dependant(tmp_path, monkeypatch, materialize):
     monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 1)
     dataset = _dataset()
     record = dataset.records[0]
@@ -613,7 +648,7 @@ def test_annotation_values_round_trip_in_their_own_typed_column(tmp_path, value,
     assert stored == (kind,)
 
 
-def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
+def test_arrow_task_views_match_the_built_objects(tmp_path):
     dataset = make_dataset()
     answer_task = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
     (classification_task,) = answer_task.from_tasks
@@ -650,7 +685,7 @@ def test_arrow_task_views_match_the_hydrated_objects(tmp_path):
     )
 
 
-def test_split_round_trips_and_filters_before_hydration(tmp_path, monkeypatch):
+def test_split_round_trips_and_filters_before_building(tmp_path, monkeypatch):
     monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
     dataset = _dataset()
     record = dataset.records[0]
@@ -741,7 +776,7 @@ def test_tasks_reject_a_record_from_another_reader_whose_annotation_was_replaced
     with DuckDBControlReader(path) as other:
         records = other.read_records()
     records[0].annotations = (records[0].annotations[0], Annotation(key="patient_age", value=70, unit="year"))
-    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match="no hydrated object carries"):
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match="no built object carries"):
         reader.read_tasks(records)
 
 

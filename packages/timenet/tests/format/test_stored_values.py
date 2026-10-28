@@ -224,8 +224,7 @@ def test_length_and_truth_read_no_payload(reader, payload_reads):
 
 def test_handles_from_one_reader_at_one_location_are_equal_without_a_read(reader, payload_reads):
     prompt, reports = _stored(reader)
-    # Closing drops the reader's cached objects, so the next read builds new handles.
-    reader.close()
+    # Every read builds new handles.
     again, reports_again = _stored(reader)
     assert again is not prompt
     assert again == prompt
@@ -768,6 +767,14 @@ def test_a_catalog_without_its_locator_table_fails_as_a_format_error(tmp_path):
     ):
         reader.read()
     assert isinstance(raised.value.__cause__, duckdb.Error)
+
+
+def test_a_locator_lookup_leaves_other_duckdb_errors_to_its_caller(tmp_path):
+    # Only a missing locator table is a format error here; the control reader maps the rest.
+    connection = connect_control(_write(tmp_path) / "control.duckdb", read_only=True)
+    connection.close()
+    with pytest.raises(duckdb.ConnectionException):
+        PackedValueReader.locations(connection, ObjectKind.TASK, [1])
 
 
 def test_the_writer_stores_locators_one_task_batch_at_a_time(tmp_path, monkeypatch):
