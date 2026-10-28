@@ -603,6 +603,21 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
             )
         return tuple(imported[identity] for identity in parent_ids)
 
+    def _record_ids_of_signals(self, signal_ids: tuple[EntityId, ...]) -> dict[EntityId, EntityId]:
+        """Return the ID of the Record that holds each Signal, building no object.
+
+        ``TimeFDataset.import_from`` uses it to read only the Records that hold the Signals it
+        imports.
+
+        Returns:
+            The Record ID of each Signal, by Signal ID.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored Signal.
+        """  # noqa: DOC502 - raised by the control reader
+        with self._as_format_error(preserve_validation=True):
+            return self._control_reader().signal_record_ids(signal_ids)
+
     def _read_by_id(self, kind: ObjectKind, ids: tuple[EntityId, ...]) -> dict[EntityId, Entity]:
         """Build the objects of one kind with these IDs, each once, with every value unloaded.
 
