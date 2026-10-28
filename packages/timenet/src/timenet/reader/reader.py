@@ -620,14 +620,16 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
 
     def _read_tasks_with_records(
         self, task_ids: tuple[EntityId, ...]
-    ) -> tuple[dict[EntityId, Task], dict[EntityId, Record]]:
-        """Read tasks by ID, as :meth:`get_many` does, with every Record the read built for them.
+    ) -> tuple[dict[EntityId, Task], dict[EntityId, Record], tuple[Annotation, ...]]:
+        """Read tasks by ID, as :meth:`get_many` does, with every Record and dataset occurrence the read built for them.
 
         ``TimeFDataset.import_from`` uses it, so the Records it copies are the objects that the tasks
-        reference.
+        reference, and every annotation the tasks reference lies on one of those Records or is one
+        of the dataset occurrences.
 
         Returns:
-            The tasks by ID and the Records by ID, with every value unloaded.
+            The tasks by ID, the Records by ID, with every value unloaded, and the dataset's own
+            occurrences that the tasks reference.
 
         Raises:
             TimeFNotFoundError: If an ID names no stored task.
