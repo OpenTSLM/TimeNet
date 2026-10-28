@@ -1,7 +1,7 @@
 """Build the TimeF object hierarchy from ``control.duckdb``."""
 
-from collections import defaultdict
-from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
+from collections import ChainMap, defaultdict
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, MutableMapping
 from fractions import Fraction
 from functools import partial
 from graphlib import CycleError, TopologicalSorter
@@ -77,6 +77,8 @@ _AnnotationsByOccurrence: TypeAlias = dict[_OccurrenceId, Annotation]
 """Each annotation, by the ID of its occurrence."""
 _SignalsBySource: TypeAlias = dict[EntityId, list[Signal]]
 """The Signals of each Source, by the catalog row ID of the Source."""
+_TasksById: TypeAlias = dict[EntityId, Task]
+"""Tasks by task ID."""
 
 
 class _RecordRow(NamedTuple):
@@ -184,12 +186,18 @@ class _ChunkRow(NamedTuple):
     chunk_minor_index: int | None
     n_values: int
 
-    @property
-    def stored_chunk(self) -> StoredChunk:
-        """Return the value-reader locator represented by this catalog row."""
+    def stored_chunk(self, strings: dict[str, str]) -> StoredChunk:
+        """Return the value-reader locator represented by this catalog row.
+
+        Args:
+            strings: File paths already in use, so chunks in one file share one string.
+
+        Returns:
+            The chunk's file, coordinates, and length.
+        """
         return StoredChunk(
             chunk_idx=self.chunk_index,
-            chunk_file=self.value_path,
+            chunk_file=strings.setdefault(self.value_path, self.value_path),
             data_index=ChunkDataIndex(self.chunk_major_index, self.chunk_minor_index),
             n_values=self.n_values,
         )
@@ -268,8 +276,8 @@ class _TargetRow(NamedTuple):
     span_signal_ids: list[int] | None
 
 
-_TASK_BATCH_SIZE = 5_000
-"""Tasks built per round of keyed queries."""
+TASK_BATCH_SIZE = 5_000
+"""The most tasks one batch of a task read or stream holds, unless a stream sets another batch size."""
 
 
 def _annotation_query(owners: Mapping[ObjectKind, Collection[int] | None]) -> tuple[str, list[object]]:
@@ -416,6 +424,33 @@ def _missing_values(signal_id: int, _spec: TimeSeriesSpec) -> pa.Array:
     raise TimeFFormatError(f"no values loader is configured for signal {signal_id!r}")
 
 
+def _shared_source(source: SourceKey | None, strings: dict[str, str]) -> SourceKey | None:
+    """Return a source key as the string already in use for it, so chunk locations share one string.
+
+    Returns:
+        The source key, or ``None`` for the release whose catalog records the chunks.
+    """
+    return None if source is None else SourceKey(strings.setdefault(source, source))
+
+
+def _check_derivations(dependencies: Mapping[EntityId, tuple[EntityId, ...]]) -> None:
+    """Check that no task derives from itself through the stored dependencies.
+
+    The check walks the dependency map without recursion, so a parent chain of any length passes.
+
+    Args:
+        dependencies: The ordered parent IDs of each task, by task ID.
+
+    Raises:
+        TimeFFormatError: If the dependencies contain a cycle. The message names the tasks in it.
+    """
+    try:
+        TopologicalSorter(dependencies).prepare()
+    except CycleError as error:
+        cycle = sorted(set(error.args[1]))
+        raise TimeFFormatError(f"task dependencies contain a cycle through tasks {cycle}") from error
+
+
 def _stores_locators(connection: duckdb.DuckDBPyConnection) -> bool:
     """Return whether the catalog stores any packed-value locator.
 
@@ -504,6 +539,8 @@ class DuckDBControlReader:
         """The occurrences on each live Record the reader built, by occurrence id, keyed by ``id(record)``."""
         self._task_facts: _TaskFacts | None = None
         self._known_record_ids: set[int] = set()
+        # Chunk files and sources named by the chunk locations read so far, so equal names share one string.
+        self._chunk_strings: dict[str, str] = {}
 
     def run(self, query: Callable[[duckdb.DuckDBPyConnection], _T]) -> _T:
         """Run one read through the connection, which opens again first if it was closed.
@@ -656,8 +693,15 @@ class DuckDBControlReader:
             self._packed_values_stored = self.run(_stores_locators)
         return self._packed_values_stored
 
-    def _stored_offsets(self, axes: Mapping[int, TimeAxis]) -> dict[int, StoredOffsets]:
+    def _stored_offsets(
+        self, axes: Mapping[EntityId, TimeAxis], shared: dict[EntityId, StoredOffsets] | None = None
+    ) -> dict[EntityId, StoredOffsets]:
         """Return one handle to the packed time offsets of each irregular axis, without reading them.
+
+        Args:
+            axes: The axes by axis ID.
+            shared: Handles that earlier record reads of the same call built, by axis ID. Their
+                axes reuse them, and new handles are added, so one call has one handle per axis.
 
         Returns:
             Handles keyed by axis ID. Each checks its time offsets against the axis on its first read
@@ -666,9 +710,10 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If an irregular axis has no packed time offsets, or another axis has some.
         """
-        locations = self._external_locations(ObjectKind.AXIS, axes)
-        handles: dict[int, StoredOffsets] = {}
-        for axis_id, axis in axes.items():
+        handles: dict[EntityId, StoredOffsets] = {} if shared is None else shared
+        new_axes = {axis_id: axis for axis_id, axis in axes.items() if axis_id not in handles}
+        locations = self._external_locations(ObjectKind.AXIS, new_axes)
+        for axis_id, axis in new_axes.items():
             location = locations.get(
                 ExternalObjectFieldKey(object_kind=ObjectKind.AXIS, object_id=axis_id, field=PackedField.TIME_OFFSETS)
             )
@@ -687,6 +732,7 @@ class DuckDBControlReader:
         self._clock_cache.clear()
         self._task_facts = None
         self._known_record_ids.clear()
+        self._chunk_strings.clear()
 
     def __enter__(self) -> "DuckDBControlReader":
         """Return this open reader.
@@ -713,6 +759,7 @@ class DuckDBControlReader:
         record_ids: Iterable[int] | None = None,
         *,
         with_annotations: bool = True,
+        shared_offsets: dict[EntityId, StoredOffsets] | None = None,
     ) -> tuple[Record, ...]:
         """Build complete recursive records while leaving signal values lazy.
 
@@ -722,6 +769,8 @@ class DuckDBControlReader:
         Args:
             record_ids: Requested IDs in result order, or ``None`` for every record.
             with_annotations: Whether to build annotations on records, sources, and signals.
+            shared_offsets: Time-offset handles by axis ID, shared with earlier record reads of
+                the same call, and extended with this read's new ones. ``None`` shares nothing.
 
         Returns:
             The built records.
@@ -731,7 +780,7 @@ class DuckDBControlReader:
             TimeFFormatError: If the stored hierarchy is inconsistent.
         """  # noqa: DOC502 - row selection and hierarchy helpers validate the stored data
         requested = None if record_ids is None else tuple(check_id(item, "record id") for item in record_ids)
-        hierarchy = self._read_record_hierarchy(requested)
+        hierarchy = self._read_record_hierarchy(requested, shared_offsets)
         occurrences: _AnnotationsByOccurrence = {}
         annotations = self._read_record_annotations(hierarchy, occurrences) if with_annotations else {}
         signals_by_source = self._read_signals(hierarchy.signals, annotations)
@@ -739,7 +788,9 @@ class DuckDBControlReader:
         self._known_record_ids.update(hierarchy.owners[ObjectKind.RECORD])
         return records
 
-    def _read_record_hierarchy(self, requested: tuple[EntityId, ...] | None) -> _RecordHierarchy:
+    def _read_record_hierarchy(
+        self, requested: tuple[EntityId, ...] | None, shared_offsets: dict[EntityId, StoredOffsets] | None
+    ) -> _RecordHierarchy:
         """Read and validate the catalog rows without opening payload files.
 
         Returns:
@@ -763,7 +814,7 @@ class DuckDBControlReader:
             sources=sources_by_id,
             children=children,
             roots_by_record=roots,
-            signals=self._prepare_signals(list(signals_by_id.values())),
+            signals=self._prepare_signals(list(signals_by_id.values()), shared_offsets),
             owners={
                 ObjectKind.RECORD: record_ids,
                 ObjectKind.SOURCE: sources_by_id.keys(),
@@ -792,7 +843,9 @@ class DuckDBControlReader:
             raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
         return [records_by_id[record_id] for record_id in requested]
 
-    def _prepare_signals(self, signal_rows: list[_SignalRow]) -> list[_PreparedSignal]:
+    def _prepare_signals(
+        self, signal_rows: list[_SignalRow], shared_offsets: dict[EntityId, StoredOffsets] | None
+    ) -> list[_PreparedSignal]:
         """Validate axes and create the signals' value handles without reading payloads.
 
         Returns:
@@ -804,7 +857,7 @@ class DuckDBControlReader:
         """  # noqa: DOC502 - _signal_axis checks each signal's axis
         axes = self._read_axes({row.axis_id for row in signal_rows})
         # Signals that share an axis share its handle, so its time offsets are read and checked once.
-        time_offsets_by_axis = self._stored_offsets(axes)
+        time_offsets_by_axis = self._stored_offsets(axes, shared_offsets)
         specs: dict[tuple[Any, ...], TimeSeriesSpec] = {}
         prepared: list[_PreparedSignal] = []
         for row in signal_rows:
@@ -1108,13 +1161,16 @@ class DuckDBControlReader:
         )
         chunks: dict[int, list[StoredChunk]] = {signal_id: [] for signal_id in ids}
         sources: dict[int, SourceKey | None] = {}
+        strings = self._chunk_strings
         for row in rows:
             # The writer stores or reuses a Signal's chunks as a unit, so one release stores them all.
             if sources.setdefault(row.signal_id, row.source_key) != row.source_key:
                 raise TimeFFormatError(f"signal {row.signal_id!r} has chunks stored by more than one release")
-            chunks[row.signal_id].append(row.stored_chunk)
+            chunks[row.signal_id].append(row.stored_chunk(strings))
         return {
-            signal_id: ChunkLocation(source=sources[signal_id], chunks=tuple(stored)) if stored else None
+            signal_id: ChunkLocation(source=_shared_source(sources[signal_id], strings), chunks=tuple(stored))
+            if stored
+            else None
             for signal_id, stored in chunks.items()
         }
 
@@ -1162,32 +1218,34 @@ class DuckDBControlReader:
         )
         return tuple(builder.read_all())
 
-    def iter_tasks(
+    def iter_task_batches(
         self,
         records: Iterable[Record] | None = None,
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
-    ) -> Iterator[Task]:
+        batch_size: int = TASK_BATCH_SIZE,
+    ) -> Iterator[list[Task]]:
         """Yield the tasks whose inputs include one of ``records``, a bounded batch at a time.
 
         Each batch runs a handful of keyed queries and builds only that batch's tasks, so a caller
         that walks one Record at a time never holds the whole task table in memory. Only ``None``
-        skips the input Record filter; an empty collection selects no tasks. Each batch selects its
-        tasks in a query of its own, after the last task ID of the batch before, so no query result
-        stays open between batches.
+        skips the input Record filter; an empty collection selects no tasks.
 
-        Tasks a batch derives from through ``from_tasks`` are built first when they have not
-        been yielded yet, and kept until their dependants are built. Records a task refers to
-        outside ``records`` are built on demand.
+        Each batch is built on its own. The parents its tasks derive from through ``from_tasks``,
+        and the Records, Signals, and annotations they refer to outside ``records``, are built for
+        the batch and shared only among its tasks, so nothing of a yielded batch stays with the
+        stream.
 
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
             split: Keep only tasks of this split, or ``None`` for every task.
+            batch_size: The most tasks a batch holds. By default, a batch holds up to 5,000 tasks
+                (``TASK_BATCH_SIZE``). Pass another value for larger or smaller batches.
 
         Yields:
-            Concrete tasks in stable ID order.
+            Each batch's concrete tasks, in stable ID order across batches.
 
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
@@ -1198,8 +1256,9 @@ class DuckDBControlReader:
             required_modalities=required_modalities,
             supported_modalities=supported_modalities,
             split=split,
+            batch_size=batch_size,
         )
-        yield from builder.iter_tasks()
+        yield from builder.iter_batches()
 
     def task_facts(self) -> _TaskFacts:
         """Return the per-database facts that task reads need, read once per reader.
@@ -1421,7 +1480,7 @@ class DuckDBControlReader:
             parameters.append(supported)
         return " AND ".join(predicates), parameters
 
-    def _task_row_page(  # noqa: PLR0913 - one argument per task selection axis, and the page
+    def _selected_task_ids(  # noqa: PLR0913 - one argument per task selection axis, and the page
         self,
         record_ids: list[int] | None,
         required_modalities: Iterable[InputModality] | None,
@@ -1430,8 +1489,8 @@ class DuckDBControlReader:
         *,
         after: int | None,
         limit: int,
-    ) -> list[_TaskRow]:
-        """Return one page of the selected task rows, in task ID order, in one query.
+    ) -> list[EntityId]:
+        """Return one page of the IDs of the selected tasks, in task ID order, in one query.
 
         The query's result is read in full, so no result stays open while the caller builds the
         page's tasks.
@@ -1440,18 +1499,17 @@ class DuckDBControlReader:
             record_ids: IDs of the Records whose input tasks to select, or ``None`` for every task.
             split: Keep only tasks of this split, or ``None`` for every task.
             after: The last task ID of the page before, or ``None`` for the first page.
-            limit: The most rows the page holds.
+            limit: The most IDs the page holds.
 
         Returns:
-            The page's task rows.
+            The page's task IDs.
         """
         where, params = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
         if after is not None:
             where = f"{where} AND t.task_id > ?" if where else "WHERE t.task_id > ?"
             params = [*params, after]
-        columns = ", ".join(f"t.{name}" for name in _TaskRow._fields)
-        sql = f"SELECT {columns} FROM tasks t {where} ORDER BY t.task_id LIMIT ?"  # noqa: S608 - fixed predicates
-        return self._query_named(sql, [*params, limit], _TaskRow._make)
+        sql = f"SELECT t.task_id FROM tasks t {where} ORDER BY t.task_id LIMIT ?"  # noqa: S608 - fixed predicates
+        return [task_id for (task_id,) in self._query(sql, [*params, limit])]
 
     @staticmethod
     def _task_filter(task_ids: list[int] | None) -> tuple[str, list[object]]:
@@ -1553,6 +1611,23 @@ class DuckDBControlReader:
             parents[task_id].append(parent_id)
         return {task_id: tuple(ids) for task_id, ids in parents.items()}
 
+    def _task_ancestors(self, task_ids: list[EntityId]) -> set[EntityId]:
+        """Find every task that the given tasks derive from, directly or through other tasks, in one query.
+
+        The query adds each ancestor once, so it ends on a stored cycle too.
+
+        Returns:
+            The IDs of the ancestors. A cycle can lead back to one of ``task_ids``.
+        """
+        rows = self._query(
+            "WITH RECURSIVE ancestors(task_id) AS ("
+            "SELECT parent_task_id FROM task_dependencies WHERE task_id IN (SELECT unnest(?)) "
+            "UNION SELECT d.parent_task_id FROM task_dependencies AS d JOIN ancestors AS a ON d.task_id = a.task_id"
+            ") SELECT task_id FROM ancestors",
+            [task_ids],
+        )
+        return {task_id for (task_id,) in rows}
+
     @staticmethod
     def _group_relationships(
         rows: list[tuple[int, str, int]],
@@ -1572,7 +1647,7 @@ class DuckDBControlReader:
         task_id: int,
         field: TaskRelationshipField,
         refs: dict[str, tuple[int, ...]],
-        objects: dict[int, _Ref],
+        objects: Mapping[int, _Ref],
         label: str,
     ) -> tuple[_Ref, ...]:
         """Resolve one ordered reference field to built objects.
@@ -1720,7 +1795,7 @@ class DuckDBControlReader:
     def _read_annotations(
         self,
         owners: Mapping[ObjectKind, Collection[int] | None],
-        by_occurrence: _AnnotationsByOccurrence | None = None,
+        by_occurrence: MutableMapping[_OccurrenceId, Annotation] | None = None,
     ) -> _AnnotationsByOwner:
         """Build annotation content and occurrences.
 
@@ -1785,12 +1860,33 @@ class DuckDBControlReader:
         return {key: tuple(value) for key, value in grouped.items()}
 
 
-class _TaskBuilder:
-    """State for one :meth:`DuckDBControlReader.iter_tasks` call.
+class _Lookups(NamedTuple):
+    """The caller's Records, their Signals, and the annotations a stream gives every batch to look up.
 
-    It holds the caller's Records and the lookups built from them, loads Records and Signals a
-    task refers to outside that set on demand, and keeps every task that another task derives
-    from until its dependants are built.
+    Batches write what they build to lookups of their own in front of these. Only the first batch
+    whose targets need Signals adds the caller's Records' Signals here, and only the first batch
+    that needs an annotation of a Record another reader built matches those Records here, once for
+    the stream.
+    """
+
+    records_by_id: MutableMapping[EntityId, Record]
+    signals_by_id: MutableMapping[EntityId, Signal]
+    unindexed: list[Record]
+    """The caller's Records whose Signals are not in ``signals_by_id`` yet."""
+    annotations_by_id: MutableMapping[_OccurrenceId, Annotation]
+    foreign: list[Record]
+    """The caller's Records that another reader built, whose annotations are not matched yet."""
+    dataset_annotations_indexed: bool
+
+
+class _TaskBuilder:
+    """State for one task read of a :class:`DuckDBControlReader`.
+
+    It holds the caller's Records and the lookups built from them. Within one scope, it builds the
+    Records, Signals, and annotations that tasks refer to outside that set once, and keeps every
+    task that another task derives from until its dependants are built. A one-pass read is one
+    scope. A stream starts a new scope for each batch, so its batches share only the caller's
+    objects.
     """
 
     def __init__(  # noqa: PLR0913 - one argument per task selection axis
@@ -1803,23 +1899,31 @@ class _TaskBuilder:
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
+        batch_size: int | None = None,
     ) -> None:
         """Index the caller's Records and decide whether the task table needs filtering.
 
         Raises:
-            TimeFValidationError: If one of ``records`` is not stored in the control database.
+            TimeFValidationError: If ``batch_size`` is not a positive int, or one of ``records`` is
+                not stored in the control database.
         """
+        if batch_size is not None and (type(batch_size) is not int or batch_size < 1):
+            raise TimeFValidationError(f"batch_size must be a positive int, got {batch_size!r}")
         self.reader = reader
         self.required_modalities = required_modalities
         self.supported_modalities = supported_modalities
         self.split = split
-        self.records_by_id: dict[int, Record] = {}
-        self.signals_by_id: dict[int, Signal] = {}
+        self.batch_size = TASK_BATCH_SIZE if batch_size is None else batch_size
+        self.records_by_id: MutableMapping[EntityId, Record] = {}
+        # Records one scope reads share one time-offsets handle per axis.
+        self.offsets_by_axis: dict[EntityId, StoredOffsets] = {}
+        self.signals_by_id: MutableMapping[EntityId, Signal] = {}
         self._records_without_signal_index: list[Record] = []
-        self.annotations_by_id: _AnnotationsByOccurrence = {}
+        self.annotations_by_id: MutableMapping[_OccurrenceId, Annotation] = {}
         self._foreign_records: list[Record] = []
-        self.retained: dict[int, Task] = {}
-        self._building: set[int] = set()
+        self.retained: _TasksById = {}
+        # The lookups of the caller's objects that a stream's batches share, or None for one pass.
+        self._given: _Lookups | None = None
         self._dataset_annotations_indexed = dataset_annotations is not None
         self.annotations_by_id.update(dataset_annotations or {})
         facts = reader.task_facts()
@@ -1832,37 +1936,25 @@ class _TaskBuilder:
             raise TimeFValidationError(f"no such record(s) in control.duckdb: {missing}")
         for record in given.values():
             self._index_record(record)
-        self.record_ids: list[int] | None = None if records is None else [record.id for record in records]
+        self.record_ids: list[EntityId] | None = None if records is None else [record.id for record in records]
 
-    def iter_tasks(self) -> Iterator[Task]:
-        """Yield the selected tasks in task ID order, one bounded batch at a time.
+    def iter_batches(self) -> Iterator[list[Task]]:
+        """Yield the selected tasks in task ID order, one bounded batch at a time, each in its own scope.
 
-        Each batch is a page of the selection: a query of its own that starts after the last task
-        ID of the page before. No query result stays open while a batch is built, so a connection
-        closed between batches, as a fork closes it, opens again for the next page.
+        The tasks of a batch share the objects the batch builds, and no batch shares them with
+        another. The builder forgets a batch's objects before it yields them, so it holds nothing
+        of a batch it has handed out.
 
         Yields:
-            Each built task.
+            Each batch's built tasks.
         """
-        batch_size = _TASK_BATCH_SIZE
-        after = None
-        while True:
-            task_rows = self.reader._task_row_page(
-                self.record_ids,
-                self.required_modalities,
-                self.supported_modalities,
-                self.split,
-                after=after,
-                limit=batch_size,
-            )
-            if task_rows:
-                yield from self._build_batch([row.task_id for row in task_rows], task_rows=task_rows)
-            if len(task_rows) < batch_size:
-                return
-            after = task_rows[-1].task_id
+        given = self._share_given()
+        self._start_scope(given)
+        for task_ids in self._pages():
+            yield self._build_scope(task_ids, given)
 
     def read_all(self) -> list[Task]:
-        """Build all selected tasks, using batches for filtered reads.
+        """Build all selected tasks in one scope, using batches for filtered reads.
 
         Returns:
             The tasks in task ID order.
@@ -1870,46 +1962,92 @@ class _TaskBuilder:
         unfiltered = self.required_modalities is None and self.supported_modalities is None and self.split is None
         if self.record_ids is None and unfiltered:
             return self._build_batch(None)
-        return list(self.iter_tasks())
+        return [task for task_ids in self._pages() for task in self._build_batch(task_ids)]
 
-    def _build_batch(self, task_ids: list[int] | None, *, task_rows: list[_TaskRow] | None = None) -> list[Task]:
-        """Build one batch, or the whole table for ``None``, building unbuilt parents first.
+    def _pages(self) -> Iterator[list[EntityId]]:
+        """Select the tasks a batch at a time and yield their IDs in task ID order.
 
-        Rows from the selection page avoid a second task-table scan.
+        Each page is a query of its own that starts after the last ID of the page before, so no
+        result stays open while a batch is built, and a connection closed between batches, as a
+        fork closes it, opens again for the next page.
+
+        Yields:
+            Each batch's task IDs.
+        """
+        after = None
+        while True:
+            ids = self.reader._selected_task_ids(
+                self.record_ids,
+                self.required_modalities,
+                self.supported_modalities,
+                self.split,
+                after=after,
+                limit=self.batch_size,
+            )
+            if ids:
+                yield ids
+            if len(ids) < self.batch_size:
+                return
+            after = ids[-1]
+
+    def _share_given(self) -> _Lookups:
+        """Keep the lookups of the caller's objects, as they stand before any batch, for every batch.
+
+        Returns:
+            The lookups, which the batches then look through.
+        """
+        self._given = _Lookups(
+            self.records_by_id,
+            self.signals_by_id,
+            self._records_without_signal_index,
+            self.annotations_by_id,
+            self._foreign_records,
+            self._dataset_annotations_indexed,
+        )
+        return self._given
+
+    def _start_scope(self, given: _Lookups) -> None:
+        """Forget what earlier batches built, and look up the caller's objects in ``given``."""
+        self.records_by_id = ChainMap({}, given.records_by_id)
+        self.offsets_by_axis = {}
+        self.signals_by_id = ChainMap({}, given.signals_by_id)
+        self._records_without_signal_index = []
+        self.annotations_by_id = ChainMap({}, given.annotations_by_id)
+        # Records a batch builds come from this reader, so only the caller's can need matching.
+        self._foreign_records = given.foreign
+        self._dataset_annotations_indexed = given.dataset_annotations_indexed
+        self.retained = {}
+
+    def _build_scope(self, task_ids: list[EntityId], given: _Lookups) -> list[Task]:
+        """Build one batch in a scope of its own, which ends when the batch is built.
+
+        Returns:
+            The batch's tasks in the order of ``task_ids``.
+        """
+        try:
+            return self._build_batch(task_ids)
+        finally:
+            self._start_scope(given)
+
+    def _build_batch(self, task_ids: list[EntityId] | None) -> list[Task]:
+        """Build one batch, or the whole table for ``None``, with every unbuilt task it derives from.
+
+        One query finds all the ancestors of the batch's tasks. One build then reads the batch and
+        the ancestors that are not built yet. Nothing recurses, so a parent chain of any length builds.
 
         Returns:
             The tasks in the order of ``task_ids``, or in task ID order for the whole table.
 
         Raises:
             TimeFFormatError: If the stored derivations contain a cycle.
-        """
+        """  # noqa: DOC502 - _check_derivations finds the cycle
         pending = None if task_ids is None else [task_id for task_id in task_ids if task_id not in self.retained]
-        if task_rows is not None:
-            task_rows = [row for row in task_rows if row.task_id not in self.retained]
+        if pending and self.parent_ids:
+            ancestors = self.reader._task_ancestors(pending) - set(pending) - self.retained.keys()
+            pending.extend(sorted(ancestors))
         dependencies = self.reader._task_dependencies(pending) if self.parent_ids else {}
-        in_batch = None if pending is None else set(pending)
-        missing_parents = (
-            []
-            if in_batch is None
-            else sorted(
-                {
-                    parent_id
-                    for parent_ids in dependencies.values()
-                    for parent_id in parent_ids
-                    if parent_id not in self.retained and parent_id not in in_batch
-                }
-            )
-        )
-        if missing_parents:
-            cyclic = self._building.intersection(missing_parents)
-            if cyclic:
-                raise TimeFFormatError(f"task dependencies contain a cycle through tasks {sorted(cyclic)}")
-            self._building.update(pending or ())
-            try:
-                self._build_batch(missing_parents)
-            finally:
-                self._building.difference_update(pending or ())
-        built = self._build(pending, task_rows=task_rows)
+        _check_derivations(dependencies)
+        built = self._build(pending)
         for task_id, parent_ids in dependencies.items():
             built[task_id].from_tasks = tuple(self._task(parent_id, built) for parent_id in parent_ids)
         if task_ids is None:
@@ -1919,7 +2057,7 @@ class _TaskBuilder:
                 self.retained[task_id] = task
         return [self._task(task_id, built) for task_id in task_ids]
 
-    def _task(self, task_id: int, built: dict[int, Task]) -> Task:
+    def _task(self, task_id: EntityId, built: _TasksById) -> Task:
         """Return a task from this batch or the retained parents.
 
         Raises:
@@ -1930,9 +2068,7 @@ class _TaskBuilder:
             raise TimeFFormatError(f"task dependency refers to missing task {task_id!r}")
         return task
 
-    def _build(  # noqa: PLR0914 - one batch joins several tables
-        self, task_ids: list[int] | None, *, task_rows: list[_TaskRow] | None = None
-    ) -> dict[int, Task]:
+    def _build(self, task_ids: list[EntityId] | None) -> _TasksById:  # noqa: PLR0914 - one batch joins several tables
         """Read every table for one batch of task IDs and construct the tasks.
 
         Returns:
@@ -1944,8 +2080,7 @@ class _TaskBuilder:
         if task_ids is not None and not task_ids:
             return {}
         reader = self.reader
-        if task_rows is None:
-            task_rows = reader._task_rows(task_ids)
+        task_rows = reader._task_rows(task_ids)
         external = reader._external_values(ObjectKind.TASK, (row.task_id for row in task_rows))
         record_refs = reader._task_relationships("task_record_refs", "record_id", RECORD_FIELDS, task_ids)
         annotation_refs = reader._task_relationships(
@@ -1988,7 +2123,7 @@ class _TaskBuilder:
                 else decode_target(values, records=self.records_by_id, signals=self.signals_by_id)
             )
 
-        tasks: dict[int, Task] = {}
+        tasks: _TasksById = {}
         for row in task_rows:
             try:
                 task_type = TaskType(row.task_type)
@@ -2065,14 +2200,18 @@ class _TaskBuilder:
         """Find the occurrence ids of the Records that another reader instance built, once.
 
         The method reads these Records again from storage only once. A fresh read builds their
-        annotations in the same order, so the two walks line up one to one.
+        annotations in the same order, so the two walks line up one to one. Only the caller's
+        Records can be foreign, so a stream matches them once, into the lookups every batch shares.
         """
-        foreign, self._foreign_records = self._foreign_records, []
+        foreign = list(self._foreign_records)
+        self._foreign_records.clear()
         if not foreign:
             return
+        given = self._given
+        index = self.annotations_by_id if given is None else given.annotations_by_id
         fresh_records = self.reader.read_records([record.id for record in foreign])
         for record, fresh in zip(foreign, fresh_records, strict=True):
-            self.annotations_by_id.update(self._match_occurrences(record, fresh))
+            index.update(self._match_occurrences(record, fresh))
 
     def _match_occurrences(self, record: Record, fresh: Record) -> _AnnotationsByOccurrence:
         """Pair the annotations of ``record`` with the annotations of ``fresh``.
@@ -2106,7 +2245,7 @@ class _TaskBuilder:
         if not missing:
             return
         try:
-            built = self.reader.read_records(missing)
+            built = self.reader.read_records(missing, shared_offsets=self.offsets_by_axis)
         except TimeFValidationError as exc:
             raise TimeFFormatError(f"task refers to a missing record: {exc}") from exc
         for record in built:
@@ -2125,10 +2264,7 @@ class _TaskBuilder:
         """
         if not signal_ids:
             return
-        for record in self._records_without_signal_index:
-            for signal in record.signals:
-                self.signals_by_id[signal.id] = signal
-        self._records_without_signal_index.clear()
+        self._index_signals()
         outside = signal_ids - self.signals_by_id.keys()
         if not outside:
             return
@@ -2137,6 +2273,17 @@ class _TaskBuilder:
         if missing:
             raise TimeFFormatError(f"task refers to missing signal {missing[0]!r}")
         self._ensure_records(set(owners.values()))
+        self._index_signals()
+
+    def _index_signals(self) -> None:
+        """Add the Signals of the Records indexed since the last walk to the lookup by ID."""
+        given = self._given
+        if given is not None and given.unindexed:
+            # A stream walks the caller's Records once, into the lookups every batch shares.
+            for record in given.unindexed:
+                for signal in record.signals:
+                    given.signals_by_id[signal.id] = signal
+            given.unindexed.clear()
         for record in self._records_without_signal_index:
             for signal in record.signals:
                 self.signals_by_id[signal.id] = signal
@@ -2146,7 +2293,7 @@ class _TaskBuilder:
         """Resolve referenced annotation occurrences to the objects on the built Records or the Dataset.
 
         An occurrence on no built Record is looked up among the Dataset's occurrences: the
-        builder reads only those its tasks reference, unless the caller gave every one of them.
+        scope reads only those its tasks reference, unless the caller gave every one of them.
 
         Returns:
             Annotations by occurrence ID.
@@ -2166,6 +2313,7 @@ class _TaskBuilder:
             else:
                 resolved[occurrence_id] = annotation
         if unresolved and not self._dataset_annotations_indexed:
+            # The scope's own lookup keeps them, so a later batch of a stream reads its own copies.
             self.reader._read_annotations({ObjectKind.DATASET: unresolved}, self.annotations_by_id)
         for occurrence_id in unresolved:
             annotation = self.annotations_by_id.get(occurrence_id)
