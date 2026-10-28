@@ -134,8 +134,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         alias: ParentAlias | None = None,
         records: Iterable[EntityId] = (),
         signals: Iterable[EntityId] = (),
+        tasks: Iterable[EntityId] = (),
     ) -> ImportedDataset:
-        """Copy selected parent Records and Signals into this dataset, sharing their stored values.
+        """Copy selected parent Records, Signals, and tasks into this dataset, sharing their stored values.
 
         The parent must be one that ``metadata.parents`` declares, by its exact release. The
         alias comes from that declaration; pass ``alias`` only to choose among several aliases that
@@ -145,11 +146,12 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
         A copy is this dataset's own object, with its own metadata and annotations: editing it
         leaves the parent unchanged. Frozen time origins and axes are shared, not copied, so Records
-        that share an origin in the parent share it in this dataset. A copied Record or Signal gets
-        the next ID of its kind in this dataset, as :meth:`add_record` gives one. Its stored values
-        keep their handles, so reading the copy reads the parent's payloads, and writing this
-        dataset reuses them instead of copying them. This dataset keeps a map from parent alias,
-        kind, and parent ID to the ID of each copy; nothing derives a copy's ID from its parent's.
+        that share an origin in the parent share it in this dataset. A copied Record, Signal, or
+        task gets the next ID of its kind in this dataset, as :meth:`add_record` and
+        :meth:`add_tasks` give one. Its stored values keep their handles, so reading the copy reads
+        the parent's payloads, and writing this dataset reuses them instead of copying them. This
+        dataset keeps a map from parent alias, kind, and parent ID to the ID of each copy; nothing
+        derives a copy's ID from its parent's.
 
         - ``records=`` brings each Record whole: its Sources, Signals, and annotations.
         - ``signals=`` brings each Signal with its annotations, inside a copy of its Record and
@@ -158,45 +160,59 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
           lies only on Signals that were not imported. A Record with a ``time_span`` checks spans
           against that session span instead, so its partial copy keeps every annotation inside
           the session.
+        - ``tasks=`` brings each task with what it needs: its input and candidate Records and its
+          Record targets, whole; each Signal target, as ``signals=`` brings it; and the tasks it
+          derives from through ``from_tasks``, transitively, with what they need. The copy holds
+          copies of the task's own annotations. An import refuses a task that references
+          annotations. A ``TSCorrespondenceTask`` without ``candidate_records`` draws on the whole
+          parent, so it cannot be imported.
         - Annotations on the parent dataset itself are not imported.
 
         A later import extends the copies this dataset holds instead of copying them again: it
         adds the Signals and Sources they lack and attaches the annotations that the added Signals
         place and the Signals the copy holds did not. The copies' other annotations and edits stay
-        as they are. An object this dataset no longer holds is copied again, under a new ID.
-        An import brings back each selected object that a copy lacks, so remove imported objects
-        only after the last import that can select them again. Removing a Signal from a copy is
-        meant to drop the annotations that only it placed, so that copying it back attaches them
-        once; other structural edits of a copy, such as assigning a Source's ``signals`` or
-        ``sources``, are not supported, and a later import may then attach an annotation twice. A
-        copy's Source that holds no imported Signal is found by its name, so when sibling Sources
-        share a name, an import that would add a Signal below one raises.
+        as they are. Importing a task again is idempotent: the call reuses the copy this dataset
+        holds as it is, with this dataset's edits, even when an edit removed some of its
+        references, and does not read the task again. An object this dataset no longer holds is
+        copied again, under a new ID. An import brings back each selected object that a copy lacks,
+        so remove imported objects only after the last import that can select them again. Removing a
+        Signal from a copy is meant to drop the annotations that only it placed, so that copying it
+        back attaches them once; other structural edits of a copy, such as assigning a Source's
+        ``signals`` or ``sources``, are not supported, and a later import may then attach an
+        annotation twice. A copy's Source that holds no imported Signal is found by its name, so
+        when sibling Sources share a name, an import that would add a Signal below one raises.
 
-        Each call reads the selected Records from the parent's catalog in one batch, with their
-        values unloaded, and reads no stored value. Import many Records in one call rather than one
-        call per Record. If a Record fails, it is left as it was; the Records before it in the call,
-        and the parent's card, stay. An import is idempotent, so repeating the call once the cause
-        is fixed completes it.
+        Each call reads the selected tasks this dataset holds no copy of, with the tasks they
+        derive from and the Records they reference, and then the other selected Records, from the
+        parent's catalog in batches, with their values unloaded, and reads no stored value. Import
+        many objects in one call rather than one call per object. If a Record fails, it is left as
+        it was; the Records before it in the call, and the parent's card, stay. The tasks register
+        after every Record, all together or none: if they fail, the Records stay, and the tasks do
+        not. An import is idempotent, so repeating the call once the cause is fixed completes it.
 
         Args:
             parent: A reader of the exact parent release.
             alias: The parent alias that declares the parent, when several do.
             records: The parent IDs of the Records to import whole.
             signals: The parent IDs of the Signals to import.
+            tasks: The parent IDs of the tasks to import.
 
         Returns:
-            The copies of the selected Records and Signals, by their parent IDs.
+            The copies of the selected Records, Signals, and tasks, by their parent IDs.
 
         Raises:
             TimeFValidationError: If ``metadata.parents`` does not declare the parent, ``alias``
                 does not declare it, this dataset imports it under another alias already, the
                 alias already imports another release, a selection is a string or holds anything
-                but positive int64 IDs, or the import would add a Signal below a copy's Source that
-                only its name, which a sibling shares, could identify.
+                but positive int64 IDs, the import would add a Signal below a copy's Source that
+                only its name, which a sibling shares, could identify, ``tasks`` is given and this
+                dataset streams its tasks, a task to copy references an annotation or is a
+                ``TSCorrespondenceTask`` without ``candidate_records``, or the task copies fail to
+                register.
             TimeFNotFoundError: If a selected ID names no parent object. Nothing changes then.
         """  # noqa: DOC502 - raised by composition.import_from
         try:
-            return import_from(self, parent, alias=alias, records=records, signals=signals)
+            return import_from(self, parent, alias=alias, records=records, signals=signals, tasks=tasks)
         finally:
             self._schema = None
 
