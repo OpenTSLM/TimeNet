@@ -305,8 +305,8 @@ Each import records the parent in the child:
 `records=` copies each Record whole: its Sources, its Signals, and the annotations on each of them.
 Each copy is a Record of the child. The copy and each of its Signals get the next ID of their kind in
 the child, as `add_record()` gives one. The copy has its own metadata and its own annotations, so an
-edit of the copy does not change the parent. Annotations on the parent dataset itself are not
-copied. An import that selects a Record whose copy the child holds reuses that copy. It adds only
+edit of the copy does not change the parent. Annotations on the parent dataset itself come only
+with a task that references them. An import that selects a Record whose copy the child holds reuses that copy. It adds only
 what the copy lacks, as [Later imports](#later-imports) describes.
 
 A copy shares the frozen time origins and axes of the parent. So copies of Records that share a time
@@ -344,7 +344,8 @@ partial copy of such a Record keeps every Record annotation inside the session.
 
 - Its input Records, its candidate Records, and its Record targets come whole, as `records=` copies
   them.
-- Each Signal target comes in a partial copy of its Record, as `signals=` copies it.
+- Each Signal target comes in a partial copy of its Record, as `signals=` copies it. If that
+  Record holds an annotation that the task references, the Record comes whole.
 - The tasks that it derives from through `from_tasks` come too, with the objects that they
   reference. So do the tasks that those tasks derive from, and so on.
 
@@ -356,15 +357,40 @@ An import reuses a task copy that the child holds as it is, with the edits of th
 read that task from the parent again. If an edit removed some references of the copy, they stay
 removed. A new task copy that derives from a held copy references the held copy.
 
-The import refuses a task that references annotations in `input_annotations` or
-`target_annotations`, and raises `TimeFValidationError`. It also refuses a `TSCorrespondenceTask`
-without `candidate_records`, because the candidates of such a task are all Records of the parent.
-`tasks=` also raises `TimeFValidationError` for a child that streams its tasks.
+The import refuses a `TSCorrespondenceTask` without `candidate_records`, because the candidates of
+such a task are all Records of the parent. `tasks=` raises `TimeFValidationError` for a child that
+streams its tasks.
 
 Each call reads the selected tasks, the tasks that they derive from, and the Records that they
 reference in one batch, before the other Records. `load=` applies to this read too. The task copies
 register after every Record, all together or not at all. If they fail, the Records that the call
-copied stay, and the child holds no task copy of the call.
+copied stay. The child then holds no task copy of the call, and no annotation that the call attached
+for the task copies.
+
+#### Annotation references
+
+A task can reference annotations in `input_annotations` and `target_annotations`. Each of these
+annotations lies on the parent dataset itself or on a Record that the task references, as
+[Annotations](data-model/annotations.md#use-annotations-in-tasks) describes. So the import copies
+the Record of each referenced annotation: the Records that the task names come whole, and so does a
+Record of a Signal target that holds a referenced annotation.
+
+Annotations have no IDs, so the import map cannot find their copies. The import resolves each
+reference to the matching occurrence on the copy of its owner instead. Here the owner is the Record,
+Source, or Signal that carries the annotation. A match is equal to the annotation of the parent in
+every field, for example the key, the value, and the span. If the child changed or removed that
+occurrence on its copy, the import attaches a copy of the annotation of the parent next to it. The
+task copy then references the attached copy, and the occurrence that the child changed stays as it
+is.
+
+An annotation on the parent dataset itself comes to the child dataset with the first task that
+references it. The other annotations of the parent dataset do not come. Identical occurrences that
+the tasks of one call reference stay separate copies. References in separate calls can share one
+copy.
+
+Sibling Sources of a Record can share a name. If no imported Signal identifies their copies, the
+import cannot tell the copies apart. Then a task that references an annotation of such a Source
+raises `TimeFValidationError`.
 
 ### Later imports
 
