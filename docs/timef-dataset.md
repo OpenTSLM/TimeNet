@@ -306,7 +306,8 @@ Each import records the parent in the child:
 Each copy is a Record of the child. The copy and each of its Signals get the next ID of their kind in
 the child, as `add_record()` gives one. The copy has its own metadata and its own annotations, so an
 edit of the copy does not change the parent. Annotations on the parent dataset itself are not
-copied. An import that selects a Record whose copy the child holds returns that copy as it is.
+copied. An import that selects a Record whose copy the child holds reuses that copy. It adds only
+what the copy lacks, as [Later imports](#later-imports) describes.
 
 A copy shares the frozen time origins and axes of the parent. So copies of Records that share a time
 origin in the parent also share it in the child. Each copied Signal keeps the value handles of the
@@ -314,14 +315,46 @@ parent, and reads the stored values of the parent unless the import loaded them.
 child stores no values for the copies. The writer reuses the payloads of the parent instead, so a
 written child needs the parent release.
 
-Each call reads the selected Records from the parent in one batch. Select many Records in one call,
-not one Record per call. By default, the import loads no stored values. Pass `load=` to load them
-during the import, as `TimeFReader.get_many()` does. With `load=LoadPlan.ALL_EAGER`, the copies share
-the loaded values, and you can read them after the parent reader closes.
+Each call reads the selected Records, and the Records that hold the selected Signals, from the
+parent in one batch. Select many objects in one call, not one object per call. By default, the
+import loads no stored values. Pass `load=` to load them during the import, as
+`TimeFReader.get_many()` does. With `load=LoadPlan.ALL_EAGER`, the copies share the loaded values,
+and you can read them after the parent reader closes.
 
 If the copy of one Record fails, the child does not change for that Record. The Records before it
 in the call stay copied, and the parent stays recorded. Imports are safe to repeat. If a call fails
 partway, fix the cause and repeat the call to complete it.
+
+### Signals
+
+`signals=` copies each selected Signal with its annotations. The Signal goes into a copy of its
+Record and of each Source above it. Such a partial copy holds only the Signals that an import
+selected or needed. The window of a Signal is the time range that its values cover.
+
+A partial copy keeps the annotations of its Record and its Sources that its Signals place. The owner
+of an annotation is the Record or Source that carries it. A copy places all annotations of an owner
+when it holds every Signal below that owner. Otherwise it places
+an annotation that has no span, or whose span lies inside the windows of the Signals that it holds
+below the owner. For a Record with a `time_span`, that session span replaces the windows. So a
+partial copy of such a Record keeps every Record annotation inside the session.
+
+### Later imports
+
+A later import reuses each copy that the child holds and grows it in place. If the call selects or
+needs a Signal that a held copy lacks, the import adds the Signal to that copy. It also adds the
+Sources above the Signal that the copy lacks. It attaches the annotations that the copy places now
+and did not place before the call. The other annotations and the edits of the copy stay as they
+are. So an import of a whole Record into a partial copy completes the copy. If the growth of a copy
+fails, the import restores the copy as it was.
+
+A Signal that an import adds to a held copy goes below the copy of its Source. The import finds the
+copy of the Source through the Signals that it imported below that Source before. If there are
+none, it finds the copy by the name of the Source. If sibling Sources share that name, in the parent
+or in the copy, the import cannot tell them apart and raises `TimeFValidationError`. If the child
+restructured the Sources of the copy, the name can find another Source, or the import raises.
+
+Do not assign `Source.signals` or `Source.sources` on a copy yourself. This is not supported. A
+later import can then attach an annotation twice.
 
 ### The import map
 
