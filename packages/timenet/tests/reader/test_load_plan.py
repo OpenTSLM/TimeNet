@@ -4,7 +4,7 @@ import shutil
 from _task_release import _KINDS, _TEXT, _all, _handles, _streamed
 import pytest
 
-from timenet.dataset import TimeFDataset
+from timenet.dataset import Record, Signal, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
@@ -53,6 +53,14 @@ def test_reads_load_nothing_without_a_plan(release, reads):
         assert _all(handles, loaded=False)
         assert _all(_handles(*tasks, *(record for task in tasks for record in task.inputs)), loaded=False)
         assert _all(_handles(*streamed), loaded=False)
+        got = (
+            reader.get(Record, release.records["r1"]),
+            *reader.get_many(Signal, [release.signals["r1-I"], release.signals["r1-II"]]),
+            reader.get(TSCorrespondenceTask, release.tasks["a-child"]),
+        )
+        handles = _handles(*got)
+        assert all(handles.values())
+        assert _all(handles, loaded=False)
     assert not reads
 
 
@@ -96,7 +104,7 @@ def test_a_fully_loaded_dataset_needs_no_storage(release, reads):
 def test_a_task_read_loads_what_its_tasks_reach_and_leaves_held_and_parent_objects_alone(release, reads):
     with TimeFReader(open_local_version(release.path)) as reader:
         (held,) = reader.iter_records((release.records["r1"],))
-        tasks = reader.read_tasks((held,), load=LoadPlan.ALL_EAGER)
+        tasks = reader.read_tasks(inputs=(held,), load=LoadPlan.ALL_EAGER)
     assert list(release.named(tasks)) == ["a-child", "b-edit", "d-mark"]
     child, edit, marked = tasks
     assert isinstance(child, TSCorrespondenceTask)
@@ -124,6 +132,33 @@ def test_a_task_read_loads_what_its_tasks_reach_and_leaves_held_and_parent_objec
     assert _all(_handles(parent, *parent.inputs), loaded=False)
 
 
+def test_get_loads_what_its_objects_reach_and_leaves_parent_tasks_alone(release, reads):
+    with TimeFReader(open_local_version(release.path)) as reader:
+        record = reader.get(Record, release.records["r1"], load=LoadPlan.ALL_EAGER)
+        values, offsets = reader.get_many(
+            Signal, [release.signals["r1-I"], release.signals["r1-II"]], load=LoadPlan(signal_values=Loading.EAGER)
+        )
+        child = reader.get(TSCorrespondenceTask, release.tasks["a-child"], load=LoadPlan.ALL_EAGER)
+    # A Record brings its signals, their time offsets, and the annotations on all of them.
+    assert all(_handles(record).values())
+    assert _all(_handles(record), loaded=True)
+    # A Signal brings its own values, and the plan loads only the kinds it names.
+    assert _loaded(_handles(values, offsets)) == {
+        "signal_values": [True, True],
+        "time_offsets": [False],
+        "text": [False],
+    }
+    # A task brings its text, its input, candidate and target records, and the annotations it references.
+    built, candidate = child.candidate_records
+    reached = _handles(child, *child.inputs, built, candidate, *child.input_annotations)
+    assert all(reached.values())
+    assert _all(reached, loaded=True)
+    # A parent reached only through from_tasks is built but not loaded, and nor is its record.
+    (parent,) = child.from_tasks
+    assert _all(_handles(parent, *parent.inputs), loaded=False)
+    assert reads
+
+
 def test_a_stream_batch_loads_what_it_reaches_through_an_earlier_batch_built_it_unloaded(release):
     # One task a batch: a-child, b-edit, c-other, d-mark, p-parent.
     tasks = _streamed(release, batch_size=1)
@@ -149,7 +184,7 @@ def test_a_stream_batch_loads_what_it_reaches_through_an_earlier_batch_built_it_
 def test_a_task_stream_loads_its_tasks_and_leaves_the_records_it_is_given_alone(release, reads):
     with TimeFReader(open_local_version(release.path)) as reader:
         (held,) = reader.iter_records((release.records["r1"],))
-        tasks = list(reader.iter_tasks((held,), load=LoadPlan.ALL_EAGER, batch_size=1))
+        tasks = list(reader.iter_tasks(inputs=(held,), load=LoadPlan.ALL_EAGER, batch_size=1))
     assert list(release.named(tasks)) == ["a-child", "b-edit", "d-mark"]
     # Every batch uses the records it is given, down to the Signal that b-edit targets.
     assert all(task.inputs[0] is held for task in tasks)
@@ -214,9 +249,9 @@ def test_a_failed_read_returns_nothing_and_leaves_held_objects_unchanged(release
             reader.read(load=LoadPlan.ALL_EAGER)
         # The tasks of r1 also use r3, which the read builds and fails to load.
         with pytest.raises(TimeFFormatError):
-            reader.read_tasks((r1,), load=LoadPlan.ALL_EAGER)
+            reader.read_tasks(inputs=(r1,), load=LoadPlan.ALL_EAGER)
         with pytest.raises(TimeFFormatError):
-            list(reader.iter_tasks((r1,), load=LoadPlan.ALL_EAGER))
+            list(reader.iter_tasks(inputs=(r1,), load=LoadPlan.ALL_EAGER))
         # A lazy read opens no payload, so it still succeeds.
         assert reader.read().records
     assert _loaded(_everything(held)) == before
