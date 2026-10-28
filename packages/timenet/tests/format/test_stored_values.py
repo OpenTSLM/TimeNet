@@ -224,8 +224,7 @@ def test_length_and_truth_read_no_payload(reader, payload_reads):
 
 def test_handles_from_one_reader_at_one_location_are_equal_without_a_read(reader, payload_reads):
     prompt, reports = _stored(reader)
-    # Closing drops the reader's cached objects, so the next read builds new handles.
-    reader.close()
+    # Every read builds new handles.
     again, reports_again = _stored(reader)
     assert again is not prompt
     assert again == prompt

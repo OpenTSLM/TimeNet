@@ -179,7 +179,7 @@ def write_and_fingerprint(root: Path, case: MatrixCase, *, scale: int) -> tuple[
                 {
                     "metadata": _canonical(reader.metadata),
                     "schema": _canonical(reader.schema),
-                    "tasks": _canonical(reader.tasks, positions),
+                    "tasks": _canonical(reader.read_tasks(), positions),
                 },
                 sort_keys=True,
                 separators=(",", ":"),
