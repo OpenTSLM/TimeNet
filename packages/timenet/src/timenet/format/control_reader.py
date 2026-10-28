@@ -1,4 +1,7 @@
-"""Build the TimeF object hierarchy from ``control.duckdb``."""
+"""Build the TimeF object hierarchy from ``control.duckdb``.
+
+The objects hold their stored values behind value handles, unloaded.
+"""
 
 from collections import ChainMap, defaultdict
 from collections.abc import Callable, Collection, Iterable, Iterator, Mapping, MutableMapping
@@ -54,6 +57,7 @@ from timenet.types import (
     check_id,
     ureg,
 )
+from timenet.types.handles import CallableArray
 from timenet.types.ids import EntityId
 from timenet.types.object_kind import ObjectKind
 from timenet.types.reference_keys import SourceKey
@@ -62,8 +66,7 @@ from timenet.types.wire import ValueDtype
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 
 
-ValueLoader = Callable[[int, TimeSeriesSpec], pa.Array]
-ValueLoaderFactory = Callable[[int, TimeSeriesSpec], ArrayHandle]
+ValueLoaderFactory = Callable[[int, TimeSeriesSpec, int], ArrayHandle]
 
 _OwnerId: TypeAlias = int
 """The ID of an annotation's owner: the public ID of a Record, Signal, or Task, or the catalog row ID of a Source."""
@@ -157,7 +160,7 @@ class _PreparedSignal(NamedTuple):
     row: _SignalRow
     axis: TimeAxis
     spec: TimeSeriesSpec
-    values: ArrayHandle | Callable[[], pa.Array]
+    values: ArrayHandle
     time_offsets: StoredOffsets | None
 
 
@@ -424,6 +427,15 @@ def _missing_values(signal_id: int, _spec: TimeSeriesSpec) -> pa.Array:
     raise TimeFFormatError(f"no values loader is configured for signal {signal_id!r}")
 
 
+def _missing_values_factory(signal_id: int, spec: TimeSeriesSpec, _n_values: int) -> ArrayHandle:
+    """Create a value handle for a metadata-only reader.
+
+    Returns:
+        A handle that raises TimeFFormatError when asked to read values.
+    """
+    return CallableArray(partial(_missing_values, signal_id, spec))
+
+
 def _shared_source(source: SourceKey | None, strings: dict[str, str]) -> SourceKey | None:
     """Return a source key as the string already in use for it, so chunk locations share one string.
 
@@ -507,8 +519,7 @@ class DuckDBControlReader:
         self,
         path: Path,
         *,
-        value_loader: ValueLoader | None = None,
-        value_loader_factory: ValueLoaderFactory | None = None,
+        value_loader_factory: ValueLoaderFactory = _missing_values_factory,
         external: PackedValueReader | None = None,
         fetch: Callable[[], Path] | None = None,
     ) -> None:
@@ -516,8 +527,9 @@ class DuckDBControlReader:
 
         Args:
             path: Local path to ``control.duckdb``.
-            value_loader: Lazy values-plane resolver keyed by signal ID.
-            value_loader_factory: Factory for range-aware per-Signal value handles.
+            value_loader_factory: Factory for range-aware per-Signal value handles. It takes the
+                Signal's ID, spec, and declared number of values. The default rejects value reads
+                while allowing metadata-only reads.
             external: Payload reader used to resolve locators for each requested object batch.
                 Required when the selected objects have packed values.
             fetch: Returns a verified local path to the database again, such as a fresh copy of
@@ -532,7 +544,6 @@ class DuckDBControlReader:
         self._open()
         self.external = external
         self._packed_values_stored: bool | None = None
-        self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
         self._clock_cache: dict[int, TimeOrigin] = {}
         self._record_occurrences: dict[int, _AnnotationsByOccurrence] = {}
@@ -761,7 +772,7 @@ class DuckDBControlReader:
         with_annotations: bool = True,
         shared_offsets: dict[EntityId, StoredOffsets] | None = None,
     ) -> tuple[Record, ...]:
-        """Build complete recursive records while leaving signal values lazy.
+        """Build complete recursive records, with their stored values behind unloaded handles.
 
         Source links, clocks, axes, and time-offset locations are checked before any object is
         built. No payload file is opened.
@@ -866,12 +877,11 @@ class DuckDBControlReader:
             if spec is None:
                 spec = self._spec_from_row(row)
                 specs[row.spec_fields] = spec
-            values = (
-                self._value_loader_factory(row.signal_id, spec)
-                if self._value_loader_factory is not None
-                else partial(self._value_loader, row.signal_id, spec)
+            prepared.append(
+                _PreparedSignal(
+                    row, axis, spec, self._value_loader_factory(row.signal_id, spec, row.n_values), time_offsets
+                )
             )
-            prepared.append(_PreparedSignal(row, axis, spec, values, time_offsets))
         return prepared
 
     @staticmethod

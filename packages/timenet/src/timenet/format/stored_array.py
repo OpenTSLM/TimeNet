@@ -7,6 +7,7 @@ from typing import TYPE_CHECKING, NamedTuple, Protocol, Self
 
 import pyarrow as pa
 
+from timenet.errors import TimeFFormatError
 from timenet.format._write_once import WriteOnce
 from timenet.types import TimeSeriesSpec
 from timenet.types.handles import ArrayHandle
@@ -68,11 +69,11 @@ class _KeptArray(NamedTuple):
 class StoredArray(ArrayHandle):
     """Refer to one signal's array, stored as chunks in the values files of a release.
 
-    The handle holds the release's reader and the signal's ID and spec. A loaded handle also keeps
-    the array and the location of its chunks in a write-once cell, so it reads, slices, and locates
-    them without storage access. An unloaded handle holds no values: every read goes to the chunks,
-    and ``read_steps`` reads only the chunks that cover the range. Handles from one reader for one
-    signal are equal, whether loaded or not.
+    The handle holds the release's reader and the signal's ID, spec, and number of values. A loaded
+    handle also keeps the array and the location of its chunks in a write-once cell, so it reads,
+    slices, and locates them without storage access. An unloaded handle holds no values: every read
+    goes to the chunks, and ``read_steps`` reads only the chunks that cover the range. Handles from
+    one reader for one signal are equal, whether loaded or not.
     """
 
     reader: ChunkReader = dataclass_field(repr=False)
@@ -81,6 +82,8 @@ class StoredArray(ArrayHandle):
     """ID of the signal in that release's catalog."""
     spec: TimeSeriesSpec
     """Spec that the stored values decode to."""
+    n_values: int
+    """Number of values that the signal declares, which a read of every chunk must return."""
     _kept: WriteOnce[_KeptArray] = dataclass_field(default_factory=WriteOnce, init=False, repr=False, compare=False)
     """The values and their location, kept once a read loads them."""
 
@@ -100,9 +103,23 @@ class StoredArray(ArrayHandle):
         return kept.location if kept is not None else self.reader._chunk_location(self.signal_id)
 
     def read(self) -> pa.Array:
-        """Return the kept values, or the values of every chunk."""
+        """Return the kept values, or the values of every chunk.
+
+        Returns:
+            The signal's values.
+
+        Raises:
+            TimeFFormatError: If the chunks hold another number of values than the signal declares.
+        """
         kept = self._kept.value
-        return kept.array if kept is not None else self.reader._read_array(self._location, self.spec)
+        if kept is not None:
+            return kept.array
+        array = self.reader._read_array(self._location, self.spec)
+        if len(array) != self.n_values:
+            raise TimeFFormatError(
+                f"signal {self.signal_id!r} declares {self.n_values} values, but its chunks hold {len(array)}"
+            )
+        return array
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Return the half-open step range ``[start, stop)``.

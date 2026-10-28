@@ -1,5 +1,6 @@
 from dataclasses import replace
 from fractions import Fraction
+from functools import partial
 from itertools import chain
 
 import pyarrow as pa
@@ -28,6 +29,7 @@ from timenet.types import (
     TSGenerationTask,
     ureg,
 )
+from timenet.types.handles import CallableArray
 from timenet.types.object_kind import ObjectKind
 from timenet.types.text import read_value
 
@@ -125,7 +127,10 @@ def test_control_reader_builds_recursive_hierarchy_and_annotations(tmp_path):
         LEAD_II_ID: pa.array([3.0, 4.0], type=pa.float32()),
     }
 
-    with DuckDBControlReader(path, value_loader=lambda signal_id, _spec: values[signal_id]) as reader:
+    with DuckDBControlReader(
+        path,
+        value_loader_factory=lambda signal_id, _spec, _n_values: CallableArray(partial(values.__getitem__, signal_id)),
+    ) as reader:
         (record,) = reader.read_records()
         (task,) = reader.read_tasks((record,))
 

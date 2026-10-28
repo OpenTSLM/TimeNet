@@ -7,10 +7,11 @@ import pyarrow as pa
 import pytest
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetError
+from timenet.errors import TimeFFormatError, TimeNetError
 from timenet.format.control_reader import DuckDBControlReader
+from timenet.format.duckdb import connect_control
 from timenet.format.stored_array import ChunkLocation, ChunkReader, StoredArray
-from timenet.reader import TimeFReader
+from timenet.reader import Loading, LoadPlan, TimeFReader
 import timenet.reader.reader as reader_module
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
@@ -155,9 +156,13 @@ def test_type_hints_resolve_on_the_stored_array():
 
 
 def _loaded(reader):
-    signals = _arrays(reader)
+    signals = [
+        signal
+        for record in reader.read(load=LoadPlan(signal_values=Loading.EAGER)).records
+        for signal in record.signals
+    ]
     for signal in signals:
-        signal._values._fill(signal._values.read(), signal._values._location)
+        assert isinstance(signal._values, StoredArray)
     return signals
 
 
@@ -279,6 +284,21 @@ def test_a_stored_array_is_filled_once(stored):
     with pytest.raises(TimeNetError, match="write-once cell"):
         handle._fill(handle.read(), handle._location)
     assert handle.read() is kept
+
+
+def test_a_stored_array_rejects_chunks_that_hold_another_count_than_its_signal(tmp_path):
+    dataset, version_dir = _write(tmp_path)
+    signal = dataset.records[0].signals[0]
+    version = open_local_version(version_dir)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        connection.execute("UPDATE signals SET n_values = n_values + 1 WHERE signal_id = ?", [signal.id])
+    message = f"signal {signal.id} declares {signal.n_values + 1} values, but its chunks hold {signal.n_values}"
+    with TimeFReader(version) as reader:
+        (lazy,) = [item for item in _arrays(reader) if item.id == signal.id]
+        with pytest.raises(TimeFFormatError, match=message):
+            lazy.to_arrow()
+        with pytest.raises(TimeFFormatError, match=message):
+            reader.read(load=LoadPlan(signal_values=Loading.EAGER))
 
 
 def test_read_step_ranges_keep_no_decoded_payload_alive(stored):

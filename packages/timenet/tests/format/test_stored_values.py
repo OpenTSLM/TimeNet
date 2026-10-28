@@ -39,7 +39,7 @@ from timenet.format.stored_values import (
     offsets_digest,
 )
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
+from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import open_local_version
 from timenet.storage.parquet import PayloadTableCache
 from timenet.testing import make_dataset
@@ -116,8 +116,8 @@ def _content_ids(version_dir, key):
     return [content_id for (content_id,) in rows]
 
 
-def _stored(reader, fill=False):
-    dataset = reader.read()
+def _stored(reader, load=LoadPlan.ALL_LAZY):
+    dataset = reader.read(load=load)
     (prompt,) = [task.prompt for task in dataset.tasks if isinstance(task.prompt, StoredText)]
     (reports,) = [
         annotation.value
@@ -125,9 +125,6 @@ def _stored(reader, fill=False):
         for annotation in record.annotations
         if annotation.key == "reports"
     ]
-    if fill:
-        prompt._fill()
-        reports._fill()
     return prompt, reports
 
 
@@ -279,9 +276,9 @@ def test_a_stored_handle_pickles_its_location_without_its_text(reader):
         assert back.read() == value
 
 
-def test_filled_stored_text_needs_no_payload(reader, payload_reads):
+def test_a_loaded_read_fills_stored_text_which_then_needs_no_payload(reader, payload_reads):
     lazy_prompt, lazy_reports = _stored(reader)
-    prompt, reports = _stored(reader, fill=True)
+    prompt, reports = _stored(reader, load=LoadPlan(text=Loading.EAGER))
     assert prompt.is_loaded
     assert reports.is_loaded
     assert sorted(payload_reads, key=lambda location: location.row) == sorted(
@@ -303,7 +300,7 @@ def test_filled_stored_text_needs_no_payload(reader, payload_reads):
 
 
 def test_a_loaded_stored_handle_pickles_its_text_with_its_location(reader, payload_reads):
-    prompt, reports = _stored(reader, fill=True)
+    prompt, reports = _stored(reader, load=LoadPlan(text=Loading.EAGER))
     payload_reads.clear()
     for handle, value in ((prompt, _TEXT), (reports, _TEXTS)):
         pickled = pickle.dumps(handle)
@@ -1424,3 +1421,46 @@ def test_a_reader_keeps_decoded_time_offsets_within_its_byte_budget(tmp_path, mo
                     read += 1
             assert packed._parquet.nbytes <= budget
         assert read == 6
+
+
+def test_a_load_reads_text_and_time_offsets_in_one_pass_and_decodes_each_payload_file_once(tmp_path, monkeypatch):
+    # With this limit, the writer closes a payload file once it holds a text. So the first file holds the time
+    # offsets and the first report, and the second file holds the other report.
+    monkeypatch.setattr(stored_values_module, "_PACK_BYTES", len(_TEXT))
+    dataset = make_dataset()
+    spec = TimeSeriesSpec(spec_type="env", name="env", unit_value=ureg.dimensionless)
+    signal = Signal.from_irregular([1.0, 2.0, 3.0], time_offsets_us=_OFFSETS_US, spec=spec, name="env")
+    record = dataset.add_record(record=Record(sources=(Source(name="env", signals=(signal,)),)))
+    for index in range(2):
+        record.annotate(Annotation(key=f"report-{index}", value=f"{_TEXT}{index}"))
+    version_dir = _write_dataset(tmp_path, dataset)
+    version = open_local_version(version_dir)
+    first, second = (part.path for part in version.manifest.files.payloads)
+    # The reader keeps only the newest decoded payload file, so a second pass over a file decodes it again.
+    monkeypatch.setattr(stored_values_module, "_CACHE_BYTES", 1)
+    decoded: list[str] = []
+
+    class CountingParquetFile(pq.ParquetFile):
+        """Record each payload file that the reader's payload cache opens to decode."""
+
+        def __init__(self, source, *args, **kwargs):
+            decoded.append(Path(source).relative_to(version_dir).as_posix())
+            super().__init__(source, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "ParquetFile", CountingParquetFile)
+    with TimeFReader(version) as reader:
+        read = reader.read(load=LoadPlan(time_offsets=Loading.EAGER, text=Loading.EAGER))
+    (loaded,) = [item for item in read.records if item.id == record.id]
+    (stored,) = loaded.signals
+    offsets = stored._time_offsets
+    report, other = (annotation.value for annotation in loaded.annotations)
+    assert isinstance(offsets, StoredOffsets)
+    assert isinstance(report, StoredText)
+    assert isinstance(other, StoredText)
+    assert offsets._location.path == report._location.path == first
+    assert other._location.path == second
+    assert offsets.is_loaded
+    assert report.is_loaded
+    assert other.is_loaded
+    # One pass in payload order reads the time offsets with the first report, before the second file evicts the first.
+    assert decoded == [first, second]

@@ -4,13 +4,14 @@ import shutil
 import numpy as np
 import pytest
 
-from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.dataset import IrregularAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError
+from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.storage import StorageSources
 from timenet.format.stored_array import ChunkLocation, StoredArray
 from timenet.format.stored_values import PackedLocation, PackedValueKind, PackedValueReader, StoredOffsets, StoredText
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
+from timenet.reader import LoadPlan, TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.testing import make_dataset
 from timenet.types import (
@@ -569,3 +570,59 @@ def test_a_download_fetches_only_the_direct_payload_sources(tmp_path):
         "test/c/1.0.0",
     ]
     assert _reports(cache / "test/c/1.0.0") == {"b": ([0.0, 1.0], [0, 2_000], "Stored by B. " * 300)}
+
+
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_a_loaded_release_reuses_its_stored_payloads_without_its_catalog(tmp_path, monkeypatch, backend):
+    original = make_dataset()
+    text = "A detailed clinical report. " * 300
+    original.tasks[0].prompt = text
+    regular = Signal.from_values(
+        [1.0, 2.0, 3.0, 4.0], spec=_SPEC, name="regular", time_axis=RegularAxis.from_rate_hz(1)
+    )
+    irregular = Signal.from_irregular([1.0, 2.0, 3.0], time_offsets_us=[0, 2, 5], spec=_SPEC, name="irregular")
+    record = original.add_record(record=Record(sources=(Source(name="env", signals=(regular, irregular)),)))
+    record.annotate(Annotation(key="report", value=text))
+    parent_dir = store(tmp_path, original, values_backend=backend)
+    with TimeFReader(open_local_version(parent_dir)) as reader:
+        parent = reader.read(load=LoadPlan.ALL_EAGER)
+    # The parent's reader is closed and its catalog is gone; the loaded values still know their locations.
+    (parent_dir / "control.duckdb").rename(parent_dir / "unavailable.duckdb")
+    loaded = next(item for item in parent.records if item.id == record.id)
+    prompt = next(task.prompt for task in parent.tasks if task.id == original.tasks[0].id)
+    assert prompt is not None
+    assert prompt.is_loaded
+    child = _derive(parent, "test/child", [loaded])
+    child.add_task(task=AnswerTask(inputs=(loaded,), prompt=prompt, targets=(prompt,)))
+
+    def unexpected(*args):
+        pytest.fail("writing loaded values must reuse their payloads without reads or catalog queries")
+
+    with monkeypatch.context() as patch:
+        patch.setattr(PackedValueReader, "read_scalar", unexpected)
+        patch.setattr(TimeFReader, "_read_array", unexpected)
+        patch.setattr(DuckDBControlReader, "chunk_locations_by_ids", unexpected)
+        child_dir = store(tmp_path, child)
+    manifest = Manifest.model_validate_json((child_dir / "manifest.json").read_text())
+    # Arrays, time offsets, and text all stay in the parent's files.
+    assert manifest.files.time_series == ()
+    assert manifest.files.payloads == ()
+    assert [str(source.release) for source in manifest.payload_sources.values()] == [
+        f"{original.metadata.dataset_id}@{original.metadata.dataset_version}"
+    ]
+    (parent_dir / "unavailable.duckdb").rename(parent_dir / "control.duckdb")
+    with TimeFReader(open_local_version(child_dir)) as reader:
+        back = reader.read(load=LoadPlan.ALL_EAGER)
+    (back_record,) = back.records
+    # The child reads its arrays through the parent, which stores them.
+    assert back_record.id == loaded.id
+    assert {signal.id for signal in back_record.signals} == {signal.id for signal in loaded.signals}
+    for signal in back_record.signals:
+        assert isinstance(signal._values, StoredArray)
+        assert signal._values._location.source == f"{original.metadata.dataset_id}@{original.metadata.dataset_version}"
+        assert signal.to_arrow().equals(next(item for item in loaded.signals if item.id == signal.id).to_arrow())
+    back_irregular = next(signal for signal in back_record.signals if signal.name == irregular.name)
+    assert back_irregular.time_offsets_us().tolist() == [0, 2, 5]
+    assert isinstance(back_irregular.time_axis, IrregularAxis)
+    assert next(annotation for annotation in back_record.annotations if annotation.key == "report").value == text
+    assert back.tasks[0].prompt == text
