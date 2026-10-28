@@ -2,6 +2,8 @@ import copy
 import pickle
 from typing import get_type_hints
 
+import numpy as np
+import pyarrow as pa
 import pytest
 
 from timenet.format.control_reader import DuckDBControlReader
@@ -13,6 +15,7 @@ from timenet.testing import make_dataset
 from timenet.types import ArrayHandle, TimeSeriesSpec
 from timenet.types.reference_keys import SourceKey
 from timenet.values_backends.types import StoredChunk
+from timenet.values_backends.zarr.reader import ZarrValuesReader
 from timenet.writer import TimeFWriter
 
 
@@ -147,3 +150,63 @@ def test_type_hints_resolve_on_the_stored_array():
     assert hints["reader"] is ChunkReader
     assert hints["spec"] is TimeSeriesSpec
     assert get_type_hints(ChunkLocation) == {"source": SourceKey | None, "chunks": tuple[StoredChunk, ...]}
+
+
+def _address_ranges(values):
+    if isinstance(values, np.ndarray):
+        start = values.__array_interface__["data"][0]
+        return [(start, start + values.nbytes)]
+    return [(buffer.address, buffer.address + buffer.size) for buffer in values.buffers() if buffer is not None]
+
+
+def test_read_arrays_keep_no_decoded_payload_alive(stored):
+    reader, signals, _ = stored
+    arrays = {signal.id: signal._values.read() for signal in signals}
+    backend = reader._values_reader()
+    # The reader still caches the row groups or Zarr chunks it decoded for the reads.
+    cached = [*getattr(backend, "_chunk_cache", {}).values()]
+    parquet = getattr(backend, "_parquet", None)
+    if parquet is not None:
+        cached.extend(parquet._groups.values())
+    assert cached
+    decoded = [address for values in cached for address in _address_ranges(values)]
+    for signal_id, kept in arrays.items():
+        assert isinstance(kept, pa.Array)
+        for start, stop in _address_ranges(kept):
+            assert not any(start < end and begin < stop for begin, end in decoded), signal_id
+
+
+def test_read_step_ranges_keep_no_decoded_payload_alive(stored):
+    reader, signals, _ = stored
+    backend = reader._values_reader()
+    for signal in signals:
+        backend.close()
+        kept = signal._values.read_steps(3, 10)
+        assert isinstance(kept, pa.Array)
+        parquet = getattr(backend, "_parquet", None)
+        # Steps 3 to 10 of each series lie inside one Zarr storage chunk or one Parquet row group.
+        (decoded,) = [*getattr(backend, "_chunk_cache", {}).values(), *(parquet._groups.values() if parquet else ())]
+        for start, stop in _address_ranges(kept):
+            assert not any(start < end and begin < stop for begin, end in _address_ranges(decoded)), signal.id
+
+
+def test_a_zarr_series_across_storage_chunks_is_copied_once(tmp_path, monkeypatch):
+    _, version_dir = _write(tmp_path, values_backend="zarr", chunk_max_bytes=64)
+    ranges = []
+    original = ZarrValuesReader._read_range
+
+    def recording(self, version, rel_path, start, stop):
+        ranges.append(original(self, version, rel_path, start, stop))
+        return ranges[-1]
+
+    monkeypatch.setattr(ZarrValuesReader, "_read_range", recording)
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        signal = max(_arrays(reader), key=lambda signal: signal.n_values)
+        kept = signal._values.read()
+        backend = reader._values_reader()
+        assert isinstance(backend, ZarrValuesReader)
+        # The series is one run, and the read decodes several storage chunks.
+        assert len(backend._chunk_cache) > 1
+    (joined,) = ranges
+    # The reader joins the chunks into a new array, and the result uses that array without a second copy.
+    assert np.shares_memory(kept.to_numpy(), joined)
