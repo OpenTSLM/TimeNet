@@ -90,7 +90,7 @@
       "pattern": "^\\d+\\.\\d+\\.\\d+$",
       "type": "string"
     },
-    "inputs": {
+    "parents": {
       "additionalProperties": {
         "anyOf": [
           {
@@ -101,7 +101,7 @@
           }
         ]
       },
-      "title": "Inputs",
+      "title": "Parents",
       "type": "object"
     },
     "source_revision": {

@@ -43,7 +43,7 @@ back to the exact TimeF bytes of one version, not a moving target.
 
 ## Parent dataset cards
 
-A dataset card's `inputs` maps local aliases to exact parent releases. The output manifest stores
+A dataset card's `parents` maps local aliases to exact parent releases. The output manifest stores
 a copy of each parent's card in `parent_cards`. Each `ParentDatasetCard` holds that parent's
 metadata, whose `dataset_id` and `dataset_version` identify the exact release.
 

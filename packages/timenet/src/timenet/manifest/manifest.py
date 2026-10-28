@@ -12,7 +12,7 @@ from timenet.types import DatasetMetadata, DatasetSchema
 from timenet.types._model import TimeFModel
 from timenet.types.metadata_fields import DatasetId
 from timenet.types.parent_dataset_card import ParentDatasetCard
-from timenet.types.reference_keys import InputAliasField, SourceKeyField
+from timenet.types.reference_keys import ParentAlias, SourceKeyField
 from timenet.types.wire import ValueEncoding
 from timenet.values_backends import ValuesBackend
 
@@ -41,8 +41,8 @@ class Manifest(TimeFModel):
     """Storage backend for the time-series values plane."""
     value_encoding: dict[StrictStr, ValueEncoding] = Field(default_factory=dict)
     """``spec_type`` to the values-column encoding used by its shards."""
-    parent_cards: dict[InputAliasField, ParentDatasetCard] = Field(default_factory=dict)
-    """Copies of the cards for build inputs, indexed by input alias."""
+    parent_cards: dict[ParentAlias, ParentDatasetCard] = Field(default_factory=dict)
+    """Copies of the cards of the declared parents, indexed by parent alias."""
     lineage: tuple[ParentDatasetCard, ...] = ()
     """Flattened provenance snapshots; never traversed to read data."""
     payload_sources: dict[SourceKeyField, PayloadSource] = Field(default_factory=dict)
