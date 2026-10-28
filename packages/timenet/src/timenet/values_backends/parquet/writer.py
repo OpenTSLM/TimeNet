@@ -8,6 +8,8 @@ row group (``major_idx``) and the row offset (``minor_idx``).
 """
 
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
+from contextlib import ExitStack
 from dataclasses import dataclass
 import logging
 
@@ -28,7 +30,7 @@ from timenet.values_backends.writer import (
     ValuesWriteResult,
 )
 from timenet.writer import encodings
-from timenet.writer.sharded import RotatingPartWriter
+from timenet.writer.sharded import PartPool, RotatingPartWriter
 from timenet.writer.value_encoding import (
     DICT_MAX_CARDINALITY,
     ENCODING_SAMPLE_SOURCE_BYTES,
@@ -125,6 +127,7 @@ class ParquetValuesBackend(BaseValuesBackend):
         else:
             self._data_page_size = None
         self._forced_encoding = config.value_encoding
+        self._shard_workers = config.shard_workers
 
     def write_series(
         self,
@@ -157,14 +160,24 @@ class ParquetValuesBackend(BaseValuesBackend):
                 "the Parquet values backend currently supports scalar series only; "
                 f"use values_backend='zarr' for N-D specs: {sorted(set(unsupported))}"
             )
-        stream = _ShardStream(self, self._row_group_target_bytes, self._shard_target_bytes, on_file_done)
-        total = len(unique_series)
-        for completed, ts in enumerate(unique_series, start=1):
-            values = read_and_validate(ts)
-            for chunk in _plan_chunks(ts, values, self._chunk_max_bytes):
-                stream.add(chunk)
-            on_series_done(completed, total)
-        stream.finish()
+        with ExitStack() as stack:
+            pool = None
+            if self._shard_workers > 1:
+                # pyarrow releases the GIL while it encodes and compresses, so threads scale.
+                executor = stack.enter_context(
+                    ThreadPoolExecutor(self._shard_workers, thread_name_prefix="timenet-shard")
+                )
+                pool = PartPool(executor, self._shard_workers)
+            stream = _ShardStream(self, self._row_group_target_bytes, self._shard_target_bytes, on_file_done, pool)
+            total = len(unique_series)
+            for completed, ts in enumerate(unique_series, start=1):
+                values = read_and_validate(ts)
+                for chunk in _plan_chunks(ts, values, self._chunk_max_bytes):
+                    stream.add(chunk)
+                on_series_done(completed, total)
+            stream.finish()
+            if pool is not None:
+                pool.drain()
         return ValuesWriteResult(
             placements=stream.placements,
             files=list(stream.shard_paths),
@@ -290,6 +303,7 @@ class _ShardStream:
         row_group_target_bytes: int,
         shard_target_bytes: int,
         on_file_done: Callable[[int], None],
+        pool: PartPool | None = None,
     ) -> None:
         """Bind the stream to its backend and to the byte targets that trigger a flush or rotation.
 
@@ -301,8 +315,11 @@ class _ShardStream:
             shard_target_bytes: If a shard's written values pass this number of bytes, the stream
                 rotates to a new shard.
             on_file_done: Progress callback. The stream calls it with the count of finalized shards.
+            pool: Writes closed shards in the background, shared by every modality. ``None`` writes
+                each shard on this thread.
         """
         self._backend = backend
+        self._pool = pool
         self._row_group_target_bytes = row_group_target_bytes
         self._shard_target_bytes = shard_target_bytes
         self._on_file_done = on_file_done
@@ -365,6 +382,7 @@ class _ShardStream:
             part_target_bytes=self._shard_target_bytes,
             parquet_kwargs=self._backend._shard_parquet_kwargs(encoding),
             on_part_closed=on_part_closed,
+            pool=self._pool,
         )
         return self._core
 

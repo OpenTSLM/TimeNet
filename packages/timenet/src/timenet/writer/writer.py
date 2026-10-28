@@ -65,6 +65,7 @@ class TimeFWriter:
         data_page_size: int | None = None,
         values_backend: str = ValuesBackend.PARQUET,
         value_encoding: str = AUTO,
+        shard_workers: int = 1,
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
         replace: bool = False,
         registry: "BaseRegistry | None" = None,
@@ -86,6 +87,10 @@ class TimeFWriter:
                 ``spec_type`` from the data. ``"dictionary"``, ``"byte_stream_split"``, or ``"plain"``
                 forces one for every modality. Only the Parquet backend applies an encoding, so the
                 writer rejects forcing one on another backend.
+            shard_workers: Parquet shards written at once on worker threads. ``1`` (the default)
+                streams each shard on the calling thread. More workers write the same bytes faster,
+                and each holds up to ``shard_target_bytes`` of uncompressed values in memory. Only
+                the Parquet backend writes shards this way.
             progress_cb: Optional callback invoked with each :class:`WriteProgressEvent`.
             replace: Replace the version if it is already committed. The old release stays in place
                 until the new one is published, so a failed write keeps it. A replace is not isolated
@@ -97,8 +102,9 @@ class TimeFWriter:
 
         Raises:
             TimeFValidationError: If ``dataset.metadata.dataset_id`` is empty, ``values_backend`` or
-                ``value_encoding`` is unsupported, or a forced ``value_encoding`` targets a backend
-                that cannot apply it.
+                ``value_encoding`` is unsupported, a forced ``value_encoding`` targets a backend
+                that cannot apply it, or ``shard_workers`` is below 1 or set on a backend other
+                than Parquet.
         """
         if not dataset.metadata.dataset_id:
             raise TimeFValidationError("dataset_id must be non-empty")
@@ -116,6 +122,13 @@ class TimeFWriter:
                 f"value_encoding {value_encoding!r} is only applied by the "
                 f"{ValuesBackend.PARQUET.value!r} values backend, not {values_backend!r}"
             )
+        if shard_workers < 1:
+            raise TimeFValidationError(f"shard_workers must be at least 1, got {shard_workers}")
+        if shard_workers != 1 and values_backend != ValuesBackend.PARQUET:
+            raise TimeFValidationError(
+                f"shard_workers is only applied by the {ValuesBackend.PARQUET.value!r} values backend, "
+                f"not {values_backend!r}"
+            )
         if data_page_size is not None and data_page_size <= 0:
             raise TimeFValidationError(f"data_page_size must be positive, got {data_page_size}")
         self._root = Path(root)
@@ -128,6 +141,7 @@ class TimeFWriter:
         self._data_page_size = data_page_size
         self._values_backend_name = ValuesBackend(values_backend)
         self._forced_value_encoding = None if value_encoding == AUTO else ValueEncoding(value_encoding)
+        self._shard_workers = shard_workers
         self._value_encoding: dict[str, ManifestValueEncoding] = {}
         self._progress_cb = progress_cb
         self._replace = replace
@@ -314,6 +328,7 @@ class TimeFWriter:
                 compression=self._compression,
                 data_page_size=self._data_page_size,
                 value_encoding=self._forced_value_encoding,
+                shard_workers=self._shard_workers,
                 compression_level=DEFAULT_PARQUET_COMPRESSION_LEVEL
                 if self._compression_level is None
                 else self._compression_level,
