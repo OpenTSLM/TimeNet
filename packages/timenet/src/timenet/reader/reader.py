@@ -105,6 +105,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
         self._root = version.root
         self._manifest = version.manifest
         self._control: DuckDBControlReader | None = None
+        self._scan_active = False
         self._values: BaseValuesReader | None = None
         self._source_readers: dict[SourceKey, BaseValuesReader] = {}
         self._chunk_locator_batches: list[list[int]] = []
@@ -533,14 +534,11 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
             tasks = control.read_tasks(cached_records=records, dataset_annotations=occurrences)
             values = ValueLoad(load)
             values.add((*records, *tasks, *annotations))
-            try:
-                if load.signal_values is Loading.EAGER:
-                    self._prepare_scan()
+            if load.signal_values is Loading.EAGER:
+                with self._parallel_scan():
+                    values.run()
+            else:
                 values.run()
-            finally:
-                for backend in (self._values, *self._source_readers.values()):
-                    if isinstance(backend, ParquetValuesReader):
-                        backend.finish_scan()
         dataset = TimeFDataset.from_parts(
             metadata=self.metadata,
             records=records,
@@ -574,6 +572,22 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
                 f"parent cards: {releases} and {cards}"
             )
         return imports
+
+    @contextmanager
+    def scan(self) -> Generator[TimeFDataset]:
+        """Reconstruct a lazy dataset and prefetch Parquet signal groups with four workers.
+
+        Use this context for sequential reads of many signals. Values remain lazy, and decoded
+        groups use the existing bounded cache. Leaving the context releases scan workers, including
+        after an early exit or error. Nested scans share the outer context's workers.
+
+        Yields:
+            The reconstructed dataset with lazy signal arrays and stored fields.
+        """
+        with self._parallel_scan():
+            with self._as_format_error():
+                dataset = self.read()
+            yield dataset  # noqa: RUF070 - consumer errors must stay outside the format-error wrapper
 
     def iter_records(
         self,
@@ -709,6 +723,23 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
         else:
             objects.update(control.read_signals_by_id(ids))
         return objects
+
+    @contextmanager
+    def _parallel_scan(self) -> Generator[None]:
+        """Share bounded Parquet decoding across eager reads and lazy scan contexts."""
+        if self._scan_active:
+            yield
+            return
+        self._scan_active = True
+        try:
+            with self._as_format_error():
+                self._prepare_scan()
+            yield
+        finally:
+            self._scan_active = False
+            for backend in (self._values, *self._source_readers.values()):
+                if isinstance(backend, ParquetValuesReader):
+                    backend.finish_scan()
 
     def _prepare_scan(self) -> None:
         """Use the write-time group plan for bounded parallel Parquet decoding."""
