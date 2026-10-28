@@ -1,10 +1,11 @@
 from contextlib import contextmanager
+from dataclasses import fields
 import shutil
 
 import numpy as np
 import pytest
 
-from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
+from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.dataset.composition import ImportedDataset
 from timenet.dataset.edit import remove_records
 from timenet.errors import TimeFNotFoundError, TimeFValidationError
@@ -15,16 +16,34 @@ from timenet.reader import LoadPlan, TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
 from timenet.types import (
+    TASKS,
     Access,
     Annotation,
+    AnswerTask,
     ClassificationTask,
     DatasetMetadata,
+    ForecastingTask,
+    InputModality,
     License,
+    LocalizationMode,
     ObjectKind,
+    ScalarPredictionTask,
+    Split,
+    StepInterval,
+    StepPoint,
+    StepSpan,
+    Task,
+    TemporalLocalizationTask,
+    TextHandle,
+    TextListHandle,
     TimeInterval,
     TimeOrigin,
     TimePoint,
     TimeSeriesSpec,
+    TimeSpan,
+    TSCorrespondenceTask,
+    TSEditingTask,
+    TSGenerationTask,
     Version,
     ureg,
 )
@@ -737,10 +756,12 @@ def test_an_unknown_parent_id_raises_before_the_child_changes(tmp_path):
             child.import_from(reader, records=[ids["rec"], 999])
         with pytest.raises(TimeFNotFoundError, match="999"):
             child.import_from(reader, signals=[ids["sig-a"], 999])
+        with pytest.raises(TimeFNotFoundError, match="999"):
+            child.import_from(reader, records=[ids["rec"]], tasks=[999])
     assert (child.records, child.parent_cards, child.lineage, child._imports) == ((), {}, {}, {})
 
 
-@pytest.mark.parametrize("selection", ["records", "signals"])
+@pytest.mark.parametrize("selection", ["records", "signals", "tasks"])
 def test_a_selection_must_be_a_collection_of_int_parent_ids(tmp_path, selection):
     parent = _tree()
     ids = _ids(parent)
@@ -964,3 +985,593 @@ def test_two_children_of_one_parent_keep_metadata_separate_and_reuse_payloads(tm
     with TimeFReader(version) as reader:
         for record in reader.read().records:
             assert record.signals[0].to_arrow().equals(original.records[0].signals[0].to_arrow())
+
+
+def _annotation(annotated, key):
+    return next(annotation for annotation in annotated.annotations if annotation.key == key)
+
+
+def _signal_named(record, name):
+    return next(signal for signal in record.signals if signal.name == name)
+
+
+def _tasks_tree():
+    """Return ``_tree()`` with tasks over it, two candidate Records, and a Record of edited Signals.
+
+    ``label`` reads ``rec``. ``question`` derives from ``label`` and scopes ``sig-a``, and ``locate``
+    derives from ``question``. ``match`` picks ``pool-1`` from two candidates, ``edit`` targets
+    ``sig-e1`` of ``edited``, and ``pooled`` has no candidates, which ``from-pooled`` derives from.
+
+    Returns:
+        The dataset, and the ID it gave each of its Records, Signals, and tasks, by name.
+    """
+    dataset = _tree()
+    rec, other = dataset.records
+    signal_a = _signal_named(rec, "sig-a")
+    pools = [
+        dataset.add_record(record=Record(sources=(Source(name="monitor", signals=(_signal(f"sig-p{index}"),)),)))
+        for index in (1, 2)
+    ]
+    edited = dataset.add_record(
+        record=Record(sources=(Source(name="monitor", signals=(_signal("sig-e1"), _signal("sig-e2"))),))
+    )
+    label = ClassificationTask(
+        inputs=(rec,),
+        targets=("normal",),
+        target_schema="scp",
+        split=Split.TRAIN,
+        metadata={"rater": "a"},
+    )
+    label.annotate(Annotation(key="quality", value="good"))
+    question = AnswerTask(
+        inputs=(rec,),
+        prompt="Is lead I clean?",
+        rationale="No artifact after 0.25 s.",
+        targets=("yes",),
+        scope=TimeInterval.seconds(0.0, 0.5, time_series=(signal_a,)),
+        from_tasks=(label,),
+    )
+    locate = TemporalLocalizationTask(
+        inputs=(rec,),
+        targets=(TimeInterval.seconds(2.0, 2.5, time_series=(_signal_named(rec, "sig-b"),)),),
+        mode=LocalizationMode.EXHAUSTIVE,
+        from_tasks=(question,),
+    )
+    pooled = TSCorrespondenceTask(inputs=(other,), targets=("none",))
+    tasks = {
+        "label": label,
+        "question": question,
+        "locate": locate,
+        "match": TSCorrespondenceTask(inputs=(other,), candidate_records=tuple(pools), targets=(pools[0],)),
+        "edit": TSEditingTask(inputs=(other,), targets=(edited.signals[0], "denoised")),
+        "pooled": pooled,
+        "from-pooled": AnswerTask(inputs=(other,), targets=("x",), from_tasks=(pooled,)),
+    }
+    dataset.add_tasks(tasks=tasks.values())
+    records = {"rec": rec, "other": other, "pool-1": pools[0], "pool-2": pools[1], "edited": edited}
+    ids = {name: record.id for name, record in records.items()}
+    ids |= {signal.name: signal.id for record in dataset.records for signal in record.signals}
+    return dataset, ids | {name: task.id for name, task in tasks.items()}
+
+
+def _task_imports(dataset):
+    return {key: value for key, value in dataset._imports.items() if key[1] is ObjectKind.TASK}
+
+
+def test_a_task_import_brings_its_inputs_whole(tmp_path):
+    parent, ids = _tasks_tree()
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        imported = child.import_from(reader, tasks=[ids["question"]])
+        parent_keys = _all_keys(reader.get(Record, ids["rec"]))
+    (question,) = imported.tasks.values()
+    (record,) = child.records
+    signal_a = _signal_named(record, "sig-a")
+    assert list(imported.tasks) == [ids["question"]]
+    assert imported.records == imported.signals == {}
+    assert isinstance(question, AnswerTask)
+    # The copies took the first IDs of the child's task counter, and the map holds them.
+    (label,) = question.from_tasks
+    assert (question.id, label.id) == (1, 2)
+    assert _task_imports(child) == {
+        (_ALIAS, ObjectKind.TASK, ids["question"]): 1,
+        (_ALIAS, ObjectKind.TASK, ids["label"]): 2,
+    }
+    assert question.inputs == (record,)
+    assert sorted(signal.name for signal in record.signals) == ["sig-a", "sig-b"]
+    assert _all_keys(record) == parent_keys
+    assert child.annotations == ()
+    assert question.scope is not None
+    assert question.scope.time_series is not None
+    assert question.scope.time_series[0] is signal_a
+    assert (question.scope.start_us, question.scope.exclusive_end) == (0, 500_000)
+    assert (question.prompt, question.rationale, question.targets) == (
+        "Is lead I clean?",
+        "No artifact after 0.25 s.",
+        ("yes",),
+    )
+    assert child.tasks_for(record) == child.tasks
+
+
+def test_a_task_import_brings_the_tasks_it_derives_from_transitively(tmp_path):
+    parent, ids = _tasks_tree()
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        imported = child.import_from(reader, tasks=[ids["locate"]])
+        (parent_quality,) = reader.get(Task, ids["label"]).annotations
+    (locate,) = imported.tasks.values()
+    (question,) = locate.from_tasks
+    (label,) = question.from_tasks
+    assert child.tasks == (locate, question, label)
+    assert (type(locate), type(question), type(label)) == (TemporalLocalizationTask, AnswerTask, ClassificationTask)
+    (record,) = child.records
+    assert locate.inputs == question.inputs == label.inputs == (record,)
+    assert locate.targets is not None
+    (target,) = locate.targets
+    assert isinstance(target, TimeInterval)
+    assert target.time_series is not None
+    (named,) = target.time_series
+    assert named is _signal_named(record, "sig-b")
+    # Every field comes, including those of a task class's own.
+    assert locate.mode is LocalizationMode.EXHAUSTIVE
+    assert (label.target_schema, label.split, label.metadata, label.targets) == (
+        "scp",
+        Split.TRAIN,
+        {"rater": "a"},
+        ("normal",),
+    )
+    # The task's own annotation is a copy of the parent's.
+    (quality,) = label.annotations
+    assert quality.value == "good"
+    assert quality is not parent_quality
+
+
+def test_a_task_import_brings_candidate_records_and_record_targets_whole(tmp_path):
+    parent, ids = _tasks_tree()
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        (match,) = child.import_from(reader, tasks=[ids["match"]]).tasks.values()
+        copies = {
+            name: child.import_from(reader, records=[ids[name]]).records[ids[name]]
+            for name in ("other", "pool-1", "pool-2")
+        }
+    assert child.records == tuple(copies.values())
+    assert match.inputs == (copies["other"],)
+    assert match.candidate_records == (copies["pool-1"], copies["pool-2"])
+    assert match.targets == (copies["pool-1"],)
+
+
+def test_a_signal_target_brings_a_partial_record(tmp_path):
+    parent, ids = _tasks_tree()
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        (edit,) = child.import_from(reader, tasks=[ids["edit"]]).tasks.values()
+        other = child.import_from(reader, records=[ids["other"]]).records[ids["other"]]
+        signal = child.import_from(reader, signals=[ids["sig-e1"]]).signals[ids["sig-e1"]]
+    (edited,) = (record for record in child.records if record is not other)
+    assert edit.inputs == (other,)
+    assert edit.targets == (signal, "denoised")
+    assert edited.signals == (signal,)
+
+
+def test_a_repeated_task_import_reuses_the_copies(tmp_path, monkeypatch):
+    parent, ids = _tasks_tree()
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        first = child.import_from(reader, tasks=[ids["question"]])
+        (record,) = child.records
+        tasks, annotations, hierarchy = child.tasks, child.annotations, _all_keys(record)
+
+        def unexpected_read(*args):
+            pytest.fail("an import must not read a task the child holds a copy of")
+
+        with monkeypatch.context() as patch:
+            patch.setattr(DuckDBControlReader, "_read_tasks_with_records", unexpected_read)
+            again = child.import_from(reader, tasks=[ids["question"], ids["label"]])
+        assert again.tasks[ids["question"]] is first.tasks[ids["question"]]
+        assert again.tasks[ids["label"]] is first.tasks[ids["question"]].from_tasks[0]
+        assert (child.tasks, child.annotations, _all_keys(record)) == (tasks, annotations, hierarchy)
+        (locate,) = child.import_from(reader, tasks=[ids["locate"]]).tasks.values()
+    assert locate.from_tasks == (first.tasks[ids["question"]],)
+    assert child.tasks == (*tasks, locate)
+    assert child.records == (record,)
+    assert locate.id == 3
+    assert set(_task_imports(child)) == {
+        (_ALIAS, ObjectKind.TASK, ids[name]) for name in ("label", "question", "locate")
+    }
+
+
+def test_a_task_imported_again_keeps_the_childs_edits_of_its_copy(tmp_path):
+    parent, ids = _tasks_tree()
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        question = child.import_from(reader, tasks=[ids["question"]]).tasks[ids["question"]]
+        # The child edits its copy and drops one of the copy's references.
+        question.scope = None
+        question.metadata["checked"] = True
+        tasks, annotations = child.tasks, child.annotations
+        again = child.import_from(reader, tasks=[ids["question"]]).tasks[ids["question"]]
+    assert again is question
+    assert (again.scope, again.metadata) == (None, {"checked": True})
+    assert (child.tasks, child.annotations) == (tasks, annotations)
+
+
+def test_a_task_import_after_a_record_import_reuses_the_copies(tmp_path):
+    parent, ids = _tasks_tree()
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        child.import_from(reader, signals=[ids["sig-a"]])
+        record = child.import_from(reader, records=[ids["rec"]]).records[ids["rec"]]
+        record.metadata["site"] = "edited"
+        hierarchy = [
+            (container, container.annotations) for container in (record, *record.walk_sources(), *record.signals)
+        ]
+        (question,) = child.import_from(reader, tasks=[ids["question"]]).tasks.values()
+    assert child.records == (record,)
+    assert record.metadata == {"site": "edited"}
+    assert [
+        (container, container.annotations) for container in (record, *record.walk_sources(), *record.signals)
+    ] == hierarchy
+    assert question.inputs == question.from_tasks[0].inputs == (record,)
+
+
+def test_task_copies_that_fail_to_register_leave_no_task_and_no_map_entry(tmp_path, monkeypatch):
+    parent, ids = _tasks_tree()
+    validate = TimeFDataset._validate_task_batch
+
+    def refuse(self, batch):
+        validate(self, batch)
+        raise TimeFValidationError("refused for the test")
+
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        record = child.import_from(reader, records=[ids["rec"]]).records[ids["rec"]]
+        imports, last_ids = dict(child._imports), child.last_ids
+        with monkeypatch.context() as patch:
+            patch.setattr(TimeFDataset, "_validate_task_batch", refuse)
+            with pytest.raises(TimeFValidationError, match="refused for the test"):
+                child.import_from(reader, tasks=[ids["question"]], records=[ids["other"]])
+        assert child.tasks == ()
+        assert child.tasks_for(record) == ()
+        # The Records stay imported, and no task is in the map or took an ID.
+        other = child._imports[_ALIAS, ObjectKind.RECORD, ids["other"]]
+        assert [copy.id for copy in child.records] == [record.id, other]
+        assert child._imports.keys() - imports.keys() == {
+            (_ALIAS, ObjectKind.RECORD, ids["other"]),
+            (_ALIAS, ObjectKind.SIGNAL, ids["sig-c"]),
+        }
+        assert _task_imports(child) == {}
+        assert child.last_ids[ObjectKind.TASK] == last_ids[ObjectKind.TASK]
+        # Once the cause is gone, the same import completes.
+        (question,) = child.import_from(reader, tasks=[ids["question"]]).tasks.values()
+    assert question.id == 1
+    assert len(child.tasks) == 2
+    assert set(_task_imports(child)) == {(_ALIAS, ObjectKind.TASK, ids[name]) for name in ("label", "question")}
+
+
+def test_a_correspondence_task_drawing_on_the_whole_parent_is_rejected(tmp_path):
+    parent, ids = _tasks_tree()
+    pooled = rf"TSCorrespondenceTask {ids['pooled']} of test/tree@1\.0\.0 has no candidate_records"
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        with pytest.raises(TimeFValidationError, match=rf"{pooled}.*explicit candidate_records"):
+            child.import_from(reader, records=[ids["rec"]], tasks=[ids["match"], ids["pooled"]])
+        # It holds for a task that a selected task derives from, too.
+        with pytest.raises(TimeFValidationError, match=pooled):
+            child.import_from(reader, tasks=[ids["from-pooled"]])
+    assert (child.records, child.tasks, child.parent_cards, child._imports) == ((), (), {}, {})
+
+
+@pytest.mark.parametrize("field", ["input_annotations", "target_annotations"])
+def test_a_task_that_references_annotations_is_rejected_before_the_child_changes(tmp_path, field):
+    parent = _tree()
+    rec = parent.records[0]
+    context = field == "input_annotations"
+    age = (_annotation(rec, "age"),)
+    referencing = AnswerTask(
+        inputs=(rec,),
+        targets=("x",) if context else None,
+        input_annotations=age if context else (),
+        target_annotations=() if context else age,
+    )
+    derived = AnswerTask(inputs=(rec,), targets=("y",), from_tasks=(referencing,))
+    parent.add_tasks(tasks=[referencing, derived])
+    message = rf"AnswerTask {referencing.id} of test/tree@1\.0\.0 references annotations in {field}"
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        # A task that derives from it brings it along, so the import refuses that task too.
+        for task in (referencing, derived):
+            with pytest.raises(TimeFValidationError, match=message):
+                child.import_from(reader, records=[rec.id], tasks=[task.id])
+    assert (child.records, child.tasks, child.parent_cards, child._imports) == ((), (), {}, {})
+
+
+def test_a_child_that_streams_its_tasks_cannot_import_tasks(tmp_path):
+    parent, ids = _tasks_tree()
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        child.set_task_stream([AnswerTask], lambda: iter(()))
+        with pytest.raises(TimeFValidationError, match="streams its tasks"):
+            child.import_from(reader, records=[ids["rec"]], tasks=[ids["question"]])
+        assert (child.records, child.parent_cards, child._imports) == ((), {}, {})
+        child.import_from(reader, records=[ids["rec"]])
+    assert len(child.records) == 1
+
+
+def test_a_task_import_reads_only_the_tasks_and_the_records_it_needs(tmp_path, monkeypatch):
+    parent, ids = _tasks_tree()
+    batches = []
+    read_records = DuckDBControlReader.read_records
+
+    def counting(self, record_ids=None, **kwargs):
+        requested = None if record_ids is None else tuple(record_ids)
+        batches.append(requested)
+        return read_records(self, requested, **kwargs)
+
+    def unexpected_read(*args, **kwargs):
+        pytest.fail("an import must not read the whole parent")
+
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        monkeypatch.setattr(TimeFReader, "read", unexpected_read)
+        monkeypatch.setattr(DuckDBControlReader, "read_records", counting)
+        child.import_from(reader, records=[ids["rec"], ids["pool-2"]], tasks=[ids["locate"], ids["edit"]])
+    # The task read builds the Records the tasks reference, and the Record that holds the Signal
+    # target, and the import copies those; it reads only the other selected Records. The tasks and
+    # the tasks they derive from build together, so their Records arrive in one read.
+    assert batches == [(ids["rec"], ids["other"]), (ids["edited"],), (ids["pool-2"],)]
+
+
+def test_a_written_child_reads_its_task_copies_by_parent_id(tmp_path):
+    parent, ids = _tasks_tree()
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        imported = child.import_from(reader, tasks=[ids["locate"], ids["edit"]])
+        child_dir = store(tmp_path, child)
+    tasks = _task_imports(child)
+    assert {parent_id for _, _, parent_id in tasks} == {ids[name] for name in ("edit", "label", "locate", "question")}
+    assert [row for row in _rows(child_dir) if row[0] == "Task"] == sorted(
+        ("Task", parent_id, child_id) for (_, _, parent_id), child_id in tasks.items()
+    )
+    with TimeFReader(open_local_version(child_dir)) as stored:
+        question = stored.get(AnswerTask, ids["question"], parent=_ALIAS)
+        assert question.prompt == "Is lead I clean?"
+        assert question.from_tasks[0].id == imported.tasks[ids["locate"]].from_tasks[0].from_tasks[0].id
+        targets = stored.get(Task, ids["edit"], parent=_ALIAS).targets
+        assert targets is not None
+        signal, _ = targets
+        assert isinstance(signal, Signal)
+        assert signal.to_numpy().tolist() == list(range(16))
+        with pytest.raises(TimeFNotFoundError, match="the stored object is a TemporalLocalizationTask"):
+            stored.get(AnswerTask, ids["locate"], parent=_ALIAS)
+
+
+def test_task_copies_reuse_the_parent_payloads_of_packed_text(tmp_path, monkeypatch):
+    text = "A long clinical question. " * 300
+    parent = _tree()
+    long = parent.add_task(task=AnswerTask(inputs=parent.records[:1], prompt=text, rationale=text, targets=(text,)))
+    parent_dir = store(tmp_path, parent)
+
+    def unexpected_read(*args):
+        pytest.fail("a task import must not read or copy stored text")
+
+    with TimeFReader(open_local_version(parent_dir)) as reader, monkeypatch.context() as patch:
+        patch.setattr(PackedValueReader, "read_scalar", unexpected_read)
+        child = _child(reader)
+        child.import_from(reader, tasks=[long.id])
+        child_dir = store(tmp_path, child)
+    assert sorted(path.name for path in child_dir.iterdir()) == ["control.duckdb", "manifest.json"]
+    with TimeFReader(open_local_version(child_dir)) as stored:
+        task = stored.get(AnswerTask, long.id, parent=_ALIAS)
+        assert isinstance(task.prompt, StoredText)
+        assert task.prompt._location.source == "test/tree@1.0.0"
+        assert (task.prompt, task.rationale, task.targets) == (text, text, (text,))
+
+
+def test_an_eager_task_import_loads_what_the_read_of_the_tasks_builds(tmp_path):
+    texts = {"question": "A question. " * 500, "earlier": "An earlier question. " * 300, "report": "A report. " * 600}
+    parent = TimeFDataset(metadata=_metadata("test/eager-tasks"))
+    record, holder = (
+        parent.add_record(record=Record(sources=(Source(name="monitor", signals=(_signal(name),)),)))
+        for name in ("sig-r", "sig-h")
+    )
+    holder.annotate(Annotation(key="report", value=texts["report"]))
+    base = AnswerTask(inputs=(record,), prompt=texts["earlier"], targets=("yes",))
+    edit = TSEditingTask(inputs=(record,), prompt=texts["question"], targets=(holder.signals[0],), from_tasks=(base,))
+    parent.add_tasks(tasks=(base, edit))
+    parent_dir = store(tmp_path, parent)
+    with TimeFReader(open_local_version(parent_dir)) as reader:
+        child = _child(reader)
+        imported = child.import_from(reader, records=[record.id], tasks=[edit.id], load=LoadPlan.ALL_EAGER)
+    # The parent release is gone, so only values that the import loaded can still be read.
+    shutil.rmtree(parent_dir)
+    copy = imported.tasks[edit.id]
+    assert isinstance(copy.prompt, StoredText)
+    assert (copy.prompt.read(), copy.from_tasks[0].prompt.read()) == (texts["question"], texts["earlier"])
+    # The read of the tasks built the Record that records= selects too, so its copy is the input.
+    (input_copy,) = copy.inputs
+    assert input_copy is imported.records[record.id]
+    assert copy.targets is not None
+    (target,) = copy.targets
+    assert isinstance(target, Signal)
+    assert input_copy.signals[0].to_numpy().tolist() == target.to_numpy().tolist() == list(range(16))
+    # The partial copy of the Record that holds the Signal target keeps the Record's annotation.
+    (report,) = next(copied for copied in child.records if copied is not input_copy).annotations
+    assert isinstance(report.value, StoredText)
+    assert report.value.read() == texts["report"]
+
+
+def _annotated_record():
+    """Return a Record with ``sig-a``, ``sig-b``, and the ordinal ``sig-s``, and annotations at every level."""
+    signal_a = _signal("sig-a")
+    ordinal = Signal.from_values(np.arange(8, dtype=np.float32), spec=_SPEC, name="sig-s", time_axis=OrdinalAxis())
+    aux = Source(name="aux")
+    root = Source(
+        name="monitor",
+        signals=(_signal("sig-b", offset_s=2), ordinal),
+        sources=(Source(name="leads", signals=(signal_a,)), aux),
+    )
+    record = Record(sources=(root,))
+    record.add_annotations(
+        [Annotation(key="age", value=64, unit="years"), Annotation(key="late", span=TimePoint.seconds(2.5))]
+    )
+    root.annotate(Annotation(key="device", value="m1", source="tech", confidence=0.5))
+    aux.annotate(Annotation(key="aux-note", value="spare", occurrence_metadata={"by": "x"}))
+    signal_a.annotate(Annotation(key="artifact", value="motion", span=TimeInterval.seconds(0.0, 0.25)))
+    return record
+
+
+def _every_task_class():
+    """Return a parent with a task of every class, with every field set, over ``_annotated_record()``.
+
+    ``far`` holds the Signal that ``fc`` forecasts, and ``gen`` has no inputs. No task references an
+    annotation, so ``input_annotations`` and ``target_annotations`` stay empty.
+
+    Returns:
+        The parent, and the ID it gave each task, by name.
+    """
+    dataset = TimeFDataset(metadata=_metadata("test/tree"))
+    rec = dataset.add_record(record=_annotated_record())
+    signal_a, ordinal = _signal_named(rec, "sig-a"), _signal_named(rec, "sig-s")
+    other, pool_1, pool_2, far = (
+        dataset.add_record(record=Record(sources=(Source(name="m", signals=tuple(map(_signal, signals))),)))
+        for signals in (["sig-c"], ["sig-p1"], ["sig-p2"], ["sig-f1", "sig-f2"])
+    )
+    classify = ClassificationTask(
+        inputs=(rec,),
+        targets=("normal",),
+        target_schema="scp",
+        split=Split.TRAIN,
+        rationale="because",
+        metadata={"rater": "a", "nested": {"values": [1, 2]}},
+        input_modalities=frozenset({InputModality.TEXT, InputModality.TIME_SERIES}),
+    )
+    classify.annotate(Annotation(key="quality", value="good"))
+    answer = AnswerTask(
+        inputs=(rec,),
+        prompt="Is lead I clean?",
+        rationale="No artifact after 0.25 s.",
+        targets=("yes",),
+        scope=TimeInterval.seconds(0.0, 0.5, time_series=(signal_a,)),
+        from_tasks=(classify,),
+        split=Split.TEST,
+    )
+    generate = TSGenerationTask(
+        prompt="make a sine",
+        targets=("ok",),
+        input_modalities=frozenset({InputModality.NO_INPUT, InputModality.TEXT}),
+    )
+    tasks = {
+        "cls": classify,
+        "ans": answer,
+        "scalar": ScalarPredictionTask(
+            inputs=(rec,), targets=(64.5, 3), unit="mV", target_name="amp", from_tasks=(answer, classify)
+        ),
+        "loc": TemporalLocalizationTask(
+            inputs=(rec,),
+            targets=(
+                TimeInterval.seconds(2.0, 2.5, time_series=(_signal_named(rec, "sig-b"),)),
+                StepPoint(time_series=ordinal, start=3),
+            ),
+            scope=StepInterval(time_series=ordinal, start=0, stop=6),
+            mode=LocalizationMode.EXHAUSTIVE,
+        ),
+        "fc": ForecastingTask(inputs=(rec,), targets=(far.signals[0],)),
+        "edit": TSEditingTask(inputs=(other,), targets=(signal_a, "denoised", True)),
+        "gen": generate,
+        "corr": TSCorrespondenceTask(
+            inputs=(other,), candidate_records=(pool_1, pool_2), targets=(pool_2,), from_tasks=(generate,)
+        ),
+    }
+    dataset.add_tasks(tasks=tasks.values())
+    return dataset, {name: task.id for name, task in tasks.items()}
+
+
+def _same(identity):
+    return identity
+
+
+def _portrait(task, *, record_id=_same, signal_id=_same, task_id=_same):
+    """Return every field of a task, with each reference as its kind and mapped ID and each text read.
+
+    A span shows the mapped IDs of the Signals it names.
+    """
+
+    def text(value):
+        return value.read() if isinstance(value, TextHandle | TextListHandle) else value
+
+    def span(value):
+        named = value.time_series
+        if isinstance(value, StepSpan):
+            signals = signal_id(named.id)
+        else:
+            signals = None if named is None else tuple(signal_id(signal.id) for signal in named)
+        bounds = tuple((item.name, getattr(value, item.name)) for item in fields(value) if item.name != "time_series")
+        return type(value).__name__, bounds, signals
+
+    def portrait(value):
+        if isinstance(value, tuple):
+            return tuple(portrait(item) for item in value)
+        if isinstance(value, Annotation):
+            fixed = ("key", "span", "unit", "description", "source", "confidence", "metadata", "occurrence_metadata")
+            return text(value.value), tuple(getattr(value, field) for field in fixed)
+        if isinstance(value, StepSpan | TimeSpan):
+            return span(value)
+        for kind, mapped in ((Record, record_id), (Signal, signal_id), (Task, task_id)):
+            if isinstance(value, kind):
+                return kind.__name__, mapped(value.id), value.to_numpy().tolist() if isinstance(value, Signal) else None
+        return text(value)
+
+    return {field.name: portrait(getattr(task, field.name)) for field in fields(task) if field.name != "_id"} | {
+        "id": task_id(task.id),
+        "class": type(task),
+    }
+
+
+def test_every_task_class_round_trips_through_a_written_child(tmp_path):
+    parent, ids = _every_task_class()
+    parent_ids = [ids[name] for name in ids]
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        imported = child.import_from(reader, tasks=parent_ids)
+        imports = {(kind, identity): copy for (_, kind, identity), copy in child._imports.items()}
+        assert all(isinstance(copy, int) for copy in imports.values())
+
+        def mapped(kind):
+            return lambda identity: imports[kind, identity]
+
+        expected = [
+            _portrait(
+                task,
+                record_id=mapped(ObjectKind.RECORD),
+                signal_id=mapped(ObjectKind.SIGNAL),
+                task_id=mapped(ObjectKind.TASK),
+            )
+            for task in reader.get_many(Task, parent_ids)
+        ]
+        assert [_portrait(task) for task in imported.tasks.values()] == expected
+        child_dir = store(tmp_path, child)
+    assert {type(task) for task in imported.tasks.values()} == set(TASKS.values())
+    with TimeFReader(open_local_version(child_dir)) as stored:
+        assert [_portrait(task) for task in stored.get_many(Task, parent_ids, parent=_ALIAS)] == expected
+
+
+def test_a_task_field_that_holds_references_outside_a_tuple_is_rejected(tmp_path, monkeypatch):
+    parent, ids = _tasks_tree()
+    read = TimeFReader._read_tasks_with_records
+
+    def with_a_list(self, task_ids, *, load):
+        tasks, records = read(self, task_ids, load=load)
+        for task in tasks.values():
+            # No JSON field holds Records, so set the value past the field's validation.
+            object.__setattr__(task, "metadata", {"inputs": list(task.inputs)})
+        return tasks, records
+
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        monkeypatch.setattr(TimeFReader, "_read_tasks_with_records", with_a_list)
+        with pytest.raises(
+            TimeFValidationError, match=r"ClassificationTask\.metadata holds a dict that references objects"
+        ):
+            child.import_from(reader, tasks=[ids["label"]])
+    assert (child.tasks, _task_imports(child)) == ((), {})
