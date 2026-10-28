@@ -154,6 +154,44 @@ def test_reader_backed_view_builds_a_batch_with_the_same_items(tmp_path):
     assert answer.prompt.read() == prompt
 
 
+@pytest.mark.parametrize("closing", ["close", "with"])
+def test_a_reader_backed_view_closes_its_reader(tmp_path, monkeypatch, closing):
+    from timenet.reader import TimeFReader  # noqa: PLC0415
+    from timenet.writer import TimeFWriter  # noqa: PLC0415
+
+    dataset = make_dataset()
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    closed: list[TimeFReader] = []
+    close = TimeFReader.close
+
+    def counting_close(reader):
+        closed.append(reader)
+        close(reader)
+
+    monkeypatch.setattr(TimeFReader, "close", counting_close)
+    reader = TimeFReader.open(tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version))
+    view = TimeFTorchDataset.from_reader(reader)
+    assert view[0]["record_id"] == dataset.records[0].id
+    if closing == "close":
+        view.close()
+    else:
+        with view as entered:
+            assert entered is view
+        # Leaving the block closes the reader.
+    assert closed == [reader]
+
+
+def test_a_dataset_backed_view_has_no_reader_to_close():
+    view = _ds()
+    view.close()
+    with view as entered:
+        assert entered is view
+    # The records are in memory, so the view still reads after close().
+    assert view[0]["series"]
+
+
 @pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="needs the fork start method")
 def test_forked_workers_open_their_own_catalog_after_len(tmp_path):
     from torch.utils.data import DataLoader  # noqa: PLC0415

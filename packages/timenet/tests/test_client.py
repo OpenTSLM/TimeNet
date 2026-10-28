@@ -1,14 +1,17 @@
 from pathlib import Path
+import shutil
 
 from pydantic import ValidationError
 import pytest
 
 from timenet import client as client_module
 from timenet.client import TimeNet
-from timenet.dataset import TimeFDataset
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeNetAccessError, TimeNetDatasetNotFoundError
+from timenet.format.stored_values import StoredText
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
+from timenet.reader import TimeFReader
 from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, DatasetMetadata, Domain, License, Version
@@ -121,11 +124,51 @@ def test_download_leaves_sibling_staging_dirs_untouched(registry_root, tmp_path)
     assert (version_dir / "manifest.json").exists()  # the download still completed
 
 
-def test_load_round_trips(registry_root, tmp_path):
+def test_open_returns_a_lazy_reader(registry_root, tmp_path):
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
-    restored = client.load("timenet/hello-world")
+    with client.open("timenet/hello-world") as reader:
+        assert isinstance(reader, TimeFReader)
+        assert reader._control is None  # the catalog opens on the first read
+        dataset = reader.read()
+        signals = [signal for record in dataset.records for signal in record.signals]
+        assert signals
+        assert not any(signal._values.is_loaded for signal in signals)
+        assert_datasets_equal(make_dataset(), dataset)
+
+
+def test_load_round_trips_with_every_value_loaded_and_its_reader_closed(tmp_path, monkeypatch):
+    expected = make_dataset()
+    # Over the inline limit, so the prompt is packed in a payload file.
+    expected.tasks[0].prompt = "A detailed clinical report. " * 300
+    spec = expected.records[0].signals[0].spec
+    irregular = Signal.from_irregular([1.0, 2.0, 3.0], time_offsets_us=[0, 2, 5], spec=spec, name="II")
+    expected.add_record(record=Record(sources=(Source(name="env", signals=(irregular,)),)))
+    expected.derive_schema()
+    with TimeFWriter(tmp_path / "reg", expected) as writer:
+        writer.write()
+    closed: list[TimeFReader] = []
+    close = TimeFReader.close
+
+    def counting_close(reader):
+        closed.append(reader)
+        close(reader)
+
+    monkeypatch.setattr(TimeFReader, "close", counting_close)
+    restored = TimeNet(tmp_path / "reg", storage_path=tmp_path / "store").load("timenet/hello-world")
     assert isinstance(restored, TimeFDataset)
-    assert_datasets_equal(make_dataset(), restored)
+    assert len(closed) == 1
+    signals = [signal for record in restored.records for signal in record.signals]
+    assert signals
+    assert all(signal._values.is_loaded for signal in signals)
+    (offsets,) = [signal._time_offsets for signal in signals if signal.id == irregular.id]
+    assert offsets is not None
+    assert offsets.is_loaded
+    prompt = next(task.prompt for task in restored.tasks if task.id == expected.tasks[0].id)
+    assert isinstance(prompt, StoredText)
+    assert prompt.is_loaded
+    # Every value is in memory, so the dataset reads without its release.
+    shutil.rmtree(tmp_path / "reg")
+    assert_datasets_equal(expected, restored)
 
 
 def test_load_reads_in_place_without_downloading(registry_root, tmp_path):
@@ -137,15 +180,30 @@ def test_load_reads_in_place_without_downloading(registry_root, tmp_path):
     assert not (storage / "timenet/hello-world").exists()  # nothing fetched into the download cache
 
 
-def test_load_torch(registry_root, tmp_path):
+def test_open_torch(registry_root, tmp_path, monkeypatch):
     torch = pytest.importorskip("torch")
     from torch.utils.data import Dataset  # noqa: PLC0415
 
+    def read_everything(*args, **kwargs):
+        raise AssertionError("open_torch reads one batch at a time, not the whole dataset")
+
+    closed: list[TimeFReader] = []
+    close = TimeFReader.close
+
+    def counting_close(reader):
+        closed.append(reader)
+        close(reader)
+
+    monkeypatch.setattr(TimeFReader, "read", read_everything)
+    monkeypatch.setattr(TimeFReader, "close", counting_close)
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
-    ds = client.load_torch("timenet/hello-world")
-    assert isinstance(ds, Dataset)
-    assert len(ds) == len(make_dataset().records)
-    assert isinstance(ds[0]["series"][0], torch.Tensor)
+    with client.open_torch("timenet/hello-world") as ds:
+        assert isinstance(ds, Dataset)
+        assert len(ds) == len(make_dataset().records)
+        assert isinstance(ds[0]["series"][0], torch.Tensor)
+        assert closed == []
+    # The view closes the reader it holds at the end of the block.
+    assert len(closed) == 1
 
 
 def test_registry_env_var(registry_root, tmp_path, monkeypatch):
@@ -173,6 +231,28 @@ def test_version_ref_pins_and_defaults_to_latest(versioned_registry, tmp_path):
     assert str(client.get("timenet/hello-world@latest").metadata.dataset_version) == "1.1.0"
     assert str(client.get("timenet/hello-world@1.0.0").metadata.dataset_version) == "1.0.0"  # pinned
     assert str(client.get("timenet/hello-world", "1.0.0").metadata.dataset_version) == "1.0.0"  # explicit arg
+
+
+def test_open_and_load_read_the_version_asked_for(versioned_registry, tmp_path):
+    client = TimeNet(versioned_registry, storage_path=tmp_path / "store")
+    with client.open("timenet/hello-world", version="1.0.0") as reader:
+        assert str(reader.metadata.dataset_version) == "1.0.0"
+    assert str(client.load("timenet/hello-world", version="1.0.0").metadata.dataset_version) == "1.0.0"
+
+
+def test_open_torch_reads_the_version_asked_for(versioned_registry, tmp_path, monkeypatch):
+    pytest.importorskip("torch")
+    opened: list[TimeFReader] = []
+    original_open = TimeNet.open
+
+    def recording_open(client, *args, **kwargs):
+        opened.append(original_open(client, *args, **kwargs))
+        return opened[-1]
+
+    monkeypatch.setattr(TimeNet, "open", recording_open)
+    TimeNet(versioned_registry, storage_path=tmp_path / "store").open_torch("timenet/hello-world", version="1.0.0")
+    (reader,) = opened
+    assert str(reader.metadata.dataset_version) == "1.0.0"
 
 
 def test_version_ref_download_pins(versioned_registry, tmp_path):
@@ -243,9 +323,11 @@ def test_load_accepts_the_latest_sentinels_after_a_build(tmp_path, monkeypatch, 
     assert str(client.load("timenet/hello-world", pin).metadata.dataset_version) == "1.0.0"
 
 
-def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, monkeypatch):
+@pytest.mark.parametrize("entry_point", ["open", "load", "open_torch"])
+def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, monkeypatch, entry_point):
     # A caller can opt out of the build-on-miss, so a notebook load fails fast instead of starting a
-    # multi-GB download and a build.
+    # multi-GB download and a build. The builder declares the requested version, so only
+    # auto_build=False keeps it from running.
     class _Builder:
         built = False
 
@@ -253,18 +335,20 @@ def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, m
             return True
 
         def declared_version(self, dataset_id):
-            return "1.0.0"
+            return "9.9.9"
 
         def build(self, dataset_id, root, *, force=False):
             self.built = True
             return Path(root) / dataset_id / "1.0.0"
 
+    if entry_point == "open_torch":
+        pytest.importorskip("torch")
     builder = _Builder()
     monkeypatch.setattr(client_module, "find_builder", lambda dataset_id: builder)
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
 
     with pytest.raises(TimeNetDatasetNotFoundError):
-        client.load("timenet/hello-world@9.9.9", auto_build=False)
+        getattr(client, entry_point)("timenet/hello-world@9.9.9", auto_build=False)
     assert not builder.built  # auto_build=False skips the connector entirely
 
 
@@ -285,6 +369,8 @@ def test_load_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):
             return type("_M", (), {"metadata": meta})()
 
     client._registry = _Hosted()  # ty: ignore[invalid-assignment]
+    with pytest.raises(TimeNetAccessError, match="build it locally"):
+        client.open("org/gated")
     with pytest.raises(TimeNetAccessError, match="build it locally"):
         client.load("org/gated")
     with pytest.raises(TimeNetAccessError, match="Get access at"):
