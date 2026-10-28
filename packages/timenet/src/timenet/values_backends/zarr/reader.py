@@ -49,6 +49,9 @@ class ZarrValuesReader(BaseValuesReader):
     def load(self, version: DatasetVersion, rows: Sequence[StoredChunk], spec: TimeSeriesSpec) -> pa.Array:
         """Read a series' values. ``data_index.major_idx`` is the element start; ``n_values`` is the length.
 
+        The result holds copies of the values, not views of the decoded storage chunks, which
+        neighboring series share.
+
         Args:
             version: The opened version handle.
             rows: The series' index rows, sorted by ``chunk_idx``.
@@ -57,7 +60,8 @@ class ZarrValuesReader(BaseValuesReader):
             The series' canonical scalar or fixed-shape tensor Arrow array.
         """
         parts = [self._read_range(version, rel, start, stop) for rel, start, stop in _coalesce_runs(rows)]
-        combined = parts[0] if len(parts) == 1 else np.concatenate(parts)
+        # Arrow wraps the result without a copy, so it must not be a view of a cached chunk.
+        combined = _owned(parts[0]) if len(parts) == 1 else np.concatenate(parts)
         return _to_arrow(combined, spec, self._read_validity(version, rows, spec))
 
     def _read_validity(
@@ -111,7 +115,7 @@ class ZarrValuesReader(BaseValuesReader):
                 if spec.nullable:
                     validity_parts.append(self._read_range(version, validity_path(rel), run_start + lo, run_start + hi))
             cursor += run_len
-        combined = parts[0] if len(parts) == 1 else np.concatenate(parts, axis=0)
+        combined = _owned(parts[0]) if len(parts) == 1 else np.concatenate(parts, axis=0)
         validity = None
         if validity_parts:
             validity = validity_parts[0] if len(validity_parts) == 1 else np.concatenate(validity_parts)
@@ -213,6 +217,11 @@ def _coalesce_runs(rows: Sequence[StoredChunk]) -> list[tuple[str, int, int]]:
         else:
             runs.append((rel, start, stop))
     return runs
+
+
+def _owned(values: Shaped[np.ndarray, " time *value"]) -> Shaped[np.ndarray, " time *value"]:
+    """Return ``values`` if it owns its buffer, else a copy. A view of a cached chunk keeps the whole chunk alive."""
+    return values if values.base is None else values.copy()
 
 
 def _to_arrow(
