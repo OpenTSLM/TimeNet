@@ -32,3 +32,6 @@ class ParquetValuesConfig:
     """Target uncompressed bytes per data page, or ``None`` for pyarrow's default."""
     value_encoding: ValueEncoding | None = None
     """Forced values-column encoding for every modality, or ``None`` to select one per modality."""
+    shard_workers: int = 1
+    """Shards written at once on worker threads. ``1`` streams each shard on the calling thread.
+    More workers hold up to one shard of uncompressed values each in memory."""
