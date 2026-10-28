@@ -436,12 +436,33 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
     assert state["_values"] is None
 
 
+@pytest.mark.parametrize(
+    ("statement", "message"),
+    [
+        ("UPDATE records SET clock_id = -1", "missing clocks"),
+        ("UPDATE sources SET parent_source_id = source_id", "source hierarchy contains a cycle"),
+    ],
+)
+def test_a_read_rejects_an_invalid_hierarchy_before_building_signals(tmp_path, monkeypatch, statement, message):
+    version_dir = _write(tmp_path)
+    version = open_local_version(version_dir)
+    with connect_control(version_dir / "control.duckdb") as connection:
+        connection.execute(statement)
+
+    def unexpected(cls, **_):
+        pytest.fail("a Signal was built before the hierarchy was checked")
+
+    monkeypatch.setattr(Signal, "from_loader", classmethod(unexpected))
+    with TimeFReader(version) as reader, pytest.raises(TimeFFormatError, match=message):
+        reader.read()
+
+
 def test_iter_records_preserves_requested_order(tmp_path):
     dataset = make_dataset()
     ordered_records = sorted(dataset.records, key=lambda record: record.id)
-    requested = (ordered_records[-1].id, ordered_records[0].id)
+    requested = (ordered_records[-1].id, ordered_records[0].id, ordered_records[-1].id)
     with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
-        selected = tuple(reader.iter_records(record_ids=requested))
+        selected = tuple(reader.iter_records(record_ids=iter(requested)))
     assert tuple(record.id for record in selected) == requested
 
 
