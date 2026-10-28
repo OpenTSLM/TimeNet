@@ -37,6 +37,8 @@ class _Release(NamedTuple):
     """Record IDs by name."""
     tasks: dict[str, int]
     """Task IDs by name, in ID order."""
+    signals: dict[str, int]
+    """Signal IDs by record and Signal name, such as ``r1-I``."""
 
     def named(self, tasks) -> dict[str, Task]:
         """Return tasks by name, in the order given."""
@@ -83,6 +85,7 @@ def release(tmp_path) -> _Release:
         _write(tmp_path, dataset),
         {name: record.id for name, record in records.items()},
         {name: task.id for name, task in tasks.items()},
+        {f"{name}-{signal.name}": signal.id for name, record in records.items() for signal in record.signals},
     )
     assert list(release.tasks.values()) == sorted(release.tasks.values())
     return release

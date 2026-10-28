@@ -16,6 +16,7 @@ from timenet.errors import TimeFValidationError  # noqa: E402
 from timenet.testing import make_dataset  # noqa: E402
 from timenet.torch import TimeFTorchDataset  # noqa: E402
 from timenet.types import (  # noqa: E402
+    AnswerTask,
     DatasetMetadata,
     Domain,
     License,
@@ -120,6 +121,11 @@ def test_reader_backed_view_builds_a_batch_with_the_same_items(tmp_path):
     from timenet.writer import TimeFWriter  # noqa: PLC0415
 
     dataset = make_dataset()
+    # A prompt this long is packed, so it stays behind its handle unless a read loads it.
+    prompt = "What rhythm? " * 400
+    answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
+    answer.prompt = prompt
+    answer_id = answer.id
     dataset.derive_schema()
     with TimeFWriter(tmp_path, dataset) as writer:
         writer.write()
@@ -137,6 +143,58 @@ def test_reader_backed_view_builds_a_batch_with_the_same_items(tmp_path):
         assert all(torch.equal(a, b) for a, b in zip(item["series"], expected["series"], strict=True))
     assert single["record_id"] == batch[0]["record_id"]
     assert all(task.inputs[0] is batch[0]["tasks"][0].inputs[0] for task in batch[0]["tasks"])
+    # The batch's records arrive with their values loaded, and its tasks with their text.
+    assert all(signal._values.is_loaded for task in batch[0]["tasks"] for signal in task.inputs[0].signals)
+    (answer,) = (task for task in batch[0]["tasks"] if task.id == answer_id)
+    (unloaded,) = (task for task in materialized.__getitems__([0])[0]["tasks"] if task.id == answer_id)
+    assert answer.prompt is not None
+    assert unloaded.prompt is not None
+    assert not unloaded.prompt.is_loaded
+    assert answer.prompt.is_loaded
+    assert answer.prompt.read() == prompt
+
+
+@pytest.mark.parametrize("arrays_loaded", [True, False], ids=["default-plan", "text-only-plan"])
+def test_reader_backed_view_loads_each_batch_with_its_plan(tmp_path, arrays_loaded):
+    from timenet.reader import Loading, LoadPlan, TimeFReader  # noqa: PLC0415
+    from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
+    from timenet.types import TSCorrespondenceTask  # noqa: PLC0415
+    from timenet.writer import TimeFWriter  # noqa: PLC0415
+
+    dataset = make_dataset()
+    record0, record1, record2 = dataset.records
+    # A prompt this long is packed, so it stays behind its handle unless a read loads it.
+    prompt = "Which recording matches? " * 400
+    # Only the task references record1 and record2, so a batch of record0 builds them for the task.
+    match = dataset.add_task(
+        task=TSCorrespondenceTask(
+            inputs=(record0,), candidate_records=(record1, record2), targets=(record1,), prompt=prompt
+        )
+    )
+    dataset.derive_schema()
+    with TimeFWriter(tmp_path, dataset) as writer:
+        writer.write()
+    version_dir = tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        view = (
+            TimeFTorchDataset.from_reader(reader)
+            if arrays_loaded
+            else TimeFTorchDataset.from_reader(reader, load=LoadPlan(text=Loading.EAGER))
+        )
+        (item,) = view.__getitems__([0])
+
+    assert item["record_id"] == record0.id
+    (task,) = (task for task in item["tasks"] if task.id == match.id)
+    assert isinstance(task, TSCorrespondenceTask)
+    assert task.prompt is not None
+    assert task.prompt.is_loaded
+    assert task.prompt.read() == prompt
+    # The batch's own Record, then the candidates, one of which is also the target.
+    records = (task.inputs[0], *task.candidate_records)
+    assert [record.id for record in records] == [record0.id, record1.id, record2.id]
+    assert task.targets is not None
+    assert task.targets[0] is task.candidate_records[0]
+    assert {signal._values.is_loaded for record in records for signal in record.signals} == {arrays_loaded}
 
 
 @pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="needs the fork start method")
