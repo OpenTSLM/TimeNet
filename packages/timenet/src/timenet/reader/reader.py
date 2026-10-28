@@ -618,6 +618,23 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
         with self._as_format_error(preserve_validation=True):
             return self._control_reader().signal_record_ids(signal_ids)
 
+    def _read_tasks_with_records(
+        self, task_ids: tuple[EntityId, ...]
+    ) -> tuple[dict[EntityId, Task], dict[EntityId, Record]]:
+        """Read tasks by ID, as :meth:`get_many` does, with every Record the read built for them.
+
+        ``TimeFDataset.import_from`` uses it, so the Records it copies are the objects that the tasks
+        reference.
+
+        Returns:
+            The tasks by ID and the Records by ID, with every value unloaded.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored task.
+        """  # noqa: DOC502 - raised by the control reader
+        with self._as_format_error(preserve_validation=True):
+            return self._control_reader()._read_tasks_with_records(task_ids)
+
     def _read_by_id(self, kind: ObjectKind, ids: tuple[EntityId, ...]) -> dict[EntityId, Entity]:
         """Build the objects of one kind with these IDs, each once, with every value unloaded.
 
