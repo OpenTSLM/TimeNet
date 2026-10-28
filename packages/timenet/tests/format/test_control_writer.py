@@ -313,7 +313,7 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
 
     def write_corrupt_relationship(writer, connection, dataset, tasks):
         task_counts = original(writer, connection, dataset, tasks)
-        connection.execute("INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}')")
+        connection.execute("INSERT INTO records (record_id, clock_id, metadata, read_order) VALUES (99, 1, '{}', 99)")
         connection.execute("UPDATE sources SET record_id = 99 WHERE source_id = ?", [MONITOR_ID])
         return task_counts
 
