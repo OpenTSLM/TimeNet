@@ -161,12 +161,17 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
           against that session span instead, so its partial copy keeps every annotation inside
           the session.
         - ``tasks=`` brings each task with what it needs: its input and candidate Records and its
-          Record targets, whole; each Signal target, as ``signals=`` brings it; and the tasks it
-          derives from through ``from_tasks``, transitively, with what they need. The copy holds
-          copies of the task's own annotations. An import refuses a task that references
-          annotations. A ``TSCorrespondenceTask`` without ``candidate_records`` draws on the whole
-          parent, so it cannot be imported.
-        - Annotations on the parent dataset itself are not imported.
+          Record targets, whole; each Signal target, as ``signals=`` brings it; each other Record
+          that holds an annotation it references, as a partial copy that holds the annotation's
+          owner and the first Signal that places it, or every Signal below the owner if none alone
+          does; and the tasks it derives from through ``from_tasks``, transitively, with what they
+          need. The copy holds copies of the task's own annotations. Each annotation it references
+          points at the same annotation on the copy of its owner; if that copy holds no equal one,
+          because this dataset removed or changed it, a copy of the parent's is attached.
+          Identical occurrences that tasks of separate calls reference may share one copy. A
+          ``TSCorrespondenceTask`` without ``candidate_records`` draws on the whole parent, so it
+          cannot be imported.
+        - Annotations on the parent dataset itself come only with a task that references them.
 
         A later import extends the copies this dataset holds instead of copying them again: it
         adds the Signals and Sources they lack and attaches the annotations that the added Signals
@@ -180,15 +185,17 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         back attaches them once; other structural edits of a copy, such as assigning a Source's
         ``signals`` or ``sources``, are not supported, and a later import may then attach an
         annotation twice. A copy's Source that holds no imported Signal is found by its name, so
-        when sibling Sources share a name, an import that would add a Signal below one raises.
+        when sibling Sources share a name, an import that would add a Signal below one, or a task
+        that references one of its annotations, raises.
 
         Each call reads the selected tasks this dataset holds no copy of, with the tasks they
         derive from and the Records they reference, and then the other selected Records, from the
         parent's catalog in batches, with their values unloaded, and reads no stored value. Import
         many objects in one call rather than one call per object. If a Record fails, it is left as
         it was; the Records before it in the call, and the parent's card, stay. The tasks register
-        after every Record, all together or none: if they fail, the Records stay, and the tasks do
-        not. An import is idempotent, so repeating the call once the cause is fixed completes it.
+        after every Record, all together or none: if they fail, the Records stay, and no task or
+        annotation they brought does. An import is idempotent, so repeating the call once the
+        cause is fixed completes it.
 
         Args:
             parent: A reader of the exact parent release.
@@ -205,10 +212,10 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 does not declare it, this dataset imports it under another alias already, the
                 alias already imports another release, a selection is a string or holds anything
                 but positive int64 IDs, the import would add a Signal below a copy's Source that
-                only its name, which a sibling shares, could identify, ``tasks`` is given and this
-                dataset streams its tasks, a task to copy references an annotation or is a
-                ``TSCorrespondenceTask`` without ``candidate_records``, or the task copies fail to
-                register.
+                only its name, which a sibling shares, could identify, or a task to copy references
+                an annotation of such a Source, ``tasks`` is given and this dataset streams its
+                tasks, a task to copy is a ``TSCorrespondenceTask`` without ``candidate_records``,
+                or the task copies fail to register.
             TimeFNotFoundError: If a selected ID names no parent object. Nothing changes then.
         """  # noqa: DOC502 - raised by composition.import_from
         try:
