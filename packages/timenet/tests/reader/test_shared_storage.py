@@ -465,7 +465,9 @@ def test_opening_names_a_missing_source_and_the_root_it_searched(tmp_path):
     parent_dir, child_dir = _parent_and_child(tmp_path)
     shutil.rmtree(parent_dir)
     with pytest.raises(
-        TimeNetDatasetNotFoundError, match=rf"payload source test/p@1\.0\.0 of test/c@1\.0\.0 is not in {tmp_path}$"
+        TimeNetDatasetNotFoundError,
+        match=rf"payload source test/p@1\.0\.0 of test/c@1\.0\.0 is not in {tmp_path}; "
+        r"fetch it with --fetch-parents <registry> or build it with --build-parents$",
     ):
         open_local_version(child_dir)
 
