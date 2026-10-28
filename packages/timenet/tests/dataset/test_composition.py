@@ -16,6 +16,7 @@ from timenet.testing import make_dataset
 from timenet.types import (
     Access,
     Annotation,
+    ClassificationTask,
     DatasetMetadata,
     License,
     ObjectKind,
@@ -83,7 +84,7 @@ def _ids(dataset):
     return records | {signal.name: signal.id for record in dataset.records for signal in record.signals}
 
 
-def _tree(dataset_id="test/tree", **update):
+def _tree(dataset_id="test/tree", *, time_span=None, **update):
     """Return a parent whose Record ``rec`` nests Sources and has annotations at every level.
 
     ``sig-a`` covers 0 to 1 s below ``monitor/leads``, and ``sig-b`` covers 2 to 3 s directly in
@@ -99,7 +100,7 @@ def _tree(dataset_id="test/tree", **update):
         signals=(signal_b,),
         sources=(Source(name="leads", signals=(signal_a,)), aux),
     )
-    record = dataset.add_record(record=Record(metadata={"site": "north"}, sources=(root,)))
+    record = dataset.add_record(record=Record(metadata={"site": "north"}, sources=(root,), time_span=time_span))
     record.add_annotations(
         [
             Annotation(key="age", value=64),
@@ -130,11 +131,51 @@ def _keys(annotated):
     return sorted(annotation.key for annotation in annotated.annotations)
 
 
+def _all_keys(record):
+    return [("record", _keys(record)), *sorted((source.name, _keys(source)) for source in record.walk_sources())]
+
+
+def _indexes(dataset):
+    names = ("_records_by_id", "_signals_by_id", "_signals_by_record_id", "_imports")
+    return {name: dict(getattr(dataset, name)) for name in names} | {
+        "_sources": set(dataset._sources),
+        "_records": list(dataset._records),
+        "last_ids": dataset.last_ids,
+    }
+
+
 def _rows(release_dir):
     with connect_control(release_dir / "control.duckdb", read_only=True) as connection:
         return connection.execute(
             "SELECT object_kind, parent_id, object_id FROM imported_objects ORDER BY object_kind, parent_id"
         ).fetchall()
+
+
+def test_a_signal_import_copies_its_source_chain_and_the_annotations_its_window_places(tmp_path):
+    parent = _tree()
+    ids = _ids(parent)
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        imported = child.import_from(reader, signals=[ids["sig-a"]])
+        (record,) = child.records
+        record.metadata["site"] = "edited"
+        assert reader.get(Record, ids["rec"]).metadata == {"site": "north"}
+    (root,) = record.sources
+    (leads,) = root.sources
+    (signal,) = leads.signals
+    assert imported.signals == {ids["sig-a"]: signal}
+    assert imported.records == {}
+    assert (root.name, leads.name, root.signals) == ("monitor", "leads", ())
+    assert root.metadata == {"model": "m1"}
+    # The annotations at 2.5 s lie only on sig-b, which was not imported.
+    assert _keys(record) == ["age", "early"]
+    assert _keys(root) == ["device", "src-early"]
+    assert _keys(leads) == []
+    assert _keys(signal) == ["artifact"]
+    assert child.annotations == ()
+    # The copies took the first IDs of the child's own counters.
+    assert (record.id, signal.id) == (1, 1)
+    assert child._imports == {(_ALIAS, ObjectKind.RECORD, ids["rec"]): 1, (_ALIAS, ObjectKind.SIGNAL, ids["sig-a"]): 1}
 
 
 def test_copies_take_the_childs_own_ids_and_only_the_map_links_them(tmp_path):
@@ -191,6 +232,63 @@ def test_copies_share_an_origin_their_parent_records_share(tmp_path):
     assert copy_c.start_time is not copy_a.start_time
 
 
+def test_a_record_import_extends_a_partial_copy_in_place(tmp_path):
+    parent = _tree()
+    ids = _ids(parent)
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        child.import_from(reader, signals=[ids["sig-a"]])
+        (record,) = child.records
+        (root,) = record.sources
+        (leads,) = root.sources
+        (signal_a,) = leads.signals
+        record.metadata["site"] = "edited"
+        root.metadata["model"] = "edited"
+        imported = child.import_from(reader, records=[ids["rec"]])
+        again = child.import_from(reader, signals=[ids["sig-b"]])
+    assert imported.records == {ids["rec"]: record}
+    assert (child.records, record.sources, leads.signals) == ((record,), (root,), (signal_a,))
+    assert (record.metadata, root.metadata) == ({"site": "edited"}, {"model": "edited"})
+    (signal_b,) = root.signals
+    assert again.signals == {ids["sig-b"]: signal_b}
+    # The Signal the copy gained took the child's next Signal ID, and the dataset indexed it, so
+    # a task can scope a span to it.
+    assert signal_b.id == 2
+    scope = TimeInterval.seconds(2.0, 2.5, time_series=(signal_b,))
+    child.add_task(task=ClassificationTask(inputs=(record,), targets=("late",), scope=scope))
+    aux = next(source for source in root.sources if source.name == "aux")
+    assert {source.name for source in root.sources} == {"leads", "aux"}
+    assert _keys(record) == ["age", "early", "late"]
+    assert _keys(root) == ["device", "src-early", "src-late"]
+    assert _keys(aux) == ["aux-note"]
+    assert _keys(signal_a) == ["artifact"]
+
+
+def test_growing_a_partial_copy_adds_only_what_the_new_signal_places(tmp_path, monkeypatch):
+    parent = _tree()
+    ids = _ids(parent)
+    parent.records[0].annotate(Annotation(key="report", value="A long clinical report. " * 300))
+    parent_dir = store(tmp_path, parent)
+    with TimeFReader(open_local_version(parent_dir)) as reader:
+        child = _child(reader)
+        child.import_from(reader, signals=[ids["sig-a"]])
+    (record,) = child.records
+    (root,) = record.sources
+    # The child edits and clears the copied annotations.
+    record.annotations = ()
+    record.annotate(Annotation(key="age", value=65))
+    root.annotations = ()
+
+    def unexpected_read(*args):
+        pytest.fail("growing a copy must not read stored text")
+
+    with TimeFReader(open_local_version(parent_dir)) as reader, monkeypatch.context() as patch:
+        patch.setattr(PackedValueReader, "read_scalar", unexpected_read)
+        child.import_from(reader, signals=[ids["sig-b"]])
+    assert [(annotation.key, annotation.value) for annotation in record.annotations] == [("age", 65), ("late", None)]
+    assert _keys(root) == ["src-late"]
+
+
 @pytest.mark.filterwarnings("ignore::timenet.errors.SpanOutsideWindowWarning")
 def test_a_complete_copy_keeps_annotations_its_windows_do_not_place(tmp_path):
     parent = _tree()
@@ -198,9 +296,145 @@ def test_a_complete_copy_keeps_annotations_its_windows_do_not_place(tmp_path):
     # The parent keeps this annotation with a warning: 1.5 s lies between sig-a and sig-b.
     parent.records[0].annotate(Annotation(key="gap", span=TimePoint.seconds(1.5)))
     with _reader(tmp_path, parent) as reader:
+        partial = _child(reader)
+        partial.import_from(reader, signals=[ids["sig-a"]])
+        assert "gap" not in _keys(partial.records[0])
+        partial.import_from(reader, records=[ids["rec"]])
         whole = _child(reader)
         whole.import_from(reader, records=[ids["rec"]])
+    assert "gap" in _keys(partial.records[0])
     assert "gap" in _keys(whole.records[0])
+
+
+def _drop(owner, *keys):
+    owner.annotations = tuple(annotation for annotation in owner.annotations if annotation.key not in keys)
+
+
+def _remove_sig_b(record):
+    """Remove sig-b from a copy of ``rec`` by hand, as removing a Signal does.
+
+    It drops the annotations that only sig-b places: the ones at 2.5 s, and "gap", which no window
+    places, so only a complete copy holds it.
+    """
+    (root,) = record.sources
+    root.signals = tuple(signal for signal in root.signals if signal.name != "sig-b")
+    _drop(record, "late", "gap")
+    _drop(root, "src-late")
+
+
+@pytest.mark.filterwarnings("ignore::timenet.errors.SpanOutsideWindowWarning")
+def test_a_signal_removed_from_a_copy_comes_back_with_its_annotations_once(tmp_path):
+    parent = _tree()
+    ids = _ids(parent)
+    parent.records[0].annotate(Annotation(key="gap", span=TimePoint.seconds(1.5)))
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        record = child.import_from(reader, records=[ids["rec"]]).records[ids["rec"]]
+        keys = _all_keys(record)
+        _remove_sig_b(record)
+        child.import_from(reader, signals=[ids["sig-b"]])
+        sources = list(record.walk_sources())
+        assert child.import_from(reader, records=[ids["rec"]]).records == {ids["rec"]: record}
+        child_dir = store(tmp_path, child)
+    assert _all_keys(record) == keys
+    assert list(record.walk_sources()) == sources
+    assert sorted(source.name for source in sources) == ["aux", "leads", "monitor"]
+    assert sorted(signal.name for signal in record.signals) == ["sig-a", "sig-b"]
+    with TimeFReader(open_local_version(child_dir)) as stored:
+        assert _all_keys(stored.get(Record, ids["rec"], parent=_ALIAS)) == keys
+
+
+def _same_name_parent(*, lead=False):
+    """Return a parent whose Record ``r`` holds two sibling Sources named ``dev``.
+
+    The first ``dev`` holds ``sig-x`` (0 to 1 s) and the second ``sig-y`` (2 to 3 s), and each has
+    an annotation in its Signal's window. Two more siblings, both named ``spare``, hold no Signal.
+    With ``lead``, a first Source named ``lead`` holds ``sig-w1`` and ``sig-w2`` (4 to 5 s).
+    """
+    parent = TimeFDataset(metadata=_metadata("test/same"))
+    z = Source(name="dev", signals=(_signal("sig-x"),))
+    a = Source(name="dev", signals=(_signal("sig-y", offset_s=2),))
+    spares = (Source(name="spare"), Source(name="spare"))
+    leads = (Source(name="lead", signals=(_signal("sig-w1", offset_s=4), _signal("sig-w2", offset_s=4))),)
+    parent.add_record(record=Record(sources=(*(leads if lead else ()), z, a, *spares)))
+    z.annotate(Annotation(key="z-note", span=TimePoint.seconds(0.5)))
+    a.annotate(Annotation(key="a-note", span=TimePoint.seconds(2.5)))
+    return parent
+
+
+def _empty(source):
+    """Remove the Signals of a Source's copy by hand, with the annotations that only they place."""
+    source.signals = ()
+    source.annotations = ()
+
+
+def _hierarchy_of(record):
+    return [(source, source.signals, source.annotations) for source in record.walk_sources()]
+
+
+def test_sibling_sources_of_one_name_are_told_apart_by_their_signals(tmp_path):
+    parent = _same_name_parent()
+    ids = _ids(parent)
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        record = child.import_from(reader, records=[ids["r"]]).records[ids["r"]]
+        (z_copy,) = (source for source in record.sources if source.signals and source.signals[0].name == "sig-x")
+        (a_copy,) = (source for source in record.sources if source.name == "dev" and source is not z_copy)
+        _empty(a_copy)
+        child.import_from(reader, signals=[ids["sig-y"]])
+        # sig-x identifies the copy of the first dev, so the name finds the other one.
+        assert [(_keys(copy), [signal.name for signal in copy.signals]) for copy in (z_copy, a_copy)] == [
+            (["z-note"], ["sig-x"]),
+            (["a-note"], ["sig-y"]),
+        ]
+        # A repeated import brings nothing below them, nor below the two spare Sources, which only
+        # their name could identify, so it leaves every copy as it is.
+        hierarchy = _hierarchy_of(record)
+        child.import_from(reader, records=[ids["r"]])
+        assert _hierarchy_of(record) == hierarchy
+        assert sorted(source.name for source in record.sources) == ["dev", "dev", "spare", "spare"]
+
+
+@pytest.mark.parametrize("first", ["records", "signals"], ids=["two-copies", "one-copy"])
+def test_sibling_sources_of_one_name_that_nothing_tells_apart_are_rejected(tmp_path, first):
+    parent = _same_name_parent()
+    ids = _ids(parent)
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        selection = {"records": [ids["r"]]} if first == "records" else {"signals": [ids["sig-x"]]}
+        child.import_from(reader, **selection)
+        (record,) = child.records
+        # The child empties every copy, so no imported Signal identifies one: with two copies the
+        # name matches both, and with one it could copy either parent Source.
+        for source in record.sources:
+            if source.name == "dev":
+                _empty(source)
+        hierarchy = _hierarchy_of(record)
+        indexes = _indexes(child)
+        with pytest.raises(TimeFValidationError, match="cannot tell apart the Sources named 'dev' of Record"):
+            child.import_from(reader, signals=[ids["sig-y"]])
+    assert _hierarchy_of(record) == hierarchy
+    assert _indexes(child) == indexes
+
+
+def test_an_extension_that_fails_leaves_the_copy_and_the_indexes_as_they_were(tmp_path):
+    parent = _same_name_parent(lead=True)
+    ids = _ids(parent)
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        child.import_from(reader, signals=[ids["sig-w1"], ids["sig-x"]])
+        (record,) = child.records
+        lead, dev = record.sources
+        _empty(dev)
+        hierarchy = [(record.sources, record.annotations), *_hierarchy_of(record)]
+        indexes = _indexes(child)
+        # The call adds sig-w2 to the copy of lead in place, then finds no way to tell the dev copies
+        # apart for sig-y: the copy goes back to what it was.
+        with pytest.raises(TimeFValidationError, match="cannot tell apart the Sources named 'dev'"):
+            child.import_from(reader, signals=[ids["sig-w2"], ids["sig-y"]])
+    assert [signal.name for signal in lead.signals] == ["sig-w1"]
+    assert [(record.sources, record.annotations), *_hierarchy_of(record)] == hierarchy
+    assert _indexes(child) == indexes
 
 
 def test_a_record_that_fails_keeps_the_parent_recorded(tmp_path, monkeypatch):
@@ -222,6 +456,21 @@ def test_a_record_that_fails_keeps_the_parent_recorded(tmp_path, monkeypatch):
     assert child._imports == {}
 
 
+@pytest.mark.filterwarnings("ignore::timenet.errors.SpanOutsideWindowWarning")
+def test_a_partial_copy_of_a_record_with_a_session_span_keeps_every_annotation_in_it(tmp_path):
+    parent = _tree(time_span=TimeInterval.seconds(0.0, 3.0))
+    ids = _ids(parent)
+    parent.records[0].annotate(Annotation(key="after", span=TimePoint.seconds(5.0)))
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        child.import_from(reader, signals=[ids["sig-a"]])
+        (record,) = child.records
+        # The session span places "late", which only sig-b's window covers; "after" lies past it.
+        assert _keys(record) == ["age", "early", "late"]
+        child.import_from(reader, records=[ids["rec"]])
+    assert _keys(record) == ["after", "age", "early", "late"]
+
+
 def test_reimporting_a_whole_record_changes_nothing_and_keeps_child_edits(tmp_path):
     parent = _tree()
     ids = _ids(parent)
@@ -232,12 +481,26 @@ def test_reimporting_a_whole_record_changes_nothing_and_keeps_child_edits(tmp_pa
         # A connector may replace the copied annotations; a later import leaves them so.
         record.annotations = ()
         hierarchy = [(source, source.signals, source.annotations) for source in record.walk_sources()]
-        second = child.import_from(reader, records=[ids["rec"]])
+        second = child.import_from(reader, records=[ids["rec"]], signals=[ids["sig-a"]])
     assert second.records == {ids["rec"]: record}
+    assert second.signals[ids["sig-a"]] is next(signal for signal in record.signals if signal.name == "sig-a")
     assert child.records == (record,)
     assert record.annotations == ()
     assert [(source, source.signals, source.annotations) for source in record.walk_sources()] == hierarchy
     assert len(hierarchy) == 3
+
+
+@pytest.mark.filterwarnings("ignore::timenet.errors.SpanOutsideWindowWarning")
+def test_repeated_imports_do_not_repeat_an_annotation_no_window_places(tmp_path):
+    parent = _tree()
+    ids = _ids(parent)
+    parent.records[0].annotate(Annotation(key="gap", span=TimePoint.seconds(1.5)))
+    with _reader(tmp_path, parent) as reader:
+        child = _child(reader)
+        child.import_from(reader, signals=[ids["sig-a"]])
+        for _ in range(2):
+            child.import_from(reader, records=[ids["rec"]], signals=[ids["sig-b"]])
+    assert _keys(child.records[0]) == ["age", "early", "gap", "late"]
 
 
 def test_copies_reuse_the_parent_payloads_of_irregular_offsets_and_packed_text(tmp_path, monkeypatch):
@@ -276,7 +539,7 @@ def test_a_written_child_reads_its_copies_by_parent_id(tmp_path, monkeypatch):
     with _reader(tmp_path, parent) as reader:
         ref = _ref(reader)
         child = _child(reader)
-        imported = child.import_from(reader, records=[ids["rec"], ids["other"]])
+        imported = child.import_from(reader, records=[ids["rec"]], signals=[ids["sig-c"]])
         imported.records[ids["rec"]].metadata["site"] = "edited"
         child_dir = store(tmp_path, child)
     # Sources and annotations are reached through their owners, so only Records and Signals get
@@ -294,7 +557,7 @@ def test_a_written_child_reads_its_copies_by_parent_id(tmp_path, monkeypatch):
 
         monkeypatch.setattr(stored, "read", unexpected_read)
         assert stored.get(Record, ids["rec"], parent=_ALIAS).metadata["site"] == "edited"
-        assert stored.get(Signal, ids["sig-c"], parent=ref).id == imported.records[ids["other"]].signals[0].id
+        assert stored.get(Signal, ids["sig-c"], parent=ref).id == imported.signals[ids["sig-c"]].id
         signals = stored.get_many(Signal, [ids["sig-a"], ids["sig-b"]], parent=_ALIAS)
         assert {signal.name for signal in signals} == {"sig-a", "sig-b"}
 
@@ -317,8 +580,8 @@ def test_an_import_reads_only_the_selected_records(tmp_path, monkeypatch):
         child = _child(reader)
         monkeypatch.setattr(TimeFReader, "read", unexpected_read)
         monkeypatch.setattr(DuckDBControlReader, "read_records", counting)
-        child.import_from(reader, records=[ids["rec"]])
-    assert batches == [(ids["rec"],)]
+        child.import_from(reader, records=[ids["rec"]], signals=[ids["sig-c"]])
+    assert batches == [(ids["rec"], ids["other"])]
 
 
 def test_an_import_that_selects_nothing_still_records_its_parent(tmp_path):
@@ -367,20 +630,23 @@ def test_an_unknown_parent_id_raises_before_the_child_changes(tmp_path):
         child = _child(reader)
         with pytest.raises(TimeFNotFoundError, match="999"):
             child.import_from(reader, records=[ids["rec"], 999])
+        with pytest.raises(TimeFNotFoundError, match="999"):
+            child.import_from(reader, signals=[ids["sig-a"], 999])
     assert (child.records, child.parent_cards, child.lineage, child._imports) == ((), {}, {}, {})
 
 
-def test_a_selection_must_be_a_collection_of_int_parent_ids(tmp_path):
+@pytest.mark.parametrize("selection", ["records", "signals"])
+def test_a_selection_must_be_a_collection_of_int_parent_ids(tmp_path, selection):
     parent = _tree()
     ids = _ids(parent)
     with _reader(tmp_path, parent) as reader:
         child = _child(reader)
         with pytest.raises(TimeFValidationError, match="not the string 'rec'"):
-            child.import_from(reader, records="rec")
+            child.import_from(reader, **{selection: "rec"})
         # A string is no ID, even one that spells a parent's ID; nor is a bool or zero.
         for identity in (str(ids["rec"]), True, 0):
             with pytest.raises(TimeFValidationError, match="must be a positive int64 id"):
-                child.import_from(reader, records=[identity])
+                child.import_from(reader, **{selection: [identity]})
     assert child.records == ()
 
 
