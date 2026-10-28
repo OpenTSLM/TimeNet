@@ -180,13 +180,15 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         holds as it is, with this dataset's edits, even when an edit removed some of its
         references, and does not read the task again. An object this dataset no longer holds is
         copied again, under a new ID. An import brings back each selected object that a copy lacks,
-        so remove imported objects only after the last import that can select them again. Removing a
-        Signal from a copy is meant to drop the annotations that only it placed, so that copying it
-        back attaches them once; other structural edits of a copy, such as assigning a Source's
-        ``signals`` or ``sources``, are not supported, and a later import may then attach an
-        annotation twice. A copy's Source that holds no imported Signal is found by its name, so
-        when sibling Sources share a name, an import that would add a Signal below one, or a task
-        that references one of its annotations, raises.
+        so remove imported objects only after the last import that can select them again. This holds
+        for a dataset read back from storage and for one that an edit such as ``remove_records``
+        built, which keep the import map. Remove a Signal from a copy with
+        :func:`~timenet.dataset.edit.remove_signals`, which drops the annotations that only it
+        placed, so that copying it back attaches them once; other structural edits of a copy, such
+        as assigning a Source's ``signals`` or ``sources``, are not supported, and a later import
+        may then attach an annotation twice. A copy's Source that holds no imported Signal is found
+        by its name, so when sibling Sources share a name, an import that would add a Signal below
+        one, or a task that references one of its annotations, raises.
 
         Each call reads the selected tasks this dataset holds no copy of, with the tasks they
         derive from and the Records they reference, and then the other selected Records, from the
@@ -769,7 +771,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     ) -> "TimeFDataset":
         """Build a dataset from parts that are already constructed.
 
-        The reader uses this method when it reads a dataset back from disk.
+        The reader uses this method when it reads a dataset back from disk. The dataset starts with
+        no :attr:`parent_cards`, no :attr:`lineage`, and an empty import map.
 
         Args:
             metadata: The dataset's descriptive identity.
