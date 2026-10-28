@@ -1,12 +1,13 @@
 """Build the TimeF object hierarchy from ``control.duckdb``."""
 
 from collections import defaultdict
-from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Mapping
-from contextlib import contextmanager
+from collections.abc import Callable, Collection, Iterable, Iterator, Mapping
 from fractions import Fraction
 from functools import partial
 import json
+import os
 from pathlib import Path
+import threading
 from typing import Any, NamedTuple, TypeVar, cast
 import weakref
 
@@ -14,10 +15,10 @@ import duckdb
 import pyarrow as pa
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeAxis, TimeFDataset
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
-from timenet.format.duckdb import check_control_schema, connect_control
+from timenet.format.duckdb import CATALOG_ERRORS, check_control_schema, connect_control
 from timenet.format.stored_array import ChunkLocation
 from timenet.format.stored_values import (
     ExternalObjectFieldKey,
@@ -373,8 +374,57 @@ def _missing_values(signal_id: int, _spec: TimeSeriesSpec) -> pa.Array:
     raise TimeFFormatError(f"no values loader is configured for signal {signal_id!r}")
 
 
+def _stores_locators(connection: duckdb.DuckDBPyConnection) -> bool:
+    """Return whether the catalog stores any packed-value locator.
+
+    Raises:
+        TimeFFormatError: If the catalog has no locator table.
+    """
+    try:
+        return connection.execute("SELECT 1 FROM external_values LIMIT 1").fetchone() is not None
+    except CATALOG_ERRORS as exc:
+        raise TimeFFormatError(f"cannot read external values: {exc}") from exc
+
+
+class _ConnectionRegistry:
+    """The control readers that hold an open DuckDB connection, so each one closes before a fork.
+
+    A forked child hangs in DuckDB when its parent holds the same database open, even on a new
+    connection. So the before-fork hook closes every registered connection, and each reader opens
+    its connection again on its next query, in the parent and in the child. Forking while other
+    threads use readers is not supported: use the spawn or forkserver start method there.
+    """
+
+    def __init__(self) -> None:
+        self.readers: weakref.WeakSet[DuckDBControlReader] = weakref.WeakSet()
+        # Guards ``readers``, which readers in different threads change.
+        self.lock = threading.Lock()
+
+    def before_fork(self) -> None:
+        """Close every registered connection."""
+        with self.lock:
+            readers = list(self.readers)
+        for reader in readers:
+            reader._disconnect()
+
+    def after_fork_in_child(self) -> None:
+        """Give the child a fresh lock, since a thread that held the inherited one is not in it."""
+        self.lock = threading.Lock()
+
+
+_CONNECTIONS = _ConnectionRegistry()
+"""The open control-reader connections of this process."""
+
+if hasattr(os, "register_at_fork"):
+    os.register_at_fork(before=_CONNECTIONS.before_fork, after_in_child=_CONNECTIONS.after_fork_in_child)
+
+
 class DuckDBControlReader:
-    """Keep one read-only DuckDB connection and build requested records from it."""
+    """Keep one read-only DuckDB connection and build requested records from it.
+
+    The connection opens again on the next query after :meth:`close`, and after the process forks,
+    since every connection closes before a fork.
+    """
 
     def __init__(
         self,
@@ -383,6 +433,7 @@ class DuckDBControlReader:
         value_loader: ValueLoader | None = None,
         value_loader_factory: ValueLoaderFactory | None = None,
         external: PackedValueReader | None = None,
+        fetch: Callable[[], Path] | None = None,
     ) -> None:
         """Open and validate an immutable control database.
 
@@ -392,16 +443,16 @@ class DuckDBControlReader:
             value_loader_factory: Factory for range-aware per-Signal value handles.
             external: Payload reader used to resolve locators for each requested object batch.
                 Required when the selected objects have packed values.
+            fetch: Returns a verified local path to the database again, such as a fresh copy of
+                a remote catalog. A reopen calls it when ``path`` no longer exists.
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
-        """
+        """  # noqa: DOC502 - raised by _open
         self.path = Path(path)
-        try:
-            self.connection = connect_control(self.path, read_only=True)
-            check_control_schema(self.connection)
-        except duckdb.Error as exc:
-            raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
+        self._fetch = fetch
+        self._connection: duckdb.DuckDBPyConnection | None = None
+        self._open()
         self.external = external
         self._packed_values_stored: bool | None = None
         self._value_loader = value_loader or _missing_values
@@ -412,6 +463,110 @@ class DuckDBControlReader:
         """The occurrences on each live Record the reader built, by occurrence id, keyed by ``id(record)``."""
         self._task_facts: _TaskFacts | None = None
         self._known_record_ids: set[int] = set()
+
+    def run(self, query: Callable[[duckdb.DuckDBPyConnection], _T]) -> _T:
+        """Run one read through the connection, which opens again first if it was closed.
+
+        Args:
+            query: Reads through the connection it is given.
+
+        Returns:
+            What ``query`` returns.
+
+        Raises:
+            TimeFReaderError: If the connection closed while the read ran, through :meth:`close` or
+                through the before-fork hook in another thread.
+            TimeFFormatError: If the catalog lacks a table, column, or type that the read expects.
+            duckdb.Error: Any other DuckDB failure, such as I/O, memory, or an interrupt, unchanged.
+        """
+        connection = self._open()
+        try:
+            return query(connection)
+        except duckdb.Error as exc:
+            if self._connection is not connection:
+                raise TimeFReaderError(
+                    f"the connection to control database {self.path} was closed while a read was running "
+                    "on it. Forking while other threads use readers is not supported; use the spawn or "
+                    "forkserver start method."
+                ) from exc
+            if isinstance(exc, CATALOG_ERRORS):
+                raise TimeFFormatError(f"could not read control database {self.path}: {exc}") from exc
+            raise
+
+    def _query(self, sql: str, parameters: object = None) -> list[Any]:
+        """Run one query through :meth:`run`.
+
+        Returns:
+            Every row of the result.
+        """
+        return self.run(lambda connection: connection.execute(sql, parameters).fetchall())
+
+    def _query_table(self, sql: str, parameters: object = None) -> pa.Table:
+        """Run one query through :meth:`run`.
+
+        Returns:
+            The result as an Arrow table.
+        """
+        return self.run(lambda connection: connection.execute(sql, parameters).to_arrow_table())
+
+    def _query_named(self, sql: str, parameters: object, make: Callable[[Iterable[Any]], _Row]) -> list[_Row]:
+        """Run one query through :meth:`run`.
+
+        Returns:
+            Every row of the result as a named tuple.
+        """
+        return self.run(lambda connection: _rows(connection.execute(sql, parameters), make))
+
+    def _open(self) -> duckdb.DuckDBPyConnection:
+        """Return the open connection, or open a new one with :meth:`_connect` and register it.
+
+        Returns:
+            The open connection.
+
+        Raises:
+            TimeFFormatError: If the database cannot be opened or has an unsupported schema.
+        """  # noqa: DOC502 - raised by _connect
+        connection = self._connection
+        if connection is not None:
+            return connection
+        connection = self._connect()
+        with _CONNECTIONS.lock:
+            self._connection = connection
+            _CONNECTIONS.readers.add(self)
+        return connection
+
+    def _connect(self) -> duckdb.DuckDBPyConnection:
+        """Open the database read-only and check its schema.
+
+        If the database file is gone and the reader has a ``fetch`` function, the reader fetches the
+        database again first. If the schema check fails, the connection closes.
+
+        Returns:
+            An open connection to a database with a supported schema.
+
+        Raises:
+            TimeFFormatError: If the database cannot be opened or has an unsupported schema.
+        """
+        if self._fetch is not None and not self.path.exists():
+            self.path = Path(self._fetch())
+        try:
+            connection = connect_control(self.path, read_only=True)
+        except duckdb.Error as exc:
+            raise TimeFFormatError(f"could not open control database {self.path}: {exc}") from exc
+        try:
+            check_control_schema(connection)
+        except BaseException:
+            connection.close()
+            raise
+        return connection
+
+    def _disconnect(self) -> None:
+        """Close the DuckDB connection, keeping what the reader knows about the catalog."""
+        with _CONNECTIONS.lock:
+            _CONNECTIONS.readers.discard(self)
+            connection, self._connection = self._connection, None
+        if connection is not None:
+            connection.close()
 
     def _external_values(
         self, kind: ObjectKind, object_ids: Iterable[int]
@@ -444,7 +599,8 @@ class DuckDBControlReader:
             TimeFFormatError: If packed values need a payload reader that was not configured.
         """
         if self.external is not None:
-            return PackedValueReader.locations(self.connection, kind, object_ids)
+            ids = tuple(object_ids)
+            return self.run(lambda connection: PackedValueReader.locations(connection, kind, ids))
         if self._stores_packed_values():
             raise TimeFFormatError("control.duckdb stores packed values, but the release lists no payload files")
         return {}
@@ -453,14 +609,10 @@ class DuckDBControlReader:
         """Return whether the catalog stores any packed-value locator, checked once per reader.
 
         Raises:
-            TimeFFormatError: If the locator table cannot be read.
-        """
+            TimeFFormatError: If the catalog has no locator table.
+        """  # noqa: DOC502 - raised by _stores_locators
         if self._packed_values_stored is None:
-            try:
-                stored = self.connection.execute("SELECT 1 FROM external_values LIMIT 1").fetchone()
-            except duckdb.Error as exc:
-                raise TimeFFormatError(f"cannot read external values: {exc}") from exc
-            self._packed_values_stored = stored is not None
+            self._packed_values_stored = self.run(_stores_locators)
         return self._packed_values_stored
 
     def _stored_offsets(self, axes: Mapping[int, TimeAxis]) -> dict[int, StoredOffsets]:
@@ -489,9 +641,12 @@ class DuckDBControlReader:
         return handles
 
     def close(self) -> None:
-        """Close the reader's DuckDB connection."""
-        self.connection.close()
+        """Close the reader's DuckDB connection and drop its cached catalog facts."""
+        self._disconnect()
         self._clock_cache.clear()
+        self._dataset_occurrences = None
+        self._task_facts = None
+        self._known_record_ids.clear()
 
     def __enter__(self) -> "DuckDBControlReader":
         """Return this open reader.
@@ -511,9 +666,7 @@ class DuckDBControlReader:
         Returns:
             The Record IDs sorted by ID.
         """
-        return tuple(
-            row[0] for row in self.connection.execute("SELECT record_id FROM records ORDER BY record_id").fetchall()
-        )
+        return tuple(row[0] for row in self._query("SELECT record_id FROM records ORDER BY record_id"))
 
     def read_records(  # noqa: PLR0912, PLR0914, PLR0915 - related row sets stay together
         self,
@@ -602,10 +755,10 @@ class DuckDBControlReader:
 
         missing_clocks = {row.clock_id for row in records_by_id.values()} - self._clock_cache.keys()
         if missing_clocks:
-            for clock_id, timestamp in self.connection.execute(
+            for clock_id, timestamp in self._query(
                 "SELECT clock_id, start_time_us FROM clocks WHERE clock_id IN (SELECT unnest(?))",
                 [list(missing_clocks)],
-            ).fetchall():
+            ):
                 self._clock_cache[clock_id] = TimeOrigin(timestamp)
         if missing_clocks - self._clock_cache.keys():
             raise TimeFFormatError(
@@ -682,8 +835,7 @@ class DuckDBControlReader:
             f"SELECT {columns} FROM {table} WHERE ? OR {relation_column} "  # noqa: S608 - fixed identifiers
             f"IN (SELECT unnest(?)) ORDER BY {id_column}"
         )
-        cursor = self.connection.execute(query, [related_ids is None, list(related_ids or ())])
-        rows = _rows(cursor, row_type._make)
+        rows = self._query_named(query, [related_ids is None, list(related_ids or ())], row_type._make)
         indexed = {row.id: row for row in rows}
         if len(indexed) != len(rows):
             raise TimeFFormatError(f"control.duckdb contains duplicate {kind.value.lower()} IDs")
@@ -716,9 +868,7 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If a stored counter names an unknown kind or is not an integer.
         """
-        rows = self.connection.execute(
-            "SELECT key, value FROM control_metadata WHERE starts_with(key, ?)", [LAST_ID_PREFIX]
-        ).fetchall()
+        rows = self._query("SELECT key, value FROM control_metadata WHERE starts_with(key, ?)", [LAST_ID_PREFIX])
         try:
             return {ObjectKind(key.removeprefix(LAST_ID_PREFIX)): int(value) for key, value in rows}
         except ValueError as exc:
@@ -730,8 +880,7 @@ class DuckDBControlReader:
         Returns:
             Dataset-level annotation occurrences in storage order.
         """
-        stored = self.connection.execute("SELECT 1 FROM datasets WHERE dataset_id = ?", [dataset_id]).fetchone()
-        if stored is None:
+        if not self._query("SELECT 1 FROM datasets WHERE dataset_id = ?", [dataset_id]):
             return ()
         return tuple(self._dataset_annotations().values())
 
@@ -777,13 +926,11 @@ class DuckDBControlReader:
         if not ids:
             return {}
         columns = ", ".join(_ChunkRow._fields)
-        rows = _rows(
-            self.connection.execute(
-                f"""SELECT {columns} FROM signal_chunks
-                   WHERE signal_id IN (SELECT unnest(?))
-                   ORDER BY signal_id, chunk_index""",  # noqa: S608 - fixed column names
-                [list(ids)],
-            ),
+        rows = self._query_named(
+            f"""SELECT {columns} FROM signal_chunks
+               WHERE signal_id IN (SELECT unnest(?))
+               ORDER BY signal_id, chunk_index""",  # noqa: S608 - fixed column names
+            [list(ids)],
             _ChunkRow._make,
         )
         chunks: dict[int, list[StoredChunk]] = {signal_id: [] for signal_id in ids}
@@ -829,7 +976,9 @@ class DuckDBControlReader:
 
         Each batch runs a handful of keyed queries and builds only that batch's tasks, so a caller
         that walks one Record at a time never holds the whole task table in memory. Only ``None``
-        skips the input Record filter; an empty collection selects no tasks.
+        skips the input Record filter; an empty collection selects no tasks. Each batch selects its
+        tasks in a query of its own, after the last task ID of the batch before, so no query result
+        stays open between batches.
 
         Tasks a batch derives from through ``from_tasks`` are built first when they have not
         been yielded yet, and kept until their dependants are built. Records a task refers to
@@ -866,15 +1015,12 @@ class DuckDBControlReader:
             TimeFFormatError: If two task rows share an ID.
         """
         if self._task_facts is None:
-            if self.connection.execute("SELECT 1 FROM tasks GROUP BY task_id HAVING count(*) > 1 LIMIT 1").fetchone():
+            if self._query("SELECT 1 FROM tasks GROUP BY task_id HAVING count(*) > 1 LIMIT 1"):
                 raise TimeFFormatError("control.duckdb contains duplicate task IDs")
-            parent_ids = {
-                row[0]
-                for row in self.connection.execute("SELECT DISTINCT parent_task_id FROM task_dependencies").fetchall()
-            }
-            (annotated,) = self.connection.execute(
+            parent_ids = {row[0] for row in self._query("SELECT DISTINCT parent_task_id FROM task_dependencies")}
+            ((annotated,),) = self._query(
                 "SELECT count(*) FROM annotation_occurrences WHERE object_type = ?", [ObjectKind.TASK]
-            ).fetchone() or (0,)
+            )
             self._task_facts = _TaskFacts(frozenset(parent_ids), annotated > 0)
         return self._task_facts
 
@@ -900,7 +1046,7 @@ class DuckDBControlReader:
             The tasks in task ID order.
         """
         where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
-        return self.connection.execute(
+        return self._query_table(
             f"""WITH inputs AS (
                     SELECT task_id, list(record_id ORDER BY position) AS input_record_ids
                     FROM task_record_refs
@@ -925,7 +1071,7 @@ class DuckDBControlReader:
                 {where}
                 ORDER BY t.task_id""",  # noqa: S608 - fixed fragments
             parameters,
-        ).to_arrow_table()
+        )
 
     def read_target_table(
         self,
@@ -948,7 +1094,7 @@ class DuckDBControlReader:
             Targets in task ID and position order.
         """
         where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
-        return self.connection.execute(
+        return self._query_table(
             f"""SELECT t.task_id, x.position, x.target_kind, x.text_value, x.integer_value, x.float_value,
                        x.boolean_value, x.record_id, x.signal_id, x.span_start, x.span_end, x.span_signal_ids
                 FROM task_targets x
@@ -956,7 +1102,7 @@ class DuckDBControlReader:
                 {where}
                 ORDER BY t.task_id, x.position""",  # noqa: S608 - fixed fragments
             parameters,
-        ).to_arrow_table()
+        )
 
     def read_annotation_table(self, object_type: ObjectKind | None = None) -> pa.Table:
         """Return every annotation occurrence joined with its content as Arrow.
@@ -975,7 +1121,7 @@ class DuckDBControlReader:
         if object_type is not None and object_type not in ANNOTATED_OBJECT_TYPES:
             raise TimeFFormatError(f"unknown annotated object type {object_type!r}")
         where = "" if object_type is None else "WHERE o.object_type = ?"
-        return self.connection.execute(
+        return self._query_table(
             f"""SELECT o.occurrence_id, o.object_type, o.object_id, c.content_id, c.name AS key,
                        c.value_kind, c.text_value, c.integer_value, c.float_value, c.boolean_value,
                        c.text_list_value, c.unit, c.description, o.span_type, o.start_us, o.end_us,
@@ -985,7 +1131,7 @@ class DuckDBControlReader:
                 {where}
                 ORDER BY o.object_type, o.object_id, o.occurrence_id""",  # noqa: S608 - fixed fragments
             [] if object_type is None else [object_type],
-        ).to_arrow_table()
+        )
 
     @staticmethod
     def _record_filter(record_ids: Iterable[int] | None) -> tuple[str, list[object]]:
@@ -1079,30 +1225,37 @@ class DuckDBControlReader:
             parameters.append(supported)
         return " AND ".join(predicates), parameters
 
-    @contextmanager
-    def _task_row_cursor(
+    def _task_row_page(  # noqa: PLR0913 - one argument per task selection axis, and the page
         self,
         record_ids: list[int] | None,
-        required_modalities: Iterable[InputModality] | None = None,
-        supported_modalities: Iterable[InputModality] | None = None,
-        split: Split | str | None = None,
-    ) -> Generator[duckdb.DuckDBPyConnection]:
-        """Stream selected task rows in task ID order through a separate query cursor.
+        required_modalities: Iterable[InputModality] | None,
+        supported_modalities: Iterable[InputModality] | None,
+        split: Split | str | None,
+        *,
+        after: int | None,
+        limit: int,
+    ) -> list[_TaskRow]:
+        """Return one page of the selected task rows, in task ID order, in one query.
+
+        The query's result is read in full, so no result stays open while the caller builds the
+        page's tasks.
 
         Args:
             record_ids: IDs of the Records whose input tasks to select, or ``None`` for every task.
             split: Keep only tasks of this split, or ``None`` for every task.
+            after: The last task ID of the page before, or ``None`` for the first page.
+            limit: The most rows the page holds.
 
-        Yields:
-            A cursor for fetching selected rows in batches.
+        Returns:
+            The page's task rows.
         """
         where, params = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
+        if after is not None:
+            where = f"{where} AND t.task_id > ?" if where else "WHERE t.task_id > ?"
+            params = [*params, after]
         columns = ", ".join(f"t.{name}" for name in _TaskRow._fields)
-        sql = f"SELECT {columns} FROM tasks t {where} ORDER BY t.task_id"  # noqa: S608 - fixed identifiers and predicates
-        # Building runs other queries while this result is open, so it needs its own cursor.
-        with self.connection.cursor() as selection:
-            selection.execute(sql, params)
-            yield selection
+        sql = f"SELECT {columns} FROM tasks t {where} ORDER BY t.task_id LIMIT ?"  # noqa: S608 - fixed predicates
+        return self._query_named(sql, [*params, limit], _TaskRow._make)
 
     @staticmethod
     def _task_filter(task_ids: list[int] | None) -> tuple[str, list[object]]:
@@ -1123,11 +1276,9 @@ class DuckDBControlReader:
         """
         columns = ", ".join(_TaskRow._fields)
         where, parameters = self._task_filter(task_ids)
-        return _rows(
-            self.connection.execute(
-                f"SELECT {columns} FROM tasks {where} ORDER BY task_id",  # noqa: S608 - fixed identifiers
-                parameters,
-            ),
+        return self._query_named(
+            f"SELECT {columns} FROM tasks {where} ORDER BY task_id",  # noqa: S608 - fixed identifiers
+            parameters,
             _TaskRow._make,
         )
 
@@ -1139,11 +1290,9 @@ class DuckDBControlReader:
         """
         columns = ", ".join(_TargetRow._fields)
         where, parameters = self._task_filter(task_ids)
-        return _rows(
-            self.connection.execute(
-                f"SELECT {columns} FROM task_targets {where} ORDER BY task_id, position",  # noqa: S608 - fixed identifiers
-                parameters,
-            ),
+        return self._query_named(
+            f"SELECT {columns} FROM task_targets {where} ORDER BY task_id, position",  # noqa: S608 - fixed identifiers
+            parameters,
             _TargetRow._make,
         )
 
@@ -1157,10 +1306,10 @@ class DuckDBControlReader:
             return []
         stored = {
             row[0]
-            for row in self.connection.execute(
+            for row in self._query(
                 f"SELECT {column} FROM {table} WHERE {column} IN (SELECT unnest(?))",  # noqa: S608 - fixed identifiers
                 [list(ids)],
-            ).fetchall()
+            )
         }
         return sorted(set(ids) - stored)
 
@@ -1182,10 +1331,10 @@ class DuckDBControlReader:
             TimeFFormatError: If a row names a field that the table cannot hold.
         """
         where, parameters = self._task_filter(task_ids)
-        rows = self.connection.execute(
+        rows = self._query(
             f"SELECT task_id, field, {column} FROM {table} {where} ORDER BY task_id, field, position",  # noqa: S608
             parameters,
-        ).fetchall()
+        )
         grouped = self._group_relationships(rows)
         unknown = {field for refs in grouped.values() for field in refs} - fields
         if unknown:
@@ -1199,10 +1348,10 @@ class DuckDBControlReader:
             ``task_id -> ordered parent task IDs`` for tasks that have parents.
         """
         where, parameters = self._task_filter(task_ids)
-        rows = self.connection.execute(
+        rows = self._query(
             f"SELECT task_id, parent_task_id FROM task_dependencies {where} ORDER BY task_id, position",  # noqa: S608
             parameters,
-        ).fetchall()
+        )
         parents: dict[int, list[int]] = defaultdict(list)
         for task_id, parent_id in rows:
             parents[task_id].append(parent_id)
@@ -1281,12 +1430,9 @@ class DuckDBControlReader:
                        FROM signals GROUP BY axis_id
                    ) lengths USING (axis_id)"""
         rows = (
-            self.connection.execute(query).fetchall()
+            self._query(query)
             if requested is None
-            else self.connection.execute(
-                f"{query} WHERE axis_id IN (SELECT unnest(?))",
-                [list(requested)],
-            ).fetchall()
+            else self._query(f"{query} WHERE axis_id IN (SELECT unnest(?))", [list(requested)])
         )
         for (
             axis_id,
@@ -1363,13 +1509,14 @@ class DuckDBControlReader:
             TimeFFormatError: If an occurrence names an unknown object type, or an ID outside the
                 built set of its type.
         """
-        unknown = self.connection.execute(
+        unknown = self._query(
             "SELECT occurrence_id, object_type FROM annotation_occurrences "
             "WHERE object_type NOT IN (SELECT unnest(?)) LIMIT 1",
             [sorted(ANNOTATED_OBJECT_TYPES)],
-        ).fetchone()
-        if unknown is not None:
-            raise TimeFFormatError(f"annotation occurrence {unknown[0]!r} has unknown object type {unknown[1]!r}")
+        )
+        if unknown:
+            ((occurrence_id, object_type),) = unknown
+            raise TimeFFormatError(f"annotation occurrence {occurrence_id!r} has unknown object type {object_type!r}")
         for object_type, object_id in annotated:
             if object_id not in owners[ObjectKind(object_type)]:
                 raise TimeFFormatError(f"annotation occurrence refers to missing {object_type} {object_id!r}")
@@ -1398,7 +1545,7 @@ class DuckDBControlReader:
         if not owners:
             return {}
         query, parameters = _annotation_query(owners)
-        rows = _rows(self.connection.execute(query, parameters), _OccurrenceRow._make)
+        rows = self._query_named(query, parameters, _OccurrenceRow._make)
         external = self._external_values(ObjectKind.ANNOTATION_CONTENT, {row.content_id for row in rows})
         grouped: dict[tuple[str, int | None], list[Annotation]] = defaultdict(list)
         for row in rows:
@@ -1468,7 +1615,6 @@ class _TaskBuilder:
         self.required_modalities = required_modalities
         self.supported_modalities = supported_modalities
         self.split = split
-        self.connection = reader.connection
         self.records_by_id: dict[int, Record] = {}
         self.signals_by_id: dict[int, Signal] = {}
         self._records_without_signal_index: list[Record] = []
@@ -1491,18 +1637,29 @@ class _TaskBuilder:
     def iter_tasks(self) -> Iterator[Task]:
         """Yield the selected tasks in task ID order, one bounded batch at a time.
 
+        Each batch is a page of the selection: a query of its own that starts after the last task
+        ID of the page before. No query result stays open while a batch is built, so a connection
+        closed between batches, as a fork closes it, opens again for the next page.
+
         Yields:
             Each built task.
         """
-        with self.reader._task_row_cursor(
-            self.record_ids,
-            self.required_modalities,
-            self.supported_modalities,
-            self.split,
-        ) as selection:
-            while rows := selection.fetchmany(_TASK_BATCH_SIZE):
-                task_rows = [_TaskRow._make(row) for row in rows]
+        batch_size = _TASK_BATCH_SIZE
+        after = None
+        while True:
+            task_rows = self.reader._task_row_page(
+                self.record_ids,
+                self.required_modalities,
+                self.supported_modalities,
+                self.split,
+                after=after,
+                limit=batch_size,
+            )
+            if task_rows:
                 yield from self._build_batch([row.task_id for row in task_rows], task_rows=task_rows)
+            if len(task_rows) < batch_size:
+                return
+            after = task_rows[-1].task_id
 
     def read_all(self) -> list[Task]:
         """Build all selected tasks, using batches for filtered reads.
@@ -1518,7 +1675,7 @@ class _TaskBuilder:
     def _build_batch(self, task_ids: list[int] | None, *, task_rows: list[_TaskRow] | None = None) -> list[Task]:
         """Build one batch, or the whole table for ``None``, building unbuilt parents first.
 
-        Rows from the selection cursor avoid a second task-table scan.
+        Rows from the selection page avoid a second task-table scan.
 
         Returns:
             The tasks in the order of ``task_ids``, or in task ID order for the whole table.

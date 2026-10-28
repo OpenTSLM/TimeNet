@@ -1,5 +1,6 @@
 from timenet.errors import (
     TimeFFormatError,
+    TimeFReaderError,
     TimeFValidationError,
     TimeNetDatasetNotFoundError,
     TimeNetDownloadError,
@@ -15,6 +16,7 @@ def test_all_derive_from_base():
         TimeNetDownloadError,
         TimeFValidationError,
         TimeFFormatError,
+        TimeFReaderError,
     ):
         assert issubclass(exc, TimeNetError)
 

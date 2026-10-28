@@ -770,6 +770,14 @@ def test_a_catalog_without_its_locator_table_fails_as_a_format_error(tmp_path):
     assert isinstance(raised.value.__cause__, duckdb.Error)
 
 
+def test_a_locator_lookup_leaves_other_duckdb_errors_to_its_caller(tmp_path):
+    # Only a missing locator table is a format error here; the control reader maps the rest.
+    connection = connect_control(_write(tmp_path) / "control.duckdb", read_only=True)
+    connection.close()
+    with pytest.raises(duckdb.ConnectionException):
+        PackedValueReader.locations(connection, ObjectKind.TASK, [1])
+
+
 def test_the_writer_stores_locators_one_task_batch_at_a_time(tmp_path, monkeypatch):
     monkeypatch.setattr(control_writer_module, "_TASK_BATCH_SIZE", 2)
     held = []
