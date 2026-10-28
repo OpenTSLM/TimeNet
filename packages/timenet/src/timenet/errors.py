@@ -58,3 +58,7 @@ class SpanOutsideWindowWarning(TimeNetWarning):
 
 class TimeFFormatError(TimeNetError):
     """An on-disk TimeF artifact is corrupt or uses an unsupported format version."""
+
+
+class TimeFReaderError(TimeNetError):
+    """A reader could not complete a read, e.g. its connection was closed while the read ran."""

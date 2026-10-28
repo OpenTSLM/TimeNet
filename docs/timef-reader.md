@@ -31,7 +31,15 @@ with TimeFReader(version) as reader:
 ```
 
 Use the reader as a context manager when possible. `close()` releases open value files and decoded
-chunk caches.
+chunk caches. For a remote release, the reader fetches and verifies `control.duckdb` once, and after
+`close()` its next read reopens the verified local copy. If that copy has been removed in the
+meantime, the reader fetches and verifies the catalog again.
+
+Catalog connections close before the process forks, because DuckDB cannot share a database across a
+fork. Each one opens again on its next query, in the parent and in a forked data-loader worker
+alike, so a task stream that was in progress when the process forked continues. Forking while other
+threads use readers is not supported: a read that the fork's closing cuts short in another thread
+raises `TimeFReaderError`. Use the `spawn` or `forkserver` start method there.
 
 ## What loads when
 
@@ -168,6 +176,11 @@ raises `TimeFValidationError`.
 
 Values remain lazy. A values file that changes after opening fails when a Signal reads the affected
 chunk. Errors include the relevant file or table context.
+
+A catalog query raises `TimeFFormatError` when the catalog lacks a table, column, or type that the
+read expects, and `TimeFReaderError` when the reader's connection closed while the read ran, through
+`close()` or a fork in another thread. Other DuckDB errors, such as I/O failures, running out of
+memory, or an interrupt, propagate unchanged.
 
 Call `verify()` to hash every file before reading data: the version's own files, and the files it
 pins on each payload source. It raises `TimeFFormatError` when a file is missing or does not match
