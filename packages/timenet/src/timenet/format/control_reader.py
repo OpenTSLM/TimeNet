@@ -277,7 +277,8 @@ def _annotation_query(owners: Mapping[ObjectKind, Collection[int] | None]) -> tu
 
     Args:
         owners: The owner IDs to read, by object type. If the IDs are ``None``, the query reads
-            every occurrence of that type.
+            every occurrence of that type. The Dataset's occurrences have no object ID, so its IDs
+            are occurrence IDs.
 
     Returns:
         The SQL and its positional parameters.
@@ -292,8 +293,11 @@ def _annotation_query(owners: Mapping[ObjectKind, Collection[int] | None]) -> tu
         if object_ids is None:
             every.append(object_type)
         else:
+            # The Dataset's occurrences have no object ID, so its IDs select occurrences by occurrence ID.
             selects.append(
-                "SELECT * FROM annotation_occurrences WHERE object_type = ? AND object_id IN (SELECT unnest(?))"
+                "SELECT * FROM annotation_occurrences WHERE object_type = ? AND occurrence_id IN (SELECT unnest(?))"
+                if object_type == ObjectKind.DATASET
+                else "SELECT * FROM annotation_occurrences WHERE object_type = ? AND object_id IN (SELECT unnest(?))"
             )
             parameters.extend((object_type, list(object_ids)))
     if every:
@@ -496,7 +500,6 @@ class DuckDBControlReader:
         self._value_loader = value_loader or _missing_values
         self._value_loader_factory = value_loader_factory
         self._clock_cache: dict[int, TimeOrigin] = {}
-        self._dataset_occurrences: _AnnotationsByOccurrence | None = None
         self._record_occurrences: dict[int, _AnnotationsByOccurrence] = {}
         """The occurrences on each live Record the reader built, by occurrence id, keyed by ``id(record)``."""
         self._task_facts: _TaskFacts | None = None
@@ -682,7 +685,6 @@ class DuckDBControlReader:
         """Close the reader's DuckDB connection and drop its cached catalog facts."""
         self._disconnect()
         self._clock_cache.clear()
-        self._dataset_occurrences = None
         self._task_facts = None
         self._known_record_ids.clear()
 
@@ -1050,29 +1052,24 @@ class DuckDBControlReader:
         except ValueError as exc:
             raise TimeFFormatError("control.duckdb stores an invalid last id counter") from exc
 
-    def read_dataset_annotations(self, dataset_id: str) -> tuple[Annotation, ...]:
-        """Return annotations attached directly to a dataset.
+    def read_dataset_annotations(
+        self, dataset_id: str, *, by_occurrence: _AnnotationsByOccurrence | None = None
+    ) -> tuple[Annotation, ...]:
+        """Return annotations attached directly to a dataset, as new objects on every call.
+
+        Args:
+            dataset_id: The dataset whose annotations to read.
+            by_occurrence: Filled with every annotation by its occurrence id, so that a task read
+                of the same call can reference these objects.
 
         Returns:
             Dataset-level annotation occurrences in storage order.
         """
         if not self._query("SELECT 1 FROM datasets WHERE dataset_id = ?", [dataset_id]):
             return ()
-        return tuple(self._dataset_annotations().values())
-
-    def _dataset_annotations(self) -> _AnnotationsByOccurrence:
-        """Return the dataset's own annotation occurrences, read once.
-
-        The reader reads them from storage only once. Tasks refer to these occurrences by object,
-        so every call must return the same objects.
-
-        Returns:
-            The occurrences attached to the dataset.
-        """
-        if self._dataset_occurrences is None:
-            self._dataset_occurrences = {}
-            self._read_annotations({ObjectKind.DATASET: None}, self._dataset_occurrences)
-        return self._dataset_occurrences
+        occurrences: _AnnotationsByOccurrence = {} if by_occurrence is None else by_occurrence
+        self._read_annotations({ObjectKind.DATASET: None}, occurrences)
+        return tuple(occurrences.values())
 
     def chunk_location(self, signal_id: int) -> ChunkLocation:
         """Return where one Signal's chunks are stored, from its catalog rows.
@@ -1121,14 +1118,35 @@ class DuckDBControlReader:
             for signal_id, stored in chunks.items()
         }
 
+    def _record_ids_of_signals(self, signal_ids: Collection[EntityId]) -> dict[EntityId, EntityId]:
+        """Return the ID of the Record that holds each stored Signal of the given IDs.
+
+        Returns:
+            The Record ID of each Signal, by Signal ID. An ID that names no Signal is absent.
+        """
+        return dict(
+            self._query(
+                "SELECT signals.signal_id, sources.record_id FROM signals JOIN sources USING (source_id) "
+                "WHERE signals.signal_id IN (SELECT unnest(?))",
+                [list(signal_ids)],
+            )
+        )
+
     def read_tasks(
-        self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = ()
+        self,
+        records: Iterable[Record] | None = None,
+        *,
+        cached_records: Iterable[Record] = (),
+        dataset_annotations: Mapping[int, Annotation] | None = None,
     ) -> tuple[Task, ...]:
         """Build every task attached to ``records`` and restore all in-memory object references.
 
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
             cached_records: Records already built, to reuse without restricting the selection.
+            dataset_annotations: The dataset's annotations, already built, by occurrence id, which tasks
+                then reference instead of their own copies, or ``None`` to read them when a task
+                needs them.
 
         Returns:
             Concrete tasks in stable ID order.
@@ -1136,7 +1154,12 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
         """  # noqa: DOC502 - raised by _TaskBuilder
-        builder = _TaskBuilder(self, None if records is None else tuple(records), cached_records=cached_records)
+        builder = _TaskBuilder(
+            self,
+            None if records is None else tuple(records),
+            cached_records=cached_records,
+            dataset_annotations=dataset_annotations,
+        )
         return tuple(builder.read_all())
 
     def iter_tasks(
@@ -1146,7 +1169,6 @@ class DuckDBControlReader:
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
-        cached_records: Iterable[Record] = (),
     ) -> Iterator[Task]:
         """Yield the tasks whose inputs include one of ``records``, a bounded batch at a time.
 
@@ -1163,7 +1185,6 @@ class DuckDBControlReader:
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
             split: Keep only tasks of this split, or ``None`` for every task.
-            cached_records: Records already built, to reuse without restricting the selection.
 
         Yields:
             Concrete tasks in stable ID order.
@@ -1174,7 +1195,6 @@ class DuckDBControlReader:
         builder = _TaskBuilder(
             self,
             None if records is None else tuple(records),
-            cached_records=cached_records,
             required_modalities=required_modalities,
             supported_modalities=supported_modalities,
             split=split,
@@ -1706,7 +1726,8 @@ class DuckDBControlReader:
 
         Args:
             owners: IDs of the annotated objects by object type. If the IDs of a type are ``None``,
-                the read gets every occurrence of that type. IDs match only within their type.
+                the read gets every occurrence of that type. IDs match only within their type. The
+                Dataset's occurrences have no object ID, so its IDs are occurrence IDs.
             by_occurrence: Filled with every occurrence it builds, by its occurrence id.
 
         Returns:
@@ -1778,6 +1799,7 @@ class _TaskBuilder:
         records: tuple[Record, ...] | None,
         *,
         cached_records: Iterable[Record] = (),
+        dataset_annotations: Mapping[int, Annotation] | None = None,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
@@ -1798,6 +1820,8 @@ class _TaskBuilder:
         self._foreign_records: list[Record] = []
         self.retained: dict[int, Task] = {}
         self._building: set[int] = set()
+        self._dataset_annotations_indexed = dataset_annotations is not None
+        self.annotations_by_id.update(dataset_annotations or {})
         facts = reader.task_facts()
         self.parent_ids = facts.parent_task_ids
         self.tasks_annotated = facts.tasks_annotated
@@ -2089,13 +2113,15 @@ class _TaskBuilder:
             self._index_record(record)
 
     def _ensure_signals(self, signal_ids: set[int]) -> None:
-        """Index the Signals of the built Records when one batch's targets or scopes refer to Signals.
+        """Index the Signals one batch's targets or scopes refer to, building the Records that hold them.
+
+        A Signal target can lie on a Record that the task references in no other way.
 
         Args:
             signal_ids: Every Signal ID the batch refers to.
 
         Raises:
-            TimeFFormatError: If an ID names no stored Signal, or no Signal on the built Records.
+            TimeFFormatError: If an ID names no stored Signal.
         """
         if not signal_ids:
             return
@@ -2103,15 +2129,24 @@ class _TaskBuilder:
             for signal in record.signals:
                 self.signals_by_id[signal.id] = signal
         self._records_without_signal_index.clear()
-        outside = sorted(signal_ids - self.signals_by_id.keys())
-        if outside:
-            missing = self.reader._missing_ids("signals", "signal_id", outside)
-            if missing:
-                raise TimeFFormatError(f"task refers to missing signal {missing[0]!r}")
-            raise TimeFFormatError(f"task target refers to Signal {outside[0]!r} on a Record outside the built set")
+        outside = signal_ids - self.signals_by_id.keys()
+        if not outside:
+            return
+        owners = self.reader._record_ids_of_signals(outside)
+        missing = sorted(outside - owners.keys())
+        if missing:
+            raise TimeFFormatError(f"task refers to missing signal {missing[0]!r}")
+        self._ensure_records(set(owners.values()))
+        for record in self._records_without_signal_index:
+            for signal in record.signals:
+                self.signals_by_id[signal.id] = signal
+        self._records_without_signal_index.clear()
 
     def _annotations_by_occurrence(self, occurrence_ids: set[int]) -> _AnnotationsByOccurrence:
-        """Resolve referenced annotation occurrences to the objects on the built Records.
+        """Resolve referenced annotation occurrences to the objects on the built Records or the Dataset.
+
+        An occurrence on no built Record is looked up among the Dataset's occurrences: the
+        builder reads only those its tasks reference, unless the caller gave every one of them.
 
         Returns:
             Annotations by occurrence ID.
@@ -2120,13 +2155,20 @@ class _TaskBuilder:
             TimeFFormatError: If an ID names no occurrence on the built Records or the Dataset.
         """
         resolved: _AnnotationsByOccurrence = {}
-        for occurrence_id in occurrence_ids:
+        unresolved: list[int] = []
+        for occurrence_id in sorted(occurrence_ids):
             annotation = self.annotations_by_id.get(occurrence_id)
             if annotation is None and self._foreign_records:
                 self._match_foreign_occurrences()
                 annotation = self.annotations_by_id.get(occurrence_id)
             if annotation is None:
-                annotation = self.reader._dataset_annotations().get(occurrence_id)
+                unresolved.append(occurrence_id)
+            else:
+                resolved[occurrence_id] = annotation
+        if unresolved and not self._dataset_annotations_indexed:
+            self.reader._read_annotations({ObjectKind.DATASET: unresolved}, self.annotations_by_id)
+        for occurrence_id in unresolved:
+            annotation = self.annotations_by_id.get(occurrence_id)
             if annotation is None:
                 raise TimeFFormatError(
                     f"task refers to annotation occurrence {occurrence_id!r} that no built object carries"
