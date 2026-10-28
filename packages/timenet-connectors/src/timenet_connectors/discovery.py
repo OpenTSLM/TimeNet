@@ -15,6 +15,7 @@ import pkgutil
 import yaml
 
 from timenet.connectors import BaseConnector
+from timenet.types import DatasetMetadata
 import timenet_connectors.datasets as _datasets
 
 
@@ -67,6 +68,21 @@ def has_connector(dataset_id: str) -> bool:
     except LookupError:
         return False
     return True
+
+
+def read_card(dataset_id: str) -> DatasetMetadata:
+    """Read a connector's ``dataset.yaml`` card without importing the connector.
+
+    Args:
+        dataset_id: A flat (``hello_world``) or ``org/name`` id.
+
+    Returns:
+        The validated card.
+
+    Raises:
+        LookupError: If no connector exists for the id.
+    """  # noqa: DOC502 (raised by connector_dir, not directly here)
+    return DatasetMetadata.from_yaml(connector_dir(dataset_id) / "dataset.yaml")
 
 
 def requirements_for(dataset_id: str) -> Path | None:
