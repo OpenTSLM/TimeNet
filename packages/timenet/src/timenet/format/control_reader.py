@@ -1262,6 +1262,26 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
             )
         )
 
+    def _record_ids_of_occurrences(self, occurrence_ids: Collection[int]) -> set[EntityId]:
+        """Return the IDs of the Records whose hierarchy holds the given annotation occurrences.
+
+        An occurrence on the Dataset or a task has no Record.
+
+        Returns:
+            The Record IDs, each once.
+        """
+        rows = self._query(
+            """SELECT DISTINCT coalesce(records.record_id, sources.record_id, signal_sources.record_id)
+               FROM annotation_occurrences AS occurrences
+               LEFT JOIN records ON occurrences.object_type = ? AND records.record_id = occurrences.object_id
+               LEFT JOIN sources ON occurrences.object_type = ? AND sources.source_id = occurrences.object_id
+               LEFT JOIN signals ON occurrences.object_type = ? AND signals.signal_id = occurrences.object_id
+               LEFT JOIN sources AS signal_sources ON signal_sources.source_id = signals.source_id
+               WHERE occurrences.occurrence_id IN (SELECT unnest(?))""",
+            [ObjectKind.RECORD.value, ObjectKind.SOURCE.value, ObjectKind.SIGNAL.value, sorted(occurrence_ids)],
+        )
+        return {record_id for (record_id,) in rows if record_id is not None}
+
     def read_signals_by_id(self, signal_ids: Collection[EntityId]) -> dict[EntityId, Signal]:
         """Build the Records that hold the given Signals, and return those Signals.
 
@@ -2428,16 +2448,18 @@ class _TaskBuilder:
         self._records_without_signal_index.clear()
 
     def _annotations_by_occurrence(self, occurrence_ids: set[int]) -> _AnnotationsByOccurrence:
-        """Resolve referenced annotation occurrences to the objects on the built Records or the Dataset.
+        """Resolve referenced annotation occurrences, building the Records that hold them.
 
-        An occurrence on no built Record is looked up among the Dataset's occurrences: the
-        scope reads only those its tasks reference, unless the caller gave every one of them.
+        A task can reference an annotation on a Record that it references in no other way: one
+        catalog query finds the Records that hold the occurrences outside what the scope has built.
+        An occurrence on no Record is looked up among the Dataset's occurrences: the scope reads
+        only those its tasks reference, unless the caller gave every one of them.
 
         Returns:
             Annotations by occurrence ID.
 
         Raises:
-            TimeFFormatError: If an ID names no occurrence on the built Records or the Dataset.
+            TimeFFormatError: If an ID names no occurrence on a Record or the Dataset.
         """
         resolved: _AnnotationsByOccurrence = {}
         unresolved: list[int] = []
@@ -2450,6 +2472,13 @@ class _TaskBuilder:
                 unresolved.append(occurrence_id)
             else:
                 resolved[occurrence_id] = annotation
+        if unresolved:
+            self._ensure_records(self.reader._record_ids_of_occurrences(unresolved))
+            for occurrence_id in unresolved:
+                annotation = self.annotations_by_id.get(occurrence_id)
+                if annotation is not None:
+                    resolved[occurrence_id] = annotation
+            unresolved = [occurrence_id for occurrence_id in unresolved if occurrence_id not in resolved]
         if unresolved and not self._dataset_annotations_indexed:
             # The scope's own lookup keeps them, so a later batch of a stream reads its own copies.
             self.reader._read_annotations({ObjectKind.DATASET: unresolved}, self.annotations_by_id)
