@@ -46,7 +46,7 @@ cli = [
     "typer>=0.12",
     "rich>=13",
 ]
-# Optional PyTorch loader (timenet.torch / load_torch). Build-agnostic: any torch build (CPU, CUDA,
+# Optional PyTorch loader (timenet.torch / open_torch). Build-agnostic: any torch build (CPU, CUDA,
 # ROCm, MPS) satisfies it, so a user with an existing CUDA torch reuses it and nothing is downgraded.
 # For a small CPU-only torch, install it from the CPU index first:
 #   pip install torch --index-url https://download.pytorch.org/whl/cpu

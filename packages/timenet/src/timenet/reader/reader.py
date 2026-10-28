@@ -26,6 +26,7 @@ from timenet.format.stored_values import (
     materialize_table,
 )
 from timenet.reader.load_plan import LoadPlan, ValueLoad
+from timenet.registry.dependencies import open_local_version
 from timenet.types import (
     Annotation,
     DatasetMetadata,
@@ -44,6 +45,8 @@ from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from timenet.manifest import FilePart
     from timenet.registry.version import DatasetVersion
     from timenet.types.references import DatasetRef
@@ -77,7 +80,7 @@ class _ReaderState:
     chunk_batches: tuple[tuple[int, ...], ...]
 
 
-class TimeFReader:
+class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
     """Read a committed TimeF dataset through its DuckDB control plane."""
 
     def __init__(self, version: DatasetVersion) -> None:
@@ -104,6 +107,29 @@ class TimeFReader:
         self._chunk_locator_batches: list[list[int]] = []
         self._chunk_locator_batch_by_id: dict[int, int] = {}
         self._chunk_locations: dict[int, ChunkLocation | None] = {}
+
+    @classmethod
+    def open(cls, path: str | Path, *, sources_root: str | Path | None = None) -> TimeFReader:
+        """Open a local version directory for reading.
+
+        Opening reads only metadata, as :func:`~timenet.registry.dependencies.open_local_version`
+        does. The reader opens the catalog on its first read. Close the reader after use, or use it
+        as a context manager.
+
+        Args:
+            path: The version directory, which holds ``manifest.json`` and ``control.duckdb``.
+            sources_root: The registry root to find payload sources under. By default this is the
+                root that holds ``path`` as ``<root>/<org>/<name>/<version>``.
+
+        Returns:
+            A reader for the version.
+
+        Raises:
+            FileNotFoundError: If ``path`` has no manifest.
+            TimeFValidationError: If the version has payload sources, is not stored as
+                ``<root>/<org>/<name>/<version>``, and no ``sources_root`` is given.
+        """  # noqa: DOC502 - raised by open_local_version
+        return cls(open_local_version(path, sources_root=sources_root))
 
     def __getstate__(self) -> _ReaderState:
         """Return picklable state without open connections or decoded caches."""

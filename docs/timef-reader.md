@@ -9,26 +9,28 @@ tags:
 # TimeFReader
 
 `TimeFReader` opens a committed TimeF version and reconstructs a
-[`TimeFDataset`](timef-dataset.md). It reads through a [`DatasetVersion`](registry.md) handle. The
-handle contains the parsed manifest and access to the version files. The reader never imports or
-runs connector code.
+[`TimeFDataset`](timef-dataset.md). The reader never imports or runs connector code.
+
+There are two everyday ways to get a reader.
+[`TimeNet.open()`](client.md#open-load-or-download) opens a dataset by its ID, and
+`TimeFReader.open()` opens a version directory:
 
 ```python
+from timenet.client import TimeNet
 from timenet.reader import TimeFReader
-from timenet.registry import open_local_version, open_registry
 
-# Read through a registry.
-version = open_registry("~/timenet/registry").open_version(
-    "timenet/hello-world"
-)
-
-# You can also open a version directory directly.
-local_version = open_local_version(version_dir)
-
-with TimeFReader(version) as reader:
+# By dataset ID, through the client.
+with TimeNet().open("timenet/hello-world") as reader:
     dataset = reader.read()
     values = dataset.records[0].signals[0].to_arrow()
+
+# By version directory.
+with TimeFReader.open(version_dir) as reader:
+    dataset = reader.read()
 ```
+
+`TimeNet.load()` opens a reader, reads the dataset with every value loaded, and closes the reader.
+[Opening a version](#opening-a-version) describes the low-level way in.
 
 Use the reader as a context manager when possible. `close()` releases open value files and decoded
 chunk caches. For a remote release, the reader fetches and verifies `control.duckdb` once, and after
@@ -137,10 +139,11 @@ source gave a recording, read the objects with `iter_records()` or `read_tasks()
 `metadata`.
 
 ```python
+from timenet.client import TimeNet
 from timenet.dataset import Signal
 from timenet.types import AnswerTask, read_value
 
-with TimeFReader(version) as reader:
+with TimeNet().open("timenet/hello-world") as reader:
     task = reader.get(AnswerTask, task_id)
     # Reads this one text and keeps nothing; None without a prompt.
     prompt = read_value(task.prompt)
@@ -192,7 +195,7 @@ default, or `Loading.EAGER`.
 ```python
 from timenet.reader import Loading, LoadPlan, TimeFReader
 
-with TimeFReader(version) as reader:
+with TimeFReader.open(version_dir) as reader:
     # Every value loads; the dataset needs no storage once the reader closes.
     dataset = reader.read(load=LoadPlan.ALL_EAGER)
     # Prompts and targets load; signal arrays stay lazy.
@@ -269,6 +272,23 @@ and decoded Zarr chunks until it closes.
 
 ## Opening a version
 
+`TimeFReader(version)` is the low-level way in. It takes a [`DatasetVersion`](registry.md) from
+`open_local_version()` or from a registry's `open_version()`. The handle contains the parsed
+manifest and access to the version files. This way does not use the client's download cache,
+access check, or auto-build:
+
+```python
+from timenet.reader import TimeFReader
+from timenet.registry import open_local_version, open_registry
+
+registry = open_registry("~/timenet/registry")
+with TimeFReader(registry.open_version("timenet/hello-world")) as reader:
+    dataset = reader.read()
+
+with TimeFReader(open_local_version(version_dir)) as reader:
+    dataset = reader.read()
+```
+
 `open_local_version()` and a registry's `open_version()` open a version eagerly, but read only
 metadata. Opening checks that:
 
@@ -299,7 +319,8 @@ An invalid or unsupported manifest raises a validation error, and a missing one 
 Payload sources resolve relative to a registry root. By default, `open_local_version()` takes the
 root that holds the version as `<root>/<org>/<name>/<version>`, so a version and its sources keep
 working when they move to another root together. Pass `sources_root=` to find them under another
-root. A registry's `open_version()` finds them in that registry.
+root. `TimeFReader.open()` takes `sources_root=` too. A registry's `open_version()` finds them in
+that registry.
 
 A version without payload sources opens from any directory. A version with payload sources that is
 not stored as `<root>/<org>/<name>/<version>` needs `sources_root=`, and opening it without one

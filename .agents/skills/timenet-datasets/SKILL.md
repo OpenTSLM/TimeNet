@@ -1,6 +1,6 @@
 ---
 name: timenet-datasets
-description: Use when finding, searching, inspecting, downloading, or loading TimeNet datasets, via the `timenet` CLI or the Python `TimeNet` client (list, search, info, download, load, load_torch). Covers dataset ids, version pinning, and registry/storage configuration.
+description: Use when finding, searching, inspecting, downloading, or loading TimeNet datasets, via the `timenet` CLI or the Python `TimeNet` client (list, search, info, download, open, load, open_torch). Covers dataset ids, version pinning, and registry/storage configuration.
 ---
 
 # Using TimeNet datasets
@@ -58,15 +58,21 @@ tn.list()                            # list[DatasetMetadata]
 tn.get("chengsenwang/tsqa")          # Manifest (add a version or use id@version)
 tn.search(domain=..., task=AnswerTask, tag="ecg", limit=50)   # filters are scalar-or-list, ANDed
 path = tn.download("chengsenwang/tsqa")                   # -> local <storage>/<id>/<version>/ dir
-dataset = tn.load("chengsenwang/tsqa")                    # download-if-needed, then read into memory
+with tn.open("chengsenwang/tsqa") as reader:              # TimeFReader; values stay in storage
+    dataset = reader.read()
+dataset = tn.load("chengsenwang/tsqa")                    # every value read into memory
 ```
 
 - `TimeNet(registry=None, *, storage_path=None)`. `registry` accepts a `BaseRegistry`, a URL, a
   `file://` URI, or a local path.
-- `load(...)` returns a `TimeFDataset` whose series read their values lazily. Call
-  `dataset.describe()` for a text summary; iterate `dataset.records` and `dataset.tasks`; get values
-  with `record.time_series[i].to_numpy()` / `.to_arrow()` (they load only when asked).
-- `load_torch(...)` returns a read-only PyTorch `Dataset`; needs the `torch` extra (`timenet[torch]`).
+- `open(...)` returns a `TimeFReader`; close it or use it in a `with` block. `reader.read()` returns
+  a `TimeFDataset` whose values load only when asked: `record.signals[i].to_numpy()` /
+  `.to_arrow()`. `reader.get(AnswerTask, task_id)` reads one object by its int ID.
+- `load(...)` returns a `TimeFDataset` with every value in memory and its reader closed. Prefer
+  `open()` for large datasets. Call `dataset.describe()` for a text summary; iterate
+  `dataset.records` and `dataset.tasks`.
+- `open_torch(...)` returns a read-only PyTorch `Dataset` that reads one batch at a time; needs the
+  `torch` extra (`timenet[torch]`). It holds an open reader: close it or use it in a `with` block.
 - `search` task filter takes the task **class** (e.g. `from timenet.types import AnswerTask`), not a string.
 
 ## End-to-end recipe
@@ -78,9 +84,10 @@ from timenet.types import AnswerTask
 tn = TimeNet()
 hits = tn.search(task=AnswerTask, limit=10)          # find candidates
 tn.get(hits[0].dataset_id)                        # inspect the manifest
-ds = tn.load(hits[0].dataset_id)                  # load into memory
-ds.describe()                                     # identity, counts, per-spec columns, record preview
-first = ds.records[0].time_series[0].to_numpy()   # pull raw values lazily
+with tn.open(hits[0].dataset_id) as reader:       # values stay in storage
+    ds = reader.read()
+    ds.describe()                                 # identity, counts, per-spec columns, preview
+    first = ds.records[0].signals[0].to_numpy()   # reads this one signal's values
 ```
 
 CLI equivalent: `uv run timenet search --task answer` then `timenet info <id>` then
