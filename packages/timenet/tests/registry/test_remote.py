@@ -187,12 +187,19 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
     assert (dest / "manifest.json").exists()
 
 
-def test_load_full_round_trips(version_dir, tmp_path):
+@pytest.mark.parametrize("entry_point", ["open", "load"])
+def test_load_full_round_trips(version_dir, tmp_path, entry_point):
     directory, manifest = version_dir
     with registry_server(directory) as server:
         registry = RemoteRegistry(server.url, cache_dir=tmp_path / "cache")
         client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
-        loaded = client.load(manifest.metadata.dataset_id)
+        if entry_point == "open":
+            with client.open(manifest.metadata.dataset_id) as reader:
+                assert_datasets_equal(make_dataset(), reader.read())
+        else:
+            loaded = client.load(manifest.metadata.dataset_id)
+    if entry_point == "load":
+        # Every value was loaded, so the dataset reads after the registry is gone.
         assert_datasets_equal(make_dataset(), loaded)
 
 

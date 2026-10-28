@@ -1,7 +1,7 @@
 """A read-only PyTorch view of a :class:`~timenet.dataset.TimeFDataset`.
 
 This module needs the ``torch`` extra (``pip install 'timenet[torch]'``). The method
-:meth:`timenet.client.TimeNet.load_torch` loads this module only when it is used. Users who do not
+:meth:`timenet.client.TimeNet.open_torch` loads this module only when it is used. Users who do not
 use PyTorch do not need to install it.
 """
 
@@ -25,6 +25,8 @@ from timenet.types import EntityId, Task
 
 
 if TYPE_CHECKING:
+    from types import TracebackType
+
     from timenet.reader import TimeFReader
 
 
@@ -39,6 +41,10 @@ class _ItemSource(Protocol):
 
     def fetch(self, indices: Sequence[int]) -> list[tuple[Record, tuple[Task, ...]]]:
         """Return the records at ``indices`` with their tasks, in order."""
+        ...
+
+    def close(self) -> None:
+        """Close the reader the items come from, if there is one."""
         ...
 
 
@@ -60,6 +66,8 @@ class TimeFTorchDataset(Dataset):
     :class:`~timenet.reader.TimeFReader` so records and tasks are read and loaded per batch instead
     of all at once. A ``DataLoader`` calls :meth:`__getitems__` with a whole batch of indices, and
     the reader-backed view answers it with one read of the batch's records and one of their tasks.
+    :meth:`close` closes the reader of a reader-backed view. Use the view as a context manager to
+    close it at the end of a ``with`` block.
     """
 
     def __init__(
@@ -97,7 +105,8 @@ class TimeFTorchDataset(Dataset):
         Each ``__getitems__`` call reads the batch's records and then their tasks. Both reads load
         values with ``load`` in one batch, so memory stays proportional to the batch. The tasks in
         an item reference the item's records. The reader pickles without its connection, so
-        ``DataLoader`` workers each reopen the control database.
+        ``DataLoader`` workers each reopen the control database. The view's :meth:`close` closes
+        the reader it was given.
 
         Args:
             reader: The reader to draw records and tasks from.
@@ -110,6 +119,26 @@ class TimeFTorchDataset(Dataset):
             The lazy view.
         """
         return cls(items=_ReaderItems(reader, load), transform=transform)
+
+    def close(self) -> None:
+        """Close the reader of a view made with :meth:`from_reader`.
+
+        A view over a :class:`~timenet.dataset.TimeFDataset` holds no reader, so this does nothing.
+        """
+        self._items.close()
+
+    def __enter__(self) -> TimeFTorchDataset:
+        """Return this view."""
+        return self
+
+    def __exit__(
+        self,
+        exc_type: type[BaseException] | None,
+        exc: BaseException | None,
+        tb: TracebackType | None,
+    ) -> None:
+        """Close the view."""
+        self.close()
 
     def __len__(self) -> int:
         return len(self._items)
@@ -159,6 +188,9 @@ class _DatasetItems:
         records = [self._records[index] for index in indices]
         return [(record, tuple(self._tasks_by_record.get(id(record), ()))) for record in records]
 
+    def close(self) -> None:
+        """Do nothing, since the records and tasks are in memory."""
+
 
 class _ReaderItems:
     """Items read from a reader per batch with a load plan: one read for the records, one for their tasks."""
@@ -189,6 +221,10 @@ class _ReaderItems:
                 if attached is not None:
                     attached.append(task)
         return [(record, tuple(tasks_by_record[record.id])) for record in records]
+
+    def close(self) -> None:
+        """Close the reader."""
+        self._reader.close()
 
 
 def _series_tensor_and_mask(ts: Signal) -> tuple[Shaped[Tensor, " time *value"], Tensor]:

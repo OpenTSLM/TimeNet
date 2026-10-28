@@ -21,7 +21,14 @@ record = dataset.records[0]
 signal = record.signals[0]
 ```
 
-The hierarchy loads first. Signal values load only when an array method reads them.
+`load()` reads the hierarchy and every Signal value into memory. For a large dataset, open it
+instead. The reader's reads leave each Signal's values in storage until an array method reads them:
+
+```python
+with TimeNet(".timenet-registry").open("timenet/hello-world") as reader:
+    dataset = reader.read()
+    values = dataset.records[0].signals[0].to_numpy()
+```
 
 ## Arrow and NumPy
 
@@ -85,19 +92,19 @@ frame = pl.DataFrame({signal.name: column})
 
 ## PyTorch
 
-Install the adapter with `uv add 'timenet[torch]'`. Then load a map-style PyTorch dataset:
+Install the adapter with `uv add 'timenet[torch]'`. Then open a map-style PyTorch dataset. The
+view holds an open reader, so use it in a `with` block or call its `close()`:
 
 ```python
 from timenet.client import TimeNet
 
-torch_dataset = TimeNet(".timenet-registry").load_torch(
-    "timenet/hello-world"
-)
-item = torch_dataset[0]
+client = TimeNet(".timenet-registry")
+with client.open_torch("timenet/hello-world") as view:
+    item = view[0]
 
-values = item["series"][0]
-present = item["series_masks"][0]
-targets = item["tasks"][0].targets
+    values = item["series"][0]
+    present = item["series_masks"][0]
+    targets = item["tasks"][0].targets
 ```
 
 The adapter preserves the Signal dtype and per-timestep shape. It raises `TimeFValidationError`
