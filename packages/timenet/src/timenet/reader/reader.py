@@ -148,7 +148,7 @@ class TimeFReader:
         return self._tasks
 
     def record_ids(self) -> tuple[EntityId, ...]:
-        """Return every Record ID without hydrating a Record.
+        """Return every Record ID without building a Record.
 
         Returns:
             The IDs in the order :meth:`iter_records` yields them when called without arguments.
@@ -157,7 +157,7 @@ class TimeFReader:
             return self._control_reader().record_ids()
 
     def read_tasks(self, records: Iterable[Record] | None = None) -> tuple[Task, ...]:
-        """Hydrate the tasks attached to ``records`` in one pass.
+        """Build the tasks attached to ``records`` in one pass.
 
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
@@ -286,7 +286,7 @@ class TimeFReader:
         return self._manifest.values_backend
 
     def read(self) -> TimeFDataset:
-        """Hydrate the dataset while keeping every Signal's values lazy.
+        """Build the dataset while keeping every Signal's values lazy.
 
         Returns:
             The reconstructed dataset.
@@ -310,10 +310,10 @@ class TimeFReader:
 
         Args:
             record_ids: IDs to read in result order, or ``None`` for every record.
-            with_annotations: Whether to hydrate annotations on the records and descendants.
+            with_annotations: Whether to build annotations on the records and descendants.
 
         Yields:
-            Hydrated records whose Signal values remain lazy.
+            Records whose Signal values remain lazy.
         """
         with self._as_format_error(preserve_validation=True):
             yield from self._control_reader().read_records(

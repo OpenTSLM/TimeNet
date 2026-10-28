@@ -489,7 +489,7 @@ def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_pat
         reader.verify()
 
 
-def test_iter_tasks_streams_one_record_and_points_at_its_hydrated_objects(tmp_path):
+def test_iter_tasks_streams_one_record_and_points_at_its_built_objects(tmp_path):
     dataset = make_dataset()
     expected_answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
     (record,) = expected_answer.inputs

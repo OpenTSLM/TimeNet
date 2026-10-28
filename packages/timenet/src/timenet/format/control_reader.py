@@ -1,4 +1,4 @@
-"""Hydrate the TimeF object hierarchy from ``control.duckdb``."""
+"""Build the TimeF object hierarchy from ``control.duckdb``."""
 
 from collections import defaultdict
 from collections.abc import Callable, Collection, Generator, Iterable, Iterator, Mapping
@@ -230,7 +230,7 @@ class _TargetRow(NamedTuple):
 
 
 _TASK_BATCH_SIZE = 5_000
-"""Tasks hydrated per round of keyed queries."""
+"""Tasks built per round of keyed queries."""
 
 
 def _annotation_query(owners: Mapping[ObjectKind, Collection[int] | None]) -> tuple[str, list[object]]:
@@ -272,7 +272,7 @@ def _annotation_query(owners: Mapping[ObjectKind, Collection[int] | None]) -> tu
 
 
 class _TaskFacts(NamedTuple):
-    """Facts about one control database that every task hydration reuses."""
+    """Facts about one control database that every task read reuses."""
 
     parent_task_ids: frozenset[int]
     tasks_annotated: bool
@@ -365,7 +365,7 @@ def _occurrence_span(row: _OccurrenceRow) -> TimePoint | TimeInterval | None:
 
 
 def _missing_values(signal_id: int, _spec: TimeSeriesSpec) -> pa.Array:
-    """Fail when metadata-only hydration is asked to load values.
+    """Fail when a metadata-only read is asked to load values.
 
     Raises:
         TimeFFormatError: Always, because no values loader was configured.
@@ -374,7 +374,7 @@ def _missing_values(signal_id: int, _spec: TimeSeriesSpec) -> pa.Array:
 
 
 class DuckDBControlReader:
-    """Keep one read-only DuckDB connection and hydrate requested records from it."""
+    """Keep one read-only DuckDB connection and build requested records from it."""
 
     def __init__(
         self,
@@ -409,7 +409,7 @@ class DuckDBControlReader:
         self._clock_cache: dict[int, TimeOrigin] = {}
         self._dataset_occurrences: dict[int, Annotation] | None = None
         self._record_occurrences: dict[int, dict[int, Annotation]] = {}
-        """The occurrences on each live hydrated Record by occurrence id, keyed by ``id(record)``."""
+        """The occurrences on each live Record the reader built, by occurrence id, keyed by ``id(record)``."""
         self._task_facts: _TaskFacts | None = None
         self._known_record_ids: set[int] = set()
 
@@ -506,7 +506,7 @@ class DuckDBControlReader:
         self.close()
 
     def record_ids(self) -> tuple[int, ...]:
-        """Return every stored Record ID in the order :meth:`read_records` yields them, without hydrating.
+        """Return every stored Record ID in the order :meth:`read_records` yields them, without building a Record.
 
         Returns:
             The Record IDs sorted by ID.
@@ -521,14 +521,14 @@ class DuckDBControlReader:
         *,
         with_annotations: bool = True,
     ) -> tuple[Record, ...]:
-        """Hydrate complete recursive records while leaving signal values lazy.
+        """Build complete recursive records while leaving signal values lazy.
 
         Args:
             record_ids: Requested IDs in result order, or ``None`` for every record.
-            with_annotations: Whether to hydrate annotations on records, sources, and signals.
+            with_annotations: Whether to build annotations on records, sources, and signals.
 
         Returns:
-            The hydrated records.
+            The built records.
 
         Raises:
             TimeFValidationError: If a requested record is absent.
@@ -613,16 +613,16 @@ class DuckDBControlReader:
             )
 
         children, roots_by_record = self._group_sources(sources_by_id.values())
-        hydrated_sources: set[int] = set()
+        built_sources: set[int] = set()
 
-        def hydrate_source(source_id: int, record_id: int) -> Source:
+        def build_source(source_id: int, record_id: int) -> Source:
             source_row = sources_by_id[source_id]
             if source_row.record_id != record_id:
                 raise TimeFFormatError(f"source {source_id!r} crosses record boundaries")
-            hydrated_sources.add(source_id)
+            built_sources.add(source_id)
             return Source(
                 name=source_row.name,
-                sources=tuple(hydrate_source(child, record_id) for child in children[source_id]),
+                sources=tuple(build_source(child, record_id) for child in children[source_id]),
                 signals=tuple(signals_by_source[source_id]),
                 annotations=annotations.get((ObjectKind.SOURCE, source_row.source_id), ()),
                 metadata=_decode_json(source_row.metadata, default={}),
@@ -637,7 +637,7 @@ class DuckDBControlReader:
                     start_us=record_row.time_span_start_us,
                     end_us=_required(record_row.time_span_end_us, f"the time span end of record {record_id!r}"),
                 )
-            root_sources = tuple(hydrate_source(source_id, record_id) for source_id in roots_by_record[record_id])
+            root_sources = tuple(build_source(source_id, record_id) for source_id in roots_by_record[record_id])
             record = Record(
                 sources=root_sources,
                 start_time=self._clock_cache[record_row.clock_id],
@@ -651,7 +651,7 @@ class DuckDBControlReader:
                 occurrence_ids[id(annotation)]: annotation for annotation in record.walk_annotations()
             }
             weakref.finalize(record, self._record_occurrences.pop, id(record), None)
-        unreachable = sources_by_id.keys() - hydrated_sources
+        unreachable = sources_by_id.keys() - built_sources
         if unreachable:
             raise TimeFFormatError(
                 f"source hierarchy contains a missing record, missing parent, or cycle: {sorted(unreachable)}"
@@ -801,20 +801,20 @@ class DuckDBControlReader:
     def read_tasks(
         self, records: Iterable[Record] | None = None, *, cached_records: Iterable[Record] = ()
     ) -> tuple[Task, ...]:
-        """Hydrate every task attached to ``records`` and restore all in-memory object references.
+        """Build every task attached to ``records`` and restore all in-memory object references.
 
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
-            cached_records: Hydrated Records to reuse without restricting the selection.
+            cached_records: Records already built, to reuse without restricting the selection.
 
         Returns:
             Concrete tasks in stable ID order.
 
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
-        """  # noqa: DOC502 - raised by _TaskHydration
-        hydration = _TaskHydration(self, None if records is None else tuple(records), cached_records=cached_records)
-        return tuple(hydration.read_all())
+        """  # noqa: DOC502 - raised by _TaskBuilder
+        builder = _TaskBuilder(self, None if records is None else tuple(records), cached_records=cached_records)
+        return tuple(builder.read_all())
 
     def iter_tasks(
         self,
@@ -831,22 +831,22 @@ class DuckDBControlReader:
         that walks one Record at a time never holds the whole task table in memory. Only ``None``
         skips the input Record filter; an empty collection selects no tasks.
 
-        Tasks a batch derives from through ``from_tasks`` are hydrated first when they have not
+        Tasks a batch derives from through ``from_tasks`` are built first when they have not
         been yielded yet, and kept until their dependants are built. Records a task refers to
-        outside ``records`` are hydrated on demand.
+        outside ``records`` are built on demand.
 
         Args:
             records: Input Records to select, or ``None`` for every task. Tasks reuse these objects.
             split: Keep only tasks of this split, or ``None`` for every task.
-            cached_records: Hydrated Records to reuse without restricting the selection.
+            cached_records: Records already built, to reuse without restricting the selection.
 
         Yields:
             Concrete tasks in stable ID order.
 
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
-        """  # noqa: DOC502 - raised by _TaskHydration
-        hydration = _TaskHydration(
+        """  # noqa: DOC502 - raised by _TaskBuilder
+        builder = _TaskBuilder(
             self,
             None if records is None else tuple(records),
             cached_records=cached_records,
@@ -854,10 +854,10 @@ class DuckDBControlReader:
             supported_modalities=supported_modalities,
             split=split,
         )
-        yield from hydration.iter_tasks()
+        yield from builder.iter_tasks()
 
     def task_facts(self) -> _TaskFacts:
-        """Return the per-database facts task hydration needs, read once per reader.
+        """Return the per-database facts that task reads need, read once per reader.
 
         Returns:
             The IDs of tasks other tasks derive from, and whether any task carries annotations.
@@ -1099,7 +1099,7 @@ class DuckDBControlReader:
         where, params = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
         columns = ", ".join(f"t.{name}" for name in _TaskRow._fields)
         sql = f"SELECT {columns} FROM tasks t {where} ORDER BY t.task_id"  # noqa: S608 - fixed identifiers and predicates
-        # Hydration runs other queries while this result is open, so it needs its own cursor.
+        # Building runs other queries while this result is open, so it needs its own cursor.
         with self.connection.cursor() as selection:
             selection.execute(sql, params)
             yield selection
@@ -1230,20 +1230,20 @@ class DuckDBControlReader:
         objects: dict[int, _Ref],
         label: str,
     ) -> tuple[_Ref, ...]:
-        """Resolve one ordered reference field to hydrated objects.
+        """Resolve one ordered reference field to built objects.
 
         Args:
             task_id: The task the field belongs to, for the error message.
             field: The relationship field name.
             refs: The task's ordered IDs by field.
-            objects: Hydrated objects by public ID.
+            objects: The objects built so far, by public ID.
             label: What the IDs name in the error message, such as ``"record"``.
 
         Returns:
             The referenced objects in stored order.
 
         Raises:
-            TimeFFormatError: If an ID names no hydrated object.
+            TimeFFormatError: If an ID names no built object.
         """
         ids = refs.get(field)
         if not ids:
@@ -1259,7 +1259,7 @@ class DuckDBControlReader:
         self,
         axis_ids: Iterable[int] | None = None,
     ) -> dict[int, TimeAxis]:
-        """Hydrate each shared axis exactly once.
+        """Build each shared axis exactly once.
 
         Returns:
             Axes keyed by axis ID.
@@ -1357,11 +1357,11 @@ class DuckDBControlReader:
 
         Args:
             annotated: The ``(object_type, object_id)`` owners that the fetched occurrences name.
-            owners: The hydrated IDs of each object type the read fetched in full.
+            owners: The IDs of each object type the read built in full.
 
         Raises:
             TimeFFormatError: If an occurrence names an unknown object type, or an ID outside the
-                hydrated set of its type.
+                built set of its type.
         """
         unknown = self.connection.execute(
             "SELECT occurrence_id, object_type FROM annotation_occurrences "
@@ -1379,12 +1379,12 @@ class DuckDBControlReader:
         owners: Mapping[ObjectKind, Collection[int] | None],
         by_occurrence: dict[int, Annotation] | None = None,
     ) -> dict[tuple[str, int | None], tuple[Annotation, ...]]:
-        """Hydrate annotation content and occurrences.
+        """Build annotation content and occurrences.
 
         Args:
             owners: IDs of the annotated objects by object type. If the IDs of a type are ``None``,
                 the read gets every occurrence of that type. IDs match only within their type.
-            by_occurrence: Filled with every hydrated occurrence by its occurrence id.
+            by_occurrence: Filled with every occurrence it builds, by its occurrence id.
 
         Returns:
             Attached occurrences keyed by object type and object ID. The object ID is ``None`` for
@@ -1441,7 +1441,7 @@ class DuckDBControlReader:
         return {key: tuple(value) for key, value in grouped.items()}
 
 
-class _TaskHydration:
+class _TaskBuilder:
     """State for one :meth:`DuckDBControlReader.iter_tasks` call.
 
     It holds the caller's Records and the lookups built from them, loads Records and Signals a
@@ -1475,7 +1475,7 @@ class _TaskHydration:
         self.annotations_by_id: dict[int, Annotation] = {}
         self._foreign_records: list[Record] = []
         self.retained: dict[int, Task] = {}
-        self._hydrating: set[int] = set()
+        self._building: set[int] = set()
         facts = reader.task_facts()
         self.parent_ids = facts.parent_task_ids
         self.tasks_annotated = facts.tasks_annotated
@@ -1492,7 +1492,7 @@ class _TaskHydration:
         """Yield the selected tasks in task ID order, one bounded batch at a time.
 
         Yields:
-            Each hydrated task.
+            Each built task.
         """
         with self.reader._task_row_cursor(
             self.record_ids,
@@ -1502,7 +1502,7 @@ class _TaskHydration:
         ) as selection:
             while rows := selection.fetchmany(_TASK_BATCH_SIZE):
                 task_rows = [_TaskRow._make(row) for row in rows]
-                yield from self._hydrate([row.task_id for row in task_rows], task_rows=task_rows)
+                yield from self._build_batch([row.task_id for row in task_rows], task_rows=task_rows)
 
     def read_all(self) -> list[Task]:
         """Build all selected tasks, using batches for filtered reads.
@@ -1512,11 +1512,11 @@ class _TaskHydration:
         """
         unfiltered = self.required_modalities is None and self.supported_modalities is None and self.split is None
         if self.record_ids is None and unfiltered:
-            return self._hydrate(None)
+            return self._build_batch(None)
         return list(self.iter_tasks())
 
-    def _hydrate(self, task_ids: list[int] | None, *, task_rows: list[_TaskRow] | None = None) -> list[Task]:
-        """Build one batch, or the whole table for ``None``, hydrating unbuilt parents first.
+    def _build_batch(self, task_ids: list[int] | None, *, task_rows: list[_TaskRow] | None = None) -> list[Task]:
+        """Build one batch, or the whole table for ``None``, building unbuilt parents first.
 
         Rows from the selection cursor avoid a second task-table scan.
 
@@ -1544,14 +1544,14 @@ class _TaskHydration:
             )
         )
         if missing_parents:
-            cyclic = self._hydrating.intersection(missing_parents)
+            cyclic = self._building.intersection(missing_parents)
             if cyclic:
                 raise TimeFFormatError(f"task dependencies contain a cycle through tasks {sorted(cyclic)}")
-            self._hydrating.update(pending or ())
+            self._building.update(pending or ())
             try:
-                self._hydrate(missing_parents)
+                self._build_batch(missing_parents)
             finally:
-                self._hydrating.difference_update(pending or ())
+                self._building.difference_update(pending or ())
         built = self._build(pending, task_rows=task_rows)
         for task_id, parent_ids in dependencies.items():
             built[task_id].from_tasks = tuple(self._task(parent_id, built) for parent_id in parent_ids)
@@ -1566,7 +1566,7 @@ class _TaskHydration:
         """Return a task from this batch or the retained parents.
 
         Raises:
-            TimeFFormatError: If the task was never hydrated.
+            TimeFFormatError: If the task was never built.
         """
         task = built.get(task_id) or self.retained.get(task_id)
         if task is None:
@@ -1705,7 +1705,7 @@ class _TaskHydration:
             self.annotations_by_id.update(occurrences)
 
     def _match_foreign_occurrences(self) -> None:
-        """Find the occurrence ids of the Records that another reader instance hydrated, once.
+        """Find the occurrence ids of the Records that another reader instance built, once.
 
         The method reads these Records again from storage only once. A fresh read builds their
         annotations in the same order, so the two walks line up one to one.
@@ -1740,7 +1740,7 @@ class _TaskHydration:
         return {ids[id(original)]: annotation for original, annotation in zip(stored, passed, strict=True)}
 
     def _ensure_records(self, record_ids: set[int]) -> None:
-        """Hydrate Records a task refers to that the caller did not pass.
+        """Build Records a task refers to that the caller did not pass.
 
         Raises:
             TimeFFormatError: If an ID names no stored Record.
@@ -1749,20 +1749,20 @@ class _TaskHydration:
         if not missing:
             return
         try:
-            hydrated = self.reader.read_records(missing)
+            built = self.reader.read_records(missing)
         except TimeFValidationError as exc:
             raise TimeFFormatError(f"task refers to a missing record: {exc}") from exc
-        for record in hydrated:
+        for record in built:
             self._index_record(record)
 
     def _ensure_signals(self, signal_ids: set[int]) -> None:
-        """Index the Signals of the hydrated Records when one batch's targets or scopes refer to Signals.
+        """Index the Signals of the built Records when one batch's targets or scopes refer to Signals.
 
         Args:
             signal_ids: Every Signal ID the batch refers to.
 
         Raises:
-            TimeFFormatError: If an ID names no stored Signal, or no Signal on the hydrated Records.
+            TimeFFormatError: If an ID names no stored Signal, or no Signal on the built Records.
         """
         if not signal_ids:
             return
@@ -1775,16 +1775,16 @@ class _TaskHydration:
             missing = self.reader._missing_ids("signals", "signal_id", outside)
             if missing:
                 raise TimeFFormatError(f"task refers to missing signal {missing[0]!r}")
-            raise TimeFFormatError(f"task target refers to Signal {outside[0]!r} on a Record outside the hydrated set")
+            raise TimeFFormatError(f"task target refers to Signal {outside[0]!r} on a Record outside the built set")
 
     def _annotations_by_occurrence(self, occurrence_ids: set[int]) -> dict[int, Annotation]:
-        """Resolve referenced annotation occurrences to the objects on the hydrated Records.
+        """Resolve referenced annotation occurrences to the objects on the built Records.
 
         Returns:
             Annotations by occurrence ID.
 
         Raises:
-            TimeFFormatError: If an ID names no occurrence on the hydrated Records or the Dataset.
+            TimeFFormatError: If an ID names no occurrence on the built Records or the Dataset.
         """
         resolved: dict[int, Annotation] = {}
         for occurrence_id in occurrence_ids:
@@ -1796,7 +1796,7 @@ class _TaskHydration:
                 annotation = self.reader._dataset_annotations().get(occurrence_id)
             if annotation is None:
                 raise TimeFFormatError(
-                    f"task refers to annotation occurrence {occurrence_id!r} that no hydrated object carries"
+                    f"task refers to annotation occurrence {occurrence_id!r} that no built object carries"
                 )
             resolved[occurrence_id] = annotation
         return resolved
