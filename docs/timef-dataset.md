@@ -407,6 +407,10 @@ none, it finds the copy by the name of the Source. If sibling Sources share that
 or in the copy, the import cannot tell them apart and raises `TimeFValidationError`. If the child
 restructured the Sources of the copy, the name can find another Source, or the import raises.
 
+To remove a Signal from a copy, call `remove_signals()` from `timenet.dataset.edit`. It also drops
+the annotations that only that Signal placed. A later import that copies the Signal back then
+attaches them once.
+
 Do not assign `Source.signals` or `Source.sources` on a copy yourself. This is not supported. A
 later import can then attach an annotation twice.
 
@@ -428,6 +432,11 @@ with TimeFReader.open(child_path) as reader:
 `read()` of a written child restores the import state. It takes the parent cards and the lineage
 from the manifest, and the import map from the catalog. A later import into the dataset that
 `read()` returns reuses the copies that it holds, as an import into the child in memory does.
+
+An edit keeps the import state too. `remove_records()` and `remove_signals()` give the new dataset
+the parent cards, the lineage, and the import map, without the entries of the copies that they
+remove. `edit_version()` writes that state into the version that it derives. A later import into the
+edited dataset reuses the copies that it holds.
 
 A removed object comes back when a later import selects it or needs it, under a new ID. So remove
 imported objects after your last import.

@@ -134,8 +134,10 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         An import of an object whose copy this dataset holds reuses that copy, with this dataset's
         edits. If the call needs Signals that the copy of a Record lacks, it adds them to that copy,
         with the Sources and annotations that they bring. An object whose copy this dataset removed is
-        copied again, under a new ID. Imports are safe to repeat: if a call fails partway, repeating
-        it completes it. Select many objects in one call, because each call reads them in batches.
+        copied again, under a new ID. An edit such as :func:`~timenet.dataset.edit.remove_signals`
+        keeps the import state in the dataset it builds, so an import into that dataset works the
+        same way. Imports are safe to repeat: if a call fails partway, repeating it completes it.
+        Select many objects in one call, because each call reads them in batches.
         ``docs/timef-dataset.md`` describes the rules.
 
         Args:

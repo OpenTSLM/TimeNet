@@ -179,10 +179,12 @@ from whichever release stores them.
 
 An ID that names nothing, an unknown alias or parent, and a stored object of another kind, such as
 `get(AnswerTask, ...)` on a classification task, raise `TimeFNotFoundError`, which subclasses both
-`TimeFValidationError` and `LookupError`. `get_many` raises it, naming every missing ID, before it
-returns anything. `Source`, `Annotation`, and any other kind not listed above, an ID that is not a
-positive int64, a single string passed to `get_many`, a `parent` that is neither a `ParentAlias`
-nor a `DatasetRef`, and a release that several aliases import raise `TimeFValidationError`.
+`TimeFValidationError` and `LookupError`. A parent's ID whose copy an edit such as `remove_records`
+removed names nothing, since the edit drops that import. `get_many` raises it, naming every missing
+ID, before it returns anything. `Source`, `Annotation`, and any other kind not listed above, an ID
+that is not a positive int64, a single string passed to `get_many`, a `parent` that is neither a
+`ParentAlias` nor a `DatasetRef`, and a release that several aliases import raise
+`TimeFValidationError`.
 
 ## Loading values at read time
 
