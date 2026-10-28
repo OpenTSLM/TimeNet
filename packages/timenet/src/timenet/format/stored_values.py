@@ -17,6 +17,7 @@ import pyarrow.parquet as pq
 from pydantic import Field, ValidationError, field_validator, model_validator
 
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.format._write_once import WriteOnce
 from timenet.format.checksums import CHECKSUM_PREFIX
 from timenet.format.constants import DEFAULT_COMPRESSION, PAYLOAD_TEMPLATE, check_relative_path, part_path
 from timenet.format.control_schema import EXTERNAL_VALUES
@@ -319,13 +320,16 @@ def _stored_content_key(handle: "StoredText | StoredTextList") -> PackedContentK
 class StoredText(TextHandle):
     """Refer to one string packed in a Parquet payload.
 
-    The handle holds the reader of the release's payloads and the string's location, not the string,
-    so it is never loaded and every ``read()`` reads the payload. Handles at one location of one
-    payload file are equal without a read.
+    The handle holds the reader of the release's payloads and the string's location. A loaded handle
+    also keeps the string in a write-once cell, and ``read()`` returns it without payload access. An
+    unloaded handle holds no text, and every ``read()`` reads the payload. Handles at one location of
+    one payload file are equal without a read, whether loaded or not.
     """
 
     store: "PackedValueReader" = dataclass_field(repr=False)
     _packed_location: PackedLocation
+    _kept: WriteOnce[str] = dataclass_field(default_factory=WriteOnce, init=False, repr=False, compare=False)
+    """The string, kept once a read loads it."""
 
     @property
     def _location(self) -> PackedLocation:
@@ -334,8 +338,8 @@ class StoredText(TextHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return False, since every read goes to the payload."""
-        return False
+        """Return whether the handle keeps the string, so reads need no payload access."""
+        return self._kept.value is not None
 
     @property
     def length(self) -> int:
@@ -343,10 +347,20 @@ class StoredText(TextHandle):
         return self._location.length
 
     def read(self) -> str:
-        """Return the string from its payload."""
-        text: str = self.store.read_scalar(self._location).as_py()
-        _check_length(len(text), self._location)
+        """Return the kept string, or the string from its payload."""
+        text = self._kept.value
+        if text is None:
+            text = self.store.read_scalar(self._location).as_py()
+            _check_length(len(text), self._location)
         return text
+
+    def _fill(self) -> None:
+        """Read the string from its payload and hold it, so the handle is loaded from then on.
+
+        Raises:
+            TimeNetError: If the handle is already loaded.
+        """  # noqa: DOC502 - raised by WriteOnce.set
+        self._kept.set(self.read())
 
     def _content_key(self) -> Hashable:
         """Return the payload file's checksum, the row, and the kind, which name the string unread."""
@@ -366,13 +380,18 @@ class StoredText(TextHandle):
 class StoredTextList(TextListHandle):
     """Refer to a list of strings packed in a Parquet payload.
 
-    The handle holds the reader of the release's payloads and the list's location, not the list, so
-    it is never loaded and every ``read()`` reads the payload. Handles at one location of one payload
-    file are equal without a read.
+    The handle holds the reader of the release's payloads and the list's location. A loaded handle
+    also keeps the strings in a write-once cell, and ``read()`` returns a new list of them without
+    payload access. An unloaded handle holds no text, and every ``read()`` reads the payload. Handles
+    at one location of one payload file are equal without a read, whether loaded or not.
     """
 
     store: "PackedValueReader" = dataclass_field(repr=False)
     _packed_location: PackedLocation
+    _kept: WriteOnce[tuple[str, ...]] = dataclass_field(
+        default_factory=WriteOnce, init=False, repr=False, compare=False
+    )
+    """The strings, kept once a read loads them."""
 
     @property
     def _location(self) -> PackedLocation:
@@ -381,8 +400,8 @@ class StoredTextList(TextListHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return False, since every read goes to the payload."""
-        return False
+        """Return whether the handle keeps the strings, so reads need no payload access."""
+        return self._kept.value is not None
 
     @property
     def length(self) -> int:
@@ -390,10 +409,21 @@ class StoredTextList(TextListHandle):
         return self._location.length
 
     def read(self) -> list[str]:
-        """Return the list of strings from its payload."""
+        """Return the kept strings, or the list of strings from its payload, as a new list."""
+        kept = self._kept.value
+        if kept is not None:
+            return list(kept)
         texts: list[str] = self.store.read_scalar(self._location).as_py()
         _check_length(len(texts), self._location)
         return texts
+
+    def _fill(self) -> None:
+        """Read the strings from their payload and hold them, so the handle is loaded from then on.
+
+        Raises:
+            TimeNetError: If the handle is already loaded.
+        """  # noqa: DOC502 - raised by WriteOnce.set
+        self._kept.set(tuple(self.read()))
 
     def _content_key(self) -> Hashable:
         """Return the payload file's checksum, the row, and the kind, which name the list unread."""
@@ -415,9 +445,9 @@ class StoredOffsets(ArrayHandle):
 
     The handle holds the reader of the release's payloads, the time offsets' location, and the axis's
     ID and endpoints. Its first ``read()`` checks the time offsets against the location and the axis
-    and keeps a compact copy, so from then on the handle is loaded and reads need no payload access.
-    The location records the number of time offsets and their digest, so both are known without a
-    read.
+    and keeps a compact copy in a write-once cell, so from then on the handle is loaded and reads need
+    no payload access. The location records the number of time offsets and their digest, so both are
+    known without a read.
     """
 
     store: "PackedValueReader" = dataclass_field(repr=False)
@@ -428,7 +458,7 @@ class StoredOffsets(ArrayHandle):
     """First time offset the axis declares, in microseconds."""
     last: int
     """Last time offset the axis declares, in microseconds."""
-    _offsets: pa.Array | None = dataclass_field(default=None, init=False, repr=False)
+    _kept: WriteOnce[pa.Array] = dataclass_field(default_factory=WriteOnce, init=False, repr=False, compare=False)
 
     @property
     def _location(self) -> PackedLocation:
@@ -438,7 +468,7 @@ class StoredOffsets(ArrayHandle):
     @property
     def is_loaded(self) -> bool:
         """Return whether a read has kept the time offsets."""
-        return self._offsets is not None
+        return self._kept.value is not None
 
     @property
     def length(self) -> int:
@@ -466,13 +496,13 @@ class StoredOffsets(ArrayHandle):
         Returns:
             One int64 microsecond offset per step.
         """
-        offsets = self._offsets
+        offsets = self._kept.value
         if offsets is None:
             stored = self.store.read_scalar(self._location).values
             self._check(stored)
             # The stored array views its payload file's whole column, so keep a copy of this axis only.
-            offsets = pa.concat_arrays([stored])
-            object.__setattr__(self, "_offsets", offsets)  # noqa: PLC2801 - keeps the checked time offsets
+            # A read in another thread may have kept its copy meanwhile; this read then returns that one.
+            offsets = self._kept.setdefault(pa.concat_arrays([stored]))
         return offsets
 
     def _check(self, offsets: pa.Array) -> None:
