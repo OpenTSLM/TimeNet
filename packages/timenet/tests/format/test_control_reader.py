@@ -1,5 +1,6 @@
 from dataclasses import replace
 from fractions import Fraction
+from itertools import chain
 
 import pyarrow as pa
 import pytest
@@ -204,8 +205,7 @@ def test_input_modalities_round_trip_as_typed_task_data(tmp_path):
     assert rows[0]["input_modalities"] == ["text", "time_series"]
 
 
-def test_modality_filters_select_tasks_and_targets_before_building(tmp_path, monkeypatch):
-    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
+def test_modality_filters_select_tasks_and_targets_before_building(tmp_path):
     dataset = _dataset()
     record = dataset.records[0]
     dataset.add_tasks(
@@ -243,7 +243,11 @@ def test_modality_filters_select_tasks_and_targets_before_building(tmp_path, mon
     DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
-        tasks = list(reader.iter_tasks(required_modalities=required, supported_modalities=supported))
+        tasks = list(
+            chain.from_iterable(
+                reader.iter_task_batches(required_modalities=required, supported_modalities=supported, batch_size=2)
+            )
+        )
         task_rows = reader.read_task_table(required_modalities=required, supported_modalities=supported).to_pylist()
         target_rows = reader.read_target_table(required_modalities=required, supported_modalities=supported).to_pylist()
 
@@ -309,7 +313,8 @@ def test_control_reader_preserves_ordered_integer_relationships(tmp_path):
     assert tuple(annotation.key for annotation in task.input_annotations) == ("patient_age", "patient_sex")
 
 
-def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
+@pytest.mark.parametrize("stream", [False, True], ids=["read", "stream"])
+def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch, stream):
     path = tmp_path / "control.duckdb"
     DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(_dataset())
 
@@ -320,7 +325,7 @@ def test_text_targets_do_not_build_a_signal_index(tmp_path, monkeypatch):
             "signals",
             property(lambda _record: pytest.fail("text targets walked the Signal hierarchy")),
         )
-        (task,) = reader.read_tasks(records)
+        (task,) = list(chain.from_iterable(reader.iter_task_batches(records))) if stream else reader.read_tasks(records)
 
     assert task.targets == ("Yes",)
 
@@ -502,7 +507,7 @@ def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tm
     with DuckDBControlReader(path) as reader:
         records = reader.read_records()
         record0 = next(record for record in records if record.id == expected_record.id)
-        tasks = list(reader.iter_tasks((record0,)))
+        tasks = list(chain.from_iterable(reader.iter_task_batches((record0,))))
 
     assert [task.id for task in tasks] == expected_ids
     assert all(task.inputs[0] is record0 for task in tasks)
@@ -514,7 +519,8 @@ def test_iter_tasks_for_one_record_yields_its_tasks_and_shares_record_objects(tm
 
 @pytest.mark.parametrize("materialize", [False, True])
 def test_iter_tasks_builds_a_parent_that_sorts_after_its_dependant(tmp_path, monkeypatch, materialize):
-    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 1)
+    # The read pages one task at a time, as the stream does with batch_size=1.
+    monkeypatch.setattr(control_reader_module, "TASK_BATCH_SIZE", 1)
     dataset = _dataset()
     record = dataset.records[0]
     parent = AnswerTask(inputs=(record,), targets=("parent",))
@@ -525,12 +531,19 @@ def test_iter_tasks_builds_a_parent_that_sorts_after_its_dependant(tmp_path, mon
 
     with DuckDBControlReader(path) as reader:
         (record,) = reader.read_records()
-        tasks = reader.read_tasks((record,)) if materialize else list(reader.iter_tasks((record,)))
+        tasks = (
+            reader.read_tasks((record,))
+            if materialize
+            else list(chain.from_iterable(reader.iter_task_batches((record,), batch_size=1)))
+        )
 
     by_id = {task.id: task for task in tasks}
     assert set(by_id) == {TASK_ID, child.id, parent.id}
     assert child.id < parent.id
-    assert by_id[child.id].from_tasks[0] is by_id[parent.id]
+    (built,) = by_id[child.id].from_tasks
+    assert built.id == parent.id
+    # One read returns the parent it built first; a stream builds it again for the batch that yields it.
+    assert (built is by_id[parent.id]) is materialize
     assert tuple(sorted(by_id)) == tuple(task.id for task in tasks)
 
 
@@ -571,9 +584,9 @@ def test_read_tasks_rejects_corrupt_task_references(tmp_path, statement, message
     "read",
     [
         lambda reader, records: reader.read_tasks(cached_records=records),
-        lambda reader, records: list(reader.iter_tasks(records)),
+        lambda reader, records: list(chain.from_iterable(reader.iter_task_batches(records))),
     ],
-    ids=["read_tasks", "iter_tasks"],
+    ids=["read_tasks", "iter_task_batches"],
 )
 def test_read_tasks_rejects_duplicate_task_ids(tmp_path, read):
     dataset = _dataset()
@@ -685,8 +698,7 @@ def test_arrow_task_views_match_the_built_objects(tmp_path):
     )
 
 
-def test_split_round_trips_and_filters_before_building(tmp_path, monkeypatch):
-    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
+def test_split_round_trips_and_filters_before_building(tmp_path):
     dataset = _dataset()
     record = dataset.records[0]
     dataset.add_tasks(
@@ -699,7 +711,7 @@ def test_split_round_trips_and_filters_before_building(tmp_path, monkeypatch):
     DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
 
     with DuckDBControlReader(path) as reader:
-        train = list(reader.iter_tasks(split="train"))
+        train = list(chain.from_iterable(reader.iter_task_batches(split="train", batch_size=2)))
         test_rows = reader.read_task_table(split=Split.TEST).to_pylist()
         train_targets = reader.read_target_table(split=Split.TRAIN).to_pylist()
         every = reader.read_task_table().to_pylist()
@@ -763,6 +775,32 @@ def test_tasks_find_the_annotations_of_records_from_another_reader(tmp_path):
     assert task.inputs == records
     assert task.input_annotations[0] is records[0].annotations[1]
     assert task.input_annotations[1] is records[0].annotations[0]
+
+
+def test_a_stream_matches_the_annotations_of_records_from_another_reader_once(tmp_path, monkeypatch):
+    path = tmp_path / "control.duckdb"
+    dataset = _dataset()
+    record = dataset.records[0]
+    second = record.annotate(Annotation(key="patient_age", value=65, unit="year"))
+    dataset.add_task(task=AnswerTask(inputs=(record,), targets=("No",), input_annotations=(second,)))
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
+    matched = []
+    match = control_reader_module._TaskBuilder._match_occurrences
+
+    def counting_match(self, record, fresh):
+        matched.append(record)
+        return match(self, record, fresh)
+
+    monkeypatch.setattr(control_reader_module._TaskBuilder, "_match_occurrences", counting_match)
+    with DuckDBControlReader(path) as other:
+        records = other.read_records()
+    with DuckDBControlReader(path) as reader:
+        first, later = chain.from_iterable(reader.iter_task_batches(records, batch_size=1))
+
+    # Each batch is built on its own, but the stream matches the Records it is given once, for every batch.
+    assert first.input_annotations[0] is records[0].annotations[0]
+    assert later.input_annotations[0] is records[0].annotations[1]
+    assert matched == [records[0]]
 
 
 def test_tasks_reject_a_record_from_another_reader_whose_annotation_was_replaced(tmp_path):

@@ -19,7 +19,7 @@ SUPPORTED_VALUES_BACKENDS: frozenset[ValuesBackend] = frozenset(ValuesBackend)
 """Every backend a writer may target and a reader can resolve."""
 
 
-@dataclass(frozen=True)
+@dataclass(frozen=True, slots=True)
 class ChunkDataIndex:
     """A backend-defined address locating one chunk's values inside its ``chunk_file``.
 
