@@ -3,11 +3,12 @@
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 import sys
-from typing import Literal, TextIO, TypeVar, cast, overload
+from typing import TYPE_CHECKING, Literal, TextIO, TypeVar, cast, overload
 
 import numpy as np
 import pyarrow as pa
 
+from timenet.dataset.composition import ImportedDataset, ImportMap, import_from
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record
 from timenet.dataset.span_validation import check_span_within_window
@@ -31,8 +32,15 @@ from timenet.types import (
     value_type_of,
 )
 from timenet.types.ids import IdCounters
+from timenet.types.load_plan import LoadPlan
+from timenet.types.parent_dataset_card import ParentDatasetCard
+from timenet.types.reference_keys import ParentAlias
 from timenet.types.splits import Split, parse_split, parse_splits
 from timenet.values_backends import ValuesBackend
+
+
+if TYPE_CHECKING:
+    from timenet.reader import TimeFReader
 
 
 T = TypeVar("T")
@@ -68,6 +76,11 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             metadata: The dataset's descriptive identity.
         """
         self._metadata = metadata
+        self._imports: ImportMap = {}
+        self.parent_cards: dict[ParentAlias, ParentDatasetCard] = {}
+        """A copy of the card of each parent this dataset imports from, by parent alias."""
+        self.lineage: dict[str, ParentDatasetCard] = {}
+        """The card of every ancestor release, parents included, keyed by ``org/name@version``."""
         self._records: list[Record] = []
         self._records_by_id: dict[EntityId, Record] = {}
         self._signals_by_id: dict[EntityId, Signal] = {}
@@ -83,6 +96,52 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._task_stream: Callable[[], Iterator[Task]] | None = None
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
+
+    def import_from(
+        self,
+        parent: "TimeFReader",
+        *,
+        alias: ParentAlias | None = None,
+        records: Iterable[EntityId] = (),
+        load: LoadPlan = LoadPlan.ALL_LAZY,
+    ) -> ImportedDataset:
+        """Copy Records from a parent release into this dataset.
+
+        The parent must be a release that ``metadata.parents`` declares. The call records the parent
+        in :attr:`parent_cards` and :attr:`lineage`, and raises this dataset's access requirement to
+        the parent's when the parent's is stricter.
+
+        Each copy is this dataset's own Record, with new IDs and its own metadata and annotations, so
+        edits do not change the parent. Its Signals keep the parent's value handles, so they read the
+        parent's stored values unless ``load`` loads them. A write of this dataset reuses the parent's
+        payloads, so it needs the parent release. Annotations on the parent dataset itself are not
+        copied.
+
+        An import of a Record whose copy this dataset holds returns that copy as it is. A Record whose
+        copy this dataset removed is copied again, under a new ID. Imports are safe to repeat: if a
+        call fails partway, repeating it completes it. Select many Records in one call, because each
+        call reads them in one batch. ``docs/timef-dataset.md`` describes the rules.
+
+        Args:
+            parent: A reader of the parent release.
+            alias: The parent alias to import under, when several aliases declare the parent.
+            records: The parent IDs of the Records to copy.
+            load: Which kinds of stored values the read of the parent Records loads. The copies share
+                the loaded values. The default loads none.
+
+        Returns:
+            The copies of the selected Records, by their parent IDs.
+
+        Raises:
+            TimeFValidationError: If ``metadata.parents`` or ``alias`` does not declare the parent,
+                another alias imports the parent or this alias imports another release, or
+                ``records`` is not a collection of positive int64 IDs.
+            TimeFNotFoundError: If a selected ID names no parent Record. This dataset does not change.
+        """  # noqa: DOC502 - raised by composition.import_from
+        try:
+            return import_from(self, parent, alias=alias, records=records, load=load)
+        finally:
+            self._schema = None
 
     def add_record(self, *, record: Record) -> Record:
         """Register and return a complete record.
@@ -583,7 +642,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
     ) -> "TimeFDataset":
         """Build a dataset from parts that are already constructed.
 
-        The reader uses this method when it reads a dataset back from disk.
+        The reader uses this method when it reads a dataset back from disk. The dataset starts with
+        no :attr:`parent_cards`, no :attr:`lineage`, and an empty import map.
 
         Args:
             metadata: The dataset's descriptive identity.

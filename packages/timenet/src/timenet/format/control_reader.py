@@ -19,6 +19,7 @@ import duckdb
 import pyarrow as pa
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeAxis, TimeFDataset
+from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
 from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
@@ -60,7 +61,7 @@ from timenet.types import (
 from timenet.types.handles import CallableArray
 from timenet.types.ids import EntityId
 from timenet.types.object_kind import ObjectKind
-from timenet.types.reference_keys import SourceKey
+from timenet.types.reference_keys import ParentAlias, SourceKey
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
@@ -429,6 +430,34 @@ def _require_found(kind: ObjectKind, requested: Iterable[EntityId], found: Conta
         raise TimeFNotFoundError(f"no {kind.value} {', '.join(map(repr, missing))}")
 
 
+def _require_listed_once(aliases: Iterable[str], objects: Iterable[tuple[str, str, EntityId]]) -> None:
+    """Check that the catalog lists each parent alias, and each object imported under it, once.
+
+    The schema does not enforce the unique keys of ``imports`` and ``imported_objects``, so a corrupt
+    catalog can list one twice.
+
+    Args:
+        aliases: The alias of each ``imports`` row.
+        objects: The alias, object kind, and parent ID of each ``imported_objects`` row.
+
+    Raises:
+        TimeFFormatError: If the catalog lists an alias, or a parent ID under one alias and kind, more
+            than once.
+    """
+    repeated_aliases = sorted(alias for alias, count in Counter(aliases).items() if count > 1)
+    if repeated_aliases:
+        raise TimeFFormatError(
+            f"the catalog lists parent alias {', '.join(map(repr, repeated_aliases))} more than once"
+        )
+    repeated = sorted(key for key, count in Counter(objects).items() if count > 1)
+    if repeated:
+        alias, kind, _ = repeated[0]
+        parent_ids = [parent_id for other, other_kind, parent_id in repeated if (other, other_kind) == (alias, kind)]
+        raise TimeFFormatError(
+            f"the catalog lists {kind} {', '.join(map(repr, parent_ids))} more than once under parent alias {alias!r}"
+        )
+
+
 def _missing_values(signal_id: int, _spec: TimeSeriesSpec) -> pa.Array:
     """Fail when a metadata-only read is asked to load values.
 
@@ -519,7 +548,7 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(before=_CONNECTIONS.before_fork, after_in_child=_CONNECTIONS.after_fork_in_child)
 
 
-class DuckDBControlReader:
+class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of catalog read
     """Keep one read-only DuckDB connection and build requested records from it.
 
     The connection opens again on the next query after :meth:`close`, and after the process forks,
@@ -1196,6 +1225,26 @@ class DuckDBControlReader:
             for signal_id, stored in chunks.items()
         }
 
+    def import_map(self) -> tuple[dict[str, str], ImportMap]:
+        """Return the parent release of each parent alias, and the import map of the catalog.
+
+        Returns:
+            The parent release that ``imports`` names for each parent alias, and the local ID of each
+            object in ``imported_objects``, keyed by parent alias, kind, and parent ID.
+
+        Raises:
+            TimeFFormatError: If the catalog lists a parent alias, or a parent ID under one alias and
+                kind, more than once.
+        """  # noqa: DOC502 - raised by _require_listed_once
+        releases = self._query("SELECT alias, parent_ref FROM imports")
+        rows = self._query("SELECT alias, object_kind, parent_id, object_id FROM imported_objects")
+        _require_listed_once(
+            (alias for alias, _ in releases), ((alias, kind, parent_id) for alias, kind, parent_id, _ in rows)
+        )
+        return dict(releases), {
+            (ParentAlias(alias), ObjectKind(kind), parent_id): object_id for alias, kind, parent_id, object_id in rows
+        }
+
     def imported_ids(
         self, alias: str, kind: ObjectKind, parent_ids: Iterable[EntityId]
     ) -> tuple[str | None, dict[EntityId, EntityId]]:
@@ -1213,23 +1262,16 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If the catalog lists the alias more than once, or lists one of the
                 parent IDs more than once under the alias and kind.
-        """
+        """  # noqa: DOC502 - raised by _require_listed_once
         found = self._query("SELECT parent_ref FROM imports WHERE alias = ?", [alias])
         if not found:
             return None, {}
-        if len(found) > 1:
-            raise TimeFFormatError(f"the catalog lists parent alias {alias!r} more than once")
         rows = self._query(
             "SELECT parent_id, object_id FROM imported_objects "
             "WHERE alias = ? AND object_kind = ? AND parent_id IN (SELECT unnest(?))",
             [alias, kind.value, list(parent_ids)],
         )
-        repeated = sorted(parent_id for parent_id, count in Counter(row[0] for row in rows).items() if count > 1)
-        if repeated:
-            raise TimeFFormatError(
-                f"the catalog lists {kind.value} {', '.join(map(repr, repeated))} more than once "
-                f"under parent alias {alias!r}"
-            )
+        _require_listed_once([alias] * len(found), [(alias, kind.value, parent_id) for parent_id, _ in rows])
         return found[0][0], dict(rows)
 
     def _record_ids_of_signals(self, signal_ids: Collection[EntityId]) -> dict[EntityId, EntityId]:
