@@ -4,18 +4,12 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import Any, Self
 
 from timenet.dataset import Record
+from timenet.errors import TimeFValidationError
 from timenet.types import Annotation
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.bash_lab.sensorcaps.parse import iter_rows
-from timenet_connectors.datasets.bash_lab.sensorcaps.records import (
-    DECLARED_SAMPLING_RATE_HZ,
-    SOURCE_SAMPLING_RATE_HZ,
-    SOURCE_WINDOW_SAMPLES,
-    TIME_AXIS_RECONSTRUCTION,
-    ValueLoader,
-    make_record,
-)
+from timenet_connectors.datasets.bash_lab.sensorcaps.records import RowCache, make_record
 from timenet_connectors.datasets.bash_lab.sensorcaps.release import HF_REPO, SOURCE_REVISION
 from timenet_connectors.datasets.bash_lab.sensorcaps.tasks import SensorCaptionTask
 
@@ -49,15 +43,24 @@ class SensorCapsLoader(DatasetLoader[SensorCaptionTask]):
 
         Returns:
             The loader.
+
+        Raises:
+            TimeFValidationError: If a row's system message differs from its file's first row.
         """
         files: tuple[HubFileRef, ...] = tuple(refs)
-        loader = ValueLoader()
+        cache = RowCache()
         records: dict[tuple[str, int], Record] = {}
         row_counts: dict[HubFileRef, int] = {}
         for file in files:
             count = 0
+            # The instruction GPT-4o-mini received, which becomes every task's prompt.
+            system: str | None = None
             for ref, row in iter_rows(file):
-                records[ref.key] = make_record(ref, row, loader)
+                if system is None:
+                    system = row.system
+                elif row.system != system:
+                    raise TimeFValidationError(f"{ref.context}: system message differs from the file's first row")
+                records[ref.key] = make_record(ref, row, cache)
                 count += 1
             row_counts[file] = count
         return cls(files, records, row_counts)
@@ -67,29 +70,22 @@ class SensorCapsLoader(DatasetLoader[SensorCaptionTask]):
         return iter(self._records.values())
 
     def tasks(self) -> Iterator[SensorCaptionTask]:
-        """Re-read each row's prompt and caption, without retaining the corpus.
+        """Re-read each row's instruction and caption, without retaining the corpus.
 
         Yields:
             One caption task per row, in file and row order.
         """
         for file in self._files:
             for ref, row in iter_rows(file):
-                yield SensorCaptionTask(self._records[ref.key], row)
+                yield SensorCaptionTask(self._records[ref.key], row.system, row.caption)
 
     def dataset_annotations(self) -> Sequence[Annotation]:  # noqa: PLR6301 - the loader interface
-        """Return the source pin and the timing interpretation.
+        """Return the pinned source.
 
         Returns:
-            The dataset's annotations.
+            The repository and revision the dataset was built from.
         """
-        return tuple(
-            Annotation(key=key, value=value)
-            for key, value in (
-                ("source_repository", HF_REPO),
-                ("source_revision", SOURCE_REVISION),
-                ("declared_sampling_rate_hz", DECLARED_SAMPLING_RATE_HZ),
-                ("source_sampling_rate_hz", SOURCE_SAMPLING_RATE_HZ),
-                ("source_window_samples", SOURCE_WINDOW_SAMPLES),
-                ("time_axis_reconstruction", TIME_AXIS_RECONSTRUCTION),
-            )
+        return (
+            Annotation(key="source_repository", value=HF_REPO),
+            Annotation(key="source_revision", value=SOURCE_REVISION),
         )
