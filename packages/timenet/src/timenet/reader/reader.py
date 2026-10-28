@@ -166,25 +166,40 @@ class TimeFReader:
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
+        batch_size: int = 5_000,
     ) -> Iterator[Task]:
-        """Yield tasks a bounded batch at a time instead of materializing the whole table.
+        """Yield tasks a bounded batch at a time instead of building the whole table.
+
+        Each batch is built on its own. Its tasks share the objects it builds: a record
+        that two of them use is one object, and the signals on one irregular axis share one
+        time-offsets handle. Batches share nothing but ``records``, so the stream keeps none of a
+        batch's objects once it has yielded them: it holds one batch of objects and that batch's
+        task IDs at a time, and selects the next batch's IDs after the last one, while the reader
+        keeps compact chunk locators for the signals it has resolved until it closes. A record or
+        parent task that tasks of several batches use is built once per batch, as separate objects
+        with the same ID.
 
         Args:
             records: Records from :meth:`iter_records` whose input tasks to yield, or ``None`` for
                 every task of the dataset. Tasks reference these ``Record`` objects directly.
             split: Keep only tasks of this split, or ``None`` for every task. The filter runs in
                 DuckDB, so a task outside the split is never built.
+            batch_size: The most tasks a batch holds. The stream holds one batch at a time.
 
         Yields:
             Concrete tasks in stable ID order.
         """
         with self._as_format_error(preserve_validation=True):
-            yield from self._control_reader().iter_tasks(
+            for batch in self._control_reader().iter_task_batches(
                 records,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
                 split=split,
-            )
+                batch_size=batch_size,
+            ):
+                yield from batch
+                # Hold no batch while the next one is built.
+                del batch
 
     def read_task_table(
         self,

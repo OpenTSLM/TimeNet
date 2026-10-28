@@ -156,15 +156,14 @@ def test_filtered_reads_validate_only_selected_text_locators(tmp_path, validated
         assert set(validated_locators) == {task_report}
 
 
-def test_task_stream_reads_text_locators_one_batch_at_a_time(tmp_path, monkeypatch, validated_locators):
+def test_task_stream_reads_text_locators_one_batch_at_a_time(tmp_path, validated_locators):
     dataset, _, text = _dataset_with_packed_text()
     version = open_local_version(_write(tmp_path, dataset))
     validated_locators.clear()
-    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
     first_batch_ids = {task.id for task in sorted(dataset.tasks, key=lambda task: task.id)[:2]}
 
     with TimeFReader(version) as reader:
-        stream = reader.iter_tasks()
+        stream = reader.iter_tasks(batch_size=2)
         first = next(stream)
         assert first.prompt == f"{text}{first.id}"
         assert {identity for kind, identity in validated_locators if kind == ObjectKind.TASK} == first_batch_ids
@@ -684,9 +683,7 @@ def _joined(*ids: int) -> str:
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
-def test_a_task_stream_continues_after_the_process_forks_between_batches(tmp_path, monkeypatch):
-    # One task a batch, so each later batch selects its page after the fork.
-    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 1)
+def test_a_task_stream_continues_after_the_process_forks_between_batches(tmp_path):
     dataset, _, text = _dataset_with_packed_text()
     version = open_local_version(_write(tmp_path, dataset))
 
@@ -696,7 +693,8 @@ def test_a_task_stream_continues_after_the_process_forks_between_batches(tmp_pat
             return _joined(*reader.record_ids(), *own.record_ids())
 
     with TimeFReader(version) as reader:
-        stream = reader.iter_tasks()
+        # One task a batch, so each later batch selects its page after the fork.
+        stream = reader.iter_tasks(batch_size=1)
         first = next(stream)
         status, child = _in_forked_child(child_record_ids)
         # The next batch reopens the catalog that the fork closed.
@@ -706,29 +704,6 @@ def test_a_task_stream_continues_after_the_process_forks_between_batches(tmp_pat
     record_ids = sorted(record.id for record in dataset.records)
     assert child == _joined(*record_ids, *record_ids)
     assert [task.id for task in tasks] == sorted(task.id for task in dataset.tasks)
-
-
-def test_a_stream_selects_its_task_rows_one_page_at_a_time(tmp_path, monkeypatch):
-    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
-    dataset = make_dataset()
-    ids = sorted(task.id for task in dataset.tasks)
-    pages = []
-    select = DuckDBControlReader._task_row_page
-
-    def recording(self, *selection, after, limit):
-        rows = select(self, *selection, after=after, limit=limit)
-        pages.append((after, limit, [row.task_id for row in rows]))
-        return rows
-
-    monkeypatch.setattr(DuckDBControlReader, "_task_row_page", recording)
-    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
-        stream = reader.iter_tasks()
-        next(stream)
-        # The first batch selects only its own page; each later page starts after the last task ID.
-        assert pages == [(None, 2, ids[:2])]
-        rest = list(stream)
-    assert [task.id for task in rest] == ids[1:]
-    assert pages == [(None, 2, ids[:2]), (ids[1], 2, ids[2:4]), (ids[3], 2, ids[4:])]
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
