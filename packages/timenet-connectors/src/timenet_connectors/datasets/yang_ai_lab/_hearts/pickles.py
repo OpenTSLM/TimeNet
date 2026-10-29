@@ -1,4 +1,4 @@
-"""Read the released HEARTS pickles through an allowlist of pandas and NumPy globals."""
+"""Read pinned HEARTS pickles through an allowlist of pandas and NumPy globals."""
 
 import functools
 from pathlib import Path
