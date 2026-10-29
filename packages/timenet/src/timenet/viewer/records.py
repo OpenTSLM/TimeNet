@@ -26,7 +26,7 @@ from timenet.viewer.models import AnnotationDetail, SpanDetail, project_annotati
 
 @dataclass(frozen=True)
 class RecordLimits:
-    """Initial operation caps, configurable by the server owner."""
+    """Operation caps: hierarchy/annotations for record details, window length and response bytes."""
 
     hierarchy: int = 5_000
     annotations: int = 10_000
@@ -163,18 +163,18 @@ def _response(model: BaseModel, limits: RecordLimits, operation: str) -> Respons
 
 
 @contextmanager
-def _record(reader: TimeFReader, record_id: int, operation: str) -> Generator[Record]:
+def _record(reader: TimeFReader, record_id: int) -> Generator[Record]:
     iterator = reader.iter_records(record_ids=[record_id], with_annotations=True)
     try:
         try:
             record = next(iterator)
         except StopIteration:
-            fail(404, "not_found", "Record not found.", operation)
+            fail(404, "not_found", "Record not found.", "record")
         except TimeFValidationError as exc:
             # The reader raises this for an unknown ID, but also when a stored record fails
             # validation. Only the first is a 404; the second is a corrupt artifact.
             if record_id not in reader.record_ids():
-                fail(404, "not_found", "Record not found.", operation)
+                fail(404, "not_found", "Record not found.", "record")
             raise TimeFFormatError(f"record {record_id!r} failed validation") from exc
         yield record
     finally:
@@ -188,7 +188,7 @@ def _children(sources: tuple[Source, ...], parent: str | None) -> list[tuple[Sou
     return [(source, key, parent) for source, key in sorted(keyed, key=lambda item: item[0].name, reverse=True)]
 
 
-def _hierarchy(record: Record, limits: RecordLimits, operation: str) -> list[tuple[Source, str, str | None]]:
+def _hierarchy(record: Record, limits: RecordLimits) -> list[tuple[Source, str, str | None]]:
     result: list[tuple[Source, str, str | None]] = []
     pending = _children(record.sources, None)
     count = 0
@@ -197,22 +197,18 @@ def _hierarchy(record: Record, limits: RecordLimits, operation: str) -> list[tup
         source, key, parent = pending.pop()
         count += 1 + len(source.signals)
         annotations += len(source.annotations) + sum(len(signal.annotations) for signal in source.signals)
-        _cap(count, limits.hierarchy, operation, "Record hierarchy")
-        _cap(annotations, limits.annotations, operation, "Attached annotations")
+        _cap(count, limits.hierarchy, "record", "Record hierarchy")
+        _cap(annotations, limits.annotations, "record", "Attached annotations")
         result.append((source, key, parent))
         pending.extend(_children(source.sources, key))
-    _cap(annotations, limits.annotations, operation, "Attached annotations")
-    # A window response holds no record fields, so only record details measure them.
-    if operation == "record":
-        _preflight(record, result, limits, operation)
+    _cap(annotations, limits.annotations, "record", "Attached annotations")
+    _preflight(record, result, limits)
     return result
 
 
-def _preflight(
-    record: Record, hierarchy: list[tuple[Source, str, str | None]], limits: RecordLimits, operation: str
-) -> None:
+def _preflight(record: Record, hierarchy: list[tuple[Source, str, str | None]], limits: RecordLimits) -> None:
     """Bound variable-size fields before Pydantic copies or projects them."""
-    budget = _Budget(limits.response_bytes, operation)
+    budget = _Budget(limits.response_bytes, "record")
     for obj in [
         record,
         *(source for source, _, _ in hierarchy),
@@ -295,9 +291,9 @@ def install_record_routes(
         with (
             registry_errors(operation),
             TimeFReader(registry.open_version(dataset_id, version)) as reader,
-            _record(reader, record_id, operation) as item,
+            _record(reader, record_id) as item,
         ):
-            hierarchy = _hierarchy(item, limits, operation)
+            hierarchy = _hierarchy(item, limits)
             detail = RecordDetail(
                 id=public_id(item.id),
                 start_time=None if item.start_time.timestamp is None else unix_us(item.start_time.timestamp),
@@ -342,14 +338,10 @@ def install_record_routes(
         if stop <= start:
             fail(422, "invalid_parameters", "Require 0 <= start < stop.", operation)
         _cap(stop - start, limits.window, operation, "Signal window")
-        with (
-            registry_errors(operation),
-            TimeFReader(registry.open_version(dataset_id, version)) as reader,
-            _record(reader, record_id, operation) as item,
-        ):
-            hierarchy = _hierarchy(item, limits, operation)
-            selected = next((s for source, _, _ in hierarchy for s in source.signals if s.id == signal_id), None)
-            if selected is None:
+        with registry_errors(operation), TimeFReader(registry.open_version(dataset_id, version)) as reader:
+            try:
+                selected = reader.read_signal(record_id, signal_id)
+            except TimeFValidationError:
                 fail(404, "not_found", "Signal not found in this record.", operation)
             if stop > selected.n_values:
                 fail(422, "invalid_parameters", "Window exceeds the signal length.", operation)
