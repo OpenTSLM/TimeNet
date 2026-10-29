@@ -165,7 +165,7 @@ def _write_ptbxl_database(tmp_path: Path, rows: list[dict[str, str]]) -> Path:
 
 
 def _source(
-    tmp_path: Path, records_dir: Path, split: str = "train", ptbxl_rows: list[dict[str, str]] | None = None
+    tmp_path: Path, records_dir: Path, split: Split = Split.TRAIN, ptbxl_rows: list[dict[str, str]] | None = None
 ) -> EcgQaCotSource:
     # Recreate what download() produces: a records500/<bucket>/ tree copied from the synthesized records,
     # a ptbxl_database.csv, an answers CSV, and a CoT CSV. All fixture rows go in one split.
@@ -232,7 +232,7 @@ def test_each_question_is_an_answer_task_on_its_recording(tmp_path, records_dir)
 
 
 def test_records_and_tasks_carry_their_split(tmp_path, records_dir):
-    dataset = EcgQaCotConnector().convert([_source(tmp_path, records_dir, split="validation")])
+    dataset = EcgQaCotConnector().convert([_source(tmp_path, records_dir, split=Split.VALIDATION)])
     for record in dataset.records:
         assert [ann.value for ann in record.annotations if ann.key == "split"] == ["validation"]
     assert {task.split for task in dataset.iter_tasks()} == {Split.VALIDATION}
