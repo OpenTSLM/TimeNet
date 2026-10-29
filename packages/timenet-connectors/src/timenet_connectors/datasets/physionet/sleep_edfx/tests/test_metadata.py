@@ -7,6 +7,7 @@ from timenet.errors import TimeFValidationError
 from timenet.types import US_PER_S
 from timenet_connectors.datasets.physionet.sleep_edfx import metadata
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
+from timenet_connectors.demographics import Sex
 
 
 # An invented recording id. It keeps the shape of a real id: three study characters, two subject
@@ -81,22 +82,22 @@ def test_a_start_moment_that_names_a_zone_raises():
 
 
 def test_two_readings_that_agree_give_no_note():
-    assert metadata.build_demographics_note("X F X Female_44yr", 44, "F") is None
+    assert metadata.build_demographics_note("X F X Female_44yr", 44, Sex.FEMALE) is None
 
 
 def test_a_header_with_no_second_reading_gives_no_note():
-    assert metadata.build_demographics_note("X X X X", 44, "F") is None
+    assert metadata.build_demographics_note("X X X X", 44, Sex.FEMALE) is None
 
 
 def test_a_sex_that_disagrees_is_recorded():
-    note = metadata.build_demographics_note("X M X Male_44yr", 44, "F")
+    note = metadata.build_demographics_note("X M X Male_44yr", 44, Sex.FEMALE)
     assert note is not None
     assert note.key == "demographics_note"
     assert "F" in str(note.value)
 
 
 def test_a_note_gives_both_readings():
-    note = metadata.build_demographics_note("X M X Male_57yr", 58, "F")
+    note = metadata.build_demographics_note("X M X Male_57yr", 58, Sex.FEMALE)
     assert note is not None
     assert "57" in str(note.value)
     assert "58" in str(note.value)

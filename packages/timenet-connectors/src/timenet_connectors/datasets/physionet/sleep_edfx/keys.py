@@ -4,7 +4,10 @@ An annotation key and a task question both reach a consumer as strings, and seve
 state the same ones. They are named here so that a rename cannot leave one site behind.
 """
 
+from collections.abc import Mapping
 from enum import StrEnum
+
+from timenet_connectors.demographics import Sex
 
 
 class AnnotationKey(StrEnum):
@@ -44,3 +47,8 @@ class Condition(StrEnum):
 
     PLACEBO = "placebo"
     TEMAZEPAM = "temazepam"
+
+
+SEX_LETTERS: Mapping[Sex, str] = {Sex.FEMALE: "F", Sex.MALE: "M"}
+"""The letter this connector writes for each sex, as both subject tables' headers spell it: ``sex (F=1)`` and
+``M1/F2``. The tables decode into :class:`~timenet_connectors.demographics.Sex`, and this gives what is stored."""
