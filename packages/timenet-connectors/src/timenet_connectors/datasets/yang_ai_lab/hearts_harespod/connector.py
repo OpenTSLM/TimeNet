@@ -1,6 +1,6 @@
 """Expose the HARESPOD-derived HEARTS records as a taskless layer."""
 
-from timenet_connectors.datasets.yang_ai_lab.hearts.corpus import HeartsCorpusConnector
+from timenet_connectors.datasets.yang_ai_lab._hearts_corpora import HeartsCorpusConnector
 
 
 class HeartsHarespodConnector(HeartsCorpusConnector):
