@@ -18,6 +18,11 @@ from timenet_connectors.datasets.bash_lab.opensqa.release import ReleaseFile
 _GYROSCOPE = "Gyroscope:"
 _ACCELEROMETER = "Accelerometer:"
 _SUMMARY = "Summary:"
+_DERIVED_FEATURES = tuple(
+    f"{sensor} {feature}:"
+    for feature in ("moving average", "FFT", "minimum", "maximum", "median", "variance")
+    for sensor in ("Gyroscope", "Accelerometer")
+)
 _EXPECTED_ROLES = ("system", "user", "assistant")
 _SAMPLES = 60
 _SENSOR_AXES = 3
@@ -202,7 +207,7 @@ def _parse_user(
         accelerometer_raw, end = json.JSONDecoder().raw_decode(accelerometer_text)
     except json.JSONDecodeError as exc:
         raise TimeFFormatError(f"{location}: invalid embedded sensor JSON") from exc
-    caption = accelerometer_text[end:].strip()
+    caption = _without_derived_features(accelerometer_text[end:], location).strip()
     if not summary or not caption:
         raise TimeFFormatError(f"{location}: summary and embedded SensorCaps completion must be non-empty")
     return (
@@ -211,6 +216,36 @@ def _parse_user(
         _sensor(accelerometer_raw, name="accelerometer", location=location),
         caption,
     )
+
+
+def _without_derived_features(text: str, location: str) -> str:
+    """Remove the derived sensor features that the v2 rows put before the caption.
+
+    The v2 rows give twelve features of the two sensors as NumPy text, such as the moving average
+    and the FFT. The features come from the same sensor values as the signals, and they are not a
+    part of the caption. The variance of the accelerometer is the last feature, and the caption
+    starts after its array.
+
+    Returns:
+        The text after the features, or the same text if it does not start with the features.
+
+    Raises:
+        TimeFFormatError: If the features are incomplete, out of order, or the last array is not
+            flat.
+    """
+    if not text.lstrip().startswith(_DERIVED_FEATURES[0]):
+        return text
+    at = 0
+    for label in _DERIVED_FEATURES:
+        at = text.find(label, at)
+        if at < 0:
+            raise TimeFFormatError(f"{location}: derived sensor features are incomplete or out of order")
+        at += len(label)
+    array = text[at:].lstrip()
+    end = array.find("]")
+    if not array.startswith("[") or end < 0 or "[" in array[1:end]:
+        raise TimeFFormatError(f"{location}: {_DERIVED_FEATURES[-1]} must be one flat array")
+    return array[end + 1 :]
 
 
 def _sensor(raw: Any, *, name: str, location: str) -> tuple[tuple[float, float, float], ...]:
