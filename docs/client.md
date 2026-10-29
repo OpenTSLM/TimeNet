@@ -77,19 +77,41 @@ The client provides these discovery methods:
 `search()` accepts filters for free text, domains, task classes, licenses, Signal specifications,
 dataset IDs, and tags. See [Registry search](registry.md#search) for their matching rules.
 
-## Load or download
+## Open, load, or download
 
-`load()` returns a `TimeFDataset`. The hierarchy is in memory, but each Signal keeps a lazy handle
-to its stored values.
+`open()` returns a [`TimeFReader`](timef-reader.md) for one version. Opening reads the manifest,
+not the catalog or any value. The reader's reads build Records and tasks whose stored values stay
+in storage until something reads them, unless a
+[load plan](timef-reader.md#loading-values-at-read-time) loads them. Close the reader after use, or
+use it as a context manager:
 
 ```python
-dataset = client.load("timenet/hello-world")
-signal = dataset.records[0].signals[0]
-window = signal.read_steps(0, 100)
+with client.open("timenet/hello-world") as reader:
+    dataset = reader.read()
+    signal = dataset.records[0].signals[0]
+    # Reads only the chunks that cover steps 0 to 100.
+    window = signal.read_steps(0, 100)
 ```
 
-For a local registry, the reader opens the version in place. If the version is missing, `load()` can
-build it from an installed connector.
+`load()` opens the version, reads it with every value loaded, and closes the reader. The dataset
+needs no storage afterwards:
+
+```python
+from timenet.reader import LoadPlan
+
+dataset = client.load("timenet/hello-world")
+
+# The same, spelled out:
+with client.open("timenet/hello-world") as reader:
+    dataset = reader.read(load=LoadPlan.ALL_EAGER)
+```
+
+`load()` keeps every Signal array, time offset, and text value in memory. For a large dataset, use
+`open()` and read what you need, such as one task with `reader.get()` or the tasks' text alone with
+a load plan.
+
+For a local registry, the reader opens the version in place. If the version is missing, `open()` and
+`load()` can build it from an installed connector.
 
 ```python
 dataset = TimeNet(".timenet-registry").load(
@@ -101,9 +123,8 @@ dataset = TimeNet(".timenet-registry").load(
 Set `auto_build=False` to report a missing local version without starting a build. Remote registries
 never run connector code.
 
-For an HTTP registry, `load()` downloads the complete version into `TIMENET_STORAGE` first. A later
-load reuses that committed copy. An S3 registry reads in place unless the storage directory already
-contains a complete copy.
+An HTTP or S3 registry reads from a complete copy of the version in `TIMENET_STORAGE` if one exists,
+and otherwise reads the remote files by range, as each read needs them.
 
 `download()` always copies the complete version into local storage:
 
@@ -122,27 +143,30 @@ client.get("chengsenwang/tsqa@1.0.0")
 client.load("chengsenwang/tsqa@latest")
 ```
 
-The `get`, `download`, `load`, and `load_torch` methods also accept `version=`. Do not supply a
-version in both places.
+The `get`, `download`, `open`, `load`, and `open_torch` methods also accept `version=`. Do not
+supply a version in both places.
 
-## Load for PyTorch
+## Open for PyTorch
 
-`load_torch()` returns a read-only `torch.utils.data.Dataset`. Install the `torch` extra before you
-use it.
+`open_torch()` returns a read-only `torch.utils.data.Dataset`. Install the `torch` extra before you
+use it. It reads through `open()`, one batch of records and their tasks at a time, so the dataset
+does not have to fit in memory. The view holds an open reader. Close the view with `close()`, or
+use it in a `with` block.
 
 ```python
 from timenet.client import TimeNet
 from timenet.types import read_value, read_values
 
-dataset = TimeNet(".timenet-registry").load_torch("timenet/hello-world")
-item = dataset[0]
+client = TimeNet(".timenet-registry")
+with client.open_torch("timenet/hello-world") as view:
+    item = view[0]
 
-signal = item["series"][0]
-mask = item["series_masks"][0]
-task = item["tasks"][0]
-# read_value reads a text handle and passes other values, None included,
-# through unchanged; read_values does the same for each target.
-print(read_value(task.prompt), read_values(task.targets))
+    signal = item["series"][0]
+    mask = item["series_masks"][0]
+    task = item["tasks"][0]
+    # read_value reads a text handle and passes other values, None included,
+    # through unchanged; read_values does the same for each target.
+    print(read_value(task.prompt), read_values(task.targets))
 ```
 
 Each item also contains the int `record_id` and record-level `annotations`. Signal lengths and

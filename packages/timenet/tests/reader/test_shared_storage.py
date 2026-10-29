@@ -528,6 +528,19 @@ def test_sources_root_opens_a_child_outside_the_registry_layout(tmp_path):
     assert _reports(loose, sources_root=tmp_path / "registry") == _reports(child_dir)
 
 
+def test_reader_open_passes_sources_root_on(tmp_path):
+    _, child_dir = _parent_and_child(tmp_path / "registry")
+    loose = tmp_path / "loose"
+    shutil.copytree(child_dir, loose)
+    with pytest.raises(TimeFValidationError, match=r"open it from <root>/test/c/1\.0\.0 or pass sources_root="):
+        TimeFReader.open(loose)
+    with TimeFReader.open(loose, sources_root=tmp_path / "registry") as reader:
+        (record,) = reader.read().records
+        # The values and the report text come from the parent's payload files.
+        assert record.signals[0].to_numpy().tolist() == [0.0, 1.0, 2.0]
+        assert _text(record.annotations[0].value) == "Parent report. " * 300
+
+
 def test_a_release_without_sources_opens_from_any_directory(tmp_path):
     parent_dir, _ = _parent_and_child(tmp_path / "registry")
     shutil.copytree(parent_dir, tmp_path / "anywhere")
