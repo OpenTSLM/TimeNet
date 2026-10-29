@@ -1,4 +1,4 @@
-"""Task browsing uses public iterators, explicit versions, and request-owned readers."""
+"""Task browsing uses projected queries, explicit versions, and request-owned readers."""
 
 from threading import get_ident
 from unittest.mock import MagicMock
@@ -7,7 +7,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from timenet.dataset import Signal
-from timenet.errors import TimeNetDownloadError
+from timenet.errors import TimeFFormatError, TimeNetDownloadError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
 from timenet.testing import make_dataset
@@ -218,30 +218,45 @@ def test_task_authentication_precedes_opening(task_registry, monkeypatch, path):
     ("route", "outcome"),
     [
         (("/api/v1/tasks", {"limit": 1}), (None, 200)),
+        (("/api/v1/task", {"task_id": "page"}), (None, 200)),
+        (("/api/v1/task", {"task_id": 999_999}), (None, 404)),
+        (("/api/v1/tasks", {}), ("query", 500)),
+        (("/api/v1/task", {"task_id": "page"}), ("query", 500)),
         (("/api/v1/task", {"task_id": "page"}), ("projection", 500)),
     ],
 )
-def test_reader_and_iterator_cleanup_on_same_worker(task_registry, task_dataset, monkeypatch, route, outcome):
+def test_reader_queries_and_cleanup_on_same_worker(task_registry, task_dataset, monkeypatch, route, outcome):
     path, params = route
     failure, expected = outcome
     if params == {"task_id": "page"}:
         params = {"task_id": _task_id(task_dataset, "page")}
     events = []
-    yielded = []
+    queries = []
 
     class TrackingReader(TimeFReader):
         def __init__(self, version):
             super().__init__(version)
             events.append(("open", get_ident()))
 
+        def read_task_table(self, *args, **kwargs):
+            events.append(("query", get_ident()))
+            queries.append(kwargs)
+            if failure == "query":
+                raise TimeFFormatError("private /server/path")
+            return super().read_task_table(*args, **kwargs)
+
+        def get(self, kind, id, **kwargs):
+            events.append(("query", get_ident()))
+            queries.append(id)
+            if failure == "query":
+                raise TimeFFormatError("private /server/path")
+            return super().get(kind, id, **kwargs)
+
         def iter_tasks(self, *args, **kwargs):
-            try:
-                for task in super().iter_tasks(*args, **kwargs):
-                    yielded.append(task.id)
-                    events.append(("yield", get_ident()))
-                    yield task
-            finally:
-                events.append(("iterator closed", get_ident()))
+            pytest.fail("viewer must not scan hydrated tasks")
+
+        def _all_records(self):
+            pytest.fail("viewer must not hydrate all records")
 
         def close(self):
             events.append(("reader closed", get_ident()))
@@ -255,13 +270,17 @@ def test_reader_and_iterator_cleanup_on_same_worker(task_registry, task_dataset,
     )
     response = client.get(path, params={**IDENTITY, **params}, headers=HEADERS)
     assert response.status_code == expected
-    assert events[-2][0] == "iterator closed"
+    assert events[-2][0] == "query"
     assert events[-1][0] == "reader closed"
     assert len({thread for _, thread in events}) == 1
     if params == {"limit": 1}:
-        assert len(yielded) == 2
-    if "task_id" in params:
-        assert yielded[-1] == int(params["task_id"])
+        assert queries == [
+            {"split": None, "columns": ("task_id", "task_type", "split", "prompt"), "offset": 0, "limit": 2}
+        ]
+    if "task_id" in params and expected != 404:
+        assert queries == [int(params["task_id"])]
+    if failure == "query":
+        assert "/server/path" not in response.text
 
 
 @pytest.mark.parametrize("path", ["/api/v1/tasks", "/api/v1/task"])
