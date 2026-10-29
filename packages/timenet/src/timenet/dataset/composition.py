@@ -1,7 +1,7 @@
 """Copy selected parent Records, Signals, and tasks into a child dataset, sharing their stored values."""
 
 from collections import deque
-from collections.abc import Container, Hashable, Iterable, Iterator
+from collections.abc import Container, Hashable, Iterable, Iterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, TypeAlias
@@ -42,7 +42,8 @@ child, so no rule derives its ID from the parent ID. An import looks up a parent
 it finds the copy by its child ID among the objects of the dataset. If the dataset no longer holds
 the copy, the import copies the object again. The map holds plain IDs, and ``dict(...)`` copies it.
 The writer stores each entry whose copy the dataset holds in the ``imported_objects`` table. A
-dataset that a reader reads back from storage gets these entries back.
+dataset that a reader reads back from storage gets these entries back. An edit that builds a new
+dataset gives it a copy of the map, without the entries of the copies that the edit removes.
 """
 
 
@@ -125,6 +126,23 @@ def _fits(annotation: Annotation, signals: tuple[Signal, ...], owner: str, time_
     except TimeFValidationError:
         return False
     return True
+
+
+def _span_on(span: Span, signals: Mapping[EntityId, Signal]) -> Span:
+    """Return a span with each Signal that it names replaced by the Signal of the same ID in ``signals``.
+
+    Args:
+        span: A task's scope or span target.
+        signals: The Signals to point at, by ID.
+
+    Returns:
+        The new span, or ``span`` itself if it names no Signal.
+    """
+    if isinstance(span, StepSpan):
+        return replace(span, time_series=signals[span.time_series.id])
+    if isinstance(span, TimeSpan) and span.time_series is not None:
+        return replace(span, time_series=tuple(signals[signal.id] for signal in span.time_series))
+    return span
 
 
 def _hierarchy(record: Record) -> list[tuple[Record | Source, dict[str, tuple]]]:
@@ -693,26 +711,13 @@ class _TaskCopy:
         if isinstance(value, Annotation):
             return self._annotation(value)
         if isinstance(value, Span):
-            return self._span(value)
+            return _span_on(value, self.importer.signals)
         if _holds_reference(value):
             raise TimeFValidationError(
                 f"{type(self.task).__name__}.{name} holds a {type(value).__name__} that references objects; "
                 "an import remaps references only inside tuples"
             )
         return deepcopy(value)
-
-    def _span(self, span: Span) -> Span:
-        """Return a task span, with each Signal that it names replaced by its copy.
-
-        Returns:
-            The span for the copy.
-        """
-        signals = self.importer.signals
-        if isinstance(span, StepSpan):
-            return replace(span, time_series=signals[span.time_series.id])
-        if isinstance(span, TimeSpan) and span.time_series is not None:
-            return replace(span, time_series=tuple(signals[signal.id] for signal in span.time_series))
-        return span
 
     def _annotation(self, original: Annotation) -> Annotation:
         """Return the child's copy of a parent annotation that a task references.
