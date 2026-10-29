@@ -69,6 +69,8 @@ class Video(NamedTuple):
 
     path: Path
     experiment: Experiment
+    first_frame: int
+    """The video frame of the first skeleton row. Tracking can start after the video does."""
     n_frames: int
     period_us: int
     """The time from one frame to the next, as the file's frame rate states it."""
@@ -115,8 +117,8 @@ def read_video(path: Path) -> Video:
 
     Raises:
         TimeFFormatError: If ``experiment_info`` is malformed, the units aren't micrometers and seconds, the
-            skeletons aren't frames of 49 x and y points, or the per-frame table doesn't number the same
-            frames 0 to n - 1, one worm's.
+            skeletons aren't frames of 49 x and y points, or the per-frame table doesn't number one worm's
+            consecutive frames, one per skeleton.
     """
     h5py = _h5py()
     with h5py.File(path, "r") as handle:
@@ -134,12 +136,14 @@ def read_video(path: Path) -> Video:
             if (unit := _attribute(table.attrs, name, context)) != expected:
                 raise TimeFFormatError(f"{context}: {name} is {unit!r}, expected {expected!r}")
         period = period_us(float(_attribute(table.attrs, "fps", context)), context)
+        # The video frame of each skeleton row. Tracking can start late or end early, but never skips.
         frames = table["timestamp"]
-        if len(frames) != n_frames or not np.array_equal(frames, np.arange(n_frames)):
-            raise TimeFFormatError(f"{context}: its frames aren't the skeletons' 0 to {n_frames - 1}")
+        first_frame = int(frames[0]) if len(frames) else 0
+        if len(frames) != n_frames or not np.array_equal(frames, np.arange(first_frame, first_frame + n_frames)):
+            raise TimeFFormatError(f"{context}: its frames aren't {n_frames} consecutive frames, one per skeleton")
         if len(np.unique(table["worm_index"])) != 1:
             raise TimeFFormatError(f"{context}: more than one worm")
-    return Video(path=path, experiment=experiment, n_frames=n_frames, period_us=period)
+    return Video(path=path, experiment=experiment, first_frame=first_frame, n_frames=n_frames, period_us=period)
 
 
 def read_skeletons(video: Video) -> np.ndarray:

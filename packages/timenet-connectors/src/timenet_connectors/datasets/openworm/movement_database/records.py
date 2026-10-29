@@ -89,7 +89,9 @@ def build_record(indexed: IndexedVideo, video: Video, fold: int) -> Record:
     signal = Signal.from_loader(
         name=SIGNAL_NAME,
         spec=_SPEC,
-        time_axis=RegularAxis(period_us=Fraction(video.period_us)),
+        # The video's frame cadence, starting at the frame tracking started on, so each skeleton keeps
+        # its time from the start of the video.
+        time_axis=RegularAxis(period_us=Fraction(video.period_us)).at_index(video.first_frame),
         n_values=video.n_frames,
         loader=partial(load_skeletons, video),
     )

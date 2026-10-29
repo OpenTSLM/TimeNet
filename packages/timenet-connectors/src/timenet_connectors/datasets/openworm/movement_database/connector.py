@@ -1,6 +1,6 @@
 """Convert the Open Worm Movement Database's single-worm videos into lazy Records and the authors' strain tasks.
 
-Each video of the authors' benchmark becomes a Record whose 98 skeleton signals reread its features file on
+Each video of the authors' benchmark becomes a Record whose skeleton signal rereads its features file on
 demand, and one ClassificationTask names its strain. README.md explains how this follows the authors.
 
 Metadata is provenance and never model input.
@@ -36,7 +36,7 @@ class OpenWormMovementConnector(BaseConnector[DownloadedRelease]):
     """What the pinned benchmark holds, which every build checks."""
 
     async def download_async(self, cache_dir: Path) -> list[DownloadedRelease]:
-        """Fetch the authors' folds and classes, and every indexed video's features file, and check each digest.
+        """Fetch the authors' benchmark files, and every indexed video's features file, and check each digest.
 
         A run that stops part way, for example on Zenodo's rate limit, keeps the files it finished, and the next
         run downloads only the rest.
@@ -46,10 +46,11 @@ class OpenWormMovementConnector(BaseConnector[DownloadedRelease]):
         """
         benchmark_dir = cache_dir / "benchmark"
         videos_dir = cache_dir / "videos"
-        folds_path, classes_path = await download_files(
+        folds_path, classes_path, video_table_path = await download_files(
             [
                 Artifact(benchmark.FOLDS_URL, benchmark_dir / "SWDB_fold_dict.p", sha256=benchmark.FOLDS_SHA256),
                 Artifact(benchmark.CLASSES_URL, benchmark_dir / "SWDB_straindict.p", sha256=benchmark.CLASSES_SHA256),
+                Artifact(benchmark.VIDEO_TABLE_URL, benchmark_dir / "SW_info.csv", sha256=benchmark.VIDEO_TABLE_SHA256),
             ]
         )
         videos = read_index(self.INDEX)
@@ -58,7 +59,14 @@ class OpenWormMovementConnector(BaseConnector[DownloadedRelease]):
         )
         for video, path in zip(videos, paths, strict=True):
             release.check_md5(path, video.md5)
-        return [DownloadedRelease(folds_path=folds_path, classes_path=classes_path, videos_dir=videos_dir)]
+        return [
+            DownloadedRelease(
+                folds_path=folds_path,
+                classes_path=classes_path,
+                video_table_path=video_table_path,
+                videos_dir=videos_dir,
+            )
+        ]
 
     def convert(self, raw_refs: list[DownloadedRelease]) -> TimeFDataset:
         """Convert each video into one lazy Record, and stream one strain task per video.

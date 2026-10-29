@@ -14,9 +14,10 @@ dataset_id: openworm/movement-database
 dataset_version: 1.0.0
 name: Open Worm Movement Database (single-worm strains)
 description: >-
-  Fifteen-minute videos of single C. elegans worms, each tracked as a 49-point skeleton per frame,
-  from 365 strains: mutants of N2, wild isolates, and N2 males. The task is to name the strain from
-  the worm's posture over time.
+  Fifteen-minute videos of single worms, each tracked as a 49-point skeleton per frame, in 365
+  classes: 364 strains (mutants of N2 and wild isolates of C. elegans, and one C. briggsae
+  isolate), with N2 hermaphrodites and males apart. The task is to name the class from the worm's
+  posture over time.
 license: CC-BY-4.0
 source_url: https://zenodo.org/communities/open-worm-movement-database
 citation: >-

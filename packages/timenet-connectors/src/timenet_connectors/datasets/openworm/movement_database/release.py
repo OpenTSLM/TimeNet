@@ -33,10 +33,11 @@ TIME_UNITS = "seconds"
 
 @dataclass(frozen=True)
 class DownloadedRelease:
-    """What ``download`` fetched: the authors' two benchmark files, and the directory of features files."""
+    """What ``download`` fetched: the authors' three benchmark files, and the directory of features files."""
 
     folds_path: Path
     classes_path: Path
+    video_table_path: Path
     videos_dir: Path
     """One features file per video, named by its Zenodo record, such as ``1019082.hdf5``."""
 

@@ -2,8 +2,9 @@
 
 `openworm/movement-database` holds the strain benchmark that Javer et al. built on the Open Worm
 Movement Database ([Javer et al., ECCV Workshops 2018][paper]): 10,476 fifteen-minute videos of
-single *C. elegans* worms, each tracked as a 49-point skeleton per frame, and the task of naming the
-worm's strain from its posture over time. The database itself is described in
+single worms, each tracked as a 49-point skeleton per frame, and the task of naming the worm's
+strain from its posture over time. The worms are *C. elegans*, except the 56 videos of ED3054, a
+*C. briggsae* wild isolate. The database itself is described in
 [Javer et al., Nature Methods 2018][database].
 
 The connector reads two sources:
@@ -12,9 +13,10 @@ The connector reads two sources:
   video, under CC BY 4.0. Each record's `_features.hdf5` is pinned by the MD5 Zenodo publishes for
   it, listed in `zenodo_index.csv.gz`.
 - **The benchmark**, from the authors' repository [ver228/worm-ts-classification][code] at
-  `6d4d6b6`: its `SWDB_fold_dict.p` (each video's fold) and `SWDB_straindict.p` (the classes),
-  pinned by SHA-256. The repository states no license; the connector downloads these two files at
-  build time and copies no code.
+  `6d4d6b6`: its `SWDB_fold_dict.p` (each video's fold), `SWDB_straindict.p` (the classes) and
+  `scripts/results/SW_info.csv` (each video's class, sex and fold), pinned by SHA-256. The
+  repository states no license; the connector downloads these three files at build time and
+  copies no code.
 
 [paper]: https://doi.org/10.1007/978-3-030-11024-6_35
 [database]: https://doi.org/10.1038/s41592-018-0112-1
@@ -40,10 +42,11 @@ The features file holds:
   tail, each `x` and `y` in micrometers, in the plate's coordinates. A frame the tracker gave no
   skeleton, or whose skeleton its filter rejected, is NaN in all 98 values. Reading a video checks
   that no frame is partly NaN.
-- **`features_timeseries`**, one row per frame. Its `timestamp` column numbers the frames 0 to
-  n − 1 with no gap, and its attributes give `fps`, `xy_units: micrometers` and
-  `time_units: seconds`. The frame rate is one over a whole number of 0.1 ms, such as 33.3 ms
-  (30.03 fps) or 38.9 ms (25.71 fps), stored as a float.
+- **`features_timeseries`**, one row per skeleton row. Its `timestamp` column is the video frame
+  of each row: consecutive frames, which usually start at 0. Tracking can start late, at frame 872
+  (26.4 s) in record 1011565 and frame 83 in record 1012128, and can end before the video does.
+  Its attributes give `fps`, `xy_units: micrometers` and `time_units: seconds`. The frame period
+  runs from 30.3 to 54.7 ms; it is a whole number of microseconds, stored as its inverse, a float.
 - Contours, per-frame features, events and per-video summaries, which the benchmark doesn't use.
 
 ## The benchmark, as the authors define it
@@ -52,17 +55,21 @@ The paper (section 2) restricts the database to "15 minutes videos of young adul
 where at least 50% of the frames were successfully skeletonized", which gives "10476 videos of
 individual worms divided between 365 different classes". A class is a strain, "except N2 where
 hermaphrodites and males are considered as separated classes", and "only classes that have at
-least six videos" are kept. The authors' code publishes the outcome, not the selection:
+least six videos" are kept. The authors' repository publishes the outcome of this selection:
 
 - `SWDB_fold_dict.p` maps each of the 10,476 base names to fold 0, 1 or 2.
   `flow_helper.save_folds_dict` deals each strain's videos into the three folds in turn.
 - `SWDB_straindict.p` maps each of the 365 classes, such as `AQ1031_XX` or `N2_XO`, to its index,
   in sorted order. `XX` is a hermaphrodite, `XO` a male; only N2 has an `XO` class.
+- `scripts/results/SW_info.csv` lists the same 10,476 videos with their class (in a column named
+  `strain`), sex, fold, frame rate, duration and more. The connector takes each target from it,
+  and checks that its fold equals `SWDB_fold_dict.p` and its sex and class equal the Zenodo
+  record's.
 - `SkelEmbeddingsFlow` tests on `fold_n_test = 0` by default, and `Trainer` never changes it. The
   paper: "Two thirds of the data are used for training and the rest for testing".
 
-The selection itself, the database query and `strains2process.csv`, isn't published, so the folds
-are the definition of the benchmark's videos.
+The selection itself, the database query and `strains2process.csv`, isn't published, so these
+files are the definition of the benchmark's videos.
 
 ## The TimeNet dataset
 
@@ -72,7 +79,9 @@ One Record per video of the folds: 10,476. Each has one Source, `Tierpsy Tracker
 signal, `skeleton`: per frame, a `(49, 2)` float32 tensor in micrometers, whose dimensions are
 `point` (0 is the head, 48 the tail) and `coordinate` (0 is `x`, 1 is `y`), exactly as the file
 stores it. A frame without a skeleton is a null timestep, so a reader sees the gap; the build fills
-nothing. The axis is regular at the file's frame period in whole microseconds.
+nothing. The axis is regular at the file's frame period in whole microseconds, and starts at the
+video frame tracking started on (`start_index`), so every skeleton keeps its time from the start
+of the video. A track that ends early simply has fewer values.
 
 `start_time` is the experiment's `timestamp`, which carries its UTC offset. The one Record
 annotation is `ventral_side`, `clockwise` or `anticlockwise`, or `unknown` for 7 videos: the
@@ -108,8 +117,8 @@ One `ClassificationTask` per video:
 | `target_schema` | `strain_vocabulary` |
 | `split` | `test` for fold 0 (3,609 videos), `train` for folds 1 and 2 (3,488 and 3,379) |
 
-There is no scope: the authors test each video on all its frames. There is no prompt: the benchmark
-asks no question in words.
+There is no scope: the authors classify a whole video, by joining all its trajectory pieces of at
+least 250 resampled frames. There is no prompt: the benchmark asks no question in words.
 
 ### What the build leaves out
 
@@ -121,9 +130,11 @@ asks no question in words.
 - **The inputs the paper compares.** `collect_data/embeddings_helper.py` turns skeletons into 48
   tangent angles (`_h_angles`), or 6 eigenworms by projecting the angles onto the first rows of
   `collect_data/pca_components.npy` (`_h_eigenworms`). Both are functions of the stored skeletons.
-- **Training-time filters.** `SkelEmbeddingsFlow` drops trajectory pieces under 250 frames and
-  strains left with fewer than three videos. These act on the unpublished resampled files, so the
-  build keeps every folded video.
+- **The authors' filters.** `SkelEmbeddingsFlow` drops trajectory pieces under 250 frames, then
+  videos left with none, then strains left with fewer than three videos. It does so before it
+  divides train from test, so the filters can also remove test videos. They act on the
+  unpublished resampled files, so the build keeps every folded video, and the authors' evaluated
+  test set may be smaller than fold 0.
 - The masked videos, WCON files, contours, Tierpsy features and the experiments' other facts
   (lab, food, who, tracker), which the benchmark doesn't use. Each Record's Zenodo record has them.
 
@@ -134,25 +145,28 @@ per video (Table 1: 58.44 % top-1 with angles, 49.40 % with eigenworms). Read ea
 ## How the connector builds it
 
 ```text
-download   SWDB_fold_dict.p, SWDB_straindict.p ── sha256 ──► benchmark/
+download   SWDB_fold_dict.p, SWDB_straindict.p,
+           SW_info.csv ── sha256 ──► benchmark/
            zenodo_index.csv.gz ──► IndexedVideo per video
              each _features.hdf5 ── md5 ──► videos/<record>.hdf5
 
 parse      SWDB_fold_dict.p ──► folds: base name → 0, 1 or 2
            SWDB_straindict.p ──► classes, in index order
+           SW_info.csv ──► AuthorsVideo: class, sex, fold
            zenodo_index.csv.gz ──► IndexedVideo
                                      base_name, record_id, md5,
                                      size, strain, sex
-             join on base name with the folds
+             join on base name with the folds and SW_info
 
 for each   <record>.hdf5 ── read_video ──► Video
 IndexedVideo                                 experiment (base name,
                                              strain, sex, ventral side,
-                                             timestamp), n_frames,
-                                             period_us
+                                             timestamp), first_frame,
+                                             n_frames, period_us
            build_record(IndexedVideo, Video, fold) ──► Record
              one lazy skeleton signal
-           class_of(strain, sex) ──► target
+           AuthorsVideo.strain, checked against the
+             fold and class_of(strain, sex) ──► target
 
 populate   dataset annotations, then the Records, then the task stream:
            StrainTask per video ──► ClassificationTask
@@ -165,7 +179,7 @@ write      load_skeletons(Video): the skeletons, null where NaN
 | `connector.py` | The download, the provenance annotations, and `convert` |
 | `release.py` | The Zenodo files: their URL, layout, units, MD5 check, and the pinned counts |
 | `index.py` | The pinned index of the videos' Zenodo records |
-| `benchmark.py` | What the authors fix: their repository, folds, classes and test fold |
+| `benchmark.py` | What the authors fix: their repository, folds, classes, video table and test fold |
 | `vocabulary.py` | The closed sets: sexes and ventral sides |
 | `keys.py` | Every annotation key the connector writes |
 | `videos.py` | One features file: `Experiment`, `Video`, `read_video`, `read_skeletons` |
@@ -193,7 +207,20 @@ run can stop with HTTP 429; a rerun keeps the files already checked and fetches 
 - **Model selection on the test fold.** `Trainer` keeps `model_best.pth.tar` by the loss on fold
   0, the fold it reports, and no fold is held out for validation. No task is `validation`, and a
   fair comparison selects models on a part of the training folds.
-- **Batch effects.** A strain's videos cluster on a few recording days: a class's median 22 videos come from a median of 3 recording days,
-  and a day holds a median of 8 classes. The authors'
-  `merge_by_week` option groups videos by week to study this. `start_time` carries the day, so a
-  model shown it can learn the batch, not the behaviour.
+- **The same recording twice.** Three recordings were uploaded twice, under misspelled base names,
+  and the folds keep both copies. Each pair has the same strain, start time, tracker and missing
+  frames, and 92.5 % to 99.96 % of their frames are identical. Two pairs cross the split:
+
+  | Records | Strain | Base names | Folds |
+  | --- | --- | --- | --- |
+  | 1011607, 1011609 | HH27 | `unc-127 (hs13)V …`, `nc-127 (hs13)V …` | 0 (test), 1 (train) |
+  | 1011961, 1011965 | ZZ15 | `acr-13or lev-8 (x15)X …`, `lev-8 (x15)X …` | 0 (test), 1 (train) |
+  | 1021931, 1021991 | CB4371 | `unc-118 (e2331)X …`, `nc-118 (e2331)X …` | 1, 2 (both train) |
+
+  The build keeps the authors' folds as they are. A stricter evaluation drops the train copy of
+  the first two pairs.
+- **Batch effects.** A strain's videos cluster on a few recording days: a class's median 22 videos
+  come from a median of 3 recording days, and a day holds a median of 8 classes. The authors'
+  `merge_by_week` option groups videos by week to study this. `start_time` carries the day, and
+  the metadata's base name often names the strain or gene, so a model shown either can learn the
+  label without the behaviour.

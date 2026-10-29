@@ -65,12 +65,13 @@ class _Video:
     skeletons: np.ndarray
     fold: int
     frames: tuple[int, ...] | None = None
-    """The per-frame table's ``timestamp`` column, by default 0 to n - 1."""
+    """The per-frame table's ``timestamp`` column: the video frame of each skeleton, by default 0 to n - 1."""
     xy_units: bytes = b"micrometers"
 
 
 # Three videos as the release writes them: a hermaphrodite mutant, an N2 male, and an N2 hermaphrodite.
-# Their frame rates are two that the release uses: 1 / 33.3 ms and 1 / 38.9 ms.
+# Their frame rates are two that the release uses: 1 / 33.3 ms and 1 / 38.9 ms. The male's tracking starts
+# at video frame 40, as some of the release's do.
 _VIDEOS = {
     "unc-1 (e580) on food L_2010_01_01__10_00_00___1___1": _Video(
         record_id=101,
@@ -91,6 +92,7 @@ _VIDEOS = {
         fps=1 / 0.0389,
         skeletons=_skeletons(5, seed=2),
         fold=1,
+        frames=(40, 41, 42, 43, 44),
     ),
     "N2 on food L_2011_02_03__13_00_00___3___3": _Video(
         record_id=103,
@@ -144,7 +146,30 @@ def _write_index(path: Path, videos_dir: Path) -> None:
         writer.writerows(rows)
 
 
-def _release(tmp_path: Path, *, folds=None, classes=None) -> DownloadedRelease:
+def _write_video_table(path: Path, rows: list[dict[str, str]]) -> None:
+    """Write ``SW_info.csv`` as the authors do: a pandas index, then columns, of which the connector reads four."""
+    columns = ["", "id", "base_name", "strain", "sex", "fps", "fold"]
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, columns)
+        writer.writeheader()
+        for index, row in enumerate(rows):
+            writer.writerow({"": str(index), "id": str(index + 6), "fps": "30.03", **row})
+
+
+def _table_rows() -> list[dict[str, str]]:
+    karyotypes = {"hermaphrodite": "XX", "male": "XO"}
+    return [
+        {
+            "base_name": base_name,
+            "strain": f"{video.strain}_{karyotypes[video.sex]}",
+            "sex": video.sex,
+            "fold": str(video.fold),
+        }
+        for base_name, video in _VIDEOS.items()
+    ]
+
+
+def _release(tmp_path: Path, *, folds=None, classes=None, table_rows=None) -> DownloadedRelease:
     videos_dir = tmp_path / "videos"
     videos_dir.mkdir(exist_ok=True)
     for base_name, video in _VIDEOS.items():
@@ -155,8 +180,12 @@ def _release(tmp_path: Path, *, folds=None, classes=None) -> DownloadedRelease:
     classes = {name: index for index, name in enumerate(_CLASSES)} if classes is None else classes
     folds_path.write_bytes(pickle.dumps(folds))
     classes_path.write_bytes(pickle.dumps(classes))
+    video_table_path = tmp_path / "SW_info.csv"
+    _write_video_table(video_table_path, _table_rows() if table_rows is None else table_rows)
     _write_index(tmp_path / "index.csv.gz", videos_dir)
-    return DownloadedRelease(folds_path=folds_path, classes_path=classes_path, videos_dir=videos_dir)
+    return DownloadedRelease(
+        folds_path=folds_path, classes_path=classes_path, video_table_path=video_table_path, videos_dir=videos_dir
+    )
 
 
 def _fixture_connector(tmp_path: Path) -> type[OpenWormMovementConnector]:
@@ -228,9 +257,18 @@ def test_a_frame_without_skeleton_is_a_null_timestep(tmp_path):
 
 def test_the_axis_is_regular_at_the_files_frame_period(tmp_path):
     dataset = _convert(tmp_path)
-    periods = {record_metadata(record).base_name: record.signals[0].time_axis for record in dataset.records}
-    assert periods["unc-1 (e580) on food L_2010_01_01__10_00_00___1___1"] == RegularAxis(period_us=Fraction(33_300))
-    assert periods["N2 male on food R_2011_02_03__12_00_00___2___2"] == RegularAxis(period_us=Fraction(38_900))
+    axes = {record_metadata(record).base_name: record.signals[0].time_axis for record in dataset.records}
+    assert axes["unc-1 (e580) on food L_2010_01_01__10_00_00___1___1"] == RegularAxis(period_us=Fraction(33_300))
+    assert axes["N2 on food L_2011_02_03__13_00_00___3___3"] == RegularAxis(period_us=Fraction(33_300))
+
+
+def test_a_track_that_starts_late_keeps_its_time_from_the_video_start(tmp_path):
+    dataset = _convert(tmp_path)
+    (male,) = (record for record in dataset.records if record_metadata(record).base_name.startswith("N2 male"))
+    axis = male.signals[0].time_axis
+    assert axis == RegularAxis(period_us=Fraction(38_900), start_index=40)
+    assert axis.time_offset_us(0) == 40 * 38_900
+    assert axis.time_offset_us(4) == 44 * 38_900
 
 
 def test_record_start_time_and_ventral_side_come_from_the_experiment(tmp_path):
@@ -330,6 +368,27 @@ def test_every_class_must_have_videos(tmp_path):
         _parse(tmp_path, _release(tmp_path, classes=classes))
 
 
+def test_the_target_is_the_authors_listed_class(tmp_path):
+    loader = _parse(tmp_path, _release(tmp_path))
+    assert sorted(task.target for task in loader.tasks()) == sorted(row["strain"] for row in _table_rows())
+
+
+@pytest.mark.parametrize(
+    ("field", "value"), [("strain", "N2_XX"), ("sex", "hermaphrodite"), ("fold", "2")], ids=["class", "sex", "fold"]
+)
+def test_the_authors_table_must_agree_with_the_folds_and_zenodo(tmp_path, field, value):
+    rows = _table_rows()
+    male = next(row for row in rows if row["base_name"].startswith("N2 male"))
+    male[field] = value
+    with pytest.raises(TimeFValidationError, match="authors' table states"):
+        _parse(tmp_path, _release(tmp_path, table_rows=rows))
+
+
+def test_the_authors_table_must_list_every_folded_video(tmp_path):
+    with pytest.raises(TimeFValidationError, match="authors' table lacks"):
+        _parse(tmp_path, _release(tmp_path, table_rows=_table_rows()[1:]))
+
+
 def test_counts_must_match_the_pinned_ones(tmp_path):
     release = _release(tmp_path)
     with pytest.raises(TimeFValidationError, match="pinned benchmark"):
@@ -340,8 +399,8 @@ def test_frames_must_be_numbered_without_gaps(tmp_path):
     release = _release(tmp_path)
     base_name, video = next(iter(_VIDEOS.items()))
     path = release.videos_dir / f"{video.record_id}.hdf5"
-    _write_features(path, base_name, replace(video, frames=(0, 1, 2, 4, 5, 6, 7)))
-    with pytest.raises(TimeFFormatError, match="frames"):
+    _write_features(path, base_name, replace(video, frames=(10, 11, 12, 14, 15, 16, 17)))
+    with pytest.raises(TimeFFormatError, match="consecutive frames"):
         read_video(path)
 
 

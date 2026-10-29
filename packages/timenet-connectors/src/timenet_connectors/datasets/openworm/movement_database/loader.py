@@ -10,9 +10,11 @@ from timenet.types import Annotation
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.openworm.movement_database.benchmark import (
     TEST_FOLD,
+    AuthorsVideo,
     class_of,
     read_classes,
     read_folds,
+    read_video_table,
 )
 from timenet_connectors.datasets.openworm.movement_database.index import IndexedVideo, read_index
 from timenet_connectors.datasets.openworm.movement_database.keys import AnnotationKey
@@ -48,17 +50,41 @@ def _check_video(indexed: IndexedVideo, video: Video) -> None:
         raise TimeFFormatError(f"{video.path}: the file states {found}, its Zenodo record {expected}")
 
 
-def _check_join(indexed_videos: tuple[IndexedVideo, ...], folds: dict[str, int]) -> None:
-    """Check that the index and the authors' folds name the same videos.
+def _check_join(
+    indexed_videos: tuple[IndexedVideo, ...], folds: dict[str, int], table: dict[str, AuthorsVideo]
+) -> None:
+    """Check that the index, the authors' folds and the authors' table name the same videos.
 
     Raises:
-        TimeFValidationError: If a folded video isn't indexed, or an indexed one isn't folded.
+        TimeFValidationError: If a folded video isn't indexed or listed in the table, or one is that isn't
+            folded.
     """
     indexed_names = {video.base_name for video in indexed_videos}
-    if indexed_names != set(folds):
-        missing = sorted(set(folds) - indexed_names)[:5]
-        extra = sorted(indexed_names - set(folds))[:5]
-        raise TimeFValidationError(f"the index lacks the folded videos {missing}, and adds {extra}")
+    for source, names in (("index", indexed_names), ("authors' table", set(table))):
+        if names != set(folds):
+            missing = sorted(set(folds) - names)[:5]
+            extra = sorted(names - set(folds))[:5]
+            raise TimeFValidationError(f"the {source} lacks the folded videos {missing}, and adds {extra}")
+
+
+def _authors_class(indexed: IndexedVideo, fold: int, listed: AuthorsVideo) -> str:
+    """Return a video's class as the authors' table states it, once its sources agree on the video.
+
+    Returns:
+        The class, such as ``N2_XO``.
+
+    Raises:
+        TimeFValidationError: If the table's fold differs from ``SWDB_fold_dict.p``, or its sex or class
+            differs from the video's Zenodo record.
+    """
+    found = (listed.fold, listed.sex, listed.strain)
+    expected = (fold, indexed.sex, class_of(indexed.strain, indexed.sex))
+    if found != expected:
+        raise TimeFValidationError(
+            f"{indexed.base_name!r}: the authors' table states fold, sex and class {found}, "
+            f"their folds and the Zenodo record {expected}"
+        )
+    return listed.strain
 
 
 class OpenWormDatasetLoader(DatasetLoader[StrainTask]):
@@ -85,7 +111,7 @@ class OpenWormDatasetLoader(DatasetLoader[StrainTask]):
         index: tuple[IndexedVideo, ...] | None = None,
         counts: PinnedCounts = PINNED_COUNTS,
     ) -> Self:
-        """Read the authors' folds and classes, and every video's header, and build one lazy Record per video.
+        """Read the authors' benchmark files and every video's header, and build one lazy Record per video.
 
         Args:
             refs: The one downloaded release.
@@ -96,8 +122,9 @@ class OpenWormDatasetLoader(DatasetLoader[StrainTask]):
             The loaded benchmark.
 
         Raises:
-            TimeFValidationError: If ``refs`` isn't one release, the index and the folds name different videos,
-                the videos' classes aren't the authors' classes, or the counts differ from ``counts``.
+            TimeFValidationError: If ``refs`` isn't one release, the index, the folds and the authors' table
+                name different videos or disagree on one, the videos' classes aren't the authors' classes, or
+                the counts differ from ``counts``.
         """
         releases = list(refs)
         if len(releases) != 1:
@@ -105,15 +132,16 @@ class OpenWormDatasetLoader(DatasetLoader[StrainTask]):
         (release,) = releases
         folds = read_folds(release.folds_path)
         classes = read_classes(release.classes_path)
+        table = read_video_table(release.video_table_path)
         indexed_videos = read_index() if index is None else index
-        _check_join(indexed_videos, folds)
+        _check_join(indexed_videos, folds, table)
         parsed = []
         for indexed in indexed_videos:
             video = read_video(release.videos_dir / indexed.file_name)
             _check_video(indexed, video)
             fold = folds[indexed.base_name]
             record = build_record(indexed, video, fold)
-            target = class_of(indexed.strain, indexed.sex)
+            target = _authors_class(indexed, fold, table[indexed.base_name])
             parsed.append(_ParsedVideo(record=record, fold=fold, target=target))
         targets = {video.target for video in parsed}
         if targets != set(classes):
