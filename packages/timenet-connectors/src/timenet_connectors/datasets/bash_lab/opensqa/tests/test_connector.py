@@ -10,7 +10,7 @@ from timenet.errors import TimeFFormatError
 from timenet.types import InputModality, Split, read_value, read_values
 from timenet_connectors.datasets.bash_lab.opensqa import connector as connector_module
 from timenet_connectors.datasets.bash_lab.opensqa.connector import OpenSqaConnector
-from timenet_connectors.datasets.bash_lab.opensqa.parser import OpenSqaFile, OpenSqaSource, qa_pairs
+from timenet_connectors.datasets.bash_lab.opensqa.parser import OpenSqaFile, OpenSqaSource, parse_row, qa_pairs
 from timenet_connectors.datasets.bash_lab.opensqa.release import (
     ANSWER_TASKS,
     CAPTION_TASKS,
@@ -22,12 +22,21 @@ from timenet_connectors.datasets.bash_lab.opensqa.release import (
 )
 
 
+# The v2 rows give derived features as NumPy text between the sensor values and the caption.
+_DERIVED_FEATURES = "".join(
+    f"{sensor} {feature}: [[ 1.0e-01  2.0e-01  3.0e-01]\n [ 4.0e-01  5.0e-01  6.0e-01]]\n"
+    for feature in ("moving average", "FFT", "minimum", "maximum", "median")
+    for sensor in ("Gyroscope", "Accelerometer")
+) + ("Gyroscope variance: [1.1e-05 5.5e-05\n 2.9e-05]\nAccelerometer variance: [6.2e-05 1.6e-05\n 2.1e-05]\n")
+
+
 def _messages(
     *,
     summary: str,
     assistant: str,
     gyroscope_value: float = 1.0,
     accelerometer_value: float = 2.0,
+    derived_features: str = "",
 ) -> dict[str, object]:
     gyroscope = [[gyroscope_value + axis for axis in range(3)] for _sample in range(60)]
     accelerometer = [[accelerometer_value + axis for axis in range(3)] for _sample in range(60)]
@@ -35,6 +44,7 @@ def _messages(
         f"Summary: {summary}\n"
         f"Gyroscope: {json.dumps(gyroscope)}\n"
         f"Accelerometer: {json.dumps(accelerometer)}\n"
+        f"{derived_features}"
         "Features: synthetic fixture features\nNarration: synthetic fixture caption"
     )
     return {
@@ -83,6 +93,7 @@ def _source(tmp_path: Path, *, mismatch: bool = False) -> OpenSqaSource:
                     "A2: There are sixty samples."
                 ),
                 gyroscope_value=1.5 if mismatch else 1.0,
+                derived_features=_DERIVED_FEATURES,
             )
         ],
     )
@@ -159,6 +170,13 @@ def test_fixture_round_trips_shared_record_values_and_tasks(tmp_path):
 def test_convert_rejects_disagreeing_v1_v2_sensor_windows(tmp_path):
     with pytest.raises(TimeFFormatError, match="sensor window differs"):
         OpenSqaConnector().convert([_source(tmp_path, mismatch=True)])
+
+
+def test_parser_rejects_incomplete_derived_features(tmp_path):
+    incomplete = _DERIVED_FEATURES[: _DERIVED_FEATURES.index("Accelerometer variance:")]
+    row = _messages(summary="v2 standing", assistant="", derived_features=incomplete)
+    with pytest.raises(TimeFFormatError, match="incomplete or out of order"):
+        parse_row(json.dumps(row).encode(), path=tmp_path / "v2.jsonl", index=0)
 
 
 def test_qa_parser_drops_truncated_questions_and_accepts_source_markdown():

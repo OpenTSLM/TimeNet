@@ -9,11 +9,15 @@
 # public release does not contain. The connector therefore converts all and only
 # the tasks whose sensor inputs are recoverable from the published files.
 #
+# The v2 rows put twelve derived sensor features, such as moving averages and FFTs, as NumPy
+# text between the sensor values and the caption. The connector removes them from the caption,
+# because they repeat the signals and are not a part of the caption text.
+#
 # The README specifies 10 Hz. Generated prose gives inconsistent physical units
 # across source corpora, so signal value units remain unknown.
 yaml_schema_version: 1
 dataset_id: bash-lab/opensqa
-dataset_version: 1.0.0
+dataset_version: 1.1.0
 name: OpenSQA
 description: >-
   OpenSQA's published training release as 35,960 shared six-second IMU windows with 435,178
