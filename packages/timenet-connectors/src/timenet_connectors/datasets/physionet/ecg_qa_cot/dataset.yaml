@@ -10,11 +10,13 @@
 # z-normalize) at load time.
 yaml_schema_version: 1
 dataset_id: physionet/ecg-qa-cot
-dataset_version: 1.0.0
+dataset_version: 1.1.0
 name: ECG-QA CoT
 description: >-
   12-lead PTB-XL ECGs paired with clinical questions, short answers, and chain-of-thought
-  rationales for reasoning fine-tuning.
+  rationales for reasoning fine-tuning. Each question carries a clinical context built from
+  PTB-XL: the patient's age and sex, the recording device, and the signal-quality issues, extra
+  beats, and pacemaker that PTB-XL records for the recording.
 license: CC-BY-4.0
 domains:
   - cardiology

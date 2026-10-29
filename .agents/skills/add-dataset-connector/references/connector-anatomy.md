@@ -240,15 +240,18 @@ from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
 
 ## PhysioNet notes: `physionet/ecg_qa_cot`
 
-Subclasses `BasePhysioNetConnector[EcgQaCotRef]` where `EcgQaCotRef` is a frozen dataclass ref.
-`download` calls `ensure_archive` / `download_files` and returns refs. `convert` builds one record per
-recording and keeps the records in a local dict keyed by the PTB-XL `ecg_id`. It also stores the
-`ecg_id` in `Record.metadata`. It attaches whole-record `Annotation`s (split, question_type,
-template_id, clinical_context, answer_options). It adds an
-`AnswerTask(inputs=(record,), prompt=..., rationale=<CoT>, targets=(<label>,))`. `_leads_for` reads
-the WFDB header for `fs`/`sig_len`/`sig_name` and builds one lazy `Signal` per lead. All tasks for a
-recording point at its one record. Records do not share a series. See its `connector.py` for the
-full pattern.
+Subclasses `BasePhysioNetConnector[EcgQaCotSource]` where `EcgQaCotSource` is a frozen dataclass
+that holds the paths of the fetched files. `download_async` calls `ensure_archive` / `download_files`
+and returns one `EcgQaCotSource`. `convert` builds one record per recording and keeps the records in
+a local dict keyed by the PTB-XL `ecg_id`. It stores the `ecg_id` and the PTB-XL `patient_id` in
+`Record.metadata`, and attaches whole-record `split`, `sex`, and `age` annotations. The sex and age
+come from `ptbxl_database.csv`. Per-question metadata (question_type, template_id, answer_options,
+clinical_context) are value-deduped dataset annotations that the tasks reference. The connector
+builds the clinical context from `ptbxl_database.csv`. It streams one
+`AnswerTask(inputs=(record,), prompt=..., rationale=<CoT>, targets=(<label>,))` per question.
+`_leads_for` reads the WFDB header for `fs`/`sig_len`/`sig_name` and builds one lazy `Signal` per
+lead. All tasks for a recording point at its one record. Records do not share a series. See its
+`connector.py` for the full pattern.
 
 ## Fixture-based test pattern
 

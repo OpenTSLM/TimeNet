@@ -11,6 +11,7 @@ import wfdb
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.engine import store_dataset
+from timenet.errors import TimeFFormatError
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.types import AnswerTask, Split
@@ -55,6 +56,54 @@ _ROWS = [
         "clinical_context": "12-lead ECG recording.",
     },
 ]
+
+_PTBXL_COLUMNS = [
+    "ecg_id",
+    "patient_id",
+    "age",
+    "sex",
+    "device",
+    "recording_date",
+    "baseline_drift",
+    "static_noise",
+    "burst_noise",
+    "electrodes_problems",
+    "extra_beats",
+    "pacemaker",
+]
+# Synthetic ptbxl_database.csv rows. Recording 1 is male (code 0) with no quality findings. Recording 2 is
+# female (code 1) with baseline drift, burst noise, extra beats and a pacemaker, and a whitespace-only
+# static-noise cell.
+_PTBXL_ROWS: list[dict[str, str]] = [
+    {
+        "ecg_id": "1",
+        "patient_id": "101.0",
+        "age": "56.0",
+        "sex": "0",
+        "device": "CS-12   E",
+        "recording_date": "1984-11-09 09:17:34",
+    },
+    {
+        "ecg_id": "2",
+        "patient_id": "102.0",
+        "age": "300.0",
+        "sex": "1",
+        "device": "AT-6 C 5.5",
+        "recording_date": "1985-01-01 10:00:00",
+        "baseline_drift": " , II,III,AVF",
+        "static_noise": "  ",
+        "burst_noise": "alles",
+        "extra_beats": "1ES",
+        "pacemaker": "ja, pacemaker",
+    },
+]
+_EXPECTED_CONTEXTS = {
+    1: "56-year-old male patient. 12-lead ECG. clinical recording. recorded with CS-12   E. "
+    "Signal quality: adequate for analysis.",
+    2: "300-year-old female patient. 12-lead ECG. clinical recording. recorded with AT-6 C 5.5. "
+    "Signal quality: baseline drift noted, burst noise present. extra beats detected during recording. "
+    "pacemaker present.",
+}
 
 # template_id -> question_type and its answer classes. Template 0's classes are asserted verbatim.
 _ANSWER_TEMPLATES = [
@@ -105,9 +154,21 @@ def _write_answers(tmp_path: Path) -> Path:
     return csv_path
 
 
-def _source(tmp_path: Path, records_dir: Path, split: str = "train") -> EcgQaCotSource:
+def _write_ptbxl_database(tmp_path: Path, rows: list[dict[str, str]]) -> Path:
+    csv_path = tmp_path / "ptbxl_database.csv"
+    with csv_path.open("w", newline="", encoding="utf-8") as handle:
+        writer = csv.DictWriter(handle, fieldnames=_PTBXL_COLUMNS)
+        writer.writeheader()
+        for row in rows:
+            writer.writerow({column: row.get(column, "") for column in _PTBXL_COLUMNS})
+    return csv_path
+
+
+def _source(
+    tmp_path: Path, records_dir: Path, split: str = "train", ptbxl_rows: list[dict[str, str]] | None = None
+) -> EcgQaCotSource:
     # Recreate what download() produces: a records500/<bucket>/ tree copied from the synthesized records,
-    # an answers CSV, and a CoT CSV. All fixture rows go in one split.
+    # a ptbxl_database.csv, an answers CSV, and a CoT CSV. All fixture rows go in one split.
     records_root = tmp_path / "records500"
     for row in _rows():
         ecg_id = int(row["ecg_id"])
@@ -123,6 +184,7 @@ def _source(tmp_path: Path, records_dir: Path, split: str = "train") -> EcgQaCot
             writer.writerow({column: row.get(column, "") for column in _CSV_COLUMNS})
     return EcgQaCotSource(
         records_root=records_root,
+        ptbxl_database_path=_write_ptbxl_database(tmp_path, _PTBXL_ROWS if ptbxl_rows is None else ptbxl_rows),
         answers_path=_write_answers(tmp_path),
         cot_csvs=((split, csv_path),),
     )
@@ -200,6 +262,39 @@ def test_answer_options_come_from_template(tmp_path, records_dir):
         by_key = {ann.key: ann.value for ann in task.input_annotations}
         options[by_key["template_id"]] = by_key.get("answer_options")
     assert options[0] == ["yes", "no", "not sure"]  # template 0 in the fixture answers CSV
+
+
+def test_clinical_context_is_built_from_ptbxl(tmp_path, records_dir):
+    # The CoT rows' own clinical_context is ignored. Code 0 is male, and only cells with a value
+    # (not empty, not whitespace) state a finding.
+    dataset = _convert(tmp_path, records_dir)
+    for task in dataset.iter_tasks():
+        by_key = {ann.key: ann.value for ann in task.input_annotations}
+        assert by_key["clinical_context"] == _EXPECTED_CONTEXTS[cast("int", task.inputs[0].metadata["ecg_id"])]
+
+
+def test_records_carry_ptbxl_patient_metadata(tmp_path, records_dir):
+    dataset = _convert(tmp_path, records_dir)
+    by_ecg = {record.metadata["ecg_id"]: record for record in dataset.records}
+    assert by_ecg[1].metadata["patient_id"] == 101
+    for ecg_id, sex, age in ((1, "male", 56), (2, "female", 300)):
+        by_key = {ann.key: ann for ann in by_ecg[ecg_id].annotations}
+        assert (by_key["sex"].value, by_key["age"].value, by_key["age"].unit) == (sex, age, "year")
+
+
+def test_recording_missing_from_ptbxl_raises(tmp_path, records_dir):
+    with pytest.raises(TimeFFormatError, match="no row for ecg_id 2"):
+        EcgQaCotConnector().convert([_source(tmp_path, records_dir, ptbxl_rows=_PTBXL_ROWS[:1])])
+
+
+@pytest.mark.parametrize(
+    ("column", "message"),
+    [("sex", "sex '' is not 0 or 1"), ("age", "age is empty"), ("patient_id", "patient_id is empty")],
+)
+def test_bad_ptbxl_row_raises(tmp_path, records_dir, column, message):
+    rows = [_PTBXL_ROWS[0], {**_PTBXL_ROWS[1], column: ""}]
+    with pytest.raises(TimeFFormatError, match=f"ecg_id 2: {message}"):
+        EcgQaCotConnector().convert([_source(tmp_path, records_dir, ptbxl_rows=rows)])
 
 
 def test_series_values_match_fixture_record(tmp_path, records_dir):
