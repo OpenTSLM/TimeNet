@@ -1,10 +1,13 @@
 """Convert pinned SensorCaps chat rows into lazy IMU Signals and streamed caption tasks.
 
-The connector downloads the original JSONL files at a pinned commit through the HuggingFace base,
-indexes rows by byte offset, and keeps just one decoded sensor row cached across the six channel
-loaders, so the complete corpus is never held in memory. Tasks use the original system message
-followed by the original derived-feature text as their prompt, with the activity summary and optional
-sensor location as input annotations. Feature text is streamed rather than retained across the corpus.
+SensorCaps is the LLaSA paper's set of IMU-caption pairs (https://arxiv.org/abs/2406.14498). The
+connector downloads the original v2 JSONL files at a pinned commit through the HuggingFace base,
+indexes rows by byte offset, and keeps just one decoded row cached across a Record's lazy values, so
+sensor values are never all held in memory. Each row becomes one Record and one
+caption task that repeats how GPT-4o-mini generated the caption: the row's system message is the
+prompt, its gyroscope and accelerometer readings are the Record's signals, and the rest of its user
+message (the summary, the derived features, and PAMAP2's location) are Record annotations, given to
+the task as input annotations.
 """
 
 from collections.abc import Mapping
@@ -31,7 +34,7 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         """Index local rows into six-channel Records and a re-iterable caption stream.
 
         Returns:
-            A dataset retaining its hierarchy, small annotations, and file-backed loaders.
+            A dataset retaining its hierarchy, its annotations, and file-backed loaders.
 
         Raises:
             TimeFValidationError: If references or source rows violate the SensorCaps mapping.
