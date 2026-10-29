@@ -15,7 +15,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import IrregularAxis, Record, Signal, Source, TimeFDataset
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetError
 from timenet.format.checksums import file_checksum
 from timenet.format.control_audit import audit_control_database
 import timenet.format.control_writer as control_writer_module
@@ -39,7 +39,7 @@ from timenet.format.stored_values import (
     offsets_digest,
 )
 from timenet.manifest import Manifest
-from timenet.reader import TimeFReader
+from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import open_local_version
 from timenet.storage.parquet import PayloadTableCache
 from timenet.testing import make_dataset
@@ -116,8 +116,8 @@ def _content_ids(version_dir, key):
     return [content_id for (content_id,) in rows]
 
 
-def _stored(reader):
-    dataset = reader.read()
+def _stored(reader, load=LoadPlan.ALL_LAZY):
+    dataset = reader.read(load=load)
     (prompt,) = [task.prompt for task in dataset.tasks if isinstance(task.prompt, StoredText)]
     (reports,) = [
         annotation.value
@@ -205,7 +205,7 @@ def test_the_annotation_table_returns_a_packed_string_list(reader):
     assert reports["text_list_value"] == _TEXTS
 
 
-def test_stored_text_is_never_loaded_and_reads_through_every_time(reader, payload_reads):
+def test_unloaded_stored_text_reads_through_every_time(reader, payload_reads):
     prompt, reports = _stored(reader)
     assert not prompt.is_loaded
     assert not reports.is_loaded
@@ -276,6 +276,52 @@ def test_a_stored_handle_pickles_its_location_without_its_text(reader):
         assert back.read() == value
 
 
+def test_a_loaded_read_fills_stored_text_which_then_needs_no_payload(reader, payload_reads):
+    lazy_prompt, lazy_reports = _stored(reader)
+    prompt, reports = _stored(reader, load=LoadPlan(text=Loading.EAGER))
+    assert prompt.is_loaded
+    assert reports.is_loaded
+    assert sorted(payload_reads, key=lambda location: location.row) == sorted(
+        (prompt._location, reports._location), key=lambda location: location.row
+    )
+    payload_reads.clear()
+    reader.close()
+    assert prompt.read() == _TEXT
+    assert reports.read() == _TEXTS
+    # Each read returns a new list, so changing one leaves the kept strings as they are.
+    reports.read().append("changed")
+    assert reports.read() == _TEXTS
+    # A loaded handle keeps the content key of its payload row, so it equals the unloaded one.
+    assert prompt._content_key() == lazy_prompt._content_key()
+    assert prompt == lazy_prompt
+    assert reports == lazy_reports
+    assert not lazy_prompt.is_loaded
+    assert not payload_reads
+
+
+def test_a_loaded_stored_handle_pickles_its_text_with_its_location(reader, payload_reads):
+    prompt, reports = _stored(reader, load=LoadPlan(text=Loading.EAGER))
+    payload_reads.clear()
+    for handle, value in ((prompt, _TEXT), (reports, _TEXTS)):
+        pickled = pickle.dumps(handle)
+        assert b"clinical report" in pickled
+        back = pickle.loads(pickled)
+        assert type(back) is type(handle)
+        assert back._location == handle._location
+        assert back.is_loaded
+        assert back.read() == value
+    assert not payload_reads
+
+
+def test_stored_text_is_filled_once(reader):
+    for handle in _stored(reader):
+        handle._fill()
+        kept = handle.read()
+        with pytest.raises(TimeNetError, match="write-once cell"):
+            handle._fill()
+        assert handle.read() == kept
+
+
 def test_a_deep_copy_shares_the_stored_handle(reader):
     prompt, reports = _stored(reader)
     assert copy.deepcopy(prompt) is prompt
@@ -341,7 +387,7 @@ def test_child_tasks_find_parent_owned_annotations_on_records_from_another_reade
         records = list(first.iter_records())
         second = TimeFReader(version) if second_reader == "opened" else pickle.loads(pickle.dumps(first))
         with second:
-            tasks = {task.id: task for task in second.iter_tasks(records)}
+            tasks = {task.id: task for task in second.iter_tasks(inputs=records)}
 
     (child_record,) = records
     (stored,) = [annotation for annotation in child_record.annotations if annotation.key == "report"]
@@ -589,7 +635,7 @@ def test_tasks_find_packed_annotations_on_records_from_another_reader(tmp_path, 
         records = list(first.iter_records())
         second = TimeFReader(version) if second_reader == "opened" else pickle.loads(pickle.dumps(first))
         with second:
-            tasks = {task.id: task for task in second.iter_tasks(records)}
+            tasks = {task.id: task for task in second.iter_tasks(inputs=records)}
 
     (record,) = [record for record in records if record.id == answer.inputs[0].id]
     (stored,) = [annotation for annotation in record.annotations if annotation.key == "report"]
@@ -1006,6 +1052,24 @@ def test_stored_offsets_are_loaded_by_their_first_read_and_keep_the_checked_time
     assert checks == [handle.axis_id]
 
 
+def test_a_read_overtaken_by_another_returns_the_time_offsets_kept_first(irregular_reader, monkeypatch):
+    handle = _stored_offsets(irregular_reader)
+    original = PackedValueReader.read_scalar
+    reads, overtaking = [], []
+
+    def read_scalar(self, location):
+        reads.append(location)
+        if len(reads) == 1:
+            # Another read of the axis keeps its time offsets while this one is still reading.
+            overtaking.append(handle.read())
+        return original(self, location)
+
+    monkeypatch.setattr(PackedValueReader, "read_scalar", read_scalar)
+    assert handle.read() is overtaking[0]
+    assert handle.read() is overtaking[0]
+    assert len(reads) == 2
+
+
 def test_stored_offsets_pickle_their_location_and_only_kept_time_offsets(irregular_reader, payload_reads):
     handle = _stored_offsets(irregular_reader)
     unloaded = pickle.loads(pickle.dumps(handle))
@@ -1357,3 +1421,46 @@ def test_a_reader_keeps_decoded_time_offsets_within_its_byte_budget(tmp_path, mo
                     read += 1
             assert packed._parquet.nbytes <= budget
         assert read == 6
+
+
+def test_a_load_reads_text_and_time_offsets_in_one_pass_and_decodes_each_payload_file_once(tmp_path, monkeypatch):
+    # With this limit, the writer closes a payload file once it holds a text. So the first file holds the time
+    # offsets and the first report, and the second file holds the other report.
+    monkeypatch.setattr(stored_values_module, "_PACK_BYTES", len(_TEXT))
+    dataset = make_dataset()
+    spec = TimeSeriesSpec(spec_type="env", name="env", unit_value=ureg.dimensionless)
+    signal = Signal.from_irregular([1.0, 2.0, 3.0], time_offsets_us=_OFFSETS_US, spec=spec, name="env")
+    record = dataset.add_record(record=Record(sources=(Source(name="env", signals=(signal,)),)))
+    for index in range(2):
+        record.annotate(Annotation(key=f"report-{index}", value=f"{_TEXT}{index}"))
+    version_dir = _write_dataset(tmp_path, dataset)
+    version = open_local_version(version_dir)
+    first, second = (part.path for part in version.manifest.files.payloads)
+    # The reader keeps only the newest decoded payload file, so a second pass over a file decodes it again.
+    monkeypatch.setattr(stored_values_module, "_CACHE_BYTES", 1)
+    decoded: list[str] = []
+
+    class CountingParquetFile(pq.ParquetFile):
+        """Record each payload file that the reader's payload cache opens to decode."""
+
+        def __init__(self, source, *args, **kwargs):
+            decoded.append(Path(source).relative_to(version_dir).as_posix())
+            super().__init__(source, *args, **kwargs)
+
+    monkeypatch.setattr(pq, "ParquetFile", CountingParquetFile)
+    with TimeFReader(version) as reader:
+        read = reader.read(load=LoadPlan(time_offsets=Loading.EAGER, text=Loading.EAGER))
+    (loaded,) = [item for item in read.records if item.id == record.id]
+    (stored,) = loaded.signals
+    offsets = stored._time_offsets
+    report, other = (annotation.value for annotation in loaded.annotations)
+    assert isinstance(offsets, StoredOffsets)
+    assert isinstance(report, StoredText)
+    assert isinstance(other, StoredText)
+    assert offsets._location.path == report._location.path == first
+    assert other._location.path == second
+    assert offsets.is_loaded
+    assert report.is_loaded
+    assert other.is_loaded
+    # One pass in payload order reads the time offsets with the first report, before the second file evicts the first.
+    assert decoded == [first, second]

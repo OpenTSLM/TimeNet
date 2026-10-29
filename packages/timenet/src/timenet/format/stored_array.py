@@ -3,10 +3,12 @@
 from __future__ import annotations
 
 from dataclasses import dataclass, field as dataclass_field
-from typing import TYPE_CHECKING, Protocol, Self
+from typing import TYPE_CHECKING, NamedTuple, Protocol, Self
 
 import pyarrow as pa
 
+from timenet.errors import TimeFFormatError
+from timenet.format._write_once import WriteOnce
 from timenet.types import TimeSeriesSpec
 from timenet.types.handles import ArrayHandle
 from timenet.types.reference_keys import SourceKey
@@ -54,13 +56,24 @@ class ChunkReader(Protocol):
         ...
 
 
+class _KeptArray(NamedTuple):
+    """The values a loaded ``StoredArray`` keeps, with where they are stored."""
+
+    array: pa.Array
+    """The values, in buffers of their own."""
+    location: ChunkLocation
+    """Where the values are stored, captured when they were loaded, since the reader forgets it on close."""
+
+
 @dataclass(frozen=True, slots=True)
 class StoredArray(ArrayHandle):
     """Refer to one signal's array, stored as chunks in the values files of a release.
 
-    The handle holds the release's reader and the signal's ID and spec, not the values, so it is
-    never loaded and every read goes to the chunks. ``read_steps`` reads only the chunks that cover
-    the range. Handles from one reader for one signal are equal.
+    The handle holds the release's reader and the signal's ID, spec, and number of values. A loaded
+    handle also keeps the array and the location of its chunks in a write-once cell, so it reads,
+    slices, and locates them without storage access. An unloaded handle holds no values: every read
+    goes to the chunks, and ``read_steps`` reads only the chunks that cover the range. Handles from
+    one reader for one signal are equal, whether loaded or not.
     """
 
     reader: ChunkReader = dataclass_field(repr=False)
@@ -69,32 +82,70 @@ class StoredArray(ArrayHandle):
     """ID of the signal in that release's catalog."""
     spec: TimeSeriesSpec
     """Spec that the stored values decode to."""
+    n_values: int
+    """Number of values that the signal declares, which a read of every chunk must return."""
+    _kept: WriteOnce[_KeptArray] = dataclass_field(default_factory=WriteOnce, init=False, repr=False, compare=False)
+    """The values and their location, kept once a read loads them."""
 
     @property
     def is_loaded(self) -> bool:
-        """Return False, since every read goes to the chunks."""
-        return False
+        """Return whether the handle keeps the values, so reads need no storage access."""
+        return self._kept.value is not None
 
     @property
     def _location(self) -> ChunkLocation:
         """Return where the chunks are stored, without reading them.
 
-        The reader finds them for a batch of signals at a time and keeps them until it closes. The
-        handle keeps nothing.
+        A loaded handle keeps its location. An unloaded one asks its reader, which finds the
+        locations of a batch of signals at a time and keeps them until it closes.
         """
-        return self.reader._chunk_location(self.signal_id)
+        kept = self._kept.value
+        return kept.location if kept is not None else self.reader._chunk_location(self.signal_id)
 
     def read(self) -> pa.Array:
-        """Return the values of every chunk."""
-        return self.reader._read_array(self._location, self.spec)
+        """Return the kept values, or the values of every chunk.
+
+        Returns:
+            The signal's values.
+
+        Raises:
+            TimeFFormatError: If the chunks hold another number of values than the signal declares.
+        """
+        kept = self._kept.value
+        if kept is not None:
+            return kept.array
+        array = self.reader._read_array(self._location, self.spec)
+        if len(array) != self.n_values:
+            raise TimeFFormatError(
+                f"signal {self.signal_id!r} declares {self.n_values} values, but its chunks hold {len(array)}"
+            )
+        return array
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
-        """Return the half-open step range ``[start, stop)``, reading only the chunks that cover it.
+        """Return the half-open step range ``[start, stop)``.
+
+        A loaded handle slices the values it keeps. An unloaded one reads only the chunks that
+        cover the range.
 
         Returns:
             The steps' values, in the form :meth:`read` returns.
         """
+        kept = self._kept.value
+        if kept is not None:
+            return kept.array.slice(start, stop - start)
         return self.reader._read_array_steps(self._location, self.spec, start, stop)
+
+    def _fill(self, array: pa.Array, location: ChunkLocation) -> None:
+        """Hold the values and their location, so the handle is loaded from then on.
+
+        Args:
+            array: The values, in buffers of their own.
+            location: Where the values are stored.
+
+        Raises:
+            TimeNetError: If the handle is already loaded.
+        """  # noqa: DOC502 - raised by WriteOnce.set
+        self._kept.set(_KeptArray(array, location))
 
     def __deepcopy__(self, memo: dict) -> Self:
         return self

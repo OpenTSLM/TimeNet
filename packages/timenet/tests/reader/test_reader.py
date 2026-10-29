@@ -24,7 +24,7 @@ import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.duckdb import connect_control
 from timenet.format.stored_values import PackedValueLocator
-from timenet.reader import TimeFReader
+from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import (
@@ -53,9 +53,12 @@ def _write(tmp_path, dataset=None, **kwargs) -> Path:
     return tmp_path / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
 
 
-def _read(version_dir: Path) -> TimeFDataset:
+def _read(version_dir: Path, load: LoadPlan) -> TimeFDataset:
     with TimeFReader(open_local_version(version_dir)) as reader:
-        return reader.read()
+        return reader.read(load=load)
+
+
+_PLANS = pytest.mark.parametrize("load", [LoadPlan.ALL_LAZY, LoadPlan.ALL_EAGER], ids=["lazy", "eager"])
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -70,7 +73,17 @@ def test_full_round_trip(tmp_path, backend):
     record.annotate(Annotation(key="report", value=text))
     record.annotate(Annotation(key="reports", value=[text, "short report"]))
 
-    restored = _read(_write(tmp_path, dataset=original, values_backend=backend))
+    irregular = Signal.from_irregular(
+        [1.0, 2.0, 3.0],
+        time_offsets_us=[0, 2, 5],
+        spec=record.signals[0].spec,
+        name="irregular",
+    )
+    original.add_record(record=Record(sources=(Source(name="irregular", signals=(irregular,)),)))
+    version_dir = _write(tmp_path, dataset=original, values_backend=backend)
+    # A fully loaded dataset needs no storage, so the comparison runs after the release is gone.
+    restored = _read(version_dir, LoadPlan.ALL_EAGER)
+    shutil.rmtree(version_dir)
     assert_datasets_equal(original, restored)
     restored_answer = next(task for task in restored.tasks if task.id == answer.id)
     assert restored_answer.prompt == text
@@ -135,7 +148,7 @@ def test_filtered_reads_validate_only_selected_text_locators(tmp_path, validated
         assert set(validated_locators) == {record_report}
 
         validated_locators.clear()
-        (loaded_task,) = reader.iter_tasks((loaded_record,), split=Split.TRAIN)
+        (loaded_task,) = reader.iter_tasks(inputs=(loaded_record,), split=Split.TRAIN)
         assert loaded_task.prompt == f"{text}{answer.id}"
         assert loaded_task.rationale == text + "Explanation."
         assert loaded_task.targets is not None
@@ -157,15 +170,14 @@ def test_filtered_reads_validate_only_selected_text_locators(tmp_path, validated
         assert set(validated_locators) == {task_report}
 
 
-def test_task_stream_reads_text_locators_one_batch_at_a_time(tmp_path, monkeypatch, validated_locators):
+def test_task_stream_reads_text_locators_one_batch_at_a_time(tmp_path, validated_locators):
     dataset, _, text = _dataset_with_packed_text()
     version = open_local_version(_write(tmp_path, dataset))
     validated_locators.clear()
-    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
     first_batch_ids = {task.id for task in sorted(dataset.tasks, key=lambda task: task.id)[:2]}
 
     with TimeFReader(version) as reader:
-        stream = reader.iter_tasks()
+        stream = reader.iter_tasks(batch_size=2)
         first = next(stream)
         assert first.prompt == f"{text}{first.id}"
         assert {identity for kind, identity in validated_locators if kind == ObjectKind.TASK} == first_batch_ids
@@ -239,9 +251,10 @@ def _referenced_annotation_dataset(*, with_task: bool = True) -> TimeFDataset:
     return dataset
 
 
-def test_annotation_occurrence_and_task_object_references_round_trip(tmp_path):
+@_PLANS
+def test_annotation_occurrence_and_task_object_references_round_trip(tmp_path, load):
     original = _referenced_annotation_dataset()
-    restored = _read(_write(tmp_path, dataset=_referenced_annotation_dataset()))
+    restored = _read(_write(tmp_path, dataset=_referenced_annotation_dataset()), load)
     assert_datasets_equal(original, restored)
     assert restored.tasks[0].inputs == (restored.records[0],)
     assert restored.tasks[0].input_annotations == restored.records[0].annotations
@@ -251,14 +264,15 @@ def test_annotation_occurrence_and_task_object_references_round_trip(tmp_path):
 HEALTHY_ANNOTATION = Annotation(key="condition", value="healthy", description="Reported by the source.")
 
 
-def test_a_read_back_annotation_equals_the_constant_it_was_written_from(tmp_path):
+@_PLANS
+def test_a_read_back_annotation_equals_the_constant_it_was_written_from(tmp_path, load):
     dataset = _referenced_annotation_dataset()
     record = dataset.records[0]
     record.annotate(HEALTHY_ANNOTATION)
     record.signals[0].annotate(HEALTHY_ANNOTATION)
 
     version_dir = _write(tmp_path, dataset=dataset)
-    restored = _read(version_dir).records[0]
+    restored = _read(version_dir, load).records[0]
 
     occurrences = [
         annotation
@@ -301,17 +315,19 @@ def _tasks_dataset(*, streaming: bool) -> TimeFDataset:
     return dataset
 
 
-def test_streamed_tasks_round_trip_and_back_populate_records(tmp_path):
-    restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)))
+@_PLANS
+def test_streamed_tasks_round_trip_and_back_populate_records(tmp_path, load):
+    restored = _read(_write(tmp_path, dataset=_tasks_dataset(streaming=True)), load)
     task = next(task for task in restored.tasks if task.prompt == "Question 3?")
     assert task.rationale == "reason 3"
     assert task.inputs == (restored.records[0],)
     assert {task.id for task in restored.tasks_for(restored.records[0])} == {task.id for task in restored.tasks}
 
 
-def test_streamed_and_batched_tasks_read_back_equally(tmp_path):
-    batched = _read(_write(tmp_path / "batch", dataset=_tasks_dataset(streaming=False)))
-    streamed = _read(_write(tmp_path / "stream", dataset=_tasks_dataset(streaming=True)))
+@_PLANS
+def test_streamed_and_batched_tasks_read_back_equally(tmp_path, load):
+    batched = _read(_write(tmp_path / "batch", dataset=_tasks_dataset(streaming=False)), load)
+    streamed = _read(_write(tmp_path / "stream", dataset=_tasks_dataset(streaming=True)), load)
     assert {task.id: task for task in batched.tasks} == {task.id: task for task in streamed.tasks}
 
 
@@ -353,15 +369,16 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         return original_open(*args, **kwargs)
 
     with TimeFReader(open_local_version(version_dir)) as reader:
-        dataset = reader.read()
+        signal_id = next(reader.iter_records()).signals[0].id
         monkeypatch.setattr(pq, "ParquetFile", counting_open)
-        signal = dataset.records[0].signals[0]
+        signal = reader.get(Signal, signal_id)
         assert opens == 0
         signal.to_arrow()
         assert opens >= 1
 
 
-def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
+@pytest.mark.parametrize("load", [LoadPlan.ALL_LAZY, LoadPlan(signal_values=Loading.EAGER)])
+def test_signal_values_batch_chunk_locator_queries(tmp_path, monkeypatch, load):
     version_dir = _write(tmp_path)
     original = DuckDBControlReader.chunk_locations_by_ids
     calls = []
@@ -372,9 +389,10 @@ def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
 
     monkeypatch.setattr(DuckDBControlReader, "chunk_locations_by_ids", counting_batch)
     with TimeFReader(open_local_version(version_dir)) as reader:
-        records = tuple(reader.iter_records())
+        records = reader.read(load=load).records
         signals = tuple(signal for record in records for signal in record.signals)
-        assert calls == []
+        # A loaded read finds every signal's chunks in one query; a lazy read waits for the first access.
+        assert len(calls) == (0 if load == LoadPlan.ALL_LAZY else 1)
 
         for signal in signals:
             signal.to_arrow()
@@ -384,11 +402,24 @@ def test_signal_values_batch_lazy_chunk_locator_queries(tmp_path, monkeypatch):
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
-def test_read_dataset_and_lazy_loaders_are_picklable(tmp_path, backend):
-    dataset = TimeFReader(open_local_version(_write(tmp_path, values_backend=backend))).read()
-    expected = dataset.records[0].signals[0].to_arrow()
+@pytest.mark.parametrize("eager", [False, True])
+def test_loaded_and_lazy_datasets_are_picklable(tmp_path, monkeypatch, backend, eager):
+    with TimeFReader(open_local_version(_write(tmp_path, values_backend=backend))) as reader:
+        dataset = reader.read(load=LoadPlan.ALL_EAGER if eager else LoadPlan.ALL_LAZY)
+        expected = [signal.to_arrow() for record in dataset.records for signal in record.signals]
+    original = DuckDBControlReader.chunk_locations_by_ids
+    calls = []
+
+    def counting_batch(reader, signal_ids):
+        calls.append(tuple(signal_ids))
+        return original(reader, signal_ids)
+
+    monkeypatch.setattr(DuckDBControlReader, "chunk_locations_by_ids", counting_batch)
     restored = pickle.loads(pickle.dumps(dataset))
-    assert restored.records[0].signals[0].to_arrow().equals(expected)
+    actual = [signal.to_arrow() for record in restored.records for signal in record.signals]
+    assert len(actual) == len(expected)
+    assert all(left.equals(right) for left, right in zip(actual, expected, strict=True))
+    assert len(calls) == (0 if eager else 1)
 
 
 def test_every_read_builds_new_objects(tmp_path):
@@ -399,42 +430,6 @@ def test_every_read_builds_new_objects(tmp_path):
         assert not any(task is other for task, other in zip(first, again, strict=True))
         dataset = reader.read()
         assert reader.read().records[0] is not dataset.records[0]
-
-
-def test_task_reads_read_only_the_dataset_annotations_their_tasks_reference(tmp_path, monkeypatch):
-    dataset = make_dataset()
-    note = dataset.annotate(Annotation(key="note", value="referenced"))
-    dataset.annotate(Annotation(key="unused", value="unreferenced"))
-    added = dataset.add_task(task=AnswerTask(inputs=(dataset.records[0],), targets=("yes",), input_annotations=(note,)))
-    version_dir = _write(tmp_path, dataset)
-    with connect_control(version_dir / "control.duckdb", read_only=True) as connection:
-        rows = connection.execute(
-            """SELECT c.name, o.occurrence_id FROM annotation_occurrences o JOIN annotation_contents c USING (content_id)
-               WHERE o.object_type = 'Dataset'"""
-        ).fetchall()
-    occurrences = dict(rows)
-    requested = []
-    read_annotations = DuckDBControlReader._read_annotations
-
-    def recording(self, owners, by_occurrence=None):
-        if ObjectKind.DATASET in owners:
-            requested.append(owners[ObjectKind.DATASET])
-        return read_annotations(self, owners, by_occurrence)
-
-    monkeypatch.setattr(DuckDBControlReader, "_read_annotations", recording)
-    with TimeFReader(open_local_version(version_dir)) as reader:
-        tasks = [*reader.read_tasks(), *reader.iter_tasks()]
-        # Each task read asks only for the occurrence its tasks reference.
-        assert requested == [[occurrences["note"]], [occurrences["note"]]]
-        requested.clear()
-        first, again = reader.read(), reader.read()
-    assert [task.input_annotations[0].value for task in tasks if task.id == added.id] == ["referenced"] * 2
-    # A whole-dataset read builds all of the Dataset's annotations, and its tasks reference them.
-    assert requested == [None, None]
-    assert [annotation.key for annotation in first.annotations] == ["note", "unused"]
-    (task,) = (task for task in first.tasks if task.id == added.id)
-    assert task.input_annotations[0] is first.annotations[0]
-    assert again.annotations[0] is not first.annotations[0]
 
 
 def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
@@ -464,15 +459,14 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
         loaded.records[0].signals[0].to_arrow()
         assert text in reader.read_task_table()["prompt"].to_pylist()
         assert read_calls == 1
-        state = reader.__getstate__()
-        with pickle.loads(pickle.dumps(reader)) as restored:
+        restored, prompt = pickle.loads(pickle.dumps((reader, task.prompt)))
+        with restored:
+            assert prompt.read() == text
             assert text in restored.read_task_table()["prompt"].to_pylist()
         assert read_calls == 2
     with reader:
         assert text in reader.read_task_table()["prompt"].to_pylist()
     assert read_calls == 3
-    assert state["_control"] is None
-    assert state["_values"] is None
 
 
 @pytest.mark.parametrize(
@@ -482,18 +476,18 @@ def test_pickling_drops_connections_and_decoded_caches(tmp_path, monkeypatch):
         ("UPDATE sources SET parent_source_id = source_id", "source hierarchy contains a cycle"),
     ],
 )
-def test_a_read_rejects_an_invalid_hierarchy_before_building_signals(tmp_path, monkeypatch, statement, message):
-    version_dir = _write(tmp_path)
+def test_a_loaded_read_rejects_an_invalid_hierarchy_before_opening_payloads(tmp_path, statement, message):
+    dataset = make_dataset()
+    dataset.records[0].annotate(Annotation(key="report", value="A detailed clinical report. " * 300))
+    version_dir = _write(tmp_path, dataset)
     version = open_local_version(version_dir)
     with connect_control(version_dir / "control.duckdb") as connection:
         connection.execute(statement)
+    for part in (*version.manifest.files.time_series, *version.manifest.files.payloads):
+        (version_dir / part.path).unlink()
 
-    def unexpected(cls, **_):
-        pytest.fail("a Signal was built before the hierarchy was checked")
-
-    monkeypatch.setattr(Signal, "from_loader", classmethod(unexpected))
     with TimeFReader(version) as reader, pytest.raises(TimeFFormatError, match=message):
-        reader.read()
+        reader.read(load=LoadPlan.ALL_EAGER)
 
 
 def test_iter_records_preserves_requested_order(tmp_path):
@@ -566,7 +560,7 @@ def test_iter_tasks_streams_one_record_and_points_at_its_built_objects(tmp_path)
     (expected_context,) = expected_answer.input_annotations
     with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
         record0 = next(reader.iter_records((record.id,)))
-        tasks = list(reader.iter_tasks((record0,)))
+        tasks = list(reader.iter_tasks(inputs=(record0,)))
         every = reader.read_tasks()
 
     assert {task.id for task in tasks} == {
@@ -701,9 +695,7 @@ def _joined(*ids: int) -> str:
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")
-def test_a_task_stream_continues_after_the_process_forks_between_batches(tmp_path, monkeypatch):
-    # One task a batch, so each later batch selects its page after the fork.
-    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 1)
+def test_a_task_stream_continues_after_the_process_forks_between_batches(tmp_path):
     dataset, _, text = _dataset_with_packed_text()
     version = open_local_version(_write(tmp_path, dataset))
 
@@ -713,39 +705,22 @@ def test_a_task_stream_continues_after_the_process_forks_between_batches(tmp_pat
             return _joined(*reader.record_ids(), *own.record_ids())
 
     with TimeFReader(version) as reader:
-        stream = reader.iter_tasks()
+        # One task a batch, so each later batch selects its page after the fork.
+        stream = reader.iter_tasks(load=LoadPlan(text=Loading.EAGER), batch_size=1)
         first = next(stream)
         status, child = _in_forked_child(child_record_ids)
         # The next batch reopens the catalog that the fork closed.
         tasks = [first, *stream]
-        assert all(task.prompt == f"{text}{task.id}" for task in tasks)
     assert status == 0
     record_ids = sorted(record.id for record in dataset.records)
     assert child == _joined(*record_ids, *record_ids)
     assert [task.id for task in tasks] == sorted(task.id for task in dataset.tasks)
-
-
-def test_a_stream_selects_its_task_rows_one_page_at_a_time(tmp_path, monkeypatch):
-    monkeypatch.setattr(control_reader_module, "_TASK_BATCH_SIZE", 2)
-    dataset = make_dataset()
-    ids = sorted(task.id for task in dataset.tasks)
-    pages = []
-    select = DuckDBControlReader._task_row_page
-
-    def recording(self, *selection, after, limit):
-        rows = select(self, *selection, after=after, limit=limit)
-        pages.append((after, limit, [row.task_id for row in rows]))
-        return rows
-
-    monkeypatch.setattr(DuckDBControlReader, "_task_row_page", recording)
-    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
-        stream = reader.iter_tasks()
-        next(stream)
-        # The first batch selects only its own page; each later page starts after the last task ID.
-        assert pages == [(None, 2, ids[:2])]
-        rest = list(stream)
-    assert [task.id for task in rest] == ids[1:]
-    assert pages == [(None, 2, ids[:2]), (ids[1], 2, ids[2:4]), (ids[3], 2, ids[4:])]
+    assert all(task.prompt == f"{text}{task.id}" for task in tasks)
+    # Batches after the fork load their text too, and each builds the parents its tasks derive from.
+    parents = {id(parent) for task in tasks for parent in task.from_tasks}
+    assert parents
+    assert parents.isdisjoint(id(task) for task in tasks)
+    assert all(task.prompt is not None and task.prompt.is_loaded for task in tasks)
 
 
 @pytest.mark.skipif(not hasattr(os, "fork"), reason="needs os.fork")

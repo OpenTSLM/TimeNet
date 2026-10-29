@@ -254,7 +254,7 @@ def test_pipeline_preserves_source_semantics_after_source_removal(monkeypatch, t
         restored = reader.read()
         _assert_records_and_tasks(restored.records, restored.tasks)
         records = list(reader.iter_records())
-        _assert_records_and_tasks(records, list(reader.iter_tasks(records)))
+        _assert_records_and_tasks(records, list(reader.iter_tasks(inputs=records)))
         assert _annotations(restored) == _DATASET_ANNOTATIONS
         reader.verify()
 

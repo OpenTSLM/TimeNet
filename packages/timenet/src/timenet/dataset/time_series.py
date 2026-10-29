@@ -492,8 +492,9 @@ class Signal(SupportsAnnotate):
     def read_steps(self, start: int, stop: int) -> pa.Array:
         """Read a half-open temporal step range as Arrow without forcing a NumPy conversion.
 
-        A stored series reads only the chunks that intersect the range. A series held in memory is
-        sliced, and one from a loader callable is read in full first.
+        A series whose stored values were loaded, or that holds its values in memory, is sliced. An
+        unloaded stored series reads only the chunks that intersect the range, and one from a loader
+        callable is read in full first.
 
         Args:
             start: First temporal step, inclusive.
