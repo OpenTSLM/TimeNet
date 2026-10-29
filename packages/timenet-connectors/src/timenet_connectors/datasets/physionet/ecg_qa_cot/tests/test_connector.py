@@ -168,7 +168,8 @@ def _source(
     tmp_path: Path, records_dir: Path, split: Split = Split.TRAIN, ptbxl_rows: list[dict[str, str]] | None = None
 ) -> EcgQaCotSource:
     # Recreate what download() produces: a records500/<bucket>/ tree copied from the synthesized records,
-    # a ptbxl_database.csv, an answers CSV, and a CoT CSV. All fixture rows go in one split.
+    # a ptbxl_database.csv, an answers CSV, and a CoT CSV. All fixture rows go in one split. The CoT CSV
+    # writes each ecg_id bracketed, as "[1]", because every row of the real release does.
     records_root = tmp_path / "records500"
     for row in _rows():
         ecg_id = int(row["ecg_id"])
@@ -181,7 +182,7 @@ def _source(
         writer = csv.DictWriter(handle, fieldnames=_CSV_COLUMNS)
         writer.writeheader()
         for row in _rows():
-            writer.writerow({column: row.get(column, "") for column in _CSV_COLUMNS})
+            writer.writerow({column: row.get(column, "") for column in _CSV_COLUMNS} | {"ecg_id": f"[{row['ecg_id']}]"})
     return EcgQaCotSource(
         records_root=records_root,
         ptbxl_database_path=_write_ptbxl_database(tmp_path, _PTBXL_ROWS if ptbxl_rows is None else ptbxl_rows),
