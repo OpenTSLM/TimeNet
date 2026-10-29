@@ -77,7 +77,7 @@ class _ReaderState:
     chunk_batches: tuple[tuple[int, ...], ...]
 
 
-class TimeFReader:
+class TimeFReader:  # noqa: PLR0904 - the public read API
     """Read a committed TimeF dataset through its DuckDB control plane."""
 
     def __init__(self, version: DatasetVersion) -> None:
@@ -274,6 +274,25 @@ class TimeFReader:
                 yield from batch
                 # Hold no batch while the next one is built.
                 del batch
+
+    def read_signal(self, record_id: EntityId, signal_id: EntityId) -> Signal:
+        """Read one signal without hydrating its record or siblings.
+
+        Annotations are omitted. Use :meth:`iter_records` for those facts.
+        The returned signal's values and irregular offsets stay lazy and require this reader.
+
+        Args:
+            record_id: ID of the signal's owning record.
+            signal_id: ID of the signal to read.
+
+        Returns:
+            A signal supporting bounded :meth:`Signal.read_steps` reads.
+
+        Raises:
+            TimeFValidationError: If the signal is absent from the selected record.
+        """  # noqa: DOC502 - raised by the control reader
+        with self._as_format_error(preserve_validation=True):
+            return self._control_reader().read_signal(record_id, signal_id)
 
     def get(
         self,

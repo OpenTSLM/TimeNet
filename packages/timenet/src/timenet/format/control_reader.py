@@ -519,7 +519,7 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(before=_CONNECTIONS.before_fork, after_in_child=_CONNECTIONS.after_fork_in_child)
 
 
-class DuckDBControlReader:
+class DuckDBControlReader:  # noqa: PLR0904 - one public read per catalog query
     """Keep one read-only DuckDB connection and build requested records from it.
 
     The connection opens again on the next query after :meth:`close`, and after the process forks,
@@ -1145,6 +1145,33 @@ class DuckDBControlReader:
         occurrences: _AnnotationsByOccurrence = {} if by_occurrence is None else by_occurrence
         self._read_annotations({ObjectKind.DATASET: None}, occurrences)
         return tuple(occurrences.values())
+
+    def read_signal(self, record_id: int, signal_id: int) -> Signal:
+        """Read one owned signal's structure, metadata, and lazy loaders, omitting annotations.
+
+        Returns:
+            A signal whose loaders borrow this reader's lifetime; values and offsets stay lazy.
+
+        Raises:
+            TimeFValidationError: If the signal is absent from the selected record.
+            TimeFFormatError: If the selected signal's axis or specification is corrupt.
+        """
+        record_id = check_id(record_id, "record id")
+        signal_id = check_id(signal_id, "signal id")
+        columns = ", ".join(f"s.{name}" for name in _SignalRow._fields)
+        rows = self._query(
+            f"""SELECT {columns} FROM signals s JOIN sources src ON src.source_id = s.source_id
+                WHERE src.record_id = ? AND s.signal_id = ?""",  # noqa: S608 - fixed column names
+            [record_id, signal_id],
+        )
+        if not rows:
+            raise TimeFValidationError(f"record {record_id!r} has no signal {signal_id!r}")
+        try:
+            prepared = self._prepare_signals([_SignalRow._make(rows[0])], None)
+        except (ValueError, TypeError) as exc:
+            raise TimeFFormatError(f"signal {signal_id!r} has invalid stored structure") from exc
+        ((signal,),) = self._read_signals(prepared, {}).values()
+        return signal
 
     def chunk_location(self, signal_id: int) -> ChunkLocation:
         """Return where one Signal's chunks are stored, from its catalog rows.

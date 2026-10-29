@@ -9,15 +9,17 @@ import signal
 import threading
 import time
 from typing import NoReturn
+from unittest.mock import MagicMock
 
 import duckdb
+import pyarrow as pa
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
 from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
+from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError
 import timenet.format.control_cache as control_cache_module
 import timenet.format.control_reader as control_reader_module
@@ -909,3 +911,66 @@ def test_task_table_projection_resolves_packed_prompts_without_selecting_ids(tmp
     assert table.column_names == ["prompt"]
     assert table["prompt"].to_pylist() == full["prompt"].to_pylist()
     assert answer.prompt in table["prompt"].to_pylist()
+
+
+@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+def test_read_signal_is_lazy_and_omits_unrelated_structure(tmp_path, monkeypatch, backend):  # noqa: PLR0914
+    dataset = make_dataset()
+    spec = TimeSeriesSpec(spec_type="test", name="Test", dtype="float64", unit_value=None, nullable=True)
+    values = pa.array([1.0, None, 3.0, 4.0])
+    ordinal = Signal(name="Ordinal", spec=spec, time_axis=OrdinalAxis(), data=values, metadata={"kept": True})
+    ordinal.annotate(Annotation(key="quality", value=True))
+    irregular = Signal.from_loader(
+        name="Irregular",
+        spec=spec,
+        time_axis=IrregularAxis(first_us=5, last_us=30),
+        n_values=4,
+        loader=lambda: values,
+        time_offsets_loader=lambda: pa.array([5, 10, 20, 30], type=pa.int64()),
+    )
+    nested = dataset.add_record(
+        record=Record(sources=(Source(name="Monitor", sources=(Source(name="Nested", signals=(ordinal, irregular)),)),))
+    )
+    regular = dataset.records[0].signals[0]
+    version_dir = _write(tmp_path, dataset, values_backend=backend)
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        forbidden = MagicMock(side_effect=AssertionError("unrelated hydration"))
+        monkeypatch.setattr(DuckDBControlReader, "read_records", forbidden)
+        monkeypatch.setattr(DuckDBControlReader, "_read_annotations", forbidden)
+        windows = MagicMock(wraps=reader._read_array_steps)
+        monkeypatch.setattr(reader, "_read_array_steps", windows)
+        original = Signal.from_loader
+        constructed = []
+
+        def construct(**kwargs):
+            constructed.append(kwargs["name"])
+            return original(**kwargs)
+
+        monkeypatch.setattr(Signal, "from_loader", construct)
+        cases = (
+            (dataset.records[0].id, regular, "regular"),
+            (nested.id, ordinal, "ordinal"),
+            (nested.id, irregular, "irregular"),
+        )
+        for record_id, expected, axis_kind in cases:
+            constructed.clear()
+            windows.reset_mock()
+            selected = reader.read_signal(record_id, expected.id)
+            assert constructed == [expected.name]
+            assert selected.id == expected.id
+            assert selected.time_axis.axis_type == axis_kind
+            assert selected.metadata == ({"kept": True} if expected is ordinal else {})
+            assert selected.annotations == ()
+            windows.assert_not_called()
+            result = selected.read_steps(1, 3)
+            assert len(result) == 2
+            assert windows.call_count == 1
+            if expected is not regular:
+                assert result.to_pylist() == [None, 3.0]
+        offsets = selected._time_offsets
+        assert offsets is not None
+        assert not offsets.is_loaded
+        assert selected.time_offsets_us().tolist() == [5, 10, 20, 30]
+        with pytest.raises(TimeFValidationError):
+            reader.read_signal(dataset.records[0].id, irregular.id)
+        forbidden.assert_not_called()

@@ -964,3 +964,45 @@ def test_task_lookup_reports_corrupt_dependencies(tmp_path, parent, message):
             connection.execute("UPDATE task_dependencies SET parent_task_id = ?", [999_999])
     with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match=message):
         reader.read_tasks_by_id((answer.id,))
+
+
+@pytest.mark.parametrize("case", ["foreign", "missing_record", "missing_signal"])
+def test_signal_lookup_checks_ownership_before_hydration(tmp_path, monkeypatch, case):
+    path = tmp_path / "control.duckdb"
+    dataset = _write_hello(path)
+    record0, record1 = dataset.records[0], dataset.records[1]
+    record_id, signal_id = {
+        "foreign": (record0.id, record1.signals[1].id),
+        "missing_record": (999_999, record0.signals[0].id),
+        "missing_signal": (record0.id, 999_999),
+    }[case]
+    with DuckDBControlReader(path) as reader:
+        forbidden = MagicMock(side_effect=AssertionError("hydrated before ownership check"))
+        monkeypatch.setattr(reader, "_read_axes", forbidden)
+        with pytest.raises(TimeFValidationError, match="has no signal"):
+            reader.read_signal(record_id, signal_id)
+        forbidden.assert_not_called()
+
+
+def test_signal_lookup_rejects_a_non_int_id(tmp_path):
+    path = tmp_path / "control.duckdb"
+    dataset = _write_hello(path)
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFValidationError, match="positive int64 id"):
+        reader.read_signal(dataset.records[0].id, "1 OR 1=1")  # ty: ignore[invalid-argument-type]
+
+
+@pytest.mark.parametrize(
+    "statement",
+    [
+        "UPDATE signals SET axis_id = 999999 WHERE signal_id = ?",
+        "UPDATE signals SET dtype = 'broken' WHERE signal_id = ?",
+    ],
+)
+def test_signal_lookup_rejects_corrupt_selected_structure(tmp_path, statement):
+    path = tmp_path / "control.duckdb"
+    dataset = _write_hello(path)
+    record = dataset.records[0]
+    with connect_control(path) as connection:
+        connection.execute(statement, [record.signals[0].id])
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError):
+        reader.read_signal(record.id, record.signals[0].id)
