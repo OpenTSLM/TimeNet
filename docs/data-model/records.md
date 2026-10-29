@@ -62,6 +62,8 @@ or an annotation.
 Each Source and Signal has one owner. TimeNet rejects cycles and objects attached in more than one
 place.
 
+The root Sources of a Record must have distinct names, and so must the child Sources of a Source.
+
 ## Store context
 
 Use `metadata` for JSON-compatible details that do not need a typed schema. Examples include an

@@ -7,7 +7,7 @@ from datetime import datetime
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset.source import Source
+from timenet.dataset.source import Source, check_sibling_names
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
@@ -30,7 +30,7 @@ class Record(SupportsAnnotate):
     """
 
     sources: tuple[Source, ...] = ()
-    """The root sources that belong to this recording."""
+    """The root sources that belong to this recording, each with a distinct name."""
     start_time: TimeOrigin = field(default_factory=TimeOrigin)
     """The common relative zero, with an optional absolute timestamp."""
     annotations: tuple[Annotation, ...] = ()
@@ -49,9 +49,10 @@ class Record(SupportsAnnotate):
         """Validate the record hierarchy and its optional single-clock session span.
 
         Raises:
-            TimeFValidationError: If ``time_span`` is not a whole-record ``TimeInterval`` or does not
-                contain some series' window.
+            TimeFValidationError: If two root sources have the same name, or ``time_span`` is not a
+                whole-record ``TimeInterval`` or does not contain some series' window.
         """
+        check_sibling_names(self.sources, self._label)
         if not isinstance(self.start_time, TimeOrigin):
             raise TimeFValidationError("Record.start_time must be a TimeOrigin")
         self.metadata = validate_json_mapping(self.metadata)
@@ -129,6 +130,20 @@ class Record(SupportsAnnotate):
 
         for root in sorted(self.sources, key=lambda item: item.name):
             yield from walk(root)
+
+    def _check_source_names(self) -> None:
+        """Reject sibling Sources that share a name, anywhere in the hierarchy.
+
+        Construction checks the rule, but a caller can assign ``sources`` on the record or on a
+        source later.
+
+        Raises:
+            TimeFValidationError: If two root sources, or two child sources of one source, have the
+                same name.
+        """  # noqa: DOC502 - raised by check_sibling_names
+        check_sibling_names(self.sources, self._label)
+        for source in self.walk_sources():
+            check_sibling_names(source.sources, f"source {source.name!r}")
 
     def walk_signals(self) -> Iterable[Signal]:
         """Yield every signal in deterministic source and signal order."""
