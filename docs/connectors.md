@@ -10,7 +10,9 @@ tags:
 
 A connector is the unit of dataset integration. Each dataset has one connector class. A connector
 fetches raw data and converts it into a [`TimeFDataset`](timef-dataset.md). A connector has no
-knowledge of the registry, the engine, or other connectors. The consumer SDK never runs a connector.
+knowledge of the registry, the engine, or other connectors. A child connector reads its parent
+releases only through the readers that the engine passes to it. The consumer SDK never runs a
+connector.
 
 `BaseConnector` is the connector contract in the `timenet` package. Concrete connectors ship in
 `timenet-connectors`, beside their [dataset cards](manifest.md).
@@ -36,8 +38,11 @@ The two stages stay separate. This lets the engine drive
 | --- | --- | --- |
 | `download(cache_dir)` | I/O only | Fetch or find raw files and return lightweight references. The method is idempotent and does not parse data. |
 | `convert(raw_refs)` | local work | Parse the references into a `TimeFDataset`. Do not use the network. |
+| `compose(raw_refs, context)` | local work | Build a child dataset from the references and the opened parent releases. The default calls `convert(raw_refs)`. |
 
-You must implement `convert`. It is the only required method. `download` depends on I/O, so it has
+You must implement `convert`. It is the only required method, unless the dataset card declares
+parent releases. Then you implement `compose` instead, as
+[Compose a child dataset](#compose-a-child-dataset) describes. `download` depends on I/O, so it has
 two forms. You can override `download(cache_dir)` for a synchronous fetch. Alternatively, you can
 define `async download_async(cache_dir)` to fetch artifacts at the same time. Implement only one of
 these two forms. The engine always calls the synchronous `download()`. Its default implementation
@@ -297,6 +302,86 @@ references directly to `convert()` and skip `download`.
 After the build, you can load and inspect a dataset with the SDK. See `examples/load_tsqa.py`. This
 example loads a dataset and calls `describe()` to print its identity, its counts, its columns per
 spec, and a record preview.
+
+## Compose a child dataset
+
+A child dataset reuses objects of other datasets, its parent releases. Its card declares each
+parent release under `parents`, by a parent alias. A parent alias is the name that the child gives
+the parent:
+
+```yaml
+parents:
+  ptbxl: physionet/ptb-xl@1.0.0
+```
+
+The connector of a child overrides `compose(raw_refs, context)`. The default `compose` calls
+`convert(raw_refs)`. If the card declares parents and the connector does not override `compose`,
+the build raises before it opens a parent or downloads anything.
+
+Before the connector runs, the build prepares each parent release in the output registry, as
+[Prepare parent releases](build.md#prepare-parent-releases) describes. The engine then opens each
+parent as a `TimeFReader` and passes the readers in a `BuildContext`, by parent alias. The connector
+copies objects into the child with `dataset.import_from()`:
+
+```python
+from timenet.connectors.context import BuildContext
+from timenet.dataset import TimeFDataset
+from timenet.types.reference_keys import ParentAlias
+
+
+def compose(self, raw_refs, context: BuildContext) -> TimeFDataset:
+    dataset = TimeFDataset(metadata=self.metadata())
+    ptbxl = context.parents[ParentAlias("ptbxl")]
+    # Find parent Records by a key of the source in their metadata.
+    selected = [
+        record.id
+        for record in ptbxl.iter_records(with_annotations=False)
+        if record.metadata["ecg_id"] in {1, 2}
+    ]
+    # Import them by the IDs that the parent gives them.
+    imported = dataset.import_from(ptbxl, records=selected)
+    for copy in imported.records.values():
+        copy.metadata["cohort"] = "selected"
+    return dataset
+```
+
+[Importing from a parent](timef-dataset.md#importing-from-a-parent) describes what an import copies,
+how a later import reuses the copies, and how to remove imported objects.
+
+After `compose` returns, the engine records each declared parent in the dataset: its card and its
+lineage. It does this also for a parent that the connector imported nothing from. A connector
+therefore does not call `import_from()` only to record a parent. The card of the child keeps the
+access that its author declared. The effective access level of the child is the strictest level of
+its card and of the cards in its lineage, as [The parent](timef-dataset.md#the-parent) describes.
+
+The copies keep handles to the stored values of the parent. The engine therefore writes the dataset
+before it closes the parent readers. A test must do the same. Open the parents with
+`open_parents()` from `timenet.engine`, and write the composed dataset inside the `with` block:
+
+```python
+from timenet.engine import open_parents, store_dataset
+from timenet.registry import LocalRegistry
+
+connector = MyConnector()
+with open_parents(connector.metadata(), LocalRegistry(root)) as context:
+    dataset = connector.compose(connector.download(cache_dir), context)
+    store_dataset(dataset, root)
+```
+
+The written child stores no values for the copies. It reads them from the payload sources that its
+manifest pins, as [Shared payloads](timef-format.md#shared-payloads) describes.
+
+### PTB-XL and ECG-QA-CoT
+
+`physionet/ptb-xl` holds the recordings and the clinical annotations of PTB-XL 1.0.3, without
+tasks. Each Record carries its `ecg_id` in its metadata. Each Record also carries `strat_fold` and
+the split that PTB-XL recommends for it. A child that honors the folds of PTB-XL keeps these
+imported annotations and sets the split of its tasks from them.
+
+`physionet/ecg-qa-cot` follows the split of its own question release instead. It keeps the `sex`
+and `age` annotations of PTB-XL, clears the other imported annotations, and adds its own `split` to
+each Record. It builds the clinical context of each question from the imported annotations. It
+downloads no recordings and writes no values files.
 
 ---
 
