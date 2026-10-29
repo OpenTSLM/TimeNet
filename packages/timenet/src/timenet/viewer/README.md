@@ -11,6 +11,8 @@ A read-only browser view of a TimeNet registry, or of one dataset version. Start
   security headers.
 - `errors.py` holds the structured error every API route returns, the mapping of registry and
   storage failures to safe responses, and dataset reference validation.
+- `tasks.py` serves the task list and one task's detail; `models.py` holds their response
+  models and the projections from TimeF objects.
 - `app.py` builds the application: the catalog and manifest API, the page, and its assets.
 - `static/` holds the built frontend. It is committed, so installing `timenet[viewer]` needs no
   Node.js.
@@ -31,6 +33,14 @@ you commit frontend changes.
 
 `npm test` runs the frontend tests in Node.js with jsdom; no browser is needed. Each test file
 calls `tests/harness.mjs` to bundle the sources it renders.
+
+## Loading costs
+
+Task pages limit the response, but later pages repeat a scan and hydrate skipped tasks. Opening a
+task scans from the start; a missing ID scans every task. Without a split filter, the reader
+hydrates all records before yielding tasks. Split filtering can still hydrate referenced records
+and dependencies. Opening a remote version may download the full dataset. Signal values remain
+lazy.
 
 ## TODO
 

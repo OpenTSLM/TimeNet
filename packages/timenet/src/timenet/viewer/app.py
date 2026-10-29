@@ -1,4 +1,4 @@
-"""Read-only HTTP catalog and manifest contract for a TimeF registry."""
+"""Read-only HTTP catalog, manifest, and task browsing for a TimeF registry."""
 
 from importlib.resources import files
 from typing import Any
@@ -12,6 +12,7 @@ from timenet.registry import BaseRegistry
 from timenet.types import DatasetMetadata
 from timenet.viewer.errors import fail, install_error_handlers, registry_errors, resolve_version
 from timenet.viewer.security import install_security
+from timenet.viewer.tasks import install_task_routes
 
 
 _QUERY_MAX_LENGTH = 100
@@ -154,6 +155,8 @@ def create_app(
             return initial_manifest.to_dict()
         with registry_errors("manifest"):
             return registry.get_manifest(dataset_id, version).to_dict()
+
+    install_task_routes(app, registry, initial_manifest)
 
     @app.get("/", response_class=HTMLResponse)
     def shell() -> str:
