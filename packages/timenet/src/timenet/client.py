@@ -24,6 +24,7 @@ from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry._paths import release_dir
 from timenet.registry.base import ProgressCallback
 from timenet.types import Access, DatasetMetadata, Domain, License, Task
+from timenet.types.access import access_requirements, effective_access
 from timenet.types.references import DatasetRef, is_latest, split_ref
 
 
@@ -268,12 +269,18 @@ class TimeNet:
         """
         if isinstance(self._registry, LocalRegistry):
             return
-        metadata = self._registry.get_manifest(dataset_id, version).metadata
-        if metadata.access is Access.OPEN:
+        manifest = self._registry.get_manifest(dataset_id, version)
+        access = effective_access(manifest.metadata, manifest.lineage)
+        if access is Access.OPEN:
             return
+        # A child can need access to its ancestors, so the hint names every access page.
+        pages = "".join(
+            f" Get access at {item.access_url} for {item.release}."
+            for item in access_requirements(manifest.metadata, manifest.lineage)
+        )
         raise TimeNetAccessError(
-            f"{dataset_id!r} is {metadata.access.value}: TimeNet does not host its data. Get access at "
-            f"{metadata.access_url}, then build it locally with `timenet-build build {dataset_id}`."
+            f"{dataset_id!r} is {access.value}: TimeNet does not host its data.{pages} Then build it "
+            f"locally with `timenet-build build {dataset_id}`."
         )
 
     def open_torch(
