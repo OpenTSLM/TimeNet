@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the phamquiluan/rcaeval connector: the single source for this dataset's
+# metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
+# derived from the data into manifest.json.
+#
+# Evaluation convention: the tasks are the authors' benchmark, root cause analysis scored at two
+# levels. Each case has a ClassificationTask whose target is its root cause service, and, where
+# main.py scores an indicator (RE1 and RE2), one whose target is the indicator's metric Signal. The
+# scope is main.py's default window, 600 s on each side of the inject time. The paper defines no
+# split. Signals are archival raw: metrics at 1 s, logs and traces at their own event times, and
+# the authors' derived series at 15 s.
+yaml_schema_version: 1
+dataset_id: phamquiluan/rcaeval
+dataset_version: 1.0.0
+name: RCAEval
+description: >-
+  735 failure cases injected into three microservice systems (Online Boutique, Sock Shop, Train
+  Ticket), each with its metrics and, in RE2 and RE3, its logs and traces, posed as root cause
+  analysis: name the root cause service, and the metric that indicates the root cause.
+license: CC-BY-4.0
+source_url: https://zenodo.org/records/14590730
+citation: >-
+  Pham, L., Zhang, H., Ha, H., Salim, F., and Zhang, X. (2025). RCAEval: A Benchmark for Root
+  Cause Analysis of Microservice Systems with Telemetry Data. Companion Proceedings of the ACM Web
+  Conference 2025, 777-780. https://doi.org/10.1145/3701716.3715290
+access: open
+domains:
+  - observability
+tags:
+  - root-cause-analysis
+  - microservices
+  - aiops
+  - metrics
+  - logs
+  - traces
+  - benchmark
