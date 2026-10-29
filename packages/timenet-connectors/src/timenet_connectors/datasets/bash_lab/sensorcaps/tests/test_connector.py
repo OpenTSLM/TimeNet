@@ -194,9 +194,13 @@ def _assert_records_and_tasks(records, tasks):
             assert task.prompt == row["messages"][0]["content"]
             assert task.split is None
             assert task.metadata == {}
-            # The task's context is everything the caption was generated from, in Record order.
-            assert len(task.input_annotations) == len(record.annotations)
-            for given, attached in zip(task.input_annotations, record.annotations, strict=True):
+            # The task's context is the summary and the location, in Record order. The derived
+            # features stay on the record only.
+            context = [annotation for annotation in record.annotations if annotation.key in {"summary", "location"}]
+            assert [annotation.key for annotation in task.input_annotations] == [
+                annotation.key for annotation in context
+            ]
+            for given, attached in zip(task.input_annotations, context, strict=True):
                 assert given is attached or (given.key, given.value) == (attached.key, attached.value)
             assert task.resolved_input_modalities == frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
 
