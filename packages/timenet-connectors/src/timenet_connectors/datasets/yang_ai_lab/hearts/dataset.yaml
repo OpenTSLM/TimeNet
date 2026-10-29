@@ -1,0 +1,28 @@
+yaml_schema_version: 1
+dataset_id: yang-ai-lab/hearts
+dataset_version: 1.0.0
+name: HEARTS frozen test cases
+description: The released test cases of HEARTS, a benchmark of LLM reasoning over health time series.
+  The tasks ask about glucose, respiration, oxygen saturation, heart rate, cough, breathing, and speech
+  recordings from five upstream corpora, and one task adds meal photographs. Every task is a test item.
+  A forecast or imputation answer is held in a record of its own.
+license: OTHER
+license_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+domains:
+- health
+- respiratory
+- audio
+- cardiology
+tags:
+- benchmark
+- qa
+- reasoning
+- glucose
+- respiration
+- spo2
+- audio
+- cough
+- speech
+source_url: https://huggingface.co/datasets/yang-ai-lab/HEARTS
+citation: 'Li, Xiao, Joshi, Metwally, McDuff, Wang, Yang. HEARTS: Benchmarking LLM Reasoning on Health
+  Time Series. arXiv:2603.06638.'
