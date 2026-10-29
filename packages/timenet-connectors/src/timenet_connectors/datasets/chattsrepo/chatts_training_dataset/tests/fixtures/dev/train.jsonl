@@ -1,0 +1,1 @@
+{"input":"There is a time series of length 3: <ts><ts/>. Return a JSON summary.","output":"{\"trend\": \"steady\"}","timeseries":[[5.0,5.0,5.0]]}
