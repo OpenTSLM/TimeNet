@@ -91,3 +91,27 @@ async def download_hub_files(repo: str, filenames: Sequence[str], *, revision: s
     if missing:
         raise TimeNetDownloadError(f"{repo}@{revision} has no {', '.join(missing)}")
     return paths
+
+
+def hub_snapshot(repo: str, revision: str, cache_dir: Path, patterns: tuple[str, ...]) -> Path:
+    """Download files that match the patterns from a pinned dataset revision.
+
+    Returns:
+        The local snapshot directory.
+
+    Raises:
+        TimeNetDownloadError: If the revision cannot be listed or no files match.
+    """
+    from fnmatch import fnmatchcase  # noqa: PLC0415
+
+    from huggingface_hub import list_repo_files  # noqa: PLC0415
+
+    try:
+        names = list_repo_files(repo, repo_type="dataset", revision=revision)
+    except Exception as exc:
+        raise TimeNetDownloadError(f"Could not list {repo}@{revision}: {exc}") from exc
+    selected = [name for name in names if any(fnmatchcase(name, pattern) for pattern in patterns)]
+    if not selected:
+        raise TimeNetDownloadError(f"{repo}@{revision} has no files matching {patterns}")
+    paths = asyncio.run(download_hub_files(repo, selected, revision=revision, cache_dir=cache_dir))
+    return paths[0].parents[len(Path(selected[0]).parts) - 1]
