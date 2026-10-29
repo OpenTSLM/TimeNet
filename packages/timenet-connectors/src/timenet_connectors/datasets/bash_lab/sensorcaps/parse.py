@@ -1,6 +1,6 @@
 """Read SensorCaps JSONL rows into their messages, descriptive fields, and validated sensor arrays."""
 
-from collections.abc import Iterator
+from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 import json
 from typing import Annotated
@@ -13,6 +13,13 @@ from timenet_connectors.bases.huggingface import HubFileRef
 
 EXPORTED_SAMPLES = 60
 """Readings per sensor in every row of the pinned v2 release."""
+FEATURE_HEADINGS = tuple(
+    f"{sensor} {statistic}"
+    for statistic in ("moving average", "FFT", "minimum", "maximum", "median", "variance")
+    for sensor in ("Gyroscope", "Accelerometer")
+)
+"""The derived features every v2 user message carries after its sensor arrays, in source order."""
+_FIELDS = frozenset({"Summary", "Accelerometer", "Gyroscope", "Location"})
 _ROLES = ("system", "user", "assistant")
 _XYZValues = Annotated[list[Annotated[FiniteFloat, Strict()]], Field(min_length=3, max_length=3)]
 _SENSOR_VALUES = TypeAdapter(Annotated[list[_XYZValues], Field(min_length=1)])
@@ -45,8 +52,10 @@ class ParsedRow:
     caption: str
     summary: str
     location: str | None
-    features: str
+    features: Mapping[str, str]
+    """Each derived feature's original text, keyed by its heading in :data:`FEATURE_HEADINGS`."""
     values: tuple[list[list[float]], list[list[float]]]
+    """The accelerometer's and then the gyroscope's readings."""
 
 
 def _sensor_values(text: str, name: str) -> list[list[float]]:
@@ -66,28 +75,41 @@ def _sensor_values(text: str, name: str) -> list[list[float]]:
         raise TimeFValidationError(f"{name}: {exc}") from exc
 
 
-def _user_sections(user: str) -> tuple[dict[str, str], str]:
-    """Separate structured fields from verbatim multiline feature text.
+def _user_sections(user: str) -> tuple[dict[str, str], dict[str, str]]:
+    """Split the user message into its structured fields and its derived features.
 
     Returns:
-        Named source fields and the remaining original feature text.
+        Named source fields, and each derived feature's original text keyed by its heading.
 
     Raises:
-        TimeFValidationError: If a structured field is repeated.
+        TimeFValidationError: If a section is repeated, a derived feature is missing, or a line
+            belongs to no known section.
     """
     sections: dict[str, str] = {}
-    feature_lines: list[str] = []
+    feature_lines: dict[str, list[str]] = {}
+    current: list[str] | None = None
     for line in user.splitlines(keepends=True):
         heading, separator, value = line.partition(":")
-        if separator and heading in {"Summary", "Accelerometer", "Gyroscope", "Location"}:
+        if separator and heading in _FIELDS:
             if heading in sections:
                 raise TimeFValidationError(f"repeated {heading} section")
             sections[heading] = value.strip()
+            current = None
+        elif separator and heading in FEATURE_HEADINGS:
+            if heading in feature_lines:
+                raise TimeFValidationError(f"repeated {heading} section")
+            current = feature_lines[heading] = [value]
+        elif current is not None and (not line.strip() or line[0].isspace()):
+            # NumPy prints a long statistic over indented continuation lines.
+            current.append(line)
         else:
-            # NumPy statistics can span lines and contain complex numbers or ellipses.
-            # Preserve their original text, including headings and whitespace.
-            feature_lines.append(line)
-    return sections, "".join(feature_lines)
+            raise TimeFValidationError(f"unexpected line in the user message: {line[:40]!r}")
+    missing = [heading for heading in FEATURE_HEADINGS if heading not in feature_lines]
+    if missing:
+        raise TimeFValidationError(f"missing derived features: {missing}")
+    # Keep each statistic's original text, including complex numbers and NumPy ellipses.
+    features = {heading: "".join(feature_lines[heading]).strip() for heading in FEATURE_HEADINGS}
+    return sections, features
 
 
 def _message_contents(row: JsonValue) -> tuple[str, str, str]:
@@ -120,7 +142,7 @@ def _section_values(sections: dict[str, str]) -> tuple[list[list[float]], list[l
     """Validate structured fields and decode the paired sensor arrays.
 
     Returns:
-        Accelerometer and gyroscope readings in source order.
+        Accelerometer and gyroscope readings.
 
     Raises:
         TimeFValidationError: If fields are missing or invalid for the pinned release.
