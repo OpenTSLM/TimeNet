@@ -1,14 +1,14 @@
 # yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
 yaml_schema_version: 1
 dataset_id: bash-lab/sensorcaps
-dataset_version: 1.0.0
+dataset_version: 1.1.0
 name: SensorCaps
 description: >-
   The LLaSA paper's 35,960 SensorCaps v2 IMU-caption pairs from five activity
-  datasets. Each task repeats how GPT-4o-mini generated its caption: the generation
+  datasets. Each task follows how GPT-4o-mini generated its caption: the generation
   instruction as prompt, accelerometer and gyroscope readings at 10 Hz, and the
-  activity summary, derived features, and PAMAP2's sensor location as input
-  annotations. Signals keep the source's channel labels, which do not match
+  activity summary and PAMAP2's sensor location as input annotations. The derived
+  features are record annotations only. Signals keep the source's channel labels, which do not match
   PAMAP2's physical channels. Published PAMAP2 values retain upstream missing-data
   processing consistent with zero filling before resampling; original gaps are not
   marked in the release.

@@ -13,23 +13,27 @@ describe, are not imported. Each row becomes one TimeF record and one captioning
 
 ## Records and captioning tasks
 
-Each task repeats how GPT-4o-mini generated its caption: the row's system message is the prompt,
-and the user message's contents are the task's inputs.
+Each task follows how GPT-4o-mini generated its caption: the row's system message is the prompt, and
+the readings, the summary, and the location of the user message are the task's inputs. The derived
+features of the user message are record annotations only.
 
 | Source row | TimeF access |
 | --- | --- |
 | System message: the generation instruction | `task.prompt`, verbatim |
 | `Summary:` (the activity label) | `summary` input annotation |
 | `Gyroscope:` and `Accelerometer:` readings | Signals in `task.inputs[0]` |
-| Derived features: moving average, FFT, minimum, maximum, median, variance | 12 input annotations, such as `gyroscope_fft` |
+| Derived features: moving average, FFT, minimum, maximum, median, variance | 12 record annotations, such as `gyroscope_fft` |
 | `Location:` (PAMAP2 only) | `location` input annotation |
 | Assistant message: the feature summary and narration | `task.targets[0]`, verbatim |
 | Source partition and row | `record.metadata`: `partition` and `row` |
 
-The input annotations are the record's annotations, in the user message's order. Their keys follow
-the labels the instruction names. Feature text keeps the original NumPy printing, including complex
-numbers and ellipses. The connector does not parse or recompute it, and the narrations refer to it.
-Captions are kept without splitting or truncation.
+The record's annotations are in the user message's order. Their keys follow the labels the
+instruction names. The task's input annotations are the `summary` and `location` among them. The
+derived features are not task inputs: they are about 36,000 characters of text per row, and the
+source computed them from a 120-reading window, not from the 60 published readings (see "Derived
+features" below). To use them, read `task.inputs[0].annotations`. Feature text keeps the original NumPy printing,
+including complex numbers and ellipses. The connector does not parse or recompute it, and the
+narrations refer to it. Captions are kept without splitting or truncation.
 
 The tasks have no split. Table 1 of the paper assigns whole source datasets to training or testing,
 and marks PAMAP2 as both, so the release gives no split per row.
