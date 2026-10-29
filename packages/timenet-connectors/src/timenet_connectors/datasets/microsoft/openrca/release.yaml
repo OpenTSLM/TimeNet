@@ -1,0 +1,386 @@
+# Trusted facts for the OpenRCA release. A public mirror of the upstream files is pinned to an
+# immutable Hugging Face revision because the official Google Drive archives are quota-limited.
+# Prompt/schema facts are pinned to this upstream source commit.
+
+upstream_commit: c1bd4af7f635171a1c31cdd567c07d698dff6abc
+repository: tracer-cloud/opensre
+revision: 07714872ea2cec77c13f9dec17a688e9df9621d1
+timezone: Asia/Shanghai
+
+task_fields:
+  task_1: [datetime]
+  task_2: [reason]
+  task_3: [component]
+  task_4: [datetime, reason]
+  task_5: [datetime, component]
+  task_6: [component, reason]
+  task_7: [datetime, component, reason]
+
+# Long-form metric tables deliberately leave `groups` empty. Their component/KPI identifiers stay
+# as row-aligned Signals beside `value`, which preserves the source table without creating tens of
+# thousands of tiny TimeF Signals. Naturally wide application/service tables still group by entity.
+systems:
+  bank:
+    prefix: Bank
+    display_name: Bank
+    context: >-
+      A banking microservice platform. Application metrics contain request rate, success rate,
+      request count, and mean response time. Container metrics contain resource KPIs. Metrics and
+      logs use Unix seconds. Bank trace files normally use Unix milliseconds, but three published
+      days unexpectedly use Unix seconds; the connector validates and normalizes either form.
+    component_candidates:
+      - apache01
+      - apache02
+      - Tomcat01
+      - Tomcat02
+      - Tomcat03
+      - Tomcat04
+      - MG01
+      - MG02
+      - IG01
+      - IG02
+      - Mysql01
+      - Mysql02
+      - Redis01
+      - Redis02
+    reason_candidates:
+      - high CPU usage
+      - high memory usage
+      - network latency
+      - network packet loss
+      - high disk I/O read usage
+      - high disk space usage
+      - high JVM CPU load
+      - JVM Out of Memory (OOM) Heap
+    tables:
+      - path: metric/metric_app.csv
+        kind: metrics
+        timestamp: timestamp
+        timestamp_unit: seconds
+        groups: [tc]
+        columns:
+          timestamp: int64
+          rr: float64
+          sr: float64
+          cnt: float64
+          mrt: float64
+          tc: str
+      - path: metric/metric_container.csv
+        kind: metrics
+        timestamp: timestamp
+        timestamp_unit: seconds
+        groups: []
+        columns:
+          timestamp: int64
+          cmdb_id: str
+          kpi_name: str
+          value: float64
+      - path: trace/trace_span.csv
+        kind: traces
+        timestamp: timestamp
+        timestamp_unit: seconds_or_milliseconds
+        groups: []
+        nullable_strings: [parent_id]
+        columns:
+          timestamp: int64
+          cmdb_id: str
+          parent_id: str
+          span_id: str
+          trace_id: str
+          duration: float64
+      - path: log/log_service.csv
+        kind: logs
+        timestamp: timestamp
+        timestamp_unit: seconds
+        groups: [cmdb_id, log_name]
+        text_columns: [value]
+        columns:
+          log_id: str
+          timestamp: int64
+          cmdb_id: str
+          log_name: str
+          value: str
+
+  market_cloudbed_1:
+    prefix: Market/cloudbed-1
+    display_name: Market cloudbed-1
+    context: &market_context >-
+      An e-commerce microservice platform with four pods per service and failover. Root causes can
+      occur at node, pod, or service level. Container metric IDs combine node and pod names; traces
+      and logs use pod names. Metrics and logs use Unix seconds; traces use Unix milliseconds.
+    component_candidates: &market_components
+      - node-1
+      - node-2
+      - node-3
+      - node-4
+      - node-5
+      - node-6
+      - frontend-0
+      - frontend-1
+      - frontend-2
+      - frontend2-0
+      - shippingservice-0
+      - shippingservice-1
+      - shippingservice-2
+      - shippingservice2-0
+      - checkoutservice-0
+      - checkoutservice-1
+      - checkoutservice-2
+      - checkoutservice2-0
+      - currencyservice-0
+      - currencyservice-1
+      - currencyservice-2
+      - currencyservice2-0
+      - adservice-0
+      - adservice-1
+      - adservice-2
+      - adservice2-0
+      - emailservice-0
+      - emailservice-1
+      - emailservice-2
+      - emailservice2-0
+      - cartservice-0
+      - cartservice-1
+      - cartservice-2
+      - cartservice2-0
+      - productcatalogservice-0
+      - productcatalogservice-1
+      - productcatalogservice-2
+      - productcatalogservice2-0
+      - recommendationservice-0
+      - recommendationservice-1
+      - recommendationservice-2
+      - recommendationservice2-0
+      - paymentservice-0
+      - paymentservice-1
+      - paymentservice-2
+      - paymentservice2-0
+      - frontend
+      - shippingservice
+      - checkoutservice
+      - currencyservice
+      - adservice
+      - emailservice
+      - cartservice
+      - productcatalogservice
+      - recommendationservice
+      - paymentservice
+    reason_candidates: &market_reasons
+      - container CPU load
+      - container memory load
+      - container network packet retransmission
+      - container network packet corruption
+      - container network latency
+      - container packet loss
+      - container process termination
+      - container read I/O load
+      - container write I/O load
+      - node CPU load
+      - node CPU spike
+      - node memory consumption
+      - node disk read I/O consumption
+      - node disk write I/O consumption
+      - node disk space consumption
+    tables: &market_tables
+      - path: metric/metric_container.csv
+        kind: metrics
+        timestamp: timestamp
+        timestamp_unit: seconds
+        groups: []
+        columns: &market_long_metric_columns
+          timestamp: int64
+          cmdb_id: str
+          kpi_name: str
+          value: float64
+      - path: metric/metric_mesh.csv
+        kind: metrics
+        timestamp: timestamp
+        timestamp_unit: seconds
+        groups: []
+        columns: *market_long_metric_columns
+      - path: metric/metric_node.csv
+        kind: metrics
+        timestamp: timestamp
+        timestamp_unit: seconds
+        groups: []
+        columns: *market_long_metric_columns
+      - path: metric/metric_runtime.csv
+        kind: metrics
+        timestamp: timestamp
+        timestamp_unit: seconds
+        groups: []
+        columns: *market_long_metric_columns
+      - path: metric/metric_service.csv
+        kind: metrics
+        timestamp: timestamp
+        timestamp_unit: seconds
+        groups: [service]
+        columns:
+          service: str
+          timestamp: int64
+          rr: float64
+          sr: float64
+          mrt: float64
+          count: float64
+      - path: trace/trace_span.csv
+        kind: traces
+        timestamp: timestamp
+        timestamp_unit: milliseconds
+        groups: []
+        nullable_strings: [parent_span]
+        columns:
+          timestamp: int64
+          cmdb_id: str
+          span_id: str
+          trace_id: str
+          duration: float64
+          type: str
+          status_code: str
+          operation_name: str
+          parent_span: str
+      - path: log/log_proxy.csv
+        kind: logs
+        timestamp: timestamp
+        timestamp_unit: seconds
+        groups: [cmdb_id, log_name]
+        text_columns: [value]
+        columns: &market_log_columns
+          log_id: str
+          timestamp: int64
+          cmdb_id: str
+          log_name: str
+          value: str
+      - path: log/log_service.csv
+        kind: logs
+        timestamp: timestamp
+        timestamp_unit: seconds
+        groups: [cmdb_id, log_name]
+        text_columns: [value]
+        columns: *market_log_columns
+
+  market_cloudbed_2:
+    prefix: Market/cloudbed-2
+    display_name: Market cloudbed-2
+    context: *market_context
+    component_candidates: *market_components
+    reason_candidates: *market_reasons
+    tables: *market_tables
+
+  telecom:
+    prefix: Telecom
+    display_name: Telecom
+    deployment_workbook: AppTelecomDeploymentList.xlsx
+    context: >-
+      A telecom database service system. Root causes can occur at node, container, or service level.
+      The deployment workbook maps components to their hosts. All telemetry timestamps use Unix
+      milliseconds.
+    component_candidates:
+      - os_001
+      - os_002
+      - os_003
+      - os_004
+      - os_005
+      - os_006
+      - os_007
+      - os_008
+      - os_009
+      - os_010
+      - os_011
+      - os_012
+      - os_013
+      - os_014
+      - os_015
+      - os_016
+      - os_017
+      - os_018
+      - os_019
+      - os_020
+      - os_021
+      - os_022
+      - docker_001
+      - docker_002
+      - docker_003
+      - docker_004
+      - docker_005
+      - docker_006
+      - docker_007
+      - docker_008
+      - db_001
+      - db_002
+      - db_003
+      - db_004
+      - db_005
+      - db_006
+      - db_007
+      - db_008
+      - db_009
+      - db_010
+      - db_011
+      - db_012
+      - db_013
+    reason_candidates:
+      - CPU fault
+      - network delay
+      - network loss
+      - db connection limit
+      - db close
+    tables:
+      - path: metric/metric_app.csv
+        kind: metrics
+        timestamp: startTime
+        timestamp_unit: milliseconds
+        groups: [serviceName]
+        columns:
+          serviceName: str
+          startTime: int64
+          avg_time: float64
+          num: float64
+          succee_num: float64
+          succee_rate: float64
+      - path: metric/metric_container.csv
+        kind: metrics
+        timestamp: timestamp
+        timestamp_unit: milliseconds
+        groups: []
+        columns: &telecom_long_metric_columns
+          itemid: str
+          name: str
+          bomc_id: str
+          timestamp: int64
+          value: float64
+          cmdb_id: str
+      - path: metric/metric_middleware.csv
+        kind: metrics
+        timestamp: timestamp
+        timestamp_unit: milliseconds
+        groups: []
+        columns: *telecom_long_metric_columns
+      - path: metric/metric_node.csv
+        kind: metrics
+        timestamp: timestamp
+        timestamp_unit: milliseconds
+        groups: []
+        columns: *telecom_long_metric_columns
+      - path: metric/metric_service.csv
+        kind: metrics
+        timestamp: timestamp
+        timestamp_unit: milliseconds
+        groups: []
+        columns: *telecom_long_metric_columns
+      - path: trace/trace_span.csv
+        kind: traces
+        timestamp: startTime
+        timestamp_unit: milliseconds
+        groups: []
+        nullable_strings: [pid, dsName, serviceName]
+        columns:
+          callType: str
+          startTime: int64
+          elapsedTime: float64
+          success: bool
+          traceId: str
+          id: str
+          pid: str
+          cmdb_id: str
+          dsName: str
+          serviceName: str
