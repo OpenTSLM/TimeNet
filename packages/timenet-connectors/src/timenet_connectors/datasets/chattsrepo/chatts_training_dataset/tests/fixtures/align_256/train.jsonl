@@ -1,0 +1,2 @@
+{"input":"There are two metrics: Requests: <ts><ts/>; Success Rate: <ts><ts/>. Which one rises?","output":"Requests rises while Success Rate falls.","timeseries":[[1.234567890123,2.5,3.75],[0.9,0.8,0.7]]}
+{"input":"There is another time series of length 3: <ts><ts/>. What is its maximum?","output":"Its maximum is 12.0.","timeseries":[[10.0,12.0,11.0]]}
