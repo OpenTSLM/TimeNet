@@ -50,7 +50,7 @@ Signals can reference the same immutable `TimeAxis`.
 
 | Table | Purpose |
 | --- | --- |
-| `records` | Recording sessions and session-level timing metadata. |
+| `records` | Recording sessions, session-level timing metadata, and the order in which readers list the records. |
 | `clocks` | Record start times, shared by records that use the same `TimeOrigin`. |
 | `sources` | Recursive sources, linked to their record and parent source by ID. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
