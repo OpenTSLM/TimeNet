@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 
 from timenet.dataset import IrregularAxis, Record, RegularAxis, Signal, Source, TimeFDataset
-from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetFileError
 from timenet.format.control_reader import DuckDBControlReader
 from timenet.format.storage import StorageSources
 from timenet.format.stored_array import ChunkLocation, StoredArray
@@ -57,7 +57,8 @@ def store(root, dataset, **kwargs):
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
-def test_prepared_shared_payloads_do_not_open_parent_catalogs(tmp_path, monkeypatch, backend):
+@pytest.mark.parametrize("read_mode", ["read", "stream"])
+def test_prepared_shared_payloads_do_not_open_parent_catalogs(tmp_path, monkeypatch, backend, read_mode):
     original = make_dataset()
     text = "A detailed clinical report. " * 300
     original.tasks[0].prompt = text
@@ -97,7 +98,17 @@ def test_prepared_shared_payloads_do_not_open_parent_catalogs(tmp_path, monkeypa
     (parent_dir / "control.duckdb").rename(parent_dir / "unavailable.duckdb")
     (parent_dir / "manifest.json").unlink()
     with TimeFReader(prepared) as child_reader:
-        assert child_reader.read().records[0].signals[0].to_arrow().equals(expected)
+        if read_mode == "stream":
+            # An eager batch loads the values that the parent stores, without the parent's catalog.
+            (record,) = child_reader.iter_records(load=LoadPlan.ALL_EAGER)
+            assert record.signals[0].to_arrow().equals(expected)
+            assert [
+                (annotation.value.is_loaded, annotation.value.read())
+                for annotation in record.annotations
+                if isinstance(annotation.value, StoredText)
+            ] == [(True, text)]
+        else:
+            assert child_reader.read().records[0].signals[0].to_arrow().equals(expected)
         assert child_reader.read_task_table()["prompt"].to_pylist() == [text]
         assert child_reader.read_target_table()["text_value"].to_pylist() == [text]
         assert text in child_reader.read_annotation_table()["text_value"].to_pylist()
@@ -464,10 +475,14 @@ def test_a_release_cannot_reuse_payloads_of_a_source_that_reads_it(tmp_path):
 def test_opening_names_a_missing_source_and_the_root_it_searched(tmp_path):
     parent_dir, child_dir = _parent_and_child(tmp_path)
     shutil.rmtree(parent_dir)
-    with pytest.raises(
-        TimeNetDatasetNotFoundError, match=rf"payload source test/p@1\.0\.0 of test/c@1\.0\.0 is not in {tmp_path}$"
-    ):
+    message = rf"payload source test/p@1\.0\.0 of test/c@1\.0\.0 is not in {tmp_path}"
+    with pytest.raises(TimeNetDatasetNotFoundError, match=rf"{message}\.$"):
         open_local_version(child_dir)
+    # The reader's own way in names its remedies, in a sentence of their own.
+    with pytest.raises(
+        TimeNetDatasetNotFoundError, match=rf"{message}\. Pass sources_root= .* TimeNet\.download\(\)\.$"
+    ):
+        TimeFReader.open(child_dir)
 
 
 @pytest.mark.parametrize("damage", ["missing", "truncated"])
@@ -485,10 +500,10 @@ def test_opening_names_a_missing_or_truncated_file_with_its_sizes(tmp_path, rele
         path = parent_dir / part.path
     if damage == "missing":
         path.unlink()
-        message = rf"{owner}: file '{part.path}' is missing; expected {part.size} bytes"
+        message = rf"{owner}: file '{part.path}' is missing, expected {part.size:,} bytes\.$"
     else:
         path.write_bytes(path.read_bytes()[:-1])
-        message = rf"{owner}: file '{part.path}' has {part.size - 1} bytes; expected {part.size}"
+        message = rf"{owner}: file '{part.path}' has {part.size - 1:,} bytes, expected {part.size:,} bytes\.$"
     with pytest.raises(TimeFFormatError, match=message):
         open_local_version(child_dir)
 
@@ -559,7 +574,9 @@ def test_verify_hashes_the_files_a_child_reuses(tmp_path):
     with (
         TimeFReader(open_local_version(child_dir)) as reader,
         pytest.raises(
-            TimeFFormatError, match=rf"checksum mismatch for {part.path} of payload source test/p@1\.0\.0: pinned"
+            TimeNetFileError,
+            match=rf"^payload source test/p@1\.0\.0 of test/c@1\.0\.0: file '{part.path}' has sha256:\w+, "
+            rf"expected {part.checksum}\.$",
         ),
     ):
         reader.verify()

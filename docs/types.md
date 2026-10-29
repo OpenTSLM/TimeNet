@@ -260,6 +260,7 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeFNullValuesError` | Values contain nulls that NumPy cannot hold. A `TimeFValidationError`. |
 | `TimeFNotFoundError` | An ID, parent alias, or parent release names nothing in the dataset, or the stored object has another kind. A `TimeFValidationError` and a `LookupError`. |
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
+| `TimeNetFileError` | A file of a release is missing, or does not match its manifest record. A `TimeFFormatError`. |
 | `TimeFReaderError` | A reader could not complete a read, e.g. its connection was closed while the read ran. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
 

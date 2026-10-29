@@ -6,9 +6,18 @@ SDK's whole knowledge of building to one protocol and one lookup, and lets a thi
 package plug in the same way the first-party one does.
 """
 
+from collections.abc import Mapping
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
+
+from timenet.types import DatasetMetadata
+from timenet.types.references import DatasetRef
+
+
+if TYPE_CHECKING:
+    from timenet.manifest import PayloadSource
+    from timenet.registry import BaseRegistry
 
 
 ENTRY_POINT_GROUP = "timenet.builders"
@@ -46,13 +55,44 @@ class BuilderBackend(Protocol):
         """
         ...
 
-    def build(self, dataset_id: str, root: Path, *, force: bool = False) -> Path:
+    def card(self, dataset_id: str) -> DatasetMetadata | None:
+        """Return the card the connector declares, without importing or building it.
+
+        A build planner reads the card for a parent's exact version, its own parents, and its access
+        requirement before anything runs. Answer without importing the connector, like :meth:`knows`.
+
+        Args:
+            dataset_id: The dataset id.
+
+        Returns:
+            The validated card, or ``None`` if it cannot be read.
+        """
+        ...
+
+    def build(  # noqa: PLR0913
+        self,
+        dataset_id: str,
+        root: Path,
+        *,
+        force: bool = False,
+        build_parents: bool = False,
+        fetch_from: "str | BaseRegistry | None" = None,
+        pinned_by: "Mapping[DatasetRef, PayloadSource] | None" = None,
+    ) -> Path:
         """Build the dataset into a registry directory.
+
+        Missing parent releases are prepared before the build starts, or the build fails before
+        any download. Each one is reused, copied from ``fetch_from``, or built when
+        ``build_parents`` is set. A build with ``pinned_by`` publishes the release only if it
+        reproduces each pinned file.
 
         Args:
             dataset_id: The dataset id.
             root: The output registry directory.
             force: Rebuild even if the version is already built.
+            build_parents: Build missing parent releases from their installed connectors.
+            fetch_from: The registry, or its URI, to copy missing parent releases from.
+            pinned_by: The releases that already read files of this release, with their pins.
 
         Returns:
             The committed version directory.
@@ -74,3 +114,21 @@ def find_builder(dataset_id: str) -> BuilderBackend | None:
         if backend.knows(dataset_id):
             return backend
     return None
+
+
+def exact_builder(reference: DatasetRef) -> BuilderBackend | None:
+    """Return the backend whose connector card declares exactly this release.
+
+    A connector builds one version, the one on its card. Building a release that others already
+    pin needs that exact version.
+
+    Args:
+        reference: The dataset ID and version.
+
+    Returns:
+        The backend, or ``None`` when no installed backend claims the dataset or its card declares
+        another version.
+    """
+    builder = find_builder(reference.dataset_id)
+    card = None if builder is None else builder.card(reference.dataset_id)
+    return builder if card is not None and card.dataset_version == reference.version else None
