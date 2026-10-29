@@ -427,7 +427,12 @@ child restructured the Sources of the copy, the name can find another Source, or
 `TimeFValidationError`.
 
 Do not assign `Source.signals` or `Source.sources` on a copy. A later import then can attach an
-annotation that the copy already holds a second time.
+annotation that the copy already holds a second time. To remove a Signal from a copy, use
+`remove_signals()`.
+
+`remove_signals()` is in `timenet.dataset.edit`. It also drops each annotation that the copy keeps
+only because it holds that Signal, by the rules in [Signals](#signals). A later import that copies
+the Signal back then attaches these annotations once.
 
 ### The import map
 
@@ -451,6 +456,11 @@ The import state of a dataset is its parent cards, its lineage, and its import m
 written child restores the import state. It takes the parent cards and the lineage from the
 manifest, and the import map from the catalog. A later import into the dataset that `read()`
 returns uses the copies that the dataset holds. An import into the child in memory does the same.
+
+An edit keeps the import state too. `remove_records()` and `remove_signals()` give the new dataset
+the parent cards, the lineage, and the import map. The new map has no entries for the copies that
+the edit removes. `edit_version()` writes this state into the version that it derives. A later
+import into the edited dataset uses the copies that the dataset holds.
 
 If a later import selects or needs a removed object, the import copies the object again, under a
 new ID. So remove imported objects after your last import.
