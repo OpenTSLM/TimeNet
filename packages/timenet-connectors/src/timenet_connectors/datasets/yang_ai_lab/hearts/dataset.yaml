@@ -1,6 +1,13 @@
 yaml_schema_version: 1
 dataset_id: yang-ai-lab/hearts
 dataset_version: 1.0.0
+source_revision: 7c18df521ae36cbc6b61e17782f1ac08dc378ea1
+parents:
+  cgmacros: yang-ai-lab/hearts-cgmacros@1.0.0
+  coswara: yang-ai-lab/hearts-coswara@1.0.0
+  coughvid: yang-ai-lab/hearts-coughvid@1.0.0
+  harespod: yang-ai-lab/hearts-harespod@1.0.0
+  vctk: yang-ai-lab/hearts-vctk@1.0.0
 name: HEARTS frozen test cases
 description: The released test cases of HEARTS, a benchmark of LLM reasoning over health time series.
   The tasks ask about glucose, respiration, oxygen saturation, heart rate, cough, breathing, and speech
