@@ -95,6 +95,14 @@ h1 { margin: 12px 0 4px; font-size: clamp(32px, 5vw, 52px); line-height: 1.1; }
 .task-table th:nth-child(3) { width: 130px; }
 .task-table tbody tr:last-child td { border-bottom: 0; }
 .task-table tbody tr:hover { background: #f7faff; }
+.annotation-section h2 { margin: 0 0 8px; font-size: 15px; }
+.annotation-note { margin: 0 0 16px; color: #476078; }
+.annotation-table { width: 100%; border-collapse: collapse; font-size: 14px; }
+.annotation-table th, .annotation-table td { text-align: left; vertical-align: top; padding: 12px 16px; border-bottom: 1px solid #e6edf4; overflow-wrap: anywhere; }
+.annotation-table th { background: #edf3f8; color: #53677d; font-size: 12px; font-weight: 600; white-space: nowrap; }
+.annotation-table tbody tr:last-child td { border-bottom: 0; }
+.annotation-table summary { cursor: pointer; }
+.annotation-list ol { max-height: 320px; overflow: auto; margin: 8px 0 0; padding-left: 28px; line-height: 1.6; }
 .task-link { border: 0; background: none; color: #1762b6; cursor: pointer; padding: 0; font: inherit; text-align: left; }
 .task-id { display: inline-flex; align-items: baseline; gap: 8px; max-width: 100%; font-family: ui-monospace, SFMono-Regular, Menlo, monospace; overflow-wrap: anywhere; }
 .task-open { flex-shrink: 0; color: #7c92a8; font-family: inherit; }
@@ -132,6 +140,11 @@ h1 { margin: 12px 0 4px; font-size: clamp(32px, 5vw, 52px); line-height: 1.1; }
   .task-table td { display: block; padding: 0; border: 0; min-width: 0; }
   .task-table td:first-child, .task-table td:last-child { grid-column: 1 / -1; }
   .task-table td:not(:first-child)::before { content: attr(data-label); display: block; margin-bottom: 6px; color: #748396; font-size: 11px; }
+  .annotation-table, .annotation-table tbody, .annotation-table tr, .annotation-table td { display: block; }
+  .annotation-table thead { position: absolute; width: 1px; height: 1px; overflow: hidden; clip-path: inset(50%); }
+  .annotation-table tr { padding: 14px 16px; border-bottom: 1px solid #e6edf4; }
+  .annotation-table td { padding: 4px 0; border: 0; }
+  .annotation-table td::before { content: attr(data-label); display: block; color: #748396; font-size: 11px; }
   .task-preview { -webkit-line-clamp: 3; }
   .task-layout .facts { grid-template-columns: 1fr; padding: 20px; }
 }

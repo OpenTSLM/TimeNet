@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { TasksBrowser } from "./tasks";
 import { RecordsBrowser } from "./records";
+import { DatasetAnnotations } from "./annotations";
 
 type Metadata = {
   dataset_id: string;
@@ -249,6 +250,8 @@ export function App() {
           <div><h2>Tags</h2><p>{metadata.tags.join(", ") || "None"}</p></div>
           <div><h2>Citation</h2><p>{metadata.citation || "None declared"}</p></div>
         </section>
+
+        <DatasetAnnotations dataset={selection.dataset_id} version={selection.version} getJson={getJson} />
 
         <details className="raw">
           <summary>Full manifest JSON</summary>

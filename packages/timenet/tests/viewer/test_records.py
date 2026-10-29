@@ -30,6 +30,8 @@ from timenet.writer import TimeFWriter
 HEADERS = {"Authorization": "Bearer secret"}
 IDENTITY = {"dataset_id": "timenet/hello-world", "version": "1.0.0"}
 OPERATIONS = ["record", "signal-window"]
+# Routes that take a dataset reference but no record.
+DATASET_OPERATIONS = [*OPERATIONS, "dataset-annotations"]
 
 
 def _spec(**fields):
@@ -66,6 +68,7 @@ def dataset():
     )
     record.annotate(Annotation(key="cohort", value="A"))
     dataset.add_record(record=record)
+    dataset.annotate(Annotation(key="answer_options", value=["yes", "no"], description="Allowed answers."))
     return dataset
 
 
@@ -149,6 +152,27 @@ def test_record_metadata_remains_lazy(get, dataset, monkeypatch, no_global_reads
     assert next(s for s in detail["signals"] if s["name"] == "Irregular")["axis"]["first_us"] == 5
 
 
+def test_dataset_annotations_skip_record_hydration(get, monkeypatch, no_global_reads):
+    monkeypatch.setattr(TimeFReader, "iter_records", MagicMock(side_effect=AssertionError("hydrated a record")))
+    response = get("dataset-annotations")
+    assert response.status_code == 200
+    [annotation] = response.json()["annotations"]
+    assert annotation["key"] == "answer_options"
+    assert annotation["value_type"] == "list"
+    assert annotation["value"] == ["yes", "no"]
+    assert annotation["description"] == "Allowed answers."
+    assert annotation["span"] is None
+
+
+def test_dataset_without_annotations_returns_an_empty_list(tmp_path):
+    registry = LocalRegistry(tmp_path / "registry")
+    registry.store(make_dataset())
+    client = TestClient(create_app(registry, token="secret", origin="http://testserver"))
+    response = client.get("/api/v1/dataset-annotations", params=IDENTITY, headers=HEADERS)
+    assert response.status_code == 200
+    assert response.json() == {"annotations": []}
+
+
 @pytest.mark.parametrize(
     "extra,status",
     [
@@ -184,7 +208,7 @@ def test_missing_objects_and_invalid_arguments(get, reads, operation, params, st
     assert reads == []
 
 
-@pytest.mark.parametrize("operation", OPERATIONS)
+@pytest.mark.parametrize("operation", DATASET_OPERATIONS)
 def test_authentication_and_direct_isolation(registry, record_params, monkeypatch, operation):
     manifest = registry.get_manifest(**IDENTITY)
     forbidden = MagicMock(side_effect=AssertionError("accessed registry"))
@@ -207,6 +231,8 @@ def test_authentication_and_direct_isolation(registry, record_params, monkeypatc
         ("record", "annotations", 0),
         ("record", "response_bytes", 80),
         ("signal-window", "response_bytes", 80),
+        ("dataset-annotations", "annotations", 0),
+        ("dataset-annotations", "response_bytes", 80),
     ],
 )
 def test_collection_and_response_caps(get, reads, operation, field, limit):
@@ -411,7 +437,7 @@ def test_record_validation_failure_is_404_only_for_an_unknown_id(get, monkeypatc
     assert response.json()["detail"]["operation"] == "record"
 
 
-@pytest.mark.parametrize("operation", OPERATIONS)
+@pytest.mark.parametrize("operation", DATASET_OPERATIONS)
 def test_record_routes_use_the_canonical_version(registry, get, operation):
     manifest = registry.get_manifest(IDENTITY["dataset_id"], IDENTITY["version"])
     opener = MagicMock(wraps=registry.open_version)

@@ -1,6 +1,6 @@
-"""Bounded record projections and explicit scalar signal windows."""
+"""Bounded record and dataset annotation projections, and explicit scalar signal windows."""
 
-from collections.abc import Generator
+from collections.abc import Generator, Iterable
 from contextlib import contextmanager
 from dataclasses import dataclass
 import json
@@ -18,6 +18,7 @@ from timenet.json import JsonMapping
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import BaseRegistry
+from timenet.types import Annotation
 from timenet.types.clock import unix_us
 from timenet.types.text import read_value
 from timenet.viewer.errors import fail, registry_errors, resolve_version
@@ -98,6 +99,12 @@ class RecordDetail(BaseModel):
     annotations: list[AnnotationDetail]
     sources: list[SourceDetail]
     signals: list[SignalDetail]
+
+
+class DatasetAnnotations(BaseModel):
+    """Annotations attached directly to the dataset rather than to one of its records."""
+
+    annotations: list[AnnotationDetail]
 
 
 class SignalWindow(BaseModel):
@@ -224,15 +231,19 @@ def _preflight(record: Record, hierarchy: list[tuple[Source, str, str | None]], 
             budget.encode(obj.spec.categories)
             budget.encode(obj.spec.dimension_names)
         budget.encode(obj.metadata)
-        for annotation in obj.annotations:
-            for text in (annotation.key, annotation.description, annotation.source):
-                budget.encode(text)
-            budget.encode(None if annotation.unit is None else str(annotation.unit))
-            if annotation.span is not None and annotation.span.time_series is not None:
-                budget.encode([public_id(signal.id) for signal in annotation.span.time_series])
-            budget.encode(read_value(annotation.value))
-            budget.encode(annotation.metadata)
-            budget.encode(annotation.occurrence_metadata)
+        _preflight_annotations(budget, obj.annotations)
+
+
+def _preflight_annotations(budget: _Budget, annotations: Iterable[Annotation]) -> None:
+    for annotation in annotations:
+        for text in (annotation.key, annotation.description, annotation.source):
+            budget.encode(text)
+        budget.encode(None if annotation.unit is None else str(annotation.unit))
+        if annotation.span is not None and annotation.span.time_series is not None:
+            budget.encode([public_id(signal.id) for signal in annotation.span.time_series])
+        budget.encode(read_value(annotation.value))
+        budget.encode(annotation.metadata)
+        budget.encode(annotation.occurrence_metadata)
 
 
 def _reason(signal: Signal) -> str | None:
@@ -317,6 +328,18 @@ def install_record_routes(
                 ],
             )
             return _response(detail, limits, operation)
+
+    @app.get("/api/v1/dataset-annotations")
+    def dataset_annotations(dataset_id: str, version: str) -> Response:
+        """Return the annotations attached directly to the dataset, without hydrating a record."""
+        operation = "dataset-annotations"
+        version = resolve_version(dataset_id, version, initial_manifest, operation)
+        with registry_errors(operation), TimeFReader(registry.open_version(dataset_id, version)) as reader:
+            annotations = reader.read_dataset_annotations()
+            _cap(len(annotations), limits.annotations, operation, "Attached annotations")
+            _preflight_annotations(_Budget(limits.response_bytes, operation), annotations)
+            items = DatasetAnnotations(annotations=[project_annotation(a) for a in annotations])
+            return _response(items, limits, operation)
 
     @app.get("/api/v1/signal-window")
     def window(  # noqa: PLR0913 - explicit HTTP window identity and bounds

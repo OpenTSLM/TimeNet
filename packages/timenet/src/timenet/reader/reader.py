@@ -179,6 +179,15 @@ class TimeFReader:  # noqa: PLR0904 - the public read API
         with self._as_format_error():
             return self._control_reader().record_ids()
 
+    def read_dataset_annotations(self) -> tuple[Annotation, ...]:
+        """Return the annotations attached directly to the dataset, without hydrating a Record.
+
+        Returns:
+            Dataset-level annotation occurrences in storage order.
+        """
+        with self._as_format_error():
+            return self._control_reader().read_dataset_annotations(self._manifest.dataset_id)
+
     def read_tasks(
         self,
         *,

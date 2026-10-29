@@ -44,6 +44,7 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.types.text import read_value
 from timenet.writer import TimeFWriter
 
 
@@ -349,6 +350,18 @@ def test_metadata_and_schema_come_from_the_manifest_without_opening_control(tmp_
     assert reader.metadata == dataset.metadata
     assert reader.schema == dataset.schema
     assert reader._control is None
+
+
+def test_dataset_annotations_read_without_hydrating_records(tmp_path):
+    dataset = make_dataset()
+    dataset.annotate(Annotation(key="answer_options", value=["yes", "no"]))
+    dataset.annotate(Annotation(key="source_url", value="https://example.org", description="Release page."))
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        annotations = reader.read_dataset_annotations()
+    assert [(a.key, read_value(a.value), a.description) for a in annotations] == [
+        ("answer_options", ["yes", "no"], None),
+        ("source_url", "https://example.org", "Release page."),
+    ]
 
 
 def test_iter_records_matches_full_read(tmp_path):
