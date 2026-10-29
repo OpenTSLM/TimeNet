@@ -324,18 +324,68 @@ def test_a_release_that_several_aliases_import_needs_an_alias(child, objects):
         assert reader.get(Record, _PARENT_IDS["record"], parent=_BASE).id == objects.record0.id
 
 
-def test_a_catalog_that_names_another_parent_than_its_manifest_raises_a_format_error(child):
+def test_a_read_restores_the_import_map_the_parent_cards_and_the_lineage(child, objects):
+    card = Manifest.model_validate_json((child / "manifest.json").read_text()).parent_cards[_BASE]
+    _declare_control_file(child, lineage=(card,))
+    with TimeFReader(open_local_version(child)) as reader:
+        dataset = reader.read()
+    assert dataset._imports == {
+        (_BASE, ObjectKind.RECORD, _PARENT_IDS["record"]): objects.record0.id,
+        (_BASE, ObjectKind.SIGNAL, _PARENT_IDS["signal"]): objects.shared.id,
+        (_BASE, ObjectKind.TASK, _PARENT_IDS["task"]): objects.answer.id,
+    }
+    assert all(
+        type(parent_id) is int and type(child_id) is int for (_, _, parent_id), child_id in dataset._imports.items()
+    )
+    assert dataset.parent_cards == {_BASE: card}
+    assert dataset.lineage == {"test/parent@1.0.0": card}
+
+
+_GET_AND_READ = pytest.mark.parametrize(
+    "read",
+    [lambda reader: reader.get(Record, _PARENT_IDS["record"], parent=_BASE), TimeFReader.read],
+    ids=["get", "read"],
+)
+
+
+@_GET_AND_READ
+def test_a_catalog_that_names_another_parent_than_its_manifest_raises_a_format_error(child, read):
     with connect_control(child / "control.duckdb") as connection:
         connection.execute("UPDATE imports SET parent_ref = 'test/parent@1.0.1'")
     _declare_control_file(child)
     with (
         TimeFReader(open_local_version(child)) as reader,
-        pytest.raises(TimeFFormatError, match="differs from its manifest"),
+        pytest.raises(TimeFFormatError, match=r"differs? from its manifest"),
     ):
-        reader.get(Record, _PARENT_IDS["record"], parent=_BASE)
+        read(reader)
 
 
-def test_a_catalog_that_lists_a_parent_alias_twice_raises_a_format_error(child):
+def test_a_catalog_without_a_parent_alias_of_its_manifest_raises_a_format_error(child, objects):
+    card = Manifest.model_validate_json((child / "manifest.json").read_text()).parent_cards[_BASE]
+    _declare_control_file(child, parent_cards={_BASE: card, ParentAlias("again"): card})
+    with TimeFReader(open_local_version(child)) as reader:
+        with pytest.raises(TimeFFormatError, match=r"differ from its manifest's parent cards"):
+            reader.read()
+        with pytest.raises(TimeFFormatError, match="names no parent release for parent alias 'again'"):
+            reader.get(Record, _PARENT_IDS["record"], parent=ParentAlias("again"))
+        assert reader.get(Record, _PARENT_IDS["record"], parent=_BASE).id == objects.record0.id
+
+
+def test_a_read_of_a_catalog_with_a_corrupt_import_row_raises_a_format_error(child):
+    with connect_control(child / "control.duckdb") as connection:
+        connection.execute(
+            "UPDATE imported_objects SET object_kind = 'Bogus' WHERE parent_id = ?", [_PARENT_IDS["record"]]
+        )
+    _declare_control_file(child)
+    with (
+        TimeFReader(open_local_version(child)) as reader,
+        pytest.raises(TimeFFormatError, match="corrupt or inconsistent TimeF artifact"),
+    ):
+        reader.read()
+
+
+@_GET_AND_READ
+def test_a_catalog_that_lists_a_parent_alias_twice_raises_a_format_error(child, read):
     # The schema does not enforce the unique keys, so a corrupt catalog can hold two rows for one alias.
     with connect_control(child / "control.duckdb") as connection:
         connection.execute("INSERT INTO imports VALUES (?, ?)", [_BASE, "test/parent@1.0.1"])
@@ -344,7 +394,7 @@ def test_a_catalog_that_lists_a_parent_alias_twice_raises_a_format_error(child):
         TimeFReader(open_local_version(child)) as reader,
         pytest.raises(TimeFFormatError, match="the catalog lists parent alias 'base' more than once"),
     ):
-        reader.get(Record, _PARENT_IDS["record"], parent=_BASE)
+        read(reader)
 
 
 def test_a_catalog_that_lists_a_parent_id_twice_raises_a_format_error(child, objects):
@@ -361,3 +411,24 @@ def test_a_catalog_that_lists_a_parent_id_twice_raises_a_format_error(child, obj
             reader.get_many(Record, [_PARENT_IDS["record"]], parent=_BASE)
         # The other imported objects keep one row each, so they still read.
         assert reader.get(Signal, _PARENT_IDS["signal"], parent=_BASE).id == objects.shared.id
+
+
+@pytest.mark.parametrize("kind", [ObjectKind.RECORD, ObjectKind.SIGNAL])
+def test_a_read_of_a_catalog_that_lists_a_parent_id_twice_raises_a_format_error(child, objects, kind):
+    # The same object listed twice is a duplicate row too, not only two copies of one parent object.
+    parent_id = _PARENT_IDS[kind.value.lower()]
+    object_id = objects.record0.id if kind is ObjectKind.RECORD else objects.shared.id
+    with connect_control(child / "control.duckdb") as connection:
+        connection.execute(
+            "INSERT INTO imported_objects (alias, object_kind, parent_id, object_id) VALUES (?, ?, ?, ?)",
+            [_BASE, kind.value, parent_id, object_id],
+        )
+    _declare_control_file(child)
+    with (
+        TimeFReader(open_local_version(child)) as reader,
+        pytest.raises(
+            TimeFFormatError,
+            match=rf"the catalog lists {kind.value} {parent_id} more than once under parent alias 'base'",
+        ),
+    ):
+        reader.read()
