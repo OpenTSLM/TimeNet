@@ -101,6 +101,22 @@ Tasks have four useful read paths:
 - `read_task_table()`, `read_target_table()`, and `read_annotation_table()` return Arrow tables
   without creating Python task objects. Their ID columns are `int64`.
 
+`read_task_table(columns=..., offset=0, limit=None)` also supports column projection and SQL
+pagination after filtering, in task ID order. For example, read a summary page without loading
+record hierarchies:
+
+```python
+page = reader.read_task_table(
+    columns=("task_id", "task_type", "split", "prompt"),
+    split="train",
+    offset=20,
+    limit=20,
+)
+```
+
+Omitting `columns` preserves the complete task-table schema. A zero limit returns an empty table
+with the requested schema. Column names must be unique and valid, and pagination bounds nonnegative.
+
 One call returns one consistent set of objects. A Record that two tasks use is one object, and the
 Signals on one irregular axis share one handle to its time offsets. `read_tasks(inputs=records)`
 and `iter_tasks(inputs=records)` reuse the Record objects you pass: a task input is the same

@@ -760,6 +760,8 @@ def materialize_table(
             if handle is None:
                 continue
             column = value_columns[handle._location.kind]
+            if column not in table.column_names:
+                continue
             if column not in changed:
                 changed[column] = table[column].to_pylist()
             if key not in resolved:

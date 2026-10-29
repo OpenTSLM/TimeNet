@@ -4,7 +4,7 @@ The objects hold their stored values behind value handles, unloaded.
 """
 
 from collections import ChainMap, Counter, defaultdict
-from collections.abc import Callable, Collection, Container, Iterable, Iterator, Mapping, MutableMapping
+from collections.abc import Callable, Collection, Container, Iterable, Iterator, Mapping, MutableMapping, Sequence
 from fractions import Fraction
 from functools import partial
 from graphlib import CycleError, TopologicalSorter
@@ -1396,52 +1396,91 @@ class DuckDBControlReader:
             self._task_facts = _TaskFacts(frozenset(parent_ids), annotated > 0)
         return self._task_facts
 
-    def read_task_table(
+    def read_task_table(  # noqa: PLR0913 - existing filters plus projection and pagination
         self,
         record_ids: Iterable[int] | None = None,
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
+        columns: Sequence[str] | None = None,
+        offset: int = 0,
+        limit: int | None = None,
     ) -> pa.Table:
-        """Return the task table as Arrow, with object references as public IDs, without building Tasks.
+        """Return projected task facts in task ID order without hydrating objects.
 
-        The table has one row per task. Each row holds the type, prompt, rationale, the four scope
-        columns, the configuration columns, ordered ``input_record_ids``, ordered ``from_task_ids``,
-        and the metadata JSON string. Targets are in :meth:`read_target_table`.
+        Targets are in :meth:`read_target_table`.
 
         Args:
-            record_ids: Keep only tasks whose inputs include one of these Records, or ``None`` for all.
-            split: Keep only tasks of this split, or ``None`` for all.
+            record_ids: Keep tasks whose inputs include these Records, or all for ``None``.
+            split: Keep only this split, or all for ``None``.
+            columns: Existing task-table columns to return, in order; ``None`` returns all.
+            offset: Rows to skip after filtering and ordering.
+            limit: Maximum rows to return, or all remaining rows for ``None``.
 
         Returns:
-            The tasks in task ID order.
+            An Arrow table with public IDs instead of object references.
+
+        Raises:
+            TimeFValidationError: If columns or pagination bounds are invalid.
         """
+        names = (
+            "task_id",
+            "task_type",
+            "prompt",
+            "rationale",
+            "scope_type",
+            "scope_start",
+            "scope_end",
+            "scope_signal_ids",
+            "target_schema",
+            "unit",
+            "target_name",
+            "mode",
+            "has_inline_targets",
+            "input_modalities",
+            "split",
+            "input_record_ids",
+            "from_task_ids",
+            "metadata",
+        )
+        selected = names if columns is None else tuple(columns)
+        if not selected or any(name not in names for name in selected) or len(set(selected)) != len(selected):
+            raise TimeFValidationError("task columns must be a nonempty, unique selection of task-table columns")
+        for bound in (offset,) if limit is None else (offset, limit):
+            if isinstance(bound, bool) or not isinstance(bound, int) or bound < 0:
+                raise TimeFValidationError("task offset and limit must be nonnegative integers")
         where, parameters = self._selection_filter(record_ids, required_modalities, supported_modalities, split)
+        paging = ""
+        if limit is not None:
+            paging += " LIMIT ?"
+            parameters.append(limit)
+        paging += " OFFSET ?"
+        parameters.append(offset)
+        derived = {"input_record_ids", "from_task_ids"}
+        needed = {"task_id", *(name for name in selected if name not in derived)}
+        page_columns = ", ".join(f"t.{name}" for name in sorted(needed))
+        ctes = [f"selected_tasks AS (SELECT {page_columns} FROM tasks t {where} ORDER BY t.task_id{paging})"]  # noqa: S608 - validated identifiers and bound paging
+        expressions = {name: f"t.{name}" for name in names}
+        joins = []
+        if "input_record_ids" in selected:
+            ctes.append(f"""inputs AS (
+                SELECT task_id, list(record_id ORDER BY position) AS input_record_ids
+                FROM task_record_refs JOIN selected_tasks USING (task_id)
+                WHERE field = '{TaskRelationshipField.INPUTS}' GROUP BY task_id
+            )""")  # noqa: S608 - fixed fragments
+            joins.append("LEFT JOIN inputs USING (task_id)")
+            expressions["input_record_ids"] = "coalesce(inputs.input_record_ids, []) AS input_record_ids"
+        if "from_task_ids" in selected:
+            ctes.append("""parents AS (
+                SELECT task_id, list(parent_task_id ORDER BY position) AS from_task_ids
+                FROM task_dependencies JOIN selected_tasks USING (task_id) GROUP BY task_id
+            )""")
+            joins.append("LEFT JOIN parents USING (task_id)")
+            expressions["from_task_ids"] = "coalesce(parents.from_task_ids, []) AS from_task_ids"
+        projection = ", ".join(expressions[name] for name in selected)
         return self._query_table(
-            f"""WITH inputs AS (
-                    SELECT task_id, list(record_id ORDER BY position) AS input_record_ids
-                    FROM task_record_refs
-                    WHERE field = '{TaskRelationshipField.INPUTS}'
-                    GROUP BY task_id
-                ),
-                parents AS (
-                    SELECT task_id, list(parent_task_id ORDER BY position) AS from_task_ids
-                    FROM task_dependencies
-                    GROUP BY task_id
-                )
-                SELECT t.task_id, t.task_type, t.prompt, t.rationale,
-                       t.scope_type, t.scope_start, t.scope_end, t.scope_signal_ids,
-                       t.target_schema, t.unit, t.target_name, t.mode, t.has_inline_targets,
-                       t.input_modalities, t.split,
-                       coalesce(inputs.input_record_ids, []) AS input_record_ids,
-                       coalesce(parents.from_task_ids, []) AS from_task_ids,
-                       t.metadata
-                FROM tasks t
-                LEFT JOIN inputs USING (task_id)
-                LEFT JOIN parents USING (task_id)
-                {where}
-                ORDER BY t.task_id""",  # noqa: S608 - fixed fragments
+            f"WITH {', '.join(ctes)} SELECT {projection} FROM selected_tasks t {' '.join(joins)} ORDER BY t.task_id",  # noqa: S608 - validated fixed identifiers
             parameters,
         )
 

@@ -2,6 +2,8 @@ from dataclasses import replace
 from fractions import Fraction
 from functools import partial
 from itertools import chain
+from typing import Any
+from unittest.mock import MagicMock
 
 import pyarrow as pa
 import pytest
@@ -873,3 +875,92 @@ def test_annotation_table_gives_dataset_annotations_a_null_int64_object_id(tmp_p
     assert table.schema.field("object_id").type == pa.int64()
     assert rows["Dataset"]["object_id"] is None
     assert rows["Record"]["object_id"] == RECORD_ID
+
+
+def _write_hello(path):
+    dataset = make_dataset()
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
+    return dataset
+
+
+@pytest.mark.parametrize(
+    "columns", [None, ("task_id", "prompt"), ("from_task_ids", "scope_signal_ids", "input_record_ids", "task_id")]
+)
+@pytest.mark.parametrize(
+    "filters",
+    [
+        {},
+        {"split": Split.TRAIN},
+        {"record_ids": "first"},
+        {"required_modalities": [InputModality.TIME_SERIES]},
+        {"supported_modalities": [InputModality.TEXT, InputModality.NO_INPUT]},
+    ],
+)
+def test_task_table_projects_and_pages_after_filters(tmp_path, columns, filters: dict[str, Any]):
+    dataset = make_dataset()
+    for index, task in enumerate(sorted(dataset.tasks, key=lambda task: task.id)):
+        task.split = Split.TRAIN if index % 2 else Split.TEST
+    if filters.get("record_ids") == "first":
+        filters = {"record_ids": [dataset.records[0].id]}
+    path = tmp_path / "control.duckdb"
+    DuckDBControlWriter(path, external=PackedValueWriter(path.parent, StorageSources())).write_hierarchy(dataset)
+    with DuckDBControlReader(path) as reader:
+        full = reader.read_task_table(**filters)
+        expected = full if columns is None else full.select(columns)
+        for offset, limit in ((0, 2), (2, 3), (1, None), (0, 0), (100, 1)):
+            page = reader.read_task_table(**filters, columns=columns, offset=offset, limit=limit)
+            assert page.equals(expected.slice(offset, limit))
+            assert page.schema == expected.schema
+
+
+@pytest.mark.parametrize(
+    "kwargs",
+    [
+        {"columns": []},
+        {"columns": ["task_id", "task_id"]},
+        {"columns": ["private_key"]},
+        {"columns": ["task_id; DROP TABLE tasks"]},
+        {"offset": -1},
+        {"limit": -1},
+        {"offset": 1.5},
+        {"limit": True},
+    ],
+)
+def test_task_table_rejects_invalid_projection_and_bounds(tmp_path, kwargs):
+    path = tmp_path / "control.duckdb"
+    _write_hello(path)
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFValidationError):
+        reader.read_task_table(**kwargs)
+
+
+def test_task_summary_query_does_not_join_relationships_or_hydrate(tmp_path, monkeypatch):
+    path = tmp_path / "control.duckdb"
+    _write_hello(path)
+    with DuckDBControlReader(path) as reader:
+        connection = MagicMock(wraps=reader._open())
+        monkeypatch.setattr(reader, "_open", lambda: connection)
+        monkeypatch.setattr(control_reader_module._TaskBuilder, "__init__", lambda *a, **k: pytest.fail("task build"))
+        monkeypatch.setattr(reader, "read_records", lambda *a, **k: pytest.fail("record hydration"))
+        page = reader.read_task_table(columns=("task_id", "task_type", "split", "prompt"), offset=1, limit=2)
+        assert len(page) == 2
+        ((sql, parameters),) = [call.args for call in connection.execute.call_args_list]
+        assert "JOIN" not in sql.upper()
+        assert "t.*" not in sql
+        assert "metadata" not in sql
+        assert "rationale" not in sql
+        assert parameters == [2, 1]
+        assert not any(name in sql for name in ("task_targets", "annotation_occurrences", "signals", "records"))
+
+
+@pytest.mark.parametrize(("parent", "message"), [("self", "cycle"), ("missing", "missing task")])
+def test_task_lookup_reports_corrupt_dependencies(tmp_path, parent, message):
+    path = tmp_path / "control.duckdb"
+    dataset = _write_hello(path)
+    answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
+    with connect_control(path) as connection:
+        if parent == "self":
+            connection.execute("UPDATE task_dependencies SET parent_task_id = task_id")
+        else:
+            connection.execute("UPDATE task_dependencies SET parent_task_id = ?", [999_999])
+    with DuckDBControlReader(path) as reader, pytest.raises(TimeFFormatError, match=message):
+        reader.read_tasks_by_id((answer.id,))

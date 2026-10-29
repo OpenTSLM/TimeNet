@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from collections.abc import Generator, Iterable, Iterator
+from collections.abc import Generator, Iterable, Iterator, Sequence
 from contextlib import contextmanager
 from dataclasses import dataclass
 from functools import partial
@@ -383,33 +383,52 @@ class TimeFReader:
             values.run()
             return tuple(cast("E", objects[identity]) for identity in local)
 
-    def read_task_table(
+    def read_task_table(  # noqa: PLR0913 - existing filters plus projection and pagination
         self,
         record_ids: Iterable[EntityId] | None = None,
         *,
         required_modalities: Iterable[InputModality] | None = None,
         supported_modalities: Iterable[InputModality] | None = None,
         split: Split | str | None = None,
+        columns: Sequence[str] | None = None,
+        offset: int = 0,
+        limit: int | None = None,
     ) -> pa.Table:
         """Return the tasks as an Arrow table without building Task objects.
 
         Args:
             record_ids: Keep only tasks whose inputs include one of these Records, or ``None`` for all.
             split: Keep only tasks of this split, or ``None`` for all.
+            columns: Existing task-table columns to return, in order; ``None`` returns all.
+            offset: Rows to skip after filtering and ordering.
+            limit: Maximum rows to return, or all remaining rows for ``None``.
 
         Returns:
             One row per task with public IDs in place of object references. Targets are in
             :meth:`read_target_table`.
-        """
+
+        Raises:
+            TimeFValidationError: If columns or pagination bounds are invalid.
+        """  # noqa: DOC502 - raised by the control reader
+        requested = None if columns is None else tuple(columns)
+        queried = requested
+        # Packed prompts and rationales resolve through their task ID.
+        if requested is not None and "task_id" not in requested and {"prompt", "rationale"}.intersection(requested):
+            queried = ("task_id", *requested)
         with self._as_format_error(preserve_validation=True):
             table = self._control_reader().read_task_table(
                 record_ids,
                 required_modalities=required_modalities,
                 supported_modalities=supported_modalities,
                 split=split,
+                columns=queried,
+                offset=offset,
+                limit=limit,
             )
-
-            return self._materialized(table, TASK_COLUMNS)
+            if "task_id" not in table.column_names:
+                return table
+            table = self._materialized(table, TASK_COLUMNS)
+            return table if queried == requested else table.select(list(requested or ()))
 
     def read_target_table(
         self,

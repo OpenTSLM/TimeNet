@@ -885,3 +885,27 @@ def test_a_reader_verifies_a_remote_catalog_once_and_again_after_its_copy_is_gon
         shutil.rmtree(tmp_path / "home" / "cache" / "control")
         assert reader.record_ids() == expected
     assert len(checks) == 2
+
+
+def test_task_table_pages_without_building_objects(tmp_path, monkeypatch):
+    dataset = make_dataset()
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        monkeypatch.setattr(DuckDBControlReader, "read_records", lambda *a, **k: pytest.fail("record build"))
+        monkeypatch.setattr(control_reader_module._TaskBuilder, "__init__", lambda *a, **k: pytest.fail("task build"))
+        table = reader.read_task_table(columns=("task_id", "prompt"), offset=1, limit=2)
+        assert len(table) == 2
+        with pytest.raises(TimeFValidationError):
+            reader.read_task_table(limit=-1)
+
+
+def test_task_table_projection_resolves_packed_prompts_without_selecting_ids(tmp_path):
+    dataset = make_dataset()
+    answer = next(task for task in dataset.tasks if isinstance(task, AnswerTask))
+    answer.prompt = "A detailed clinical report. " * 300
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        table = reader.read_task_table(columns=("prompt",))
+        full = reader.read_task_table()
+
+    assert table.column_names == ["prompt"]
+    assert table["prompt"].to_pylist() == full["prompt"].to_pylist()
+    assert answer.prompt in table["prompt"].to_pylist()
