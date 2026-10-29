@@ -357,6 +357,35 @@ annotation of a Signal that it holds. It keeps an annotation of a Record or Sour
 For a Record with a `time_span`, the session span replaces the windows. So a partial copy of such a
 Record keeps every Record annotation inside the session.
 
+### Tasks
+
+`tasks=` copies each selected task with the objects that it references:
+
+- Its input Records, its candidate Records, and its Record targets come whole, as `records=` copies
+  them.
+- Each Signal target comes in a partial copy of its Record, as `signals=` copies it.
+- The tasks that it derives from through `from_tasks` come too, with the objects that they
+  reference. So do the tasks that those tasks derive from, and so on.
+
+Each task copy references the copies in the child, not the objects of the parent. It holds copies of
+the annotations of the task itself. It gets the next task ID of the child, and the import map links
+it to its parent ID. `imported.tasks` holds the copy of each selected task, by its parent ID.
+
+If the child holds a copy of a task, the import uses that copy as it is, with the edits of the
+child. It does not read that task from the parent again. If an edit removed some references of the
+copy, they stay removed. A new task copy that derives from a task copy in the child references that
+copy.
+
+The import refuses a task that references annotations in `input_annotations` or
+`target_annotations`, and raises `TimeFValidationError`. It also refuses a `TSCorrespondenceTask`
+without `candidate_records`, because the candidates of such a task are all Records of the parent.
+For a child that streams its tasks, `tasks=` also raises `TimeFValidationError`.
+
+Each call reads the selected tasks, the tasks that they derive from, and the Records that they
+reference in one batch, before the other Records. `load=` applies to this read too. The task copies
+register after every Record, all together or not at all. If they fail, the Records that the call
+copied stay, and the child holds no task copy of the call.
+
 ### Later imports
 
 A later import uses each copy that the child holds and adds to it in place. If the call selects or

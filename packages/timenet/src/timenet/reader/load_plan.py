@@ -137,11 +137,16 @@ class ValueLoad:
         self._left: set[int] = {id(handle) for handle in _stored_values(keep, parents=True)} if self._kinds else set()
         self._pending: dict[int, _StoredValue] = {}
 
-    def add(self, objects: Iterable[object]) -> None:
-        """Collect the plan's unloaded handles on objects the read built."""
+    def add(self, objects: Iterable[object], *, parents: bool = False) -> None:
+        """Collect the plan's unloaded handles on objects the read built.
+
+        Args:
+            objects: The objects the read built.
+            parents: Whether to follow each task's ``from_tasks`` as well.
+        """
         if not self._kinds:
             return
-        for handle in _stored_values(objects, parents=False):
+        for handle in _stored_values(objects, parents=parents):
             if isinstance(handle, self._kinds) and not handle.is_loaded and id(handle) not in self._left:
                 self._pending.setdefault(id(handle), handle)
 
