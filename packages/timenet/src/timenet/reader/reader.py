@@ -659,11 +659,12 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
 
     def _read_tasks_with_records(
         self, task_ids: tuple[EntityId, ...], *, load: LoadPlan
-    ) -> tuple[dict[EntityId, Task], dict[EntityId, Record]]:
-        """Read tasks by ID, as :meth:`get_many` does, with every Record the read built for them.
+    ) -> tuple[dict[EntityId, Task], dict[EntityId, Record], tuple[Annotation, ...]]:
+        """Read tasks by ID, as :meth:`get_many` does, with every Record and dataset occurrence the read built for them.
 
         ``TimeFDataset.import_from`` uses it, so the Records it copies are the objects that the tasks
-        reference.
+        reference, and every annotation the tasks reference lies on one of those Records or is one
+        of the dataset occurrences.
 
         Args:
             task_ids: The IDs of the tasks to read.
@@ -671,18 +672,19 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
                 and every Record the read built.
 
         Returns:
-            The tasks by ID and the Records by ID.
+            The tasks by ID, the Records by ID, and the dataset's own occurrences that the tasks
+            reference.
 
         Raises:
             TimeFNotFoundError: If an ID names no stored task.
         """  # noqa: DOC502 - raised by the control reader
         with self._as_format_error(preserve_validation=True):
-            tasks, records = self._control_reader()._read_tasks_with_records(task_ids)
+            tasks, records, on_dataset = self._control_reader()._read_tasks_with_records(task_ids)
             values = ValueLoad(load)
             values.add(tasks.values(), parents=True)
             values.add(records.values())
             values.run()
-            return tasks, records
+            return tasks, records, on_dataset
 
     def _read_by_id(self, kind: ObjectKind, ids: tuple[EntityId, ...]) -> dict[EntityId, Entity]:
         """Build the objects of one kind with these IDs, each once, with every value unloaded.
