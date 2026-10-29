@@ -143,7 +143,7 @@ def _all_keys(record):
 
 
 def _indexes(dataset):
-    names = ("_records_by_id", "_signals_by_id", "_signals_by_record_id", "_imports")
+    names = ("_records_by_id", "_signals_by_id", "_signals_by_record_id", "_records_by_signal_id", "_imports")
     return {name: dict(getattr(dataset, name)) for name in names} | {
         "_sources": set(dataset._sources),
         "_records": list(dataset._records),

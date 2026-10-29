@@ -23,6 +23,7 @@ from timenet.types import (
     TimePoint,
     TimeSeriesSpec,
     TSCorrespondenceTask,
+    TSEditingTask,
     Version,
     ureg,
 )
@@ -396,6 +397,121 @@ def test_add_task_rejects_an_annotation_ref_the_records_do_not_carry(make_series
         dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), input_annotations=(detached,)))
 
 
+def _records(dataset, make_series, count):
+    """Register ``count`` Records, each with one Source of one Signal, and return them."""
+    return tuple(
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+        for _ in range(count)
+    )
+
+
+def _annotate(record, owner):
+    """Annotate ``record`` itself, its Source, or its Signal, and return the occurrence."""
+    (source,) = record.sources
+    annotated = {"record": record, "source": source, "signal": record.signals[0]}[owner]
+    return annotated.annotate(Annotation(key="context", value=owner))
+
+
+_NOT_REFERENCED = "not attached to its dataset or to a Record the task references"
+
+
+@pytest.mark.parametrize("owner", ["record", "source", "signal"])
+@pytest.mark.parametrize("field", ["input_annotations", "target_annotations"])
+def test_add_task_and_add_tasks_reject_an_annotation_ref_on_a_record_the_task_does_not_reference(
+    make_series, field, owner
+):
+    dataset = _dataset()
+    record, other = _records(dataset, make_series, 2)
+    reference = _annotate(other, owner)
+
+    def referencing():
+        if field == "input_annotations":
+            return AnswerTask(inputs=(record,), prompt="q", targets=("a",), input_annotations=(reference,))
+        return AnswerTask(inputs=(record,), prompt="q", target_annotations=(reference,))
+
+    with pytest.raises(TimeFValidationError, match=_NOT_REFERENCED):
+        dataset.add_task(task=referencing())
+    valid = AnswerTask(inputs=(record,), prompt="q", targets=("a",))
+    with pytest.raises(TimeFValidationError, match=_NOT_REFERENCED):
+        dataset.add_tasks(tasks=(valid, referencing()))
+    assert dataset.tasks == ()
+
+
+@pytest.mark.parametrize("kind", ["candidate", "record-target", "signal-target"])
+def test_add_task_accepts_annotation_refs_on_a_record_that_the_task_references_but_takes_no_input_from(
+    make_series, kind
+):
+    dataset = _dataset()
+    record, other = _records(dataset, make_series, 2)
+    references = tuple(_annotate(other, owner) for owner in ("record", "source", "signal"))
+    tasks = {
+        "candidate": lambda: TSCorrespondenceTask(
+            inputs=(record,), candidate_records=(record, other), targets=(record,), input_annotations=references
+        ),
+        "record-target": lambda: TSEditingTask(inputs=(record,), targets=(other,), input_annotations=references),
+        "signal-target": lambda: TSEditingTask(
+            inputs=(record,), targets=(other.signals[0],), input_annotations=references
+        ),
+    }
+    task = dataset.add_task(task=tasks[kind]())
+    assert task.input_annotations == references
+    # The task references other, but other is not one of its inputs.
+    assert dataset.tasks_for(record) == (task,)
+    assert dataset.tasks_for(other) == ()
+
+
+def test_a_tasks_referenced_records_are_those_it_names_and_those_that_hold_its_signals(make_series):
+    dataset = _dataset()
+    record, candidate, target, holder, scoped = _records(dataset, make_series, 5)
+    correspondence = dataset.add_task(
+        task=TSCorrespondenceTask(inputs=(record,), candidate_records=(candidate, target), targets=(target,))
+    )
+    edit = dataset.add_task(task=TSEditingTask(inputs=(record,), targets=(holder.signals[0], "denoised")))
+    # A scope names only Signals of the inputs, so the Record that holds them comes once.
+    answer = dataset.add_task(
+        task=AnswerTask(
+            inputs=(record, scoped),
+            targets=("a",),
+            scope=TimeInterval.seconds(0.0, 0.002, time_series=scoped.signals),
+        )
+    )
+    assert dataset._referenced_records(correspondence) == (record, candidate, target)
+    assert dataset._referenced_records(edit) == (record, holder)
+    assert dataset._referenced_records(answer) == (record, scoped)
+
+
+def test_the_record_of_each_signal_follows_a_record_that_is_indexed_again(make_series):
+    dataset = _dataset()
+    grown, shrunk, other = _records(dataset, make_series, 3)
+    (kept,) = grown.signals
+    (dropped,) = shrunk.signals
+    # Change two Records in place, as an import changes a copy that it extends.
+    added = make_series(signal="V1")
+    grown.sources = (*grown.sources, Source(name="Added", signals=(added,)))
+    shrunk.sources[0].signals = ()
+    dataset._reindex_record(grown)
+    dataset._reindex_record(shrunk)
+    assert {signal_id: record.id for signal_id, record in dataset._records_by_signal_id.items()} == {
+        kept.id: grown.id,
+        added.id: grown.id,
+        other.signals[0].id: other.id,
+    }
+    assert dropped.id not in dataset._records_by_signal_id
+    context = grown.sources[1].annotate(Annotation(key="context", value="added"))
+    task = dataset.add_task(task=TSEditingTask(inputs=(other,), targets=(added,), input_annotations=(context,)))
+    assert dataset._referenced_records(task) == (other, grown)
+
+
+def test_add_task_rejects_an_annotation_ref_on_an_unregistered_record(make_series):
+    dataset = _dataset()
+    record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
+    unregistered = Record(sources=(Source(name="Source", signals=(make_series(),)),))
+    annotation = unregistered.annotate(Annotation(key="context", value="elsewhere"))
+    with pytest.raises(TimeFValidationError, match=_NOT_REFERENCED):
+        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), input_annotations=(annotation,)))
+    assert dataset.tasks == ()
+
+
 def test_set_task_stream_rejects_after_add_task(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
@@ -419,6 +535,19 @@ def test_streamed_task_validation_rejects_an_unknown_record(make_series):
     task = AnswerTask(prompt="q", targets=("a",), inputs=(unknown,))
     dataset.set_task_stream([AnswerTask], lambda: iter((task,)))
     with pytest.raises(TimeFValidationError, match="not registered"):
+        list(dataset.iter_streamed_tasks_validated())
+
+
+def test_streamed_task_validation_rejects_an_annotation_ref_on_a_record_the_task_does_not_reference(make_series):
+    dataset = _dataset()
+    record, holder, other = _records(dataset, make_series, 3)
+    task = TSEditingTask(
+        prompt="q", targets=(holder.signals[0],), inputs=(record,), input_annotations=(_annotate(holder, "signal"),)
+    )
+    dataset.set_task_stream([TSEditingTask], lambda: iter((task,)))
+    assert list(dataset.iter_streamed_tasks_validated()) == [task]
+    task.input_annotations = (_annotate(other, "signal"),)
+    with pytest.raises(TimeFValidationError, match=_NOT_REFERENCED):
         list(dataset.iter_streamed_tasks_validated())
 
 
