@@ -299,3 +299,6 @@ spec, and a record preview.
 ---
 
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
+
+Composed connectors can import records from exact parent releases. See
+[Dataset composition](composition.md) for the card and build context.
