@@ -4,11 +4,13 @@ from collections.abc import Callable
 from pathlib import Path
 import shutil
 
+from timenet.composition import BuildContext
 from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.registry import LocalRegistry
 from timenet.registry.writable import WritableRegistry
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
@@ -62,12 +64,13 @@ def run_pipeline(  # noqa: PLR0913
     cache.mkdir(parents=True, exist_ok=True)
 
     raw_refs = connector.download(cache)
-    dataset = connector.convert(raw_refs)
-    # Derive the schema before writing. store_dataset() derives one only for a dataset that has none.
-    dataset.derive_schema()
-    # A forced rebuild replaces the committed version only once the new one is ready, so a failed
-    # write keeps the old one.
-    store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb, replace=force)
+    with BuildContext.open(metadata, LocalRegistry(root)) as context:
+        dataset = connector.compose(raw_refs, context) if metadata.parents else connector.convert(raw_refs)
+        # Derive the schema before writing. store_dataset() derives one only for a dataset that has none.
+        dataset.derive_schema()
+        # A forced rebuild replaces the committed version only once the new one is ready, so a failed
+        # write keeps the old one.
+        store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb, replace=force)
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
     if not keep_cache and cache_dir is None and cache.is_dir():
@@ -114,9 +117,14 @@ def publish_pipeline(  # noqa: PLR0913
     cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
-    dataset = connector.convert(connector.download(cache))
-    dataset.derive_schema()
-    registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
+    with BuildContext.open(metadata, registry) as context:
+        dataset = (
+            connector.compose(connector.download(cache), context)
+            if metadata.parents
+            else connector.convert(connector.download(cache))
+        )
+        dataset.derive_schema()
+        registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version

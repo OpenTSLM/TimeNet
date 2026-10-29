@@ -22,6 +22,7 @@ from fractions import Fraction
 from pathlib import Path
 from typing import ClassVar
 
+from timenet.composition import BuildContext
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.types import (
@@ -173,7 +174,7 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         )
         return [EcgQaCotSource(records_root=ptbxl_root / "records500", answers_path=answers_path, cot_csvs=cot_csvs)]
 
-    def convert(self, raw_refs: list[EcgQaCotSource]) -> TimeFDataset:
+    def convert(self, raw_refs: list[EcgQaCotSource], context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002
         """Build one record per recording and stream one :class:`AnswerTask` per CoT row.
 
         A first pass over the CoT CSVs collects each recording's split and the distinct question

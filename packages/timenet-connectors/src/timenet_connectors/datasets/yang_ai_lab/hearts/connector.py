@@ -3,6 +3,7 @@
 from collections.abc import Iterator
 from pathlib import Path
 
+from timenet.composition import BuildContext
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDownloadError
@@ -36,7 +37,7 @@ class HeartsConnector(BaseConnector[Path]):
             raise TimeNetDownloadError(f"{REPO!r} at {REVISION!r} returned no test cases for {missing} under {root}")
         return [root]
 
-    def convert(self, raw_refs: list[Path]) -> TimeFDataset:
+    def convert(self, raw_refs: list[Path], context: BuildContext | None = None) -> TimeFDataset:  # noqa: ARG002
         """Build the records and the task of every test case under the tree.
 
         Args:
