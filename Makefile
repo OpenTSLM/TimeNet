@@ -88,8 +88,9 @@ schemas-check:
 # Rebuild the viewer frontend into a scratch directory and fail if the bundle under
 # VIEWER_STATIC no longer matches its source, the way schemas-check guards the generated schemas.
 # Needs Node.js 22 or later, so it is not a pre-commit hook.
-# TODO: Run frontend-check in CI (the quick job, only when frontend/ or VIEWER_STATIC changes), together
-# with the frontend's `npm test` once it has tests. Until then a stale bundle can ship unnoticed.
+# TODO: Run frontend-check in CI (the quick job, only when frontend/ or VIEWER_STATIC changes),
+# together with `cd frontend && npm test`. Until then a stale bundle or a failing frontend test
+# can ship unnoticed.
 VIEWER_STATIC := packages/timenet/src/timenet/viewer/static
 frontend-check:
 	@out="$$(mktemp -d)"; trap 'rm -rf "$$out"' EXIT; \
