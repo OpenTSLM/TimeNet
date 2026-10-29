@@ -1,0 +1,37 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: tsaqa/tsaqa-benchmark
+dataset_version: 1.0.0
+name: TSAQA
+description: >-
+  Time series analysis question answering: 210,000 closed questions about
+  z-score normalized series from 13 domains (147,000 train, 21,000
+  validation, 42,000 test), across six tasks: anomaly detection,
+  classification, characterization, comparison, data transformation and
+  temporal relationship. True-or-false questions are classification tasks;
+  multiple-choice and puzzle questions are answer tasks whose target is the
+  published choice letters. Candidate series that the authors print inside a
+  question are Records of their own.
+license: MIT
+source_url: https://huggingface.co/datasets/TSAQA/TSAQA-Benchmark
+citation: >-
+  Jing et al. TSAQA: Time Series Analysis Question And Answering Benchmark.
+  https://arxiv.org/abs/2601.23204
+domains:
+  - energy
+  - transport
+  - health
+  - cardiology
+  - economics
+  - finance
+  - environment
+  - observability
+  - industrial
+  - motion
+  - general
+tags:
+  - qa
+  - classification
+  - anomaly-detection
+  - generated-supervision
+  - huggingface
