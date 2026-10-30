@@ -61,7 +61,11 @@ class DatasetMetadata(TimeFModel):
     citation: StrictStr | None = None
     """How to cite the dataset, when the source asks for attribution."""
     access: Access = Access.OPEN
-    """How a user obtains the data (see :class:`Access`). ``OPEN`` needs nothing."""
+    """How a user obtains the data (see :class:`Access`). ``OPEN`` needs nothing.
+
+    An import into a child dataset does not change it. The level that applies to a release with
+    parents is :func:`~timenet.types.access.effective_access`.
+    """
     access_url: StrictStr | None = None
     """Where to obtain access (the DUA or credentialing page). Required when ``access`` is not ``OPEN``."""
     yaml_schema_version: Annotated[int, Field(strict=True, ge=1, le=1)] = 1

@@ -15,6 +15,7 @@ from timenet.cli.runner import run_cli
 from timenet.cli.ui import console as ui
 from timenet.client import TimeNet
 from timenet.types import DatasetMetadata, Domain, License, TaskType
+from timenet.types.access import access_requirements, effective_access
 from timenet.types.tasks import TASKS
 
 
@@ -131,9 +132,13 @@ def info(dataset_id: str, version: str | None = None, registry: str | None = _re
     table.add_row("license", str(manifest.metadata.license))
     if manifest.metadata.license_url:
         table.add_row("license_url", manifest.metadata.license_url)
-    table.add_row("access", str(manifest.metadata.access))
-    if manifest.metadata.access_url:
-        table.add_row("access_url", manifest.metadata.access_url)
+    # The strictest level of the card and its lineage applies, also when the card itself says open.
+    table.add_row("access", str(effective_access(manifest.metadata, manifest.lineage)))
+    # Each card whose access is not open, the dataset or an ancestor, names its own page.
+    requirements = access_requirements(manifest.metadata, manifest.lineage)
+    if requirements:
+        pages = (f"{item.release} ({item.access}): {item.access_url}" for item in requirements)
+        table.add_row("access_urls", "\n".join(pages))
     if manifest.metadata.citation:
         table.add_row("citation", manifest.metadata.citation)
     table.add_row("domains", ", ".join(str(domain) for domain in manifest.metadata.domains) or "-")

@@ -339,8 +339,9 @@ read expects, and `TimeFReaderError` when the reader's connection closed while t
 memory, or an interrupt, propagate unchanged.
 
 A request for an object, ID, or parent alias that the dataset does not have raises
-`TimeFNotFoundError`, a `TimeFValidationError`. A catalog that disagrees with its manifest, such as
-one that names another parent release for a parent alias, raises `TimeFFormatError`.
+`TimeFNotFoundError`, a `TimeFValidationError`. A catalog that disagrees with its manifest raises
+`TimeFFormatError`. For example, the catalog names no parent release for a parent alias of the
+manifest, or it names another release.
 
 Call `verify()` to hash every file before reading data: the version's own files, and the files it
 pins on each payload source. It raises `TimeFFormatError` when a file is missing or does not match

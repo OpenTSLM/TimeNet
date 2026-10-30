@@ -40,6 +40,13 @@ _ANNOTATION_FIELDS = _sql_in(ANNOTATION_FIELDS)
 _OBJECT_TYPES_SQL = _sql_in(ANNOTATED_OBJECT_TYPES)
 _EXTERNAL_KINDS_SQL = _sql_in(EXTERNAL_OWNER_TABLES)
 
+_IMPORTED_OBJECT_TABLES: dict[ObjectKind, tuple[str, str]] = {
+    ObjectKind.RECORD: ("records", "record_id"),
+    ObjectKind.SIGNAL: ("signals", "signal_id"),
+}
+"""The table and key column of each object kind that ``imported_objects`` can list."""
+_IMPORTED_KINDS_SQL = _sql_in(_IMPORTED_OBJECT_TABLES)
+
 _ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
     ("records", "record_id"),
     ("sources", "source_id"),
@@ -71,6 +78,9 @@ _DOMAIN_CHECKS = f"""
     UNION ALL
     SELECT 'external_values.object_kind' FROM external_values
     WHERE object_kind NOT IN ({_EXTERNAL_KINDS_SQL})
+    UNION ALL
+    SELECT 'imported_objects.object_kind' FROM imported_objects
+    WHERE object_kind NOT IN ({_IMPORTED_KINDS_SQL})
     UNION ALL
     SELECT 'annotation_occurrences.span_type' FROM annotation_occurrences
     WHERE span_type NOT IN ('static', 'point', 'interval')
@@ -119,6 +129,13 @@ _EXTERNAL_OWNER = " UNION ALL ".join(
     for kind, (table, column) in EXTERNAL_OWNER_TABLES.items()
 )
 """The external values whose owner row does not exist."""
+
+_IMPORTED_OBJECT = " UNION ALL ".join(
+    f"SELECT alias, object_kind, object_id FROM imported_objects WHERE object_kind = '{kind}' "  # noqa: S608
+    f"AND NOT EXISTS (SELECT 1 FROM {table} WHERE {table}.{column} = imported_objects.object_id)"
+    for kind, (table, column) in _IMPORTED_OBJECT_TABLES.items()
+)
+"""The imported objects whose copy does not exist in the catalog."""
 
 _EXTERNAL_TARGET = f"""
     SELECT external.object_id, external.position
@@ -278,6 +295,7 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
         raise TimeFFormatError(f"annotation occurrence {occurrence_id!r} refers to missing {object_type} {object_id!r}")
 
     _audit_external_values(connection)
+    _audit_imported_objects(connection)
 
     invalid_clock_scope = connection.execute(_TASK_RECORD_SCOPE).fetchone()
     if invalid_clock_scope is not None:
@@ -330,6 +348,22 @@ def _audit_external_values(connection: duckdb.DuckDBPyConnection) -> None:
     if wrong_axis is not None:
         raise TimeFFormatError(
             f"external value of Axis {wrong_axis[0]!r} is not one digested time offsets array at position 0"
+        )
+
+
+def _audit_imported_objects(connection: duckdb.DuckDBPyConnection) -> None:
+    """Raise on the first ``imported_objects`` row whose copy does not exist.
+
+    ``object_id`` refers to the table of its ``object_kind``, so a plain foreign key cannot check it.
+
+    Raises:
+        TimeFFormatError: If a row names a copy that the table of its kind does not hold.
+    """
+    orphan = connection.execute(f"{_IMPORTED_OBJECT} LIMIT 1").fetchone()
+    if orphan is not None:
+        alias, object_kind, object_id = orphan
+        raise TimeFFormatError(
+            f"imported object of parent alias {alias!r} refers to missing {object_kind} {object_id!r}"
         )
 
 

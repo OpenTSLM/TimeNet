@@ -192,6 +192,12 @@ Record's known origin. Relative spans also work when its absolute timestamp is u
 
 `DatasetMetadata.from_yaml()` validates a card against the packaged JSON Schema.
 
+A card keeps the `access` and the `access_url` that its author declared. An import into a child
+dataset does not change them. The effective access level of a dataset is the strictest level of its
+own card and of the cards in its `lineage`. `effective_access(metadata, lineage)` in
+`timenet.types.access` returns this level. `access_requirements(metadata, lineage)` lists each of
+these cards whose `access` is not `OPEN`, with its `access_url`.
+
 ## DatasetSchema
 
 `DatasetSchema` is the type summary that TimeNet derives from a populated dataset. Do not author it
