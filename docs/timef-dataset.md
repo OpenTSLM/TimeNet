@@ -285,8 +285,9 @@ sure that each selected object, and each object that it needs, is in the child. 
 copy of the object, the import uses that copy as it is, with the edits of the child. Otherwise, the
 import copies the object under a new ID. This includes an object that the child removed.
 
-Sources and annotations have no IDs. They come only with the object that holds them. An import never
-adds, restores, or changes them later.
+Sources and annotations have no IDs. They come only with the Records and Signals that they belong
+to. An import can also add them to a copy that the child holds, as [Later imports](#later-imports)
+describes.
 
 ### The parent
 
@@ -314,7 +315,8 @@ Each copy is a Record of the child. The copy and its Signals get new IDs in the 
 its own metadata and its own annotations, so an edit of the copy does not change the parent.
 
 `records=` does not copy the annotations of the parent dataset itself. If the child holds a copy of
-a selected Record, the import returns that copy as it is.
+a selected Record, the import uses that copy. It adds only what the copy lacks, as
+[Later imports](#later-imports) describes.
 
 Copies keep the time axes of the parent. If Records share a time origin in the parent, their copies
 share one time origin in the child. This is also true when separate imports copy them.
@@ -323,15 +325,55 @@ A copy does not duplicate the stored values of the parent. It reads them from th
 unless the import loaded them, and a written child stores none of them. So a written child needs the
 parent release.
 
-Each call reads the selected Records from the parent in one batch, without their stored values.
-Select many Records in one call, not one Record per call. By default, the import loads no stored
-values. To load them during the import, pass `load=`, as for `TimeFReader.get_many()`. The import
-then loads these values on the copies of the selected Records, also on a copy that the child holds
-already. A value that a copy holds already does not load again. With `load=LoadPlan.ALL_EAGER`, you
-can read the copies after the parent reader closes.
+Each call reads the selected Records, and the Records that hold the selected Signals, from the
+parent in one batch, without their stored values. Select many objects in one call, not one object
+per call.
+
+By default, the import loads no stored values. To load them during the import, pass `load=`, as for
+`TimeFReader.get_many()`. The import then loads these values on the copies of the selected Records
+and Signals, also on a copy that the child holds already. It does not load the other Signals of a
+partial copy. A value that a copy holds already does not load again. With `load=LoadPlan.ALL_EAGER`,
+you can read these copies after the parent reader closes.
 
 If an import fails partway, the Records that it copied stay in the child. Fix the cause and repeat
 the call. An import is safe to repeat.
+
+### Signals
+
+`signals=` copies each selected Signal with its annotations. The Signal goes into a copy of its
+Record, below copies of the Sources above it. Such a copy holds only the Signals that an import
+selected or needed, so it is a partial copy.
+
+A partial copy keeps the annotations of the Signals that it holds. The window of a Signal is the time
+range that its values cover. The copy keeps an annotation of a Record or Source in these cases:
+
+- The copy holds every Signal below that Record or Source.
+- The annotation has no span.
+- The span of the annotation lies inside the windows of the Signals that the copy holds below that
+  Record or Source.
+
+If a Record has a `time_span`, that session span takes the place of the windows. So a partial copy
+of such a Record keeps every Record annotation inside the session.
+
+### Later imports
+
+A later import reuses the copies that the child holds, and adds to them in place. If the call selects
+or needs a Signal that a copy lacks, the import adds the Signal to the copy. It also adds the
+Sources above the Signal that the copy lacks. Then it attaches the annotations that the copy keeps
+now, by the rules in [Signals](#signals), and did not keep before. Other annotations and the edits of
+the child stay as they are. So an import of a whole Record completes a partial copy.
+
+The import checks a copy that it adds to, as for a new Record. For example, a new Signal must lie
+inside the `time_span` of the copy. If a check fails, the import raises `TimeFValidationError` and
+restores the copy as it was.
+
+A Signal that an import adds goes below the copy of its Source. The import finds that copy through
+the Signals that it imported below the Source before, or else by the name of the Source. Sibling
+Sources have distinct names. If the child moved or renamed Sources of the copy, the import can find
+another Source, or it raises `TimeFValidationError`.
+
+Do not assign `Source.signals` or `Source.sources` on a copy. A later import can then attach an
+annotation that the copy already holds a second time.
 
 ### Find a copy by its parent ID
 
