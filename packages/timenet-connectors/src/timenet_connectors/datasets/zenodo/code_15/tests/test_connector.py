@@ -291,6 +291,8 @@ def _edit_csv(root: Path, old: str, new: str) -> None:
         (_ROWS[40], _ROWS[40].replace("True,1.25", ",1.25"), r"(?s)exams\.csv:4: .*death and timey"),
         (_ROWS[40], _ROWS[40].replace("1.25", "nan"), r"exams\.csv:4: .*\ntimey"),
         (_ROWS[30], _ROWS[30].replace("exams_part0.hdf5", "part0.hdf5"), r"exams\.csv:5: .*\ntrace_file"),
+        (_ROWS[30], _ROWS[30].replace("3.5,False", "3.5,True"), r"(?s)exams\.csv:5: .*normal_ecg is True"),
+        (_ROWS[30], _ROWS[30].replace("False,True,True,7", "True,True,True,7"), r"(?s)exams\.csv:5: .*SB and ST"),
         (_ROWS[20], _ROWS[30], "exam 30 is listed twice"),
         (_ROWS[10], _ROWS[10].replace(",True,58.25", ",False,58.25"), "patient 7 is listed as both sexes"),
         (_ROWS[20], _ROWS[20].replace(",,,True", ",False,2.0,True"), "patient 8's mortality is stated on two exams"),

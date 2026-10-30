@@ -51,11 +51,19 @@ def _published_bool(value: Any) -> Any:
     Returns:
         The boolean, or the value unchanged for the field's own validation to reject.
     """
-    return {"True": True, "False": False}.get(value, value) if isinstance(value, str) else value
+    if value == "True":
+        return True
+    if value == "False":
+        return False
+    return value
 
 
 def _empty_as_none(value: Any) -> Any:
-    """Read an empty field as absent: ``death`` and ``timey`` are empty on all but one exam per patient.
+    """Read an empty ``death`` as absent.
+
+    ``death`` and ``timey`` are the only fields the release leaves empty, and always together; ``timey`` reads
+    its own with :func:`_optional_number`, and every other field raises when empty. A patient states them on
+    at most one exam: on the pinned release, 233,647 patients on exactly one and 123 on none.
 
     Returns:
         ``None`` for an empty string, else the value unchanged.
@@ -106,7 +114,7 @@ class ExamRow(BaseModel):
     atrial_fibrillation: _Bool = Field(alias=Abnormality.ATRIAL_FIBRILLATION.value)
     patient_id: NonNegativeInt
     death: _OptionalBool
-    """Whether the patient died in the follow-up. Only one exam per patient states it."""
+    """Whether the patient died in the follow-up. At most one exam per patient states it."""
     timey: _OptionalYears
     """Years to death, or to the end of follow-up for a survivor. Stated with ``death``."""
     normal_ecg: _Bool
@@ -117,6 +125,15 @@ class ExamRow(BaseModel):
     def _mortality_stated_together(self) -> Self:
         if (self.death is None) != (self.timey is None):
             raise ValueError("death and timey must be both stated or both empty")
+        return self
+
+    @model_validator(mode="after")
+    def _labels_agree(self) -> Self:
+        # Both rules hold on every row of the pinned release; a row that breaks one is mislabelled.
+        if self.normal_ecg and self.abnormalities:
+            raise ValueError(f"normal_ecg is True, but the exam is labelled {[a.value for a in self.abnormalities]}")
+        if self.sinus_bradycardia and self.sinus_tachycardia:
+            raise ValueError("SB and ST are both True, but a sinus rhythm can't be both slow and fast")
         return self
 
     @classmethod
@@ -149,15 +166,11 @@ class ExamRow(BaseModel):
     @property
     def abnormalities(self) -> tuple[Abnormality, ...]:
         """Return the abnormalities the exam is labelled with, in the authors' output order."""
-        flags = {
-            Abnormality.FIRST_DEGREE_AV_BLOCK: self.first_degree_av_block,
-            Abnormality.RIGHT_BUNDLE_BRANCH_BLOCK: self.right_bundle_branch_block,
-            Abnormality.LEFT_BUNDLE_BRANCH_BLOCK: self.left_bundle_branch_block,
-            Abnormality.SINUS_BRADYCARDIA: self.sinus_bradycardia,
-            Abnormality.ATRIAL_FIBRILLATION: self.atrial_fibrillation,
-            Abnormality.SINUS_TACHYCARDIA: self.sinus_tachycardia,
-        }
-        return tuple(abnormality for abnormality in Abnormality if flags[abnormality])
+        return tuple(abnormality for abnormality in Abnormality if getattr(self, _FIELD_OF[abnormality]))
+
+
+# Each abnormality's ExamRow field, read from the fields' aliases, which are the abnormalities' columns.
+_FIELD_OF = {Abnormality(field.alias): name for name, field in ExamRow.model_fields.items() if field.alias}
 
 
 def read_exams(path: Path) -> tuple[ExamRow, ...]:
