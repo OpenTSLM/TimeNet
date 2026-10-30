@@ -8,7 +8,7 @@ and the system never reuses them, so surviving references stay valid without ren
 content-addressed or deduplicating backend, the rewrite stores only the chunks that changed.
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Callable, Iterable, Mapping
 from dataclasses import replace
 from pathlib import Path
 from typing import cast
@@ -19,7 +19,7 @@ from timenet.errors import TimeFEditError
 from timenet.reader import TimeFReader
 from timenet.registry._paths import release_dir, split_release_dir
 from timenet.registry.dependencies import open_local_version
-from timenet.types import DatasetSchema, EntityId, Task, Version
+from timenet.types import Annotation, DatasetSchema, EntityId, Task, Version
 from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
@@ -31,11 +31,13 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[EntityId], *, cas
     dataset also does not contain their dependents.
 
     The method repairs every surviving cross-reference. It removes deleted records from task
-    inputs. A task becomes invalid if the edit removes all of its inputs or an object that it uses
-    as a target or candidate. It also becomes invalid if the edit removes an annotation that holds
-    its answer or a task that it derives from. If ``cascade`` is set, the method removes such a
-    task. If ``cascade`` is not set, the method rejects the edit, so a committed version never
-    contains a dangling reference.
+    inputs. A task references its inputs, candidate Records, and Record targets, and the Records
+    that hold the Signals it references. It becomes invalid if the edit removes all of its inputs,
+    an object that it uses as a target or candidate, or a Signal that its scope or a span names. It
+    also becomes invalid if the edit removes an annotation that holds its answer or a task that it
+    derives from. An input annotation on a removed Record is context, so the task keeps going
+    without it. If ``cascade`` is set, the method removes an invalid task. If ``cascade`` is not
+    set, the method rejects the edit, so a committed version never contains a dangling reference.
 
     Args:
         dataset: The base dataset. This is typically read back from a committed version.
@@ -55,31 +57,13 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[EntityId], *, cas
     if unknown:
         raise TimeFEditError(f"cannot remove unknown record ids: {sorted(unknown)}")
 
-    annotations_by_record = {
-        record.id: frozenset(id(annotation) for annotation in record.walk_annotations())
-        for record in dataset.records
-        if record.id not in remove
-    }
-    dataset_annotation_ids = frozenset(id(annotation) for annotation in dataset.annotations)
+    reachable = _reachability(dataset, (record for record in dataset.records if record.id not in remove))
     removed_signal_ids = {signal.id for record in dataset.records if record.id in remove for signal in record.signals}
-    removed_task_ids = _tasks_to_remove(
-        dataset,
-        remove,
-        removed_signal_ids,
-        annotations_by_record,
-        dataset_annotation_ids,
-        cascade=cascade,
-    )
+    removed_task_ids = _tasks_to_remove(dataset, remove, removed_signal_ids, reachable, cascade=cascade)
 
     records = [record for record in dataset.records if record.id not in remove]
     records_by_id = {record.id: record for record in records}
-    tasks = _rebuild_tasks(
-        dataset,
-        removed_task_ids,
-        records_by_id,
-        annotations_by_record,
-        dataset_annotation_ids,
-    )
+    tasks = _rebuild_tasks(dataset, removed_task_ids, records_by_id, reachable)
 
     # Use an empty schema, not the base dataset's schema. The derive_schema() call below
     # overwrites it anyway, and `dataset.schema or dataset.derive_schema()` mutated the input
@@ -97,12 +81,11 @@ def remove_records(dataset: TimeFDataset, record_ids: Iterable[EntityId], *, cas
     return edited
 
 
-def _tasks_to_remove(  # noqa: PLR0913 - each collection represents one part of edit reachability
+def _tasks_to_remove(
     dataset: TimeFDataset,
     remove: set[EntityId],
     removed_signal_ids: set[EntityId],
-    annotations_by_record: Mapping[EntityId, frozenset[int]],
-    dataset_annotation_ids: frozenset[int],
+    reachable: Callable[[Task, Annotation], bool],
     *,
     cascade: bool,
 ) -> set[EntityId]:
@@ -114,9 +97,7 @@ def _tasks_to_remove(  # noqa: PLR0913 - each collection represents one part of 
         dataset: The base dataset.
         remove: The record IDs to remove.
         removed_signal_ids: The signal IDs owned by the removed records.
-        annotations_by_record: Identities of the annotation occurrences carried by each surviving
-            record.
-        dataset_annotation_ids: Identities of the annotation occurrences attached to the dataset.
+        reachable: Whether a task can still resolve an annotation that it references.
         cascade: If set, remove invalidated tasks (transitively) instead of rejecting the edit.
 
     Returns:
@@ -125,17 +106,7 @@ def _tasks_to_remove(  # noqa: PLR0913 - each collection represents one part of 
     Raises:
         TimeFEditError: If a task dangles and ``cascade`` is off.
     """
-    invalid = {
-        task.id
-        for task in dataset.tasks
-        if _task_invalidated(
-            task,
-            remove,
-            removed_signal_ids,
-            annotations_by_record,
-            dataset_annotation_ids,
-        )
-    }
+    invalid = {task.id for task in dataset.tasks if _task_invalidated(task, remove, removed_signal_ids, reachable)}
     if invalid and not cascade:
         raise TimeFEditError(
             f"removing {sorted(remove)} would dangle tasks {sorted(invalid)}; pass cascade=True to remove them"
@@ -155,29 +126,30 @@ def _tasks_to_remove(  # noqa: PLR0913 - each collection represents one part of 
     return invalid
 
 
-def _reachable_annotation_ids(
-    task: Task,
-    annotations_by_record: Mapping[EntityId, frozenset[int]],
-    dataset_annotation_ids: frozenset[int],
-) -> set[int]:
-    """Return the identities of the annotation occurrences that ``task`` can still resolve.
+def _reachability(dataset: TimeFDataset, records: Iterable[Record]) -> Callable[[Task, Annotation], bool]:
+    """Return a check of whether a task can still resolve an annotation that it references after an edit.
 
-    These are occurrences attached directly to the dataset or anywhere below the task's surviving
-    input records.
+    The check builds no set per task. It finds the Record of an annotation in a map that the call
+    builds once.
 
     Args:
-        task: The task whose references the method resolves.
-        annotations_by_record: Identities of the annotation occurrences carried by each surviving
-            record. A removed record is absent, so it contributes nothing.
-        dataset_annotation_ids: Identities of the annotation occurrences attached directly to the
-            dataset.
+        dataset: The base dataset. The check takes from it the occurrences on the dataset itself, and
+            the Records that each task references (see ``TimeFDataset._referenced_records``).
+        records: The Records that the edit keeps, with the annotations that it keeps.
 
     Returns:
-        The identities still reachable from the task's surviving records.
+        The check. It takes a task and an annotation that the task references. It returns whether
+        the annotation lies on the dataset itself, or below a kept Record that the task references.
     """
-    reachable: set[int] = set(dataset_annotation_ids)
-    for record in task.inputs:
-        reachable |= annotations_by_record.get(record.id, frozenset())
+    record_ids = {id(annotation): record.id for record in records for annotation in record.walk_annotations()}
+    on_dataset = frozenset(id(annotation) for annotation in dataset.annotations)
+
+    def reachable(task: Task, annotation: Annotation) -> bool:
+        if id(annotation) in on_dataset:
+            return True
+        record_id = record_ids.get(id(annotation))
+        return record_id is not None and any(record.id == record_id for record in dataset._referenced_records(task))
+
     return reachable
 
 
@@ -185,39 +157,34 @@ def _task_invalidated(
     task: Task,
     remove: set[EntityId],
     removed_signal_ids: set[EntityId],
-    annotations_by_record: Mapping[EntityId, frozenset[int]],
-    dataset_annotation_ids: frozenset[int],
+    reachable: Callable[[Task, Annotation], bool],
 ) -> bool:
     """Return whether removing ``remove`` strips a required reference from ``task``.
 
-    A Record or Signal used as a target is required by construction. Candidate records are also
-    required because silently changing the candidate pool changes the question. Target annotations
-    are the answer and therefore cannot be stripped. Input annotations are context, so
-    :func:`_rebuild_tasks` removes the ones that are no longer reachable.
+    A Record or Signal used as a target is required by construction, and so is a Signal that a
+    span names. Candidate records are also required because silently changing the candidate pool
+    changes the question. Target annotations are the answer and therefore cannot be stripped.
+    Input annotations are context, so :func:`_rebuild_tasks` removes the ones that are no longer
+    reachable.
     """
-    from timenet.dataset.record import Record  # noqa: PLC0415
-    from timenet.dataset.time_series import Signal  # noqa: PLC0415
-
     targets = task.targets or ()
     target_record_ids = {target.id for target in targets if isinstance(target, Record)}
-    target_signal_ids = {target.id for target in targets if isinstance(target, Signal)}
     candidate_record_ids = {record.id for record in getattr(task, "candidate_records", ())}
     if (target_record_ids | candidate_record_ids) & remove:
         return True
-    if target_signal_ids & removed_signal_ids:
+    # The Signal targets, and the Signals that the scope and span targets name.
+    if any(signal.id in removed_signal_ids for signal in TimeFDataset._task_signals(task)):
         return True
     if task.inputs and all(record.id in remove for record in task.inputs):
         return True
-    reachable = _reachable_annotation_ids(task, annotations_by_record, dataset_annotation_ids)
-    return any(id(annotation) not in reachable for annotation in task.target_annotations)
+    return not all(reachable(task, annotation) for annotation in task.target_annotations)
 
 
 def _rebuild_tasks(
     dataset: TimeFDataset,
     removed_task_ids: set[EntityId],
     records_by_id: Mapping[EntityId, "Record"],
-    annotations_by_record: Mapping[EntityId, frozenset[int]],
-    dataset_annotation_ids: frozenset[int],
+    reachable: Callable[[Task, Annotation], bool],
 ) -> list[Task]:
     """Rebuild the surviving tasks. Strip out unreachable record, annotation, and from-task references.
 
@@ -225,8 +192,7 @@ def _rebuild_tasks(
         dataset: The base dataset.
         removed_task_ids: The ids of the tasks to drop.
         records_by_id: The surviving Record objects, keyed by id.
-        annotations_by_record: Identities of the annotation occurrences carried by each surviving
-            record.
+        reachable: Whether a task can still resolve an annotation that it references.
 
     Returns:
         The rebuilt surviving tasks, with ``from_tasks`` rewired to the rebuilt instances.
@@ -235,9 +201,8 @@ def _rebuild_tasks(
     for task in dataset.tasks:
         if task.id in removed_task_ids:
             continue
-        reachable = _reachable_annotation_ids(task, annotations_by_record, dataset_annotation_ids)
         inputs = tuple(records_by_id[record.id] for record in task.inputs if record.id in records_by_id)
-        input_annotations = tuple(annotation for annotation in task.input_annotations if id(annotation) in reachable)
+        input_annotations = tuple(annotation for annotation in task.input_annotations if reachable(task, annotation))
         changes: dict[str, object] = {
             "inputs": inputs,
             "targets": tuple(

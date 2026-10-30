@@ -128,6 +128,18 @@ For a large task corpus, use `set_task_stream()`. The writer validates each stre
 writes the Task. A stream does not keep the complete task set in memory. TimeNet therefore cannot
 check duplicate task IDs or `from_tasks` relationships across streamed Tasks.
 
+## Records that a Task references
+
+A Task references these Records:
+
+- Its inputs.
+- Its candidate Records.
+- Its Record targets.
+- Each Record that holds a Signal that the Task references, for example a Signal target.
+
+Only the inputs are Records that the Task takes as input. `tasks_for(record)` returns the Task only
+for its inputs, and `read_tasks(inputs=)` selects the Task only through its inputs.
+
 ## Scope an input
 
 `scope` limits the region that the model gets. A scope holds the Signal objects that it covers:
