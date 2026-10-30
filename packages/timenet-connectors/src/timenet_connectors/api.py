@@ -117,7 +117,8 @@ def load(
         dataset_id: The dataset id (``org/name``).
         version: The version string, or ``None`` for the latest. :func:`build` checks this value
             against the connector's declared version and rejects a mismatch.
-        fetch_from: The registry, or its URI, to copy missing parent releases from.
+        fetch_from: The registry, or its URI, to copy missing parent releases and payload
+            sources from, for the build and for the read.
         build_parents: Build missing parent releases from their installed connectors.
 
     Returns:
@@ -126,4 +127,4 @@ def load(
     from timenet.client import TimeNet  # noqa: PLC0415
 
     build(dataset_id, version=version, fetch_from=fetch_from, build_parents=build_parents)
-    return TimeNet().load(dataset_id, version)
+    return TimeNet().load(dataset_id, version, fetch_from=fetch_from)
