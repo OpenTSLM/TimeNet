@@ -52,12 +52,13 @@ class RecordMetadata(BaseModel):
     def to_json(self) -> JsonMapping:
         """Return the metadata as TimeNet stores it.
 
-        Fields that are ``None`` are left out, and enums are written as their values.
+        Every field is written, ``None`` as ``null``, so ``from_json`` reads back the same values; enums are
+        written as their values.
 
         Returns:
             The JSON object.
         """
-        stored: dict[str, Any] = self.model_dump(mode="json", exclude_none=True)
+        stored: dict[str, Any] = self.model_dump(mode="json")
         return stored
 
     @classmethod
