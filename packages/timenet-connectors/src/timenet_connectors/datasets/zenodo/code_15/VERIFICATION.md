@@ -104,7 +104,7 @@ the device's output. No other copy of CODE-15% exists.
 | # | Error | Status | Evidence, or what's left |
 | --- | --- | --- | --- |
 | 18 | Raw ADC counts stored without gain and baseline | ☑️ Done once | The values are floats the authors converted with `convert_to_mv` and scaled by 2 (`ecg-preprocessing`). DII's peak per trace has median 1.90, so 0.95 mV, a typical R wave. |
-| 19 | Wrong units or scale | ☑️ Done once / ⚠️ Open | Done once: the factor 2 is the author's (issue 5 and the `ecg-preprocessing` README), and DII's median peak of 0.95 mV fits. Open: the "scale 1e-4V" sentence of both READMEs contradicts it, and no measurement in a known unit is published to check the factor against. |
+| 19 | Wrong units or scale | ☑️ Done once / ⚠️ Open | Done once: the factor 2 is the author's (issue 5 and the `ecg-preprocessing` README), and DII's median peak of 0.95 mV fits. Measured on 2026-10-30 against the four CODE-15% exams whose raw WFDB files (in mV) the `ecg-preprocessing` README links (2905463, 2834, 286512, 2678117): resampled, derived and padded as `preprocess_ecg` does, the published rows are 1.953125 × the millivolts (least-squares fits 1.95309 to 1.95314, over gains of 200 and 256.4 per mV), not 2 ×; the largest residual falls from 0.07 to 0.014. Open: whether the files' gains or the release carry the 1000/1024, so whether a Record's values are 2.3% below the true millivolts. To ask the author in issue 5. |
 | 20 | Swapped or mislabeled channels | ☑️ Done once | DIII equals DII − DI to 10⁻⁶ of the peak in 250,910 of 345,106 traces, and AVR, AVL and AVF are within 2% of their derivation in 258,355, which only the published order fits. On 1,500 normal exams the share of positive QRS is DI 95%, DII 96%, AVR 2%, and rises V1 5%, V2 19%, V3 38%, V4 83%, V5 96%, V6 96%: the R-wave progression, so the precordial order holds. |
 | 21 | Flipped sign convention | ☑️ Done once | The connector only halves, so it flips nothing (#13). The polarity pattern of #20 matches a normal ECG in every lead, so the release's signs are the standard ones. |
 | 22 | Missing-value markers stored as values | ✅ Done / ☑️ Done once | Done: a non-finite value fails the scan (`test_a_value_that_isnt_finite_fails_when_scanned`); the authors' fill, zero padding, is left out by the centring rule (`test_centred_padding_follows_preprocess_ecg`); an all-zero trace has no Record (`test_converts_the_fixture`). Done once: 0 non-finite values. Zero runs the rule can't explain stay (#24). |
@@ -182,8 +182,8 @@ the device's output. No other copy of CODE-15% exists.
    against the CSV and the HDF5 files, and a second build compared with it, are running.
 2. **The splits (#43, #44).** The release has none; the per-task roles are ours, and they share inputs
    across splits. Decide whether a patient-level split of our own should be added for training.
-3. **The scale (#19).** The factor 2 rests on the author's statement; no measurement in a known unit
-   checks it.
+3. **The scale (#19).** The author states 2; the four raw exams measure 1.953125 (= 2 × 1000/1024).
+   Until the author says which side is off, Records may be 2.3% below the true millivolts.
 4. **Mortality on the Record (#53).** `death` and `follow_up` are after the exam; they are safe only
    while no loader feeds a Record's annotations to a model.
 5. **Reused extraction (#3).** A changed value that keeps the counts and zero runs isn't caught after
@@ -196,7 +196,10 @@ the device's output. No other copy of CODE-15% exists.
 
 - Add the one-off scripts (the independent scan, the read-back comparison, the heart-rate and
   polarity checks) to the repository's verification tooling, so the ☑️ Done once rows can be rerun.
-- Run the authors' published age model on `preprocessing.authors_input` for a sample of Records and
-  compare with `nn_predicted_age`. A match confirms the input, scale included, is the one the model
-  was trained on (#19).
+- Ask the author in `ecg-age-prediction` issue 5 whether the factor is 2 or 1.953125, and for each
+  exam's raw length and sampling rate, which would make the padding exact (#19, #29). Running the
+  authors' age model on `preprocessing.authors_input` wouldn't settle the scale: it checks that the
+  input is the published one, which the bit-for-bit rebuild already shows, not its unit.
+- Add the raw-exam comparison, which downloads the four WFDB exams and restates `preprocess_ecg`,
+  to the verification tooling with the other one-off scripts (#19).
 - Hash each extracted HDF5 file against a pinned digest when the extraction is reused (#3).
