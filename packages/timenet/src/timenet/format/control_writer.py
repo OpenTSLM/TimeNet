@@ -272,7 +272,7 @@ class DuckDBControlWriter:
 
     @staticmethod
     def _write_imports(connection: duckdb.DuckDBPyConnection, import_state: ImportState) -> None:
-        """Store the parent aliases, and the parent ID of each imported Record and Signal the dataset holds.
+        """Store the parent aliases, and the parent ID of each imported Record, Signal, and task the dataset holds.
 
         Raises:
             TimeFValidationError: If the dataset holds objects imported under an alias that has no
@@ -286,6 +286,7 @@ class DuckDBControlWriter:
                 for kind, query in (
                     (ObjectKind.RECORD, "SELECT record_id FROM records"),
                     (ObjectKind.SIGNAL, "SELECT signal_id FROM signals"),
+                    (ObjectKind.TASK, "SELECT task_id FROM tasks"),
                 )
             }
             rows = [

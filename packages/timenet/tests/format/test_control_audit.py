@@ -70,7 +70,9 @@ def test_audit_accepts_a_freshly_written_database(control_path):
 def test_audit_accepts_imported_objects_whose_copies_exist(control_path):
     with connect_control(control_path) as connection:
         connection.execute("INSERT INTO imports VALUES ('base', 'org/parent@1.0.0')")
-        connection.execute("INSERT INTO imported_objects VALUES ('base', 'Record', 7, 1), ('base', 'Signal', 8, 1)")
+        connection.execute(
+            "INSERT INTO imported_objects VALUES ('base', 'Record', 7, 1), ('base', 'Signal', 8, 1), ('base', 'Task', 9, 1)"
+        )
         audit_control_database(connection, require_chunks=False)
 
 
@@ -236,7 +238,12 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
         ),
         (
             "INSERT INTO imports VALUES ('base', 'org/parent@1.0.0'); "
-            "INSERT INTO imported_objects VALUES ('base', 'Task', 7, 1)",
+            "INSERT INTO imported_objects VALUES ('base', 'Task', 7, 999)",
+            "imported object of parent alias 'base' refers to missing Task 999",
+        ),
+        (
+            "INSERT INTO imports VALUES ('base', 'org/parent@1.0.0'); "
+            "INSERT INTO imported_objects VALUES ('base', 'Source', 7, 1)",
             r"invalid imported_objects\.object_kind value",
         ),
     ],

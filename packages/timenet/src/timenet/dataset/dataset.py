@@ -100,16 +100,17 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
 
-    def import_from(
+    def import_from(  # noqa: PLR0913 - one argument per selection
         self,
         parent: "TimeFReader",
         *,
         alias: ParentAlias | None = None,
         records: Iterable[EntityId] = (),
         signals: Iterable[EntityId] = (),
+        tasks: Iterable[EntityId] = (),
         load: LoadPlan = LoadPlan.ALL_LAZY,
     ) -> ImportedDataset:
-        """Copy Records and Signals from a parent release into this dataset.
+        """Copy Records, Signals, and tasks from a parent release into this dataset.
 
         The parent must be a release that ``metadata.parents`` declares. The call records the parent
         in :attr:`parent_cards` and :attr:`lineage`. It does not change the card of this dataset.
@@ -117,6 +118,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         - ``records=`` copies each Record whole, with its Sources, Signals, and annotations.
         - ``signals=`` copies each Signal into a copy of its Record and of the Sources above it. Such a
           partial copy keeps the annotations that its Signals place.
+        - ``tasks=`` copies each task with the Records and Signals that it references and the tasks
+          that it derives from. A task that references annotations cannot be imported.
 
         Each copy is this dataset's own object, with new IDs and its own metadata and annotations, so
         edits do not change the parent. Its Signals keep the parent's value handles, so they read the
@@ -128,7 +131,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         edits. If the call needs Signals that the copy of a Record lacks, it adds them to that copy,
         with the Sources and annotations that they bring. An object whose copy this dataset removed is
         copied again, under a new ID. Imports are safe to repeat: if a call fails partway, repeating
-        it completes it. Select many objects in one call, because each call reads them in one batch.
+        it completes it. Select many objects in one call, because each call reads them in batches.
         ``docs/timef-dataset.md`` describes the rules.
 
         Args:
@@ -136,24 +139,28 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             alias: The parent alias to import under, when several aliases declare the parent.
             records: The parent IDs of the Records to copy whole.
             signals: The parent IDs of the Signals to copy.
-            load: Which kinds of stored values to load. The import reads the parent Records without
-                their values. Then it loads these kinds on the copies of the selected Records and
-                Signals, and on the annotations that it copies, through their own value handles. This
-                includes copies that this dataset holds already. The other Signals of a partial copy
-                stay as they are. The default loads none.
+            tasks: The parent IDs of the tasks to copy.
+            load: Which kinds of stored values to load. The import reads the parent tasks and Records
+                without their values. Then it loads these kinds on the copies of the selected and
+                needed tasks, Records, and Signals, and on the annotations that it copies, through
+                their own value handles. This includes copies that this dataset holds already. The
+                other Signals of a partial copy stay as they are. The default loads none.
 
         Returns:
-            The copies of the selected Records and Signals, by their parent IDs.
+            The copies of the selected Records, Signals, and tasks, by their parent IDs.
 
         Raises:
             TimeFValidationError: If ``metadata.parents`` or ``alias`` does not declare the parent,
                 another alias imports the parent or this alias imports another release, a selection
-                is not a collection of positive int64 IDs, or the copy of a Record that the call adds
-                to holds sibling Sources of one name or a Signal outside its ``time_span``.
+                is not a collection of positive int64 IDs, the copy of a Record that the call adds
+                to holds sibling Sources of one name or a Signal outside its ``time_span``, ``tasks``
+                is given and this dataset streams its tasks, a task to copy references an annotation
+                or is a ``TSCorrespondenceTask`` without ``candidate_records``, or the task copies
+                fail to register.
             TimeFNotFoundError: If a selected ID names no parent object. This dataset does not change.
         """  # noqa: DOC502 - raised by composition.import_from
         try:
-            return import_from(self, parent, alias=alias, records=records, signals=signals, load=load)
+            return import_from(self, parent, alias=alias, records=records, signals=signals, tasks=tasks, load=load)
         finally:
             self._schema = None
 
