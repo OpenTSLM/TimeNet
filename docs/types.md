@@ -263,6 +263,7 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeNetFileError` | A file of a release is missing, or does not match its manifest record. A `TimeFFormatError`. |
 | `TimeFReaderError` | A reader could not complete a read, e.g. its connection was closed while the read ran. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
+| `TimeNetConnectorError` | A connector found that an assumption about its source data, a download, or a parent does not hold. `TimeNetDownloadError` is one. |
 
 Pydantic `ValidationError` reports field and schema errors in a dataset card. The error includes the
 native field location and details.
