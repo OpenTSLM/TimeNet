@@ -314,9 +314,9 @@ information.
 Each copy is a Record of the child. The copy and its Signals get new IDs in the child. The copy has
 its own metadata and its own annotations, so an edit of the copy does not change the parent.
 
-`records=` does not copy the annotations of the parent dataset itself. If the child holds a copy of
-a selected Record, the import uses that copy. It adds only what the copy lacks, as
-[Later imports](#later-imports) describes.
+The annotations of the parent dataset itself come only with a task that references them. If the
+child holds a copy of a selected Record, the import uses that copy. It adds only what the copy lacks,
+as [Later imports](#later-imports) describes.
 
 Copies keep the time axes of the parent, so Records that are aligned in the parent stay aligned in
 the child.
@@ -357,7 +357,8 @@ Record keeps every Record annotation inside the session.
 
 - Its input Records, its candidate Records, and its Record targets come whole, as `records=` copies
   them.
-- Each Signal target comes in a partial copy of its Record, as `signals=` copies it.
+- Each Signal target comes in a partial copy of its Record, as `signals=` copies it. If that
+  Record holds an annotation that the task references, the Record comes whole.
 - The tasks that it derives from through `from_tasks` come too, with the objects that they
   reference. So do the tasks that those tasks derive from, and so on.
 
@@ -371,15 +372,38 @@ child. It does not read that task from the parent again. If an edit removed some
 copy, they stay removed. A new task copy that derives from a task copy in the child references that
 copy.
 
-The import refuses a task that references annotations in `input_annotations` or
-`target_annotations`, and raises `TimeFValidationError`. It also refuses a `TSCorrespondenceTask`
-without `candidate_records`, because the candidates of such a task are all Records of the parent.
-For a child that streams its tasks, `tasks=` also raises `TimeFValidationError`.
+The import refuses a `TSCorrespondenceTask` without `candidate_records`, because the candidates of
+such a task are all Records of the parent. For a child that streams its tasks, `tasks=` raises
+`TimeFValidationError`.
 
 Each call reads the selected tasks, the tasks that they derive from, and the Records that they
 reference in one batch, before the other Records. `load=` applies to this read too. The task copies
 register after every Record, all together or not at all. If they fail, the Records that the call
-copied stay, and the child holds no task copy of the call.
+copied stay. The child then holds no task copy of the call, and no annotation that the call attached
+for the task copies.
+
+#### Annotation references
+
+A task can reference annotations in `input_annotations` and `target_annotations`. Each of these
+annotations lies on the parent dataset itself or on a Record that the task references, as
+[Annotations](data-model/annotations.md#use-annotations-in-tasks) describes. So the import copies
+the Record of each referenced annotation. The Records that the task names come whole. A Record of a
+Signal target that holds a referenced annotation comes whole too.
+
+Annotations have no IDs, so the import cannot find their copies by a parent ID. Instead, the import
+resolves each reference to the matching occurrence on the copy of its owner. As
+[Signals](#signals) tells, the owner is the Record, Source, or Signal that holds the annotation. A
+match is equal to the annotation of the parent in every field, for example the key, the value, and
+the span.
+
+If the child previously changed or removed that occurrence on its copy, the import attaches a copy
+of the annotation of the parent next to it. The task copy then references the attached copy. The
+occurrence that the child changed stays as it is.
+
+An annotation on the parent dataset itself comes to the child dataset with the first task that
+references it. The other annotations of the parent dataset do not come. If the tasks of one call
+reference identical occurrences, each occurrence gets its own copy. References in separate calls can
+share one copy.
 
 ### Later imports
 
