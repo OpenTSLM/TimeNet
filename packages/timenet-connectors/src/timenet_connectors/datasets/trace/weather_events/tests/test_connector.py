@@ -25,11 +25,6 @@ from timenet_connectors.datasets.trace.weather_events.release import (
     TraceSplit,
     TraceTaskKind,
 )
-from timenet_connectors.datasets.trace.weather_events.tasks import (
-    TraceEventTypeTask,
-    TraceForecastTask,
-    TraceRetrievalTask,
-)
 from timenet_connectors.datasets.trace.weather_events.vocabulary import EventLabel, SkyCover, WindowSampling
 
 
@@ -502,13 +497,17 @@ def test_download_locates_split_files_in_the_pinned_archive(monkeypatch, tmp_pat
     ]
 
 
-def test_the_loader_selects_tasks_by_split_and_kind(tmp_path):
+def test_the_loader_gives_each_task_of_the_authors_by_its_method(tmp_path):
     trace = TraceDatasetLoader.parse_from(_write(tmp_path))
-    every = list(trace.tasks())
-    assert [(task.TIMENET_TYPE.__name__, task.window.ref.window_id) for task in every] == [
-        _task_key(task) for task in trace.timenet_tasks()
+    by_method = {
+        ClassificationTask: list(trace.event_type_tasks()),
+        TSCorrespondenceTask: list(trace.retrieval_tasks()),
+        ForecastingTask: list(trace.forecast_tasks()),
+    }
+    # Each method gives only its own TimeNet type, and tasks() yields from each method in turn.
+    for task_type, tasks in by_method.items():
+        assert tasks
+        assert all(type(task) is task_type for task in tasks)
+    assert [_task_key(task) for task in trace.tasks()] == [
+        _task_key(task) for tasks in by_method.values() for task in tasks
     ]
-    for kind in (TraceEventTypeTask, TraceRetrievalTask, TraceForecastTask):
-        for split in Split:
-            selected = list(trace.tasks_of(kind, split=split))
-            assert selected == [task for task in every if isinstance(task, kind) and task.split is split]

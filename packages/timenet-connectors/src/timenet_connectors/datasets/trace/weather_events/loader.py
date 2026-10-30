@@ -1,42 +1,34 @@
 """Load TRACE's archive into its windows, retrieval rows, Records, and tasks."""
 
 from collections.abc import Iterable, Iterator
-from itertools import chain
 from typing import Self
 
 from timenet.dataset import Record
-from timenet.types import Annotation
+from timenet.types import Annotation, ClassificationTask, ForecastingTask, Task, TSCorrespondenceTask
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.trace.weather_events.index import RetrievalIndex, TraceRecords, WindowIndex
 from timenet_connectors.datasets.trace.weather_events.keys import AnnotationKey
 from timenet_connectors.datasets.trace.weather_events.records import WindowLoader
 from timenet_connectors.datasets.trace.weather_events.release import TraceArchive, TraceFileRef, TraceSplit
-from timenet_connectors.datasets.trace.weather_events.tasks import (
-    TraceEventTypeTask,
-    TraceForecastTask,
-    TraceRetrievalTask,
-    TraceTask,
-)
+from timenet_connectors.datasets.trace.weather_events.tasks import event_type_task, forecast_task, retrieval_task
 from timenet_connectors.datasets.trace.weather_events.vocabulary import EventLabel
 
 
-class TraceDatasetLoader(DatasetLoader[TraceTask]):
+class TraceDatasetLoader(DatasetLoader):
     """TRACE's archive, read and checked: its windows, its retrieval rows, one Record per measurement, and tasks.
 
-    TRACE defines three tasks, one per published window or row, each under the authors' split:
+    TRACE defines three tasks, one per published window or row, each under the authors' split. Each
+    has its own method:
 
-    - Event type (:class:`TraceEventTypeTask`): a classified ``pretrain`` window must name the event
+    - Event type (:meth:`event_type_tasks`): a classified ``pretrain`` window must name the event
       that followed it.
-    - Retrieval (:class:`TraceRetrievalTask`): a retrieval row's generated description must find its
+    - Retrieval (:meth:`retrieval_tasks`): a retrieval row's generated description must find its
       window's Record.
-    - Forecasting (:class:`TraceForecastTask`): a ``forecasting`` window's last values must follow
-      from the rest.
-
-    Select one kind, or one kind of one split, with ``tasks_of``, such as
-    ``tasks_of(TraceRetrievalTask, split=Split.TRAIN)``.
+    - Forecasting (:meth:`forecast_tasks`): a ``forecasting`` window's last values must follow from
+      the rest.
     """
 
-    TASK_KINDS = (TraceEventTypeTask, TraceRetrievalTask, TraceForecastTask)
+    TASK_TYPES = (ClassificationTask, TSCorrespondenceTask, ForecastingTask)
 
     def __init__(self, windows: WindowIndex, retrieval_rows: RetrievalIndex, records: TraceRecords) -> None:
         self._windows = windows
@@ -83,30 +75,49 @@ class TraceDatasetLoader(DatasetLoader[TraceTask]):
         """Return one Record per distinct measurement, whose values stay in the window files until written."""
         return iter(self._records)
 
-    def tasks(self) -> Iterator[TraceTask]:
+    def tasks(self) -> Iterator[Task]:
         """Return every TRACE task, in stream order.
 
-        Each call rereads the retrieval files, so the tasks can be iterated more than once. A retrieval
-        task's split is its retrieval file's, which is the authors' own: most retrieval test tasks are
-        on windows from the ``pretrain`` train and val files.
+        Each call rereads the retrieval files, so the tasks can be iterated more than once.
 
-        Returns:
-            Each retrieval row's event-type task, if its window is classified, then its retrieval task.
-            Then each forecasting task.
+        Yields:
+            The event-type tasks, then the retrieval tasks, then the forecasting tasks.
         """
-        return chain(self._retrieval_row_tasks(), self._forecast_tasks())
+        yield from self.event_type_tasks()
+        yield from self.retrieval_tasks()
+        yield from self.forecast_tasks()
 
-    def _retrieval_row_tasks(self) -> Iterator[TraceEventTypeTask | TraceRetrievalTask]:
-        for file, window, row in self._retrieval_rows:
-            record = self._records.of(window)
+    def event_type_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the event-type tasks.
+
+        Yields:
+            One classification task for each retrieval row whose window is classified.
+        """
+        for _, window, row in self._retrieval_rows:
             # A row has a report exactly when its window is classified, as RetrievalIndex.from_files checked.
             if row.event_report is not None:
-                yield TraceEventTypeTask(window, record, row.event_report)
+                yield event_type_task(window, self._records.of(window), row.event_report)
+
+    def retrieval_tasks(self) -> Iterator[TSCorrespondenceTask]:
+        """Return the retrieval tasks.
+
+        A retrieval task's split is its retrieval file's, which is the authors' own: most retrieval test
+        tasks are on windows from the ``pretrain`` train and val files.
+
+        Yields:
+            One correspondence task for each retrieval row.
+        """
+        for file, window, row in self._retrieval_rows:
             # Test tasks rank the retrieval test windows' Records; train tasks name no candidates.
             candidates = self._retrieval_test_candidates if file.split is TraceSplit.TEST else ()
-            yield TraceRetrievalTask(window, record, row, file.split, candidates)
+            yield retrieval_task(window, self._records.of(window), row, file.split, candidates)
 
-    def _forecast_tasks(self) -> Iterator[TraceForecastTask]:
+    def forecast_tasks(self) -> Iterator[ForecastingTask]:
+        """Return the forecasting tasks.
+
+        Yields:
+            One forecasting task for each forecasting window long enough for one.
+        """
         for window in self._windows:
             if window.is_eligible_for_forecasting():
-                yield TraceForecastTask(window, self._records.of(window))
+                yield forecast_task(window, self._records.of(window))
