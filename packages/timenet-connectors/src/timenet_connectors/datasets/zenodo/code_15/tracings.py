@@ -14,7 +14,7 @@ import weakref
 import numpy as np
 
 from timenet.errors import TimeFFormatError
-from timenet_connectors.datasets.zenodo.code_15.preprocessing import TRACE_SAMPLES
+from timenet_connectors.datasets.zenodo.code_15.preprocessing import TRACE_SAMPLES, Padding, centred_padding
 from timenet_connectors.datasets.zenodo.code_15.release import (
     EXAM_ID_DATASET,
     FILLER_EXAM_ID,
@@ -70,6 +70,11 @@ class TraceScan(NamedTuple):
     def all_zero(self) -> bool:
         """Return whether the trace is zero in every lead and sample."""
         return self.leading_zeros == TRACE_SAMPLES
+
+    @property
+    def padding(self) -> Padding:
+        """Return the zeros the authors added around the trace, inferred from its runs of all-lead zeros."""
+        return centred_padding(self.leading_zeros, self.trailing_zeros)
 
 
 def zero_runs(traces: np.ndarray) -> tuple[np.ndarray, np.ndarray]:

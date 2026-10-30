@@ -10,7 +10,6 @@ from pathlib import Path
 
 from timenet.errors import TimeFFormatError
 from timenet_connectors.datasets.zenodo.code_15.exams import ExamRow
-from timenet_connectors.datasets.zenodo.code_15.preprocessing import Padding, centred_padding
 from timenet_connectors.datasets.zenodo.code_15.release import Part
 from timenet_connectors.datasets.zenodo.code_15.tracings import TraceScan, part_path, scan_part
 
@@ -21,11 +20,6 @@ class Exam:
 
     row: ExamRow
     scan: TraceScan
-
-    @property
-    def padding(self) -> Padding:
-        """Return the zeros the authors added around the trace."""
-        return centred_padding(self.scan.leading_zeros, self.scan.trailing_zeros)
 
 
 @dataclass(frozen=True)

@@ -11,7 +11,7 @@ from timenet.errors import TimeFFormatError
 from timenet.types import Annotation, TimeSeriesSpec, ureg
 from timenet_connectors.datasets.zenodo.code_15.index import Exam
 from timenet_connectors.datasets.zenodo.code_15.keys import AnnotationKey
-from timenet_connectors.datasets.zenodo.code_15.preprocessing import Padding, centred_padding, to_millivolts
+from timenet_connectors.datasets.zenodo.code_15.preprocessing import Padding, to_millivolts
 from timenet_connectors.datasets.zenodo.code_15.release import SAMPLE_RATE_HZ
 from timenet_connectors.datasets.zenodo.code_15.tracings import TraceReader, TraceScan, zero_runs
 from timenet_connectors.datasets.zenodo.code_15.vocabulary import Lead
@@ -22,6 +22,8 @@ SOURCE_NAME = "12-lead ECG"
 
 # The release stores float32, and halving it to millivolts is exact.
 _SPEC = TimeSeriesSpec(spec_type="ecg", name="12-lead ECG", unit_value=ureg.millivolt, dtype="float32")
+# One axis for every Record: RegularAxis is frozen.
+_TIME_AXIS = RegularAxis.from_rate_hz(SAMPLE_RATE_HZ)
 
 _SEX = "The patient's sex, decoded from exams.csv's is_male."
 _DEATH = "Whether the patient died in the follow-up. exams.csv states it on at most one exam per patient."
@@ -34,19 +36,19 @@ _FOLLOW_UP = (
 class Code15RecordMetadata(RecordMetadata):
     """A CODE-15% Record's metadata: the exam, and where its trace sits in the published one.
 
-    The patient id is the shared ``subject_id``. ``pad_start`` and ``pad_end`` are the zeros the Record's signals
-    leave out, so ``preprocessing.authors_input`` can rebuild the published trace.
+    The patient id is the shared ``subject_id``. ``n_pad_before`` and ``n_pad_after`` count the zeros the
+    Record's signals leave out, so ``preprocessing.authors_input`` can rebuild the published trace.
     """
 
     exam_id: int
     trace_file: str
-    pad_start: int
-    pad_end: int
+    n_pad_before: int
+    n_pad_after: int
 
     @property
     def padding(self) -> Padding:
         """Return the zeros the published trace has around the Record's samples."""
-        return Padding(start=self.pad_start, end=self.pad_end)
+        return Padding(n_before=self.n_pad_before, n_after=self.n_pad_after)
 
 
 def record_metadata(record: Record) -> Code15RecordMetadata:
@@ -85,11 +87,10 @@ class LeadLoader:
         location = scan.location
         trace = self._reader.read(location)
         leading, trailing = zero_runs(trace[np.newaxis])
-        if (int(leading[0]), int(trailing[0])) != (scan.leading_zeros, scan.trailing_zeros) or not np.isfinite(
-            trace
-        ).all():
+        same_zeros = (int(leading[0]), int(trailing[0])) == (scan.leading_zeros, scan.trailing_zeros)
+        if not same_zeros or not np.isfinite(trace).all():
             raise TimeFFormatError(f"{location.path}: row {location.row} changed since it was scanned")
-        return to_millivolts(trace, centred_padding(scan.leading_zeros, scan.trailing_zeros))
+        return to_millivolts(trace, scan.padding)
 
     def __call__(self, exam: Exam, lead: Lead) -> pa.Array:
         """Return one lead of an exam.
@@ -113,13 +114,13 @@ def build_record(exam: Exam, leads: LeadLoader) -> Record:
     Returns:
         The Record, whose values stay in the part until read.
     """
-    time_axis = RegularAxis.from_rate_hz(SAMPLE_RATE_HZ)
+    padding = exam.scan.padding
     signals = tuple(
         Signal.from_loader(
             name=lead.value,
             spec=_SPEC,
-            time_axis=time_axis,
-            n_values=exam.padding.n_values,
+            time_axis=_TIME_AXIS,
+            n_values=padding.n_values,
             loader=partial(leads, exam, lead),
         )
         for lead in Lead
@@ -129,8 +130,8 @@ def build_record(exam: Exam, leads: LeadLoader) -> Record:
         subject_id=str(row.patient_id),
         exam_id=row.exam_id,
         trace_file=row.trace_file,
-        pad_start=exam.padding.start,
-        pad_end=exam.padding.end,
+        n_pad_before=padding.n_before,
+        n_pad_after=padding.n_after,
     )
     record = Record(sources=(Source(name=SOURCE_NAME, signals=signals),), metadata=metadata.to_json())
     record.annotate(Annotation(key=AnnotationKey.SEX, value=row.sex.value, description=_SEX))
