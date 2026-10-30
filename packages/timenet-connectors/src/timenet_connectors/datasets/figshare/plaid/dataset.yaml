@@ -1,0 +1,30 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the figshare/plaid connector: the single source for this dataset's metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
+# derived from the data into manifest.json.
+#
+# Training convention: the tasks are the two uses the paper names. Each submetered file has one
+# ClassificationTask, its appliance type, as the authors' GlobalSIP notebook classifies it. Each
+# aggregated file has one TemporalLocalizationTask, its labelled switch-on and switch-off events.
+# No task has a split: the authors evaluate by leaving one household out, and a Record's
+# subject_id is that household. Signals are archival raw: current and voltage at 30 kHz, as
+# written, with no calibration; the paper leaves normalizing the 2013 files to the user.
+yaml_schema_version: 1
+dataset_id: figshare/plaid
+dataset_version: 1.0.0
+name: PLAID
+description: >-
+  Current and voltage at 30 kHz of household appliances: 1,876 recordings of one appliance
+  switching on, from 65 locations in Pittsburgh, and 575 recordings of two to four appliances
+  switching on and off together in one lab.
+license: CC-BY-4.0
+domains:
+  - energy
+tags:
+  - electrical-load
+  - appliance-identification
+  - nilm
+  - event-detection
+  - current
+  - voltage
+source_url: https://doi.org/10.6084/m9.figshare.10084619.v2
