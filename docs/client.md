@@ -110,6 +110,16 @@ with client.open("timenet/hello-world") as reader:
 `open()` and read what you need, such as one task with `reader.get()` or the tasks' text alone with
 a load plan.
 
+To read every value of a large dataset without holding all of it in memory, stream its Records in
+batches. `iter_records()` loads the values of each batch before it yields the batch. The stream
+holds one batch at a time:
+
+```python
+with client.open("timenet/hello-world") as reader:
+    for record in reader.iter_records(load=LoadPlan.ALL_EAGER, batch_size=500):
+        values = record.signals[0].to_numpy()
+```
+
 For a local registry, the reader opens the version in place. A local read needs complete copies of
 the version and of its payload sources: the releases whose payload files the version reads. For
 each of these releases, `open()` and `load()` use the first of these steps that works:

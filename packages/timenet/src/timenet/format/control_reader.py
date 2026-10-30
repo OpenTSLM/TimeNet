@@ -283,6 +283,9 @@ class _TargetRow(NamedTuple):
 TASK_BATCH_SIZE = 5_000
 """The most tasks one batch of a task read or stream holds, unless a stream sets another batch size."""
 
+RECORD_BATCH_SIZE = 1_000
+"""The most Records one batch of a Record stream holds, unless the stream sets another batch size."""
+
 
 def _annotation_query(owners: Mapping[ObjectKind, Collection[int] | None]) -> tuple[str, list[object]]:
     """Build the occurrence query, restricted to the requested owners.
@@ -839,6 +842,44 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         records = self._assemble_records(hierarchy, signals_by_source, annotations, occurrences)
         self._known_record_ids.update(hierarchy.owners[ObjectKind.RECORD])
         return records
+
+    def iter_record_batches(
+        self,
+        record_ids: Iterable[int] | None = None,
+        *,
+        with_annotations: bool = True,
+        batch_size: int = RECORD_BATCH_SIZE,
+    ) -> Iterator[tuple[Record, ...]]:
+        """Yield complete records a bounded batch at a time, each batch built on its own.
+
+        Every requested ID is checked before the first batch is built. Each batch reads only its own
+        rows, and its records share no object with another batch.
+
+        Args:
+            record_ids: Requested IDs in result order, or ``None`` for every record in read order.
+            with_annotations: Whether to build annotations on records, sources, and signals.
+            batch_size: The most records a batch holds. By default, a batch holds up to 1,000
+                records (``RECORD_BATCH_SIZE``).
+
+        Yields:
+            Each batch's records, with their stored values behind unloaded handles.
+
+        Raises:
+            TimeFValidationError: If ``batch_size`` is not a positive int, or a requested ID is not
+                an int.
+            TimeFNotFoundError: If a requested record is absent.
+        """
+        if type(batch_size) is not int or batch_size < 1:
+            raise TimeFValidationError(f"batch_size must be a positive int, got {batch_size!r}")
+        if record_ids is None:
+            ids = self.record_ids()
+        else:
+            ids = tuple(check_id(item, "record id") for item in record_ids)
+            missing = self._missing_ids("records", "record_id", ids)
+            if missing:
+                raise TimeFNotFoundError(f"no such record(s) in control.duckdb: {missing}")
+        for start in range(0, len(ids), batch_size):
+            yield self.read_records(ids[start : start + batch_size], with_annotations=with_annotations)
 
     def _read_record_hierarchy(
         self, requested: tuple[EntityId, ...] | None, shared_offsets: dict[EntityId, StoredOffsets] | None
