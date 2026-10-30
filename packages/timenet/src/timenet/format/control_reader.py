@@ -86,7 +86,7 @@ _TasksById: TypeAlias = dict[EntityId, Task]
 
 
 class _RecordRow(NamedTuple):
-    """One ``records`` row in schema column order."""
+    """The ``records`` columns that build one Record, in schema column order."""
 
     record_id: EntityId
     clock_id: int
@@ -339,11 +339,11 @@ _Ref = TypeVar("_Ref", Record, Annotation)
 _T = TypeVar("_T")
 
 _HIERARCHY_TABLES: dict[type[tuple[Any, ...]], tuple[str, str, str, ObjectKind]] = {
-    _RecordRow: ("records", "record_id", "record_id", ObjectKind.RECORD),
+    _RecordRow: ("records", "read_order", "record_id", ObjectKind.RECORD),
     _SourceRow: ("sources", "source_id", "record_id", ObjectKind.SOURCE),
     _SignalRow: ("signals", "signal_id", "source_id", ObjectKind.SIGNAL),
 }
-"""Table name, ID column, relation column, and object kind of each hierarchy row type."""
+"""Table name, ordering column, relation column, and object kind of each hierarchy row type."""
 
 
 def _rows(cursor: duckdb.DuckDBPyConnection, make: Callable[[Iterable[Any]], _Row]) -> list[_Row]:
@@ -801,9 +801,9 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         """Return every stored Record ID in the order :meth:`read_records` yields them, without building a Record.
 
         Returns:
-            The Record IDs sorted by ID.
+            The Record IDs in their stored read order.
         """
-        return tuple(row[0] for row in self._query("SELECT record_id FROM records ORDER BY record_id"))
+        return tuple(row[0] for row in self._query("SELECT record_id FROM records ORDER BY read_order"))
 
     def read_records(
         self,
@@ -818,7 +818,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         built. No payload file is opened.
 
         Args:
-            record_ids: Requested IDs in result order, or ``None`` for every record.
+            record_ids: Requested IDs in result order, or ``None`` for every record in read order.
             with_annotations: Whether to build annotations on records, sources, and signals.
             shared_offsets: Time-offset handles by axis ID, shared with earlier record reads of
                 the same call, and extended with this read's new ones. ``None`` shares nothing.
@@ -879,7 +879,7 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
         """Select and validate record rows, preserving the requested order.
 
         Args:
-            requested: Record IDs in result order, or ``None`` for every record.
+            requested: Record IDs in result order, or ``None`` for every record in read order.
 
         Returns:
             Record rows in result order, including repeated requests for the same record.
@@ -1086,16 +1086,17 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
             related_ids: Values of the table's relation column to keep, or ``None`` for every row.
 
         Returns:
-            Rows from the requested hierarchy table in ID order.
+            Rows from the requested hierarchy table, sorted by its ordering column: Records in their
+            stored read order, Sources and Signals by ID.
 
         Raises:
             TimeFFormatError: If an ID occurs more than once.
         """
-        table, id_column, relation_column, kind = _HIERARCHY_TABLES[row_type]
+        table, order_column, relation_column, kind = _HIERARCHY_TABLES[row_type]
         columns = ", ".join(row_type._fields)
         query = (
             f"SELECT {columns} FROM {table} WHERE ? OR {relation_column} "  # noqa: S608 - fixed identifiers
-            f"IN (SELECT unnest(?)) ORDER BY {id_column}"
+            f"IN (SELECT unnest(?)) ORDER BY {order_column}"
         )
         rows = self._query_named(query, [related_ids is None, list(related_ids or ())], row_type._make)
         indexed = {row.id: row for row in rows}

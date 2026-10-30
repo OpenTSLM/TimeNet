@@ -259,6 +259,7 @@ class DuckDBControlWriter:
                     )
                     self._write_chunks(connection, placements, signal_values)
                     self._write_imports(connection, dataset._import_state)
+                    self._write_read_order(connection)
                     self._check_source_tree(connection)
                     self.external.finish(connection)
                 connection.execute("CHECKPOINT")
@@ -305,6 +306,41 @@ class DuckDBControlWriter:
         )
         insert_rows(connection, TABLES["imported_objects"], rows)
 
+    @staticmethod
+    def _write_read_order(connection: duckdb.DuckDBPyConnection) -> None:
+        """Rank the records of a release that holds imported ones by where their values are stored.
+
+        A copy takes the child's next ID in the order an import selects it, which need not be the
+        order in which the parent stores its values, so walking such records by ID would jump across
+        the parent's values files. Any other release keeps the ID ranking from ``_write_objects``:
+        an edit keeps its base's IDs, and the base stored its values in ID order within each spec
+        type.
+        """
+        # Only a Record row whose copy the release holds counts.
+        if not connection.execute(
+            "SELECT 1 FROM imported_objects JOIN records ON object_id = record_id WHERE object_kind = ? LIMIT 1",
+            [ObjectKind.RECORD],
+        ).fetchone():
+            return
+        # Rank every record by its earliest-stored chunk across its Signals: this release's own
+        # values first, then by source release, values file, and coordinates, with records that
+        # have no chunks last. Ties fall back to the record ID, so each rank is unique and depends
+        # only on what the catalog stores.
+        connection.execute(
+            """UPDATE records SET read_order = ranked.position FROM (
+                SELECT record_id, row_number() OVER (ORDER BY location NULLS LAST, record_id) - 1 AS position
+                FROM records LEFT JOIN (
+                    SELECT sources.record_id, min(struct_pack(
+                        source := coalesce(source_key, ''), path := value_path,
+                        major := chunk_major_index, minor := coalesce(chunk_minor_index, 0)
+                    )) AS location
+                    FROM sources JOIN signals USING (source_id)
+                    JOIN signal_chunks USING (signal_id)
+                    GROUP BY sources.record_id
+                ) USING (record_id)
+            ) ranked WHERE records.record_id = ranked.record_id"""
+        )
+
     def _pack(self, kind: ObjectKind, object_id: int, field: PackedField, value: Any, position: int = 0) -> Any:
         """Construct a catalog value from the explicit packing result.
 
@@ -346,6 +382,8 @@ class DuckDBControlWriter:
             (ObjectKind.DATASET, None, annotation) for annotation in dataset.annotations
         ]
         record_ids: set[int] = set()
+        # Records rank by ID until _write_read_order ranks an imported child's by storage.
+        read_order = {identity: index for index, identity in enumerate(sorted(record.id for record in dataset.records))}
         for record in dataset.records:
             identity = id(record.start_time)
             if identity not in clock_keys:
@@ -359,6 +397,7 @@ class DuckDBControlWriter:
                     "time_span_start_us": None if span is None else span.start_us,
                     "time_span_end_us": None if span is None else span.end_us,
                     "metadata": _json(record.metadata),
+                    "read_order": read_order[record.id],
                 }
             )
             record_ids.add(record.id)

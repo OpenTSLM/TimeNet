@@ -31,8 +31,8 @@ def test_control_transaction_rolls_back_all_rows(tmp_path):
         with pytest.raises(RuntimeError, match="stop"), transaction(connection):
             connection.execute(
                 """INSERT INTO records (
-                       record_id, clock_id, time_span_start_us, time_span_end_us, metadata
-                   ) VALUES (?, 1, NULL, NULL, ?)""",
+                       record_id, clock_id, time_span_start_us, time_span_end_us, metadata, read_order
+                   ) VALUES (?, 1, NULL, NULL, ?, 0)""",
                 [10, "{}"],
             )
             raise RuntimeError("stop")
