@@ -1,6 +1,7 @@
 """Recursive data sources that group signals into a recording hierarchy."""
 
-from collections.abc import Iterator
+from collections import Counter
+from collections.abc import Iterable, Iterator
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING
 
@@ -15,6 +16,26 @@ if TYPE_CHECKING:
     from timenet.dataset.selection import SignalSelection
 
 
+def check_sibling_names(sources: Iterable["Source"], owner: str) -> None:
+    """Reject sibling Sources that share a name.
+
+    Sibling Sources are the root Sources of one Record, or the child Sources of one Source. Their
+    names are distinct, so an import finds the copy of a Source by its name.
+
+    Args:
+        sources: The sibling Sources.
+        owner: The Record or Source that holds them, as the error message names it.
+
+    Raises:
+        TimeFValidationError: If two of the Sources have the same name.
+    """
+    shared = sorted(name for name, count in Counter(source.name for source in sources).items() if count > 1)
+    if shared:
+        raise TimeFValidationError(
+            f"{owner} holds more than one Source named {shared[0]!r}; sibling Sources must have distinct names"
+        )
+
+
 @dataclass(kw_only=True)
 class Source(SupportsAnnotate):
     """A device, sensor, or subsystem that contains child sources and signals."""
@@ -22,7 +43,7 @@ class Source(SupportsAnnotate):
     name: str
     """Human-readable source name."""
     sources: tuple["Source", ...] = ()
-    """Direct child sources. Their order has no semantic meaning."""
+    """Direct child sources, each with a distinct name. Their order has no semantic meaning."""
     signals: tuple[Signal, ...] = ()
     """Signals produced directly by this source."""
     annotations: tuple[Annotation, ...] = ()
@@ -31,13 +52,15 @@ class Source(SupportsAnnotate):
     """Optional JSON-compatible source metadata."""
 
     def __post_init__(self) -> None:
-        """Validate the source's name and the spans of its annotations.
+        """Validate the source's name, the names of its child sources, and the spans of its annotations.
 
         Raises:
-            TimeFValidationError: If the source has no name.
+            TimeFValidationError: If the source has no name, or two of its child sources have the same
+                name.
         """
         if not self.name:
             raise TimeFValidationError("Source.name must be non-empty")
+        check_sibling_names(self.sources, f"source {self.name!r}")
         self.metadata = validate_json_mapping(self.metadata)
 
         for annotation in self.annotations:

@@ -3,8 +3,9 @@ from fractions import Fraction
 import pyarrow as pa
 import pytest
 
-from timenet.dataset import Record, RegularAxis, Signal, Source
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeFValidationError
+from timenet.testing import make_dataset
 from timenet.types import TimeSeriesSpec, ureg
 
 
@@ -47,3 +48,46 @@ def test_record_rejects_source_cycle():
 
     with pytest.raises(TimeFValidationError, match="cycle"):
         Record(sources=(root,))
+
+
+def test_a_source_rejects_child_sources_of_one_name():
+    with pytest.raises(TimeFValidationError, match="source 'IMU' holds more than one Source named 'Gyroscope'"):
+        Source(name="IMU", sources=(Source(name="Gyroscope"), Source(name="Accelerometer"), Source(name="Gyroscope")))
+
+
+def test_a_record_rejects_root_sources_of_one_name():
+    with pytest.raises(TimeFValidationError, match="record holds more than one Source named 'IMU'"):
+        Record(sources=(Source(name="IMU"), Source(name="IMU")))
+    # Sources of one name below different owners are not siblings.
+    record = Record(sources=(Source(name="Left", sources=(Source(name="IMU"),)), Source(name="IMU")))
+    assert [source.name for source in record.walk_sources()] == ["IMU", "Left", "IMU"]
+
+
+def _empty_dataset():
+    return TimeFDataset(metadata=make_dataset().metadata)
+
+
+def test_add_record_rejects_sibling_sources_of_one_name_that_a_caller_assigned():
+    imu = Source(name="IMU", signals=(_signal("X"),))
+    record = Record(sources=(imu,))
+    dataset = _empty_dataset()
+    imu.sources = (Source(name="Gyroscope"), Source(name="Gyroscope"))
+    with pytest.raises(TimeFValidationError, match="source 'IMU' holds more than one Source named 'Gyroscope'"):
+        dataset.add_record(record=record)
+    imu.sources = ()
+    record.sources = (imu, Source(name="IMU"))
+    with pytest.raises(TimeFValidationError, match="record holds more than one Source named 'IMU'"):
+        dataset.add_record(record=record)
+    assert (dataset.records, record._id, imu.signals[0]._id) == ((), None, None)
+
+
+def test_reindexing_rejects_sibling_sources_of_one_name_that_a_caller_assigned():
+    dataset = _empty_dataset()
+    imu = Source(name="IMU", signals=(_signal("X"),))
+    record = dataset.add_record(record=Record(sources=(imu,)))
+    imu.sources = (Source(name="Gyroscope", signals=(_signal("GX"),)), Source(name="Gyroscope"))
+    with pytest.raises(TimeFValidationError, match="source 'IMU' holds more than one Source named 'Gyroscope'"):
+        dataset._reindex_record(record)
+    # The check runs before an index or an ID changes.
+    assert [signal.name for signal in dataset._signals_by_record_id[record.id]] == ["X"]
+    assert imu.sources[0].signals[0]._id is None
