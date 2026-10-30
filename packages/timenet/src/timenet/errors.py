@@ -87,8 +87,17 @@ class TimeNetAccessError(TimeNetError):
         return message if self.hint is None else f"{message} {self.hint}"
 
 
-class TimeNetDownloadError(TimeNetError):
-    """TimeNet could not fetch a dataset's source data, or what arrived is not what was expected."""
+class TimeNetConnectorError(TimeNetError):
+    """A connector found that an assumption it makes does not hold.
+
+    Connector code raises it, for example when its source data has an unknown code, a file is missing
+    from a download, or a parent lacks a value it needs. The message says where, such as the file and
+    row. TimeNet's own checks raise their own errors.
+    """
+
+
+class TimeNetDownloadError(TimeNetConnectorError):
+    """TimeNet could not fetch a dataset's source data."""
 
 
 class TimeFValidationError(TimeNetError, ValueError):

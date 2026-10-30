@@ -56,6 +56,9 @@ A connector takes no constructor arguments. Configuration comes from environment
 dataclass, or an S3 key. The connector is generic through PEP 695:
 `class MyConnector(BaseConnector[MyRawRef])`.
 
+If an assumption about your source data, downloads, or parents does not hold, raise
+`TimeNetConnectorError` from `timenet.errors`.
+
 ---
 
 ## Reusing descriptors

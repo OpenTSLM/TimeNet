@@ -1,0 +1,4 @@
+# wfdb is the fallback for signal formats that the direct reader does not handle.
+wfdb>=4.1
+# boto3 downloads the archive from PhysioNet's S3 bucket.
+boto3>=1.34
