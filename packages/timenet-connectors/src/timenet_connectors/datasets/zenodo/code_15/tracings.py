@@ -9,6 +9,7 @@ from collections.abc import Iterator
 from pathlib import Path
 from types import ModuleType
 from typing import Any, NamedTuple
+import weakref
 
 import numpy as np
 
@@ -166,22 +167,38 @@ def part_path(root: Path, part: Part) -> Path:
     return path
 
 
-class TraceReader:
-    """Reread one exam's published trace, keeping each part's file open for the rereads that follow.
+def _close(files: dict[Path, Any]) -> None:
+    """Close every open part and forget it."""
+    for handle in files.values():
+        handle.close()
+    files.clear()
 
-    A reader serves the Records of one load.
+
+class TraceReader:
+    """Reread one exam's published trace, keeping only the part last read open.
+
+    A reader serves the Records of one load, which come by part, then by row, so it opens each part once.
+    Reading another part closes the open one, and the reader closes the last when it is closed or collected:
+    a load holds at most one HDF5 file, and its chunk cache, at a time.
     """
 
     def __init__(self) -> None:
+        # At most one part, by path. The finalizer holds the dict, not the reader, so the reader can be collected.
         self._files: dict[Path, Any] = {}
+        weakref.finalize(self, _close, self._files)
 
     def read(self, location: ExamLocation) -> np.ndarray:
-        """Return one published trace.
+        """Return one published trace, closing the part read before if it is another.
 
         Returns:
             The ``(4096, 12)`` float32 trace, as the file holds it.
         """
         handle = self._files.get(location.path)
         if handle is None:
+            self.close()
             handle = self._files[location.path] = _h5py().File(location.path, "r")
         return handle[TRACINGS_DATASET][location.row]
+
+    def close(self) -> None:
+        """Close the open part, if any. A later read reopens the part it needs."""
+        _close(self._files)

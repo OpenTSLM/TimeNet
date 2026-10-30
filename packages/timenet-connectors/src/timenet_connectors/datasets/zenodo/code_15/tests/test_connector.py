@@ -1,3 +1,4 @@
+import gc
 from pathlib import Path
 from typing import ClassVar
 
@@ -15,6 +16,7 @@ from timenet_connectors.datasets.zenodo.code_15.loader import Code15DatasetLoade
 from timenet_connectors.datasets.zenodo.code_15.preprocessing import Padding, authors_input, centred_padding
 from timenet_connectors.datasets.zenodo.code_15.records import record_metadata
 from timenet_connectors.datasets.zenodo.code_15.release import PINNED_COUNTS, Part, PinnedCounts
+from timenet_connectors.datasets.zenodo.code_15.tracings import ExamLocation, TraceReader
 from timenet_connectors.datasets.zenodo.code_15.vocabulary import Lead
 
 
@@ -357,3 +359,24 @@ def test_a_trace_changed_after_the_scan_fails_when_read(tmp_path):
     record = next(r for r in dataset.records if record_metadata(r).exam_id == 30)
     with pytest.raises(TimeFFormatError, match="row 0 changed since it was scanned"):
         record.sources[0].signals[0].to_numpy()
+
+
+def _open_hdf5_files() -> int:
+    return h5py.h5f.get_obj_count(h5py.h5f.OBJ_ALL, h5py.h5f.OBJ_FILE)
+
+
+def test_the_trace_reader_keeps_one_part_open_and_closes_it(tmp_path):
+    root = _release(tmp_path)
+    # Readers of earlier tests close when collected, so collect them before counting.
+    gc.collect()
+    before = _open_hdf5_files()
+    reader = TraceReader()
+    for part in (0, 1, 0):
+        reader.read(ExamLocation(path=root / f"exams_part{part}.hdf5", row=0))
+        assert _open_hdf5_files() == before + 1
+    reader.close()
+    assert _open_hdf5_files() == before
+    reader.read(ExamLocation(path=root / "exams_part1.hdf5", row=0))
+    del reader
+    gc.collect()
+    assert _open_hdf5_files() == before
