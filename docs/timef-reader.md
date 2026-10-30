@@ -313,7 +313,7 @@ releases that source reuses.
 | --- | --- | --- |
 | A payload source is missing | `TimeNetDatasetNotFoundError` | The source and the root searched |
 | A payload source differs from its pins | `TimeFFormatError` | The source and the first differing file |
-| A file is missing or has another size | `TimeFFormatError` | The file, its expected size, and its actual size |
+| A file is missing or has another size | `TimeNetFileError` | The file, its expected size, and its actual size |
 
 An invalid or unsupported manifest raises a validation error, and a missing one raises
 `FileNotFoundError`.
@@ -346,8 +346,8 @@ A request for an object, ID, or parent alias that the dataset does not have rais
 manifest, or it names another release.
 
 Call `verify()` to hash every file before reading data: the version's own files, and the files it
-pins on each payload source. It raises `TimeFFormatError` when a file is missing or does not match
-its manifest record or pin.
+pins on each payload source. If a file is missing or does not match its manifest record or pin,
+`verify()` raises `TimeNetFileError`, a `TimeFFormatError`.
 
 ## Round-trip guarantee
 
