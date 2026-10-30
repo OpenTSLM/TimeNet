@@ -1,5 +1,7 @@
 """Sharded values-plane round trips and targeted-read verification."""
 
+import threading
+
 import duckdb
 import pyarrow.parquet as pq
 import pytest
@@ -20,7 +22,7 @@ from timenet.types import (
     Version,
     ureg,
 )
-from timenet.writer import TimeFWriter
+from timenet.writer import TimeFWriter, sharded
 
 
 # Small enough that a modest dataset shards every artifact type into several parts, tiny on disk.
@@ -175,3 +177,77 @@ def test_reading_a_series_reads_only_its_row_groups(tmp_path, monkeypatch):
         series = reader.get(Signal, _signal_id(6))
         series.to_arrow()
     assert set(read) == expected  # the reader decoded only the row groups of signal 6's chunks, not whole shards
+
+
+# ---- parallel shard writes -------------------------------------------------------------------
+
+
+def _two_modality_dataset() -> TimeFDataset:
+    """Build a dataset whose two modalities each fill several shards.
+
+    With a few workers, shards of ``s`` are still in flight when ``t`` opens its writer. Both modalities
+    get dictionary encoding, so this does not exercise an encoding change between them.
+    """
+    dataset = _sharded_dataset(12, 128)
+    spec = TimeSeriesSpec(spec_type="t", name="T", unit_value=ureg.dimensionless)
+    for i in range(12):
+        values = [float(i * j) / 7 for j in range(96)]
+        ts = Signal.from_values(values, spec=spec, name="b", time_axis=RegularAxis.from_rate_hz(16))
+        dataset.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
+    return dataset
+
+
+def _value_shards(version_dir) -> dict[str, bytes]:
+    return {
+        path.relative_to(version_dir).as_posix(): path.read_bytes()
+        for path in sorted((version_dir / "time_series").iterdir())
+    }
+
+
+def test_overlapping_shard_writes_produce_the_serial_bytes_and_report_shards_in_order(tmp_path, monkeypatch):
+    original = sharded._write_part
+    part_1_written = threading.Event()
+
+    def write_part(path, *args):
+        if path.name == "part-00000000.parquet":
+            # Part 1 must finish while part 0 waits, so the parts overlap and complete out of order.
+            assert part_1_written.wait(timeout=10), "part 1 never ran while part 0 was in flight"
+        original(path, *args)
+        if path.name == "part-00000001.parquet":
+            part_1_written.set()
+
+    finalized: list[int] = []
+
+    def on_progress(event):
+        if event.stage == "shard_finalized":
+            finalized.append(event.completed)
+
+    serial = _write(tmp_path / "serial", _two_modality_dataset(), **_SMALL_TARGETS)
+    monkeypatch.setattr(sharded, "_write_part", write_part)
+    parallel = _write(
+        tmp_path / "parallel", _two_modality_dataset(), shard_workers=3, progress_cb=on_progress, **_SMALL_TARGETS
+    )
+    assert part_1_written.is_set()  # the pool wrote the parts, not the serial path
+    shards = _value_shards(serial)
+    assert len(shards) > 3  # enough shards that the pool waits for a free worker
+    assert _value_shards(parallel) == shards
+    assert finalized == list(range(1, len(shards) + 1))  # submission order, though part 1 finished first
+
+
+def test_a_failed_parallel_shard_write_aborts_the_release(tmp_path, monkeypatch):
+    original = sharded._write_part
+    written: list[object] = []
+
+    def fail_third(*args):
+        written.append(args[0])
+        if len(written) == 3:
+            raise OSError("disk full")
+        original(*args)
+
+    monkeypatch.setattr(sharded, "_write_part", fail_third)
+    dataset = _two_modality_dataset()
+    with pytest.raises(OSError, match="disk full"):
+        _write(tmp_path, dataset, shard_workers=2, **_SMALL_TARGETS)
+    dataset_dir = tmp_path / dataset.metadata.dataset_id
+    assert not (dataset_dir / str(dataset.metadata.dataset_version)).exists()  # nothing committed
+    assert not list(dataset_dir.glob("*.tmp-*"))  # and no staging directory left behind

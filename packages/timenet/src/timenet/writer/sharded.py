@@ -5,14 +5,64 @@
 ``values_backends.parquet.writer``), so both planes shard through one code path.
 """
 
+from collections import deque
 from collections.abc import Callable, Iterable
+from concurrent.futures import Executor, Future
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 
 import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.writer import encodings
+
+
+class PartPool:
+    """Writes closed parts on an executor, with at most ``workers`` parts in flight.
+
+    Each part's completion callback runs on the calling thread, in submission order. So progress
+    reports and checks see the parts in the same order as a serial write. A part's bytes depend only
+    on its row groups, so the output is the same for any worker count.
+    """
+
+    def __init__(self, executor: Executor, workers: int) -> None:
+        """Bind the pool to its executor and in-flight bound.
+
+        Args:
+            executor: Runs the part writes. Its workers must not share a part.
+            workers: The most parts in flight at once. Submitting one more first waits for the oldest.
+        """
+        self._executor = executor
+        self._workers = workers
+        self._pending: deque[tuple[Future[None], Callable[[], None]]] = deque()
+
+    def submit(self, write: Callable[[], None], done: Callable[[], None]) -> None:
+        """Run ``write`` on the executor, and ``done`` on this thread once it and every earlier part finish.
+
+        Args:
+            write: Writes one whole part.
+            done: Runs after the part is on disk.
+        """
+        while len(self._pending) >= self._workers:
+            self._finish_oldest()
+        self._pending.append((self._executor.submit(write), done))
+
+    def drain(self) -> None:
+        """Wait for every part in flight and run its callback, in submission order."""
+        while self._pending:
+            self._finish_oldest()
+
+    def _finish_oldest(self) -> None:
+        future, done = self._pending.popleft()
+        future.result()
+        done()
+
+
+def _write_part(path: Path, schema: pa.Schema, tables: list[pa.Table], parquet_kwargs: dict[str, Any]) -> None:
+    """Write ``tables`` to ``path`` as one row group each, as the serial path does."""
+    with pq.ParquetWriter(path, schema, **parquet_kwargs) as writer:
+        for table in tables:
+            writer.write_table(table)
 
 
 class RotatingPartWriter:
@@ -23,6 +73,10 @@ class RotatingPartWriter:
     It rotates to a new numbered part once the current part's accumulated size exceeds the target,
     and it reports where each row group landed. Both the control plane and the values plane sit on
     it, so there is one sharding implementation.
+
+    With a :class:`PartPool`, it holds a part's row groups in memory and hands the whole part to the
+    pool when it closes, so parts compress in parallel. Without one, it streams each row group to
+    disk as it arrives. Both write the same bytes.
     """
 
     def __init__(  # noqa: PLR0913
@@ -34,6 +88,7 @@ class RotatingPartWriter:
         part_target_bytes: int,
         parquet_kwargs: dict[str, Any],
         on_part_closed: Callable[[str, int], None] | None = None,
+        pool: PartPool | None = None,
     ) -> None:
         """Bind the writer to its staging directory, schema, path template, and byte budget.
 
@@ -44,6 +99,8 @@ class RotatingPartWriter:
             part_target_bytes: Rotate to a new part once a part's accumulated size exceeds this.
             parquet_kwargs: Keyword arguments for :class:`pyarrow.parquet.ParquetWriter`.
             on_part_closed: Optional callback invoked ``(rel_path, parts_written)`` as each part closes.
+                With a pool, it runs once the part is on disk.
+            pool: Writes each closed part in the background. ``None`` writes on this thread.
         """
         self._staging_dir = staging_dir
         self._schema = schema
@@ -51,7 +108,9 @@ class RotatingPartWriter:
         self._part_target_bytes = part_target_bytes
         self._parquet_kwargs = parquet_kwargs
         self._on_part_closed = on_part_closed
+        self._pool = pool
         self._writer: pq.ParquetWriter | None = None
+        self._tables: list[pa.Table] | None = None  # the open part's row groups, with a pool
         self._row_group = 0
         self._part_bytes = 0
         self.parts: list[str] = []
@@ -66,8 +125,12 @@ class RotatingPartWriter:
         Returns:
             The relative path of the part the row group landed in and its index within that part.
         """
-        writer = self._writer if self._writer is not None else self._open()
-        writer.write_table(table)
+        if self._writer is None and self._tables is None:
+            self._open()
+        if self._tables is not None:
+            self._tables.append(table)
+        else:
+            cast("pq.ParquetWriter", self._writer).write_table(table)
         landed = (self.parts[-1], self._row_group)
         self._row_group += 1
         self._part_bytes += size_bytes
@@ -77,6 +140,8 @@ class RotatingPartWriter:
 
     def finish(self, *, write_empty_part: bool = False) -> list[str]:
         """Close the current part and return every part written, in order.
+
+        With a pool, the last parts may still be in flight; the pool's owner drains it.
 
         Args:
             write_empty_part: If the caller never wrote a row group, still write one empty part so
@@ -91,24 +156,35 @@ class RotatingPartWriter:
             self._close()
         return self.parts
 
-    def _open(self) -> pq.ParquetWriter:
+    def _open(self) -> None:
         rel = self._part_path(len(self.parts))
         path = self._staging_dir / rel
         path.parent.mkdir(parents=True, exist_ok=True)
-        writer = pq.ParquetWriter(path, self._schema, **self._parquet_kwargs)
-        self._writer = writer
+        if self._pool is not None:
+            self._tables = []
+        else:
+            self._writer = pq.ParquetWriter(path, self._schema, **self._parquet_kwargs)
         self.parts.append(rel)
         self._row_group = 0
         self._part_bytes = 0
-        return writer
 
     def _close(self) -> None:
-        if self._writer is None:
+        if self._writer is None and self._tables is None:
             return
-        self._writer.close()
-        self._writer = None
-        if self._on_part_closed is not None:
-            self._on_part_closed(self.parts[-1], len(self.parts))
+        rel, parts_written = self.parts[-1], len(self.parts)
+
+        def done() -> None:
+            if self._on_part_closed is not None:
+                self._on_part_closed(rel, parts_written)
+
+        if self._tables is None:
+            cast("pq.ParquetWriter", self._writer).close()
+            self._writer = None
+            done()
+            return
+        path, tables = self._staging_dir / rel, self._tables
+        self._tables = None
+        cast("PartPool", self._pool).submit(lambda: _write_part(path, self._schema, tables, self._parquet_kwargs), done)
 
 
 # While the bytes-per-row rate is unknown, the writer measures rows one at a time. After this many
