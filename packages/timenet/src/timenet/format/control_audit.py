@@ -43,6 +43,7 @@ _EXTERNAL_KINDS_SQL = _sql_in(EXTERNAL_OWNER_TABLES)
 _IMPORTED_OBJECT_TABLES: dict[ObjectKind, tuple[str, str]] = {
     ObjectKind.RECORD: ("records", "record_id"),
     ObjectKind.SIGNAL: ("signals", "signal_id"),
+    ObjectKind.TASK: ("tasks", "task_id"),
 }
 """The table and key column of each object kind that ``imported_objects`` can list."""
 _IMPORTED_KINDS_SQL = _sql_in(_IMPORTED_OBJECT_TABLES)
