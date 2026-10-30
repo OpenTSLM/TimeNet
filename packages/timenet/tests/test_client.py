@@ -1,5 +1,6 @@
 from pathlib import Path
 import shutil
+from types import SimpleNamespace
 
 from pydantic import ValidationError
 import pytest
@@ -15,6 +16,7 @@ from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, DatasetMetadata, Domain, License, Version
+from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.writer import TimeFWriter
 
 
@@ -368,26 +370,55 @@ def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, m
     assert not builder.built  # auto_build=False skips the connector entirely
 
 
-def test_load_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):
-    client = TimeNet(tmp_path / "registry", storage_path=tmp_path / "store")
-    meta = DatasetMetadata(
-        dataset_id="org/gated",
+def _card(dataset_id, access, access_url=None):
+    return DatasetMetadata(
+        dataset_id=dataset_id,
         dataset_version=Version(1, 0, 0),
         name="Gated",
         description="A credentialed dataset.",
         license=License.CC_BY_4_0,
-        access=Access.CREDENTIALED,
-        access_url="https://physionet.example/dua",
+        access=access,
+        access_url=access_url,
     )
 
-    class _Hosted:  # not a LocalRegistry, so the build-your-own gate applies
-        def get_manifest(self, dataset_id, version=None):
-            return type("_M", (), {"metadata": meta})()
 
-    client._registry = _Hosted()  # ty: ignore[invalid-assignment]
-    with pytest.raises(TimeNetAccessError, match="build it locally"):
-        client.open("org/gated")
-    with pytest.raises(TimeNetAccessError, match="build it locally"):
-        client.load("org/gated")
-    with pytest.raises(TimeNetAccessError, match="Get access at"):
-        client.download("org/gated")
+def _hosted(client, metadata, lineage=()):
+    """Serve one manifest from a registry that is not local, so the build-your-own gate applies."""
+
+    class _Hosted:
+        def get_manifest(self, dataset_id, version=None):
+            return SimpleNamespace(metadata=metadata, lineage=lineage)
+
+    client._registry = _Hosted()
+
+
+def test_load_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):
+    client = TimeNet(tmp_path / "registry", storage_path=tmp_path / "store")
+    _hosted(client, _card("org/gated", Access.CREDENTIALED, "https://physionet.example/dua"))
+    message = (
+        "'org/gated' is credentialed: TimeNet does not host its data. Get access at "
+        "https://physionet.example/dua for org/gated@1.0.0. Then build it locally with `timenet-build build org/gated`."
+    )
+    for entry_point in (client.open, client.load, client.download):
+        with pytest.raises(TimeNetAccessError) as caught:
+            entry_point("org/gated")
+        assert str(caught.value) == message
+
+
+def test_the_hint_for_a_hosted_child_names_the_access_page_of_each_ancestor(tmp_path):
+    client = TimeNet(tmp_path / "registry", storage_path=tmp_path / "store")
+    # The card of the child stays open and has no access page. Its parents set the access.
+    parents = (
+        _card("org/a", Access.CREDENTIALED, "https://a.example"),
+        _card("org/b", Access.RESTRICTED, "https://b.example"),
+    )
+    _hosted(client, _card("org/child", Access.OPEN), tuple(ParentDatasetCard(metadata=card) for card in parents))
+
+    with pytest.raises(TimeNetAccessError) as caught:
+        client.open("org/child")
+
+    assert str(caught.value) == (
+        "'org/child' is restricted: TimeNet does not host its data. "
+        "Get access at https://a.example for org/a@1.0.0. Get access at https://b.example for org/b@1.0.0. "
+        "Then build it locally with `timenet-build build org/child`."
+    )
