@@ -1,6 +1,6 @@
 """The build pipeline that turns a connector into a stored dataset."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 import shutil
 
@@ -10,12 +10,15 @@ from timenet.dataset import TimeFDataset
 from timenet.dataset.composition import _record_parent
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.manifest import PayloadSource
 from timenet.reader import TimeFReader
 from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import prepare_local_copy
 from timenet.registry.local import LocalRegistry
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
+from timenet.types.access import require_open_access
+from timenet.types.references import DatasetRef
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
@@ -29,6 +32,7 @@ def run_pipeline(  # noqa: PLR0913
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
     values_backend: str | None = None,
+    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> Path:
     """Run one connector through the full build pipeline and return the version directory.
 
@@ -54,6 +58,8 @@ def run_pipeline(  # noqa: PLR0913
             needs Zarr declares it once on the class.
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
+        pinned_by: The releases that already read files of this release, with their pins. The write
+            publishes only if it reproduces each pinned file, and otherwise raises.
 
     Returns:
         The committed version directory.
@@ -82,7 +88,14 @@ def run_pipeline(  # noqa: PLR0913
         dataset.derive_schema()
         # A forced rebuild replaces the committed version only once the new one is ready, so a failed
         # write keeps the old one.
-        store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb, replace=force)
+        store_dataset(
+            dataset,
+            root,
+            values_backend=resolved_backend,
+            progress_cb=progress_cb,
+            replace=force,
+            pinned_by=pinned_by,
+        )
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
     if not keep_cache and cache_dir is None and cache.is_dir():
@@ -99,12 +112,16 @@ def publish_pipeline(  # noqa: PLR0913
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
     values_backend: str | None = None,
+    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
     """Run one connector and publish the result through a writable registry.
 
     Like :func:`run_pipeline`, but the converted dataset is handed to ``registry.store`` instead of
     written to a local directory, so it also targets a remote or S3 registry. It is idempotent: an
     already-committed version skips the ``download`` and ``convert`` stages and returns unless ``force``.
+    A registry other than a local one holds open releases only, so a card that is not open fails
+    before any download. The composed dataset can be a child whose card says open while a parent is
+    not open. So the engine checks the dataset again with its lineage before the write.
 
     Args:
         connector: The connector to build.
@@ -115,6 +132,8 @@ def publish_pipeline(  # noqa: PLR0913
             ``None``, this function uses the connector's ``values_backend``.
         progress_cb: Optional writer progress callback.
         force: Republish even if the version is already committed.
+        pinned_by: The releases that already read files of this release, with their pins. The store
+            publishes only if it reproduces each pinned file, and otherwise raises.
 
     Returns:
         The published version string.
@@ -122,13 +141,17 @@ def publish_pipeline(  # noqa: PLR0913
     Raises:
         TimeFValidationError: If the card declares parents and the connector does not override
             ``compose``.
-    """  # noqa: DOC502 - raised by _check_composes
+        TimeNetAccessError: If the registry is not local, and the card, or the composed dataset with
+            its lineage, is not open.
+    """  # noqa: DOC502 - raised by _check_composes and require_open_access
     resolved_backend = _resolve_values_backend(connector, values_backend)
     metadata = connector.metadata()
     dataset_id = metadata.dataset_id
     version = str(metadata.dataset_version)
     if not force and registry.exists(dataset_id, version):
         return version
+    if not isinstance(registry, LocalRegistry):
+        require_open_access(metadata)
     _check_composes(connector, metadata)
 
     cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
@@ -136,8 +159,13 @@ def publish_pipeline(  # noqa: PLR0913
 
     with open_parents(metadata, registry) as context:
         dataset = _compose(connector, cache, context)
+        if not isinstance(registry, LocalRegistry):
+            require_open_access(dataset.metadata, dataset.lineage.values())
         dataset.derive_schema()
-        registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
+        # Pass pins only when there are any, so a registry written against the earlier store()
+        # signature keeps working for every other build.
+        pinned = {"pinned_by": pinned_by} if pinned_by else {}
+        registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb, **pinned)
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version
@@ -221,13 +249,14 @@ def _resolve_values_backend(connector: BaseConnector, override: str | None) -> s
     return backend
 
 
-def store_dataset(
+def store_dataset(  # noqa: PLR0913
     dataset: TimeFDataset,
     root: Path,
     *,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     values_backend: str = "parquet",
     replace: bool = False,
+    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> Path:
     """Serialize a populated dataset to the TimeF format under ``root``.
 
@@ -243,12 +272,16 @@ def store_dataset(
         values_backend: Storage backend for the values plane.
         replace: Replace the version if it is already committed, keeping it until the new one is
             published.
+        pinned_by: The releases that already read files of this release, with their pins. The
+            writer publishes only if it reproduces each pinned file.
 
     Returns:
         The committed version directory.
     """
     if dataset.schema is None:
         dataset.derive_schema()
-    with TimeFWriter(root, dataset, progress_cb=progress_cb, values_backend=values_backend, replace=replace) as writer:
+    with TimeFWriter(
+        root, dataset, progress_cb=progress_cb, values_backend=values_backend, replace=replace, pinned_by=pinned_by
+    ) as writer:
         writer.write()
     return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
