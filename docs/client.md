@@ -110,18 +110,38 @@ with client.open("timenet/hello-world") as reader:
 `open()` and read what you need, such as one task with `reader.get()` or the tasks' text alone with
 a load plan.
 
-For a local registry, the reader opens the version in place. If the version is missing, `open()` and
-`load()` can build it from an installed connector.
+For a local registry, the reader opens the version in place. A local read needs complete copies of
+the version and of its payload sources: the releases whose payload files the version reads. For
+each of these releases, `open()` and `load()` use the first of these steps that works:
+
+1. Reuse a complete local copy.
+2. Copy the release from the registry that `fetch_from` names.
+3. Build the release from its installed connector, if `auto_build` is set. This is the default.
+
+If no step works, the call raises an error that names the release and the keyword that can get it.
+A build of the version prepares its declared parents in the same order.
 
 ```python
-dataset = TimeNet(".timenet-registry").load(
-    "timenet/hello-world",
-    auto_build=True,
-)
+with TimeNet(".timenet-registry").open(
+    "org/name",
+    fetch_from="timenet://",
+) as reader:
+    records = reader.read().records
 ```
 
-Set `auto_build=False` to report a missing local version without starting a build. Remote registries
-never run connector code.
+`fetch_from` takes a registry or its URI. `open_torch()` takes `auto_build` and `fetch_from` too.
+Set `auto_build=False` to report a missing local release without starting a build.
+
+A payload source builds with its own connector, at the exact version that the version pins. The
+build publishes the source only if it writes the pinned files. See
+[Rebuild a pinned release](build.md#rebuild-a-pinned-release).
+
+A local copy is damaged if its manifest is present but a file is missing or has another size.
+`fetch_from` repairs a damaged copy. Without `fetch_from`, the call raises `TimeNetFileError`, which
+names the first missing or resized file. No build runs over a damaged copy.
+
+Remote registries never run connector code. A remote client rejects `fetch_from`, because it reads
+from its own registry.
 
 An HTTP or S3 registry reads from a complete copy of the version in `TIMENET_STORAGE` if one exists,
 and otherwise reads the remote files by range, as each read needs them.
