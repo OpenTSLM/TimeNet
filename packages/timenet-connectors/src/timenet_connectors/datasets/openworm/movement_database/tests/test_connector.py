@@ -38,7 +38,6 @@ from timenet_connectors.datasets.openworm.movement_database.release import (
     PinnedCounts,
     check_md5,
 )
-from timenet_connectors.datasets.openworm.movement_database.tasks import StrainTask
 from timenet_connectors.datasets.openworm.movement_database.videos import period_us, read_video
 from timenet_connectors.datasets.openworm.movement_database.vocabulary import Sex
 
@@ -314,10 +313,10 @@ def test_dataset_annotations_hold_the_sources_and_the_class_vocabulary(tmp_path)
     assert "6d4d6b6f04e05a93baea7a5a7550a7a180b60c94" in annotations[AnnotationKey.BENCHMARK_URL]
 
 
-def test_tasks_of_selects_the_test_fold(tmp_path):
+def test_tasks_follow_the_test_fold(tmp_path):
     loader = _parse(tmp_path, _release(tmp_path))
-    test = list(loader.tasks_of(StrainTask, split=Split.TEST))
-    assert [task.target for task in test] == ["CB580_XX"]
+    test = [task for task in loader.tasks() if task.split is Split.TEST]
+    assert [read_value(target) for task in test for target in task.targets or ()] == ["CB580_XX"]
 
 
 def test_write_and_read_back_keeps_every_value_null_and_task(tmp_path):
@@ -370,7 +369,8 @@ def test_every_class_must_have_videos(tmp_path):
 
 def test_the_target_is_the_authors_listed_class(tmp_path):
     loader = _parse(tmp_path, _release(tmp_path))
-    assert sorted(task.target for task in loader.tasks()) == sorted(row["strain"] for row in _table_rows())
+    targets = [str(read_value(target)) for task in loader.tasks() for target in task.targets or ()]
+    assert sorted(targets) == sorted(row["strain"] for row in _table_rows())
 
 
 @pytest.mark.parametrize(

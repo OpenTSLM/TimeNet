@@ -169,7 +169,7 @@ IndexedVideo                                 experiment (base name,
              fold and class_of(strain, sex) ──► target
 
 populate   dataset annotations, then the Records, then the task stream:
-           StrainTask per video ──► ClassificationTask
+           strain_task per video ──► ClassificationTask
 
 write      load_skeletons(Video): the skeletons, null where NaN
 ```
@@ -184,7 +184,7 @@ write      load_skeletons(Video): the skeletons, null where NaN
 | `keys.py` | Every annotation key the connector writes |
 | `videos.py` | One features file: `Experiment`, `Video`, `read_video`, `read_skeletons` |
 | `records.py` | A video's Record, its lazy skeletons, and its typed metadata |
-| `tasks.py` | `StrainTask`, which becomes a `ClassificationTask` |
+| `tasks.py` | `strain_task`, which builds the `ClassificationTask` of one video |
 | `loader.py` | `OpenWormDatasetLoader`, which runs the parse and streams the tasks |
 
 ### The pinned index

@@ -6,7 +6,7 @@ from typing import Self
 
 from timenet.dataset import Record
 from timenet.errors import TimeFFormatError, TimeFValidationError
-from timenet.types import Annotation
+from timenet.types import Annotation, ClassificationTask
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.openworm.movement_database.benchmark import (
     TEST_FOLD,
@@ -24,7 +24,7 @@ from timenet_connectors.datasets.openworm.movement_database.release import (
     DownloadedRelease,
     PinnedCounts,
 )
-from timenet_connectors.datasets.openworm.movement_database.tasks import StrainTask
+from timenet_connectors.datasets.openworm.movement_database.tasks import strain_task
 from timenet_connectors.datasets.openworm.movement_database.videos import Video, read_video
 
 
@@ -87,17 +87,17 @@ def _authors_class(indexed: IndexedVideo, fold: int, listed: AuthorsVideo) -> st
     return listed.strain
 
 
-class OpenWormDatasetLoader(DatasetLoader[StrainTask]):
+class OpenWormDatasetLoader(DatasetLoader):
     """The authors' single-worm strain benchmark, read and checked: one lazy Record per video, and its task.
 
-    The benchmark defines one task (:class:`StrainTask`): classify a video's strain, with N2 hermaphrodites
-    and males as two classes. Select one split with ``tasks_of``.
+    The benchmark defines one task (:func:`strain_task`): classify a video's strain, with N2 hermaphrodites
+    and males as two classes. After ``populate``, ``TimeFDataset.get_split`` selects one split.
 
     The loader keeps each video's header, not its skeletons. The signals reread their file, so the files must
     stay available until writing ends.
     """
 
-    TASK_KINDS = (StrainTask,)
+    TASK_TYPES = (ClassificationTask,)
 
     def __init__(self, classes: tuple[str, ...], videos: tuple[_ParsedVideo, ...]) -> None:
         self._classes = classes
@@ -168,11 +168,11 @@ class OpenWormDatasetLoader(DatasetLoader[StrainTask]):
         """Return one Record per video, by base name, whose values stay in the files until written."""
         return (video.record for video in self._videos)
 
-    def tasks(self) -> Iterator[StrainTask]:
+    def tasks(self) -> Iterator[ClassificationTask]:
         """Return one task per video, by base name.
 
         Yields:
             The tasks.
         """
         for video in self._videos:
-            yield StrainTask(record=video.record, fold=video.fold, target=video.target)
+            yield strain_task(record=video.record, fold=video.fold, target=video.target)
