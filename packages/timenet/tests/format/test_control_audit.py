@@ -94,8 +94,13 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
     ("statement", "message"),
     [
         (
-            "INSERT INTO records (record_id, clock_id, metadata) SELECT record_id, clock_id, metadata FROM records",
+            "INSERT INTO records (record_id, clock_id, metadata, read_order) "
+            "SELECT record_id, clock_id, metadata, read_order + 100 FROM records",
             "records contains duplicate values for record_id",
+        ),
+        (
+            "INSERT INTO records (record_id, clock_id, metadata, read_order) VALUES (99, 1, '{}', 0)",
+            "records contains duplicate values for read_order",
         ),
         (
             "UPDATE sources SET record_id = -1 WHERE source_id = 1",
@@ -123,7 +128,7 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
             r"invalid signals\.n_values value",
         ),
         (
-            "INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}'); "
+            "INSERT INTO records (record_id, clock_id, metadata, read_order) VALUES (99, 1, '{}', 99); "
             "UPDATE sources SET record_id = 99 WHERE source_id = 2",
             f"source {ECG_ID} and its parent belong to different records",
         ),
@@ -187,14 +192,14 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
             r"task_targets\.signal_id refers to missing signals\.signal_id value 999",
         ),
         (
-            "INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}'); "
+            "INSERT INTO records (record_id, clock_id, metadata, read_order) VALUES (99, 1, '{}', 99); "
             "UPDATE tasks SET scope_type = 'time_interval', scope_start = 0, scope_end = 2000, "
             "scope_signal_ids = [1]; "
             "UPDATE task_record_refs SET record_id = 99",
             "task 1 time span must resolve to exactly one input Record",
         ),
         (
-            "INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}'); "
+            "INSERT INTO records (record_id, clock_id, metadata, read_order) VALUES (99, 1, '{}', 99); "
             "UPDATE task_targets SET target_kind = 'time_interval', text_value = NULL, span_start = 0, "
             "span_end = 2000, span_signal_ids = [1]; "
             "UPDATE task_record_refs SET record_id = 99",
