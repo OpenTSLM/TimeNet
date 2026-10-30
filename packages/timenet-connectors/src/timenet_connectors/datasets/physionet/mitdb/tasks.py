@@ -9,93 +9,68 @@ tasks are TimeNet's, for the beat classification PhysioNet's usage notes list.
 The release has no split, so no task has one, and asks no question in words, so no task has a prompt.
 """
 
-from dataclasses import dataclass
-from typing import ClassVar
-
 from timenet.dataset import Record
 from timenet.types import (
     Annotation,
     ClassificationTask,
     LocalizationMode,
-    Task,
     TemporalLocalizationTask,
     TimePoint,
 )
-from timenet_connectors.bases.loader import DatasetTask
 from timenet_connectors.datasets.physionet.mitdb.keys import AnnotationKey
 from timenet_connectors.datasets.physionet.mitdb.vocabulary import BeatCode
 
 
-class MitdbTask(DatasetTask):
-    """A task of the MIT-BIH Arrhythmia Database, which has no split."""
+def beat_annotation_task(record: Record, beats: tuple[Annotation, ...]) -> TemporalLocalizationTask:
+    """Return the task that finds and labels every beat of a record, the annotation file ``bxb`` compares.
 
-    @property
-    def split(self) -> None:
-        """Return ``None``: the release has no split."""
+    ``bxb`` scores both: a beat matches within 150 ms, and the matched labels are compared in the AAMI classes.
 
+    Args:
+        record: The record's Record.
+        beats: The Record's beat annotations: each a point at the fiducial, valued by its code.
 
-@dataclass(frozen=True)
-class BeatAnnotationTask(MitdbTask):
-    """Find and label every beat of a record, the annotation file the authors' ``bxb`` compares.
-
-    The target is the Record's beat annotations: each a point at the fiducial, valued by its code. ``bxb``
-    scores both: a beat matches within 150 ms, and the matched labels are compared in the AAMI classes.
+    Returns:
+        The localization task, whose target is every beat annotation of the Record.
     """
-
-    TIMENET_TYPE: ClassVar[type[Task]] = TemporalLocalizationTask
-
-    record: Record
-    beats: tuple[Annotation, ...]
-
-    def to_timenet_task(self) -> TemporalLocalizationTask:
-        """Return the localization task, whose target is every beat annotation of the Record."""
-        # Exhaustive: the cardiologists added every beat the detector missed.
-        return TemporalLocalizationTask(
-            inputs=(self.record,), target_annotations=self.beats, mode=LocalizationMode.EXHAUSTIVE
-        )
+    # Exhaustive: the cardiologists added every beat the detector missed.
+    return TemporalLocalizationTask(inputs=(record,), target_annotations=beats, mode=LocalizationMode.EXHAUSTIVE)
 
 
-@dataclass(frozen=True)
-class RhythmAnnotationTask(MitdbTask):
-    """Divide a record into rhythm episodes, from which the authors' ``epicmp`` takes the episodes it compares.
+def rhythm_annotation_task(record: Record, rhythms: tuple[Annotation, ...]) -> TemporalLocalizationTask:
+    """Return the task that divides a record into rhythm episodes, from which ``epicmp`` takes its episodes.
 
-    The target is the Record's rhythm annotations: each an interval from a rhythm change to the next, valued
-    by its label. ``epicmp`` compares the episodes of atrial fibrillation and atrial flutter.
+    ``epicmp`` compares the episodes of atrial fibrillation and atrial flutter.
+
+    Args:
+        record: The record's Record.
+        rhythms: The Record's rhythm annotations: each an interval from a rhythm change to the next, valued
+            by its label.
+
+    Returns:
+        The localization task, whose target is every rhythm annotation of the Record.
     """
-
-    TIMENET_TYPE: ClassVar[type[Task]] = TemporalLocalizationTask
-
-    record: Record
-    rhythms: tuple[Annotation, ...]
-
-    def to_timenet_task(self) -> TemporalLocalizationTask:
-        """Return the localization task, whose target is every rhythm annotation of the Record."""
-        # Exhaustive: the episodes cover the record from its first rhythm change to its end.
-        return TemporalLocalizationTask(
-            inputs=(self.record,), target_annotations=self.rhythms, mode=LocalizationMode.EXHAUSTIVE
-        )
+    # Exhaustive: the episodes cover the record from its first rhythm change to its end.
+    return TemporalLocalizationTask(inputs=(record,), target_annotations=rhythms, mode=LocalizationMode.EXHAUSTIVE)
 
 
-@dataclass(frozen=True)
-class BeatClassificationTask(MitdbTask):
-    """Name the code of one reference beat, given its fiducial point.
+def beat_classification_task(record: Record, at_us: int, code: BeatCode) -> ClassificationTask:
+    """Return the task that names the code of one reference beat, given its fiducial point.
 
     The scope is the beat's point and names no signal, since the cardiologists read both leads. The whole
     Record stays available, as the beat's neighbours and the rhythm are what tell many codes apart.
+
+    Args:
+        record: The beat's Record.
+        at_us: The fiducial point's time from the record's first sample.
+        code: The beat's reference code.
+
+    Returns:
+        The classification task, with the beat's code as target.
     """
-
-    TIMENET_TYPE: ClassVar[type[Task]] = ClassificationTask
-
-    record: Record
-    at_us: int
-    """The fiducial point's time from the record's first sample."""
-    code: BeatCode
-
-    def to_timenet_task(self) -> ClassificationTask:
-        """Return the classification task, with the beat's code as target."""
-        return ClassificationTask(
-            inputs=(self.record,),
-            scope=TimePoint.micros(self.at_us),
-            targets=(self.code.value,),
-            target_schema=AnnotationKey.BEAT_VOCABULARY,
-        )
+    return ClassificationTask(
+        inputs=(record,),
+        scope=TimePoint.micros(at_us),
+        targets=(code.value,),
+        target_schema=AnnotationKey.BEAT_VOCABULARY,
+    )

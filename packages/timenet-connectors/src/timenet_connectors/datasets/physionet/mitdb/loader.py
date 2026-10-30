@@ -6,7 +6,7 @@ from typing import Any, NamedTuple, Self
 
 from timenet.dataset import Record
 from timenet.errors import TimeFFormatError, TimeFValidationError
-from timenet.types import Annotation
+from timenet.types import Annotation, ClassificationTask, Task, TemporalLocalizationTask
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.bases.physionet import WfdbHeader
 from timenet_connectors.datasets.physionet.mitdb.annotations import read_reference
@@ -20,10 +20,9 @@ from timenet_connectors.datasets.physionet.mitdb.release import (
     PinnedCounts,
 )
 from timenet_connectors.datasets.physionet.mitdb.tasks import (
-    BeatAnnotationTask,
-    BeatClassificationTask,
-    MitdbTask,
-    RhythmAnnotationTask,
+    beat_annotation_task,
+    beat_classification_task,
+    rhythm_annotation_task,
 )
 from timenet_connectors.datasets.physionet.mitdb.vocabulary import BeatCode, RhythmLabel
 
@@ -57,18 +56,22 @@ def _record_names(root: Path) -> list[str]:
     return names
 
 
-class MitdbDatasetLoader(DatasetLoader[MitdbTask]):
+class MitdbDatasetLoader(DatasetLoader):
     """The MIT-BIH records, read and checked: one lazy Record each, with every reference label, and its tasks.
 
-    Each record has a :class:`BeatAnnotationTask` and a :class:`RhythmAnnotationTask`, the outputs the
-    authors' ``bxb`` and ``epicmp`` compare, and a :class:`BeatClassificationTask` per beat. Select one kind
-    with ``tasks_of``.
+    Each kind of task has its own method:
+
+    - Beat annotation (:meth:`beat_annotation_tasks`): the output the authors' ``bxb`` compares, one per record.
+    - Rhythm annotation (:meth:`rhythm_annotation_tasks`): the output ``epicmp`` compares, one per record.
+    - Beat classification (:meth:`beat_classification_tasks`): one per reference beat.
+
+    :meth:`tasks` keeps the record order: each record's three kinds of tasks, then the next record's.
 
     The loader keeps the labels, not the samples. The signals reread their ``.dat``, so the files must stay
     available until writing ends.
     """
 
-    TASK_KINDS = (BeatAnnotationTask, RhythmAnnotationTask, BeatClassificationTask)
+    TASK_TYPES = (TemporalLocalizationTask, ClassificationTask)
 
     def __init__(self, records: tuple[ParsedRecord, ...]) -> None:
         self._records = records
@@ -131,16 +134,45 @@ class MitdbDatasetLoader(DatasetLoader[MitdbTask]):
         """Return one Record per record, in ``RECORDS`` order, whose values stay in the files until written."""
         return (parsed.record for parsed in self._records)
 
-    def tasks(self) -> Iterator[MitdbTask]:
+    def tasks(self) -> Iterator[Task]:
         """Return each record's beat and rhythm annotation tasks, then one classification task per beat.
 
         Yields:
             The tasks, by record in ``RECORDS`` order, and its beats in sample order.
         """
         for parsed in self._records:
-            yield BeatAnnotationTask(record=parsed.record, beats=parsed.beats)
-            yield RhythmAnnotationTask(record=parsed.record, rhythms=parsed.rhythms)
-            for beat in parsed.reference.beats:
-                yield BeatClassificationTask(
-                    record=parsed.record, at_us=AXIS.time_offset_us(beat.sample), code=beat.code
-                )
+            yield beat_annotation_task(parsed.record, parsed.beats)
+            yield rhythm_annotation_task(parsed.record, parsed.rhythms)
+            yield from _beat_classification_tasks(parsed)
+
+    def beat_annotation_tasks(self) -> Iterator[TemporalLocalizationTask]:
+        """Return the beat annotation tasks, which ``bxb`` scores.
+
+        Yields:
+            One task per record, in ``RECORDS`` order.
+        """
+        for parsed in self._records:
+            yield beat_annotation_task(parsed.record, parsed.beats)
+
+    def rhythm_annotation_tasks(self) -> Iterator[TemporalLocalizationTask]:
+        """Return the rhythm annotation tasks, from which ``epicmp`` takes its episodes.
+
+        Yields:
+            One task per record, in ``RECORDS`` order.
+        """
+        for parsed in self._records:
+            yield rhythm_annotation_task(parsed.record, parsed.rhythms)
+
+    def beat_classification_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the beat classification tasks.
+
+        Yields:
+            One task per reference beat, by record in ``RECORDS`` order, and its beats in sample order.
+        """
+        for parsed in self._records:
+            yield from _beat_classification_tasks(parsed)
+
+
+def _beat_classification_tasks(parsed: ParsedRecord) -> Iterator[ClassificationTask]:
+    for beat in parsed.reference.beats:
+        yield beat_classification_task(parsed.record, AXIS.time_offset_us(beat.sample), beat.code)

@@ -21,11 +21,6 @@ from timenet_connectors.datasets.physionet.mitdb.keys import AnnotationKey
 from timenet_connectors.datasets.physionet.mitdb.loader import MitdbDatasetLoader
 from timenet_connectors.datasets.physionet.mitdb.records import AXIS, record_metadata
 from timenet_connectors.datasets.physionet.mitdb.release import PINNED_COUNTS, PinnedCounts
-from timenet_connectors.datasets.physionet.mitdb.tasks import (
-    BeatAnnotationTask,
-    BeatClassificationTask,
-    RhythmAnnotationTask,
-)
 from timenet_connectors.datasets.physionet.mitdb.vocabulary import SignalQuality
 
 
@@ -298,13 +293,28 @@ def test_tasks_point_at_the_records_own_labels(tmp_path):
     # The localization targets are the Record's own beat and rhythm annotations, and a classification
     # scope is its beat's point, which maps back to the beat's sample. No task carries anything else.
     loader = MitdbDatasetLoader.parse_from([_release(tmp_path)], counts=_FIXTURE_COUNTS)
-    for task in loader.tasks_of(BeatAnnotationTask):
-        assert task.beats == tuple(a for a in task.record.annotations if a.key == AnnotationKey.BEAT)
-    for task in loader.tasks_of(RhythmAnnotationTask):
-        assert task.rhythms == tuple(a for a in task.record.annotations if a.key == AnnotationKey.RHYTHM)
-    beat_samples = [AXIS.index_at_or_after(task.at_us) for task in loader.tasks_of(BeatClassificationTask)]
+    beat_annotations = list(loader.beat_annotation_tasks())
+    rhythm_annotations = list(loader.rhythm_annotation_tasks())
+    beat_classifications = list(loader.beat_classification_tasks())
+    for task in beat_annotations:
+        (record,) = task.inputs
+        assert task.target_annotations == tuple(a for a in record.annotations if a.key == AnnotationKey.BEAT)
+    for task in rhythm_annotations:
+        (record,) = task.inputs
+        assert task.target_annotations == tuple(a for a in record.annotations if a.key == AnnotationKey.RHYTHM)
+    beat_samples = []
+    for task in beat_classifications:
+        assert isinstance(task.scope, TimePoint)
+        beat_samples.append(AXIS.index_at_or_after(task.scope.start_us))
     assert beat_samples == [100, 400, 800, 3599, 20, 50]
-    for task in loader.timenet_tasks():
+    tasks = list(loader.tasks())
+    # tasks() holds exactly the tasks of the three methods, record by record.
+    by_record = [
+        [beat, rhythm, *(task for task in beat_classifications if task.inputs == beat.inputs)]
+        for beat, rhythm in zip(beat_annotations, rhythm_annotations, strict=True)
+    ]
+    assert tasks == [task for record_tasks in by_record for task in record_tasks]
+    for task in tasks:
         assert task.split is None
         assert task.prompt is None
         assert task.input_annotations == ()

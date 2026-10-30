@@ -115,13 +115,14 @@ column order of the directory's beat table) and `rhythm_vocabulary` (the 19 rhyt
 
 The authors score an algorithm on whole records: it writes an annotation file, and WFDB's
 comparators match it against the reference. Each record has one task for each output they score,
-and each beat a classification task:
+and each beat a classification task. Each kind has its own `MitdbDatasetLoader` method, and
+`tasks()` streams them record by record:
 
-| Task | Count | Type | Target |
-| --- | --- | --- | --- |
-| Beat annotation (`bxb`) | 48 | `TemporalLocalizationTask`, exhaustive | `target_annotations`: the Record's `beat` annotations |
-| Rhythm annotation (`epicmp`) | 48 | `TemporalLocalizationTask`, exhaustive | `target_annotations`: the Record's `rhythm` annotations |
-| Beat classification | 109,966 | `ClassificationTask`, `target_schema` `beat_vocabulary` | The beat's code, with `scope` the beat's point |
+| Task | Loader method | Count | Type | Target |
+| --- | --- | --- | --- | --- |
+| Beat annotation (`bxb`) | `beat_annotation_tasks` | 48 | `TemporalLocalizationTask`, exhaustive | `target_annotations`: the Record's `beat` annotations |
+| Rhythm annotation (`epicmp`) | `rhythm_annotation_tasks` | 48 | `TemporalLocalizationTask`, exhaustive | `target_annotations`: the Record's `rhythm` annotations |
+| Beat classification | `beat_classification_tasks` | 109,966 | `ClassificationTask`, `target_schema` `beat_vocabulary` | The beat's code, with `scope` the beat's point |
 
 - **Beat annotation.** `bxb` matches each beat within 150 ms and compares the labels of matched
   beats, so the target is the labelled beats. The beats alone are the QRS detection target.
@@ -179,8 +180,8 @@ build     RecordHeader + ReferenceAnnotations ──► records.build_record
 
 check     the counts ──► release.PINNED_COUNTS
 
-tasks     ParsedRecord ──► BeatAnnotationTask, RhythmAnnotationTask,
-                           one BeatClassificationTask per beat
+tasks     ParsedRecord ──► tasks.beat_annotation_task, tasks.rhythm_annotation_task,
+                           one tasks.beat_classification_task per beat
 ```
 
 `connector.py` adds the provenance annotations and hands the extracted directory to
