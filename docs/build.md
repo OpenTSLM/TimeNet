@@ -107,6 +107,55 @@ The error names the release and its effective access level, which is the stricte
 card and of the cards in its lineage. It also names each `access_url` that a user needs, with the
 release that sets it. For a card, this is the `access_url` of the card.
 
+## Prepare parent releases
+
+A connector card can declare exact parent releases under `parents`. The connector reads them when it
+composes the child dataset. Before the build downloads anything, it prepares each parent release in
+the output registry. It also prepares the payload sources of each parent: the releases whose payload
+files the parent reads.
+
+For each release, the build uses the first of these steps that works:
+
+1. Reuse a complete copy in the output registry.
+2. Copy the release from the registry that `--fetch-from` names.
+3. Build the release from its own connector, if `--build-parents` is set.
+
+If no step works, the build stops before any download and names the missing release. Parents come
+before their children.
+
+```bash
+timenet-build build org/name --out .timenet-registry \
+    --fetch-from timenet:// --build-parents
+```
+
+A parent builds like the requested dataset, in the environment of its own connector, but never with
+`--force`. If the builder backend of another installed package claims a parent, that backend builds
+it. The build never builds over a release that the output holds. If a file of that copy is missing
+or has another size, the build copies the release again from `--fetch-from`. If it cannot, it raises
+`TimeNetFileError`. A copied file must match the size and checksum that its manifest records.
+Otherwise the copy raises `TimeNetFileError`.
+
+With `--build-parents`, a missing payload source builds as a pinned release. The build publishes it
+only if it writes the files that the reading release pins. See
+[Rebuild a pinned release](#rebuild-a-pinned-release) for the check and the two fixes.
+
+`--fetch-from` needs a local `--out`. An output that is not local holds open releases only, so the
+build checks the access of each release before any download. A copy from a registry that is not
+local needs an open release too.
+
+`timenet_connectors.build()` and `timenet_connectors.load()` take the same options as keywords.
+`fetch_from` takes a registry or its URI. `build_parents=True` builds missing parents.
+
+```python
+import timenet_connectors
+
+dataset = timenet_connectors.load(
+    "org/name",
+    fetch_from="timenet://",
+    build_parents=True,
+)
+```
+
 ## Rebuild a pinned release
 
 A release can read payload files that another release stores. The reading release pins each of

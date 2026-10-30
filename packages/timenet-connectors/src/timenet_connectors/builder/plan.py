@@ -68,7 +68,8 @@ def plan_parents(
     declares exactly that version. A damaged copy in a local output is fetched again, and never
     built over. An output that is not local accepts only releases with ``open`` access, which need
     no credentials. So every release that the plan visits for such an output must have ``open``
-    access.
+    access. A registry that is not local serves only releases with ``open`` access, so a release to
+    fetch from one must have ``open`` access too.
 
     Args:
         dataset_id: The dataset to build.
@@ -87,7 +88,8 @@ def plan_parents(
         TimeNetMissingParentError: If a parent or payload source is missing and building is off.
         TimeNetDatasetNotFoundError: If a parent is missing and no installed connector builds it.
         TimeNetFileError: If the output holds a parent with a damaged copy that cannot be fetched again.
-        TimeNetAccessError: If the output is not local and the plan visits a release without ``open`` access.
+        TimeNetAccessError: If the plan visits a release without ``open`` access in an output that is
+            not local, or would fetch one from a registry that is not local.
     """  # noqa: DOC502 - raised by the helpers of the walk
     if fetch_from is not None and not isinstance(output, LocalRegistry):
         # A remote registry only accepts a child whose parents it already serves, and a fetched
@@ -224,7 +226,8 @@ def _locate(
     Raises:
         TimeNetFileError: If the output holds a local copy that lacks a file or holds one with another
             size, and the release cannot be fetched again.
-        TimeNetAccessError: If the output is not local and holds the release, which is not open.
+        TimeNetAccessError: If the release is not open, and the output that holds it, or the
+            registry to fetch it from, is not local.
     """  # noqa: DOC502 - the damage is raised from a variable, the access error by require_open_access
     manifest = _manifest(output, reference)
     damage = None
@@ -244,6 +247,9 @@ def _locate(
         return manifest, None
     fetched = None if fetch_from is None else _manifest(fetch_from, reference)
     if fetched is not None:
+        # A registry other than a local one serves open releases only, so check before any download.
+        if not isinstance(fetch_from, LocalRegistry):
+            require_open_access(fetched.metadata, fetched.lineage)
         return fetched, "fetch"
     if damage is not None:
         raise damage
