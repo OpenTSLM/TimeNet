@@ -1,93 +1,57 @@
-"""A Record's metadata as a small shared core plus typed extensions, one per dataset or source.
+"""A Record's metadata: the fields every dataset shares, plus one dataset's own typed fields.
 
-This is a prototype of the shared metadata proposed on TimeNet #433, kept in the connectors package until
-the core design is agreed. Nothing here is specific to one dataset, so it can move to ``timenet.types``
-unchanged.
+A connector declares its Record metadata as one subclass of ``RecordMetadata`` that adds its own fields, and a
+Record holds one such object. ``to_json`` writes it as one flat JSON object::
 
-A Record's metadata is a ``RecordMetadata``: the fields every dataset shares, then any number of
-extensions, each a ``MetadataExtension``. Each extension is stored under its own ``NAME``, so no extension can
-overwrite a field or another extension, and ``from_json`` restores each one as its own type. An extension can
-hold extensions of its own, stored the same way one level down::
-
-    {"subject_id": "USW00093242", "trace": {"coordinates": ..., "sampling": ..., "windows": [...]}}
-
-An extension that may change shape over time declares a ``version`` field as a ``Literal``, so a stored
-version it does not read is rejected rather than misread.
+    {"subject_id": "USW00093242", "coordinates": ..., "sampling": "random", "windows": [...]}
 
 Design choices:
 
-- The stored JSON is plain keys and values, with no type tags or wrappers, so a reader without these classes,
-  such as a consumer who has not installed the connector, can still read it.
-- Values keep their types: each extension is a pydantic model with typed fields, not a bag of strings.
-- Metadata is frozen, and ``extend`` returns a new copy, so metadata shared between objects never changes.
-- ``from_json`` takes the extension types explicitly rather than looking them up in a global registry, so a
-  name only has to be unique among the types passed, and reading does not depend on which modules are imported.
+- One class per dataset, one level of keys: the stored JSON is plain keys and values, with no type tags or
+  wrappers, so a reader without the connector, such as a consumer who has not installed it, can still read it.
+  A field may still hold a structured value, such as a pydantic model or a tuple of them.
+- Values keep their types: the fields are typed pydantic fields, not a bag of strings.
+- Metadata is frozen, so metadata shared between objects never changes.
+- A subclass adds fields but never redefines a shared one, so a shared field means the same in every dataset.
+- Reading needs the dataset's class: ``CGMRecordMetadata.from_json(...)``. Code without it reads the shared
+  fields with ``RecordMetadata.core_of(...)``.
+
+A dataset whose metadata may change shape over time declares a ``version`` field as a ``Literal``, so a stored
+version it does not read is rejected rather than misread.
 
 Metadata is provenance and never model input.
 """
 
-from collections.abc import Iterable, Iterator
-from typing import Annotated, Any, ClassVar, Self, TypeVar
+from typing import Annotated, Any, Self
 
-from pydantic import BaseModel, ConfigDict, PrivateAttr, StrictStr, StringConstraints
+from pydantic import BaseModel, ConfigDict, StrictStr, StringConstraints, ValidationError
 
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping
 
 
-_Extension = TypeVar("_Extension", bound="MetadataExtension")
+class RecordMetadata(BaseModel):
+    """The metadata every Record shares. A dataset subclasses it to add its own fields."""
 
+    model_config = ConfigDict(extra="forbid", frozen=True, title="Record metadata")
 
-class Metadata(BaseModel):
-    """Typed fields, then extensions, each stored under its ``NAME``."""
+    subject_id: Annotated[StrictStr, StringConstraints(pattern=r"\S")] | None = None
+    """What was measured: a person, a device, or a site such as a weather station."""
 
-    model_config = ConfigDict(extra="forbid", frozen=True)
-
-    _extensions: dict[str, "MetadataExtension"] = PrivateAttr(default_factory=dict)
-    """The extensions by name, in the order they were added. A private attribute rather than a field, so its
-    own name never collides with an extension's."""
-
-    def __repr_args__(self) -> Iterator[tuple[str | None, Any]]:  # noqa: PLW3201 - pydantic's repr hook
-        # pydantic leaves private attributes out of repr; show each extension under its name, as in the JSON.
-        yield from super().__repr_args__()
-        yield from self._extensions.items()
-
-    def extend(self, *extensions: "MetadataExtension") -> Self:
-        """Return this metadata with more extensions.
-
-        Returns:
-            New metadata; this one is unchanged.
+    @classmethod
+    def __pydantic_init_subclass__(cls, **kwargs: Any) -> None:  # noqa: PLW3201 - pydantic's subclass hook
+        """Reject a subclass that redefines a shared field.
 
         Raises:
-            TimeFValidationError: If an extension's name is one of this metadata's fields, or another extension's.
+            TimeFValidationError: If the subclass changes a shared field's type.
         """
-        extended = dict(self._extensions)
-        for extension in extensions:
-            if extension.NAME in type(self).model_fields:
-                raise TimeFValidationError(f"extension name {extension.NAME!r} is a field of {type(self).__name__}")
-            if extension.NAME in extended:
-                raise TimeFValidationError(f"metadata already has a {extension.NAME!r} extension")
-            extended[extension.NAME] = extension
-        copy = self.model_copy()
-        copy._extensions = extended
-        return copy
-
-    def extension(self, kind: type[_Extension]) -> _Extension:
-        """Return the extension of one type.
-
-        Returns:
-            The extension.
-
-        Raises:
-            TimeFValidationError: If the metadata has no extension of that type.
-        """
-        extension = self._extensions.get(kind.NAME)
-        if not isinstance(extension, kind):
-            raise TimeFValidationError(f"metadata has no {kind.NAME!r} extension")
-        return extension
+        super().__pydantic_init_subclass__(**kwargs)
+        for name, field in RecordMetadata.model_fields.items():
+            if cls.model_fields[name].annotation != field.annotation:
+                raise TimeFValidationError(f"{cls.__name__} redefines the shared metadata field {name!r}")
 
     def to_json(self) -> JsonMapping:
-        """Return the metadata as TimeNet stores it: the fields, then each extension under its name.
+        """Return the metadata as TimeNet stores it.
 
         Fields that are ``None`` are left out, and enums are written as their values.
 
@@ -95,54 +59,37 @@ class Metadata(BaseModel):
             The JSON object.
         """
         stored: dict[str, Any] = self.model_dump(mode="json", exclude_none=True)
-        for name, extension in self._extensions.items():
-            stored[name] = extension.to_json()
         return stored
 
     @classmethod
-    def from_json(cls, stored: JsonMapping, kinds: Iterable[type["MetadataExtension"]]) -> Self:
-        """Read stored metadata back, restoring each extension, at any depth, as its own type.
+    def from_json(cls, stored: JsonMapping) -> Self:
+        """Read stored metadata back as this class.
 
         Args:
             stored: The JSON object ``to_json`` wrote.
-            kinds: The extension types the metadata may hold, at any depth.
 
         Returns:
-            The metadata, with its extensions in the order they were stored.
+            The metadata.
 
         Raises:
-            TimeFValidationError: If two of ``kinds`` share a name, a stored key is neither a field nor one of
-                ``kinds``, or an extension is not stored as a JSON object.
+            TimeFValidationError: If the stored object does not match this class, for example an unknown key or
+                another version.
         """
-        kinds = tuple(kinds)
-        by_name = {kind.NAME: kind for kind in kinds}
-        if len(by_name) != len(kinds):
-            raise TimeFValidationError("two extension types share a name")
-        fields = {key: value for key, value in stored.items() if key in cls.model_fields}
-        unknown = sorted(key for key in stored if key not in fields and key not in by_name)
-        if unknown:
-            raise TimeFValidationError(f"metadata has keys that are neither fields nor known extensions: {unknown}")
-        extensions: list[MetadataExtension] = []
-        for key, value in stored.items():
-            if key in fields:
-                continue
-            if not isinstance(value, dict):
-                raise TimeFValidationError(f"metadata extension {key!r} is not a JSON object")
-            extensions.append(by_name[key].from_json(value, kinds))
-        return cls.model_validate(fields).extend(*extensions)
+        try:
+            return cls.model_validate(stored)
+        except ValidationError as error:
+            raise TimeFValidationError(f"invalid {cls.__name__}: {error}") from error
 
+    @classmethod
+    def core_of(cls, stored: JsonMapping) -> "RecordMetadata":
+        """Read only the shared fields, for code that doesn't have the dataset's class.
 
-class MetadataExtension(Metadata):
-    """A dataset's or source's typed addition to ``RecordMetadata``, stored under its ``NAME``."""
+        Args:
+            stored: The JSON object a dataset's ``to_json`` wrote.
 
-    NAME: ClassVar[str]
-    """The key the extension is stored under. It must differ from its holder's fields and other extensions."""
-
-
-class RecordMetadata(Metadata):
-    """The metadata every Record shares, and the typed extensions its datasets add."""
-
-    model_config = ConfigDict(title="Record metadata")
-
-    subject_id: Annotated[StrictStr, StringConstraints(pattern=r"\S")] | None = None
-    """What was measured: a person, a device, or a site such as a weather station."""
+        Returns:
+            The shared fields; the dataset's own fields are left out.
+        """
+        return RecordMetadata.from_json(
+            {key: value for key, value in stored.items() if key in RecordMetadata.model_fields}
+        )

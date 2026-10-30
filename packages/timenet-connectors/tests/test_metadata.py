@@ -1,70 +1,48 @@
 from enum import StrEnum
+from typing import Literal
 
+from pydantic import BaseModel, ConfigDict
 import pytest
 
 from timenet.errors import TimeFValidationError
-from timenet_connectors.metadata import MetadataExtension, RecordMetadata
+from timenet_connectors.metadata import RecordMetadata
 
 
 class _Sampling(StrEnum):
     RANDOM = "random"
 
 
-class _OtherMetadata(MetadataExtension):
-    NAME = "other"
-    note: str
-
-
-class _SubjectMetadata(MetadataExtension):
-    NAME = "subject_id"
-
-
-class _DeviceMetadata(MetadataExtension):
-    NAME = "device"
+class _Device(BaseModel):
+    model_config = ConfigDict(extra="forbid", frozen=True)
     name: str
 
 
-class _TypedMetadata(MetadataExtension):
-    NAME = "typed"
+class _DatasetMetadata(RecordMetadata):
+    version: Literal[2] = 2
     grams: float
     sampling: _Sampling
+    watch: _Device
+    strap: _Device | None = None
 
 
-def test_metadata_extensions_keep_their_own_names():
-    core = RecordMetadata(subject_id="S1")
-    metadata = core.extend(_OtherMetadata(note="x"))
-    assert core.to_json() == {"subject_id": "S1"}
-    assert metadata.to_json() == {"subject_id": "S1", "other": {"note": "x"}}
-    assert RecordMetadata.from_json(metadata.to_json(), [_OtherMetadata]) == metadata
-    # No extension may overwrite a field or another extension.
-    with pytest.raises(TimeFValidationError, match="already has a 'other' extension"):
-        metadata.extend(_OtherMetadata(note="y"))
-    with pytest.raises(TimeFValidationError, match="'subject_id' is a field of RecordMetadata"):
-        metadata.extend(_SubjectMetadata())
-    # A stored key that is neither a field nor a known extension is not dropped silently.
-    with pytest.raises(TimeFValidationError, match=r"neither fields nor known extensions: \['other'\]"):
-        RecordMetadata.from_json(metadata.to_json(), [])
-    with pytest.raises(TimeFValidationError, match="two extension types share a name"):
-        RecordMetadata.from_json({}, [_OtherMetadata, _OtherMetadata])
-    with pytest.raises(TimeFValidationError, match="'other' is not a JSON object"):
-        RecordMetadata.from_json({"other": "x"}, [_OtherMetadata])
-
-
-def test_metadata_extensions_nest_and_keep_their_types():
-    typed = _TypedMetadata(grams=45, sampling=_Sampling.RANDOM).extend(_DeviceMetadata(name="watch"))
-    metadata = RecordMetadata(subject_id="S1").extend(typed)
+def test_dataset_metadata_is_one_flat_typed_object():
+    metadata = _DatasetMetadata(subject_id="S1", grams=45, sampling=_Sampling.RANDOM, watch=_Device(name="w"))
     stored = metadata.to_json()
-    assert stored == {
-        "subject_id": "S1",
-        "typed": {"grams": 45.0, "sampling": "random", "device": {"name": "watch"}},
-    }
-    assert repr(metadata) == (
-        "RecordMetadata(subject_id='S1', typed=_TypedMetadata(grams=45.0, sampling=<_Sampling.RANDOM: 'random'>, "
-        "device=_DeviceMetadata(name='watch')))"
-    )
-    restored = RecordMetadata.from_json(stored, [_TypedMetadata, _DeviceMetadata])
+    assert stored == {"subject_id": "S1", "version": 2, "grams": 45.0, "sampling": "random", "watch": {"name": "w"}}
+    restored = _DatasetMetadata.from_json(stored)
     assert restored == metadata
-    assert restored.extension(_TypedMetadata).sampling is _Sampling.RANDOM
-    assert restored.extension(_TypedMetadata).extension(_DeviceMetadata).name == "watch"
-    with pytest.raises(TimeFValidationError, match="has no 'device' extension"):
-        restored.extension(_DeviceMetadata)
+    assert restored.sampling is _Sampling.RANDOM
+    # Code without the dataset's class still reads the shared fields.
+    assert RecordMetadata.core_of(stored) == RecordMetadata(subject_id="S1")
+    # A key the class doesn't declare, or a version it doesn't read, is rejected rather than misread.
+    with pytest.raises(TimeFValidationError, match="invalid _DatasetMetadata"):
+        _DatasetMetadata.from_json({**stored, "note": "x"})
+    with pytest.raises(TimeFValidationError, match="version"):
+        _DatasetMetadata.from_json({**stored, "version": 1})
+
+
+def test_a_dataset_cannot_redefine_a_shared_field():
+    with pytest.raises(TimeFValidationError, match="redefines the shared metadata field 'subject_id'"):
+
+        class _Clash(RecordMetadata):
+            subject_id: int = 0  # ty: ignore[invalid-attribute-override]
