@@ -6,50 +6,51 @@ from typing import Self
 
 from timenet.dataset import Record
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation
+from timenet.types import Annotation, AnswerTask, ClassificationTask, ScalarPredictionTask, Task
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.hayleyzhou1113.veritime.keys import class_vocabulary
 from timenet_connectors.datasets.hayleyzhou1113.veritime.records import SeriesLoader, build_record
-from timenet_connectors.datasets.hayleyzhou1113.veritime.release import PINNED_INVENTORY, Family, Part, PinnedInventory
+from timenet_connectors.datasets.hayleyzhou1113.veritime.release import (
+    PINNED_INVENTORY,
+    Family,
+    Part,
+    PinnedInventory,
+    SourceTask,
+)
 from timenet_connectors.datasets.hayleyzhou1113.veritime.rows import Row, read_rows
 from timenet_connectors.datasets.hayleyzhou1113.veritime.series import group_series
 from timenet_connectors.datasets.hayleyzhou1113.veritime.tasks import (
-    AnomalyDetectionTask,
-    InferentialCalculationTask,
-    KnowledgeClassificationTask,
-    ScenarioAttributionTask,
-    VeriTimeTask,
-    task_of,
+    anomaly_detection_task,
+    inferential_calculation_task,
+    knowledge_task,
+    row_task,
+    scenario_attribution_task,
 )
 from timenet_connectors.datasets.hayleyzhou1113.veritime.vocabulary import CLASS_VOCABULARIES
 
 
-class VeriTimeDatasetLoader(DatasetLoader[VeriTimeTask]):
+class VeriTimeDatasetLoader(DatasetLoader):
     """VeriTime's files, read and checked: one lazy Record per distinct series, and one task per row.
 
-    VeriTime asks one question per row, under the authors' split. Its seven tasks make four kinds:
+    VeriTime asks one question per row, under the authors' split. It defines seven tasks, and each has
+    its own method:
 
-    - Anomaly detection (:class:`AnomalyDetectionTask`): answer Yes or No to the question's criterion.
-    - Scenario attribution (:class:`ScenarioAttributionTask`): choose the option that best explains the
-      series.
-    - Inferential calculation (:class:`InferentialCalculationTask`): count the events the question
+    - Anomaly detection (:meth:`anomaly_detection_tasks`): answer Yes or No to the question's criterion.
+    - Scenario attribution (:meth:`scenario_attribution_tasks`): choose the option that best explains
+      the series.
+    - Inferential calculation (:meth:`inferential_calculation_tasks`): count the events the question
       names.
-    - CTU, ECG, EMG and RCW (:class:`KnowledgeClassificationTask`): name the class of a real-world signal.
+    - CTU, ECG, EMG and RCW (:meth:`ctu_tasks`, :meth:`ecg_tasks`, :meth:`emg_tasks` and
+      :meth:`rcw_tasks`): name the class of a real-world signal.
 
-    Select one kind, or one kind of one split, with ``tasks_of``, such as
-    ``tasks_of(KnowledgeClassificationTask, split=Split.TEST)``.
+    :meth:`tasks` keeps the file order, in which the three scenario tasks alternate.
 
     The loader keeps each row's text fields, not its values, so tasks stream from memory and a signal
     rereads only its own row. The source files must stay available until writing ends.
     """
 
-    TASK_KINDS = (
-        AnomalyDetectionTask,
-        ScenarioAttributionTask,
-        InferentialCalculationTask,
-        KnowledgeClassificationTask,
-    )
+    TASK_TYPES = (ClassificationTask, AnswerTask, ScalarPredictionTask)
 
     def __init__(self, rows: tuple[tuple[Row, Record], ...], records: tuple[Record, ...]) -> None:
         self._rows = rows
@@ -113,6 +114,77 @@ class VeriTimeDatasetLoader(DatasetLoader[VeriTimeTask]):
         """Return one Record per distinct series, in the order its first row appears."""
         return iter(self._records)
 
-    def tasks(self) -> Iterator[VeriTimeTask]:
-        """Return one task per row, in file order."""
-        return (task_of(row, record) for row, record in self._rows)
+    def tasks(self) -> Iterator[Task]:
+        """Return one task per row, in file order.
+
+        Yields:
+            The tasks.
+        """
+        for row, record in self._rows:
+            yield row_task(row, record)
+
+    def anomaly_detection_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the anomaly detection tasks, in file order.
+
+        Yields:
+            One classification task for each anomaly detection row.
+        """
+        for row, record in self._rows_of(SourceTask.ANOMALY_DETECTION):
+            yield anomaly_detection_task(row, record)
+
+    def scenario_attribution_tasks(self) -> Iterator[AnswerTask]:
+        """Return the scenario attribution tasks, in file order.
+
+        Yields:
+            One answer task for each scenario attribution row.
+        """
+        for row, record in self._rows_of(SourceTask.SCENARIO_ATTRIBUTION):
+            yield scenario_attribution_task(row, record)
+
+    def inferential_calculation_tasks(self) -> Iterator[ScalarPredictionTask]:
+        """Return the inferential calculation tasks, in file order.
+
+        Yields:
+            One scalar task for each inferential calculation row.
+        """
+        for row, record in self._rows_of(SourceTask.INFERENTIAL_CALCULATION):
+            yield inferential_calculation_task(row, record)
+
+    def ctu_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the CTU tasks, computer type usage, in file order.
+
+        Yields:
+            One classification task for each CTU row.
+        """
+        for row, record in self._rows_of(SourceTask.CTU):
+            yield knowledge_task(row, record)
+
+    def ecg_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the ECG tasks, heart rhythm, in file order.
+
+        Yields:
+            One classification task for each ECG row.
+        """
+        for row, record in self._rows_of(SourceTask.ECG):
+            yield knowledge_task(row, record)
+
+    def emg_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the EMG tasks, neuromuscular condition, in file order.
+
+        Yields:
+            One classification task for each EMG row.
+        """
+        for row, record in self._rows_of(SourceTask.EMG):
+            yield knowledge_task(row, record)
+
+    def rcw_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the RCW tasks, right whale call detection, in file order.
+
+        Yields:
+            One classification task for each RCW row.
+        """
+        for row, record in self._rows_of(SourceTask.RCW):
+            yield knowledge_task(row, record)
+
+    def _rows_of(self, task: SourceTask) -> Iterator[tuple[Row, Record]]:
+        return ((row, record) for row, record in self._rows if row.task is task)

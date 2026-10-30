@@ -114,7 +114,7 @@ clipping. Scenario series are synthetic, and 227 of the 2,520 rows publish a con
 The Record's metadata is `records.VeriTimeRecordMetadata`: the series `kind` and `rows`, which lists
 every row that publishes the series by `part` and `row` (its position in the file, from 0).
 `records.record_metadata(record)` reads it back as a typed object. The release names no subject,
-so the shared `subject_id` is unset.
+so the shared `subject_id` is stored as null.
 
 ### Tasks
 
@@ -142,8 +142,10 @@ The process labels and `source_answer` are task annotations. They are supervisio
 authors' rewards score, and no task names them in `input_annotations`. A label published as null
 has no annotation: `step1_label` and `step4_label` are null in the same 137 scenario rows.
 
-`loader.VeriTimeDatasetLoader.tasks_of` selects one kind: `AnomalyDetectionTask`,
-`ScenarioAttributionTask`, `InferentialCalculationTask` or `KnowledgeClassificationTask`.
+`loader.VeriTimeDatasetLoader` has one method for each of the seven tasks:
+`anomaly_detection_tasks`, `scenario_attribution_tasks`, `inferential_calculation_tasks`,
+`ctu_tasks`, `ecg_tasks`, `emg_tasks` and `rcw_tasks`. Its `tasks` yields every task in file order.
+After `populate`, `TimeFDataset.get_split` selects the tasks of one split.
 
 ### Dataset annotations
 

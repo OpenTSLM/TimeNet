@@ -6,12 +6,10 @@ fine-tune on. The process labels of steps 1, 2, 4 and 6, which the authors' RL r
 annotations, never model input.
 """
 
-from dataclasses import dataclass
-from typing import Any, ClassVar, TypeVar
+from typing import Any, TypeVar
 
 from timenet.dataset import Record
-from timenet.types import Annotation, AnswerTask, ClassificationTask, ScalarPredictionTask, Split, Task
-from timenet_connectors.bases.loader import DatasetTask
+from timenet.types import Annotation, AnswerTask, ClassificationTask, ScalarPredictionTask, Task
 from timenet_connectors.datasets.hayleyzhou1113.veritime.keys import AnnotationKey, class_vocabulary
 from timenet_connectors.datasets.hayleyzhou1113.veritime.release import SourceTask
 from timenet_connectors.datasets.hayleyzhou1113.veritime.rows import Row
@@ -32,113 +30,90 @@ _SOURCE_ANSWER = "The ChatTS answer the authors extracted the label from, as pub
 _T = TypeVar("_T", bound=Task)
 
 
-@dataclass(frozen=True)
-class VeriTimeTask(DatasetTask):
-    """One row's task, on the Record of the series it publishes."""
+def _fields(row: Row, record: Record) -> dict[str, Any]:
+    """Return the fields every VeriTime task shares, on the Record of the row's series.
 
-    row: Row
-    record: Record
-
-    @property
-    def split(self) -> Split:
-        """Return the task's split: the authors' split of the row's file."""
-        return self.row.ref.part.timenet_split
-
-    def _fields(self) -> dict[str, Any]:
-        """Return the fields every VeriTime task shares."""
-        row = self.row
-        return {
-            "inputs": (self.record,),
-            "prompt": row.question,
-            "rationale": row.cot,
-            "split": self.split,
-            "metadata": {"source_task": row.task.value, "part": row.ref.part.value, "row": row.ref.row},
-        }
-
-    def _annotate(self, task: _T) -> _T:
-        """Attach the row's process labels and, on a scenario row, its ChatTS answer.
-
-        A process label published as null has no annotation, since an annotation must say something.
-
-        Returns:
-            The same task.
-        """
-        for key, field, description in _STEP_LABELS:
-            value = getattr(self.row, field)
-            if value is not None:
-                task.annotate(Annotation(key=key, value=value, description=description))
-        if self.row.output is not None:
-            task.annotate(
-                Annotation(key=AnnotationKey.SOURCE_ANSWER, value=self.row.output, description=_SOURCE_ANSWER)
-            )
-        return task
+    The split is the authors' split of the row's file.
+    """
+    return {
+        "inputs": (record,),
+        "prompt": row.question,
+        "rationale": row.cot,
+        "split": row.ref.part.timenet_split,
+        "metadata": {"source_task": row.task.value, "part": row.ref.part.value, "row": row.ref.row},
+    }
 
 
-@dataclass(frozen=True)
-class AnomalyDetectionTask(VeriTimeTask):
-    """A true/false question: does the series meet the question's anomaly criterion? Yes or No."""
+def _annotate(task: _T, row: Row) -> _T:
+    """Attach the row's process labels and, on a scenario row, its ChatTS answer.
 
-    TIMENET_TYPE: ClassVar[type[Task]] = ClassificationTask
+    A process label published as null has no annotation, since an annotation must say something.
 
-    def to_timenet_task(self) -> ClassificationTask:
-        """Return the classification task, with Yes or No as target."""
-        schema = class_vocabulary(self.row.task)
-        return self._annotate(ClassificationTask(targets=(self.row.label,), target_schema=schema, **self._fields()))
+    Returns:
+        The same task.
+    """
+    for key, field, description in _STEP_LABELS:
+        value = getattr(row, field)
+        if value is not None:
+            task.annotate(Annotation(key=key, value=value, description=description))
+    if row.output is not None:
+        task.annotate(Annotation(key=AnnotationKey.SOURCE_ANSWER, value=row.output, description=_SOURCE_ANSWER))
+    return task
 
 
-@dataclass(frozen=True)
-class ScenarioAttributionTask(VeriTimeTask):
-    """A multiple-choice question: which of the options the question offers best explains the series?
+def anomaly_detection_task(row: Row, record: Record) -> ClassificationTask:
+    """Return a true/false question's task: does the series meet the question's anomaly criterion? Yes or No.
+
+    Returns:
+        The classification task, with Yes or No as target.
+    """
+    schema = class_vocabulary(row.task)
+    return _annotate(ClassificationTask(targets=(row.label,), target_schema=schema, **_fields(row, record)), row)
+
+
+def scenario_attribution_task(row: Row, record: Record) -> AnswerTask:
+    """Return a multiple-choice question's task: which of the options it offers best explains the series?
 
     The options differ by question, so there is no shared vocabulary. The target is the label as
     published: an option's text, sometimes with other capitalization or its letter.
+
+    Returns:
+        The answer task, with the chosen option's text as target.
     """
-
-    TIMENET_TYPE: ClassVar[type[Task]] = AnswerTask
-
-    def to_timenet_task(self) -> AnswerTask:
-        """Return the answer task, with the chosen option's text as target."""
-        return self._annotate(AnswerTask(targets=(self.row.label,), **self._fields()))
+    return _annotate(AnswerTask(targets=(row.label,), **_fields(row, record)), row)
 
 
-@dataclass(frozen=True)
-class InferentialCalculationTask(VeriTimeTask):
-    """A counting question: how many events of the question's kind does the series show?"""
+def inferential_calculation_task(row: Row, record: Record) -> ScalarPredictionTask:
+    """Return a counting question's task: how many events of the question's kind does the series show?
 
-    TIMENET_TYPE: ClassVar[type[Task]] = ScalarPredictionTask
-
-    def to_timenet_task(self) -> ScalarPredictionTask:
-        """Return the scalar task, with the label's number as target: a count, apart from one amplitude."""
-        return self._annotate(ScalarPredictionTask(targets=(self.row.quantity,), **self._fields()))
+    Returns:
+        The scalar task, with the label's number as target: a count, apart from one amplitude.
+    """
+    return _annotate(ScalarPredictionTask(targets=(row.quantity,), **_fields(row, record)), row)
 
 
-@dataclass(frozen=True)
-class KnowledgeClassificationTask(VeriTimeTask):
-    """A classification question on a real-world signal: CTU, ECG, EMG or RCW, each with its classes."""
+def knowledge_task(row: Row, record: Record) -> ClassificationTask:
+    """Return a classification question's task on a real-world signal: CTU, ECG, EMG or RCW, each with its classes.
 
-    TIMENET_TYPE: ClassVar[type[Task]] = ClassificationTask
-
-    def to_timenet_task(self) -> ClassificationTask:
-        """Return the classification task, with the class name as target."""
-        schema = class_vocabulary(self.row.task)
-        return self._annotate(ClassificationTask(targets=(self.row.label,), target_schema=schema, **self._fields()))
+    Returns:
+        The classification task, with the class name as target.
+    """
+    schema = class_vocabulary(row.task)
+    return _annotate(ClassificationTask(targets=(row.label,), target_schema=schema, **_fields(row, record)), row)
 
 
-_KINDS: dict[SourceTask, type[VeriTimeTask]] = {
-    SourceTask.ANOMALY_DETECTION: AnomalyDetectionTask,
-    SourceTask.SCENARIO_ATTRIBUTION: ScenarioAttributionTask,
-    SourceTask.INFERENTIAL_CALCULATION: InferentialCalculationTask,
-    SourceTask.CTU: KnowledgeClassificationTask,
-    SourceTask.ECG: KnowledgeClassificationTask,
-    SourceTask.EMG: KnowledgeClassificationTask,
-    SourceTask.RCW: KnowledgeClassificationTask,
-}
-
-
-def task_of(row: Row, record: Record) -> VeriTimeTask:
-    """Return a row's task, of the kind its source task makes it.
+def row_task(row: Row, record: Record) -> AnswerTask | ClassificationTask | ScalarPredictionTask:
+    """Return a row's task, built by the function of its source task.
 
     Returns:
         The task, on the Record of the row's series.
     """
-    return _KINDS[row.task](row, record)
+    match row.task:
+        case SourceTask.ANOMALY_DETECTION:
+            return anomaly_detection_task(row, record)
+        case SourceTask.SCENARIO_ATTRIBUTION:
+            return scenario_attribution_task(row, record)
+        case SourceTask.INFERENTIAL_CALCULATION:
+            return inferential_calculation_task(row, record)
+        case SourceTask.CTU | SourceTask.ECG | SourceTask.EMG | SourceTask.RCW:
+            return knowledge_task(row, record)

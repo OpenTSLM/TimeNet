@@ -184,8 +184,9 @@ def _output(dataset) -> dict:
                 signal.spec.unit_value,
             ),
         }
-        # Only VeriTime's fields: the release names no subject.
-        assert set(record.metadata) == {"kind", "rows"}
+        # VeriTime's fields, and the shared subject_id stored as null: the release names no subject.
+        assert set(record.metadata) == {"subject_id", "kind", "rows"}
+        assert record.metadata["subject_id"] is None
         assert str(signal.to_numpy().dtype) == "float64"
     for task in dataset.iter_tasks():
         tasks[_row_key(task)] = {
@@ -286,6 +287,28 @@ def test_rationale_earns_the_authors_final_answer_reward():
         rationale = task.rationale.read()
         assert rationale == _fixture_rows(part)[index]["cot"]
         assert _authors_final_answer_reward(rationale, _fixture_rows(part)[index]["label"]) == pytest.approx(5.0)
+
+
+def test_each_task_method_selects_its_rows():
+    loader = VeriTimeDatasetLoader.parse_from(_refs(), inventory=_FIXTURE_INVENTORY)
+    methods = {
+        "Anomaly detection": (loader.anomaly_detection_tasks, ClassificationTask),
+        "Scenario attribution": (loader.scenario_attribution_tasks, AnswerTask),
+        "Inferential calculation": (loader.inferential_calculation_tasks, ScalarPredictionTask),
+        "CTU": (loader.ctu_tasks, ClassificationTask),
+        "ECG": (loader.ecg_tasks, ClassificationTask),
+        "EMG": (loader.emg_tasks, ClassificationTask),
+        "RCW": (loader.rcw_tasks, ClassificationTask),
+    }
+    selected = []
+    for source_task, (method, task_type) in methods.items():
+        tasks = list(method())
+        assert all(type(task) is task_type and task.metadata["source_task"] == source_task for task in tasks)
+        selected.extend(_row_key(task) for task in tasks)
+    # tasks() keeps the file order and holds exactly the tasks of the seven methods.
+    in_file_order = [_row_key(task) for task in loader.tasks()]
+    assert in_file_order == [(part.value, index) for part in Part for index in range(len(_fixture_rows(part)))]
+    assert sorted(selected) == sorted(in_file_order)
 
 
 def test_declares_pinned_source_files():
