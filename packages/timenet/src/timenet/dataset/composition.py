@@ -1,7 +1,7 @@
 """Copy selected parent Records, Signals, and tasks into a child dataset, sharing their stored values."""
 
 from collections import deque
-from collections.abc import Iterable, Iterator
+from collections.abc import Container, Hashable, Iterable, Iterator
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, TypeAlias
@@ -17,6 +17,7 @@ from timenet.types import (
     StepSpan,
     Task,
     TimeInterval,
+    TimePoint,
     TimeSpan,
     TSCorrespondenceTask,
 )
@@ -171,6 +172,9 @@ class _Importer:
         """The child copy of each parent Record that this call found or copied, by parent ID."""
         self.signals: dict[EntityId, Signal] = {}
         """The child copy of each parent Signal that this call found or copied, by parent ID."""
+        self.sources: dict[int, Source] = {}
+        """The child copy of each parent Source that this call found or copied, keyed by the ``id()`` of
+        the parent Source."""
         self.annotations: dict[int, Annotation] = {}
         """The copy of each parent annotation that this call copied, keyed by the ``id()`` of the parent
         annotation."""
@@ -224,6 +228,7 @@ class _Importer:
                 raise
         self.records[original.id] = target
         self.signals.update(copied.held)
+        self.sources.update(copied.pairs)
         imports = self.child._import_state.import_map
         imports[self.alias, ObjectKind.RECORD, original.id] = target.id
         for parent_id, signal in copied.held.items():
@@ -298,7 +303,11 @@ class _RecordCopy:
         """The ``id()`` of each Signal copy in ``held``, which tells the imported Signals apart from the
         Signals that the child added."""
         self.pairs = _pair_sources(original, target, self.held)
-        """The copy of each parent Source that the copy of the Record holds, keyed by the ``id()`` of the parent Source."""
+        """The copy of each parent Source that the copy of the Record holds, keyed by the ``id()`` of the parent Source.
+
+        It starts with the copies that the call finds through the Signals of the copy. The merge adds
+        each copy that it finds by name or makes.
+        """
 
     def merge(self, *, new: bool) -> None:
         """Copy the wanted Sources and Signals into the copy of the Record, then the annotations that they bring."""
@@ -340,9 +349,11 @@ class _RecordCopy:
             if copy is None:
                 copy = unmatched.pop(original.name, None)
             if copy is not None:
+                self.pairs[id(original)] = copy
                 grew = self._merge_source(original, copy, new=False) or grew
             elif self._brings(original):
                 copy = Source(name=original.name, metadata=deepcopy(original.metadata))
+                self.pairs[id(original)] = copy
                 grew = self._merge_source(original, copy, new=True) or grew
                 added.append(copy)
         if added:
@@ -494,7 +505,7 @@ def _tasks_to_copy(
     alias: ParentAlias,
     parent: "TimeFReader",
     task_ids: tuple[EntityId, ...],
-) -> tuple[dict[EntityId, Task], dict[EntityId, Task], dict[EntityId, Record]]:
+) -> tuple[dict[EntityId, Task], dict[EntityId, Task], dict[EntityId, Record], tuple[Annotation, ...]]:
     """Sort the selected parent tasks and their ``from_tasks`` into tasks to copy and copies in the child.
 
     If the child holds a copy of a selected task, the call does not read that task from the parent.
@@ -503,7 +514,8 @@ def _tasks_to_copy(
 
     Returns:
         The parent tasks to copy and the copy in the child of each other task, both by parent ID.
-        Also every parent Record that the read of the tasks built, by parent ID.
+        Also every parent Record that the read of the tasks built, by parent ID, and the occurrences
+        of the parent dataset itself that the tasks reference.
     """
 
     def held_copy(identity: EntityId) -> Task | None:
@@ -512,7 +524,9 @@ def _tasks_to_copy(
 
     held = {identity: copy for identity in task_ids if (copy := held_copy(identity)) is not None}
     unread = tuple(identity for identity in task_ids if identity not in held)
-    read, built = parent._read_tasks_with_records(unread, load=LoadPlan.ALL_LAZY) if unread else ({}, {})
+    read, built, on_dataset = (
+        parent._read_tasks_with_records(unread, load=LoadPlan.ALL_LAZY) if unread else ({}, {}, ())
+    )
     pending: dict[EntityId, Task] = {}
     queue = deque(read.values())
     while queue:
@@ -525,7 +539,7 @@ def _tasks_to_copy(
         else:
             pending[task.id] = task
             queue.extend(task.from_tasks)
-    return pending, held, built
+    return pending, held, built, on_dataset
 
 
 def _check_candidates(tasks: Iterable[Task], release: DatasetRef) -> None:
@@ -540,25 +554,6 @@ def _check_candidates(tasks: Iterable[Task], release: DatasetRef) -> None:
                 f"TSCorrespondenceTask {task.id!r} of {release} has no candidate_records, so its candidates are "
                 "every Record of the parent; only a task with explicit candidate_records can be imported"
             )
-
-
-def _check_annotation_references(tasks: Iterable[Task], release: DatasetRef) -> None:
-    """Reject a task that references annotations.
-
-    Annotations have no IDs, so the import map cannot find their copies. The ``annotations`` of the
-    task itself are not references. The task copy holds copies of them.
-
-    Raises:
-        TimeFValidationError: If a field of a task, other than its own ``annotations``, holds an
-            annotation.
-    """
-    for task in tasks:
-        for name, value in _task_fields(task):
-            if name != "annotations" and any(isinstance(item, Annotation) for item in _leaves(value)):
-                raise TimeFValidationError(
-                    f"{type(task).__name__} {task.id!r} of {release} references annotations in {name}. "
-                    "An import copies only tasks that reference no annotations."
-                )
 
 
 def _task_dependencies(tasks: Iterable[Task]) -> tuple[dict[EntityId, Record], dict[EntityId, Signal]]:
@@ -582,6 +577,52 @@ def _task_dependencies(tasks: Iterable[Task]) -> tuple[dict[EntityId, Record], d
     return records, signals
 
 
+def _annotation_holders(
+    tasks: Iterable[Task], built: dict[EntityId, Record], whole: Container[EntityId]
+) -> tuple[EntityId, ...]:
+    """Return the parent IDs of the other Records that hold an annotation that a task references.
+
+    A task references annotations on the parent dataset and on the Records that it references. The
+    Records that it names come whole. A Record that it references only through a Signal target comes
+    as a partial copy, and that copy can lack the owner of the annotation. So such a Record comes
+    whole when it holds an annotation that a task references.
+
+    Args:
+        tasks: The parent tasks to copy.
+        built: The parent Records that the read of the tasks built, by parent ID.
+        whole: The parent IDs of the Records that come whole already.
+
+    Returns:
+        The parent IDs, each once.
+    """
+    referenced = {
+        id(annotation) for task in tasks for annotation in (*task.input_annotations, *task.target_annotations)
+    }
+    if not referenced:
+        return ()
+    return tuple(
+        identity
+        for identity, record in built.items()
+        if identity not in whole and any(id(annotation) in referenced for annotation in record.walk_annotations())
+    )
+
+
+def _bucket(annotation: Annotation) -> tuple[str, TimePoint | TimeInterval | None, str | None]:
+    """Return the key, the span, and the source of an annotation, which group the annotations of an owner."""
+    return annotation.key, annotation.span, annotation.source
+
+
+def _same_occurrence(annotation: Annotation, original: Annotation) -> bool:
+    """Return whether an annotation in the group of a parent annotation is the same occurrence.
+
+    The group compares the key, the span, the source, and the content. This call compares the fields
+    of one attachment: the confidence and the occurrence metadata.
+    """
+    return (
+        annotation.confidence == original.confidence and annotation.occurrence_metadata == original.occurrence_metadata
+    )
+
+
 def _holds_reference(value: object) -> bool:
     """Return whether a value is, or holds at any depth, an object of a dataset or a span.
 
@@ -597,14 +638,64 @@ def _holds_reference(value: object) -> bool:
     return False
 
 
+_Group: TypeAlias = dict[tuple[Hashable, ...], list[Annotation]]
+"""The annotations of an owner with one key, span, and source, by their content key."""
+
+
+def _take(group: _Group, original: Annotation) -> Annotation | None:
+    """Remove and return the first annotation of a group that is the same occurrence as ``original``.
+
+    Returns:
+        The annotation, or ``None`` if the group holds no such annotation.
+    """
+    entries = group.get(original._content_key)
+    index = next((index for index, held in enumerate(entries or ()) if _same_occurrence(held, original)), None)
+    return None if entries is None or index is None else entries.pop(index)
+
+
+def _set_annotations(owner: Record | Source | Signal, annotations: tuple[Annotation, ...]) -> None:
+    """Replace the annotations of a Record, Source, or Signal."""
+    if isinstance(owner, Signal):
+        # A Signal is frozen. Signal.annotate changes its annotations the same way.
+        object.__setattr__(owner, "annotations", annotations)  # noqa: PLC2801
+    else:
+        owner.annotations = annotations
+
+
 class _TaskCopy:
     """Copy parent tasks into one child, and point each reference at the copy of the object in the child.
 
-    A reference to a Record or Signal points at the copy that the call found or made.
+    A reference to a Record or Signal points at the copy that the call found or made. A reference to
+    an annotation points at the copy on the copy of its owner. For an annotation of the parent
+    dataset, it points at the copy on the child dataset.
     """
 
-    def __init__(self, importer: _Importer) -> None:
+    def __init__(self, importer: _Importer, originals: Iterable[Record], on_dataset: Iterable[Annotation]) -> None:
         self.importer = importer
+        self.owners: dict[int, tuple[Record | Source | Signal, Record]] = {
+            id(annotation): (owner, record)
+            for record in originals
+            for owner in (record, *record.walk_sources(), *record.walk_signals())
+            for annotation in owner.annotations
+        }
+        """The parent Record, Source, or Signal that holds each annotation of the Records that the call
+        imports, with its Record, keyed by the ``id()`` of the annotation. The read of the tasks built
+        these objects."""
+        self.on_dataset = {id(annotation) for annotation in on_dataset}
+        """The ``id()`` of each occurrence of the parent dataset itself that the read of the tasks built."""
+        self.made = {id(copy) for copy in importer.annotations.values()}
+        """The ``id()`` of each annotation copy that this call made. Each such copy belongs to its own
+        parent annotation."""
+        self.resolved: dict[int, Annotation] = {}
+        """The copy from an earlier call of each parent annotation that a task references, keyed by the
+        ``id()`` of the parent annotation."""
+        self.filed: dict[int, dict[tuple[Hashable, ...], _Group]] = {}
+        """The annotations of each owner copy that no reference took yet, grouped by :func:`_bucket` and
+        then by content key. The key is the ``id()`` of the owner copy, or the ``id()`` of the child
+        for the annotations of the child dataset itself."""
+        self.saved: dict[int, tuple[Record | Source | Signal, tuple[Annotation, ...]]] = {}
+        """Each owner copy that the call attached an annotation to, with the annotations that it held
+        before."""
         self.task: Task | None = None
         """The parent task that the call copies now."""
 
@@ -612,7 +703,8 @@ class _TaskCopy:
         """Copy and register the pending tasks, then add each copy to the import map.
 
         The copies register together, all or none. Each copy gets the next task ID of the child. If
-        the registration fails, the map does not change, so the child holds no task of this call.
+        the registration fails, the call removes the annotations that it attached for the copies,
+        and the map does not change. So the child holds no task of this call.
 
         Args:
             pending: The parent tasks to copy, by parent ID.
@@ -622,12 +714,19 @@ class _TaskCopy:
             The copy in the child of every task, pending or held, by parent ID.
         """
         child = self.importer.child
-        copies = {identity: self._copy(task) for identity, task in pending.items()}
-        found = held | copies
-        for identity, copy in copies.items():
-            copy.from_tasks = tuple(found[task.id] for task in pending[identity].from_tasks)
-        if copies:
-            child.add_tasks(tasks=copies.values())
+        dataset_annotations = list(child._annotations)
+        try:
+            copies = {identity: self._copy(task) for identity, task in pending.items()}
+            found = held | copies
+            for identity, copy in copies.items():
+                copy.from_tasks = tuple(found[task.id] for task in pending[identity].from_tasks)
+            if copies:
+                child.add_tasks(tasks=copies.values())
+        except BaseException:
+            child._annotations = dataset_annotations
+            for owner, annotations in self.saved.values():
+                _set_annotations(owner, annotations)
+            raise
         for identity, copy in copies.items():
             child._import_state.import_map[self.importer.alias, ObjectKind.TASK, identity] = copy.id
         return found
@@ -653,7 +752,7 @@ class _TaskCopy:
         return type(original)(**values)
 
     def _remap(self, name: str, value: object) -> object:
-        """Return the value of a task field, with each Record, Signal, and span pointed at the child.
+        """Return the value of a task field, with each Record, Signal, annotation, and span pointed at the child.
 
         Returns:
             The value for the copy. The call copies a value that references nothing.
@@ -668,6 +767,8 @@ class _TaskCopy:
             return self.importer.records[value.id]
         if isinstance(value, Signal):
             return self.importer.signals[value.id]
+        if isinstance(value, Annotation):
+            return self._annotation(value)
         if isinstance(value, Span):
             return self._span(value)
         if _holds_reference(value):
@@ -689,6 +790,112 @@ class _TaskCopy:
         if isinstance(span, TimeSpan) and span.time_series is not None:
             return replace(span, time_series=tuple(signals[signal.id] for signal in span.time_series))
         return span
+
+    def _annotation(self, original: Annotation) -> Annotation:
+        """Return the child's copy of a parent annotation that a task references.
+
+        The owner is the Record, Source, or Signal that holds the annotation. The lookup uses the first
+        of these steps that finds a copy:
+
+        1. The copy that this call already made or returned for this annotation.
+        2. An annotation on the child's copy of the owner with the same key, span, source, content,
+           confidence, and occurrence metadata. Each such match serves one reference only, so two
+           identical annotations that one call references get two copies. Separate calls can return
+           the same match.
+        3. A new copy, attached to the owner's copy. This happens when the child removed or changed
+           the annotation. A changed annotation stays next to the new copy.
+
+        An annotation of the parent dataset itself goes to the child dataset, not to an owner.
+
+        Returns:
+            The copy.
+
+        Raises:
+            TimeFValidationError: If the annotation lies neither on a Record the call imports nor on
+                the parent dataset.
+        """
+        copy = self.importer.annotations.get(id(original))
+        if copy is None:
+            copy = self.resolved.get(id(original))
+        if copy is not None:
+            return copy
+        owned = self.owners.get(id(original))
+        if owned is None and id(original) not in self.on_dataset:
+            raise TimeFValidationError(
+                f"{type(self.task).__name__} references annotation {original.key!r}, which lies on no Record "
+                "this import copies nor on the parent dataset"
+            )
+        owner = None if owned is None else self._owner_copy(*owned, original)
+        copy = _take(self._filed(owner).get(_bucket(original), {}), original)
+        if copy is not None:
+            self.resolved[id(original)] = copy
+            return copy
+        return self._attach(original, owner)
+
+    def _attach(self, original: Annotation, owner: Record | Source | Signal | None) -> Annotation:
+        """Attach a copy of a parent annotation to the copy of its owner, or to the child dataset.
+
+        An annotation of the parent dataset itself goes to the child dataset.
+
+        Returns:
+            The copy. It is an occurrence of its own, next to any identical occurrence on the copy of
+            the owner.
+        """
+        copy = self.importer.copy_annotation(original)
+        self.made.add(id(copy))
+        if owner is None:
+            self.importer.child._annotations.append(copy)
+        else:
+            self.saved.setdefault(id(owner), (owner, owner.annotations))
+            _set_annotations(owner, (*owner.annotations, copy))
+        return copy
+
+    def _filed(self, owner: Record | Source | Signal | None) -> dict[tuple[Hashable, ...], _Group]:
+        """Return the annotations of the copy of an owner, grouped at the first reference of the call to it.
+
+        The groups leave out each copy that this call made. Such a copy belongs to its own parent
+        annotation, so no other reference takes it.
+
+        Args:
+            owner: The copy of the owner, or ``None`` for the child dataset.
+
+        Returns:
+            The annotations that no reference took yet, grouped by :func:`_bucket` and then by content key.
+        """
+        held = self.importer.child._annotations if owner is None else owner.annotations
+        key = id(self.importer.child) if owner is None else id(owner)
+        filed = self.filed.get(key)
+        if filed is None:
+            filed = self.filed[key] = {}
+            for annotation in held:
+                if id(annotation) not in self.made:
+                    group = filed.setdefault(_bucket(annotation), {})
+                    group.setdefault(annotation._content_key, []).append(annotation)
+        return filed
+
+    def _owner_copy(
+        self, owner: Record | Source | Signal, record: Record, annotation: Annotation
+    ) -> Record | Source | Signal:
+        """Return the child's copy of the parent Record, Source, or Signal that holds an annotation.
+
+        Returns:
+            The copy.
+
+        Raises:
+            TimeFValidationError: If the copy of the Record of the annotation holds no copy of its
+                Source.
+        """
+        if isinstance(owner, Record):
+            return self.importer.records[owner.id]
+        if isinstance(owner, Signal):
+            return self.importer.signals[owner.id]
+        copy = self.importer.sources.get(id(owner))
+        if copy is None:
+            raise TimeFValidationError(
+                f"a task references annotation {annotation.key!r} of the Source {owner.name!r} of Record "
+                f"{record.id!r}, which the child's copy of that Record holds no copy of"
+            )
+        return copy
 
 
 def _parent_ids(selection: str, ids: Iterable[EntityId]) -> tuple[EntityId, ...]:
@@ -818,8 +1025,8 @@ def import_from(  # noqa: PLR0913 - one argument per selection
         TimeFValidationError: If the parent is not a declared parent under ``alias``, the alias
             imports another release already, a selection is not a collection of parent IDs,
             ``tasks`` is given for a child that streams its tasks, a task to copy is a
-            ``TSCorrespondenceTask`` without ``candidate_records`` or references an annotation, or
-            ``add_tasks`` rejects the task copies.
+            ``TSCorrespondenceTask`` without ``candidate_records``, or ``add_tasks`` rejects the
+            task copies.
         TimeFNotFoundError: If a selected ID names no parent object. The child does not change.
     """  # noqa: DOC502 - raised by the helpers and the parent's reader
     record_ids = _parent_ids("records", records)
@@ -834,13 +1041,15 @@ def import_from(  # noqa: PLR0913 - one argument per selection
     alias = _resolve_alias(child, release, alias)
     importer = _Importer(child, alias)
     # The parent tasks to copy with the tasks that they derive from, the task copies that the child
-    # holds, and the Records that the read of the tasks built. The reads load no stored values. The
-    # import loads the values that ``load`` names on the copies.
-    pending, held, built = _tasks_to_copy(child, alias, parent, task_ids) if task_ids else ({}, {}, {})
+    # holds, and the Records that the read of the tasks built. These Records hold every annotation
+    # that the tasks reference. The reads load no stored values. The import loads the values that
+    # ``load`` names on the copies.
+    pending, held, built, on_dataset = _tasks_to_copy(child, alias, parent, task_ids) if task_ids else ({}, {}, {}, ())
     _check_candidates(pending.values(), release)
-    _check_annotation_references(pending.values(), release)
     task_records, task_signals = _task_dependencies(pending.values())
-    whole = (*record_ids, *task_records)
+    # A Record that holds a Signal target and an annotation that a task references comes whole, so
+    # its copy holds the owner of the annotation.
+    whole = (*record_ids, *task_records, *_annotation_holders(pending.values(), built, task_records))
     selected = _read_records(parent, whole, (*signal_ids, *task_signals), built)
     importer.origins = _held_origins(importer, parent, tuple(original.id for original, _ in selected))
     # Every read succeeded. Record the parent first, so that the copies below always have its card,
@@ -848,7 +1057,11 @@ def import_from(  # noqa: PLR0913 - one argument per selection
     _record_parent(child, alias, parent)
     for original, wanted in selected:
         importer.import_record(original, wanted)
-    copies = _TaskCopy(importer).copy_tasks(pending, held) if task_ids else {}
+    copies = (
+        _TaskCopy(importer, (original for original, _ in selected), on_dataset).copy_tasks(pending, held)
+        if task_ids
+        else {}
+    )
     # The load reaches each Record selected or needed whole, each Signal selected or needed alone, each
     # annotation that the call copied, and each task copy. So the other Signals of a partial copy stay
     # as they are.
