@@ -22,6 +22,7 @@ from timenet.types import (
     ObjectKind,
     Split,
     Task,
+    TSEditingTask,
     Version,
 )
 from timenet.types.parent_dataset_card import ParentDatasetCard
@@ -208,6 +209,130 @@ def test_get_takes_only_positive_int64_ids(reader, objects):
     record = reader.get(Record, np.int64(objects.record0.id))
     assert type(record.id) is int
     assert record.id == objects.record0.id
+
+
+def _with_a_signal_target_outside_the_inputs() -> tuple[TimeFDataset, Task, Signal]:
+    """Return ``make_dataset()`` with an editing task whose input is record0 and whose target is record1's long Signal."""
+    dataset = make_dataset()
+    record0, record1, _ = dataset.records
+    target = record1.signals[1]
+    task = dataset.add_task(task=TSEditingTask(inputs=(record0,), targets=(target,)))
+    return dataset, task, target
+
+
+def _only_target(task: Task) -> Signal:
+    assert task.targets is not None
+    (signal,) = task.targets
+    assert isinstance(signal, Signal)
+    return signal
+
+
+@pytest.mark.parametrize("read", ["get", "get_many"])
+def test_a_task_read_by_id_builds_the_record_of_a_signal_target_outside_its_inputs(tmp_path, read):
+    dataset, expected, target = _with_a_signal_target_outside_the_inputs()
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        task = reader.get(Task, expected.id) if read == "get" else reader.get_many(TSEditingTask, [expected.id])[0]
+        signal = _only_target(task)
+        assert signal.id == target.id
+        assert signal.to_arrow().equals(target.to_arrow())
+
+
+@pytest.mark.parametrize("given", [True, False], ids=["given-records", "every-task"])
+@pytest.mark.parametrize("read", ["read_tasks", "iter_tasks"])
+def test_a_task_read_builds_the_record_of_a_signal_target_outside_its_inputs(tmp_path, read, given):
+    dataset, expected, target = _with_a_signal_target_outside_the_inputs()
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        inputs = tuple(reader.iter_records((dataset.records[0].id,))) if given else None
+        (task,) = (task for task in getattr(reader, read)(inputs=inputs) if task.id == expected.id)
+        signal = _only_target(task)
+        assert signal.id == target.id
+        assert signal.to_arrow().equals(target.to_arrow())
+        # A given Record stays the input; the target's Record is built beside it.
+        assert inputs is None or task.inputs[0] is inputs[0]
+
+
+def _with_annotations_on_the_record_of_a_signal_target() -> tuple[TimeFDataset, dict[str, Task]]:
+    """Return ``make_dataset()`` with one editing task for each owner of the annotation that it references.
+
+    Each task has record0 as its input and record1's long Signal as its target. So it references
+    record1 through the Signal target only. Its input annotation lies on record1 itself, on its
+    Source, or on its long Signal.
+
+    Returns:
+        The dataset, and the task of each owner: ``record``, ``source``, and ``signal``.
+    """
+    dataset = make_dataset()
+    record0, record1, _ = dataset.records
+    (source,) = record1.sources
+    target = record1.signals[1]
+    tasks: dict[str, Task] = {}
+    for owner, annotated in {"record": record1, "source": source, "signal": target}.items():
+        context = annotated.annotate(Annotation(key="context", value=owner))
+        task = TSEditingTask(inputs=(record0,), targets=(target,), input_annotations=(context,))
+        tasks[owner] = dataset.add_task(task=task)
+    return dataset, tasks
+
+
+@pytest.fixture
+def owners_release(tmp_path) -> tuple[Path, TimeFDataset, dict[str, Task]]:
+    """Write the dataset of ``_with_annotations_on_the_record_of_a_signal_target()``.
+
+    Returns:
+        The release directory, the dataset, and the task of each owner.
+    """
+    dataset, tasks = _with_annotations_on_the_record_of_a_signal_target()
+    return _write(tmp_path, dataset), dataset, tasks
+
+
+_READS = {
+    "read": lambda reader, _inputs, _task_ids: reader.read().tasks,
+    "get": lambda reader, _inputs, task_ids: tuple(reader.get(Task, task_id) for task_id in task_ids),
+    "get_many": lambda reader, _inputs, task_ids: reader.get_many(TSEditingTask, task_ids),
+    "read_tasks": lambda reader, inputs, _task_ids: reader.read_tasks(inputs=inputs),
+    "iter_tasks": lambda reader, inputs, _task_ids: tuple(reader.iter_tasks(inputs=inputs)),
+}
+
+
+# Only read_tasks and iter_tasks take inputs, so only they run with given Records.
+@pytest.mark.parametrize(
+    ("read", "given"),
+    [(read, False) for read in _READS] + [("read_tasks", True), ("iter_tasks", True)],
+    ids=[*_READS, "read_tasks-given-records", "iter_tasks-given-records"],
+)
+def test_a_task_read_resolves_an_annotation_on_the_record_of_a_signal_target(owners_release, read, given):
+    path, dataset, expected = owners_release
+    record0 = dataset.records[0]
+    with TimeFReader(open_local_version(path)) as reader:
+        inputs = tuple(reader.iter_records((record0.id,))) if given else None
+        found = {task.id: task for task in _READS[read](reader, inputs, [task.id for task in expected.values()])}
+    for owner, wanted in expected.items():
+        task = found[wanted.id]
+        assert (owner, task.input_annotations) == (owner, wanted.input_annotations)
+        assert [record.id for record in task.inputs] == [record0.id]
+        assert _only_target(task).id == _only_target(wanted).id
+        assert inputs is None or task.inputs[0] is inputs[0]
+
+
+def test_a_task_read_looks_up_the_record_of_a_signal_target_once_and_only_when_unbuilt(tmp_path, monkeypatch):
+    dataset, tasks = _with_annotations_on_the_record_of_a_signal_target()
+    edit = tasks["signal"]
+    record0, record1, _ = dataset.records
+    lookups: list[list[int]] = []
+    original = DuckDBControlReader._record_ids_of_signals
+
+    def spy(self, ids):
+        lookups.append(sorted(ids))
+        return original(self, ids)
+
+    monkeypatch.setattr(DuckDBControlReader, "_record_ids_of_signals", spy)
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        # A read that builds every Record looks nothing up, nor does one given the Records.
+        reader.read()
+        reader.read_tasks(inputs=tuple(reader.iter_records((record0.id, record1.id))))
+        assert lookups == []
+        # One lookup builds record1, which also holds the annotation, so the annotation needs no other.
+        reader.get(Task, edit.id)
+        assert lookups == [[record1.signals[1].id]]
 
 
 def test_read_tasks_and_iter_tasks_take_inputs_by_keyword_only(reader, objects):
