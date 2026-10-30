@@ -6,7 +6,8 @@ import shutil
 import pyarrow.fs as pafs
 import pytest
 
-from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetFileError
+from timenet.format.checksums import file_checksum
 from timenet.manifest import PayloadSource
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.registry.dependencies import open_cached_or_remote, prepare_local_copy
@@ -114,7 +115,7 @@ def test_preparation_caches_only_verified_complete_releases(registry_root, tmp_p
     if corruption is not None:
         damaged = expected[:-1] if corruption == "truncated" else bytes([expected[0] ^ 1]) + expected[1:]
         source_file.write_bytes(damaged)
-        with pytest.raises(TimeFFormatError, match="checksum or size mismatch"):
+        with pytest.raises(TimeFFormatError, match=r"has ([\d,]+ bytes|sha256:\w+), expected"):
             prepare_local_copy(cache, reference, fetch_from=registry)
         assert not destination.exists()
         assert not (directory / "manifest.json").exists()
@@ -130,6 +131,30 @@ def test_preparation_caches_only_verified_complete_releases(registry_root, tmp_p
     cached = prepare_local_copy(cache, reference, fetch_from=registry)
     assert cached.resolve_file_path(part.path) == str(destination)
     assert destination.read_bytes() == expected
+
+
+@pytest.mark.parametrize("corruption", ["truncated", "checksum"])
+def test_a_corrupted_download_names_the_file_and_what_differs(registry_root, tmp_path, corruption):
+    registry = LocalRegistry(registry_root)
+    reference = DatasetRef.parse("demo/ecg@2.0.0")
+    part = registry.get_manifest(reference.dataset_id, "2.0.0").files.time_series[0]
+    source_file = _version_dir(registry_root) / part.path
+    original = source_file.read_bytes()
+    source_file.write_bytes(original[:-1] if corruption == "truncated" else bytes([original[0] ^ 1]) + original[1:])
+
+    with pytest.raises(TimeNetFileError) as caught:
+        prepare_local_copy(tmp_path / "cache", reference, fetch_from=registry)
+
+    error = caught.value
+    # A caller that handles format errors still catches it.
+    assert isinstance(error, TimeFFormatError)
+    # The size is compared first, so a truncated file names its size and a changed one its checksum.
+    if corruption == "truncated":
+        expected, actual = f"{part.size:,} bytes", f"{part.size - 1:,} bytes"
+    else:
+        expected, actual = part.checksum, file_checksum(source_file)
+    assert (error.release, error.path, error.expected, error.actual) == (reference, part.path, expected, actual)
+    assert error.owner == f"download of demo/ecg@2.0.0 from {registry}"
 
 
 def test_preparation_needs_only_the_direct_payload_sources(registry_root, tmp_path):

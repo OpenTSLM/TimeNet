@@ -13,7 +13,13 @@ import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.composition import ImportMap
-from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFValidationError
+from timenet.errors import (
+    TimeFFormatError,
+    TimeFNotFoundError,
+    TimeFValidationError,
+    TimeNetFileError,
+    TimeNetMissingParentError,
+)
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
 from timenet.format.control_reader import TASK_BATCH_SIZE, DuckDBControlReader
@@ -129,8 +135,16 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
             FileNotFoundError: If ``path`` has no manifest.
             TimeFValidationError: If the version has payload sources, is not stored as
                 ``<root>/<org>/<name>/<version>``, and no ``sources_root`` is given.
+            TimeNetMissingParentError: If a payload source is not under the sources root.
         """  # noqa: DOC502 - raised by open_local_version
-        return cls(open_local_version(path, sources_root=sources_root))
+        try:
+            return cls(open_local_version(path, sources_root=sources_root))
+        except TimeNetMissingParentError as error:
+            error.hint = (
+                "Pass sources_root= with the registry root that holds it, or download the release with "
+                "its payload sources through TimeNet.download()."
+            )
+            raise
 
     def __getstate__(self) -> _ReaderState:
         """Return picklable state without open connections or decoded caches."""
@@ -181,11 +195,14 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
         These are the artifacts its manifest lists, and the files it pins on each payload source.
 
         Raises:
-            TimeFFormatError: If a file is missing or does not match its manifest entry or pin.
+            TimeNetFileError: If a file is missing, or its size or checksum differs from the manifest
+                record that describes it: its own record, or the pin of a payload source file.
         """  # noqa: DOC502 - raised by _verify_files
-        _verify_files(self._version, self._manifest.files.all_files())
+        release = DatasetRef(dataset_id=self._manifest.dataset_id, version=self._manifest.metadata.dataset_version)
+        _verify_files(self._version, self._manifest.files.all_files(), release=release, owner=str(release))
         for key, pinned in self._manifest.payload_sources.items():
-            _verify_files(self._version.resolve_payload_source(key), pinned.files, source=pinned.release)
+            owner = f"payload source {pinned.release} of {release}"
+            _verify_files(self._version.resolve_payload_source(key), pinned.files, release=pinned.release, owner=owner)
 
     @property
     def metadata(self) -> DatasetMetadata:
@@ -820,34 +837,31 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
 
 
-def _verify_files(version: DatasetVersion, parts: Iterable[FilePart], *, source: DatasetRef | None = None) -> None:
+def _verify_files(version: DatasetVersion, parts: Iterable[FilePart], *, release: DatasetRef, owner: str) -> None:
     """Hash each file of a release and compare it with its manifest record, or its pin.
 
     Args:
         version: The release that stores the files.
         parts: The records to check, which name each file relative to ``version``.
-        source: The payload source whose files the records pin, or ``None`` for the release's own.
+        release: The release that stores the files, for the error.
+        owner: The release, or the payload source, that the files belong to, for the error message.
 
     Raises:
-        TimeFFormatError: If a file is missing, or its size or checksum differs from its record.
+        TimeNetFileError: If a file is missing, or its size or checksum differs from its record.
     """
-    of, record = ("", "manifest says") if source is None else (f" of payload source {source}", "pinned")
     for part in sorted(parts, key=lambda item: item.path):
+        expected_size = f"{part.size:,} bytes"
         try:
             handle = version.filesystem.open_input_file(version.resolve_file_path(part.path))
         except FileNotFoundError as exc:
-            raise TimeFFormatError(f"manifest lists a missing file{of}: {part.path}") from exc
+            raise TimeNetFileError(release, owner, part.path, expected_size, None) from exc
         with handle:
             actual_size = handle.size()
             if actual_size != part.size:
-                raise TimeFFormatError(
-                    f"size mismatch for {part.path}{of}: {record} {part.size}, file is {actual_size}"
-                )
+                raise TimeNetFileError(release, owner, part.path, expected_size, f"{actual_size:,} bytes")
             actual_checksum = stream_checksum(handle)
         if actual_checksum != part.checksum:
-            raise TimeFFormatError(
-                f"checksum mismatch for {part.path}{of}: {record} {part.checksum}, file is {actual_checksum}"
-            )
+            raise TimeNetFileError(release, owner, part.path, part.checksum, actual_checksum)
 
 
 def _object_kind(kind: object) -> ObjectKind:
