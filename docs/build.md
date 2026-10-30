@@ -121,7 +121,9 @@ For each release, the build uses the first of these steps that works:
 3. Build the release from its own connector, if `--build-parents` is set.
 
 If no step works, the build stops before any download and names the missing release. Parents come
-before their children.
+before their children. If the output already holds the requested version and `--force` is not set,
+the build prepares only the missing payload sources of that version, in the same order. No connector
+runs.
 
 ```bash
 timenet-build build org/name --out .timenet-registry \
