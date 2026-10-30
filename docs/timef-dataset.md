@@ -265,3 +265,88 @@ values plane. See [TimeF format](timef-format.md) and [TimeFWriter](timef-writer
 layout.
 
 See the [API reference for `timenet.dataset`](api/dataset.md) for the full symbol listing.
+
+## Importing from a parent
+
+A child dataset copies objects from a parent release with `import_from()`. A parent release is one
+version of another dataset. The child must declare the parent in `metadata.parents`, under a parent
+alias. A parent alias is the name that the child gives the parent.
+
+```python
+from timenet.reader import TimeFReader
+
+with TimeFReader.open(parent_path) as parent:
+    imported = child.import_from(parent, records=[12, 13])
+copy = imported.records[12]
+```
+
+The unit of import is an object with an ID. Records, Signals, and tasks have IDs. An import makes
+sure that each selected object, and each object that it needs, is in the child. If the child holds a
+copy of the object, the import uses that copy as it is, with the edits of the child. Otherwise, the
+import copies the object under a new ID. This includes an object that the child removed.
+
+Sources and annotations have no IDs. They come only with the object that holds them. An import never
+adds, restores, or changes them later.
+
+### The parent
+
+Pass a reader of the parent release. The child must declare that exact release. If several aliases
+declare it, pass `alias=` to choose one. The child imports a release under one alias only, and an
+alias imports one release only.
+
+Each import records the parent in the child. `parent_cards` holds a copy of the card of each
+parent, by parent alias. `lineage` holds the card of each ancestor release. An ancestor release is a
+parent, a parent of a parent, and so on.
+
+An import does not change the card of the child. Each card keeps the `access` level and the
+`access_url` that its author declared. A parent can be credentialed, and the card of its child can
+still say `open`. The effective access level of a dataset is the strictest level of its own card and
+of the cards in its `lineage`. A user must have this level of access to use the data of the dataset.
+
+`timenet info` shows the effective access level and the page of each card that requires access.
+`effective_access()` and `access_requirements()` in `timenet.types.access` return the same
+information.
+
+### Records
+
+`records=` copies each Record whole: its Sources, its Signals, and the annotations on each of them.
+Each copy is a Record of the child. The copy and its Signals get new IDs in the child. The copy has
+its own metadata and its own annotations, so an edit of the copy does not change the parent.
+
+`records=` does not copy the annotations of the parent dataset itself. If the child holds a copy of
+a selected Record, the import returns that copy as it is.
+
+Copies keep the time axes of the parent. If Records share a time origin in the parent, their copies
+share one time origin in the child. This is also true when separate imports copy them.
+
+A copy does not duplicate the stored values of the parent. It reads them from the parent release,
+unless the import loaded them, and a written child stores none of them. So a written child needs the
+parent release.
+
+Each call reads the selected Records from the parent in one batch, without their stored values.
+Select many Records in one call, not one Record per call. By default, the import loads no stored
+values. To load them during the import, pass `load=`, as for `TimeFReader.get_many()`. The import
+then loads these values on the copies of the selected Records, also on a copy that the child holds
+already. A value that a copy holds already does not load again. With `load=LoadPlan.ALL_EAGER`, you
+can read the copies after the parent reader closes.
+
+If an import fails partway, the Records that it copied stay in the child. Fix the cause and repeat
+the call. An import is safe to repeat.
+
+### Find a copy by its parent ID
+
+A copy gets its own ID in the child. Nothing derives that ID from the parent ID. To find the copy of
+a parent object in a written child, pass the parent ID and the parent alias:
+
+```python
+from timenet.types.reference_keys import ParentAlias
+
+with TimeFReader.open(child_path) as reader:
+    copy = reader.get(Record, 12, parent=ParentAlias("ptbxl"))
+```
+
+In memory, `import_from()` returns the copies by their parent IDs.
+
+A later import reuses the copies that the child holds, also after you write the child and read it
+back. If you removed a copy, a later import copies the object again, under a new ID. So remove
+imported objects after your last import.

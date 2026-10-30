@@ -9,9 +9,14 @@ from typer.testing import CliRunner
 from timenet.cache import cached_datasets, raw_cache_size
 from timenet.cli.app import _enum_list, app
 from timenet.client import TimeNet
+from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDatasetNotFoundError
+from timenet.reader import TimeFReader
+from timenet.registry import open_local_version
 from timenet.testing import make_dataset
-from timenet.types import Domain
+from timenet.types import Access, Domain
+from timenet.types.reference_keys import ParentAlias
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
 
@@ -93,6 +98,54 @@ def test_search_no_match(registry_root):
 def test_info(registry_root):
     assert runner.invoke(app, ["info", "timenet/hello-world", "--registry", str(registry_root)]).exit_code == 0
     assert TimeNet(str(registry_root)).get("timenet/hello-world").dataset_id == "timenet/hello-world"
+
+
+def _write(root, dataset):
+    with TimeFWriter(root, dataset) as writer:
+        writer.write()
+    return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+
+
+def test_info_lists_the_access_page_of_each_release_that_sets_one(tmp_path):
+    root = tmp_path / "reg"
+    parents = {}
+    for name in ("a", "b"):
+        parent = make_dataset()
+        parent._metadata = parent.metadata.model_copy(
+            update={
+                "dataset_id": f"test/{name}",
+                "access": Access.CREDENTIALED,
+                "access_url": f"https://{name}.example",
+            }
+        )
+        parents[ParentAlias(name)] = _write(root, parent)
+    metadata = make_dataset().metadata.model_copy(
+        update={
+            "dataset_id": "test/child",
+            "parents": {
+                alias: DatasetRef(dataset_id=f"test/{alias}", version=make_dataset().metadata.dataset_version)
+                for alias in parents
+            },
+        }
+    )
+    child = TimeFDataset(metadata=metadata)
+    for path in parents.values():
+        with TimeFReader(open_local_version(path)) as reader:
+            child.import_from(reader)
+    _write(root, child)
+
+    result = runner.invoke(app, ["info", "test/child", "--registry", str(root)])
+
+    assert result.exit_code == 0, result.output
+    cells = [[cell.strip() for cell in line.split("│")[1:-1]] for line in result.output.splitlines() if "│" in line]
+    start = cells.index(["access", "credentialed"])
+    # The card of the child stays open. Its effective level comes from its parents, and each parent
+    # names its own page.
+    assert cells[start + 1 : start + 3] == [
+        ["access_urls", "test/a@1.0.0 (credentialed): https://a.example"],
+        ["", "test/b@1.0.0 (credentialed): https://b.example"],
+    ]
+    assert cells[start + 3][0] == "domains"
 
 
 def test_download(registry_root, tmp_path):

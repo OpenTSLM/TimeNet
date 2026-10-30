@@ -67,6 +67,13 @@ def test_audit_accepts_a_freshly_written_database(control_path):
         audit_control_database(connection, require_chunks=False)
 
 
+def test_audit_accepts_imported_objects_whose_copies_exist(control_path):
+    with connect_control(control_path) as connection:
+        connection.execute("INSERT INTO imports VALUES ('base', 'org/parent@1.0.0')")
+        connection.execute("INSERT INTO imported_objects VALUES ('base', 'Record', 7, 1), ('base', 'Signal', 8, 1)")
+        audit_control_database(connection, require_chunks=False)
+
+
 def test_audit_requires_chunks_to_cover_each_signal(control_path):
     with connect_control(control_path) as connection:
         with pytest.raises(TimeFFormatError, match="value chunks whose lengths do not match"):
@@ -215,6 +222,22 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
         (
             "UPDATE annotation_occurrences SET content_id = 999",
             r"annotation_occurrences\.content_id refers to missing annotation_contents\.content_id",
+        ),
+        (
+            "INSERT INTO imports VALUES ('base', 'org/parent@1.0.0'); "
+            "INSERT INTO imported_objects VALUES ('base', 'Record', 7, 999)",
+            "imported object of parent alias 'base' refers to missing Record 999",
+        ),
+        (
+            # Record 1 exists, but no Signal has the ID 2.
+            "INSERT INTO imports VALUES ('base', 'org/parent@1.0.0'); "
+            "INSERT INTO imported_objects VALUES ('base', 'Signal', 7, 2)",
+            "imported object of parent alias 'base' refers to missing Signal 2",
+        ),
+        (
+            "INSERT INTO imports VALUES ('base', 'org/parent@1.0.0'); "
+            "INSERT INTO imported_objects VALUES ('base', 'Task', 7, 1)",
+            r"invalid imported_objects\.object_kind value",
         ),
     ],
 )

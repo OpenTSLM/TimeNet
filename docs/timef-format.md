@@ -64,6 +64,8 @@ Signals can reference the same immutable `TimeAxis`.
 | `annotation_contents` | Reusable annotation content with one typed value column per value shape. |
 | `annotation_occurrences` | One attachment of content to an object, with its span. |
 | `signal_chunks` | Locations of Signal values in Parquet or Zarr. |
+| `imports` | Each parent alias of the release, with its exact parent release. |
+| `imported_objects` | For each copy: the parent alias, the object kind, the parent ID, and the ID of the copy. |
 
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
 in either direction, so TimeF does not store duplicate reverse-index tables.

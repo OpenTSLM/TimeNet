@@ -437,6 +437,7 @@ class TimeFWriter:
         schema = self._dataset.schema
         if schema is None:  # unreachable: write() already checked, but keeps the type non-optional
             raise RuntimeError("schema was not derived")
+        import_state = self._dataset._import_state
         manifest = Manifest(
             dataset_id=self._dataset.metadata.dataset_id,
             metadata=self._dataset.metadata,
@@ -450,6 +451,8 @@ class TimeFWriter:
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             payload_sources=self._storage_sources.sources,
+            parent_cards=import_state.parent_cards,
+            lineage=tuple(import_state.lineage.values()),
             build_env=build_env(),
             timef_format_version=1,
         )

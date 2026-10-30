@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
+from timenet.dataset.composition import ImportState
 from timenet.dataset.dataset import _TaskValidationIndex
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
@@ -257,6 +258,7 @@ class DuckDBControlWriter:
                         dataset.iter_tasks() if tasks is None else tasks,
                     )
                     self._write_chunks(connection, placements, signal_values)
+                    self._write_imports(connection, dataset._import_state)
                     self._check_source_tree(connection)
                     self.external.finish(connection)
                 connection.execute("CHECKPOINT")
@@ -267,6 +269,40 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
         return task_counts
+
+    @staticmethod
+    def _write_imports(connection: duckdb.DuckDBPyConnection, import_state: ImportState) -> None:
+        """Store the parent aliases, and the parent ID of each imported Record and Signal the dataset holds.
+
+        Raises:
+            TimeFValidationError: If the dataset holds objects imported under an alias that has no
+                parent card.
+        """
+        rows = []
+        if import_state.import_map:
+            # The map may name copies the dataset no longer holds; only the ones it holds get a row.
+            held = {
+                kind: {row[0] for row in connection.execute(query).fetchall()}
+                for kind, query in (
+                    (ObjectKind.RECORD, "SELECT record_id FROM records"),
+                    (ObjectKind.SIGNAL, "SELECT signal_id FROM signals"),
+                )
+            }
+            rows = [
+                {"alias": alias, "object_kind": kind.value, "parent_id": parent_id, "object_id": object_id}
+                for (alias, kind, parent_id), object_id in import_state.import_map.items()
+                if object_id in held[kind]
+            ]
+        cards = import_state.parent_cards
+        orphaned = sorted({row["alias"] for row in rows} - cards.keys())
+        if orphaned:
+            raise TimeFValidationError(f"objects are imported under parent aliases {orphaned} without a parent card")
+        insert_rows(
+            connection,
+            TABLES["imports"],
+            [{"alias": alias, "parent_ref": str(card.source)} for alias, card in cards.items()],
+        )
+        insert_rows(connection, TABLES["imported_objects"], rows)
 
     def _pack(self, kind: ObjectKind, object_id: int, field: PackedField, value: Any, position: int = 0) -> Any:
         """Construct a catalog value from the explicit packing result.
