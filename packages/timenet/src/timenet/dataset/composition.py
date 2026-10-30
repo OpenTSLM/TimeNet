@@ -1,7 +1,7 @@
 """Copy selected parent Records, Signals, and tasks into a child dataset, sharing their stored values."""
 
 from collections import deque
-from collections.abc import Container, Hashable, Iterable, Iterator
+from collections.abc import Container, Hashable, Iterable, Iterator, Mapping
 from copy import deepcopy
 from dataclasses import dataclass, field, fields, replace
 from typing import TYPE_CHECKING, Any, TypeAlias
@@ -43,7 +43,8 @@ child, independent of its parent ID. An import looks up a parent object here. Th
 by its child ID among the objects of the dataset. If the dataset no longer holds the copy, the
 import copies the object again. The map holds plain IDs, and ``dict(...)`` copies it. The writer
 stores each entry whose copy the dataset holds in the ``imported_objects`` table. A dataset that a
-reader reads back from storage gets these entries back.
+reader reads back from storage gets these entries back. An edit that builds a new dataset gives it a
+copy of the map, without the entries of the copies that the edit removes.
 """
 
 
@@ -52,7 +53,7 @@ class ImportState:
     """What a dataset keeps about its imports: its parent cards, its lineage, and its import map.
 
     An import fills the three parts. The writer stores them, and a reader of the written dataset
-    restores them as one state.
+    restores them as one state. An edit gives the dataset that it builds a copy of the state.
     """
 
     parent_cards: dict[ParentAlias, ParentDatasetCard] = field(default_factory=dict)
@@ -61,6 +62,27 @@ class ImportState:
     """The card of every ancestor release, parents included, keyed by ``org/name@version``."""
     import_map: ImportMap = field(default_factory=dict)
     """The child ID of each imported object, keyed by parent alias, kind, and parent ID."""
+
+    def without(self, removed: Mapping[ObjectKind, Container[EntityId]]) -> "ImportState":
+        """Return a copy of the state without the import map entries of removed copies.
+
+        An edit that builds a new dataset gives it this copy. A later import into the new dataset
+        then copies a removed object again.
+
+        Args:
+            removed: The child IDs of the copies that an edit removed, by kind.
+
+        Returns:
+            A new state with copies of the parent cards and the lineage, and a copy of the import map
+            without each entry whose child ID ``removed`` lists under its kind.
+        """
+        return ImportState(
+            parent_cards=dict(self.parent_cards),
+            lineage=dict(self.lineage),
+            import_map={
+                key: child_id for key, child_id in self.import_map.items() if child_id not in removed.get(key[1], ())
+            },
+        )
 
 
 @dataclass(frozen=True)
@@ -142,6 +164,23 @@ def _fits(annotation: Annotation, signals: tuple[Signal, ...], owner: str, time_
     except TimeFValidationError:
         return False
     return True
+
+
+def _span_on(span: Span, signals: Mapping[EntityId, Signal]) -> Span:
+    """Return a span with each Signal that it names replaced by the Signal of the same ID in ``signals``.
+
+    Args:
+        span: A task's scope or span target.
+        signals: The Signals to point at, by ID.
+
+    Returns:
+        The new span, or ``span`` itself if it names no Signal.
+    """
+    if isinstance(span, StepSpan):
+        return replace(span, time_series=signals[span.time_series.id])
+    if isinstance(span, TimeSpan) and span.time_series is not None:
+        return replace(span, time_series=tuple(signals[signal.id] for signal in span.time_series))
+    return span
 
 
 def _hierarchy(record: Record) -> list[tuple[Record | Source, dict[str, tuple]]]:
@@ -770,26 +809,13 @@ class _TaskCopy:
         if isinstance(value, Annotation):
             return self._annotation(value)
         if isinstance(value, Span):
-            return self._span(value)
+            return _span_on(value, self.importer.signals)
         if _holds_reference(value):
             raise TimeFValidationError(
                 f"{type(self.task).__name__}.{name} holds a {type(value).__name__} that references objects; "
                 "an import remaps references only inside tuples"
             )
         return deepcopy(value)
-
-    def _span(self, span: Span) -> Span:
-        """Return a task span, with each Signal that it names replaced by its copy.
-
-        Returns:
-            The span for the copy.
-        """
-        signals = self.importer.signals
-        if isinstance(span, StepSpan):
-            return replace(span, time_series=signals[span.time_series.id])
-        if isinstance(span, TimeSpan) and span.time_series is not None:
-            return replace(span, time_series=tuple(signals[signal.id] for signal in span.time_series))
-        return span
 
     def _annotation(self, original: Annotation) -> Annotation:
         """Return the child's copy of a parent annotation that a task references.
