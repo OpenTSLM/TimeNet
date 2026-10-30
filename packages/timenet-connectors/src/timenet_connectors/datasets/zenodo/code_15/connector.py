@@ -57,11 +57,8 @@ class Code15Connector(BaseConnector[Path]):
             A dataset with the provenance and vocabulary annotations, the Records, and a stream of every task.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        for key, value in (
-            (AnnotationKey.SOURCE_URL, release.RECORD_URL),
-            (AnnotationKey.SOURCE_DOI, release.RECORD_DOI),
-        ):
-            dataset.annotate(Annotation(key=key, value=value))
+        dataset.annotate(Annotation(key=AnnotationKey.SOURCE_URL, value=release.RECORD_URL))
+        dataset.annotate(Annotation(key=AnnotationKey.SOURCE_DOI, value=release.RECORD_DOI))
         loader = Code15DatasetLoader.parse_from(raw_refs, parts=self.SOURCE_PARTS, counts=self.SOURCE_COUNTS)
         return loader.populate(dataset)
 
