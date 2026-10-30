@@ -5,6 +5,7 @@ import pytest
 from timenet.errors import TimeFFormatError
 from timenet_connectors.datasets.physionet.sleep_edfx import tables
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import Condition
+from timenet_connectors.demographics import Sex
 
 
 # Every recording id in this file is invented. Each one keeps the shape of a real id, because
@@ -43,7 +44,7 @@ def test_cassette_rows_key_by_subject_and_night():
 
 def test_cassette_row_states_age_sex_and_lights_off():
     row = tables.parse_subject_table(tables.CASSETTE_SHEET, _CASSETTE_ROWS)[90, 1]
-    assert (row.age, row.sex, row.nights[0].lights_off) == (44, "F", time(1, 5, 0))
+    assert (row.age, row.sex, row.nights[0].lights_off) == (44, Sex.FEMALE, time(1, 5, 0))
 
 
 def test_a_lights_off_time_before_midnight_reads_the_same_way():
@@ -54,11 +55,11 @@ def test_a_lights_off_time_before_midnight_reads_the_same_way():
 def test_the_code_1_means_the_opposite_thing_in_each_sheet():
     cassette = tables.parse_subject_table(tables.CASSETTE_SHEET, _CASSETTE_ROWS)[90, 1]
     telemetry = tables.parse_subject_table(tables.TELEMETRY_SHEET, _TELEMETRY_ROWS)[91,]
-    assert (cassette.sex, telemetry.sex) == ("F", "M")
+    assert (cassette.sex, telemetry.sex) == (Sex.FEMALE, Sex.MALE)
 
 
 def test_the_cassette_sheet_decodes_code_2_as_male():
-    assert tables.parse_subject_table(tables.CASSETTE_SHEET, _CASSETTE_ROWS)[91, 1].sex == "M"
+    assert tables.parse_subject_table(tables.CASSETTE_SHEET, _CASSETTE_ROWS)[91, 1].sex is Sex.MALE
 
 
 def test_a_sex_code_the_sheet_does_not_define_raises():
@@ -97,7 +98,7 @@ def test_telemetry_rows_key_by_the_subject_number_and_not_by_the_position():
 
 def test_a_telemetry_row_becomes_two_nights():
     subject = tables.parse_subject_table(tables.TELEMETRY_SHEET, _TELEMETRY_ROWS)[91,]
-    assert (subject.age, subject.sex) == (62, "M")
+    assert (subject.age, subject.sex) == (62, Sex.MALE)
     assert [(night.night, night.condition, night.lights_off) for night in subject.nights] == [
         (1, Condition.PLACEBO, time(22, 15, 0)),
         (2, Condition.TEMAZEPAM, time(23, 40, 0)),
@@ -126,7 +127,7 @@ def test_a_night_number_that_matches_both_columns_raises():
     subject = tables.SubjectRow(
         subject=95,
         age=47,
-        sex="F",
+        sex=Sex.FEMALE,
         nights=(
             tables.SubjectNight(night=1, condition=Condition.PLACEBO, lights_off=time(23, 0, 0)),
             tables.SubjectNight(night=1, condition=Condition.TEMAZEPAM, lights_off=time(23, 30, 0)),
