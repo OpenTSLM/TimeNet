@@ -10,6 +10,8 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Protocol
 
+from timenet.types import DatasetMetadata
+
 
 ENTRY_POINT_GROUP = "timenet.builders"
 
@@ -43,6 +45,20 @@ class BuilderBackend(Protocol):
 
         Returns:
             The declared version string, or ``None`` if it cannot be read.
+        """
+        ...
+
+    def card(self, dataset_id: str) -> DatasetMetadata | None:
+        """Return the card the connector declares, without importing or building it.
+
+        A build planner reads the card for a parent's exact version, its own parents, and its access
+        requirement before anything runs. Answer without importing the connector, like :meth:`knows`.
+
+        Args:
+            dataset_id: The dataset id.
+
+        Returns:
+            The validated card, or ``None`` if it cannot be read.
         """
         ...
 

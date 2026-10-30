@@ -216,7 +216,9 @@ A credentialed dataset (a PhysioNet DUA-gated one, for example) declares `access
 and an `access_url` on its card. TimeNet never hosts such data, so it is build-your-own: get access
 at the `access_url`, set the provider credential in the environment (the way `HF_TOKEN` already
 works), and run `timenet-build build <id>` yourself. An `open`, `load`, or `download` of a
-credentialed dataset from a hosted registry raises with the `access_url` instead of serving bytes.
+credentialed dataset from a hosted registry raises `TimeNetAccessError` instead of serving bytes.
+The error names each `access_url` that the dataset needs, with the release that sets it. A child
+dataset can need the access pages of its ancestors.
 
 ## Downloading artifacts
 
