@@ -146,7 +146,7 @@ the sensor's own output.
 
 | # | Error | Status | Evidence, or what's left |
 | --- | --- | --- | --- |
-| 43 | Not the authors' splits | ✅ Done / ☑️ Done once | Done: P001–P100 are train and P101–P151 test (`test_split_follows_benchmark_py`, `test_tasks_of_selects_the_benchmark_split`). Done once: every task's split equals the authors' `train_test_split`, compiled from their `benchmark.py`, and the paper's sets; 626,314 train and 308,448 test windows. The repository README's P102 is wrong. |
+| 43 | Not the authors' splits | ✅ Done / ☑️ Done once | Done: P001–P100 are train and P101–P151 test (`test_split_follows_benchmark_py`, `test_tasks_follow_the_benchmark_split`). Done once: every task's split equals the authors' `train_test_split`, compiled from their `benchmark.py`, and the paper's sets; 626,314 train and 308,448 test windows. The repository README's P102 is wrong. |
 | 44 | Leakage across splits | ☑️ Done once | A participant has one recording and one split, so no subject spans splits. Window starts are at least 10 s apart in every recording, so no windows overlap. |
 | 45 | Splits regenerated without a fixed seed | ✅ Done | The split is a function of the pid, with no randomness (`test_split_follows_benchmark_py`). The authors' random validation split isn't reproduced. |
 

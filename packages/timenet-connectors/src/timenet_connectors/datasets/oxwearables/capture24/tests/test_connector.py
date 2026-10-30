@@ -17,7 +17,6 @@ from timenet_connectors.datasets.oxwearables.capture24.benchmark import split_of
 from timenet_connectors.datasets.oxwearables.capture24.loader import Capture24DatasetLoader
 from timenet_connectors.datasets.oxwearables.capture24.records import record_metadata
 from timenet_connectors.datasets.oxwearables.capture24.release import PINNED_COUNTS, PinnedCounts
-from timenet_connectors.datasets.oxwearables.capture24.tasks import Capture24WindowTask
 
 
 _SLEEP = "7030 sleeping;MET 0.95"
@@ -252,10 +251,10 @@ def test_tasks_mark_only_their_window_as_input(tmp_path):
         assert dict(task.metadata) == {}
 
 
-def test_tasks_of_selects_the_benchmark_split(tmp_path):
+def test_tasks_follow_the_benchmark_split(tmp_path):
     loader = Capture24DatasetLoader.parse_from([_release(tmp_path)], counts=_FIXTURE_COUNTS)
-    test_tasks = list(loader.tasks_of(Capture24WindowTask, split=Split.TEST))
-    assert {record_metadata(task.record).subject_id for task in test_tasks} == {"P101"}
+    test_tasks = [task for task in loader.tasks() if task.split is Split.TEST]
+    assert {record_metadata(task.inputs[0]).subject_id for task in test_tasks} == {"P101"}
     assert len(test_tasks) == 4
 
 

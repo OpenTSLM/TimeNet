@@ -174,7 +174,7 @@ Participant                                  │     path, n_rows,
            _ParsedParticipant(participant, record, windows)
 
 populate   dataset annotations, then the Records, then the task stream:
-           Capture24WindowTask per window and scheme ──► ClassificationTask
+           window_task per window and scheme ──► ClassificationTask
 
 write      AccelerationLoader(recording, column, segment)
              └─ read_acceleration(recording): x, y, z, once per recording
@@ -191,7 +191,7 @@ write      AccelerationLoader(recording, column, segment)
 | `recordings.py` | One `P<nnn>.csv.gz`: `Recording`, `Segment`, `Samples` |
 | `windows.py` | The authors' `make_windows` rule: `Windows` and `make_windows` |
 | `records.py` | A participant's Record and the lazy `AccelerationLoader` |
-| `tasks.py` | `Capture24WindowTask`, which becomes a `ClassificationTask` |
+| `tasks.py` | `window_task`, which builds the `ClassificationTask` of one window and scheme |
 | `loader.py` | `Capture24DatasetLoader`, which runs the parse and streams the tasks |
 
 ## Verification

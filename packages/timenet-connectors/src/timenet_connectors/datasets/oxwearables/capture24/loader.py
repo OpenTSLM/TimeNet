@@ -7,7 +7,7 @@ from typing import Self
 
 from timenet.dataset import Record
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation
+from timenet.types import Annotation, ClassificationTask
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.oxwearables.capture24.benchmark import BENCHMARK_SCHEMES
 from timenet_connectors.datasets.oxwearables.capture24.keys import scheme_vocabulary
@@ -19,7 +19,7 @@ from timenet_connectors.datasets.oxwearables.capture24.release import (
     PINNED_COUNTS,
     PinnedCounts,
 )
-from timenet_connectors.datasets.oxwearables.capture24.tasks import Capture24WindowTask
+from timenet_connectors.datasets.oxwearables.capture24.tasks import window_task
 from timenet_connectors.datasets.oxwearables.capture24.vocabulary import LabelDictionary
 from timenet_connectors.datasets.oxwearables.capture24.windows import Windows, make_windows
 
@@ -33,18 +33,19 @@ class _ParsedParticipant:
     windows: Windows
 
 
-class Capture24DatasetLoader(DatasetLoader[Capture24WindowTask]):
+class Capture24DatasetLoader(DatasetLoader):
     """CAPTURE-24's recordings, read and checked: one lazy Record per participant, and its window tasks.
 
-    CAPTURE-24 defines one task (:class:`Capture24WindowTask`): classify a 10 s window's activity, in each
-    scheme of :data:`~timenet_connectors.datasets.oxwearables.capture24.benchmark.BENCHMARK_SCHEMES`.
-    Select one split with ``tasks_of``.
+    CAPTURE-24 defines one task (:func:`window_task`): classify a 10 s window's activity, in each scheme
+    of :data:`~timenet_connectors.datasets.oxwearables.capture24.benchmark.BENCHMARK_SCHEMES`. Each task
+    names its scheme in its ``target_schema``. After ``populate``, ``TimeFDataset.get_split`` selects one
+    split.
 
     The loader keeps each participant's segments, label runs and windows, not their samples. The signals
     reread their recording, so the files must stay available until writing ends.
     """
 
-    TASK_KINDS = (Capture24WindowTask,)
+    TASK_TYPES = (ClassificationTask,)
 
     def __init__(self, dictionary: LabelDictionary, participants: tuple[_ParsedParticipant, ...]) -> None:
         self._dictionary = dictionary
@@ -104,7 +105,7 @@ class Capture24DatasetLoader(DatasetLoader[Capture24WindowTask]):
         """Return one Record per participant, in id order, whose values stay in the files until written."""
         return (parsed.record for parsed in self._participants)
 
-    def tasks(self) -> Iterator[Capture24WindowTask]:
+    def tasks(self) -> Iterator[ClassificationTask]:
         """Return one task per window and benchmarked scheme, by participant, then window, then scheme.
 
         Yields:
@@ -115,9 +116,9 @@ class Capture24DatasetLoader(DatasetLoader[Capture24WindowTask]):
             split = parsed.participant.split
             for window, start_us in enumerate(parsed.windows.start_us.tolist()):
                 for scheme in BENCHMARK_SCHEMES:
-                    yield Capture24WindowTask(
+                    yield window_task(
                         record=parsed.record,
-                        participant_split=split,
+                        split=split,
                         scheme=scheme,
                         start_us=start_us,
                         target=vocabularies[scheme][parsed.windows.class_codes[scheme][window]],
