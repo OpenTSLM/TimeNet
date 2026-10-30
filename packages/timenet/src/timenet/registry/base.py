@@ -13,9 +13,9 @@ import shutil
 from typing import BinaryIO, TypeVar
 import uuid
 
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetFileError
 from timenet.format.checksums import file_checksum
-from timenet.manifest import Manifest
+from timenet.manifest import FilePart, Manifest
 from timenet.registry._paths import safe_version_path, split_release_dir
 from timenet.registry.dependencies import prepare_local_copy
 from timenet.registry.shared import complete_copy
@@ -170,8 +170,8 @@ class BaseRegistry(ABC):
             progress_cb: Called with each staged file's byte count, for a progress display.
 
         Raises:
-            TimeFFormatError: If a downloaded file's size or checksum differs from the manifest.
-        """
+            TimeNetFileError: If a downloaded file's size or checksum differs from the manifest.
+        """  # noqa: DOC502 - raised by _check_staged_file
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
         target = Path(dest_dir)
@@ -184,12 +184,11 @@ class BaseRegistry(ABC):
         # a concurrent download of the same version has a live staging dir with the same prefix, and
         # sweeping it would break that download mid-write. A rare orphaned dir is the lesser evil.
         staging = parent / f"{target.name}.tmp-{uuid.uuid4().hex}"
+        release = DatasetRef.parse(f"{dataset_id}@{version}")
         try:
             for part in manifest.files.all_files():
                 self._stage_file(dataset_id, version, part.path, staging)
-                path = staging / part.path
-                if path.stat().st_size != part.size or file_checksum(path) != part.checksum:
-                    raise TimeFFormatError(f"checksum or size mismatch for {part.path!r} in {dataset_id}@{version}")
+                self._check_staged_file(staging / part.path, part, release)
                 if progress_cb is not None:
                     progress_cb(part.size)
             (staging / "manifest.json").write_text(manifest.to_json())
@@ -198,6 +197,20 @@ class BaseRegistry(ABC):
             staging.replace(target)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+
+    def _check_staged_file(self, path: Path, part: FilePart, release: DatasetRef) -> None:
+        """Compare one downloaded file with its manifest record, first by size, then by checksum.
+
+        Raises:
+            TimeNetFileError: Naming the file and whichever of the two differs.
+        """
+        owner = f"download of {release} from {self}"
+        size = path.stat().st_size
+        if size != part.size:
+            raise TimeNetFileError(release, owner, part.path, f"{part.size:,} bytes", f"{size:,} bytes")
+        checksum = file_checksum(path)
+        if checksum != part.checksum:
+            raise TimeNetFileError(release, owner, part.path, part.checksum, checksum)
 
     def _stage_file(self, dataset_id: str, version: str, relpath: str, staging: Path) -> None:
         """Copy one version file from the registry into the ``staging`` directory.
