@@ -58,6 +58,60 @@ dataclass, or an S3 key. The connector is generic through PEP 695:
 
 ---
 
+## Converting with `DatasetLoader`
+
+Use `timenet_connectors.bases.loader.DatasetLoader` to keep the parsing out of the connector. The
+loader reads the downloaded files once, builds the Records and the tasks, and adds them to the
+dataset. The connector keeps `download` and calls the loader in `convert`.
+
+```python
+from timenet_connectors.bases.loader import DatasetLoader
+
+
+class MyDatasetLoader(DatasetLoader):
+    TASK_TYPES = (ClassificationTask,)
+
+    # Each dataset also implements parse_from(refs) and records().
+    def binary_label_tasks(self) -> Iterator[ClassificationTask]:
+        """Is the beat normal or abnormal?"""
+        for row in self._rows:
+            yield ClassificationTask(inputs=(self._records[row.key],), targets=(row.binary,))
+
+    def rhythm_label_tasks(self) -> Iterator[ClassificationTask]:
+        """Which of the 5 rhythm classes is the beat?"""
+        for row in self._rows:
+            yield ClassificationTask(inputs=(self._records[row.key],), targets=(row.rhythm,))
+
+    def tasks(self) -> Iterator[Task]:
+        yield from self.binary_label_tasks()
+        yield from self.rhythm_label_tasks()
+
+
+class MyConnector(BaseConnector[MyRawRef]):
+    def convert(self, raw_refs: list[MyRawRef]) -> TimeFDataset:
+        loader = MyDatasetLoader.parse_from(raw_refs)
+        dataset = TimeFDataset(metadata=self.metadata())
+        return loader.populate(dataset)
+```
+
+| Method | Provided by | Contract |
+| --- | --- | --- |
+| `parse_from(refs)` | the dataset | Read the downloaded files once and make sure that they are correct. |
+| `records()` | the dataset | Return each Record, always in the same order. |
+| `tasks()` | the dataset | Return each TimeNet task. Each call starts again at the first task. |
+| `dataset_annotations()` | the dataset, optional | Return the annotations of the full dataset, such as the list of its labels. |
+| `populate(dataset)` | the base | Add the annotations, the Records and the tasks to the dataset. |
+
+A loader lists each TimeNet task type that it makes in `TASK_TYPES`. `populate` gives these types to
+the dataset. When the dataset is written, the writer stops on a task whose type is not in this list.
+
+The dataset authors often define several tasks. Two of them can have the same TimeNet type, such as
+the binary and the rhythm label in the example. Give each task of the authors its own method, with
+the name that the authors use. Then `loader.binary_label_tasks()` returns only the binary-label
+tasks. After `populate`, use `TimeFDataset.tasks_of` and `TimeFDataset.get_split` to select tasks.
+
+---
+
 ## Reusing descriptors
 
 Each Signal has exactly one owning Source. Do not attach one Signal to several Sources or Records.
