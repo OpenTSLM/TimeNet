@@ -1,15 +1,31 @@
 """Copy-on-write edits: remove_records validate-and-cascade, and the edit_version round trip."""
 
+import re
+
 import duckdb
+import numpy as np
 import pytest
 
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.dataset.edit import edit_version, remove_records
 from timenet.errors import TimeFEditError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
-from timenet.types import Annotation, AnswerTask, TemporalLocalizationTask, TSCorrespondenceTask, TSEditingTask, Version
+from timenet.types import (
+    Annotation,
+    AnswerTask,
+    DatasetMetadata,
+    License,
+    TemporalLocalizationTask,
+    TimeInterval,
+    TimeSeriesSpec,
+    TSCorrespondenceTask,
+    TSEditingTask,
+    Version,
+    ureg,
+)
 from timenet.writer import TimeFWriter
 
 
@@ -197,6 +213,84 @@ def test_target_and_candidate_records_are_required_whatever_the_task_type():
         remove_records(dataset, [edited_record.id])
     with pytest.raises(TimeFEditError, match=rf"dangle tasks \[[^\]]*\b{correspondence_task.id}\b"):
         remove_records(dataset, [candidate_record.id])
+
+
+_REF_SPEC = TimeSeriesSpec(spec_type="sine", name="Sine", unit_value=ureg.dimensionless)
+
+
+def _noted(*names):
+    """Return a dataset of one Record per name, each with one Signal and a ``note`` annotation of its name."""
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id="test/pair", dataset_version=Version(1, 0, 0), name="pair", description="d", license=License.MIT
+        )
+    )
+    for name in names:
+        signal = Signal.from_values(
+            np.arange(16, dtype=np.float32), spec=_REF_SPEC, name=f"sig-{name}", time_axis=RegularAxis.from_rate_hz(16)
+        )
+        record = dataset.add_record(record=Record(sources=(Source(name="m", signals=(signal,)),)))
+        record.annotate(Annotation(key="note", value=name))
+    return dataset
+
+
+def _referencing_b(kind):
+    """Return ``_noted("a", "b")`` with a task whose input is ``a`` and which references ``b`` by ``kind``."""
+    dataset = _noted("a", "b")
+    a, b = dataset.records
+    tasks = {
+        "candidate": lambda: TSCorrespondenceTask(inputs=(a,), candidate_records=(a, b), targets=(a,)),
+        "record-target": lambda: TSEditingTask(inputs=(a,), targets=(b,)),
+        "signal-target": lambda: TSEditingTask(inputs=(a,), targets=(b.signals[0],)),
+        # An answer may lie only on a Record that the task references, so b is an input too, and a keeps
+        # the task alive.
+        "target-annotation": lambda: AnswerTask(inputs=(a, b), target_annotations=b.annotations),
+        # A span may name only the Signals of inputs, so b is an input too, and a keeps the task alive.
+        "span": lambda: AnswerTask(
+            inputs=(a, b), targets=("x",), scope=TimeInterval.seconds(0.0, 0.5, time_series=b.signals)
+        ),
+    }
+    task = dataset.add_task(task=tasks[kind]())
+    return dataset, task
+
+
+@pytest.mark.parametrize("kind", ["candidate", "record-target", "signal-target", "target-annotation", "span"])
+def test_removing_a_record_invalidates_each_kind_of_reference_to_it(kind):
+    dataset, task = _referencing_b(kind)
+    b = dataset.records[1]
+    with pytest.raises(TimeFEditError, match=re.escape(f"would dangle tasks [{task.id}]")):
+        remove_records(dataset, [b.id])
+    edited = remove_records(dataset, [b.id], cascade=True)
+    assert edited.tasks == ()
+    assert [record.id for record in edited.records] == [dataset.records[0].id]
+
+
+def test_an_input_annotation_on_the_record_of_a_signal_target_stays_while_that_record_does():
+    dataset = _noted("a", "b", "c")
+    a, b, c = dataset.records
+    # b holds the Signal target, so the task references b, though b is not one of its inputs.
+    dataset.add_task(
+        task=TSEditingTask(inputs=(a,), targets=(b.signals[0],), input_annotations=(*a.annotations, *b.annotations))
+    )
+    (task,) = remove_records(dataset, [c.id]).tasks
+    assert [annotation.value for annotation in task.input_annotations] == ["a", "b"]
+    # Removing b removes the Signal target too, so the task goes.
+    assert remove_records(dataset, [b.id], cascade=True).tasks == ()
+
+
+def test_an_edit_finds_the_record_of_each_signal_among_its_own_records():
+    dataset = _noted("a", "b", "c")
+    a, b, c = dataset.records
+    dataset.add_task(task=TSEditingTask(inputs=(a,), targets=(c.signals[0],), input_annotations=c.annotations))
+    edited = remove_records(dataset, [b.id])
+    kept_a, kept_c = edited.records
+    assert {signal_id: id(record) for signal_id, record in edited._records_by_signal_id.items()} == {
+        a.signals[0].id: id(kept_a),
+        c.signals[0].id: id(kept_c),
+    }
+    (task,) = edited.tasks
+    assert [id(record) for record in edited._referenced_records(task)] == [id(kept_a), id(kept_c)]
+    assert task.input_annotations == c.annotations
 
 
 # ---- copy-on-write version --------------------------------------------------------------------
