@@ -427,7 +427,12 @@ Sources have distinct names. If the child moved or renamed Sources of the copy, 
 another Source, or it raises `TimeFValidationError`.
 
 Do not assign `Source.signals` or `Source.sources` on a copy. A later import can then attach an
-annotation that the copy already holds a second time.
+annotation that the copy already holds a second time. To remove a Signal from a copy, use
+`remove_signals()`.
+
+`remove_signals()` is in `timenet.dataset.edit`. It also drops each annotation that the copy keeps
+only because it holds that Signal, by the rules in [Signals](#signals). A later import that copies
+the Signal back then attaches these annotations once.
 
 ### Find a copy by its parent ID
 
@@ -446,3 +451,8 @@ In memory, `import_from()` returns the copies by their parent IDs.
 A later import reuses the copies that the child holds, also after you write the child and read it
 back. If you removed a copy, a later import copies the object again, under a new ID. So remove
 imported objects after your last import.
+
+An edit with `remove_records()` or `remove_signals()` keeps the parent cards and the lineage of the
+child. A later import into the new dataset reuses each copy that the edit keeps. `edit_version()`
+does the same for the version that it derives. A reader of that version finds its copies by their
+parent IDs.
