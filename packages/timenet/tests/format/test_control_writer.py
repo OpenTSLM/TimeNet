@@ -13,6 +13,7 @@ from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
 from timenet.format.storage import StorageSources
 from timenet.format.stored_values import PackedValueWriter
+from timenet.reader import TimeFReader
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -292,7 +293,8 @@ def test_a_streamed_parent_that_streams_after_its_child_is_stored(tmp_path):
     child = AnswerTask(inputs=(record,), prompt="Child?", targets=("Yes",), from_tasks=(parent,))
     dataset.set_task_stream([AnswerTask], lambda: iter((child, parent)))
 
-    restored = TimeFDataset.open(path=dataset.write(path=tmp_path))
+    with TimeFReader.open(dataset.write(path=tmp_path)) as reader:
+        restored = reader.read()
 
     by_prompt = {read_value(task.prompt): task for task in restored.tasks}
     assert by_prompt["Child?"].from_tasks == (by_prompt["Parent?"],)

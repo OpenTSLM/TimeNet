@@ -18,8 +18,8 @@ for per-component detail.
 TimeNet splits into three parts. A **connector** builds a raw source into a TimeF version. The
 **client/SDK** reads its manifest from a **registry** and loads the data. The relational control
 plane is one immutable DuckDB file. The values plane can be Parquet or Zarr. Reading never runs
-connector code. Against a local registry, `load` can first build a dataset that the registry does
-not have from an installed connector.
+connector code. Against a local registry, `open` and `load` can first build a dataset that the
+registry does not have from an installed connector.
 
 | | What it is | Ships | Used by |
 | --- | --- | --- | --- |
@@ -118,4 +118,5 @@ can read it directly.
 2. **Build**: `timenet-build build <org>/<name>` runs the engine, compiles the manifest, and writes a TimeF version.
 3. **Verify** locally: point the SDK at the output directory (itself a valid local registry).
 4. **Publish** the complete TimeF version to a registry.
-5. **Consume**: use `TimeNet.load()` for lazy access or `timenet download` for a local copy.
+5. **Consume**: use `TimeNet.open()` for lazy access, `TimeNet.load()` for a dataset with every
+   value in memory, or `timenet download` from the CLI for a local copy.
