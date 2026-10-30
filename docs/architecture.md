@@ -120,3 +120,29 @@ can read it directly.
 4. **Publish** the complete TimeF version to a registry.
 5. **Consume**: use `TimeNet.open()` for lazy access, `TimeNet.load()` for a dataset with every
    value in memory, or `timenet download` from the CLI for a local copy.
+
+## Parent releases and payload sources
+
+A child dataset copies Records, Signals, and tasks from its parent releases while its connector
+builds it. A parent release is an exact `org/name@version` that the card of the child declares under
+`parents`. The child keeps the copies in its own DuckDB catalog, under IDs of its own. It does not
+copy their stored values. It reads them from the release that stores them, its payload source. The
+manifest pins each payload source by dataset ID, version, and file. See
+[Importing from a parent](timef-dataset.md#importing-from-a-parent) and
+[Compose a child dataset](connectors.md#compose-a-child-dataset).
+
+A build needs the parent releases, and a read needs only the payload sources. Before the connector
+runs, the build prepares each parent release, as
+[Prepare parent releases](build.md#prepare-parent-releases) describes. `TimeNet.open()`,
+`TimeNet.load()`, `TimeNet.open_torch()`, and `TimeFReader.open()` resolve the payload sources
+before the first read. A read never opens the catalog of a parent. Against a local registry, the
+client reuses a complete copy of each release, copies it from `fetch_from`, or builds it.
+`auto_build` is on by default. A remote client never runs connector code. See
+[Open, load, or download](client.md#open-load-or-download).
+
+An import gives each copy the next ID of its kind in the child. The writer pins as payload source
+the release that stores each file, also when a parent reuses the file from its own parent. The
+writer also stores the read order of the Records, so that a full read follows the order of their
+stored values. The `imports` and `imported_objects` tables map each parent ID to the ID of its copy.
+`get(..., parent=)` finds a copy through them, and `read()` uses them to restore the import state.
+Other reads do not use them.

@@ -153,16 +153,39 @@ names the first missing or resized file. No build runs over a damaged copy.
 Remote registries never run connector code. A remote client rejects `fetch_from`, because it reads
 from its own registry.
 
-An HTTP or S3 registry reads from a complete copy of the version in `TIMENET_STORAGE` if one exists,
-and otherwise reads the remote files by range, as each read needs them.
+An HTTP or S3 registry resolves the manifests of the payload sources when `open()`, `load()`, or
+`open_torch()` runs. Reads then use complete copies in `TIMENET_STORAGE` where they exist. Otherwise
+they read the remote files by range, as each read needs them. The first read of Records or tasks
+downloads the catalog of the version and makes sure that it matches the manifest. A read never opens
+the catalog of a parent release. A read also never fetches a parent release that is not a payload
+source. See [Payload sources](registry.md#payload-sources).
 
-`download()` always copies the complete version into local storage:
+A child dataset gives the objects that it imports from a parent IDs of its own. To read such a copy
+by the ID that the parent gives it, pass the parent to `get()` with `parent=`:
+
+```python
+from timenet.dataset import Signal
+from timenet.types.reference_keys import ParentAlias
+
+with client.open("physionet/ecg-qa-cot") as reader:
+    signal = reader.get(Signal, parent_signal_id, parent=ParentAlias("ptbxl"))
+    window = signal.read_steps(0, 100)
+```
+
+`parent_signal_id` is the int ID that the parent gives the Signal. `parent=` takes the alias of the
+parent as a `ParentAlias`, or its exact release as a `DatasetRef`. Without `parent=`, the lookup
+uses the ID that the child gives the object.
+
+`download()` copies the complete release and its payload sources into local storage:
 
 ```python
 path = client.download("chengsenwang/tsqa@1.0.0")
 ```
 
-Use `force=True` to replace an existing local copy.
+Use `force=True` to replace an existing local copy. A later `open()` or `load()` reuses the complete
+copies. A remote client still requests the manifests. To read without a network, open the storage
+directory as a local registry with `TimeNet(storage_dir)`, and set `auto_build=False`. A remote read
+keeps the byte ranges that it reads in memory only. The copies of `download()` stay on disk.
 
 ## Pin a version
 
