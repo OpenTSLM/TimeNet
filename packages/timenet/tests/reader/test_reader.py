@@ -19,7 +19,8 @@ import pytest
 from timenet.client import TimeNet
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError, TimeNetFileError
+from timenet.format.checksums import file_checksum
 import timenet.format.control_cache as control_cache_module
 import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
@@ -559,9 +560,38 @@ def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_pat
     control_path.write_bytes(payload)
     with (
         TimeFReader(open_local_version(version_dir)) as reader,
-        pytest.raises(TimeFFormatError, match="checksum mismatch"),
+        pytest.raises(TimeFFormatError, match=r"^timenet/hello-world@1\.0\.0: file 'control\.duckdb' has sha256:"),
     ):
         reader.verify()
+
+
+@pytest.mark.parametrize("damage", ["changed", "truncated", "missing"])
+def test_verify_names_the_file_and_what_differs_from_its_manifest_record(tmp_path, damage):
+    version_dir = _write(tmp_path)
+    reader = TimeFReader(open_local_version(version_dir))
+    part = reader._manifest.files.time_series[0]
+    path = version_dir / part.path
+    original = path.read_bytes()
+    # The file changes after opening, which checked its size.
+    if damage == "changed":
+        path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+        expected, actual = part.checksum, file_checksum(path)
+    elif damage == "truncated":
+        path.write_bytes(original[:-1])
+        expected, actual = f"{part.size:,} bytes", f"{part.size - 1:,} bytes"
+    else:
+        path.unlink()
+        expected, actual = f"{part.size:,} bytes", None
+
+    with reader, pytest.raises(TimeNetFileError) as caught:
+        reader.verify()
+
+    error = caught.value
+    release = "timenet/hello-world@1.0.0"
+    assert (str(error.release), error.owner, error.path) == (release, release, part.path)
+    assert (error.expected, error.actual) == (expected, actual)
+    found = "is missing" if actual is None else f"has {actual}"
+    assert str(error) == f"{release}: file '{part.path}' {found}, expected {expected}."
 
 
 def test_iter_tasks_streams_one_record_and_points_at_its_built_objects(tmp_path):

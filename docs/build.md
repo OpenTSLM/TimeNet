@@ -94,8 +94,35 @@ registry = open_writable_registry("s3://bucket/prefix")
 version = publish_pipeline(connector, registry)
 ```
 
-Both functions accept `force`, `keep_cache`, `cache_dir`, `values_backend`, and a writer progress
-callback.
+Both functions accept `force`, `keep_cache`, `cache_dir`, `values_backend`, `pinned_by`, and a
+writer progress callback.
+
+A registry that is not local holds open releases only. `publish_pipeline()` checks the card before
+it downloads anything. A credentialed or restricted card raises `TimeNetAccessError` for such a
+registry. After the connector composes the dataset, `publish_pipeline()` checks the dataset again
+with its lineage, before it writes. A child whose card is open but whose parent is credentialed
+raises there.
+
+The error names the release and its effective access level, which is the strictest level of its
+card and of the cards in its lineage. It also names each `access_url` that a user needs, with the
+release that sets it. For a card, this is the `access_url` of the card.
+
+## Rebuild a pinned release
+
+A release can read payload files that another release stores. The reading release pins each of
+these files by path, size, and checksum (see [Shared payloads](timef-format.md#shared-payloads)).
+A rebuild of the stored release must write the same files.
+
+Pass the pins to `run_pipeline()` or `publish_pipeline()` as `pinned_by`, keyed by the reading
+release. The writer builds the release in a staging directory. Before it publishes the release, it
+compares each pinned file with the file that it wrote. If a pinned file differs, the writer deletes
+the staging directory and raises `TimeFFormatError`. Nothing is published.
+
+The error names two fixes:
+
+- Fetch the exact release from a registry that holds it.
+- Rebuild the reading release with force, so that it pins the new files. The releases that pin the
+  old files of the reading release then fail to open.
 
 ## Authoring loop
 
