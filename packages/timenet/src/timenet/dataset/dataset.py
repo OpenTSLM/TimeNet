@@ -119,13 +119,15 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         - ``signals=`` copies each Signal into a copy of its Record and of the Sources above it. Such a
           partial copy keeps the annotations that its Signals place.
         - ``tasks=`` copies each task with the Records and Signals that it references and the tasks
-          that it derives from. A task that references annotations cannot be imported.
+          that it derives from. Each annotation that a task references points at the matching
+          occurrence on the copy of its owner. If this dataset changed or removed that occurrence,
+          the import attaches a copy of the parent's next to it.
 
         Each copy is this dataset's own object, with new IDs and its own metadata and annotations, so
         edits do not change the parent. Its Signals keep the parent's value handles, so they read the
         parent's stored values unless ``load`` loads them. A write of this dataset reuses the parent's
-        payloads, so it needs the parent release. Annotations on the parent dataset itself are not
-        copied.
+        payloads, so it needs the parent release. Annotations on the parent dataset itself come only
+        with a task that references them.
 
         An import of an object whose copy this dataset holds reuses that copy, with this dataset's
         edits. If the call needs Signals that the copy of a Record lacks, it adds them to that copy,
@@ -154,9 +156,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 another alias imports the parent or this alias imports another release, a selection
                 is not a collection of positive int64 IDs, the copy of a Record that the call adds
                 to holds sibling Sources of one name or a Signal outside its ``time_span``, ``tasks``
-                is given and this dataset streams its tasks, a task to copy references an annotation
-                or is a ``TSCorrespondenceTask`` without ``candidate_records``, or the task copies
-                fail to register.
+                is given and this dataset streams its tasks, a task to copy is a
+                ``TSCorrespondenceTask`` without ``candidate_records``, or the task copies fail to
+                register.
             TimeFNotFoundError: If a selected ID names no parent object. This dataset does not change.
         """  # noqa: DOC502 - raised by composition.import_from
         try:
