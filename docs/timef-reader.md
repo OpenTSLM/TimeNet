@@ -37,6 +37,8 @@ chunk caches. For a remote release, the reader fetches and verifies `control.duc
 `close()` its next read reopens the verified local copy. If that copy has been removed in the
 meantime, the reader fetches and verifies the catalog again.
 
+A reader is not safe to share between threads. Open one reader per thread.
+
 Catalog connections close before the process forks, because DuckDB cannot share a database across a
 fork. Each one opens again on its next query, in the parent and in a forked data-loader worker
 alike, so a task stream that was in progress when the process forked continues. Forking while other
@@ -87,8 +89,10 @@ on a Signal reads its axis's array and checks it against the axis and against th
 locator records. Within one read, the Signals on one axis share the checked array, so later calls
 on any of them read nothing.
 
-`iter_records(record_ids=...)` yields records one at a time. It takes int record IDs. It does not
-create a complete `TimeFDataset`.
+`iter_records()` yields Records in bounded batches and does not create a complete `TimeFDataset`.
+Without `record_ids=`, it yields every Record in the order of `record_ids()`. With
+`record_ids=`, it yields the Records with these int IDs, in the order given. It makes sure that
+every requested ID exists before it yields the first Record.
 
 Tasks have four useful read paths:
 
@@ -119,6 +123,12 @@ reader itself keeps compact chunk locators for the Signals it has resolved until
 default, a batch holds up to 5,000 tasks (`TASK_BATCH_SIZE`). Pass `iter_tasks(batch_size=...)` for
 larger or smaller batches. With an eager plan the stream holds every value one batch loaded, so a
 smaller batch bounds the memory its arrays take.
+
+`iter_records()` builds each batch on its own in the same way. The Records of one batch share the
+objects that the batch builds: the Signals on one irregular axis share one handle to its time
+offsets. Batches share nothing, and the stream holds one batch at a time. A Record ID that you
+request in two batches arrives as two separate objects. By default, a batch holds up to 1,000
+Records (`RECORD_BATCH_SIZE`). Pass `iter_records(batch_size=...)` for larger or smaller batches.
 
 ## Reading objects by ID
 
@@ -188,11 +198,11 @@ that is not a positive int64, a single string passed to `get_many`, a `parent` t
 
 ## Loading values at read time
 
-`read()`, `read_tasks()`, `iter_tasks()`, `get()`, and `get_many()` take a `load=` plan that says
-which kinds of stored values the read loads into the objects it builds. A `LoadPlan` has one field
-per kind of value: `signal_values`, `time_offsets` for irregular axes, and `text` for packed
-prompts, rationales, text targets, and annotation values. Each field is `Loading.LAZY`, the
-default, or `Loading.EAGER`.
+`read()`, `iter_records()`, `read_tasks()`, `iter_tasks()`, `get()`, and `get_many()` take a
+`load=` plan that says which kinds of stored values the read loads into the objects it builds. A
+`LoadPlan` has one field per kind of value: `signal_values`, `time_offsets` for irregular axes, and
+`text` for packed prompts, rationales, text targets, and annotation values. Each field is
+`Loading.LAZY`, the default, or `Loading.EAGER`.
 
 ```python
 from timenet.reader import Loading, LoadPlan, TimeFReader
@@ -224,6 +234,11 @@ batch's tasks. What a batch reaches only through its tasks' `from_tasks` parents
 parents, their records, and their annotations, it builds but does not load, unless a task of the
 batch uses it too. A later batch that yields such a parent, or uses such a record or annotation,
 builds its own copy and loads it.
+
+`iter_records()` loads each batch before it yields the batch: the Signal arrays, time offsets, and
+annotation values of the batch's Records that the plan names. A batch never loads the values of
+another batch. With `LoadPlan.ALL_EAGER`, the Records of a batch need no storage after the reader
+closes, and the stream holds the values of one batch at a time.
 
 Values on lazy handles stay readable. `to_numpy()`, `read_steps()`, and a text handle's `read()`
 read them through the reader, which reopens its files on demand after `close()`.
@@ -259,7 +274,7 @@ and decoded Zarr chunks until it closes.
 | Member | Description |
 | --- | --- |
 | `read(load=...)` | Create the complete `TimeFDataset`, loading the values the plan names. |
-| `iter_records()` | Yield Records without building a dataset. |
+| `iter_records(record_ids=..., load=..., batch_size=...)` | Yield Records in bounded batches, loading the values the plan names. |
 | `read_tasks(inputs=..., split=..., load=...)` | Build the matching tasks, or every task, in one pass. |
 | `iter_tasks(inputs=..., split=..., load=..., batch_size=...)` | Yield the matching tasks in bounded batches. |
 | `get(kind, id, parent=..., load=...)` | Read one Record, Signal, or task by ID. |
