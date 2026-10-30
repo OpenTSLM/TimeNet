@@ -23,7 +23,8 @@ author or change a connector.
 timenet-build [--quiet] build <dataset_id> \
     [--out <registry>] \
     [--values-backend parquet|zarr] \
-    [--force] [--keep-cache] [--no-isolation]
+    [--force] [--keep-cache] [--no-isolation] \
+    [--fetch-from <registry>] [--build-parents]
 ```
 
 | Option | Default | Purpose |
@@ -34,6 +35,8 @@ timenet-build [--quiet] build <dataset_id> \
 | `--force`, `-f` | off | Rebuild or republish an existing version. |
 | `--keep-cache` | off | Keep downloaded source files after a successful build. |
 | `--no-isolation` | isolation on | Use the current environment instead of a connector-specific one. |
+| `--fetch-from` | off | Copy missing parent releases from this registry URI. Needs a local `--out`. |
+| `--build-parents` | off | Build missing parent releases from their own connectors. |
 | `--quiet`, `-q` | off | Hide status output. Place this option before `build`. |
 
 The output selector accepts:
