@@ -1,4 +1,4 @@
-"""Copy-on-write edits: remove_records validate-and-cascade, and the edit_version round trip."""
+"""Copy-on-write edits: remove_records and remove_signals validate-and-cascade, and the edit_version round trip."""
 
 import re
 
@@ -7,7 +7,7 @@ import numpy as np
 import pytest
 
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
-from timenet.dataset.edit import edit_version, remove_records
+from timenet.dataset.edit import edit_version, remove_records, remove_signals
 from timenet.errors import TimeFEditError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
@@ -20,6 +20,7 @@ from timenet.types import (
     License,
     TemporalLocalizationTask,
     TimeInterval,
+    TimePoint,
     TimeSeriesSpec,
     TSCorrespondenceTask,
     TSEditingTask,
@@ -134,7 +135,7 @@ def test_input_annotation_refs_are_stripped_when_unreachable():
     kept_record, removed_record = answer.inputs
     edited = remove_records(dataset, [removed_record.id])
     rebuilt = next(task for task in edited.tasks if task.id == answer.id)
-    assert rebuilt.inputs == (kept_record,)
+    assert [record.id for record in rebuilt.inputs] == [kept_record.id]
     assert rebuilt.input_annotations == ()
 
 
@@ -309,6 +310,96 @@ def test_an_edit_finds_the_record_of_each_signal_among_its_own_records():
     assert task.input_annotations == c.annotations
 
 
+def _without_b(edit, dataset):
+    """Return ``edit`` of a ``_noted`` dataset without its Record ``b``, or without the Signal of ``b``."""
+    b = dataset.records[1]
+    return edit(dataset, [b.id] if edit is remove_records else [b.signals[0].id])
+
+
+def _by_rater(key, **fields):
+    """Return an annotation whose metadata and occurrence metadata hold a nested dict."""
+    return Annotation(key=key, metadata={"by": {"name": "a"}}, occurrence_metadata={"by": {"name": "a"}}, **fields)
+
+
+def _change(metadata):
+    """Change the nested dict of ``metadata`` and add a key, as any holder of the dict can."""
+    nested = metadata["by"]
+    assert isinstance(nested, dict)
+    nested["name"] = "changed"
+    metadata["added"] = True
+
+
+def _annotated_a():
+    """Return ``_noted("a", "b")`` with nested metadata and an annotation on ``a``, its Source, and its Signal.
+
+    The dataset and a task hold an annotation too. Each annotation has nested metadata. The tasks
+    reference the Signal of ``a`` as a target, in a scope, and in a span target, and they reference
+    the annotations.
+    """
+    dataset = _noted("a", "b")
+    a = dataset.records[0]
+    (signal,) = a.signals
+    a.annotations = ()
+    for owner in (a, a.sources[0], signal):
+        owner.metadata["by"] = {"name": "a"}
+        owner.annotate(_by_rater("note", value="a"))
+    dataset.annotate(_by_rater("release", value=1))
+    tasks = dataset.add_tasks(
+        tasks=[
+            TSEditingTask(inputs=(a,), targets=(signal, "denoised")),
+            AnswerTask(
+                inputs=(a,),
+                targets=("x",),
+                scope=TimeInterval.seconds(0.0, 0.5, time_series=(signal,)),
+                input_annotations=(*a.annotations, *dataset.annotations),
+            ),
+            TemporalLocalizationTask(inputs=(a,), targets=(TimeInterval.seconds(0.0, 0.5, time_series=(signal,)),)),
+            AnswerTask(inputs=(a,), target_annotations=signal.annotations),
+        ]
+    )
+    tasks[0].annotate(_by_rater("quality", value=1))
+    return dataset
+
+
+@pytest.mark.parametrize("edit", [remove_records, remove_signals])
+def test_an_edit_holds_copies_with_metadata_of_their_own(edit):
+    dataset = _annotated_a()
+    a = dataset.records[0]
+    edited = _without_b(edit, dataset)
+    record = edited.records[0]
+    holders = [record, record.sources[0], record.signals[0], edited, edited.tasks[0]]
+    originals = [a, a.sources[0], a.signals[0], dataset, dataset.tasks[0]]
+    for holder, original in zip(holders, originals, strict=True):
+        assert holder is not original
+        assert holder.annotations == original.annotations
+        assert not {id(item) for item in holder.annotations} & {id(item) for item in original.annotations}
+        for annotation in holder.annotations:
+            _change(annotation.metadata)
+            _change(annotation.occurrence_metadata)
+    # The Signal copy has the ID of the original and reads its stored values.
+    assert record.signals[0].id == a.signals[0].id
+    assert record.signals[0]._values is a.signals[0]._values
+    for holder in holders[:3]:
+        _change(holder.metadata)
+    unchanged = {"by": {"name": "a"}}
+    assert [original.metadata for original in originals[:3]] == [unchanged] * 3
+    annotations = [annotation for original in originals for annotation in original.annotations]
+    assert [(item.metadata, item.occurrence_metadata) for item in annotations] == [(unchanged, unchanged)] * 5
+
+
+@pytest.mark.parametrize("edit", [remove_records, remove_signals])
+def test_the_tasks_of_an_edit_point_at_its_copies(edit):
+    edited = _without_b(edit, _annotated_a())
+    record = edited.records[0]
+    (copy,) = record.signals
+    # The Signal target, the scope, and the span target. Signals compare by identity.
+    assert [signal for task in edited.tasks for signal in task.referenced_signals()] == [copy] * 3
+    _, scoped, _, answered = edited.tasks
+    referenced = (*scoped.input_annotations, *answered.target_annotations)
+    expected = (*record.annotations, *edited.annotations, *copy.annotations)
+    assert [id(item) for item in referenced] == [id(item) for item in expected]
+
+
 # ---- copy-on-write version --------------------------------------------------------------------
 
 
@@ -343,3 +434,179 @@ def test_edit_version_same_version_rejected(tmp_path):
             dataset_version=dataset.metadata.dataset_version,
             remove_record_ids=[dataset.records[1].id],
         )
+
+
+# ---- removing Signals ---------------------------------------------------------------------------
+
+
+def _signal(name, offset_s):
+    """Return 16 values at 16 Hz, covering one second from ``offset_s``."""
+    axis = RegularAxis.from_rate_hz(16, offset_us=offset_s * 1_000_000)
+    return Signal.from_values(np.arange(16, dtype=np.float32), spec=_REF_SPEC, name=name, time_axis=axis)
+
+
+def _signal_id(dataset, name):
+    """Return the ID the dataset gave the Signal of this name."""
+    return next(signal.id for record in dataset.records for signal in record.signals if signal.name == name)
+
+
+def _two_leads(time_span=None):
+    """Return a local dataset whose one Record holds ``sig-a`` (0 to 1 s) below ``monitor/leads``
+    and ``sig-b`` (2 to 3 s) in ``monitor``, with annotations at 0.5 s and 2.5 s at every level, and
+    one at 1.5 s on the Record."""
+    dataset = _noted()
+    signal_b = _signal("sig-b", 2)
+    leads = Source(name="leads", signals=(_signal("sig-a", 0),))
+    monitor = Source(name="monitor", signals=(signal_b,), sources=(leads,))
+    record = dataset.add_record(record=Record(sources=(monitor,), time_span=time_span))
+    record.add_annotations(
+        [
+            Annotation(key="age", value=64),
+            Annotation(key="early", span=TimePoint.seconds(0.5)),
+            Annotation(key="late", span=TimePoint.seconds(2.5)),
+        ]
+    )
+    # No window places gap; the Record keeps it while it holds every Signal.
+    record.annotate(Annotation(key="gap", span=TimePoint.seconds(1.5)))
+    monitor.annotate(Annotation(key="src-early", span=TimePoint.seconds(0.5)))
+    monitor.annotate(Annotation(key="src-late", span=TimePoint.seconds(2.5)))
+    leads.annotate(Annotation(key="leads-early", span=TimePoint.seconds(0.5)))
+    signal_b.annotate(Annotation(key="artifact", span=TimeInterval.seconds(2.0, 2.25)))
+    return dataset
+
+
+def _keys(annotated):
+    return sorted(annotation.key for annotation in annotated.annotations)
+
+
+def _annotation(annotated, key):
+    return next(annotation for annotation in annotated.annotations if annotation.key == key)
+
+
+@pytest.mark.filterwarnings("ignore::timenet.errors.SpanOutsideWindowWarning")
+def test_remove_signals_drops_what_only_the_removed_signals_place():
+    dataset = _two_leads()
+    sig_a, sig_b = _signal_id(dataset, "sig-a"), _signal_id(dataset, "sig-b")
+    edited = remove_signals(dataset, [sig_b])
+    (record,) = edited.records
+    (monitor,) = record.sources
+    (leads,) = monitor.sources
+    assert [signal.id for signal in record.signals] == [sig_a]
+    assert (_keys(record), _keys(monitor), _keys(leads)) == (["age", "early"], ["src-early"], ["leads-early"])
+    # Without any Signal, the Sources stay, with the annotations that need no Signal.
+    emptied = remove_signals(edited, [sig_a])
+    (record,) = emptied.records
+    assert record.signals == ()
+    assert [(source.name, _keys(source)) for source in record.walk_sources()] == [("monitor", []), ("leads", [])]
+    assert _keys(record) == ["age"]
+    # The session span of a Record places late, gap, and a task span without Signals. A Source has no session span.
+    spanned = _two_leads(time_span=TimeInterval.seconds(0.0, 3.0))
+    task = spanned.add_task(
+        task=AnswerTask(inputs=spanned.records, targets=("x",), scope=TimeInterval.seconds(2.0, 2.5))
+    )
+    edited = remove_signals(spanned, [_signal_id(spanned, "sig-b")])
+    (record,) = edited.records
+    assert (_keys(record), _keys(record.sources[0])) == (["age", "early", "gap", "late"], ["src-early"])
+    assert [kept.id for kept in edited.tasks] == [task.id]
+
+
+@pytest.mark.filterwarnings("ignore::timenet.errors.SpanOutsideWindowWarning")
+def test_remove_signals_rejects_or_cascades_the_tasks_that_reference_what_it_removes():
+    dataset = _two_leads()
+    (record,) = dataset.records
+    signal_a, signal_b = (
+        next(signal for signal in record.signals if signal.name == name) for name in ("sig-a", "sig-b")
+    )
+    context = AnswerTask(inputs=(record,), targets=("x",), input_annotations=(_annotation(record, "late"),))
+    kept = AnswerTask(
+        inputs=(record,),
+        targets=("x",),
+        input_annotations=(_annotation(record, "early"),),
+        scope=TimeInterval.seconds(0.0, 0.5, time_series=(signal_a,)),
+    )
+    edit = TSEditingTask(inputs=(record,), targets=(signal_b, "denoised"))
+    scoped = AnswerTask(inputs=(record,), targets=("x",), scope=TimeInterval.seconds(2.0, 2.5, time_series=(signal_b,)))
+    located = TemporalLocalizationTask(inputs=(record,), target_annotations=(_annotation(signal_b, "artifact"),))
+    # A span without Signals must lie where the kept Signals of the input place it, as an annotation must.
+    early = TemporalLocalizationTask(inputs=(record,), targets=(TimeInterval.seconds(0.0, 0.5),))
+    late = AnswerTask(inputs=(record,), targets=("x",), scope=TimeInterval.seconds(2.0, 2.5))
+    dataset.add_tasks(
+        tasks=[
+            edit,
+            AnswerTask(inputs=(record,), targets=("z",), from_tasks=(edit,)),
+            scoped,
+            located,
+            context,
+            AnswerTask(inputs=(record,), targets=("y",), from_tasks=(context,)),
+            kept,
+            early,
+            late,
+        ]
+    )
+    after_edit, derived = dataset.tasks[1], dataset.tasks[5]
+    # The input annotation late is context, so only the other references invalidate a task.
+    invalid = sorted([edit.id, scoped.id, located.id, late.id])
+    with pytest.raises(
+        TimeFEditError, match=re.escape(f"removing signals [{signal_b.id}] would dangle tasks {invalid}")
+    ):
+        remove_signals(dataset, [signal_b.id])
+    edited = remove_signals(dataset, [signal_b.id], cascade=True)
+    (record,) = edited.records
+    assert [task.id for task in edited.tasks] == [context.id, derived.id, kept.id, early.id]
+    # context and derived, then kept.
+    assert edited.tasks[0].input_annotations == ()
+    assert edited.tasks[1].from_tasks == (edited.tasks[0],)
+    assert edited.tasks[2].inputs == (record,)
+    assert edited.tasks[2].input_annotations[0] is _annotation(record, "early")
+    assert len(dataset.tasks) == 9
+    # Removing sig-a drops the task scoped to it and the span that only sig-a places.
+    assert [task.id for task in remove_signals(dataset, [signal_a.id], cascade=True).tasks] == [
+        task.id for task in (edit, after_edit, scoped, located, context, derived, late)
+    ]
+    # An input left without Signals invalidates every task.
+    assert remove_signals(dataset, [signal_a.id, signal_b.id], cascade=True).tasks == ()
+
+
+@pytest.mark.parametrize("edit", [remove_records, remove_signals])
+def test_edits_reject_a_string_of_ids_and_unknown_ids(edit):
+    # A string names one ID per character, so it is refused even when it spells an ID.
+    with pytest.raises(TimeFEditError, match="takes a collection of IDs, not the string '1'"):
+        edit(_noted("a", "b"), "1")
+    with pytest.raises(TimeFEditError, match=re.escape("ids: [999]")):
+        edit(_noted("a", "b"), [999])
+
+
+@pytest.mark.parametrize("edit", [remove_records, remove_signals])
+def test_edits_reject_a_dataset_that_streams_its_tasks(edit):
+    dataset = _noted("a", "b")
+    dataset.set_task_stream([AnswerTask], lambda: iter([AnswerTask(inputs=(dataset.records[0],), targets=("x",))]))
+    with pytest.raises(TimeFEditError, match=re.escape("edits do not support a dataset with a task stream")):
+        _without_b(edit, dataset)
+
+
+def test_edit_version_removes_the_signals_first_and_forwards_cascade(tmp_path):
+    dataset = _noted("a", "b")
+    a, b = dataset.records
+    sig_a, sig_b = a.signals[0].id, b.signals[0].id
+    dataset.add_tasks(
+        tasks=[
+            TSEditingTask(inputs=(b,), targets=(a.signals[0], "denoised")),
+            TSEditingTask(inputs=(a,), targets=(b,)),
+        ]
+    )
+    base = _base(tmp_path, dataset)
+    version = Version(1, 0, 1)
+    # The Signals go first; sig-b, a Signal of the removed b, is left to b's removal.
+    with pytest.raises(TimeFEditError, match=re.escape(f"removing signals [{sig_a}] would dangle tasks")):
+        edit_version(base, dataset_version=version, remove_record_ids=[b.id], remove_signal_ids=[sig_a, sig_b])
+    with pytest.raises(TimeFEditError, match="takes a collection of IDs, not the string"):
+        edit_version(base, dataset_version=version, remove_record_ids="1")  # ty: ignore[invalid-argument-type]
+    with pytest.raises(TimeFEditError, match="takes a collection of IDs, not the string"):
+        edit_version(base, dataset_version=version, remove_signal_ids="1")  # ty: ignore[invalid-argument-type]
+    # A Signal of a removed record is left to that removal, so it names no unknown Signal.
+    out = edit_version(
+        base, dataset_version=version, remove_record_ids=[b.id], remove_signal_ids=[sig_a, sig_b], cascade=True
+    )
+    with TimeFReader(open_local_version(out)) as reader:
+        edited = reader.read()
+    assert ([record.id for record in edited.records], edited.tasks, edited.records[0].signals) == ([a.id], (), ())
