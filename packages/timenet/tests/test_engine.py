@@ -2,20 +2,21 @@ from pathlib import Path
 import tempfile
 from typing import Any, ClassVar, cast
 
+import httpx
 import pytest
 
 from timenet.config import settings
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.engine import open_parents, publish_pipeline, run_pipeline, store_dataset
-from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
-from timenet.registry import LocalRegistry
+from timenet.registry import LocalRegistry, RemoteRegistry
 from timenet.registry.writable import WritableRegistry
 from timenet.testing import make_dataset
 from timenet.types import Access
-from timenet.types.access import effective_access
+from timenet.types.access import AccessRequirement, effective_access
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
@@ -353,3 +354,65 @@ def test_open_parents_closes_the_parents_it_opened_when_a_later_one_is_missing(t
         open_parents(metadata, LocalRegistry(tmp_path))
 
     assert closed == [_PARENT.dataset_id]
+
+
+class _GatedConnector(_DemoConnector):
+    """The demo dataset, credentialed."""
+
+    def metadata(self):
+        return make_dataset().metadata.model_copy(
+            update={"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
+        )
+
+
+def test_publish_pipeline_refuses_a_card_that_is_not_open_before_downloading(tmp_path, monkeypatch):
+    monkeypatch.setattr(_GatedConnector, "download", lambda self, cache_dir: pytest.fail("downloaded"))
+    remote = RemoteRegistry(
+        "http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)), cache_dir=tmp_path
+    )
+
+    with pytest.raises(TimeNetAccessError) as caught:
+        publish_pipeline(_GatedConnector(), remote, cache_dir=tmp_path / "cache")
+
+    # A card has no lineage, so its own page is the only one.
+    assert (caught.value.dataset, caught.value.requirements) == (
+        _PARENT,
+        (AccessRequirement(_PARENT, Access.CREDENTIALED, "https://example.org/dua"),),
+    )
+    # A local registry is the user's own, so it may hold the credentialed release.
+    monkeypatch.undo()
+    publish_pipeline(_GatedConnector(), LocalRegistry(tmp_path / "local"), cache_dir=tmp_path / "cache")
+    assert LocalRegistry(tmp_path / "local").exists(_PARENT.dataset_id, str(_PARENT.version))
+
+
+class _HostedRegistry:
+    """A registry that is not local. It serves the parents from a local registry and refuses writes."""
+
+    def __init__(self, root: Path) -> None:
+        self.local = LocalRegistry(root)
+
+    def exists(self, dataset_id, version):
+        return False
+
+    def open_version(self, dataset_id, version=None):
+        return self.local.open_version(dataset_id, version)
+
+    def store(self, dataset, **kwargs):
+        pytest.fail("wrote a child whose parent is credentialed")
+
+
+def test_publish_pipeline_refuses_an_open_child_of_a_credentialed_parent_before_the_write(tmp_path):
+    _store_credentialed_parent(tmp_path)
+    registry = cast(WritableRegistry, _HostedRegistry(tmp_path))
+
+    with pytest.raises(TimeNetAccessError) as caught:
+        publish_pipeline(_ChildConnector(), registry, cache_dir=tmp_path / "cache")
+
+    # The card of the child is open, so the check before the download passes. Its lineage makes it
+    # credentialed.
+    child = DatasetRef(dataset_id="test/child", version=_PARENT.version)
+    assert (caught.value.dataset, caught.value.access, caught.value.requirements) == (
+        child,
+        Access.CREDENTIALED,
+        (AccessRequirement(_PARENT, Access.CREDENTIALED, "https://example.org/dua"),),
+    )
