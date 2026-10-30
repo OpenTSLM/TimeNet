@@ -6,11 +6,6 @@ from timenet_connectors.datasets.mikeam.time_series_reasoning.loader import Time
 from timenet_connectors.datasets.mikeam.time_series_reasoning.release import SourceFile
 from timenet_connectors.datasets.mikeam.time_series_reasoning.request import authors_series
 from timenet_connectors.datasets.mikeam.time_series_reasoning.rows import CounterfactualRow, DescriptionRow, QuestionRow
-from timenet_connectors.datasets.mikeam.time_series_reasoning.tasks import (
-    CounterfactualTask,
-    DescriptionTask,
-    QuestionTask,
-)
 from timenet_connectors.datasets.mikeam.time_series_reasoning.tests.release_fixtures import fixture_path, published_rows
 
 
@@ -85,34 +80,49 @@ def _authors_item(data: dict, config: dict, shuffle) -> dict:
     return {"context": context, "ts": ts, "label": answer, "label_index": label_index}
 
 
+def _provenance(task: AnswerTask) -> tuple[SourceFile, int]:
+    line = task.metadata["line"]
+    assert isinstance(line, int)
+    return SourceFile(task.metadata["file"]), line
+
+
 def test_every_task_is_the_item_the_authors_loader_builds():
-    tasks = list(_loader().tasks())
-    assert len(tasks) == 12
-    for task in tasks:
-        timenet_task = task.to_timenet_task()
-        file, line = task.row.ref.file, task.row.ref.line
-        assert (timenet_task.metadata["file"], timenet_task.metadata["line"]) == (file.value, line)
-        # The connector draws the description order from this seed. Any draw is one the authors' loader can make.
-        draw = random.Random(f"{file.value}:{line}").shuffle  # noqa: S311 - a shuffle, not cryptography
-        item = _authors_item(published_rows(file)[line - 1], _CONFIGS[type(task.row)], draw)
-        assert isinstance(timenet_task, AnswerTask)
-        assert timenet_task.prompt == item["context"]
-        assert timenet_task.targets == (item["label"],)
-        assert authors_series(timenet_task) == item["ts"]
+    loader = _loader()
+    by_method = {
+        DescriptionRow: list(loader.description_tasks()),
+        QuestionRow: list(loader.question_tasks()),
+        CounterfactualRow: list(loader.counterfactual_tasks()),
+    }
+    # tasks() yields from each method in turn.
+    assert [_provenance(task) for task in loader.tasks()] == [
+        _provenance(task) for tasks in by_method.values() for task in tasks
+    ]
+    assert sum(map(len, by_method.values())) == 12
+    for row_type, tasks in by_method.items():
+        for task in tasks:
+            file, line = _provenance(task)
+            # The connector draws the description order from this seed. Any draw is one the authors' loader can make.
+            draw = random.Random(f"{file.value}:{line}").shuffle  # noqa: S311 - a shuffle, not cryptography
+            item = _authors_item(published_rows(file)[line - 1], _CONFIGS[row_type], draw)
+            assert isinstance(task, AnswerTask)
+            assert task.prompt == item["context"]
+            assert task.targets == (item["label"],)
+            assert authors_series(task) == item["ts"]
 
 
 def test_the_description_order_is_fixed_and_puts_the_answer_anywhere():
-    descriptions = [task.to_timenet_task() for task in _loader().tasks_of(DescriptionTask)]
+    descriptions = list(_loader().description_tasks())
     # Published, every answer is the first option. The seeded draw is pinned here: a change to it, or to
     # Python's shuffle, shows as a changed target.
     assert [task.targets for task in descriptions] == [(letter,) for letter in "DBDCABA"]
 
 
 def test_question_tasks_keep_the_answer_and_the_source_issues_in_metadata():
+    loader = _loader()
     metadata = {
-        (task.row.ref.file.name, task.row.ref.line): task.to_timenet_task().metadata
-        for kind in (QuestionTask, CounterfactualTask)
-        for task in _loader().tasks_of(kind)
+        (_provenance(task)[0].name, _provenance(task)[1]): task.metadata
+        for tasks in (loader.question_tasks(), loader.counterfactual_tasks())
+        for task in tasks
     }
     # MCQ_1_TS.jsonl line 14221: the answer's text is also a wrong option's. The letter keeps the
     # authors' choice.

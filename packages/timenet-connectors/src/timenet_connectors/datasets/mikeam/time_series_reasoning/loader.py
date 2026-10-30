@@ -1,12 +1,12 @@
 """Load the release's six files into its Records and the authors' three tasks."""
 
 from collections.abc import Iterable, Iterator, Mapping
-from itertools import chain
 from pathlib import Path
 from typing import Self
 
 from timenet.dataset import Record
 from timenet.errors import TimeFValidationError
+from timenet.types import AnswerTask
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.mikeam.time_series_reasoning.index import ReleaseIndex
@@ -14,29 +14,28 @@ from timenet_connectors.datasets.mikeam.time_series_reasoning.records import Rel
 from timenet_connectors.datasets.mikeam.time_series_reasoning.release import SourceFile
 from timenet_connectors.datasets.mikeam.time_series_reasoning.rows import CounterfactualRow, QuestionRow, read_rows
 from timenet_connectors.datasets.mikeam.time_series_reasoning.tasks import (
-    CounterfactualTask,
-    DescriptionTask,
-    QuestionTask,
-    TimeSeriesReasoningTask,
+    counterfactual_task,
+    description_task,
+    question_task,
 )
 
 
-class TimeSeriesReasoningLoader(DatasetLoader[TimeSeriesReasoningTask]):
+class TimeSeriesReasoningLoader(DatasetLoader):
     """The release, read and checked: its Records, and one task per row of the authors' task files.
 
-    The authors define three tasks, one per config:
+    The authors define three tasks, one per config. Each is an ``AnswerTask``, and each has its own
+    method:
 
-    - Description (:class:`DescriptionTask`, ``ts2desc_mcq``): pick the series' description, under
+    - Description (:meth:`description_tasks`, ``ts2desc_mcq``): pick the series' description, under
       the authors' split.
-    - Question (:class:`QuestionTask`, ``qa_mcq``): answer a question about one series. No split.
-    - Counterfactual (:class:`CounterfactualTask`, ``qa_counterfactual``): answer a question that
+    - Question (:meth:`question_tasks`, ``qa_mcq``): answer a question about one series. No split.
+    - Counterfactual (:meth:`counterfactual_tasks`, ``qa_counterfactual``): answer a question that
       compares a series with its changed version. No split.
 
-    Select one kind, or one kind of one split, with ``tasks_of``. The question tasks stream from their
-    files, which must stay available until writing ends.
+    The question tasks stream from their files, which must stay available until writing ends.
     """
 
-    TASK_KINDS = (DescriptionTask, QuestionTask, CounterfactualTask)
+    TASK_TYPES = (AnswerTask,)
 
     def __init__(self, paths: Mapping[SourceFile, Path], index: ReleaseIndex, records: ReleaseRecords) -> None:
         self._paths = paths
@@ -72,22 +71,42 @@ class TimeSeriesReasoningLoader(DatasetLoader[TimeSeriesReasoningTask]):
         """Return the series Records, the rounded copies, then the changed series, each in source order."""
         return iter(self._records)
 
-    def tasks(self) -> Iterator[TimeSeriesReasoningTask]:
-        """Return the description tasks, then the question tasks, then the counterfactual tasks, in file order.
+    def tasks(self) -> Iterator[AnswerTask]:
+        """Return every task, in file order.
 
         Each call rereads the two question files, so the tasks can be iterated more than once.
+
+        Yields:
+            The description tasks, then the question tasks, then the counterfactual tasks.
         """
-        return chain(self._description_tasks(), self._question_tasks(), self._counterfactual_tasks())
+        yield from self.description_tasks()
+        yield from self.question_tasks()
+        yield from self.counterfactual_tasks()
 
-    def _description_tasks(self) -> Iterator[DescriptionTask]:
+    def description_tasks(self) -> Iterator[AnswerTask]:
+        """Return the description tasks (``ts2desc_mcq``).
+
+        Yields:
+            One task for each description row.
+        """
         for row in self._index.descriptions:
-            yield DescriptionTask(row, self._records.of_description(row))
+            yield description_task(row, self._records.of_description(row))
 
-    def _question_tasks(self) -> Iterator[QuestionTask]:
+    def question_tasks(self) -> Iterator[AnswerTask]:
+        """Return the question tasks (``qa_mcq``), read again from their file.
+
+        Yields:
+            One task for each question row.
+        """
         for row in read_rows(self._paths[SourceFile.QUESTIONS], SourceFile.QUESTIONS, QuestionRow):
-            yield QuestionTask(row, self._records.series[row.uuid])
+            yield question_task(row, self._records.series[row.uuid])
 
-    def _counterfactual_tasks(self) -> Iterator[CounterfactualTask]:
+    def counterfactual_tasks(self) -> Iterator[AnswerTask]:
+        """Return the counterfactual tasks (``qa_counterfactual``), read again from their file.
+
+        Yields:
+            One task for each counterfactual row.
+        """
         for row in read_rows(self._paths[SourceFile.COUNTERFACTUALS], SourceFile.COUNTERFACTUALS, CounterfactualRow):
             changed = self._records.changed[row.uuid, row.counterfactual]
-            yield CounterfactualTask(row, self._records.series[row.uuid], changed)
+            yield counterfactual_task(row, self._records.series[row.uuid], changed)
