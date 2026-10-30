@@ -71,10 +71,9 @@ uv add 'timenet[s3]'
 The layout under the prefix mirrors the local one, `org/name/version/…` with `manifest.json` beside the
 data files. `store` uploads to a temporary `version.tmp-<uuid>` prefix and moves each object into place
 (`manifest.json` last), so a failed publish never leaves a partial version. `open` reads lazily and
-`load` reads every value, both through a pyarrow `S3FileSystem` (range reads, no whole-version
-download), or from the local cache when a prior `download` populated it. The backend has no
-catalog, so `list` and `search` are unsupported: publish and fetch by an explicit
-`org/name@version`.
+`load` reads every value. Both reuse complete local copies where available and otherwise read
+remote payload ranges through a pyarrow `S3FileSystem`. The backend has no catalog, so `list` and
+`search` are unsupported: publish and fetch by an explicit `org/name@version`.
 
 ## `BaseRegistry`
 
@@ -85,6 +84,7 @@ Every backend implements this contract: four data-access methods and one shared 
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
 | `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
+| `local_root` | The local registry or cache directory for complete releases. |
 | `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files, with its [payload sources](#payload-sources) opened from this registry. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. |
 | `search(...)` | Filter datasets (shared implementation). |
 
@@ -125,6 +125,22 @@ when `auto_build` is set. Otherwise the read raises. A payload source builds wit
 at its exact version. `fetch_from` repairs a damaged copy. Without it, the read raises
 `TimeNetFileError`. A remote client never runs connector code and rejects `fetch_from`. See
 [Open, load, or download](client.md#open-load-or-download).
+
+### Remote reads of payload sources
+
+The `open_version()` method of an HTTP or S3 registry resolves the manifests of the payload sources
+before it returns. Reads then use complete cached copies where they exist. Otherwise they read byte
+ranges of the remote files, as each read needs them. The first read of Records or tasks downloads
+the catalog of the version and makes sure that it matches the manifest. A read never opens the
+catalog of a parent release.
+
+HTTP reads use the range reader and the read-ahead cache of fsspec. The object server must support
+byte ranges. The client requests a new signed URL after one expires. The registry token goes only
+with API requests.
+
+A read of byte ranges cannot make sure that a whole file matches its checksum. `download()` and
+`download_version()` copy complete files, and make sure that each file has its recorded size and
+checksum. `TimeFReader.verify()` reads and hashes every file that a release reads.
 
 ## Writing to a registry
 
