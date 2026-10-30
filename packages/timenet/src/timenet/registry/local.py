@@ -1,13 +1,13 @@
 """A registry backed by a local ``<root>/<dataset_id>/<version>/`` directory tree."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 from typing import BinaryIO
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE
-from timenet.manifest import Manifest
+from timenet.manifest import Manifest, PayloadSource
 from timenet.registry._paths import release_dir
 from timenet.registry.dependencies import open_local_release
 from timenet.registry.version import DatasetVersion
@@ -142,6 +142,7 @@ class LocalRegistry(WritableRegistry):
         force: bool = False,
         values_backend: str = "parquet",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
+        pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
     ) -> str:
         """Compile a dataset and write it into this registry's directory tree.
 
@@ -156,6 +157,8 @@ class LocalRegistry(WritableRegistry):
             force: Replace an already-committed version instead of skipping it.
             values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
             progress_cb: Optional writer progress callback.
+            pinned_by: The releases that already read files of this release, with their pins. The
+                writer publishes only if it reproduced each pinned file.
 
         Returns:
             The stored version string.
@@ -163,7 +166,8 @@ class LocalRegistry(WritableRegistry):
         Raises:
             TimeNetDatasetNotFoundError: If the dataset reuses payloads stored by a release that this
                 registry does not hold.
-            TimeFFormatError: If this registry holds such a release in another form.
+            TimeFFormatError: If this registry holds such a release in another form, or a release in
+                ``pinned_by`` pins a file that the write did not reproduce.
         """  # noqa: DOC502 - the writer checks payload sources before it publishes
         if dataset.schema is None:
             dataset.derive_schema()
@@ -174,7 +178,13 @@ class LocalRegistry(WritableRegistry):
         if self.exists(dataset_id, version) and not force:
             return version
         with TimeFWriter(
-            self._root, dataset, values_backend=values_backend, progress_cb=progress_cb, replace=force, registry=self
+            self._root,
+            dataset,
+            values_backend=values_backend,
+            progress_cb=progress_cb,
+            replace=force,
+            registry=self,
+            pinned_by=pinned_by,
         ) as writer:
             writer.write()
         return version
