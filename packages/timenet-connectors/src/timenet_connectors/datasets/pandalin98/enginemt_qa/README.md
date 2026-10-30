@@ -100,15 +100,15 @@ A row named by several lines, in train and in test, is one Record that their tas
 
 ### Tasks
 
-Each published QA pair with a label becomes one task. There are four kinds, one per stage, and each
-task takes its split from its file:
+Each published QA pair with a label becomes one task. There are four tasks, one per stage, and each
+task takes its split from its file. Each stage has its own loader method:
 
-| Kind | TimeNet type | Inputs | Target | train | test |
+| Loader method | TimeNet type | Inputs | Target | train | test |
 | --- | --- | --- | --- | --- | --- |
-| `UnderstandingTask` | `AnswerTask` | 1 Record | the published answer | 41,128 | 17,240 |
-| `PerceptionTask` | `ClassificationTask` | 1 Record | the published letters | 34,718 | 14,585 |
-| `ReasoningTask` | `ClassificationTask` | 10 Records | the published letter | 16,300 | 6,768 |
-| `DecisionTask` | `AnswerTask` | 10 Records | the published answer | 8,150 | 3,384 |
+| `understanding_tasks()` | `AnswerTask` | 1 Record | the published answer | 41,128 | 17,240 |
+| `perception_tasks()` | `ClassificationTask` | 1 Record | the published letters | 34,718 | 14,585 |
+| `reasoning_tasks()` | `ClassificationTask` | 10 Records | the published letter | 16,300 | 6,768 |
+| `decision_tasks()` | `AnswerTask` | 10 Records | the published answer | 8,150 | 3,384 |
 
 That is 142,273 tasks: 100,296 train and 41,977 test. The 1,769 Perception pairs with an empty
 answer have no task (see [Data limitations](#data-limitations)).

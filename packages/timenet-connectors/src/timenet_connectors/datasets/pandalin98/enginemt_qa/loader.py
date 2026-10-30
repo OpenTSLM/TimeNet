@@ -7,12 +7,12 @@ from typing import Self
 
 from timenet.dataset import Record
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation
+from timenet.types import Annotation, AnswerTask, ClassificationTask, Task
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.pandalin98.enginemt_qa.keys import vocabulary_key
 from timenet_connectors.datasets.pandalin98.enginemt_qa.qa import QAPair, read_pairs
-from timenet_connectors.datasets.pandalin98.enginemt_qa.questions import Vocabulary
+from timenet_connectors.datasets.pandalin98.enginemt_qa.questions import Stage, Vocabulary
 from timenet_connectors.datasets.pandalin98.enginemt_qa.records import RowLoader, build_record
 from timenet_connectors.datasets.pandalin98.enginemt_qa.release import (
     PINNED_RELEASE,
@@ -22,29 +22,29 @@ from timenet_connectors.datasets.pandalin98.enginemt_qa.release import (
     PinnedRelease,
 )
 from timenet_connectors.datasets.pandalin98.enginemt_qa.signals import check_layout
-from timenet_connectors.datasets.pandalin98.enginemt_qa.tasks import KIND_OF_STAGE, TASK_KINDS, EngineMTQATask
+from timenet_connectors.datasets.pandalin98.enginemt_qa.tasks import closed_task, open_task, stage_task
 
 
-class EngineMTQADatasetLoader(DatasetLoader[EngineMTQATask]):
+class EngineMTQADatasetLoader(DatasetLoader):
     """EngineMT-QA's files, read and checked: one lazy Record per row, and one task per QA pair.
 
-    EngineMT-QA defines four tasks, the paper's stages, each under the authors' split:
+    EngineMT-QA defines four tasks, the paper's stages, each under the authors' split. Two stages are
+    ``AnswerTask``s and two are ``ClassificationTask``s, so each stage has its own method:
 
-    - Understanding (:class:`~.tasks.UnderstandingTask`): describe one cycle's change in a named signal.
-    - Perception (:class:`~.tasks.PerceptionTask`): from one cycle, choose a component's health, the
-      fault's causes, or the engine's health state.
-    - Reasoning (:class:`~.tasks.ReasoningTask`): from 10 cycles, choose the engine's condition or its
-      failure probability range.
-    - Decision-making (:class:`~.tasks.DecisionTask`): from 10 cycles, recommend maintenance.
+    - Understanding (:meth:`understanding_tasks`): describe one cycle's change in a named signal.
+    - Perception (:meth:`perception_tasks`): from one cycle, choose a component's health, the fault's
+      causes, or the engine's health state.
+    - Reasoning (:meth:`reasoning_tasks`): from 10 cycles, choose the engine's condition or its failure
+      probability range.
+    - Decision-making (:meth:`decision_tasks`): from 10 cycles, recommend maintenance.
 
-    Select one kind, or one kind of one split, with ``tasks_of``, such as
-    ``tasks_of(PerceptionTask, split=Split.TEST)``.
+    :meth:`tasks` keeps the file order, in which the stages alternate.
 
     The loader keeps the QA pairs, not the values: the signals read their row from the HDF5 file, so the
     files must stay available until writing ends.
     """
 
-    TASK_KINDS = TASK_KINDS
+    TASK_TYPES = (AnswerTask, ClassificationTask)
 
     def __init__(self, pairs: tuple[QAPair, ...], records: Mapping[int, Record]) -> None:
         self._pairs = pairs
@@ -111,14 +111,56 @@ class EngineMTQADatasetLoader(DatasetLoader[EngineMTQATask]):
         """Return one Record per row, in row id order, whose values stay in the HDF5 file until written."""
         return iter(self._records.values())
 
-    def tasks(self) -> Iterator[EngineMTQATask]:
+    def tasks(self) -> Iterator[Task]:
         """Return one task per labelled QA pair: the train file's pairs, then the test file's, in file order.
 
         Yields:
             The tasks.
         """
         for pair in self._pairs:
-            yield KIND_OF_STAGE[pair.stage](pair, tuple(self._records[row] for row in pair.rows))
+            yield stage_task(pair, self._inputs(pair))
+
+    def understanding_tasks(self) -> Iterator[AnswerTask]:
+        """Return the understanding tasks (stage 1), in file order.
+
+        Yields:
+            One answer task for each understanding pair.
+        """
+        for pair in self._pairs_of(Stage.UNDERSTANDING):
+            yield open_task(pair, self._inputs(pair))
+
+    def perception_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the perception tasks (stage 2), in file order.
+
+        Yields:
+            One classification task for each labelled perception pair.
+        """
+        for pair in self._pairs_of(Stage.PERCEPTION):
+            yield closed_task(pair, self._inputs(pair))
+
+    def reasoning_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the reasoning tasks (stage 3), in file order.
+
+        Yields:
+            One classification task for each reasoning pair.
+        """
+        for pair in self._pairs_of(Stage.REASONING):
+            yield closed_task(pair, self._inputs(pair))
+
+    def decision_tasks(self) -> Iterator[AnswerTask]:
+        """Return the decision-making tasks (stage 4), in file order.
+
+        Yields:
+            One answer task for each decision-making pair.
+        """
+        for pair in self._pairs_of(Stage.DECISION_MAKING):
+            yield open_task(pair, self._inputs(pair))
+
+    def _pairs_of(self, stage: Stage) -> Iterator[QAPair]:
+        return (pair for pair in self._pairs if pair.stage is stage)
+
+    def _inputs(self, pair: QAPair) -> tuple[Record, ...]:
+        return tuple(self._records[row] for row in pair.rows)
 
 
 def _read_labelled_pairs(path: Path, part: Part, inventory: PinnedInventory) -> list[QAPair]:

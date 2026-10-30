@@ -26,12 +26,6 @@ from timenet_connectors.datasets.pandalin98.enginemt_qa.release import (
     PinnedRelease,
 )
 from timenet_connectors.datasets.pandalin98.enginemt_qa.signals import check_layout
-from timenet_connectors.datasets.pandalin98.enginemt_qa.tasks import (
-    DecisionTask,
-    PerceptionTask,
-    ReasoningTask,
-    UnderstandingTask,
-)
 
 
 _ROWS = 13
@@ -236,13 +230,25 @@ def test_all_rows_builds_a_record_per_row(tmp_path):
     assert [record_metadata(record).row_id for record in loader.records()] == list(range(1, _ROWS + 1))
 
 
-def test_tasks_of_selects_a_kind_and_split(tmp_path):
+def _pair_key(task) -> tuple:
+    return task.metadata["source_file"], task.metadata["source_line"], task.metadata["qa_offset"]
+
+
+def test_each_stage_has_its_own_method(tmp_path):
     loader = EngineMTQADatasetLoader.parse_from(_release(tmp_path), release=_RELEASE)
-    assert len(list(loader.tasks_of(UnderstandingTask, split=Split.TEST))) == 8
-    assert len(list(loader.tasks_of(PerceptionTask, split=Split.TRAIN))) == 6
-    assert len(list(loader.tasks_of(ReasoningTask))) == 4
-    assert [task.split for task in loader.tasks_of(DecisionTask)] == [Split.TRAIN, Split.TEST]
-    assert {kind.TIMENET_TYPE for kind in loader.TASK_KINDS} == {AnswerTask, ClassificationTask}
+    assert len([task for task in loader.understanding_tasks() if task.split is Split.TEST]) == 8
+    assert len([task for task in loader.perception_tasks() if task.split is Split.TRAIN]) == 6
+    assert len(list(loader.reasoning_tasks())) == 4
+    assert [task.split for task in loader.decision_tasks()] == [Split.TRAIN, Split.TEST]
+    # tasks() keeps the file order, and holds exactly the tasks of the four methods.
+    by_stage = [
+        *loader.understanding_tasks(),
+        *loader.perception_tasks(),
+        *loader.reasoning_tasks(),
+        *loader.decision_tasks(),
+    ]
+    assert sorted(map(_pair_key, loader.tasks())) == sorted(map(_pair_key, by_stage))
+    assert (AnswerTask, ClassificationTask) == loader.TASK_TYPES
 
 
 def test_a_changed_inventory_fails(tmp_path):
