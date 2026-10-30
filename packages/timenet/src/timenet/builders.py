@@ -6,11 +6,18 @@ SDK's whole knowledge of building to one protocol and one lookup, and lets a thi
 package plug in the same way the first-party one does.
 """
 
+from collections.abc import Mapping
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import Protocol
+from typing import TYPE_CHECKING, Protocol
 
 from timenet.types import DatasetMetadata
+
+
+if TYPE_CHECKING:
+    from timenet.manifest import PayloadSource
+    from timenet.registry import BaseRegistry
+    from timenet.types.references import DatasetRef
 
 
 ENTRY_POINT_GROUP = "timenet.builders"
@@ -62,13 +69,30 @@ class BuilderBackend(Protocol):
         """
         ...
 
-    def build(self, dataset_id: str, root: Path, *, force: bool = False) -> Path:
+    def build(  # noqa: PLR0913
+        self,
+        dataset_id: str,
+        root: Path,
+        *,
+        force: bool = False,
+        build_parents: bool = False,
+        fetch_from: "str | BaseRegistry | None" = None,
+        pinned_by: "Mapping[DatasetRef, PayloadSource] | None" = None,
+    ) -> Path:
         """Build the dataset into a registry directory.
+
+        Missing parent releases are prepared before the build starts, or the build fails before
+        any download. Each one is reused, copied from ``fetch_from``, or built when
+        ``build_parents`` is set. A build with ``pinned_by`` publishes the release only if it
+        reproduces each pinned file.
 
         Args:
             dataset_id: The dataset id.
             root: The output registry directory.
             force: Rebuild even if the version is already built.
+            build_parents: Build missing parent releases from their installed connectors.
+            fetch_from: The registry, or its URI, to copy missing parent releases from.
+            pinned_by: The releases that already read files of this release, with their pins.
 
         Returns:
             The committed version directory.
