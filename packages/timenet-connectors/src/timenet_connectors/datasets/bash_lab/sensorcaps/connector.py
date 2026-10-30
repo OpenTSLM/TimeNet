@@ -2,9 +2,9 @@
 
 The connector downloads the original JSONL files at a pinned commit through the HuggingFace base,
 indexes rows by byte offset, and keeps just one decoded sensor row cached across the six channel
-loaders, so the complete corpus is never held in memory. Tasks use the original system message
-followed by the original derived-feature text as their prompt, with the activity summary and optional
-sensor location as input annotations. Feature text is streamed rather than retained across the corpus.
+loaders, so sensor values are never all held in memory. Tasks use the original system message as
+their prompt, with the activity summary and optional sensor location as input annotations. Each
+derived feature is a Record annotation, held in memory with the Records.
 """
 
 from collections.abc import Mapping

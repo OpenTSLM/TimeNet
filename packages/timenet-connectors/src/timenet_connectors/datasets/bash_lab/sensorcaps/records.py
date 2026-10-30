@@ -7,7 +7,13 @@ import pyarrow as pa
 from timenet.dataset import Record, Signal, Source
 from timenet.dataset.axis import IrregularAxis
 from timenet.types import Annotation, TimeSeriesSpec
-from timenet_connectors.datasets.bash_lab.sensorcaps.parse import EXPORTED_SAMPLES, ParsedRow, RowRef, parse_row
+from timenet_connectors.datasets.bash_lab.sensorcaps.parse import (
+    EXPORTED_SAMPLES,
+    FEATURE_HEADINGS,
+    ParsedRow,
+    RowRef,
+    parse_row,
+)
 from timenet_connectors.datasets.bash_lab.sensorcaps.release import source_file
 
 
@@ -94,6 +100,15 @@ def _load_time_offsets() -> pa.Array:
     return _TIME_OFFSETS_US
 
 
+def feature_key(heading: str) -> str:
+    """Return the annotation key of a derived feature, such as ``gyroscope_moving_average``.
+
+    Returns:
+        The heading in lowercase, with underscores for spaces.
+    """
+    return heading.lower().replace(" ", "_")
+
+
 def make_record(ref: RowRef, row: ParsedRow, loader: ValueLoader) -> Record:
     """Build one six-channel IMU Record with its source provenance.
 
@@ -125,4 +140,8 @@ def make_record(ref: RowRef, row: ParsedRow, loader: ValueLoader) -> Record:
         metadata["sensor_location"] = row.location
     for key, value in metadata.items():
         record.annotate(Annotation(key=key, value=value))
+    # The derived features are Record annotations only, not task inputs: they are long NumPy text that
+    # the generator computed from the 120-reading source window, not from the 60 stored readings.
+    for heading in FEATURE_HEADINGS:
+        record.annotate(Annotation(key=feature_key(heading), value=row.features[heading]))
     return record

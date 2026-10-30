@@ -45,7 +45,7 @@ class SensorCapsLoader(DatasetLoader):
 
     @classmethod
     def parse_from(cls, refs: Iterable[Any]) -> Self:
-        """Index every row and build its Record, keeping only byte offsets and small annotations.
+        """Index every row and build its Record, keeping byte offsets and the row's text annotations.
 
         Args:
             refs: The :class:`HubFileRef` list the connector downloaded.
@@ -73,8 +73,8 @@ class SensorCapsLoader(DatasetLoader):
         """Re-read each row's prompt and caption, without retaining the corpus.
 
         Yields:
-            One caption task per row, in file and row order: the system message and the derived-feature
-            text as prompt, and the activity summary and sensor location as input annotations.
+            One caption task per row, in file and row order: the system message as prompt, and the
+            activity summary and sensor location as input annotations.
         """
         for file in self._files:
             for ref, row in iter_rows(file):
@@ -82,7 +82,7 @@ class SensorCapsLoader(DatasetLoader):
                 yield AnswerTask(
                     inputs=(record,),
                     targets=(row.caption,),
-                    prompt=f"{row.system}\n\n{row.features}" if row.features.strip() else row.system,
+                    prompt=row.system,
                     input_annotations=tuple(a for a in record.annotations if a.key in _CONTEXT_KEYS),
                     split=Split.TRAIN,
                 )
