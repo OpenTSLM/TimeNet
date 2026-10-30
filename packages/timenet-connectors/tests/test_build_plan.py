@@ -26,6 +26,7 @@ from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias, SourceKey
 from timenet.types.references import DatasetRef
 import timenet_connectors
+from timenet_connectors import api as api_module
 from timenet_connectors.builder import cli as cli_module, env as env_module
 from timenet_connectors.builder.backend import ConnectorBuilder
 from timenet_connectors.builder.cli import app
@@ -290,6 +291,28 @@ def test_a_pinned_source_is_rebuilt_in_staging_and_published_only_if_it_matches(
     assert not list(release_dir(output.root, GRAND).parent.glob("*"))
 
 
+def test_a_built_release_needs_only_its_payload_sources(tmp_path, monkeypatch):
+    _install_cards(monkeypatch, parent={"parent": GRAND})
+    output = LocalRegistry(tmp_path / "output")
+    _parent_without_its_source(output)
+    pins = output.get_manifest(PARENT.dataset_id).payload_sources[SourceKey(str(GRAND))]
+
+    with pytest.raises(TimeNetMissingParentError, match=r"^payload source timenet/hello-world@1\.0\.0 of test/parent"):
+        plan_parents(PARENT.dataset_id, output)
+    # The source that PARENT reads builds against its pins.
+    assert plan_parents(PARENT.dataset_id, output, build_parents=True) == [
+        ParentStep(GRAND, "build", pinned_by={PARENT: pins})
+    ]
+    # A rebuild of PARENT needs its declared parents instead, and pins the new files.
+    assert plan_parents(PARENT.dataset_id, output, build_parents=True, force=True) == [ParentStep(GRAND, "build")]
+    # A registry that holds the source fills the gap: the local PARENT is reused and GRAND is copied.
+    origin = LocalRegistry(tmp_path / "origin")
+    origin.store(make_dataset())
+    assert plan_parents(PARENT.dataset_id, output, fetch_from=origin) == [ParentStep(PARENT, "fetch")]
+    prepare_parents(PARENT.dataset_id, output, build=_no_build, fetch_from=origin)
+    assert output.exists(GRAND.dataset_id, str(GRAND.version))
+
+
 def test_a_damaged_parent_is_fetched_again_but_never_built_over(tmp_path, monkeypatch):
     _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
     output, origin = LocalRegistry(tmp_path / "output"), LocalRegistry(tmp_path / "origin")
@@ -474,6 +497,24 @@ def test_load_obtains_a_missing_parent_before_it_builds_and_reads(tmp_path, monk
     assert [record.id for record in dataset.records] == [make_dataset().records[0].id]
     builds = [(CHILD.dataset_id, False)]
     assert calls == (builds if obtain == "fetch_from" else [(PARENT.dataset_id, False), *builds])
+
+
+def test_load_copies_a_missing_payload_source_through_fetch_from(tmp_path, monkeypatch):
+    out = LocalRegistry(tmp_path / "out")
+    _parent_without_its_source(out)
+    origin = LocalRegistry(tmp_path / "origin")
+    origin.store(make_dataset())
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TIMENET_REGISTRY", str(out.root))
+    # The build has nothing to do, and no builder backend can build the payload source, so only the
+    # read can copy it.
+    monkeypatch.setattr(api_module, "build", lambda dataset_id, **options: None)
+    monkeypatch.setattr(builders, "entry_points", lambda group: [])
+
+    dataset = timenet_connectors.load(PARENT.dataset_id, fetch_from=origin)
+
+    assert out.exists(GRAND.dataset_id, str(GRAND.version))
+    assert len(dataset.records) == 2
 
 
 class _NoDownloads(_Hosted):

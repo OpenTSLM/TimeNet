@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from timenet.types import DatasetMetadata
+from timenet.types.references import DatasetRef
 
 
 if TYPE_CHECKING:
     from timenet.manifest import PayloadSource
     from timenet.registry import BaseRegistry
-    from timenet.types.references import DatasetRef
 
 
 ENTRY_POINT_GROUP = "timenet.builders"
@@ -114,3 +114,21 @@ def find_builder(dataset_id: str) -> BuilderBackend | None:
         if backend.knows(dataset_id):
             return backend
     return None
+
+
+def exact_builder(reference: DatasetRef) -> BuilderBackend | None:
+    """Return the backend whose connector card declares exactly this release.
+
+    A connector builds one version, the one on its card. Building a release that others already
+    pin needs that exact version.
+
+    Args:
+        reference: The dataset ID and version.
+
+    Returns:
+        The backend, or ``None`` when no installed backend claims the dataset or its card declares
+        another version.
+    """
+    builder = find_builder(reference.dataset_id)
+    card = None if builder is None else builder.card(reference.dataset_id)
+    return builder if card is not None and card.dataset_version == reference.version else None
