@@ -9,6 +9,7 @@ from dataclasses import dataclass
 from enum import StrEnum, unique
 from typing import TYPE_CHECKING
 
+from timenet.errors import TimeNetAccessError
 from timenet.types.references import DatasetRef
 
 
@@ -85,3 +86,28 @@ def effective_access(metadata: "DatasetMetadata", lineage: "Iterable[ParentDatas
     """
     cards = (metadata, *(ancestor.metadata for ancestor in lineage))
     return max((card.access for card in cards), key=_STRICTNESS.__getitem__)
+
+
+def require_open_access(metadata: "DatasetMetadata", lineage: "Iterable[ParentDatasetCard]" = ()) -> None:
+    """Reject a release that is not open, for a registry that serves its bytes to others.
+
+    Credentialed and restricted data cannot be redistributed. Only the user's own registry, which
+    holds what the user built, may hold such a release. The check uses the effective access level
+    of the release, so a child whose card says open but whose parent is credentialed is not open.
+
+    Args:
+        metadata: The release's card or manifest metadata.
+        lineage: The lineage of a manifest or a dataset. A card that is not built yet has none, so
+            its own level and requirement are the only ones.
+
+    Raises:
+        TimeNetAccessError: If the effective access of the release is credentialed or restricted.
+            The error names the release, its effective access level, and each requirement that
+            :func:`access_requirements` finds.
+    """
+    lineage = tuple(lineage)
+    access = effective_access(metadata, lineage)
+    if access is Access.OPEN:
+        return
+    release = DatasetRef(dataset_id=metadata.dataset_id, version=metadata.dataset_version)
+    raise TimeNetAccessError(release, access, access_requirements(metadata, lineage))
