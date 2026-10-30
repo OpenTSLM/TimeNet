@@ -12,6 +12,7 @@ import pyarrow as pa
 from timenet.dataset.composition import ImportedDataset, ImportState, import_from
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record
+from timenet.dataset.source import Source
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
@@ -84,6 +85,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._records_by_id: dict[EntityId, Record] = {}
         self._signals_by_id: dict[EntityId, Signal] = {}
         self._sources: set[int] = set()
+        self._sources_by_record_id: dict[EntityId, tuple[Source, ...]] = {}
         self._signals_by_record_id: dict[EntityId, tuple[Signal, ...]] = {}
         self._tasks: list[Task] = []
         self._tasks_by_id: dict[EntityId, Task] = {}
@@ -102,45 +104,54 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         *,
         alias: ParentAlias | None = None,
         records: Iterable[EntityId] = (),
+        signals: Iterable[EntityId] = (),
         load: LoadPlan = LoadPlan.ALL_LAZY,
     ) -> ImportedDataset:
-        """Copy Records from a parent release into this dataset.
+        """Copy Records and Signals from a parent release into this dataset.
 
         The parent must be a release that ``metadata.parents`` declares. The call records the parent
         in :attr:`parent_cards` and :attr:`lineage`. It does not change the card of this dataset.
 
-        Each copy is this dataset's own Record, with new IDs and its own metadata and annotations, so
+        - ``records=`` copies each Record whole, with its Sources, Signals, and annotations.
+        - ``signals=`` copies each Signal into a copy of its Record and of the Sources above it. Such a
+          partial copy keeps the annotations that its Signals place.
+
+        Each copy is this dataset's own object, with new IDs and its own metadata and annotations, so
         edits do not change the parent. Its Signals keep the parent's value handles, so they read the
         parent's stored values unless ``load`` loads them. A write of this dataset reuses the parent's
         payloads, so it needs the parent release. Annotations on the parent dataset itself are not
         copied.
 
-        An import of a Record whose copy this dataset holds returns that copy as it is. A Record whose
-        copy this dataset removed is copied again, under a new ID. Imports are safe to repeat: if a
-        call fails partway, repeating it completes it. Select many Records in one call, because each
-        call reads them in one batch. ``docs/timef-dataset.md`` describes the rules.
+        An import of an object whose copy this dataset holds reuses that copy, with this dataset's
+        edits. If the call needs Signals that the copy of a Record lacks, it adds them to that copy,
+        with the Sources and annotations that they bring. An object whose copy this dataset removed is
+        copied again, under a new ID. Imports are safe to repeat: if a call fails partway, repeating
+        it completes it. Select many objects in one call, because each call reads them in one batch.
+        ``docs/timef-dataset.md`` describes the rules.
 
         Args:
             parent: A reader of the parent release.
             alias: The parent alias to import under, when several aliases declare the parent.
-            records: The parent IDs of the Records to copy.
-            load: Which kinds of stored values the copies of the selected Records hold loaded. The
-                import reads the parent Records without their values. Then it loads these kinds on the
-                copies, through their own value handles, also on a copy that this dataset holds
-                already. A value that a copy holds already does not load again. The default loads
-                none.
+            records: The parent IDs of the Records to copy whole.
+            signals: The parent IDs of the Signals to copy.
+            load: Which kinds of stored values to load. The import reads the parent Records without
+                their values. Then it loads these kinds on the copies of the selected Records and
+                Signals, and on the annotations that it copies, through their own value handles. This
+                includes copies that this dataset holds already. The other Signals of a partial copy
+                stay as they are. The default loads none.
 
         Returns:
-            The copies of the selected Records, by their parent IDs.
+            The copies of the selected Records and Signals, by their parent IDs.
 
         Raises:
             TimeFValidationError: If ``metadata.parents`` or ``alias`` does not declare the parent,
-                another alias imports the parent or this alias imports another release, or
-                ``records`` is not a collection of positive int64 IDs.
-            TimeFNotFoundError: If a selected ID names no parent Record. This dataset does not change.
+                another alias imports the parent or this alias imports another release, a selection
+                is not a collection of positive int64 IDs, or the copy of a Record that the call adds
+                to holds sibling Sources of one name or a Signal outside its ``time_span``.
+            TimeFNotFoundError: If a selected ID names no parent object. This dataset does not change.
         """  # noqa: DOC502 - raised by composition.import_from
         try:
-            return import_from(self, parent, alias=alias, records=records, load=load)
+            return import_from(self, parent, alias=alias, records=records, signals=signals, load=load)
         finally:
             self._schema = None
 
@@ -171,14 +182,17 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
         Raises:
             TimeFValidationError: If the record is already in this dataset. Also if the record
-                attaches one Signal or annotation occurrence twice, or holds a Source or Signal
-                that belongs to another record. Without ``keep_ids``, also if the record or one of
-                its signals already has an id from another dataset or a reader.
+                attaches one Signal or annotation occurrence twice, holds sibling Sources of one
+                name, or holds a Source or Signal that belongs to another record. Without
+                ``keep_ids``, also if the record or one of its signals already has an id from
+                another dataset or a reader.
         """
         if record._id is not None and self._records_by_id.get(record._id) is record:
             raise TimeFValidationError(f"{record._label} is already in this dataset")
         if record._id is not None and not keep_ids:
             raise TimeFValidationError(f"{record._label} already has an id from another dataset")
+        # A caller can assign Record.sources or Source.sources after construction.
+        record._check_source_names()
         signals = record.signals
         if len({id(signal) for signal in signals}) != len(signals):
             raise TimeFValidationError(f"{record._label} attaches one Signal more than once")
@@ -208,8 +222,58 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._sources.update(sources)
         self._records.append(record)
         self._records_by_id[record.id] = record
+        self._sources_by_record_id[record.id] = tuple(sources.values())
         self._signals_by_record_id[record.id] = signals
         return record
+
+    def _reindex_record(self, record: Record) -> None:
+        """Index a registered Record again after its hierarchy grew in place, as an import extends a copy.
+
+        Each Signal the Record gained gets the next Signal id, and the Sources and Signals it no
+        longer holds leave the indexes. Every check runs before an index or an id changes.
+
+        Raises:
+            TimeFValidationError: If the Record attaches one Signal or annotation occurrence twice,
+                holds sibling Sources of one name, or holds a Source or Signal that belongs to another
+                record, or a new Signal that has an id already. Also if construction would reject the
+                time of a Signal or the ``time_span`` of the Record.
+        """
+        record._check_source_names()
+        record._check_times()
+        sources = {id(source): source for source in record.walk_sources()}
+        before_sources = {id(source) for source in self._sources_by_record_id[record.id]}
+        shared = [source.name for identity, source in sources.items() if identity in self._sources - before_sources]
+        if shared:
+            raise TimeFValidationError(f"Sources {shared} already belong to another record; each Source has one owner")
+        signals = record.signals
+        if len({id(signal) for signal in signals}) != len(signals):
+            raise TimeFValidationError(f"{record._label} attaches one Signal more than once")
+        before = self._signals_by_record_id[record.id]
+        held = {id(signal) for signal in before}
+        added = [signal for signal in signals if id(signal) not in held]
+        owned = [
+            signal.name for signal in added if signal._id is not None and self._signals_by_id.get(signal._id) is signal
+        ]
+        if owned:
+            raise TimeFValidationError(f"Signals {owned} already belong to another record; each Signal has one owner")
+        foreign = [signal.name for signal in added if signal._id is not None]
+        if foreign:
+            raise TimeFValidationError(f"Signals {foreign} already have ids from another dataset")
+        annotations = tuple(record.walk_annotations())
+        if len({id(annotation) for annotation in annotations}) != len(annotations):
+            raise TimeFValidationError(f"{record._label} attaches one annotation occurrence more than once")
+
+        kept = {id(signal) for signal in signals}
+        for signal in before:
+            if id(signal) not in kept and self._signals_by_id.get(signal.id) is signal:
+                del self._signals_by_id[signal.id]
+        for signal in added:
+            object.__setattr__(signal, "_id", self._ids.next(ObjectKind.SIGNAL))  # noqa: PLC2801 (Signal is frozen)
+            self._signals_by_id[signal.id] = signal
+        self._sources.difference_update(before_sources - sources.keys())
+        self._sources.update(sources)
+        self._sources_by_record_id[record.id] = tuple(sources.values())
+        self._signals_by_record_id[record.id] = signals
 
     def _take_id(self, kind: ObjectKind, value: EntityId | None, *, keep: bool) -> EntityId:
         """Return ``value`` after recording it when ``keep`` is set, else the next id of ``kind``."""
