@@ -10,13 +10,13 @@ from timenet.dataset.axis import IrregularAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
+from timenet.types import ClassificationTask
 from timenet.types.text import read_value
 from timenet_connectors.datasets.phamquiluan.rcaeval import RCAEvalConnector
 from timenet_connectors.datasets.phamquiluan.rcaeval.benchmark import Fault, indicator_column, window
 from timenet_connectors.datasets.phamquiluan.rcaeval.loader import RCAEvalDatasetLoader
 from timenet_connectors.datasets.phamquiluan.rcaeval.records import record_metadata
 from timenet_connectors.datasets.phamquiluan.rcaeval.release import PinnedArchive, Suite, UntimedRows
-from timenet_connectors.datasets.phamquiluan.rcaeval.tasks import RCAEvalIndicatorTask, RCAEvalServiceTask
 
 
 _S = 1_000_000
@@ -517,16 +517,27 @@ def test_indicator_targets_are_the_records_own_signals(tmp_path):
     assert all(any(target is s for s in record.walk_signals()) for record, target in indicators)
 
 
-def test_tasks_of_selects_a_level(tmp_path):
+def test_the_loader_gives_each_level_by_its_method(tmp_path):
     loader = RCAEvalDatasetLoader.parse_from(_release(tmp_path), archives=_FIXTURE_ARCHIVES, untimed=_FIXTURE_UNTIMED)
+    services, indicators = list(loader.service_tasks()), list(loader.indicator_tasks())
 
-    assert [task.case.path for task in loader.tasks_of(RCAEvalIndicatorTask)] == [
+    assert [task.metadata["case"] for task in indicators] == [
         "RE1-OB/adservice_cpu/1",
         "RE1-OB/adservice_delay/1",
         "RE2-OB/checkoutservice_disk/1",
     ]
-    assert len(list(loader.tasks_of(RCAEvalServiceTask))) == 5
+    assert all(isinstance(target, Signal) for task in indicators for target in task.targets or ())
+    assert len(services) == 5
+    assert not any(isinstance(target, Signal) for task in services for target in task.targets or ())
+    # tasks() holds exactly the tasks of both methods, each case's indicator task just after its service task.
+    indicator_of = {task.metadata["case"]: task for task in indicators}
+    expected = [task for service in services for task in (service, indicator_of.get(service.metadata["case"])) if task]
+    assert [_task_key(task) for task in loader.tasks()] == [_task_key(task) for task in expected]
     assert all(task.split is None for task in loader.tasks())
+
+
+def _task_key(task: ClassificationTask) -> tuple[object, object]:
+    return task.metadata["case"], task.metadata.get("authors_indicator")
 
 
 @pytest.mark.parametrize(

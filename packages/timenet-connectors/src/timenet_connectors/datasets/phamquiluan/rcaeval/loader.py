@@ -7,7 +7,7 @@ from typing import Self
 
 from timenet.dataset import Record, Signal
 from timenet.errors import TimeFValidationError
-from timenet.types import US_PER_S, TimeInterval
+from timenet.types import US_PER_S, ClassificationTask, TimeInterval
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.phamquiluan.rcaeval import benchmark
 from timenet_connectors.datasets.phamquiluan.rcaeval.cases import ROOT_CAUSE_FILE, Case, list_cases
@@ -22,7 +22,7 @@ from timenet_connectors.datasets.phamquiluan.rcaeval.release import (
     UntimedRows,
 )
 from timenet_connectors.datasets.phamquiluan.rcaeval.tables import TableReader
-from timenet_connectors.datasets.phamquiluan.rcaeval.tasks import RCAEvalIndicatorTask, RCAEvalServiceTask, RCAEvalTask
+from timenet_connectors.datasets.phamquiluan.rcaeval.tasks import indicator_task, service_task
 
 
 @dataclass(frozen=True)
@@ -36,22 +36,24 @@ class _ParsedCase:
     """The indicator's Signal, and the indicator as ``main.py`` names it."""
 
 
-class RCAEvalDatasetLoader(DatasetLoader[RCAEvalTask]):
+class RCAEvalDatasetLoader(DatasetLoader):
     """RCAEval's zips, read and checked: one lazy Record per case, and its tasks at both levels.
 
-    RCAEval defines one task, root cause analysis, scored at two levels, each a kind here:
+    RCAEval defines one task, root cause analysis, scored at two levels. Both levels are
+    ``ClassificationTask``s, so each level has its own method:
 
-    - Service (:class:`RCAEvalServiceTask`): name the root cause service. Every case has one.
-    - Indicator (:class:`RCAEvalIndicatorTask`): name the root cause indicator, a metric of that
-      service. Every case whose fault ``main.py`` scores an indicator for has one: RE1 and RE2.
+    - Service (:meth:`service_tasks`): name the root cause service. Every case has one.
+    - Indicator (:meth:`indicator_tasks`): name the root cause indicator, a metric of that service.
+      Every case whose fault ``main.py`` scores an indicator for has one: RE1 and RE2.
 
-    No task has a split. Select one kind with ``tasks_of``.
+    :meth:`tasks` keeps the case order, in which each case's service task comes just before its
+    indicator task. No task has a split.
 
     The loader keeps each file's shape, not its values. The Signals reread the zips, so the zips must stay
     available until writing ends.
     """
 
-    TASK_KINDS = (RCAEvalServiceTask, RCAEvalIndicatorTask)
+    TASK_TYPES = (ClassificationTask,)
 
     def __init__(self, cases: tuple[_ParsedCase, ...]) -> None:
         self._cases = cases
@@ -113,23 +115,44 @@ class RCAEvalDatasetLoader(DatasetLoader[RCAEvalTask]):
         """Return one Record per case, in zip then path order, whose values stay in the zips until written."""
         return (parsed.record for parsed in self._cases)
 
-    def tasks(self) -> Iterator[RCAEvalTask]:
+    def tasks(self) -> Iterator[ClassificationTask]:
         """Return each case's service task, then its indicator task if its fault has one, in Record order.
 
         Yields:
             The tasks.
         """
         for parsed in self._cases:
-            yield RCAEvalServiceTask(case=parsed.case, record=parsed.record, scope=parsed.scope)
+            yield _service_task(parsed)
             if parsed.indicator is not None:
-                signal, authors_name = parsed.indicator
-                yield RCAEvalIndicatorTask(
-                    case=parsed.case,
-                    record=parsed.record,
-                    scope=parsed.scope,
-                    indicator=signal,
-                    authors_indicator=authors_name,
-                )
+                yield _indicator_task(parsed, parsed.indicator)
+
+    def service_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the coarse-grained tasks, which name the root cause service, in Record order.
+
+        Yields:
+            One classification task for each case.
+        """
+        for parsed in self._cases:
+            yield _service_task(parsed)
+
+    def indicator_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the fine-grained tasks, which name the root cause indicator, in Record order.
+
+        Yields:
+            One classification task for each case whose fault ``main.py`` scores an indicator for.
+        """
+        for parsed in self._cases:
+            if parsed.indicator is not None:
+                yield _indicator_task(parsed, parsed.indicator)
+
+
+def _service_task(parsed: _ParsedCase) -> ClassificationTask:
+    return service_task(parsed.case, parsed.record, parsed.scope)
+
+
+def _indicator_task(parsed: _ParsedCase, indicator: tuple[Signal, str]) -> ClassificationTask:
+    signal, authors_name = indicator
+    return indicator_task(parsed.case, parsed.record, parsed.scope, signal, authors_name)
 
 
 def _parse_case(case: Case, telemetry: CaseTelemetry, reader: TableReader) -> _ParsedCase:

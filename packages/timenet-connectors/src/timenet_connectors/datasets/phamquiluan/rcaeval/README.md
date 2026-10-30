@@ -173,6 +173,9 @@ fine-grained, the root cause indicator, "the metric specifying resource usage" f
 (section 3.2). A method returns a ranking; `main.py` scores it with AC@k and Avg@k. Each level is a
 `ClassificationTask` per case, whose target is the answer a ranking is scored against.
 
+The loader gives each level by its own method: `service_tasks()` and `indicator_tasks()`.
+`tasks()` keeps the case order, in which a case's indicator task follows its service task.
+
 | Field | Service task | Indicator task |
 | --- | --- | --- |
 | `inputs` | The case's Record | The case's Record |
