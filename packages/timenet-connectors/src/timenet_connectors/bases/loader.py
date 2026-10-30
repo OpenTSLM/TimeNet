@@ -1,121 +1,79 @@
-"""Generic bases for a dataset's loader and its typed source tasks.
+"""A shared base class that reads a dataset's files and turns them into TimeNet tasks.
 
-A connector deals with the outside world: its card, its download, its pinned source, and the
-engine's interface. A :class:`DatasetLoader` deals with the downloaded files: it parses them once,
-then hands out the dataset's Records and its tasks as the source defines them. Each source task is a
-:class:`DatasetTask`, which knows the TimeNet task it becomes. The connector's ``convert`` parses with
-the loader and lets it fill the dataset::
+A connector gets the files of a dataset from its source, and turns them into Records and tasks.
+Most connectors do the second job with the same steps: read the files once, build the Records and
+the tasks, and add them to a TimeFDataset. :class:`DatasetLoader` does these steps, so each
+connector only writes the parts that are special to its dataset.
+
+The connector still downloads the files. Its ``convert`` gives them to the loader::
 
     def convert(self, raw_refs):
         loader = MyDatasetLoader.parse_from(raw_refs)
         return loader.populate(TimeFDataset(metadata=self.metadata()))
-
-The loader returns source tasks, not TimeNet tasks, so it repeats nothing ``TimeFDataset`` does:
-``tasks_of`` selects by source task kind, which a TimeNet task type can't tell apart.
 """
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator, Sequence
-from typing import Any, ClassVar, Generic, Self, TypeVar
+from typing import Any, ClassVar, Self
 
 from timenet.dataset import Record, TimeFDataset
-from timenet.types import Annotation, Split, Task
+from timenet.types import Annotation, Task
 
 
-class DatasetTask(ABC):
-    """One task as its source defines it, which knows the TimeNet task it becomes.
+class DatasetLoader(ABC):
+    """Reads the downloaded files of one dataset and gives its Records, tasks and annotations.
 
-    A subclass is one kind of task of one dataset, such as TRACE's retrieval task. It holds what the
-    task is built from, and builds the TimeNet task on demand, so a loader can keep its tasks small
-    and stream them.
+    A subclass must implement :meth:`parse_from`, :meth:`records` and :meth:`tasks`. It must list
+    each TimeNet task type that it makes in :attr:`TASK_TYPES`. It can override
+    :meth:`dataset_annotations`. This base gives :meth:`populate`.
+
+    When the dataset authors define several tasks, give each one its own method with the name that
+    the authors use, such as ``binary_label_tasks``. Then :meth:`tasks` yields from each method. After
+    :meth:`populate`, ``TimeFDataset.tasks_of`` and ``TimeFDataset.get_split`` select the tasks.
     """
 
-    TIMENET_TYPE: ClassVar[type[Task]]
-    """The TimeNet task type ``to_timenet_task`` returns."""
+    TASK_TYPES: ClassVar[tuple[type[Task], ...]]
+    """Each TimeNet task type that :meth:`tasks` makes, in the order that a reader sees them first.
 
-    @property
-    @abstractmethod
-    def split(self) -> Split | None:
-        """Return the task's split, as the source assigns it, or ``None`` when the source gives it none."""
-
-    @abstractmethod
-    def to_timenet_task(self) -> Task:
-        """Return the task as TimeNet stores it, an instance of :attr:`TIMENET_TYPE`."""
-
-
-TTask = TypeVar("TTask", bound=DatasetTask)
-K = TypeVar("K", bound=DatasetTask)
-
-
-class DatasetLoader(ABC, Generic[TTask]):
-    """A dataset's downloaded files, parsed: its Records, its typed source tasks, and its annotations.
-
-    A subclass implements :meth:`parse_from`, :meth:`records` and :meth:`tasks`, declares the kinds
-    of task it yields in :attr:`TASK_KINDS`, and lists them in its docstring. It may override
-    :meth:`dataset_annotations`. The base provides :meth:`tasks_of`, :meth:`timenet_tasks` and
-    :meth:`populate`.
-    """
-
-    TASK_KINDS: ClassVar[tuple[type[DatasetTask], ...]]
-    """Every kind of task :meth:`tasks` yields, in the order a reader should meet them.
-
-    :meth:`populate` declares their TimeNet types. The writer rejects a streamed task of any other
-    type, so a kind missing here fails when the dataset is written.
+    :meth:`populate` gives these types to the dataset. When the dataset is written, the writer stops
+    on a task whose type is not in this list.
     """
 
     @classmethod
     @abstractmethod
     def parse_from(cls, refs: Iterable[Any]) -> Self:
-        """Parse and check the downloaded files once.
+        """Read the downloaded files one time, and make sure that they are correct.
 
         Args:
-            refs: The references the connector's ``download`` returned.
+            refs: The references that the ``download`` of the connector returned.
 
         Returns:
-            The loader, holding what its Records and tasks are built from.
+            The loader. It keeps the data that its Records and tasks need.
         """
 
     @abstractmethod
     def records(self) -> Iterator[Record]:
-        """Return every Record, in a stable order."""
+        """Return each Record, always in the same order."""
 
     @abstractmethod
-    def tasks(self) -> Iterator[TTask]:
-        """Return every source task, in a stable order. Each call starts again from the first."""
+    def tasks(self) -> Iterator[Task]:
+        """Return each TimeNet task, always in the same order. Each call starts again at the first task."""
 
     def dataset_annotations(self) -> Sequence[Annotation]:  # noqa: PLR6301 - the loader interface
-        """Return the annotations the dataset holds as a whole, such as a label vocabulary.
+        """Return the annotations of the full dataset, such as the list of its labels.
 
         Returns:
-            No annotations, unless a subclass overrides this.
+            No annotations. A subclass can override this.
         """
         return ()
 
-    def tasks_of(self, kind: type[K], *, split: Split | None = None) -> Iterator[K]:
-        """Return the tasks of one kind, optionally of one split, in the order of :meth:`tasks`.
-
-        Args:
-            kind: A source task kind from :attr:`TASK_KINDS`, or a base class of several.
-            split: Only the tasks of this split, if given.
-
-        Yields:
-            The matching tasks.
-        """
-        for task in self.tasks():
-            if isinstance(task, kind) and (split is None or task.split is split):
-                yield task
-
-    def timenet_tasks(self) -> Iterator[Task]:
-        """Return every task as TimeNet stores it, in the order of :meth:`tasks`."""
-        return (task.to_timenet_task() for task in self.tasks())
-
     def populate(self, dataset: TimeFDataset) -> TimeFDataset:
-        """Fill a dataset with this loader's annotations and Records, and stream its tasks.
+        """Add the annotations, the Records and the tasks of this loader to a dataset.
 
-        Tasks are not held: the dataset calls :meth:`timenet_tasks` each time it reads them.
+        The dataset does not keep the tasks. It calls :meth:`tasks` each time that it reads them.
 
         Args:
-            dataset: A dataset, usually empty, carrying the connector's metadata.
+            dataset: A dataset, usually empty, with the metadata of the connector.
 
         Returns:
             The same dataset.
@@ -124,7 +82,5 @@ class DatasetLoader(ABC, Generic[TTask]):
             dataset.annotate(annotation)
         for record in self.records():
             dataset.add_record(record=record)
-        # One TimeNet type per kind, without repeats, in TASK_KINDS order.
-        task_types = tuple(dict.fromkeys(kind.TIMENET_TYPE for kind in self.TASK_KINDS))
-        dataset.set_task_stream(task_types, self.timenet_tasks)
+        dataset.set_task_stream(self.TASK_TYPES, self.tasks)
         return dataset

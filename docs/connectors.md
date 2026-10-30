@@ -58,26 +58,33 @@ dataclass, or an S3 key. The connector is generic through PEP 695:
 
 ---
 
-## Loaders and source tasks
+## Converting with `DatasetLoader`
 
-A connector that parses several files, or defines several kinds of task, can put that work in a
-loader. `timenet_connectors.bases.loader` holds two generic bases. The connector keeps the outside
-world: its card, its download, and its pinned source. The loader keeps the downloaded files.
+Use `timenet_connectors.bases.loader.DatasetLoader` to keep the parsing out of the connector. The
+loader reads the downloaded files once, builds the Records and the tasks, and adds them to the
+dataset. The connector keeps `download` and calls the loader in `convert`.
 
 ```python
-from timenet_connectors.bases.loader import DatasetLoader, DatasetTask
+from timenet_connectors.bases.loader import DatasetLoader
 
 
-class MyRetrievalTask(DatasetTask):
-    TIMENET_TYPE = TSCorrespondenceTask
-    # split (a property) and to_timenet_task() build the TimeNet task.
+class MyDatasetLoader(DatasetLoader):
+    TASK_TYPES = (ClassificationTask,)
 
+    # Each dataset also implements parse_from(refs) and records().
+    def binary_label_tasks(self) -> Iterator[ClassificationTask]:
+        """Is the beat normal or abnormal?"""
+        for row in self._rows:
+            yield ClassificationTask(inputs=(self._records[row.key],), targets=(row.binary,))
 
-class MyDatasetLoader(DatasetLoader[MyRetrievalTask]):
-    """The dataset's tasks: one retrieval task per published row."""
+    def rhythm_label_tasks(self) -> Iterator[ClassificationTask]:
+        """Which of the 5 rhythm classes is the beat?"""
+        for row in self._rows:
+            yield ClassificationTask(inputs=(self._records[row.key],), targets=(row.rhythm,))
 
-    TASK_KINDS = (MyRetrievalTask,)
-    # parse_from(refs), records() and tasks() are the dataset's own.
+    def tasks(self) -> Iterator[Task]:
+        yield from self.binary_label_tasks()
+        yield from self.rhythm_label_tasks()
 
 
 class MyConnector(BaseConnector[MyRawRef]):
@@ -87,22 +94,21 @@ class MyConnector(BaseConnector[MyRawRef]):
         return loader.populate(dataset)
 ```
 
-| Member | Provided by | Contract |
+| Method | Provided by | Contract |
 | --- | --- | --- |
-| `parse_from(refs)` | the dataset | Parse and check the downloaded files once. |
-| `records()` | the dataset | Every Record, in a stable order. |
-| `tasks()` | the dataset | Every source task. Each call starts again from the first. |
-| `dataset_annotations()` | the dataset, optional | Annotations of the whole dataset, such as a label vocabulary. |
-| `tasks_of(kind, split=)` | the base | The source tasks of one kind, optionally of one split. |
-| `timenet_tasks()` | the base | Every task as TimeNet stores it, in the order of `tasks()`. |
-| `populate(dataset)` | the base | Add the annotations and Records, and stream the tasks. |
+| `parse_from(refs)` | the dataset | Read the downloaded files once and make sure that they are correct. |
+| `records()` | the dataset | Return each Record, always in the same order. |
+| `tasks()` | the dataset | Return each TimeNet task. Each call starts again at the first task. |
+| `dataset_annotations()` | the dataset, optional | Return the annotations of the full dataset, such as the list of its labels. |
+| `populate(dataset)` | the base | Add the annotations, the Records and the tasks to the dataset. |
 
-A source task is the dataset's own: TRACE has an event-type, a retrieval and a forecasting task.
-`tasks_of` selects by that kind, which a TimeNet task type can't tell apart when two kinds become
-the same type. To select stored tasks by TimeNet type or split, use `TimeFDataset.tasks_of` and
-`TimeFDataset.get_split` instead. A loader declares its kinds in `TASK_KINDS` and lists them in its
-docstring. `populate` declares their TimeNet types, so the writer rejects a task of a kind missing
-from `TASK_KINDS`.
+A loader lists each TimeNet task type that it makes in `TASK_TYPES`. `populate` gives these types to
+the dataset. When the dataset is written, the writer stops on a task whose type is not in this list.
+
+The dataset authors often define several tasks. Two of them can have the same TimeNet type, such as
+the binary and the rhythm label in the example. Give each task of the authors its own method, with
+the name that the authors use. Then `loader.binary_label_tasks()` returns only the binary-label
+tasks. After `populate`, use `TimeFDataset.tasks_of` and `TimeFDataset.get_split` to select tasks.
 
 ---
 

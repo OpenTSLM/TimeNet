@@ -1,6 +1,5 @@
 from collections.abc import Iterable, Iterator, Sequence
-from dataclasses import dataclass
-from typing import Any, ClassVar, Self
+from typing import Any, Self
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
@@ -15,7 +14,7 @@ from timenet.types import (
     TimeSeriesSpec,
     Version,
 )
-from timenet_connectors.bases.loader import DatasetLoader, DatasetTask
+from timenet_connectors.bases.loader import DatasetLoader
 
 
 _SPEC = TimeSeriesSpec(spec_type="toy", name="Toy", unit_value=None, dtype="float64")
@@ -28,103 +27,52 @@ _METADATA = DatasetMetadata(
 )
 
 
-@dataclass(frozen=True)
-class _ToyTask(DatasetTask):
-    """A toy source task on one Record."""
-
-    record: Record
-    toy_split: Split | None
-
-    @property
-    def split(self) -> Split | None:
-        return self.toy_split
+def _signal() -> Signal:
+    return Signal.from_values([1.0, 2.0], spec=_SPEC, name="series", time_axis=OrdinalAxis())
 
 
-@dataclass(frozen=True)
-class _Label(_ToyTask):
-    TIMENET_TYPE: ClassVar[type[Task]] = ClassificationTask
+class _ToyLoader(DatasetLoader):
+    """Two classification tasks of the authors for each Record, and a caption without a split."""
 
-    def to_timenet_task(self) -> ClassificationTask:
-        return ClassificationTask(inputs=(self.record,), targets=("spike",), split=self.split)
-
-
-@dataclass(frozen=True)
-class _Severity(_ToyTask):
-    # A second kind that becomes the same TimeNet type as _Label.
-    TIMENET_TYPE: ClassVar[type[Task]] = ClassificationTask
-
-    def to_timenet_task(self) -> ClassificationTask:
-        return ClassificationTask(inputs=(self.record,), targets=("high",), split=self.split)
-
-
-@dataclass(frozen=True)
-class _Caption(_ToyTask):
-    TIMENET_TYPE: ClassVar[type[Task]] = AnswerTask
-
-    def to_timenet_task(self) -> AnswerTask:
-        return AnswerTask(inputs=(self.record,), prompt="Describe it.", targets=("A spike.",), split=self.split)
-
-
-class _ToyLoader(DatasetLoader[_ToyTask]):
-    """Toy tasks: a label and a severity per Record, and a caption on the train Record."""
-
-    TASK_KINDS = (_Label, _Severity, _Caption)
+    TASK_TYPES = (ClassificationTask, AnswerTask)
 
     def __init__(self, records: tuple[Record, ...]) -> None:
         self._records = records
 
     @classmethod
     def parse_from(cls, refs: Iterable[Any]) -> Self:
-        records = tuple(Record(sources=(Source(name=name, signals=(_signal(values),)),)) for name, values in refs)
-        return cls(records)
+        return cls(tuple(Record(sources=(Source(name=name, signals=(_signal(),)),)) for name in refs))
 
     def records(self) -> Iterator[Record]:
         return iter(self._records)
 
-    def tasks(self) -> Iterator[_ToyTask]:
+    def label_tasks(self) -> Iterator[ClassificationTask]:
+        """Is the series a spike or flat?"""
         train, test = self._records
-        yield _Label(train, Split.TRAIN)
-        yield _Severity(train, Split.TRAIN)
-        yield _Caption(train, Split.TRAIN)
-        yield _Label(test, Split.TEST)
-        yield _Severity(test, Split.TEST)
+        yield ClassificationTask(inputs=(train,), targets=("spike",), split=Split.TRAIN)
+        yield ClassificationTask(inputs=(test,), targets=("flat",), split=Split.TEST)
+
+    def severity_tasks(self) -> Iterator[ClassificationTask]:
+        """Is the spike high or low? The same TimeNet type as the label tasks."""
+        train, _ = self._records
+        yield ClassificationTask(inputs=(train,), targets=("high",), split=Split.TRAIN)
+
+    def tasks(self) -> Iterator[Task]:
+        yield from self.label_tasks()
+        yield from self.severity_tasks()
+        train, _ = self._records
+        yield AnswerTask(inputs=(train,), prompt="Describe it.", targets=("A spike.",))
 
     def dataset_annotations(self) -> Sequence[Annotation]:
         return (Annotation(key="label_vocabulary", value=["spike", "flat"]),)
 
 
-def _signal(values: list[float]) -> Signal:
-    return Signal.from_values(values, spec=_SPEC, name="series", time_axis=OrdinalAxis())
-
-
 def _loader() -> _ToyLoader:
-    return _ToyLoader.parse_from([("train", [1.0, 2.0]), ("test", [3.0])])
+    return _ToyLoader.parse_from(["train", "test"])
 
 
-def test_tasks_of_selects_a_source_kind_and_a_split():
-    loader = _loader()
-    assert [task.split for task in loader.tasks_of(_Label, split=Split.TEST)] == [Split.TEST]
-    # The two classification kinds stay apart, which a TimeNet task type can't tell.
-    assert [type(task) for task in loader.tasks_of(_Severity, split=Split.TRAIN)] == [_Severity]
-    # A base class selects every kind derived from it, in the order of tasks().
-    assert list(loader.tasks_of(_ToyTask, split=Split.TRAIN)) == list(loader.tasks())[:3]
-
-
-class _UnsplitLoader(_ToyLoader):
-    """A source that splits only its label tasks."""
-
-    def tasks(self) -> Iterator[_ToyTask]:
-        train, test = self._records
-        yield _Label(train, Split.TRAIN)
-        yield _Caption(test, None)
-
-
-def test_a_task_without_a_split_is_selected_only_without_a_split():
-    loader = _UnsplitLoader.parse_from([("train", [1.0, 2.0]), ("test", [3.0])])
-    assert [task.split for task in loader.tasks_of(_ToyTask)] == [Split.TRAIN, None]
-    assert [task.split for task in loader.tasks_of(_ToyTask, split=Split.TRAIN)] == [Split.TRAIN]
-    dataset = loader.populate(TimeFDataset(metadata=_METADATA))
-    assert [task.split for task in dataset.iter_streamed_tasks_validated()] == [Split.TRAIN, None]
+def _targets(tasks: Iterable[Task]) -> list[tuple[Any, ...] | None]:
+    return [task.targets for task in tasks]
 
 
 def test_populate_fills_the_dataset_and_streams_the_tasks():
@@ -134,9 +82,8 @@ def test_populate_fills_the_dataset_and_streams_the_tasks():
     assert [(a.key, a.value) for a in dataset.annotations] == [("label_vocabulary", ["spike", "flat"])]
     assert [record.sources[0].name for record in dataset.records] == ["train", "test"]
     # The stream starts again on each read, in the order of tasks().
-    first, second = list(dataset.iter_tasks()), list(dataset.iter_tasks())
-    expected = [(task.TIMENET_TYPE, task.split) for task in loader.tasks()]
-    assert [(type(task), task.split) for task in first] == expected
-    assert [(type(task), task.split) for task in second] == expected
-    # Each TimeNet type is declared once, in TASK_KINDS order.
+    first, second = list(dataset.iter_streamed_tasks_validated()), list(dataset.iter_streamed_tasks_validated())
+    assert _targets(first) == _targets(second) == _targets(loader.tasks())
+    # The caption keeps having no split.
+    assert [task.split for task in first] == [Split.TRAIN, Split.TEST, Split.TRAIN, None]
     assert dataset.derive_schema().tasks == (ClassificationTask, AnswerTask)
