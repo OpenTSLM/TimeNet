@@ -1,0 +1,4 @@
+# h5py reads the Tierpsy Tracker features files, which are HDF5.
+h5py>=3.10
+# The skeletons are (49, 2) tensors per frame, which only the Zarr values backend stores.
+zarr>=3

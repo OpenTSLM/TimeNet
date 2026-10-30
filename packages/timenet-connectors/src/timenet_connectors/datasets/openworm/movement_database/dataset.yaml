@@ -1,0 +1,36 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the openworm/movement-database connector: the single source for this dataset's
+# metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
+# derived from the data into manifest.json.
+#
+# Training convention: the tasks are the authors' strain benchmark (Javer et al., ECCV Workshops
+# 2018). Each of the 10,476 videos in their SWDB_fold_dict.p has one ClassificationTask, whose
+# target is one of their 365 classes (a strain, with N2 hermaphrodites and males apart), split as
+# their code runs it: fold 0 test, folds 1 and 2 train. Signals are archival raw: the skeletons
+# Tierpsy Tracker published, 49 points of x and y in micrometers, at each video's frame rate.
+yaml_schema_version: 1
+dataset_id: openworm/movement-database
+dataset_version: 1.0.0
+name: Open Worm Movement Database (single-worm strains)
+description: >-
+  Fifteen-minute videos of single worms, each tracked as a 49-point skeleton per frame, in 365
+  classes: 364 strains (mutants of N2 and wild isolates of C. elegans, and one C. briggsae
+  isolate), with N2 hermaphrodites and males apart. The task is to name the class from the worm's
+  posture over time.
+license: CC-BY-4.0
+source_url: https://zenodo.org/communities/open-worm-movement-database
+citation: >-
+  Javer et al. An open-source platform for analyzing and sharing worm-behavior data. Nature
+  Methods 15, 645-646 (2018). https://doi.org/10.1038/s41592-018-0112-1. Javer et al.
+  Identification of C. elegans strains using a fully convolutional neural network on behavioural
+  dynamics. ECCV Workshops (2018).
+domains:
+  - motion
+tags:
+  - c-elegans
+  - behaviour
+  - posture
+  - skeleton
+  - tierpsy
+  - zenodo
