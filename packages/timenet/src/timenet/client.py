@@ -14,15 +14,23 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
-from timenet.builders import find_builder
+from timenet.builders import exact_builder, find_builder
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
+from timenet.errors import (
+    TimeFValidationError,
+    TimeNetAccessError,
+    TimeNetDatasetNotFoundError,
+    TimeNetFileError,
+    TimeNetMissingParentError,
+)
 from timenet.manifest import Manifest
 from timenet.reader import LoadPlan, TimeFReader
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.registry._paths import release_dir
 from timenet.registry.base import ProgressCallback
+from timenet.registry.dependencies import prepare_local_copy
+from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, Task
 from timenet.types.access import require_open_access
 from timenet.types.references import DatasetRef, is_latest, split_ref
@@ -180,57 +188,83 @@ class TimeNet:
         )
         return target
 
-    def open(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFReader:
-        """Open a dataset version for lazy reads through the registry's storage handle.
+    def open(
+        self,
+        dataset_id: str,
+        version: str | None = None,
+        *,
+        auto_build: bool = True,
+        fetch_from: str | BaseRegistry | None = None,
+    ) -> TimeFReader:
+        """Prepare a dataset version and its payload sources, then open it for lazy reads.
 
-        Opening prepares the version and reads its manifest, but neither its catalog nor any value.
-        The reader's reads leave stored values behind value handles unless their load plan names
-        them. Close the reader after use, or use it as a context manager. Remote backends open
-        payload sources from their manifests upfront and read payload ranges on demand, reusing
-        complete cached releases.
+        Opening reads the version's manifest, but neither its catalog nor any value. The reader's
+        reads leave stored values behind value handles unless their load plan names them. Close
+        the reader after use, or use it as a context manager. Remote backends open payload sources
+        from their manifests upfront and read payload ranges on demand, reusing complete cached
+        releases.
 
-        Against a local registry, a dataset the registry does not have is built first, if some
-        installed package registers a connector for its id. Set ``auto_build`` false to fail fast
-        instead of starting a download and a build. A remote registry raises instead.
+        Against a local registry, every release the call needs resolves in one order: the version
+        and its payload sources, and for a build, its declared parents and their payload sources.
+        A complete local copy is reused. Otherwise the release is copied from ``fetch_from``, or
+        built from its installed connector when ``auto_build`` is set, or the call raises. A copy
+        whose manifest is present but whose files are not is damaged: ``fetch_from`` repairs it,
+        and nothing builds over it. A payload source builds with its own connector, at its exact
+        version, against the pins of the version. The build runs in staging and publishes the
+        source only if it reproduces the pinned files. Against a remote registry, ``open`` never
+        runs connector code, and ``fetch_from`` raises.
 
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
-            auto_build: Build a missing local dataset from its connector. Set false to raise instead.
+            auto_build: Build a missing local release from its connector. Set false to raise instead.
+            fetch_from: The registry, or its URI, to copy missing local releases from.
 
         Returns:
             A reader for the version.
 
         Raises:
-            TimeNetAccessError: If the dataset is not open access and the registry is not local.
+            TimeNetAccessError: If the dataset is not open access and the registry is not local, or
+                a release to copy from a registry that is not local is not open.
             TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
                 declares a different version than the one asked for.
+            TimeNetMissingParentError: If a release that the version or its build needs is absent and
+                nothing obtains it. The message names the keyword that can.
+            TimeNetFileError: If a local copy is damaged and ``fetch_from`` is not given, or a copied
+                file does not match its manifest record.
+            TimeFFormatError: If the build of a payload source does not reproduce the pinned files.
             TimeNetBuildError: If the build runs but fails.
-        """  # noqa: DOC502 (TimeNetAccessError comes from _reject_unhosted_access, TimeNetBuildError from the builder)
+            TimeFValidationError: If a remote client gets ``fetch_from``.
+        """  # noqa: DOC502 (raised by _reject_unhosted_access, _prepare, and the builder)
         dataset_id, version = _resolve_ref(dataset_id, version)
-        self._reject_unhosted_access(dataset_id, version)
+        registry = self._registry
+        if not isinstance(registry, LocalRegistry):
+            if fetch_from is not None:
+                raise TimeFValidationError(
+                    "fetch_from copies releases into a local registry; a remote client reads from its own registry"
+                )
+            self._reject_unhosted_access(dataset_id, version)
+            return TimeFReader(registry.open_version(dataset_id, version))
+        source = open_registry(fetch_from) if isinstance(fetch_from, str) else fetch_from
         try:
-            handle = self._registry.open_version(dataset_id, version)
-        except TimeNetDatasetNotFoundError as miss:
-            if not auto_build or not isinstance(self._registry, LocalRegistry):
-                raise
-            builder = find_builder(dataset_id)
-            if builder is None:
-                raise
-            # A connector produces one declared version. Reject a pin it cannot satisfy before the
-            # build runs, so a wrong pin fails fast instead of after a full build. Sentinels are
-            # not pins, so a fresh build satisfies them.
-            if not is_latest(version):
-                declared = builder.declared_version(dataset_id)
-                if declared is not None and version != declared:
-                    raise TimeNetDatasetNotFoundError(
-                        f"the connector for {dataset_id!r} builds version {declared}, not the requested {version}"
-                    ) from miss
-            builder.build(dataset_id, self._registry.root)
-            handle = self._registry.open_version(dataset_id, version)
-        return TimeFReader(handle)
+            return TimeFReader(_prepare(registry, dataset_id, version, auto_build=auto_build, fetch_from=source))
+        except TimeNetMissingParentError as error:
+            error.hint = _missing_hint(auto_build=auto_build, fetch_from=source)
+            raise
+        except TimeNetFileError as error:
+            # Without fetch_from, the error names a damaged local copy. With it, a copied file.
+            if source is None:
+                error.hint = "Repair it with fetch_from=<registry>."
+            raise
 
-    def load(self, dataset_id: str, version: str | None = None, *, auto_build: bool = True) -> TimeFDataset:
+    def load(
+        self,
+        dataset_id: str,
+        version: str | None = None,
+        *,
+        auto_build: bool = True,
+        fetch_from: str | BaseRegistry | None = None,
+    ) -> TimeFDataset:
         """Read a whole dataset version into memory, with every stored value loaded.
 
         The dataset needs no storage afterwards: its reader is closed before it is returned. For a
@@ -239,18 +273,26 @@ class TimeNet:
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
-            auto_build: Build a missing local dataset from its connector. Set false to raise instead.
+            auto_build: Build a missing local release from its connector. Set false to raise instead.
+            fetch_from: The registry, or its URI, to copy missing local releases from.
 
         Returns:
             The dataset with every signal array, time offset, and text value loaded.
 
         Raises:
-            TimeNetAccessError: If the dataset is not open access and the registry is not local.
+            TimeNetAccessError: If the dataset is not open access and the registry is not local, or
+                a release to copy from a registry that is not local is not open.
             TimeNetDatasetNotFoundError: If the version is absent and nothing builds it, or the connector
                 declares a different version than the one asked for.
+            TimeNetMissingParentError: If a release that the version or its build needs is absent and
+                nothing obtains it.
+            TimeNetFileError: If a local copy is damaged and ``fetch_from`` is not given, or a copied
+                file does not match its manifest record.
+            TimeFFormatError: If the build of a payload source does not reproduce the pinned files.
             TimeNetBuildError: If the build runs but fails.
+            TimeFValidationError: If a remote client gets ``fetch_from``.
         """  # noqa: DOC502 (all come from open())
-        with self.open(dataset_id, version, auto_build=auto_build) as reader:
+        with self.open(dataset_id, version, auto_build=auto_build, fetch_from=fetch_from) as reader:
             return reader.read(load=LoadPlan.ALL_EAGER)
 
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
@@ -282,6 +324,7 @@ class TimeNet:
         version: str | None = None,
         *,
         auto_build: bool = True,
+        fetch_from: str | BaseRegistry | None = None,
         load: LoadPlan = LoadPlan.ALL_EAGER,
     ) -> TimeFTorchDataset:
         """Open a dataset version as a read-only PyTorch ``Dataset`` that reads it a batch at a time.
@@ -294,7 +337,8 @@ class TimeNet:
         Args:
             dataset_id: The dataset id.
             version: The version string, or ``None`` for the latest.
-            auto_build: Build a missing local dataset from its connector. Set false to raise instead.
+            auto_build: Build a missing local release from its connector. Set false to raise instead.
+            fetch_from: The registry, or its URI, to copy missing local releases from.
             load: The plan that each batch loads with. A text-only plan, for example, skips the
                 arrays of candidate and target Records.
 
@@ -304,4 +348,116 @@ class TimeNet:
         """
         from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
 
-        return TimeFTorchDataset.from_reader(self.open(dataset_id, version, auto_build=auto_build), load=load)
+        return TimeFTorchDataset.from_reader(
+            self.open(dataset_id, version, auto_build=auto_build, fetch_from=fetch_from), load=load
+        )
+
+
+def _require_open(manifest: Manifest) -> None:
+    """Reject a release that is not open before its files are copied from a registry that is not local."""
+    require_open_access(manifest.metadata, manifest.lineage)
+
+
+def _missing_hint(*, auto_build: bool, fetch_from: BaseRegistry | None) -> str | None:
+    """Name the keywords of :meth:`TimeNet.open` that can obtain a missing release.
+
+    Returns:
+        The hint as a full sentence, or ``None`` when the call already used both.
+    """
+    ways = []
+    if fetch_from is None:
+        ways.append("copy it with fetch_from=<registry>")
+    if not auto_build:
+        ways.append("build it from its connector with auto_build=True")
+    if not ways:
+        return None
+    hint = " or ".join(ways)
+    return f"{hint[0].upper()}{hint[1:]}."
+
+
+def _prepare(
+    registry: LocalRegistry, dataset_id: str, version: str | None, *, auto_build: bool, fetch_from: BaseRegistry | None
+) -> DatasetVersion:
+    """Make a local version and its payload sources complete, in the order :meth:`TimeNet.open` names.
+
+    A payload source that is still missing after the copy from ``fetch_from`` builds with its own
+    connector: the backend whose card declares its exact version. The build gets the pins of the
+    version, which reads the source, so it publishes the source only if it reproduces those files.
+
+    Returns:
+        The version with each payload source attached.
+
+    Raises:
+        TimeNetMissingParentError: If a payload source is absent and nothing obtains it.
+    """
+    try:
+        manifest = registry.get_manifest(dataset_id, version)
+    except TimeNetDatasetNotFoundError as miss:
+        manifest = _obtain(registry, dataset_id, version, miss, auto_build=auto_build, fetch_from=fetch_from)
+    reference = DatasetRef(dataset_id=dataset_id, version=manifest.metadata.dataset_version)
+    # A registry other than a local one serves open releases only.
+    check = None if fetch_from is None or isinstance(fetch_from, LocalRegistry) else _require_open
+    built: set[DatasetRef] = set()
+    while True:
+        try:
+            return prepare_local_copy(
+                registry.root, reference, manifest=manifest, fetch_from=fetch_from, before_fetch=check
+            )
+        except TimeNetMissingParentError as missing:
+            source = missing.missing
+            builder = exact_builder(source) if auto_build and source not in built else None
+            if builder is None:
+                raise
+            pins = next(pinned for pinned in manifest.payload_sources.values() if pinned.release == source)
+            builder.build(
+                source.dataset_id,
+                registry.root,
+                build_parents=True,
+                fetch_from=fetch_from,
+                pinned_by={reference: pins},
+            )
+            built.add(source)
+
+
+def _obtain(  # noqa: PLR0913
+    registry: LocalRegistry,
+    dataset_id: str,
+    version: str | None,
+    miss: TimeNetDatasetNotFoundError,
+    *,
+    auto_build: bool,
+    fetch_from: BaseRegistry | None,
+) -> Manifest:
+    """Find a version the local registry lacks in ``fetch_from``, or build it.
+
+    Returns:
+        The manifest of the version: from ``fetch_from``, whose files the caller then copies, or
+        from the local registry after the build.
+
+    Raises:
+        TimeNetDatasetNotFoundError: If nothing provides the version, with a hint that names the
+            keywords that could, or the connector declares another version.
+    """
+    if fetch_from is not None:
+        try:
+            return fetch_from.get_manifest(dataset_id, version)
+        except TimeNetDatasetNotFoundError:
+            pass
+    builder = find_builder(dataset_id) if auto_build else None
+    if builder is None:
+        hint = _missing_hint(auto_build=auto_build, fetch_from=fetch_from)
+        if hint is None:
+            raise miss
+        raise TimeNetDatasetNotFoundError(f"{miss}. {hint}") from miss
+    # A connector produces one declared version. Reject a pin it cannot satisfy before the
+    # build runs, so a wrong pin fails fast instead of after a full build. Sentinels are
+    # not pins, so a fresh build satisfies them.
+    if not is_latest(version):
+        declared = builder.declared_version(dataset_id)
+        if declared is not None and version != declared:
+            raise TimeNetDatasetNotFoundError(
+                f"the connector for {dataset_id!r} builds version {declared}, not the requested {version}"
+            ) from miss
+    # The build prepares its declared parents in the same order: reuse, copy, then build.
+    builder.build(dataset_id, registry.root, build_parents=True, fetch_from=fetch_from)
+    return registry.get_manifest(dataset_id, version)
