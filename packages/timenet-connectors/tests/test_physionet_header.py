@@ -40,3 +40,26 @@ def test_read_header_rejects_an_unparseable_gain(tmp_path):
     rec = _write_hea(tmp_path, "rec 1 250 100\nrec.dat 16 bad/mV 16 0 0 0 0 II\n")
     with pytest.raises(TimeFFormatError, match="cannot parse the gain"):
         BasePhysioNetConnector._read_header(rec)
+
+
+def test_read_header_uses_the_direct_path_for_plain_single_dat_16(tmp_path):
+    (tmp_path / "plain.hea").write_text(
+        "plain 2 500 100\nplain.dat 16 1000(0)/mV 16 0 0 0 0 I\nplain.dat 16 1000(0)/mV 16 0 0 0 0 II\n"
+    )
+    assert BasePhysioNetConnector._read_header(tmp_path / "plain").direct_read is True
+
+
+def test_read_header_falls_back_when_the_record_is_not_plain_16(tmp_path):
+    # 16x2 (two WFDB samples per frame) breaks the (-1, n_sig) reshape, so the record must route to wfdb; a
+    # multi-word signal description is kept whole rather than truncated to its last token.
+    (tmp_path / "framed.hea").write_text("framed 1 500 100\nframed.dat 16x2 1000(0)/mV 16 0 0 0 0 my lead II\n")
+    header = BasePhysioNetConnector._read_header(tmp_path / "framed")
+    assert header.direct_read is False
+    assert header.sig_name == ["my lead II"]
+
+
+def test_read_header_falls_back_when_signals_span_multiple_dat_files(tmp_path):
+    (tmp_path / "multi.hea").write_text(
+        "multi 2 500 100\na.dat 16 1000(0)/mV 16 0 0 0 0 I\nb.dat 16 1000(0)/mV 16 0 0 0 0 II\n"
+    )
+    assert BasePhysioNetConnector._read_header(tmp_path / "multi").direct_read is False

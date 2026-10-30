@@ -10,7 +10,7 @@
 # z-normalize) at load time.
 yaml_schema_version: 1
 dataset_id: physionet/ecg-qa-cot
-dataset_version: 1.1.0
+dataset_version: 1.2.0
 name: ECG-QA CoT
 description: >-
   12-lead PTB-XL ECGs paired with clinical questions, short answers, and chain-of-thought
@@ -26,4 +26,12 @@ tags:
   - qa
   - cot
   - physionet
-source_url: https://physionet.org/content/ptb-xl/
+source_url: https://github.com/StanfordBDHG/OpenTSLM
+citation: >-
+  Oh, J., Lee, G., Bae, S., Kwon, J., & Choi, E. (2023). ECG-QA: A Comprehensive Question Answering
+  Dataset Combined With Electrocardiogram. Advances in Neural Information Processing Systems 36,
+  66277-66288. Chain-of-thought rationales: Langer, P., et al. (2025). OpenTSLM: Time-Series
+  Language Models for Reasoning over Multivariate Medical Text- and Time-Series Data.
+  https://doi.org/10.48550/arXiv.2510.02410
+parents:
+  ptbxl: physionet/ptb-xl@1.0.0

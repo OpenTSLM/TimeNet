@@ -8,14 +8,14 @@ template, answer options, clinical context) once, as value-deduped annotations t
 reference. Each recording carries its dataset split, and the patient's sex and age from PTB-XL. The ~230k
 tasks stream to disk, so they never all live in memory.
 
-Sources come from three places. The signals and the patient metadata come from PhysioNet PTB-XL. The
+The recordings and their patient metadata are imported from the pinned PTB-XL TimeF parent. The
 per-template answer options come from the ``Jwoo5/ecg-qa`` GitHub repo. The precomputed CoT rows
 (question, answer, rationale, template) come from the OpenTSLM release, the only public source for the
-rationales. Real build needs the network and a multi-GB PTB-XL download.
+rationales. Build the PTB-XL parent first or pass ``--build-parents``.
 
-The clinical context comes from ``ptbxl_database.csv``. It states the patient's age and sex, the
-recording device, and the signal-quality issues, extra beats, and pacemaker that PTB-XL records for the
-recording.
+The clinical context comes from the annotations of the imported PTB-XL records. It states the patient's
+age and sex, the recording device, and the signal-quality issues, extra beats, and pacemaker that PTB-XL
+records for the recording.
 """
 
 import ast
@@ -23,28 +23,23 @@ import asyncio
 from collections.abc import Iterator, Mapping
 import csv
 from dataclasses import dataclass
-from enum import StrEnum, unique
-from fractions import Fraction
 from pathlib import Path
 from typing import ClassVar
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError
+from timenet.connectors import BaseConnector
+from timenet.connectors.context import BuildContext
+from timenet.dataset import Record, TimeFDataset
+from timenet.errors import TimeNetConnectorError
 from timenet.types import (
     Annotation,
     AnswerTask,
     Split,
-    TimeSeriesSpec,
-    ureg,
+    read_value,
 )
-from timenet_connectors.bases.physionet import BasePhysioNetConnector
+from timenet.types.reference_keys import ParentAlias
 from timenet_connectors.download import Artifact, download_files, ensure_archive, find_dir_containing
 
 
-# PTB-XL 500 Hz records from PhysioNet's open S3 bucket. ``_hr`` means high-rate (500 Hz) recordings.
-# Fetched with boto3, which resolves AWS credentials itself (anonymous access works for this open bucket).
-PTBXL_ZIP_URL = "s3://physionet-open/ptb-xl/ptb-xl-1.0.3.zip"
 # The per-template answer options (the multiple-choice candidates), keyed by template_id.
 ECG_QA_TEMPLATE_ANSWERS_URL = (
     "https://raw.githubusercontent.com/Jwoo5/ecg-qa/master/ecgqa/ptbxl/answers_for_each_template.csv"
@@ -53,45 +48,21 @@ ECG_QA_TEMPLATE_ANSWERS_URL = (
 # public source. This is a swappable constant so a mirror can replace it.
 ECG_QA_COT_URL = "https://polybox.ethz.ch/index.php/s/D5QaJSEw4dXkzXm/download/ecg_qa_cot_final.zip"
 
-_ECG = TimeSeriesSpec(
-    spec_type="ecg",
-    name="12-lead ECG",
-    unit_value=ureg.millivolt,
-)
 
-
-@unique
-class Sex(StrEnum):
-    """A patient's sex, as the clinical context and the ``sex`` annotation state it."""
-
-    MALE = "male"
-    FEMALE = "female"
-
-
-# PTB-XL codes sex as 0 = male, 1 = female.
-_PTBXL_SEX = {"0": Sex.MALE, "1": Sex.FEMALE}
-# PTB-XL signal-quality columns and the phrase the clinical context states when a cell has a value.
+# PTB-XL signal-quality annotations and the phrase the clinical context states when a record has one.
 _QUALITY_ISSUES = (
     ("baseline_drift", "baseline drift noted"),
     ("static_noise", "static noise present"),
     ("burst_noise", "burst noise present"),
     ("electrodes_problems", "electrode artifacts present"),
 )
-# PTB-XL findings outside signal quality and the phrase the clinical context states when a cell has a value.
+# PTB-XL findings outside signal quality and the phrase the clinical context states when a record has one.
 _OTHER_FINDINGS = (
     ("extra_beats", "extra beats detected during recording"),
     ("pacemaker", "pacemaker present"),
 )
-# PTB-XL cells the connector parses as numbers. Each must have a value.
-_REQUIRED_NUMERIC_COLUMNS = ("patient_id", "age")
-# PTB-XL anonymizes the age of every patient older than 89 as 300, in compliance with HIPAA (PhysioNet
-# PTB-XL page, Data Preprocessing: "ages of more than 89 years appear in the range of 300 years").
-_PTBXL_AGE_OVER_89 = 300
-_SEX_DESCRIPTION = "The patient's sex, as PTB-XL states it."
-_AGE_DESCRIPTION = (
-    f"The patient's age in whole years, as PTB-XL states it. PTB-XL states {_PTBXL_AGE_OVER_89} for every "
-    "patient older than 89."
-)
+# The imported PTB-XL annotations a record keeps. The connector clears every other one.
+_KEPT_ANNOTATIONS = frozenset({"sex", "age"})
 
 
 @dataclass(frozen=True)
@@ -102,8 +73,6 @@ class EcgQaCotSource:
     lazily during ``convert`` and the task stream, never materialized as a list.
     """
 
-    records_root: Path
-    ptbxl_database_path: Path
     answers_path: Path
     cot_csvs: tuple[tuple[Split, Path], ...]  # (split, csv_path) for train / validation / test
 
@@ -132,122 +101,81 @@ def _parse_ecg_id(raw: str) -> int:
     return int(raw.strip().strip("[]").strip())
 
 
-def _record_base(records_root: Path, ecg_id: int) -> Path:
-    """Resolve a recording's path in the PTB-XL ``records500/<bucket>/`` layout.
-
-    Args:
-        records_root: The ``records500`` directory.
-        ecg_id: The recording id.
-
-    Returns:
-        The record path without the ``.dat`` / ``.hea`` extension.
-    """
-    return records_root / f"{ecg_id // 1000 * 1000:05d}" / f"{ecg_id:05d}_hr"
-
-
-def _load_ptbxl_database(path: Path) -> dict[int, dict[str, str]]:
-    """Load ``ptbxl_database.csv`` rows keyed by ``ecg_id``.
-
-    Args:
-        path: Path to ``ptbxl_database.csv``.
-
-    Returns:
-        Each recording's row, with every cell as its raw CSV text.
-    """
-    with path.open(newline="", encoding="utf-8") as handle:
-        return {int(row["ecg_id"]): row for row in csv.DictReader(handle)}
-
-
 @dataclass(frozen=True)
 class _PtbxlRecording:
-    """One recording's PTB-XL values, parsed once from its ``ptbxl_database.csv`` row."""
+    """One recording's PTB-XL values, read once from the annotations of its imported record."""
 
     patient_id: int
     age: int
-    sex: Sex
-    row: Mapping[str, str]
-    """The raw row, for the device, recording-date, signal-quality, extra-beats and pacemaker cells."""
+    sex: str
+    annotations: Mapping[str, object]
+    """The imported annotation values by key, for the device, recording-date, signal-quality, extra-beats
+    and pacemaker values."""
 
 
-def _ptbxl_recording(ptbxl: Mapping[int, Mapping[str, str]], ecg_id: int) -> _PtbxlRecording:
-    """Parse a recording's PTB-XL row.
+def _ptbxl_recording(ecg_id: int, record: Record) -> _PtbxlRecording:
+    """Read a recording's PTB-XL values from the annotations of its imported record.
 
     Args:
-        ptbxl: PTB-XL rows keyed by ``ecg_id``.
         ecg_id: The recording id.
+        record: The imported PTB-XL record, with its annotations.
 
     Returns:
-        The recording's parsed PTB-XL values.
+        The recording's PTB-XL values.
 
     Raises:
-        TimeFFormatError: If PTB-XL has no row for the recording, a required numeric cell is empty, or the
-            row's sex is not ``0`` or ``1``.
+        TimeNetConnectorError: If the record has no patient, age, or sex.
     """
-    row = ptbxl.get(ecg_id)
-    if row is None:
-        raise TimeFFormatError(f"ptbxl_database.csv has no row for ecg_id {ecg_id}")
-    for column in _REQUIRED_NUMERIC_COLUMNS:
-        if not row[column].strip():
-            raise TimeFFormatError(f"ptbxl_database.csv ecg_id {ecg_id}: {column} is empty")
-    sex = _PTBXL_SEX.get(row["sex"])
-    if sex is None:
-        raise TimeFFormatError(f"ptbxl_database.csv ecg_id {ecg_id}: sex {row['sex']!r} is not 0 or 1")
-    return _PtbxlRecording(patient_id=_parse_int(row["patient_id"]), age=_parse_int(row["age"]), sex=sex, row=row)
+    values = {annotation.key: read_value(annotation.value) for annotation in record.annotations}
+    patients = values.get("subject_ids")
+    if not isinstance(patients, list) or not patients:
+        raise TimeNetConnectorError(f"PTB-XL ecg_id {ecg_id}: patient_id is empty")
+    # PTB-XL states the age as an int in years and the sex as "male" or "female". Both stay as they are.
+    age = values.get("age")
+    if not isinstance(age, int):
+        raise TimeNetConnectorError(f"PTB-XL ecg_id {ecg_id}: age is empty")
+    sex = values.get("sex")
+    if not isinstance(sex, str):
+        raise TimeNetConnectorError(f"PTB-XL ecg_id {ecg_id}: sex is empty")
+    return _PtbxlRecording(patient_id=_parse_int(patients[0]), age=age, sex=sex, annotations=values)
+
+
+def _text(values: Mapping[str, object], key: str) -> str:
+    """Return a text annotation value without surrounding whitespace, or ``""`` if the record has none.
+
+    Args:
+        values: The imported annotation values by key.
+        key: The annotation key.
+
+    Returns:
+        The text.
+    """
+    value = values.get(key)
+    return value.strip() if isinstance(value, str) else ""
 
 
 def _clinical_context(recording: _PtbxlRecording) -> str:
     """Build a recording's clinical context from its PTB-XL values.
 
     The context states the patient's age and sex, the recording device, and each signal-quality issue,
-    extra beats, or pacemaker whose PTB-XL cell has a value.
+    extra beats, or pacemaker that the imported record has an annotation for.
 
     Args:
-        recording: The recording's parsed PTB-XL values.
+        recording: The recording's PTB-XL values.
 
     Returns:
         The clinical-context text.
     """
-    row = recording.row
-    parts = [f"{recording.age}-year-old", f"{recording.sex.value} patient", "12-lead ECG"]
-    if row["recording_date"].strip():
+    values = recording.annotations
+    parts = [f"{recording.age}-year-old", f"{recording.sex} patient", "12-lead ECG"]
+    if _text(values, "recording_date"):
         parts.append("clinical recording")
-    if device := row["device"].strip():
+    if device := _text(values, "device"):
         parts.append(f"recorded with {device}")
-    issues = [phrase for column, phrase in _QUALITY_ISSUES if row[column].strip()]
+    issues = [phrase for key, phrase in _QUALITY_ISSUES if _text(values, key)]
     parts.append(f"Signal quality: {', '.join(issues)}" if issues else "Signal quality: adequate for analysis")
-    parts.extend(phrase for column, phrase in _OTHER_FINDINGS if row[column].strip())
+    parts.extend(phrase for key, phrase in _OTHER_FINDINGS if _text(values, key))
     return f"{parts[0]} {parts[1]}. " + ". ".join(parts[2:]) + "."
-
-
-class _PatientAnnotations:
-    """Give each record its sex and age annotations, one instance per distinct value.
-
-    Many records share a sex or an age, so the annotation for a value is built once and every later record
-    that states that value gets the same instance.
-    """
-
-    def __init__(self) -> None:
-        self._sex: dict[Sex, Annotation] = {}
-        self._age: dict[int, Annotation] = {}
-
-    def for_recording(self, recording: _PtbxlRecording) -> list[Annotation]:
-        """Give a recording's sex and age annotations.
-
-        Args:
-            recording: The recording's parsed PTB-XL values.
-
-        Returns:
-            The sex annotation and the age annotation, with no span.
-        """
-        sex = self._sex.get(recording.sex)
-        if sex is None:
-            sex = Annotation(key="sex", value=recording.sex.value, description=_SEX_DESCRIPTION)
-            self._sex[recording.sex] = sex
-        age = self._age.get(recording.age)
-        if age is None:
-            age = Annotation(key="age", value=recording.age, unit=ureg.year, description=_AGE_DESCRIPTION)
-            self._age[recording.age] = age
-        return [sex, age]
 
 
 @dataclass(frozen=True)
@@ -312,7 +240,7 @@ def _iter_cot_rows(csv_path: Path) -> Iterator[_CotRow]:
             )
 
 
-class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
+class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
     """Connector for the ECG-QA CoT dataset (PTB-XL signals + OpenTSLM chain-of-thought QA)."""
 
     _COT_CSVS: ClassVar[tuple[tuple[Split, str], ...]] = (
@@ -322,10 +250,9 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
     )
 
     async def download_async(self, cache_dir: Path) -> list[EcgQaCotSource]:
-        """Fetch PTB-XL, the template answers, and the CoT CSVs, and return one lightweight handle.
+        """Fetch the template answers and CoT CSVs and return one lightweight handle.
 
-        PTB-XL is an S3 archive fetched synchronously (boto3 parallelizes the transfer internally). The
-        two HTTP artifacts, the template-answers CSV and the CoT archive, download concurrently. No CoT
+        The template-answers CSV and the CoT archive download concurrently. No CoT
         row is read here; ``convert`` and the task stream read them lazily.
 
         Args:
@@ -334,8 +261,6 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         Returns:
             A single-element list holding the :class:`EcgQaCotSource` handle.
         """
-        # PTB-XL is an S3 archive. Fetch it first (boto3 blocks the loop but parallelizes the transfer).
-        ptbxl_root = find_dir_containing(await ensure_archive(PTBXL_ZIP_URL, cache_dir), "ptbxl_database.csv")
         answers_path = cache_dir / "answers_for_each_template.csv"
         # The two HTTP artifacts download concurrently.
         _, cot_root = await asyncio.gather(
@@ -345,33 +270,30 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
         cot_csvs = tuple(
             (split, find_dir_containing(cot_root, csv_name) / csv_name) for split, csv_name in self._COT_CSVS
         )
-        return [
-            EcgQaCotSource(
-                records_root=ptbxl_root / "records500",
-                ptbxl_database_path=ptbxl_root / "ptbxl_database.csv",
-                answers_path=answers_path,
-                cot_csvs=cot_csvs,
-            )
-        ]
+        return [EcgQaCotSource(answers_path=answers_path, cot_csvs=cot_csvs)]
 
-    def convert(self, raw_refs: list[EcgQaCotSource]) -> TimeFDataset:
+    def compose(self, raw_refs: list[EcgQaCotSource], context: BuildContext) -> TimeFDataset:
         """Build one record per recording and stream one :class:`AnswerTask` per CoT row.
 
         A first pass over the CoT CSVs collects each recording's split and the distinct question
-        metadata. It then builds a record per recording (its 12 leads with lazy loaders, and its patient
-        sex and age from PTB-XL), builds each recording's clinical context from PTB-XL, and registers
-        the deduped metadata annotations. The tasks themselves stream from :meth:`_iter_tasks`, so the
-        ~230k questions never all live in memory.
+        metadata. It then imports the selected parent records, found by the ``ecg_id`` in their
+        metadata, builds each recording's clinical context from the imported PTB-XL annotations, and
+        registers the deduped metadata annotations. The tasks themselves stream from
+        :meth:`_iter_tasks`, so the ~230k questions never all live in memory.
 
         Args:
             raw_refs: The single-element list from :meth:`download`.
+            context: The opened PTB-XL parent, under the parent alias ``ptbxl``.
 
         Returns:
             The dataset: recording records plus a task stream.
+
+        Raises:
+            TimeNetConnectorError: If the PTB-XL parent has no recording for an ECG the rows name, or an
+                imported Record has no patient, age, or sex.
         """
         source = raw_refs[0]
         answers = _load_template_answers(source.answers_path)
-        ptbxl = _load_ptbxl_database(source.ptbxl_database_path)
         dataset = TimeFDataset(metadata=self.metadata())
 
         split_of_ecg: dict[int, Split] = {}
@@ -383,18 +305,31 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
                 question_types.add(row.question_type)
                 template_ids.add(row.template_id)
 
-        patient_annotations = _PatientAnnotations()
+        ptbxl = context.parents[ParentAlias("ptbxl")]
+        # PTB-XL keeps each recording's upstream ecg_id in the record's metadata.
+        parent_ids = {
+            record.metadata["ecg_id"]: record.id
+            for record in ptbxl.iter_records(with_annotations=False)
+            if record.metadata.get("ecg_id") in split_of_ecg
+        }
+        missing = sorted(split_of_ecg.keys() - parent_ids.keys())
+        if missing:
+            raise TimeNetConnectorError(f"the PTB-XL parent has no recording with ecg_id {missing}")
+        imported = dataset.import_from(ptbxl, records=[parent_ids[ecg_id] for ecg_id in sorted(split_of_ecg)])
         records: dict[int, Record] = {}
         contexts: dict[int, str] = {}
         for ecg_id, split in sorted(split_of_ecg.items()):
-            ptbxl_recording = _ptbxl_recording(ptbxl, ecg_id)
-            record = self._build_record(source.records_root, ecg_id, ptbxl_recording)
-            dataset.add_record(record=record)
-            record.add_annotations(
-                [Annotation(key="split", value=split.value), *patient_annotations.for_recording(ptbxl_recording)]
+            record = imported.records[parent_ids[ecg_id]]
+            recording = _ptbxl_recording(ecg_id, record)
+            record.metadata["patient_id"] = recording.patient_id
+            # Keep PTB-XL's span-free sex and age and clear the other imported annotations, so the
+            # Records match our standalone ECG-QA-CoT 1.1.0: ``sex``, ``age``, and the split.
+            record.annotations = tuple(
+                annotation for annotation in record.annotations if annotation.key in _KEPT_ANNOTATIONS
             )
+            record.add_annotations([Annotation(key="split", value=split.value)])
             records[ecg_id] = record
-            contexts[ecg_id] = _clinical_context(ptbxl_recording)
+            contexts[ecg_id] = _clinical_context(recording)
 
         task_annotations = self._annotate_task_metadata(dataset, question_types, template_ids, contexts, answers)
         dataset.set_task_stream(
@@ -402,45 +337,6 @@ class EcgQaCotConnector(BasePhysioNetConnector[EcgQaCotSource]):
             lambda: self._iter_tasks(source, records, task_annotations),
         )
         return dataset
-
-    def _build_record(self, records_root: Path, ecg_id: int, recording: _PtbxlRecording) -> Record:
-        """Build one recording's record: its 12 leads and its PTB-XL ids.
-
-        Args:
-            records_root: The ``records500`` directory.
-            ecg_id: The recording id.
-            recording: The recording's parsed PTB-XL values.
-
-        Returns:
-            The record, not yet added to a dataset.
-        """
-        record_base = _record_base(records_root, ecg_id)
-        return Record(
-            sources=(Source(name="PTB-XL ECG", signals=self._leads_for(record_base)),),
-            metadata={"ecg_id": ecg_id, "patient_id": recording.patient_id},
-        )
-
-    def _leads_for(self, record_base: Path) -> tuple[Signal, ...]:
-        """Build the 12 lead :class:`Signal` for one recording with lazy per-lead loaders.
-
-        Args:
-            record_base: The record path without the ``.dat`` / ``.hea`` extension.
-
-        Returns:
-            One :class:`Signal` per lead. All leads share the ECG spec.
-        """
-        header = self._read_header(record_base)
-        axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
-        return tuple(
-            Signal.from_loader(
-                spec=_ECG,
-                name=name,
-                time_axis=axis,
-                loader=self._lead_loader(record_base, header, lead_idx),
-                n_values=int(header.sig_len),
-            )
-            for lead_idx, name in enumerate(header.sig_name)
-        )
 
     @staticmethod
     def _annotate_task_metadata(
