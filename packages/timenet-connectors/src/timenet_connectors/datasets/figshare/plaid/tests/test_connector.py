@@ -21,7 +21,6 @@ from timenet_connectors.datasets.figshare.plaid.release import (
     PinnedCounts,
     Subset,
 )
-from timenet_connectors.datasets.figshare.plaid.tasks import PlaidApplianceTask, PlaidSwitchingEventsTask
 
 
 _ROWS = 300
@@ -292,10 +291,16 @@ def test_tasks_hold_nothing_beyond_their_record(tmp_path):
     assert all(record.annotations == () for record in submetered)
 
 
-def test_tasks_of_selects_one_kind(tmp_path):
+def test_each_task_has_its_method(tmp_path):
     loader = PlaidDatasetLoader.parse_from([_release(tmp_path)], counts=_FIXTURE_COUNTS, defects=_FIXTURE_DEFECTS)
-    assert [task.appliance_type for task in loader.tasks_of(PlaidApplianceTask)] == ["Fan", "Laptop", "Water kettle"]
-    assert [len(task.events) for task in loader.tasks_of(PlaidSwitchingEventsTask)] == [5, 3]
+    appliance = list(loader.appliance_tasks())
+    events = list(loader.switching_events_tasks())
+    assert [task.targets for task in appliance] == [("Fan",), ("Laptop",), ("Water kettle",)]
+    assert [len(task.target_annotations) for task in events] == [5, 3]
+    assert all(isinstance(task, ClassificationTask) for task in appliance)
+    assert all(isinstance(task, TemporalLocalizationTask) for task in events)
+    # tasks() yields from each method in turn.
+    assert [type(task) for task in loader.tasks()] == [type(task) for task in (*appliance, *events)]
 
 
 def test_pinned_counts_mismatch_fails(tmp_path):

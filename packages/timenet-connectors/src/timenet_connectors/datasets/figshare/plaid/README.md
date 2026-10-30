@@ -130,8 +130,8 @@ build      build_record(Measurement) ──► Record (lazy current, voltage)
            annotate_events(Record, AggregatedEntry) ──► event annotations
 
 populate   dataset annotations, then the Records, then the task stream:
-           PlaidApplianceTask ───────► ClassificationTask
-           PlaidSwitchingEventsTask ─► TemporalLocalizationTask
+           appliance_tasks ────────► ClassificationTask
+           switching_events_tasks ─► TemporalLocalizationTask
 
 write      ValueLoader(measurement, column)
              └─ read_values(path): both columns, once per file
@@ -145,8 +145,8 @@ write      ValueLoader(measurement, column)
 | `measurements.py` | One CSV file: `Measurement`, its row count, its values |
 | `keys.py` | Every annotation key the connector writes |
 | `records.py` | A file's Record, its metadata, its events, and the lazy `ValueLoader` |
-| `tasks.py` | `PlaidApplianceTask` and `PlaidSwitchingEventsTask` |
-| `loader.py` | `PlaidDatasetLoader`, which runs the parse and streams the tasks |
+| `tasks.py` | `appliance_task` and `switching_events_task`, which build the TimeNet tasks |
+| `loader.py` | `PlaidDatasetLoader`, which runs the parse and streams the tasks of `appliance_tasks` and `switching_events_tasks` |
 
 Every build checks the pins in `release.py`: 1,876 submetered and 575 aggregated files, 2,714
 events, 65 households, the one unlisted file, and the 90 entries with a wrong stated length. Every

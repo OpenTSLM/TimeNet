@@ -8,7 +8,7 @@ from typing import Self
 
 from timenet.dataset import Record
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation
+from timenet.types import Annotation, ClassificationTask, Task, TemporalLocalizationTask
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.figshare.plaid.entries import (
     AggregatedEntry,
@@ -26,7 +26,7 @@ from timenet_connectors.datasets.figshare.plaid.release import (
     PinnedCounts,
     Subset,
 )
-from timenet_connectors.datasets.figshare.plaid.tasks import PlaidApplianceTask, PlaidSwitchingEventsTask, PlaidTask
+from timenet_connectors.datasets.figshare.plaid.tasks import appliance_task, switching_events_task
 
 
 @dataclass(frozen=True)
@@ -46,23 +46,23 @@ class _Aggregated:
     events: tuple[Annotation, ...]
 
 
-class PlaidDatasetLoader(DatasetLoader[PlaidTask]):
+class PlaidDatasetLoader(DatasetLoader):
     """PLAID's files, read and checked: one lazy Record per CSV file, and its task.
 
-    PLAID defines two tasks, one per Record, as the paper names them:
+    PLAID defines two tasks, one per Record, as the paper names them. Each has its own method:
 
-    - Appliance type (:class:`PlaidApplianceTask`): a submetered file's appliance type, as the authors'
+    - Appliance type (:meth:`appliance_tasks`): a submetered file's appliance type, as the authors'
       GlobalSIP notebook classifies it.
-    - Switching events (:class:`PlaidSwitchingEventsTask`): an aggregated file's labelled switch-on and
+    - Switching events (:meth:`switching_events_tasks`): an aggregated file's labelled switch-on and
       switch-off events, each with its appliance.
 
-    Neither has a split; select one kind with ``tasks_of``.
+    Neither has a split.
 
     The loader keeps each file's entry and row count, not its samples. The signals reread their file, so the
     files must stay available until writing ends.
     """
 
-    TASK_KINDS = (PlaidApplianceTask, PlaidSwitchingEventsTask)
+    TASK_TYPES = (ClassificationTask, TemporalLocalizationTask)
 
     def __init__(self, submetered: tuple[_Submetered, ...], aggregated: tuple[_Aggregated, ...]) -> None:
         self._submetered = submetered
@@ -127,16 +127,29 @@ class PlaidDatasetLoader(DatasetLoader[PlaidTask]):
         """Return the submetered Records, then the aggregated ones, each in file number order."""
         return chain((item.record for item in self._submetered), (item.record for item in self._aggregated))
 
-    def tasks(self) -> Iterator[PlaidTask]:
-        """Return each submetered file's appliance task, then each aggregated file's event task, in file order.
+    def tasks(self) -> Iterator[Task]:
+        """Return every PLAID task, in stream order.
 
-        Returns:
-            The tasks.
+        Yields:
+            Each submetered file's appliance task, then each aggregated file's event task, in file order.
         """
-        return chain(
-            (
-                PlaidApplianceTask(record=item.record, appliance_type=item.entry.appliance.type)
-                for item in self._submetered
-            ),
-            (PlaidSwitchingEventsTask(record=item.record, events=item.events) for item in self._aggregated),
-        )
+        yield from self.appliance_tasks()
+        yield from self.switching_events_tasks()
+
+    def appliance_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the appliance type tasks.
+
+        Yields:
+            One classification task for each submetered file, in file number order.
+        """
+        for item in self._submetered:
+            yield appliance_task(item.record, item.entry.appliance.type)
+
+    def switching_events_tasks(self) -> Iterator[TemporalLocalizationTask]:
+        """Return the switching events tasks.
+
+        Yields:
+            One localization task for each aggregated file, in file number order.
+        """
+        for item in self._aggregated:
+            yield switching_events_task(item.record, item.events)
