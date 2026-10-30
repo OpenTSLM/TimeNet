@@ -884,7 +884,12 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
     @property
     def records(self) -> tuple[Record, ...]:
-        """All records in insertion order."""
+        """All records of the dataset.
+
+        For a dataset read from a release, the records come in the release's record order, as
+        :meth:`~timenet.reader.TimeFReader.record_ids` lists it. Records added later follow them.
+        For a dataset built in memory, the records come in the order in which they were added.
+        """
         return tuple(self._records)
 
     @property

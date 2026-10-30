@@ -50,7 +50,7 @@ Signals can reference the same immutable `TimeAxis`.
 
 | Table | Purpose |
 | --- | --- |
-| `records` | Recording sessions and session-level timing metadata. |
+| `records` | Recording sessions, session-level timing metadata, and the order in which readers list the records. |
 | `clocks` | Record start times, shared by records that use the same `TimeOrigin`. |
 | `sources` | Recursive sources, linked to their record and parent source by ID. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
@@ -66,6 +66,15 @@ Signals can reference the same immutable `TimeAxis`.
 | `signal_chunks` | Locations of Signal values in Parquet or Zarr. |
 | `imports` | Each parent alias of the release, with its exact parent release. |
 | `imported_objects` | For each copy: the parent alias, the object kind, the parent ID, and the ID of the copy. |
+
+The `read_order` column of `records` gives each Record a unique rank. `TimeFReader.record_ids()`,
+`iter_records()`, and `read()` list the Records in the order of this rank. In a release without
+imported Records, the rank follows the record ID.
+
+In a release with imported Record copies, each Record ranks by its first stored chunk of Signal
+values. Chunks that this release stores come first. Chunks that other releases store follow,
+sorted by source release. Within one release, chunks sort by values file, then by position in the
+file. Records without Signal values come last, and Records that tie rank by ID.
 
 Object relationships are normalized rather than embedded in JSON. DuckDB can follow the same row
 in either direction, so TimeF does not store duplicate reverse-index tables.
