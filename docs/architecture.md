@@ -120,3 +120,32 @@ can read it directly.
 4. **Publish** the complete TimeF version to a registry.
 5. **Consume**: use `TimeNet.open()` for lazy access, `TimeNet.load()` for a dataset with every
    value in memory, or `timenet download` from the CLI for a local copy.
+
+## Dataset inheritance
+
+A dataset can derive from one or more parent datasets. It builds on their data and does not store
+their values a second time. For example, `physionet/ecg-qa-cot` adds questions to the recordings of
+`physionet/ptb-xl`. The child records its parents and their lineage. So it credits them, and their
+access requirements also apply to the child.
+
+Each parent is an exact release, `org/name@version`, that the card of the child declares under
+`parents`. While the connector builds the child, it copies Records, Signals, annotations, and tasks
+from the parents. The child keeps the copies in its own DuckDB catalog, under IDs of its own. It
+reads their values from the release that stores them, its payload source. See
+[Importing from a parent](timef-dataset.md#importing-from-a-parent) and
+[Compose a child dataset](connectors.md#compose-a-child-dataset).
+
+A build needs the parent releases, and a read needs only the payload sources. Before the connector
+runs, the build prepares each parent release, as
+[Prepare parent releases](build.md#prepare-parent-releases) describes. `TimeNet.open()`,
+`TimeNet.load()`, `TimeNet.open_torch()`, and `TimeFReader.open()` resolve the payload sources
+before the first read. A read never opens the catalog of a parent. Against a local registry, the
+client reuses a complete copy of each release, copies it from `fetch_from`, or builds it.
+`auto_build` is on by default. A remote client never runs connector code. See
+[Open, load, or download](client.md#open-load-or-download).
+
+The child keeps an internal map from the ID of each parent object to the ID of its copy. Through
+this map, `get(..., parent=)` finds a copy, and a later import reuses it. The child also stores a
+read order of its Records, so that a full read follows the order of the stored values. Its manifest
+pins each file that it reads from a payload source by path, size, and checksum, as
+[Shared payloads](timef-format.md#shared-payloads) describes.

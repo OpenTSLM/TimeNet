@@ -47,8 +47,11 @@ raises `TimeFReaderError`. Use the `spawn` or `forkserver` start method there.
 
 ## What loads when
 
-Creating the reader does not open the control database. The first request for records, tasks, or
-annotations opens `control.duckdb` in read-only mode.
+A child dataset can read some of its values from the files of another release, for example a
+parent. The client finds these releases before it creates the reader, as
+[Opening a version](#opening-a-version) describes. Creating the reader does not open the control
+database. The first request for records, tasks, or annotations opens `control.duckdb` in read-only
+mode.
 
 Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy unless the
 read's load plan asks for them, as [Loading values at read time](#loading-values-at-read-time)
@@ -291,10 +294,10 @@ and decoded Zarr chunks until it closes.
 
 To read a version without the client, pass a [`DatasetVersion`](registry.md) to
 `TimeFReader(version)`. `open_local_version()` and the `open_version()` method of a registry
-return one. A `DatasetVersion` holds the parsed manifest and gives access to the files of the
-version. A reader that you open this way skips three parts of the client: the download cache, the
-access check, and `auto_build`. The two examples open a version from a registry and from a
-directory:
+return one. A `DatasetVersion` holds the parsed manifest and the local or remote file systems of
+the version and its payload sources. A reader that you open this way skips three parts of the
+client: the download cache, the access check, and `auto_build`. The two examples open a version
+from a registry and from a directory:
 
 ```python
 from timenet.reader import TimeFReader
@@ -314,7 +317,8 @@ they read only metadata. Opening makes sure that:
 - `manifest.json` is valid and has a supported format version.
 - Each file that the manifest lists, `control.duckdb` included, is present with its recorded size.
 - Each payload source is present, and its manifest still records each pinned file as the version
-  pins it. A payload source is a release whose payload files this version reuses.
+  pins it. Some values of a child are stored in another release, for example in its parent. That
+  release is a payload source of the child.
 - Each pinned file of a local payload source is present with its recorded size.
 
 Opening hashes nothing and reads no values. A remote version's file sizes come from its manifest,
@@ -348,7 +352,9 @@ raises `TimeFValidationError`.
 ## Errors and integrity
 
 Values remain lazy. A values file that changes after opening fails when a Signal reads the affected
-chunk. Errors include the relevant file or table context.
+chunk. Opening does not look for remote files. A missing remote `control.duckdb` fails on the first
+read of Records or tasks. A missing remote values file fails when a Signal reads its chunk. Errors
+include the relevant file or table context.
 
 A catalog query raises `TimeFFormatError` when the catalog lacks a table, column, or type that the
 read expects, and `TimeFReaderError` when the reader's connection closed while the read ran, through
@@ -363,6 +369,18 @@ manifest, or it names another release.
 Call `verify()` to hash every file before reading data: the version's own files, and the files it
 pins on each payload source. If a file is missing or does not match its manifest record or pin,
 `verify()` raises `TimeNetFileError`, a `TimeFFormatError`.
+
+## Inherited storage
+
+A child dataset holds a complete catalog of its own. Its chunk and external-value locators name the
+payload source that stores each file. A read never opens the catalog of a parent and never follows
+a chain of parents. `TimeNet.open()`, `TimeNet.open_torch()`, and `TimeFReader.open()` resolve the
+payload sources before the first read.
+
+The writer stores a read order for the Records, from the locations of their values. `read()` and
+`iter_records()` without IDs follow this order. Imported Records get IDs in the order of the
+imports, so the order of their IDs can differ from the read order. Requested Record IDs keep the
+order that the caller gives.
 
 ## Round-trip guarantee
 

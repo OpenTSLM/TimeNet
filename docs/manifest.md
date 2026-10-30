@@ -107,6 +107,24 @@ live in separate structures.
 
 `all_files()` returns every descriptor. `all_parts()` returns only the paths.
 
+## Parent and storage pins
+
+`metadata.parents` declares the exact parent releases of a child, by parent alias. `parent_cards`
+holds a copy of the card of each parent release. `lineage` holds the card of each ancestor release,
+the parents included. These cards record where the child comes from. A read does not need them.
+
+`payload_sources` maps each source key, `org/name@version`, to a release that stores payload files
+that this release reads. It pins each of these files as a copy of the `FilePart` record of that
+release (see [Shared payloads](timef-format.md#shared-payloads)). A payload source can be a parent,
+or another ancestor that stores the file. A registry never changes a published release. So opening
+compares the pins with the manifest of the source, and hashes no file. `files.payloads` lists the
+packed text and time-offset files that this release stores itself.
+
+A build needs the parent releases. A read needs only the payload sources. `TimeNet.open()`,
+`TimeNet.load()`, `TimeNet.open_torch()`, and `TimeFReader.open()` resolve the payload sources
+before the first read, and a read never opens the catalog of a parent. `download()` copies the
+release and its payload sources. See [Payload sources](registry.md#payload-sources).
+
 ---
 
 See the [API reference for `timenet.manifest`](api/manifest.md) for the full symbol listing.
