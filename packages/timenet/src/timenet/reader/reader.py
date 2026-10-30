@@ -198,7 +198,12 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
         return self._manifest.dataset_schema
 
     def record_ids(self) -> tuple[EntityId, ...]:
-        """Return every Record ID without building a Record.
+        """Return the ID of every Record, without building the Records.
+
+        The IDs come in the release's record order, which `iter_records()` and `read()` also use.
+        Every reader of a release returns the same order. In a release with imported Records, the
+        order follows where the values are stored, so that a walk over the records reads the stored
+        values in sequence. In any other release, the order is by ID.
 
         Returns:
             The IDs in the order :meth:`iter_records` yields them when called without arguments.
@@ -566,10 +571,11 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
         *,
         with_annotations: bool = True,
     ) -> Iterator[Record]:
-        """Yield complete records, optionally in a requested ID order.
+        """Yield complete records, in a requested ID order or in the release's record order.
 
         Args:
-            record_ids: IDs to read in result order, or ``None`` for every record.
+            record_ids: IDs to read in result order, or ``None`` for every record in the order of
+                :meth:`record_ids`.
             with_annotations: Whether to build annotations on the records and descendants.
 
         Yields:
