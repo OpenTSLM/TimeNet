@@ -105,14 +105,15 @@ context: the question already states both, and 10,000 rows give a wrong `questio
 
 ### Tasks
 
-Each row is one task. A task's kind is its question's format, read from the question's text, since
-the format decides its TimeNet type. The row's paper task is its `task` metadata.
+Each row is one task. The question's format, read from the question's text, decides its TimeNet
+type, so each format has its own loader method. `tasks()` keeps the file order, in which the formats
+alternate. The row's paper task is its `task` metadata.
 
-| Kind | TimeNet type | Target | Train | Validation | Test |
+| Loader method | TimeNet type | Target | Train | Validation | Test |
 | --- | --- | --- | --- | --- | --- |
-| `TrueOrFalseTask` | `ClassificationTask` | `T` or `F` | 62,757 | 8,931 | 17,993 |
-| `MultipleChoiceTask` | `AnswerTask` | One letter, `A` to `D` | 63,311 | 9,090 | 18,029 |
-| `PuzzleTask` | `AnswerTask` | Four letters, such as `C,B,D,A` | 20,932 | 2,979 | 5,978 |
+| `true_or_false_tasks()` | `ClassificationTask` | `T` or `F` | 62,757 | 8,931 | 17,993 |
+| `multiple_choice_tasks()` | `AnswerTask` | One letter, `A` to `D` | 63,311 | 9,090 | 18,029 |
+| `puzzling_tasks()` | `AnswerTask` | Four letters, such as `C,B,D,A` | 20,932 | 2,979 | 5,978 |
 
 - **A true-or-false question** is a classification, since `T` and `F` mean the same in every
   question. Its `target_schema` is the `true_or_false_vocabulary` dataset annotation, `["T", "F"]`.

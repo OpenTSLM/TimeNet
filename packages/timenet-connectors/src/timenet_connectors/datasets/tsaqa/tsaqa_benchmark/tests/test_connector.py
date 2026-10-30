@@ -17,6 +17,7 @@ from timenet.types import AnswerTask, ClassificationTask, Split
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark import TSAQAConnector, records
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.issues import SourceIssue, without_source_issues
+from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.loader import TSAQADatasetLoader
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.records import record_metadata
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.release import PINNED_INVENTORY, InventoryKey, SourceSplit
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.request import authors_question
@@ -171,6 +172,22 @@ def test_task_kinds_and_issue_filter():
     }
     clean = list(without_source_issues(dataset.iter_tasks(), issues=[SourceIssue.REPEATED_ACROSS_SPLITS]))
     assert len(clean) == 19 - 4
+
+
+def test_each_format_has_its_own_method():
+    loader = TSAQADatasetLoader.parse_from(_refs(), inventory=_FIXTURE_INVENTORY)
+    assert len(list(loader.true_or_false_tasks())) == 8
+    assert len([task for task in loader.multiple_choice_tasks() if task.split is Split.VALIDATION]) == 1
+    assert [task.split for task in loader.puzzling_tasks()] == [Split.TRAIN, Split.TRAIN, Split.TEST]
+    # tasks() keeps the file order, and holds exactly the tasks of the three methods.
+    by_format = [*loader.true_or_false_tasks(), *loader.multiple_choice_tasks(), *loader.puzzling_tasks()]
+    assert sorted(map(_row_of, loader.tasks())) == sorted(map(_row_of, by_format))
+    assert [_row_of(task) for task in loader.tasks()] == [
+        (f"{split}.parquet", row)
+        for split in _SPLITS
+        for row in range(len(pq.read_table(_FIXTURES / f"{split}.parquet")))
+    ]
+    assert (ClassificationTask, AnswerTask) == loader.TASK_TYPES
 
 
 def test_each_split_file_is_read_once_for_all_its_series(monkeypatch):
