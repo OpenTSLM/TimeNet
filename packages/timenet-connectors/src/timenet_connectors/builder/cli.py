@@ -140,7 +140,8 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
     registry. Missing ones fail the build before any download, unless ``--fetch-from`` names a
     registry to copy them from or ``--build-parents`` builds them from their own connectors. Every
     parent is prepared before the dataset itself builds, and a parent is never rebuilt over a
-    release the output already holds.
+    release the output already holds. A version that is already built needs only its payload
+    sources, which are prepared the same way.
 
     ``--values-backend`` overrides the values-plane storage the connector declares. This process
     resolves the connector's default for an in-process build; an isolated child resolves its own,
@@ -215,11 +216,11 @@ def build_one(  # noqa: PLR0913
     :class:`~timenet_connectors.builder.backend.ConnectorBuilder`, and :func:`timenet_connectors.build`.
     A missing parent fails the build before any download, unless ``fetch_from`` or ``build_parents``
     obtains it. A parent builds the same way as this dataset, but never with ``force``. A parent
-    that another builder backend claims builds through that backend's ``build``, with its pins. A
-    version that the output already holds returns without a connector run, unless ``force``. The
-    connector runs in an environment built from its requirements, or in this interpreter when
-    isolation is off. A local output gets a version directory, and a remote output gets a published
-    version.
+    that another builder backend claims builds through that backend's ``build``, with its pins. For
+    a version that the output already holds, only its missing payload sources are prepared, and no
+    connector runs, unless ``force``. The connector runs in an environment built from its
+    requirements, or in this interpreter when isolation is off. A local output gets a version
+    directory, and a remote output gets a published version.
 
     Args:
         dataset_id: The dataset id.

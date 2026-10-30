@@ -61,8 +61,8 @@ def plan_parents(
 
     A build opens each parent with its direct payload sources, not their own sources nor its own
     parents. Missing releases are fetched from ``fetch_from`` or built from an installed
-    connector that declares exactly that version. Only builds visit declared parents. A release that is
-    already built needs no parents unless ``force``. A damaged copy in a local output is fetched
+    connector that declares exactly that version. Only builds visit declared parents. A requested
+    release that is already built needs only its payload sources, unless ``force``. A damaged copy in a local output is fetched
     again, and never built over. An output that is not local holds open releases only, so every
     release the plan visits there must be open. A registry that is not local serves open releases
     only, so a release to fetch from one must be open too.
@@ -72,7 +72,7 @@ def plan_parents(
         output: The registry the build writes to.
         fetch_from: Registry to fetch missing parents from. ``None`` disables fetching.
         build_parents: Build missing parents from their installed connectors.
-        force: Plan parents even when the requested release is already built.
+        force: Plan the parents of a rebuild even when the requested release is already built.
 
     Returns:
         The parents to fetch or build, each after the parents it needs itself.
@@ -95,9 +95,13 @@ def plan_parents(
     if card is None:
         raise LookupError(f"no installed connector declares a card for {dataset_id!r}")
     # A root dataset never touches the output registry here, so its build costs no extra round trip.
-    if not card.parents or (not force and output.exists(card.dataset_id, str(card.dataset_version))):
+    if not card.parents:
         return []
-    if not isinstance(output, LocalRegistry):
+    root = DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)
+    # A release that is already built needs only its payload sources, to open. Its declared parents
+    # matter only to a rebuild.
+    held = None if force else _manifest(output, root)
+    if held is None and not isinstance(output, LocalRegistry):
         require_open_access(card)
     searched = str(output) if fetch_from is None else f"{output} or {fetch_from}"
     steps: list[tuple[DatasetRef, Literal["fetch", "build"]]] = []
@@ -144,9 +148,16 @@ def plan_parents(
         if action is not None and (ref, action) not in steps:
             steps.append((ref, action))
 
-    root = DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)
-    for ref in card.parents.values():
-        visit(ref, (root,))
+    if held is not None:
+        sources = list(held.payload_sources.values())
+        for source in sources:
+            visit(source.release, (root,), source)
+        # As for a parent: a fetch of the built release brings each payload source it lacks.
+        if any(str(source.release) in fetched for source in sources):
+            steps.append((root, "fetch"))
+    else:
+        for ref in card.parents.values():
+            visit(ref, (root,))
     return [
         ParentStep(ref, action, pinned_by=pins.get(str(ref), {}) if action == "build" else {}) for ref, action in steps
     ]
@@ -170,7 +181,7 @@ def prepare_parents(  # noqa: PLR0913
             release only if it reproduces those pins.
         fetch_from: Registry to fetch missing parents from. ``None`` disables fetching.
         build_parents: Build missing parents from their installed connectors.
-        force: Prepare parents even when the requested release is already built.
+        force: Prepare the parents of a rebuild even when the requested release is already built.
 
     Raises:
         TimeNetDatasetNotFoundError: If a builder does not produce the required release.
