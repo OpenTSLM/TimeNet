@@ -1,0 +1,2 @@
+# wfdb reads the format-212 signals and the reference annotation files.
+wfdb>=4.1
