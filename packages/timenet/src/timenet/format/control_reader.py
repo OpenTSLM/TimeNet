@@ -1353,6 +1353,21 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
 
         Raises:
             TimeFNotFoundError: If an ID names no stored task.
+        """  # noqa: DOC502 - raised by _read_tasks_with_records
+        return self._read_tasks_with_records(task_ids)[0]
+
+    def _read_tasks_with_records(
+        self, task_ids: Collection[EntityId]
+    ) -> tuple[dict[EntityId, Task], dict[EntityId, Record]]:
+        """Build the given tasks as :meth:`read_tasks_by_id` does, with every Record the read built.
+
+        Returns:
+            The tasks by ID, and by ID the Records the read built for them and the tasks they derive
+            from: the Records they reference, and those that hold their Signal targets and the
+            annotations they reference.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored task.
         """  # noqa: DOC502 - raised by _require_found
         stored = {
             task_id
@@ -1361,8 +1376,9 @@ class DuckDBControlReader:  # noqa: PLR0904 - one public method per kind of cata
             )
         }
         _require_found(ObjectKind.TASK, task_ids, stored)
-        tasks = _TaskBuilder(self, None).read_ids(list(task_ids))
-        return {task.id: task for task in tasks}
+        builder = _TaskBuilder(self, None)
+        tasks = builder.read_ids(list(task_ids))
+        return {task.id: task for task in tasks}, dict(builder.records_by_id)
 
     def read_tasks(  # noqa: PLR0913 - one argument per task selection axis
         self,

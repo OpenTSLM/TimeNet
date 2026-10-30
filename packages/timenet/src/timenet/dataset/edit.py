@@ -173,7 +173,7 @@ def _task_invalidated(
     if (target_record_ids | candidate_record_ids) & remove:
         return True
     # The Signal targets, and the Signals that the scope and span targets name.
-    if any(signal.id in removed_signal_ids for signal in TimeFDataset._task_signals(task)):
+    if any(signal.id in removed_signal_ids for signal in task.referenced_signals()):
         return True
     if task.inputs and all(record.id in remove for record in task.inputs):
         return True

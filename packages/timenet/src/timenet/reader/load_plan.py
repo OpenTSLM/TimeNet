@@ -2,7 +2,8 @@
 
 A read builds its objects with every stored value behind an unloaded value handle. Before it hands
 the objects out, it collects the handles its plan reaches, reads their values in one batch, and
-fills the handles. Objects that existed before the read are never changed.
+fills the handles. Objects that existed before the read are never changed. An import runs the same
+step over its copies.
 
 :class:`LoadPlan` and :class:`Loading` live in :mod:`timenet.types.load_plan`. This module exports
 them too.
@@ -115,7 +116,7 @@ class ValueLoad:
     """Collect the unloaded stored values a plan reaches on a read's new objects, then load them.
 
     The handles on objects the read did not build are left as they are, so a read changes only the
-    objects it hands out.
+    objects it hands out. An import runs it over its copies too.
     """
 
     def __init__(self, plan: LoadPlan, *, keep: Iterable[object] = ()) -> None:
@@ -137,11 +138,16 @@ class ValueLoad:
         self._left: set[int] = {id(handle) for handle in _stored_values(keep, parents=True)} if self._kinds else set()
         self._pending: dict[int, _StoredValue] = {}
 
-    def add(self, objects: Iterable[object]) -> None:
-        """Collect the plan's unloaded handles on objects the read built."""
+    def add(self, objects: Iterable[object], *, parents: bool = False) -> None:
+        """Collect the plan's unloaded handles on objects the read built.
+
+        Args:
+            objects: The objects the read built.
+            parents: Whether to follow each task's ``from_tasks`` as well.
+        """
         if not self._kinds:
             return
-        for handle in _stored_values(objects, parents=False):
+        for handle in _stored_values(objects, parents=parents):
             if isinstance(handle, self._kinds) and not handle.is_loaded and id(handle) not in self._left:
                 self._pending.setdefault(id(handle), handle)
 
