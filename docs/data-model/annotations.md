@@ -135,3 +135,7 @@ task = AnswerTask(
 
 Use `input_annotations` for context. Use `target_annotations` for the answer. A Task cannot combine
 inline `targets` with `target_annotations`.
+
+The occurrences must lie on the dataset itself or on a Record that the Task references, as
+[Records that a Task references](tasks.md#records-that-a-task-references) describes. `add_task()`,
+`add_tasks()`, and the check of streamed Tasks reject an occurrence on any other Record.
