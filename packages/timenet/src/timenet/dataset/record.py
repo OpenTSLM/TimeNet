@@ -7,7 +7,7 @@ from datetime import datetime
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset.source import Source
+from timenet.dataset.source import Source, check_sibling_names
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
@@ -30,7 +30,7 @@ class Record(SupportsAnnotate):
     """
 
     sources: tuple[Source, ...] = ()
-    """The root sources that belong to this recording."""
+    """The root sources that belong to this recording, each with a distinct name."""
     start_time: TimeOrigin = field(default_factory=TimeOrigin)
     """The common relative zero, with an optional absolute timestamp."""
     annotations: tuple[Annotation, ...] = ()
@@ -49,12 +49,28 @@ class Record(SupportsAnnotate):
         """Validate the record hierarchy and its optional single-clock session span.
 
         Raises:
-            TimeFValidationError: If ``time_span`` is not a whole-record ``TimeInterval`` or does not
-                contain some series' window.
+            TimeFValidationError: If two root sources have the same name, or ``time_span`` is not a
+                whole-record ``TimeInterval`` or does not contain some series' window.
         """
+        check_sibling_names(self.sources, self._label)
         if not isinstance(self.start_time, TimeOrigin):
             raise TimeFValidationError("Record.start_time must be a TimeOrigin")
         self.metadata = validate_json_mapping(self.metadata)
+        self._check_times()
+        for annotation in self.annotations:
+            self._validate_annotation(annotation)
+
+    def _check_times(self) -> None:
+        """Check the time of each Signal and the ``time_span``, as construction does.
+
+        A caller can assign ``time_span``, or the Signals of a Source, after construction. An import
+        that adds Signals to a copy runs this check again.
+
+        Raises:
+            TimeFValidationError: If the window of a Signal does not fit int64 microseconds, or
+                ``time_span`` is not a whole-record ``TimeInterval`` or does not contain some series'
+                window.
+        """
         for signal in self.signals:
             if (window := signal.span_us) is not None:
                 for endpoint in window:
@@ -77,9 +93,6 @@ class Record(SupportsAnnotate):
                         f"Record.time_span ({self.time_span.start_us}, {self.time_span.end_us}) us must contain "
                         f"every series' window, but {ts.name!r} covers {window} us"
                     )
-
-        for annotation in self.annotations:
-            self._validate_annotation(annotation)
 
     @property
     def id(self) -> EntityId:
@@ -129,6 +142,20 @@ class Record(SupportsAnnotate):
 
         for root in sorted(self.sources, key=lambda item: item.name):
             yield from walk(root)
+
+    def _check_source_names(self) -> None:
+        """Reject sibling Sources that share a name, anywhere in the hierarchy.
+
+        Construction checks the rule, but a caller can assign ``sources`` on the record or on a
+        source later.
+
+        Raises:
+            TimeFValidationError: If two root sources, or two child sources of one source, have the
+                same name.
+        """  # noqa: DOC502 - raised by check_sibling_names
+        check_sibling_names(self.sources, self._label)
+        for source in self.walk_sources():
+            check_sibling_names(source.sources, f"source {source.name!r}")
 
     def walk_signals(self) -> Iterable[Signal]:
         """Yield every signal in deterministic source and signal order."""
