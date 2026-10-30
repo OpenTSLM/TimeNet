@@ -4,12 +4,8 @@ Lima et al. 2021 predict the age, and Ribeiro et al. 2020 classify the abnormali
 out to test their age model, and Ribeiro et al. train their abnormality model on the CODE cohort it is part of.
 """
 
-from dataclasses import dataclass
-from typing import ClassVar
-
 from timenet.dataset import Record
-from timenet.types import Annotation, ClassificationTask, ScalarPredictionTask, Split, Task, ureg
-from timenet_connectors.bases.loader import DatasetTask
+from timenet.types import Annotation, ClassificationTask, ScalarPredictionTask, Split, ureg
 from timenet_connectors.datasets.zenodo.code_15.exams import ExamRow
 from timenet_connectors.datasets.zenodo.code_15.keys import AnnotationKey
 
@@ -32,70 +28,57 @@ _NORMAL_ECG = (
 )
 
 
-@dataclass(frozen=True)
-class Code15AgeTask(DatasetTask):
-    """An exam's patient's age, which the authors' network predicts from the trace.
+def age_task(record: Record, row: ExamRow) -> ScalarPredictionTask:
+    """Return an exam's age task: its patient's age, which the authors' network predicts from the trace.
 
     ``train.py`` of ``ecg-age-prediction`` regresses ``exams.csv``'s ``age`` on every exam. The published
-    prediction is a task annotation, never model input.
+    prediction is a task annotation, never model input. The split is test, as Lima et al. 2021 hold CODE-15% out.
+
+    Args:
+        record: The exam's Record.
+        row: The exam's ``exams.csv`` row.
+
+    Returns:
+        The scalar task, with the age in years as target.
     """
-
-    TIMENET_TYPE: ClassVar[type[Task]] = ScalarPredictionTask
-
-    record: Record
-    row: ExamRow
-
-    @property
-    def split(self) -> Split:
-        """Return the task's split: test, as Lima et al. 2021 hold CODE-15% out."""
-        return AGE_SPLIT
-
-    def to_timenet_task(self) -> ScalarPredictionTask:
-        """Return the scalar task, with the age in years as target."""
-        task = ScalarPredictionTask(
-            inputs=(self.record,),
-            # A float with a unit keeps the type a regression metric needs.
-            targets=(float(self.row.age),),
+    task = ScalarPredictionTask(
+        inputs=(record,),
+        # A float with a unit keeps the type a regression metric needs.
+        targets=(float(row.age),),
+        unit=ureg.year,
+        target_name="age",
+        split=AGE_SPLIT,
+    )
+    task.annotate(
+        Annotation(
+            key=AnnotationKey.NN_PREDICTED_AGE,
+            value=row.nn_predicted_age,
             unit=ureg.year,
-            target_name="age",
-            split=self.split,
+            description=_NN_PREDICTED_AGE,
         )
-        task.annotate(
-            Annotation(
-                key=AnnotationKey.NN_PREDICTED_AGE,
-                value=self.row.nn_predicted_age,
-                unit=ureg.year,
-                description=_NN_PREDICTED_AGE,
-            )
-        )
-        return task
+    )
+    return task
 
 
-@dataclass(frozen=True)
-class Code15AbnormalityTask(DatasetTask):
-    """An exam's abnormalities among the six, which the authors' network scores with one sigmoid each.
+def abnormality_task(record: Record, row: ExamRow) -> ClassificationTask:
+    """Return an exam's abnormality task: its abnormalities among the six, which the authors' network scores.
 
-    The target holds every abnormality the exam is labelled with, in the authors' output order, and is empty
-    when it has none. ``normal_ecg`` is a task annotation, never model input.
+    The authors' network scores each abnormality with one sigmoid. The target holds every abnormality the exam
+    is labelled with, in the authors' output order, and is empty when it has none. ``normal_ecg`` is a task
+    annotation, never model input. The split is train, as Ribeiro et al. 2020 train on the CODE cohort.
+
+    Args:
+        record: The exam's Record.
+        row: The exam's ``exams.csv`` row.
+
+    Returns:
+        The multi-label classification task.
     """
-
-    TIMENET_TYPE: ClassVar[type[Task]] = ClassificationTask
-
-    record: Record
-    row: ExamRow
-
-    @property
-    def split(self) -> Split:
-        """Return the task's split: train, as Ribeiro et al. 2020 train on the CODE cohort."""
-        return ABNORMALITY_SPLIT
-
-    def to_timenet_task(self) -> ClassificationTask:
-        """Return the multi-label classification task."""
-        task = ClassificationTask(
-            inputs=(self.record,),
-            targets=tuple(abnormality.value for abnormality in self.row.abnormalities),
-            target_schema=AnnotationKey.ABNORMALITY_VOCABULARY,
-            split=self.split,
-        )
-        task.annotate(Annotation(key=AnnotationKey.NORMAL_ECG, value=self.row.normal_ecg, description=_NORMAL_ECG))
-        return task
+    task = ClassificationTask(
+        inputs=(record,),
+        targets=tuple(abnormality.value for abnormality in row.abnormalities),
+        target_schema=AnnotationKey.ABNORMALITY_VOCABULARY,
+        split=ABNORMALITY_SPLIT,
+    )
+    task.annotate(Annotation(key=AnnotationKey.NORMAL_ECG, value=row.normal_ecg, description=_NORMAL_ECG))
+    return task

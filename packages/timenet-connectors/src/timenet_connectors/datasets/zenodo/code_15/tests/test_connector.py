@@ -15,7 +15,6 @@ from timenet_connectors.datasets.zenodo.code_15.loader import Code15DatasetLoade
 from timenet_connectors.datasets.zenodo.code_15.preprocessing import Padding, authors_input, centred_padding
 from timenet_connectors.datasets.zenodo.code_15.records import record_metadata
 from timenet_connectors.datasets.zenodo.code_15.release import PINNED_COUNTS, Part, PinnedCounts
-from timenet_connectors.datasets.zenodo.code_15.tasks import Code15AbnormalityTask, Code15AgeTask
 from timenet_connectors.datasets.zenodo.code_15.vocabulary import Lead
 
 
@@ -158,15 +157,15 @@ _EXPECTED = {
             "signals": _signals(4001),
         },
     },
-    # Each exam's age task, then its abnormality task. Exam 30's AF comes before its ST.
+    # Every exam's age task, then every exam's abnormality task. Exam 30's AF comes before its ST.
     "tasks": [
         ("ScalarPredictionTask", 30, (60.0,), "test", {"nn_predicted_age": (71.75, "year")}),
-        ("ClassificationTask", 30, ("AF", "ST"), "train", {"normal_ecg": (False, None)}),
         ("ScalarPredictionTask", 10, (61.0,), "test", {"nn_predicted_age": (58.25, "year")}),
-        ("ClassificationTask", 10, (), "train", {"normal_ecg": (True, None)}),
         ("ScalarPredictionTask", 40, (45.0,), "test", {"nn_predicted_age": (49.0, "year")}),
-        ("ClassificationTask", 40, ("RBBB",), "train", {"normal_ecg": (False, None)}),
         ("ScalarPredictionTask", 50, (30.0,), "test", {"nn_predicted_age": (33.5, "year")}),
+        ("ClassificationTask", 30, ("AF", "ST"), "train", {"normal_ecg": (False, None)}),
+        ("ClassificationTask", 10, (), "train", {"normal_ecg": (True, None)}),
+        ("ClassificationTask", 40, ("RBBB",), "train", {"normal_ecg": (False, None)}),
         ("ClassificationTask", 50, ("1dAVb",), "train", {"normal_ecg": (False, None)}),
     ],
 }
@@ -235,19 +234,26 @@ def test_centred_padding_follows_preprocess_ecg(leading, trailing, padding):
 
 def test_tasks_carry_their_papers_split(tmp_path):
     loader = _loader(_release(tmp_path))
-    age = list(loader.tasks_of(Code15AgeTask))
-    abnormality = list(loader.tasks_of(Code15AbnormalityTask))
+    age = list(loader.age_tasks())
+    abnormality = list(loader.abnormality_tasks())
     assert len(age) == len(abnormality) == 4
-    assert list(loader.tasks_of(Code15AgeTask, split=Split.TEST)) == age
-    assert list(loader.tasks_of(Code15AbnormalityTask, split=Split.TRAIN)) == abnormality
     for task in age:
-        built = task.to_timenet_task()
-        assert isinstance(built, ScalarPredictionTask)
-        assert (built.unit, built.target_name) == ("year", "age")
+        assert isinstance(task, ScalarPredictionTask)
+        assert task.split is Split.TEST
+        assert (task.unit, task.target_name) == ("year", "age")
     for task in abnormality:
-        built = task.to_timenet_task()
-        assert isinstance(built, ClassificationTask)
-        assert built.target_schema == "abnormality_vocabulary"
+        assert isinstance(task, ClassificationTask)
+        assert task.split is Split.TRAIN
+        assert task.target_schema == "abnormality_vocabulary"
+
+
+def test_tasks_yield_each_method_in_turn(tmp_path):
+    loader = _loader(_release(tmp_path))
+    stream = [(type(task), task.inputs[0], task.split) for task in loader.tasks()]
+    by_method = [
+        (type(task), task.inputs[0], task.split) for task in [*loader.age_tasks(), *loader.abnormality_tasks()]
+    ]
+    assert stream == by_method
 
 
 def test_targets_stay_off_the_inputs(tmp_path):

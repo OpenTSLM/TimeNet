@@ -7,14 +7,14 @@ from typing import Self
 
 from timenet.dataset import Record
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation
+from timenet.types import Annotation, ClassificationTask, ScalarPredictionTask, Task
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.zenodo.code_15.exams import ExamRow, read_exams
 from timenet_connectors.datasets.zenodo.code_15.index import index_exams
 from timenet_connectors.datasets.zenodo.code_15.keys import AnnotationKey
 from timenet_connectors.datasets.zenodo.code_15.records import LeadLoader, build_record
 from timenet_connectors.datasets.zenodo.code_15.release import CSV_FILE, PARTS, PINNED_COUNTS, Part, PinnedCounts
-from timenet_connectors.datasets.zenodo.code_15.tasks import Code15AbnormalityTask, Code15AgeTask
+from timenet_connectors.datasets.zenodo.code_15.tasks import abnormality_task, age_task
 from timenet_connectors.datasets.zenodo.code_15.vocabulary import Abnormality
 
 
@@ -31,17 +31,17 @@ class _ParsedExam:
     record: Record
 
 
-class Code15DatasetLoader(DatasetLoader[Code15AgeTask | Code15AbnormalityTask]):
+class Code15DatasetLoader(DatasetLoader):
     """CODE-15%'s exams, read and checked: one lazy Record per exam with a trace, and its two tasks.
 
-    CODE-15% has two tasks per exam: its patient's age (:class:`Code15AgeTask`), and its abnormalities among
-    the six (:class:`Code15AbnormalityTask`). Select one kind with ``tasks_of``.
+    CODE-15% has two tasks per exam, each with its own method: its patient's age (:meth:`age_tasks`), and its
+    abnormalities among the six (:meth:`abnormality_tasks`).
 
     The loader keeps each exam's row, the location of its trace and its padding, not its samples. The signals
     reread their part, so the files must stay available until writing ends.
     """
 
-    TASK_KINDS = (Code15AgeTask, Code15AbnormalityTask)
+    TASK_TYPES = (ScalarPredictionTask, ClassificationTask)
 
     def __init__(self, exams: tuple[_ParsedExam, ...]) -> None:
         self._exams = exams
@@ -97,12 +97,29 @@ class Code15DatasetLoader(DatasetLoader[Code15AgeTask | Code15AbnormalityTask]):
         """Return one Record per exam with a trace, by part, then by row in the part."""
         return (exam.record for exam in self._exams)
 
-    def tasks(self) -> Iterator[Code15AgeTask | Code15AbnormalityTask]:
-        """Return each exam's age task, then its abnormality task, in the order of :meth:`records`.
+    def tasks(self) -> Iterator[Task]:
+        """Return every CODE-15% task, in stream order.
 
         Yields:
-            The tasks.
+            The age tasks, then the abnormality tasks.
+        """
+        yield from self.age_tasks()
+        yield from self.abnormality_tasks()
+
+    def age_tasks(self) -> Iterator[ScalarPredictionTask]:
+        """Return the age tasks (Lima et al. 2021).
+
+        Yields:
+            One scalar task per exam with a trace, in the order of :meth:`records`.
         """
         for exam in self._exams:
-            yield Code15AgeTask(record=exam.record, row=exam.row)
-            yield Code15AbnormalityTask(record=exam.record, row=exam.row)
+            yield age_task(exam.record, exam.row)
+
+    def abnormality_tasks(self) -> Iterator[ClassificationTask]:
+        """Return the abnormality tasks (Ribeiro et al. 2020).
+
+        Yields:
+            One multi-label classification task per exam with a trace, in the order of :meth:`records`.
+        """
+        for exam in self._exams:
+            yield abnormality_task(exam.record, exam.row)

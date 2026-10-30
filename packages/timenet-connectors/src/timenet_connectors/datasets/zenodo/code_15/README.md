@@ -113,6 +113,10 @@ Each exam has the two tasks the authors define on it, with neither prompt nor sc
 | `targets` | `age` as a float, `unit` `year`, `target_name` `age` | Each abnormality the exam has, in the authors' output order; empty if none |
 | Task annotation | `nn_predicted_age`, in years | `normal_ecg` |
 | `split` | `test` | `train` |
+| Loader method | `age_tasks` | `abnormality_tasks` |
+
+The task stream holds every exam's age task, then every exam's abnormality task. After
+`populate`, `TimeFDataset.tasks_of` selects one task type and `TimeFDataset.get_split` one split.
 
 The abnormality order is the authors' model output order, `1dAVb, RBBB, LBBB, SB, AF, ST`;
 `exams.csv` writes ST before AF. Over the 345,109 abnormality tasks:
@@ -197,8 +201,8 @@ join      index_exams: ExamRow + TraceScan by exam_id ──► ExamIndex
           build_record(Exam, LeadLoader) ──► Record: 12 lazy leads
 
 populate  dataset annotations, then the Records, then the task stream:
-          Code15AgeTask ─────────► ScalarPredictionTask
-          Code15AbnormalityTask ─► ClassificationTask
+          age_tasks ─────────► ScalarPredictionTask, every exam
+          abnormality_tasks ─► ClassificationTask, every exam
 
 write     LeadLoader(exam, lead)
             └─ rereads the exam's row once for its 12 leads, checks its
@@ -216,8 +220,8 @@ write     LeadLoader(exam, lead)
 | `tracings.py` | The HDF5 parts: `scan_part`, `TraceScan`, `TraceReader` |
 | `index.py` | The join: `Exam`, `ExamIndex`, `index_exams` |
 | `records.py` | An exam's Record and the lazy `LeadLoader` |
-| `tasks.py` | `Code15AgeTask` and `Code15AbnormalityTask`, and their splits |
-| `loader.py` | `Code15DatasetLoader`, which runs the parse and streams the tasks |
+| `tasks.py` | `age_task` and `abnormality_task`, which build one exam's TimeNet tasks, and their splits |
+| `loader.py` | `Code15DatasetLoader`, which runs the parse and streams the tasks: `age_tasks`, then `abnormality_tasks` |
 
 Parsing reads every trace once, about 68 GB, to find its padding: a Signal's length must be known
 before its values are read. Writing reads each trace again, once for its 12 leads.
