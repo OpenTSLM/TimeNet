@@ -146,7 +146,7 @@ def _expected_output(variant: str, split: str) -> tuple[dict, dict]:
     row = _FIXTURE_ROWS[variant, split]
     figures = "figures" if variant == "uni" else "figures_multi"
     record = {
-        "metadata": {"variant": variant, "split": split, "key": "0"},
+        "metadata": {"subject_id": None, "variant": variant, "split": split, "key": "0"},
         "annotations": {"source_domain": row["domain"]},
         "source": row["domain"],
         "source_metadata": {"channel_order": list(row["channels"])},

@@ -64,9 +64,9 @@ release gives neither units nor sampling cadence. TimeNet numbers Records and ta
 source row is in `Record.metadata` as `variant`, `split`, and `key`, the fields of
 `records.RATS40KRecordMetadata`. Keys repeat across splits, so all three name the row.
 `records.record_metadata(record)` reads them back as a typed object. The release names no upstream
-series or subject, so the shared `subject_id` is unset. Nothing else is in record metadata, so
-nothing derived from a row's fields travels with the input. The domain (`source_domain`) is a
-Record annotation, since the task uses it as an input annotation.
+series or subject, so the shared `subject_id` is stored as null. Nothing else is in record
+metadata, so nothing derived from a row's fields travels with the input. The domain
+(`source_domain`) is a Record annotation, since the task uses it as an input annotation.
 
 ### Tasks
 
@@ -330,14 +330,13 @@ of a conversion, one module each:
 - `records.py` builds one Record per row, whose signals reread only their own entry, so the raw
   files must stay available until writing ends. A row's signals share one reread: each load's
   `ChannelLoader` caches the last row read (`lru_cache(maxsize=1)`, as TRACE's `WindowLoader`).
-- `tasks.py` builds one task per row, `RATS40KCategoryTask`, and the `ClassificationTask` it
-  becomes.
+- `tasks.py` builds the `ClassificationTask` of one row, with `category_task`.
 - `request.py` holds the authors' prompts: the templates, the task prompts derived from them, the
   category names, `authors_request`, and `authors_answer`.
 - `keys.py` names every annotation and metadata key, so writing and reading share one spelling.
 - `loader.py` reads both files once and checks the inventory. `RATS40KDatasetLoader` is a
-  `DatasetLoader`: it gives the vocabulary and template annotations, the Records, and the tasks,
-  which `tasks_of(RATS40KCategoryTask, split=...)` selects by split. `connector.py` adds the
+  `DatasetLoader`: it gives the vocabulary and template annotations, the Records, and the tasks.
+  After `populate`, `TimeFDataset.get_split` selects the tasks of one split. `connector.py` adds the
   provenance annotations, and the loader's `populate` adds the rest and streams the tasks.
 
 Validation rejects malformed JSON, duplicate splits or keys, unknown, missing, or invalid row
