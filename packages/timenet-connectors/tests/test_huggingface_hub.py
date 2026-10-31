@@ -11,7 +11,7 @@ import pytest
 from timenet.errors import TimeFValidationError, TimeNetDownloadError
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.download.progress import DownloadProgress, progress_sink
-from timenet_connectors.sources.huggingface_hub import download_hub_files
+from timenet_connectors.sources.huggingface_hub import download_hub_files, hub_snapshot
 
 
 _SHA = "0" * 40
@@ -164,3 +164,18 @@ def test_convert_checks_refs_before_the_subclass_runs():
     refs = [HubFileRef(Path("test.jsonl"), "test")]
     assert _Pinned().convert(refs) is refs
     assert _Pinned.convert.__name__ == "convert"
+
+
+def test_snapshot_selects_patterns_and_keeps_the_snapshot_root(monkeypatch, tmp_path):
+    calls = _fake_hub(monkeypatch, tmp_path)
+    hub = sys.modules["huggingface_hub"]
+    monkeypatch.setattr(
+        hub, "list_repo_files", lambda *args, **kwargs: ["meta.csv", "data/train.parquet", "README.md"], raising=False
+    )
+
+    root = hub_snapshot("org/repo", _SHA, tmp_path, ("data/*.parquet",))
+    assert root == tmp_path / "snapshot"
+    assert (root / "data/train.parquet").is_file()
+    assert calls[0][1]["allow_patterns"] == ["data/train.parquet"]
+    with pytest.raises(TimeNetDownloadError, match="no files matching"):
+        hub_snapshot("org/repo", _SHA, tmp_path, ("missing/*",))
