@@ -271,6 +271,10 @@ pull their database archive.
   row's question and answer become an `AnswerTask`. It downloads the Hub's parquet conversion of
   the dataset at a pinned commit, through `BaseHuggingFaceConnector`, so its `requirements.txt` names
   `huggingface_hub`.
+- `adityalab/time-mmd` pairs government time series with dated text. It fetches the Energy and
+  Environment CSVs of the Time-MMD GitHub repository at a pinned commit with `download_files`, makes
+  one record per domain with the text as interval annotations, and streams sliding-window
+  `ForecastingTask`s at the paper's lookback and horizons.
 
 ```bash
 timenet-build build timenet/hello-world             # offline, synthetic
