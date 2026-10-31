@@ -15,8 +15,8 @@ from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.types import AnswerTask, InputModality, Split, TimeSeriesSpec, read_value
 from timenet_connectors.bases.huggingface import HubFileRef
-from timenet_connectors.datasets.bash_lab.sensorcaps import SensorCapsConnector, connector as module
-from timenet_connectors.datasets.bash_lab.sensorcaps.connector import DECLARED_SAMPLING_RATE_HZ
+from timenet_connectors.datasets.bash_lab.sensorcaps import SensorCapsConnector, records as module
+from timenet_connectors.datasets.bash_lab.sensorcaps.records import DECLARED_SAMPLING_RATE_HZ
 
 
 _FIXTURES = Path(__file__).parent / "fixtures"
@@ -195,14 +195,14 @@ def test_conversion_preserves_source_semantics_and_reiterable_tasks(tmp_path):
 
 def test_channel_reads_reuse_rows_and_reread_offsets(monkeypatch, tmp_path):
     dataset = SensorCapsConnector().convert(_refs(tmp_path)[:1])
-    original = module._parse_row
+    original = module.parse_row
     calls = []
 
     def parse(raw, context):
         calls.append(context)
         return original(raw, context)
 
-    monkeypatch.setattr(module, "_parse_row", parse)
+    monkeypatch.setattr(module, "parse_row", parse)
     first, second = dataset.records
     for signal in first.signals:
         assert len(signal.to_arrow()) == 60
