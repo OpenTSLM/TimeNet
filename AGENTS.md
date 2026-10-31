@@ -79,6 +79,12 @@ finishes.
 
 In final summaries, state which checks you ran and call out any you could not run.
 
+A new connector ships a `VERIFICATION.md` beside its `dataset.yaml`, in the same commit. Start
+from `docs/connector-verification-template.md` and answer every item;
+`docs/connector-verification.md` explains them. `test_every_connector_ships_a_verification_record`
+enforces the format. Never add a connector to its `_PENDING_VERIFICATION` set; remove one when its
+record lands.
+
 ## Stacked PRs
 This repository uses GitHub Stacked PRs via the `gh stack` CLI extension. Each branch in a stack
 maps to one PR whose base is the branch below it, so a large change ships as a chain of small,
