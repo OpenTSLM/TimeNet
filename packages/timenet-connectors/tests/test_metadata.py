@@ -32,8 +32,6 @@ def test_dataset_metadata_is_one_flat_typed_object():
     restored = _DatasetMetadata.from_json(stored)
     assert restored == metadata
     assert restored.sampling is _Sampling.RANDOM
-    # Code without the dataset's class still reads the shared fields.
-    assert RecordMetadata.core_of(stored) == RecordMetadata(subject_id="S1")
     # A key the class doesn't declare, or a version it doesn't read, is rejected rather than misread.
     with pytest.raises(TimeFValidationError, match="invalid _DatasetMetadata"):
         _DatasetMetadata.from_json({**stored, "note": "x"})

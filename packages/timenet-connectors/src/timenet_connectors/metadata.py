@@ -13,8 +13,7 @@ Design choices:
 - Values keep their types: the fields are typed pydantic fields, not a bag of strings.
 - Metadata is frozen, so metadata shared between objects never changes.
 - A subclass adds fields but never redefines a shared one, so a shared field means the same in every dataset.
-- Reading needs the dataset's class: ``CGMRecordMetadata.from_json(...)``. Code without it reads the shared
-  fields with ``RecordMetadata.core_of(...)``.
+- Reading needs the dataset's class: ``CGMRecordMetadata.from_json(...)``.
 
 A dataset whose metadata may change shape over time declares a ``version`` field as a ``Literal``, so a stored
 version it does not read is rejected rather than misread.
@@ -79,17 +78,3 @@ class RecordMetadata(BaseModel):
             return cls.model_validate(stored)
         except ValidationError as error:
             raise TimeFValidationError(f"invalid {cls.__name__}: {error}") from error
-
-    @classmethod
-    def core_of(cls, stored: JsonMapping) -> "RecordMetadata":
-        """Read only the shared fields, for code that doesn't have the dataset's class.
-
-        Args:
-            stored: The JSON object a dataset's ``to_json`` wrote.
-
-        Returns:
-            The shared fields; the dataset's own fields are left out.
-        """
-        return RecordMetadata.from_json(
-            {key: value for key, value in stored.items() if key in RecordMetadata.model_fields}
-        )
