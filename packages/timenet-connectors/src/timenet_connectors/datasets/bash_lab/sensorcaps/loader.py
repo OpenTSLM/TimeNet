@@ -4,7 +4,7 @@ from collections.abc import Iterable, Iterator, Mapping, Sequence
 from typing import Any, Self
 
 from timenet.dataset import Record
-from timenet.types import Annotation
+from timenet.types import Annotation, AnswerTask, Split
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.bash_lab.sensorcaps.parse import iter_rows
@@ -17,17 +17,20 @@ from timenet_connectors.datasets.bash_lab.sensorcaps.records import (
     make_record,
 )
 from timenet_connectors.datasets.bash_lab.sensorcaps.release import HF_REPO, SOURCE_REVISION
-from timenet_connectors.datasets.bash_lab.sensorcaps.tasks import SensorCaptionTask
 
 
-class SensorCapsLoader(DatasetLoader[SensorCaptionTask]):
+# Record annotations the captioning model receives with the sensor values.
+_CONTEXT_KEYS = frozenset({"activity_summary", "sensor_location"})
+
+
+class SensorCapsLoader(DatasetLoader):
     """SensorCaps' Records and tasks, one of each per source row.
 
-    Task kinds:
-        SensorCaptionTask: the row's caption of its Record.
+    SensorCaps defines one task: the row's caption of its Record, as an :class:`AnswerTask` in the
+    training split.
     """
 
-    TASK_KINDS = (SensorCaptionTask,)
+    TASK_TYPES = (AnswerTask,)
 
     def __init__(
         self,
@@ -66,15 +69,23 @@ class SensorCapsLoader(DatasetLoader[SensorCaptionTask]):
         """Return every Record, in file and row order."""
         return iter(self._records.values())
 
-    def tasks(self) -> Iterator[SensorCaptionTask]:
+    def tasks(self) -> Iterator[AnswerTask]:
         """Re-read each row's prompt and caption, without retaining the corpus.
 
         Yields:
-            One caption task per row, in file and row order.
+            One caption task per row, in file and row order: the system message and the derived-feature
+            text as prompt, and the activity summary and sensor location as input annotations.
         """
         for file in self._files:
             for ref, row in iter_rows(file):
-                yield SensorCaptionTask(self._records[ref.key], row)
+                record = self._records[ref.key]
+                yield AnswerTask(
+                    inputs=(record,),
+                    targets=(row.caption,),
+                    prompt=f"{row.system}\n\n{row.features}" if row.features.strip() else row.system,
+                    input_annotations=tuple(a for a in record.annotations if a.key in _CONTEXT_KEYS),
+                    split=Split.TRAIN,
+                )
 
     def dataset_annotations(self) -> Sequence[Annotation]:  # noqa: PLR6301 - the loader interface
         """Return the source pin and the timing interpretation.
