@@ -1,29 +1,21 @@
 """Parse the downloaded SensorCaps files into Records and a re-iterable caption stream."""
 
-from collections.abc import Iterable, Iterator, Mapping, Sequence
-from typing import Any, Self
+from collections.abc import Iterable, Iterator, Mapping
+from typing import Self
 
 from timenet.dataset import Record
-from timenet.types import Annotation, AnswerTask, Split
+from timenet.types import AnswerTask, Split
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.bash_lab.sensorcaps.parse import iter_rows
-from timenet_connectors.datasets.bash_lab.sensorcaps.records import (
-    DECLARED_SAMPLING_RATE_HZ,
-    SOURCE_SAMPLING_RATE_HZ,
-    SOURCE_WINDOW_SAMPLES,
-    TIME_AXIS_RECONSTRUCTION,
-    ValueLoader,
-    make_record,
-)
-from timenet_connectors.datasets.bash_lab.sensorcaps.release import HF_REPO, SOURCE_REVISION
+from timenet_connectors.datasets.bash_lab.sensorcaps.records import ValueLoader, make_record
 
 
 # Record annotations the captioning model receives with the sensor values.
 _CONTEXT_KEYS = frozenset({"activity_summary", "sensor_location"})
 
 
-class SensorCapsLoader(DatasetLoader):
+class SensorCapsLoader(DatasetLoader[HubFileRef]):
     """SensorCaps' Records and tasks, one of each per source row.
 
     SensorCaps defines one task: the row's caption of its Record, as an :class:`AnswerTask` in the
@@ -44,7 +36,7 @@ class SensorCapsLoader(DatasetLoader):
         """Rows read from each file, for checking against the pinned inventory."""
 
     @classmethod
-    def parse_from(cls, refs: Iterable[Any]) -> Self:
+    def parse_from(cls, refs: Iterable[HubFileRef]) -> Self:
         """Index every row and build its Record, keeping only byte offsets and small annotations.
 
         Args:
@@ -53,7 +45,7 @@ class SensorCapsLoader(DatasetLoader):
         Returns:
             The loader.
         """
-        files: tuple[HubFileRef, ...] = tuple(refs)
+        files = tuple(refs)
         loader = ValueLoader()
         records: dict[tuple[str, int], Record] = {}
         row_counts: dict[HubFileRef, int] = {}
@@ -86,21 +78,3 @@ class SensorCapsLoader(DatasetLoader):
                     input_annotations=tuple(a for a in record.annotations if a.key in _CONTEXT_KEYS),
                     split=Split.TRAIN,
                 )
-
-    def dataset_annotations(self) -> Sequence[Annotation]:  # noqa: PLR6301 - the loader interface
-        """Return the source pin and the timing interpretation.
-
-        Returns:
-            The dataset's annotations.
-        """
-        return tuple(
-            Annotation(key=key, value=value)
-            for key, value in (
-                ("source_repository", HF_REPO),
-                ("source_revision", SOURCE_REVISION),
-                ("declared_sampling_rate_hz", DECLARED_SAMPLING_RATE_HZ),
-                ("source_sampling_rate_hz", SOURCE_SAMPLING_RATE_HZ),
-                ("source_window_samples", SOURCE_WINDOW_SAMPLES),
-                ("time_axis_reconstruction", TIME_AXIS_RECONSTRUCTION),
-            )
-        )

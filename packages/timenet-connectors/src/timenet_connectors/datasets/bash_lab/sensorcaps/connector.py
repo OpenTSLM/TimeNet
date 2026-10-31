@@ -12,9 +12,33 @@ from typing import ClassVar
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
+from timenet.types import Annotation
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.datasets.bash_lab.sensorcaps import release
 from timenet_connectors.datasets.bash_lab.sensorcaps.loader import SensorCapsLoader
+from timenet_connectors.datasets.bash_lab.sensorcaps.records import (
+    DECLARED_SAMPLING_RATE_HZ,
+    SOURCE_SAMPLING_RATE_HZ,
+    SOURCE_WINDOW_SAMPLES,
+    TIME_AXIS_RECONSTRUCTION,
+)
+
+
+DATASET_ANNOTATIONS = tuple(
+    Annotation(key=key, value=value)
+    for key, value in (
+        ("source_repository", release.HF_REPO),
+        ("source_revision", release.SOURCE_REVISION),
+        ("declared_sampling_rate_hz", DECLARED_SAMPLING_RATE_HZ),
+        ("source_sampling_rate_hz", SOURCE_SAMPLING_RATE_HZ),
+        ("source_window_samples", SOURCE_WINDOW_SAMPLES),
+        ("time_axis_reconstruction", TIME_AXIS_RECONSTRUCTION),
+    )
+)
+"""The source pin and the timing interpretation of the full dataset.
+
+They do not come from the files, so the connector adds them and not the loader.
+"""
 
 
 class SensorCapsConnector(BaseHuggingFaceConnector):
@@ -42,7 +66,10 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
             expected = self.SOURCE_ROWS[file.part]
             if count != expected:
                 raise TimeFValidationError(f"{file.path} ({file.part}): expected {expected} rows, found {count}")
-        return loader.populate(TimeFDataset(metadata=self.metadata()))
+        dataset = TimeFDataset(metadata=self.metadata())
+        for annotation in DATASET_ANNOTATIONS:
+            dataset.annotate(annotation)
+        return loader.populate(dataset)
 
 
 CONNECTOR = SensorCapsConnector
