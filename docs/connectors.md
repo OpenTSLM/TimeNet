@@ -69,7 +69,7 @@ that do not come from the files, such as the source revision, and calls the load
 from timenet_connectors.bases.loader import DatasetLoader
 
 
-class MyDatasetLoader(DatasetLoader):
+class MyDatasetLoader(DatasetLoader[MyRawRef]):
     TASK_TYPES = (ClassificationTask,)
 
     # Each dataset also implements parse_from(refs) and records().
@@ -110,7 +110,7 @@ class MyConnector(BaseConnector[MyRawRef]):
 
 | Method | Provided by | Contract |
 | --- | --- | --- |
-| `parse_from(refs)` | the dataset | Read the downloaded files once and make sure that they are correct. |
+| `parse_from(refs)` | the dataset | Read the downloaded files once and make sure that they are correct. `refs` has the type `TRaw` of the connector. |
 | `records()` | the dataset | Return each Record once, in the same order on each run. The tasks use these same objects. |
 | `tasks()` | the dataset | Return each TimeNet task. Each call starts again at the first task. |
 | `annotate_dataset(dataset)` | the dataset, optional | Attach the annotations of the full dataset that come from the files. |

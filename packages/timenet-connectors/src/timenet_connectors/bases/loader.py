@@ -17,15 +17,21 @@ files, such as the source revision. Its ``convert`` gives the files to the loade
 
 from abc import ABC, abstractmethod
 from collections.abc import Iterable, Iterator
-from typing import Any, ClassVar, Self
+from typing import ClassVar, Generic, Self, TypeVar
 
 from timenet.dataset import Record, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.types import Task
 
 
-class DatasetLoader(ABC):
+TRaw = TypeVar("TRaw")
+
+
+class DatasetLoader(ABC, Generic[TRaw]):
     """Reads the downloaded files of one dataset and gives its Records, tasks and annotations.
+
+    ``TRaw`` is the type of the references that the connector downloads, as in
+    ``BaseConnector[TRaw]``. A loader names it, for example ``DatasetLoader[HubFileRef]``.
 
     A subclass must implement :meth:`parse_from`, :meth:`records` and :meth:`tasks`. It must list
     each TimeNet task type that it makes in :attr:`TASK_TYPES`. It can override
@@ -54,7 +60,7 @@ class DatasetLoader(ABC):
 
     @classmethod
     @abstractmethod
-    def parse_from(cls, refs: Iterable[Any]) -> Self:
+    def parse_from(cls, refs: Iterable[TRaw]) -> Self:
         """Read the downloaded files one time, and make sure that they are correct.
 
         Build the Records here, with their annotations, so that :meth:`records` and :meth:`tasks`
@@ -80,11 +86,12 @@ class DatasetLoader(ABC):
     def tasks(self) -> Iterator[Task]:
         """Return each TimeNet task, always in the same order. Each call starts again at the first task.
 
-        The dataset calls this method only after :meth:`annotate_dataset`, so the tasks can use the
-        annotations that it kept.
+        :meth:`populate` calls :meth:`annotate_dataset` before the dataset reads the tasks. So the
+        tasks can use the annotations that :meth:`annotate_dataset` kept. If you call this method
+        before :meth:`populate`, those annotations do not exist yet.
         """
 
-    def annotate_dataset(self, dataset: TimeFDataset) -> None:  # noqa: B027 - an optional hook that does nothing by default
+    def annotate_dataset(self, dataset: TimeFDataset) -> None:
         """Attach the annotations of the full dataset that come from the files.
 
         Call ``dataset.annotate`` for each one. When a task refers to an annotation, keep the copy

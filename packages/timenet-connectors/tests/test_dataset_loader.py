@@ -1,6 +1,6 @@
 from collections.abc import Iterable, Iterator
 from pathlib import Path
-from typing import Any, Self
+from typing import Self
 
 import pytest
 
@@ -39,7 +39,7 @@ def _signal() -> Signal:
     return Signal.from_values([1.0, 2.0], spec=_SPEC, name="series", time_axis=OrdinalAxis())
 
 
-class _ToyLoader(DatasetLoader):
+class _ToyLoader(DatasetLoader[str]):
     """A label task for each Record, a severity task for the train Record, and a caption without a split.
 
     Each Record has a ``site`` annotation. The caption refers to the ``site`` of its Record and to the
@@ -53,7 +53,7 @@ class _ToyLoader(DatasetLoader):
         self._vocabulary: Annotation | None = None
 
     @classmethod
-    def parse_from(cls, refs: Iterable[Any]) -> Self:
+    def parse_from(cls, refs: Iterable[str]) -> Self:
         records = []
         for name in refs:
             record = Record(sources=(Source(name=name, signals=(_signal(),)),))
