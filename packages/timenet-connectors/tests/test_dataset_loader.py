@@ -1,8 +1,15 @@
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator
+from pathlib import Path
 from typing import Any, Self
+
+import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
+from timenet.engine import store_dataset
+from timenet.errors import TimeFValidationError
+from timenet.reader import TimeFReader
+from timenet.registry import open_local_version
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -25,6 +32,7 @@ _METADATA = DatasetMetadata(
     description="demo",
     license=License.CC_BY_4_0,
 )
+_PROVENANCE = Annotation(key="source_revision", value="v1")
 
 
 def _signal() -> Signal:
@@ -32,19 +40,32 @@ def _signal() -> Signal:
 
 
 class _ToyLoader(DatasetLoader):
-    """Two classification tasks of the authors for each Record, and a caption without a split."""
+    """A label task for each Record, a severity task for the train Record, and a caption without a split.
+
+    Each Record has a ``site`` annotation. The caption refers to the ``site`` of its Record and to the
+    label vocabulary of the dataset.
+    """
 
     TASK_TYPES = (ClassificationTask, AnswerTask)
 
     def __init__(self, records: tuple[Record, ...]) -> None:
         self._records = records
+        self._vocabulary: Annotation | None = None
 
     @classmethod
     def parse_from(cls, refs: Iterable[Any]) -> Self:
-        return cls(tuple(Record(sources=(Source(name=name, signals=(_signal(),)),)) for name in refs))
+        records = []
+        for name in refs:
+            record = Record(sources=(Source(name=name, signals=(_signal(),)),))
+            record.annotate(Annotation(key="site", value=name))
+            records.append(record)
+        return cls(tuple(records))
 
     def records(self) -> Iterator[Record]:
         return iter(self._records)
+
+    def annotate_dataset(self, dataset: TimeFDataset) -> None:
+        self._vocabulary = dataset.annotate(Annotation(key="label_vocabulary", value=["spike", "flat"]))
 
     def label_tasks(self) -> Iterator[ClassificationTask]:
         """Is the series a spike or flat?"""
@@ -58,32 +79,81 @@ class _ToyLoader(DatasetLoader):
         yield ClassificationTask(inputs=(train,), targets=("high",), split=Split.TRAIN)
 
     def tasks(self) -> Iterator[Task]:
+        assert self._vocabulary is not None
         yield from self.label_tasks()
         yield from self.severity_tasks()
         train, _ = self._records
-        yield AnswerTask(inputs=(train,), prompt="Describe it.", targets=("A spike.",))
-
-    def dataset_annotations(self) -> Sequence[Annotation]:
-        return (Annotation(key="label_vocabulary", value=["spike", "flat"]),)
+        yield AnswerTask(
+            inputs=(train,),
+            prompt="Describe it.",
+            targets=("A spike.",),
+            input_annotations=(*train.annotations, self._vocabulary),
+            annotations=(Annotation(key="difficulty", value="easy"),),
+        )
 
 
 def _loader() -> _ToyLoader:
     return _ToyLoader.parse_from(["train", "test"])
 
 
-def _targets(tasks: Iterable[Task]) -> list[tuple[Any, ...] | None]:
-    return [task.targets for task in tasks]
-
-
-def test_populate_fills_the_dataset_and_streams_the_tasks():
-    loader = _loader()
+def _dataset() -> TimeFDataset:
+    """A dataset with the annotation that a connector adds before it calls populate."""
     dataset = TimeFDataset(metadata=_METADATA)
-    assert loader.populate(dataset) is dataset
-    assert [(a.key, a.value) for a in dataset.annotations] == [("label_vocabulary", ["spike", "flat"])]
+    dataset.annotate(_PROVENANCE)
+    return dataset
+
+
+def test_populate_adds_the_annotations_and_records_and_streams_the_tasks():
+    dataset = _dataset()
+    assert _loader().populate(dataset) is dataset
+    assert [a.key for a in dataset.annotations] == ["source_revision", "label_vocabulary"]
     assert [record.sources[0].name for record in dataset.records] == ["train", "test"]
     # The stream starts again on each read, in the order of tasks().
     first, second = list(dataset.iter_streamed_tasks_validated()), list(dataset.iter_streamed_tasks_validated())
-    assert _targets(first) == _targets(second) == _targets(loader.tasks())
-    # The caption keeps having no split.
+    expected = [("spike",), ("flat",), ("high",), ("A spike.",)]
+    assert [task.targets for task in first] == [task.targets for task in second] == expected
     assert [task.split for task in first] == [Split.TRAIN, Split.TEST, Split.TRAIN, None]
     assert dataset.derive_schema().tasks == (ClassificationTask, AnswerTask)
+
+
+def test_populate_rejects_a_dataset_with_a_task_stream():
+    dataset = _loader().populate(_dataset())
+    with pytest.raises(TimeFValidationError, match="without tasks"):
+        _loader().populate(dataset)
+    # The second loader added nothing.
+    assert len(dataset.records) == 2
+    assert len(dataset.annotations) == 2
+
+
+def test_populate_rejects_a_dataset_with_added_tasks():
+    dataset = _dataset()
+    record = dataset.add_record(record=Record(sources=(Source(name="other", signals=(_signal(),)),)))
+    dataset.add_task(task=AnswerTask(inputs=(record,), prompt="Describe it.", targets=("Flat.",)))
+    with pytest.raises(TimeFValidationError, match="without tasks"):
+        _loader().populate(dataset)
+    assert len(dataset.records) == 1
+    assert len(dataset.annotations) == 1
+
+
+def test_populate_rejects_a_loader_without_task_types():
+    class _NoTypes(_ToyLoader):
+        TASK_TYPES = ()
+
+    dataset = _dataset()
+    with pytest.raises(TimeFValidationError, match="TASK_TYPES"):
+        _NoTypes.parse_from(["train", "test"]).populate(dataset)
+    assert dataset.records == ()
+
+
+def test_a_task_refers_to_annotations_of_the_dataset_and_of_its_record_after_a_write(tmp_path: Path):
+    dataset = _loader().populate(_dataset())
+    with TimeFReader(open_local_version(store_dataset(dataset, tmp_path / "out"))) as reader:
+        restored = reader.read()
+    provenance, vocabulary = restored.annotations
+    assert (provenance.key, vocabulary.key) == ("source_revision", "label_vocabulary")
+    assert [[a.value for a in record.annotations] for record in restored.records] == [["train"], ["test"]]
+    (caption,) = restored.tasks_of(AnswerTask)
+    site, task_vocabulary = caption.input_annotations
+    assert site is restored.records[0].annotations[0]
+    assert task_vocabulary is vocabulary
+    assert [(a.key, a.value) for a in caption.annotations] == [("difficulty", "easy")]

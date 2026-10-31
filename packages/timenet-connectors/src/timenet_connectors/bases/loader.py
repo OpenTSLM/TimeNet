@@ -5,19 +5,23 @@ Most connectors do the second job with the same steps: read the files once, buil
 the tasks, and add them to a TimeFDataset. :class:`DatasetLoader` does these steps, so each
 connector only writes the parts that are special to its dataset.
 
-The connector still downloads the files. Its ``convert`` gives them to the loader::
+The connector still downloads the files. It also adds the annotations that do not come from the
+files, such as the source revision. Its ``convert`` gives the files to the loader::
 
     def convert(self, raw_refs):
-        loader = MyDatasetLoader.parse_from(raw_refs)
-        return loader.populate(TimeFDataset(metadata=self.metadata()))
+        dataset = TimeFDataset(metadata=self.metadata())
+        for annotation in PROVENANCE:
+            dataset.annotate(annotation)
+        return MyDatasetLoader.parse_from(raw_refs).populate(dataset)
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Iterable, Iterator, Sequence
+from collections.abc import Iterable, Iterator
 from typing import Any, ClassVar, Self
 
 from timenet.dataset import Record, TimeFDataset
-from timenet.types import Annotation, Task
+from timenet.errors import TimeFValidationError
+from timenet.types import Task
 
 
 class DatasetLoader(ABC):
@@ -25,24 +29,36 @@ class DatasetLoader(ABC):
 
     A subclass must implement :meth:`parse_from`, :meth:`records` and :meth:`tasks`. It must list
     each TimeNet task type that it makes in :attr:`TASK_TYPES`. It can override
-    :meth:`dataset_annotations`. This base gives :meth:`populate`.
+    :meth:`annotate_dataset`. This base gives :meth:`populate`.
+
+    The loader attaches each annotation that comes from the files, so a task can refer to it:
+
+    - Attach the annotations of a Record, a Source or a Signal to that object in :meth:`parse_from`.
+    - Attach the annotations of the full dataset, such as a label vocabulary, in
+      :meth:`annotate_dataset`.
+    - Attach the annotations of a task to the task in :meth:`tasks`.
+
+    ``annotate`` attaches a copy and returns it. A task that refers to an annotation must use that
+    copy, so keep it.
 
     When the dataset authors define several tasks, give each one its own method with the name that
-    the authors use, such as ``binary_label_tasks``. Then :meth:`tasks` yields from each method. After
-    :meth:`populate`, ``TimeFDataset.tasks_of`` and ``TimeFDataset.get_split`` select the tasks.
+    the authors use, such as ``binary_label_tasks``. Then :meth:`tasks` yields from each method.
     """
 
     TASK_TYPES: ClassVar[tuple[type[Task], ...]]
-    """Each TimeNet task type that :meth:`tasks` makes, in the order that a reader sees them first.
+    """Each TimeNet task type that :meth:`tasks` makes.
 
-    :meth:`populate` gives these types to the dataset. When the dataset is written, the writer stops
-    on a task whose type is not in this list.
+    :meth:`populate` gives these types to the dataset, and the dataset schema lists them in this
+    order. When the dataset is written, the writer stops on a task whose type is not in this list.
     """
 
     @classmethod
     @abstractmethod
     def parse_from(cls, refs: Iterable[Any]) -> Self:
         """Read the downloaded files one time, and make sure that they are correct.
+
+        Build the Records here, with their annotations, so that :meth:`records` and :meth:`tasks`
+        use the same objects.
 
         Args:
             refs: The references that the ``download`` of the connector returned.
@@ -53,34 +69,61 @@ class DatasetLoader(ABC):
 
     @abstractmethod
     def records(self) -> Iterator[Record]:
-        """Return each Record, always in the same order."""
+        """Return each Record once, in the same order on each run.
+
+        The tasks must use these same Record objects, and the same annotation objects in them. A task
+        that uses a copy fails when the dataset is written. The order keeps the IDs the same between
+        runs.
+        """
 
     @abstractmethod
     def tasks(self) -> Iterator[Task]:
-        """Return each TimeNet task, always in the same order. Each call starts again at the first task."""
+        """Return each TimeNet task, always in the same order. Each call starts again at the first task.
 
-    def dataset_annotations(self) -> Sequence[Annotation]:  # noqa: PLR6301 - the loader interface
-        """Return the annotations of the full dataset, such as the list of its labels.
-
-        Returns:
-            No annotations. A subclass can override this.
+        The dataset calls this method only after :meth:`annotate_dataset`, so the tasks can use the
+        annotations that it kept.
         """
-        return ()
+
+    def annotate_dataset(self, dataset: TimeFDataset) -> None:  # noqa: B027 - an optional hook that does nothing by default
+        """Attach the annotations of the full dataset that come from the files.
+
+        Call ``dataset.annotate`` for each one. When a task refers to an annotation, keep the copy
+        that ``dataset.annotate`` returns, and use that copy in :meth:`tasks`. The base attaches
+        nothing.
+
+        Args:
+            dataset: The dataset that :meth:`populate` fills.
+        """
 
     def populate(self, dataset: TimeFDataset) -> TimeFDataset:
         """Add the annotations, the Records and the tasks of this loader to a dataset.
 
-        The dataset does not keep the tasks. It calls :meth:`tasks` each time that it reads them.
+        The dataset does not keep the tasks. It calls :meth:`tasks` each time that it reads them. So
+        ``dataset.tasks``, ``tasks_of`` and ``tasks_for`` stay empty. Use ``iter_tasks`` to read the
+        tasks one by one. ``get_split``, ``get_splits`` and ``get_all`` keep each selected task in
+        memory.
 
         Args:
-            dataset: A dataset, usually empty, with the metadata of the connector.
+            dataset: A dataset with the metadata of the connector and no tasks. It can already have
+                the annotations that the connector adds.
 
         Returns:
             The same dataset.
+
+        Raises:
+            TimeFValidationError: If the dataset already has tasks, or if the loader does not set
+                :attr:`TASK_TYPES`. A second stream would replace the first one, and its tasks would
+                be lost.
         """
-        for annotation in self.dataset_annotations():
-            dataset.annotate(annotation)
+        if dataset.has_task_stream or dataset.tasks:
+            raise TimeFValidationError(
+                f"populate needs a dataset without tasks, but {dataset.metadata.dataset_id!r} already has tasks"
+            )
+        task_types = getattr(self, "TASK_TYPES", None)
+        if not task_types:
+            raise TimeFValidationError(f"{type(self).__name__} must list the task types that it makes in TASK_TYPES")
+        self.annotate_dataset(dataset)
         for record in self.records():
             dataset.add_record(record=record)
-        dataset.set_task_stream(self.TASK_TYPES, self.tasks)
+        dataset.set_task_stream(task_types, self.tasks)
         return dataset
