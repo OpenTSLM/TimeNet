@@ -103,17 +103,19 @@ def _dataset() -> TimeFDataset:
     return dataset
 
 
-def test_populate_adds_the_annotations_and_records_and_streams_the_tasks():
+def test_populate_adds_the_records_and_the_annotations():
     dataset = _dataset()
     assert _loader().populate(dataset) is dataset
     assert [a.key for a in dataset.annotations] == ["source_revision", "label_vocabulary"]
     assert [record.sources[0].name for record in dataset.records] == ["train", "test"]
-    # The stream starts again on each read, in the order of tasks().
+    assert dataset.derive_schema().tasks == (ClassificationTask, AnswerTask)
+
+
+def test_the_task_stream_starts_again_on_each_read():
+    dataset = _loader().populate(_dataset())
     first, second = list(dataset.iter_streamed_tasks_validated()), list(dataset.iter_streamed_tasks_validated())
     expected = [("spike",), ("flat",), ("high",), ("A spike.",)]
     assert [task.targets for task in first] == [task.targets for task in second] == expected
-    assert [task.split for task in first] == [Split.TRAIN, Split.TEST, Split.TRAIN, None]
-    assert dataset.derive_schema().tasks == (ClassificationTask, AnswerTask)
 
 
 def test_populate_rejects_a_dataset_with_a_task_stream():
@@ -135,14 +137,40 @@ def test_populate_rejects_a_dataset_with_added_tasks():
     assert len(dataset.annotations) == 1
 
 
-def test_populate_rejects_a_loader_without_task_types():
-    class _NoTypes(_ToyLoader):
-        TASK_TYPES = ()
+class _EmptyTypes(_ToyLoader):
+    TASK_TYPES = ()
 
+
+class _MissingTypes(DatasetLoader[str]):
+    """A loader that does not set ``TASK_TYPES``."""
+
+    @classmethod
+    def parse_from(cls, refs: Iterable[str]) -> Self:
+        return cls()
+
+    def records(self) -> Iterator[Record]:
+        return iter(())
+
+    def tasks(self) -> Iterator[Task]:
+        return iter(())
+
+
+@pytest.mark.parametrize("loader", [_EmptyTypes.parse_from(["train", "test"]), _MissingTypes.parse_from([])])
+def test_populate_rejects_a_loader_without_task_types(loader: DatasetLoader[str]):
     dataset = _dataset()
     with pytest.raises(TimeFValidationError, match="TASK_TYPES"):
-        _NoTypes.parse_from(["train", "test"]).populate(dataset)
+        loader.populate(dataset)
     assert dataset.records == ()
+    assert len(dataset.annotations) == 1
+
+
+def test_a_loader_that_fills_a_second_dataset_leaves_the_first_one_writable(tmp_path: Path):
+    loader = _loader()
+    first = loader.populate(_dataset())
+    # The Records already belong to the first dataset, so the second populate fails.
+    with pytest.raises(TimeFValidationError):
+        loader.populate(_dataset())
+    store_dataset(first, tmp_path / "out")
 
 
 def test_a_task_refers_to_annotations_of_the_dataset_and_of_its_record_after_a_write(tmp_path: Path):

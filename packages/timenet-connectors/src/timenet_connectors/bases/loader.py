@@ -45,7 +45,7 @@ class DatasetLoader(ABC, Generic[TRaw]):
     - Attach the annotations of a task to the task in :meth:`tasks`.
 
     ``annotate`` attaches a copy and returns it. A task that refers to an annotation must use that
-    copy, so keep it.
+    copy, so keep it. The copies belong to one dataset, so a loader fills only one dataset.
 
     When the dataset authors define several tasks, give each one its own method with the name that
     the authors use, such as ``binary_label_tasks``. Then :meth:`tasks` yields from each method.
@@ -86,9 +86,9 @@ class DatasetLoader(ABC, Generic[TRaw]):
     def tasks(self) -> Iterator[Task]:
         """Return each TimeNet task, always in the same order. Each call starts again at the first task.
 
-        :meth:`populate` calls :meth:`annotate_dataset` before the dataset reads the tasks. So the
-        tasks can use the annotations that :meth:`annotate_dataset` kept. If you call this method
-        before :meth:`populate`, those annotations do not exist yet.
+        The dataset reads the tasks only when it is written or read, after :meth:`populate` has
+        called :meth:`annotate_dataset`. So the tasks can use the annotations that
+        :meth:`annotate_dataset` kept. Before :meth:`populate`, those annotations do not exist yet.
         """
 
     def annotate_dataset(self, dataset: TimeFDataset) -> None:
@@ -103,7 +103,7 @@ class DatasetLoader(ABC, Generic[TRaw]):
         """
 
     def populate(self, dataset: TimeFDataset) -> TimeFDataset:
-        """Add the annotations, the Records and the tasks of this loader to a dataset.
+        """Add the Records, the annotations and the tasks of this loader to a dataset.
 
         The dataset does not keep the tasks. It calls :meth:`tasks` each time that it reads them. So
         ``dataset.tasks``, ``tasks_of`` and ``tasks_for`` stay empty. Use ``iter_tasks`` to read the
@@ -129,8 +129,10 @@ class DatasetLoader(ABC, Generic[TRaw]):
         task_types = getattr(self, "TASK_TYPES", None)
         if not task_types:
             raise TimeFValidationError(f"{type(self).__name__} must list the task types that it makes in TASK_TYPES")
-        self.annotate_dataset(dataset)
+        # Add the Records first. If a Record is already in another dataset, this fails before
+        # annotate_dataset replaces the annotations that the tasks of the first dataset use.
         for record in self.records():
             dataset.add_record(record=record)
+        self.annotate_dataset(dataset)
         dataset.set_task_stream(task_types, self.tasks)
         return dataset
