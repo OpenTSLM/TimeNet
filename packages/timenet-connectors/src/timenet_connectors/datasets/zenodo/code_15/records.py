@@ -36,8 +36,9 @@ _FOLLOW_UP = (
 class Code15RecordMetadata(RecordMetadata):
     """A CODE-15% Record's metadata: the exam, and where its trace sits in the published one.
 
-    The patient id is the shared ``subject_id``. ``n_pad_before`` and ``n_pad_after`` count the zeros the
-    Record's signals leave out, so ``preprocessing.authors_input`` can rebuild the published trace.
+    The patient id is not in this metadata. The Record keeps it in its ``subject_ids`` annotation.
+    ``n_pad_before`` and ``n_pad_after`` count the zeros the Record's signals leave out, so
+    ``preprocessing.authors_input`` can rebuild the published trace.
     """
 
     exam_id: int
@@ -55,7 +56,7 @@ def record_metadata(record: Record) -> Code15RecordMetadata:
     """Read a CODE-15% Record's typed metadata back.
 
     Returns:
-        The metadata: the patient as ``subject_id``, the exam, and where its trace sits.
+        The metadata: the exam, and where its trace sits.
 
     Raises:
         TimeFValidationError: If the Record's metadata is not CODE-15% metadata.
@@ -127,13 +128,13 @@ def build_record(exam: Exam, leads: LeadLoader) -> Record:
     )
     row = exam.row
     metadata = Code15RecordMetadata(
-        subject_id=str(row.patient_id),
         exam_id=row.exam_id,
         trace_file=row.trace_file,
         n_pad_before=padding.n_before,
         n_pad_after=padding.n_after,
     )
     record = Record(sources=(Source(name=SOURCE_NAME, signals=signals),), metadata=metadata.to_json())
+    record.annotate(Annotation(key=AnnotationKey.SUBJECT_IDS, value=[str(row.patient_id)]))
     record.annotate(Annotation(key=AnnotationKey.SEX, value=row.sex.value, description=_SEX))
     if row.death is not None and row.timey is not None:
         record.annotate(Annotation(key=AnnotationKey.DEATH, value=row.death, description=_DEATH))

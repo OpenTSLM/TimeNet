@@ -86,7 +86,6 @@ def _output(dataset) -> dict:
         metadata = record_metadata(record)
         (source,) = record.sources
         records[metadata.exam_id] = {
-            "subject_id": metadata.subject_id,
             "trace_file": metadata.trace_file,
             "padding": tuple(metadata.padding),
             "annotations": {a.key: (read_value(a.value), a.unit) for a in record.annotations},
@@ -125,36 +124,47 @@ _EXPECTED = {
     # By part, then by row: exam 20's trace is zero everywhere, so it has no Record.
     "records": {
         30: {
-            "subject_id": "7",
             "trace_file": "exams_part0.hdf5",
             "padding": (581, 581),
-            "annotations": {"sex": _SEX["male"], "death": (False, None), "follow_up": (3.5, "year")},
+            "annotations": {
+                "subject_ids": (["7"], None),
+                "sex": _SEX["male"],
+                "death": (False, None),
+                "follow_up": (3.5, "year"),
+            },
             "source": "12-lead ECG",
             "signals": _signals(2934),
         },
         10: {
-            "subject_id": "7",
             "trace_file": "exams_part0.hdf5",
             "padding": (0, 0),
             # Only the patient's first exam states mortality.
-            "annotations": {"sex": _SEX["male"]},
+            "annotations": {"subject_ids": (["7"], None), "sex": _SEX["male"]},
             "source": "12-lead ECG",
             "signals": _signals(4096),
         },
         40: {
-            "subject_id": "9",
             "trace_file": "exams_part1.hdf5",
             # The zeros at the start alone stay, as zeros of the published trace.
             "padding": (0, 0),
-            "annotations": {"sex": _SEX["female"], "death": (True, None), "follow_up": (1.25, "year")},
+            "annotations": {
+                "subject_ids": (["9"], None),
+                "sex": _SEX["female"],
+                "death": (True, None),
+                "follow_up": (1.25, "year"),
+            },
             "source": "12-lead ECG",
             "signals": _signals(4096),
         },
         50: {
-            "subject_id": "8",
             "trace_file": "exams_part1.hdf5",
             "padding": (47, 48),
-            "annotations": {"sex": _SEX["female"], "death": (False, None), "follow_up": (0.0, "year")},
+            "annotations": {
+                "subject_ids": (["8"], None),
+                "sex": _SEX["female"],
+                "death": (False, None),
+                "follow_up": (0.0, "year"),
+            },
             "source": "12-lead ECG",
             "signals": _signals(4001),
         },
@@ -260,10 +270,10 @@ def test_tasks_yield_each_method_in_turn(tmp_path):
 
 def test_targets_stay_off_the_inputs(tmp_path):
     # The age and the labels are targets, and the published prediction and normal_ecg task annotations; no
-    # task passes the model an annotation, and the Record states neither.
+    # task passes the model an annotation, and the Record states neither. The patient id is not a target.
     dataset = _FixtureConnector().convert([_release(tmp_path)])
     for record in dataset.records:
-        assert {a.key for a in record.annotations} <= {"sex", "death", "follow_up"}
+        assert {a.key for a in record.annotations} <= {"subject_ids", "sex", "death", "follow_up"}
     for task in dataset.iter_tasks():
         assert task.input_annotations == ()
         assert task.prompt is None

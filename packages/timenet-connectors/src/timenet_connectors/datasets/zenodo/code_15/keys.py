@@ -11,6 +11,8 @@ class AnnotationKey(StrEnum):
     SOURCE_DOI = "source_doi"
     ABNORMALITY_VOCABULARY = "abnormality_vocabulary"
     """The six abnormalities, in the authors' output order: the abnormality tasks' ``target_schema``."""
+    SUBJECT_IDS = "subject_ids"
+    """The patient of the exam, as the TimeF docs store a Record's subjects: a list of ids."""
     SEX = "sex"
     DEATH = "death"
     """Whether the patient died in the follow-up, on the one exam of a patient that states it."""

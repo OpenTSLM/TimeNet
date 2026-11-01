@@ -92,8 +92,10 @@ axis:
 - **Time.** The release gives no exam date, so `start_time` is unset and each axis starts at the
   first sample kept.
 
-The patient id is the shared `subject_id` of `Record.metadata`, beside `exam_id`, `trace_file`,
-`n_pad_before` and `n_pad_after`; `records.record_metadata(record)` reads them back. `sex` is a Record annotation, `male` or `female`: `is_male` decoded into the shared
+The patient id is the Record's `subject_ids` annotation, a list with one id, as the TimeF docs
+store a Record's subjects. `Record.metadata` holds `exam_id`, `trace_file`, `n_pad_before` and
+`n_pad_after`; `records.record_metadata(record)` reads them back. `sex` is a Record annotation,
+`male` or `female`: `is_male` decoded into the shared
 `timenet_connectors.demographics.Sex`. On the exam that states them, `death` and `follow_up`
 (`timey`, in years) are Record annotations too.
 

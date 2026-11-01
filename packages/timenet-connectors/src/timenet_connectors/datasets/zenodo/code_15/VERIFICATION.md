@@ -46,7 +46,7 @@ the device's output. No other copy of CODE-15% exists.
 | `is_male` | `exams.csv` | `sex` Record annotation, `male` or `female` | Decoded (#23) |
 | `nn_predicted_age` | `exams.csv` | `nn_predicted_age` annotation of the age task, in years | The authors' prediction; never input (#48) |
 | `1dAVb`, `RBBB`, `LBBB`, `SB`, `ST`, `AF` | `exams.csv` | The abnormality task's targets, in the authors' output order | Not on the Record (#51) |
-| `patient_id` | `exams.csv` | Core `subject_id` of the Record metadata | |
+| `patient_id` | `exams.csv` | Record annotation `subject_ids`, a list with one id | |
 | `death`, `timey` | `exams.csv` | `death` and `follow_up` (years) Record annotations, on the exam that states them | No task: neither paper trains on them (#46). Lost for 419 patients whose only statement is on an all-zero exam (#11) |
 | `normal_ecg` | `exams.csv` | `normal_ecg` annotation of the abnormality task | Never input (#48) |
 | `trace_file` | `exams.csv` | `trace_file` in the Record metadata; checked against the part that holds the exam | |
