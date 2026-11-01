@@ -24,7 +24,7 @@ SOURCE_NAME = "12-lead ECG"
 _SPEC = TimeSeriesSpec(spec_type="ecg", name="12-lead ECG", unit_value=ureg.millivolt, dtype="float32")
 
 _SEX = "The patient's sex, decoded from exams.csv's is_male."
-_DEATH = "Whether the patient died in the follow-up. exams.csv states it on one exam per patient."
+_DEATH = "Whether the patient died in the follow-up. exams.csv states it on at most one exam per patient."
 _FOLLOW_UP = (
     "exams.csv's timey: the years to the patient's death, or to the end of follow-up if they survived. Stated on "
     "the same exam as death."

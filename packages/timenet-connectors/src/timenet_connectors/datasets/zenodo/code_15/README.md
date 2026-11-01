@@ -3,7 +3,7 @@
 `zenodo/code-15` holds CODE-15% ([Zenodo record 4916206][zenodo], version 1.0.0): 345,779
 12-lead ECGs from 233,770 patients, recorded by the Telehealth Network of Minas Gerais, Brazil,
 from 2010 to 2016. Each exam comes with the patient's age and sex, six abnormality labels, and,
-on one exam per patient, mortality follow-up.
+on at most one exam per patient, mortality follow-up.
 
 The data license is CC BY 4.0. The authors use it in two papers, with code in three repositories:
 
@@ -43,7 +43,7 @@ order. That order isn't `exams.csv`'s.
 | `nn_predicted_age` | The age the network of Lima et al. predicts from the trace |
 | `1dAVb`, `RBBB`, `LBBB`, `SB`, `ST`, `AF` | Whether the exam shows each abnormality |
 | `normal_ecg` | `True` if the automatic annotation system calls the ECG normal |
-| `death` | Whether the patient died in the follow-up; on one exam per patient, else empty |
+| `death` | Whether the patient died in the follow-up; on at most one exam per patient (none for 123 patients), else empty |
 | `timey` | Years to death, or to the end of follow-up for a survivor; with `death` |
 | `trace_file` | The HDF5 file that holds the exam's trace |
 
