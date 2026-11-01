@@ -17,7 +17,20 @@ from timenet_connectors.datasets.zenodo.code_15 import release
 from timenet_connectors.datasets.zenodo.code_15.keys import AnnotationKey
 from timenet_connectors.datasets.zenodo.code_15.loader import Code15DatasetLoader
 from timenet_connectors.datasets.zenodo.code_15.release import Part, PinnedCounts
+from timenet_connectors.datasets.zenodo.code_15.vocabulary import Abnormality
 from timenet_connectors.download import Artifact, download_files, ensure_archive
+
+
+ABNORMALITY_VOCABULARY = Annotation(
+    key=AnnotationKey.ABNORMALITY_VOCABULARY,
+    value=[abnormality.value for abnormality in Abnormality],
+    description="The six abnormalities, in the authors' output order: "
+    + "; ".join(f"{abnormality.value}, {abnormality.full_name}" for abnormality in Abnormality),
+)
+"""The six abnormalities, in the authors' output order. The abnormality tasks name it as their target schema.
+
+It does not come from the files, so the connector adds it and not the loader.
+"""
 
 
 class Code15Connector(BaseConnector[Path]):
@@ -48,10 +61,10 @@ class Code15Connector(BaseConnector[Path]):
     def convert(self, raw_refs: list[Path]) -> TimeFDataset:
         """Convert each exam with a trace into one lazy Record, and stream its age and abnormality tasks.
 
-        The connector adds the record's provenance. ``Code15DatasetLoader`` reads ``exams.csv``, scans every part
-        once, checks the pinned counts, and builds the Records; its ``populate`` adds them and streams the tasks,
-        not holding them. A malformed file raises ``TimeFFormatError``, and counts that differ from the pinned
-        release's raise ``TimeFValidationError``.
+        The connector adds the record's provenance and the abnormality vocabulary. ``Code15DatasetLoader`` reads
+        ``exams.csv``, scans every part once, checks the pinned counts, and builds the Records; its ``populate`` adds
+        them and streams the tasks, not holding them. A malformed file raises ``TimeFFormatError``, and counts that
+        differ from the pinned release's raise ``TimeFValidationError``.
 
         Returns:
             A dataset with the provenance and vocabulary annotations, the Records, and a stream of every task.
@@ -59,6 +72,7 @@ class Code15Connector(BaseConnector[Path]):
         dataset = TimeFDataset(metadata=self.metadata())
         dataset.annotate(Annotation(key=AnnotationKey.SOURCE_URL, value=release.RECORD_URL))
         dataset.annotate(Annotation(key=AnnotationKey.SOURCE_DOI, value=release.RECORD_DOI))
+        dataset.annotate(ABNORMALITY_VOCABULARY)
         loader = Code15DatasetLoader.parse_from(raw_refs, parts=self.SOURCE_PARTS, counts=self.SOURCE_COUNTS)
         return loader.populate(dataset)
 

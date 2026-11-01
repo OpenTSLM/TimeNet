@@ -7,20 +7,13 @@ from typing import Self
 
 from timenet.dataset import Record
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, ClassificationTask, ScalarPredictionTask, Task
+from timenet.types import ClassificationTask, ScalarPredictionTask, Task
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.zenodo.code_15.exams import ExamRow, read_exams
 from timenet_connectors.datasets.zenodo.code_15.index import index_exams
-from timenet_connectors.datasets.zenodo.code_15.keys import AnnotationKey
 from timenet_connectors.datasets.zenodo.code_15.records import LeadLoader, build_record
 from timenet_connectors.datasets.zenodo.code_15.release import CSV_FILE, PARTS, PINNED_COUNTS, Part, PinnedCounts
 from timenet_connectors.datasets.zenodo.code_15.tasks import abnormality_task, age_task
-from timenet_connectors.datasets.zenodo.code_15.vocabulary import Abnormality
-
-
-_ABNORMALITY_VOCABULARY = "The six abnormalities, in the authors' output order: " + "; ".join(
-    f"{abnormality.value}, {abnormality.full_name}" for abnormality in Abnormality
-)
 
 
 @dataclass(frozen=True)
@@ -31,7 +24,7 @@ class _ParsedExam:
     record: Record
 
 
-class Code15DatasetLoader(DatasetLoader):
+class Code15DatasetLoader(DatasetLoader[Path]):
     """CODE-15%'s exams, read and checked: one lazy Record per exam with a trace, and its two tasks.
 
     CODE-15% has two tasks per exam, each with its own method: its patient's age (:meth:`age_tasks`), and its
@@ -78,20 +71,6 @@ class Code15DatasetLoader(DatasetLoader):
         # One loader for the Records of this load, so an exam's leads share one read.
         leads = LeadLoader()
         return cls(tuple(_ParsedExam(row=exam.row, record=build_record(exam, leads)) for exam in index.exams))
-
-    def dataset_annotations(self) -> tuple[Annotation, ...]:  # noqa: PLR6301 - the loader interface
-        """Return the abnormality vocabulary, which the abnormality tasks name as their ``target_schema``.
-
-        Returns:
-            The vocabulary, in the authors' output order.
-        """
-        return (
-            Annotation(
-                key=AnnotationKey.ABNORMALITY_VOCABULARY,
-                value=[abnormality.value for abnormality in Abnormality],
-                description=_ABNORMALITY_VOCABULARY,
-            ),
-        )
 
     def records(self) -> Iterator[Record]:
         """Return one Record per exam with a trace, by part, then by row in the part."""
