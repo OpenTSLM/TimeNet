@@ -21,7 +21,7 @@ class RATS40KRecordMetadata(RecordMetadata):
     """A RATS40K Record's metadata: the published row the Record holds.
 
     Keys repeat across splits, so variant, split and key together name the row. The release names no
-    upstream series or subject, so the shared ``subject_id`` stays unset.
+    upstream series or subject, so the Records have no ``subject_ids`` annotation.
     """
 
     variant: Variant

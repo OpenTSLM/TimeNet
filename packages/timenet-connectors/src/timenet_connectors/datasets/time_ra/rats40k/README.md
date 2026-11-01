@@ -64,7 +64,7 @@ release gives neither units nor sampling cadence. TimeNet numbers Records and ta
 source row is in `Record.metadata` as `variant`, `split`, and `key`, the fields of
 `records.RATS40KRecordMetadata`. Keys repeat across splits, so all three name the row.
 `records.record_metadata(record)` reads them back as a typed object. The release names no upstream
-series or subject, so the shared `subject_id` is stored as null. Nothing else is in record
+series or subject, so the Records have no `subject_ids` annotation. Nothing else is in record
 metadata, so nothing derived from a row's fields travels with the input. The domain
 (`source_domain`) is a Record annotation, since the task uses it as an input annotation.
 
