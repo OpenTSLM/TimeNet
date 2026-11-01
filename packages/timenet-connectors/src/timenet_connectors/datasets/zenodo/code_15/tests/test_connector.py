@@ -52,8 +52,8 @@ def _trace(exam_id: int, zeros: Padding | None) -> np.ndarray:
     """A published trace: nonzero float32 values, seeded by the exam, between ``zeros``."""
     trace = np.zeros((4096, 12), dtype=np.float32)
     if zeros is not None:
-        values = np.random.default_rng(exam_id).uniform(0.5, 3.0, (4096 - zeros.start - zeros.end, 12))
-        trace[zeros.start : 4096 - zeros.end] = values.astype(np.float32)
+        values = np.random.default_rng(exam_id).uniform(0.5, 3.0, (4096 - zeros.n_before - zeros.n_after, 12))
+        trace[zeros.n_before : 4096 - zeros.n_after] = values.astype(np.float32)
     return trace
 
 
@@ -198,7 +198,7 @@ def _millivolts(record) -> np.ndarray:
 def _published(exam_id: int, padding: Padding) -> np.ndarray:
     """The fixture's samples of an exam, halved, without the padding."""
     zeros = dict(exam for exams in _PARTS.values() for exam in exams)[exam_id]
-    return _trace(exam_id, zeros)[padding.start : 4096 - padding.end] / np.float32(2)
+    return _trace(exam_id, zeros)[padding.n_before : 4096 - padding.n_after] / np.float32(2)
 
 
 def test_signals_rebuild_the_authors_input_bit_for_bit(tmp_path):

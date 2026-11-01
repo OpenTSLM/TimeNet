@@ -89,7 +89,7 @@ axis:
   first sample kept.
 
 The patient id is the shared `subject_id` of `Record.metadata`, beside `exam_id`, `trace_file`,
-`pad_start` and `pad_end`; `records.record_metadata(record)` reads them back. `sex` is a Record annotation, `male` or `female`: `is_male` decoded into the shared
+`n_pad_before` and `n_pad_after`; `records.record_metadata(record)` reads them back. `sex` is a Record annotation, `male` or `female`: `is_male` decoded into the shared
 `timenet_connectors.demographics.Sex`. On the exam that states them, `death` and `follow_up`
 (`timey`, in years) are Record annotations too.
 
@@ -195,7 +195,7 @@ part        filler row checked; exam_id, location,
             leading and trailing all-lead zeros
 
 join      index_exams: ExamRow + TraceScan by exam_id ──► ExamIndex
-            exams: Exam(row, scan) ── padding = centred_padding(scan)
+            exams: Exam(row, scan), padding = scan.padding (centred_padding)
             all_zero_exam_ids: set aside, checked against the pin
 
           build_record(Exam, LeadLoader) ──► Record: 12 lazy leads

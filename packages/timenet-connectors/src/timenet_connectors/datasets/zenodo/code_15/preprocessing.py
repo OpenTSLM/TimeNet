@@ -3,8 +3,15 @@
 The authors built the HDF5 files with something equivalent to ``generate_h5.py --scale 2 --use_all_leads
 --new_freq 400 --new_len 4096`` from their ``ecg-preprocessing`` repository (its README, "CODE-15%"). Its
 ``preprocess_ecg`` multiplies by the scale, then pads a shorter trace with zeros, ``(4096 - n) // 2`` before
-and the rest after, or cuts a longer one around its centre. This module undoes the scale and the padding, and
-redoes both to rebuild the authors' model input exactly.
+and the rest after, or cuts a longer one around its centre.
+
+The conversion only undoes this, with :func:`to_millivolts`: a Record's leads are in millivolts and leave the
+padding out, so they hold the recording, not the network's fixed-size input. The padding is kept in the
+Record's metadata. A cut trace can't be uncut, and stays 4096 samples.
+
+:func:`authors_input` redoes both, but the conversion never calls it. It is for a user who needs the authors'
+exact model input, such as to run their published models on a Record, and the tests use it to show the undo
+loses nothing: on the pinned release, every one of the 345,109 traces rebuilds bit for bit.
 """
 
 from typing import NamedTuple
@@ -19,20 +26,34 @@ SCALE = 2
 ``ecg-age-prediction`` issue 5; the READMEs' "scale 1e-4V" sentence is wrong."""
 TRACE_SAMPLES = 4096
 """Every published trace's length: ``--new_len 4096``."""
-# Halving a float32 only lowers its exponent, so it is exact, and SCALE * (value * HALF) == value.
+# Halving a float32 at least twice the smallest normal only lowers its exponent, so SCALE * (value * _HALF)
+# == value. The release's smallest nonzero magnitude is 1.9e-36, far above that bound of 2.4e-38.
 _HALF = np.float32(1 / SCALE)
 
 
 class Padding(NamedTuple):
-    """The zeros ``preprocess_ecg`` added before and after a trace."""
+    """How many zero samples ``preprocess_ecg`` added before and after a trace.
 
-    start: int
-    end: int
+    Both are counts of samples, not positions: the recording starts at sample ``n_before`` of the published
+    trace and ends ``n_after`` samples before its end.
+    """
+
+    n_before: int
+    n_after: int
 
     @property
     def n_values(self) -> int:
-        """Return the number of samples the trace holds without its padding."""
-        return TRACE_SAMPLES - self.start - self.end
+        """Return the number of samples the trace holds without its padding.
+
+        That is the published trace's 4096 samples, less the zeros before and the zeros after: a trace of 2,934
+        samples between 581 zeros on each side has 4096 - 581 - 581 = 2,934.
+        """
+        return TRACE_SAMPLES - self.n_before - self.n_after
+
+    @property
+    def values(self) -> slice:
+        """Return the samples of the published trace that hold the recording, between the zeros."""
+        return slice(self.n_before, TRACE_SAMPLES - self.n_after)
 
 
 def centred_padding(leading_zeros: int, trailing_zeros: int) -> Padding:
@@ -43,6 +64,13 @@ def centred_padding(leading_zeros: int, trailing_zeros: int) -> Padding:
     explain are padding; any others are zeros of the published trace, and stay. A trace with no zeros at its
     end, such as one cut from a longer recording, has no padding.
 
+    This is an inference, not the authors' record: the raw lengths aren't published. A trace whose recording
+    itself starts and ends with all-lead zeros loses them as padding, and one with real zeros at its end alone
+    loses one. On the pinned release, 344,932 of the 345,109 traces have the layouts of the known recording
+    lengths: 581 zeros each side, which four of the authors' raw exams confirm (2,200 samples at 300 Hz
+    resample to 2,934), 48, or none. The other 177 may be misread. Either way, only exact zeros are dropped,
+    and the Record's metadata keeps the counts, so :func:`authors_input` still rebuilds the published trace.
+
     Args:
         leading_zeros: Samples, from the first, that are zero in every lead.
         trailing_zeros: Samples, from the last, that are zero in every lead.
@@ -50,9 +78,10 @@ def centred_padding(leading_zeros: int, trailing_zeros: int) -> Padding:
     Returns:
         The padding before and after the trace.
     """
-    start = min(leading_zeros, trailing_zeros)
-    end = start + 1 if trailing_zeros > start else start
-    return Padding(start=start, end=end)
+    n_before = min(leading_zeros, trailing_zeros)
+    # The padding after is the padding before, or one more if the trailing zeros allow it.
+    n_after = min(trailing_zeros, n_before + 1)
+    return Padding(n_before=n_before, n_after=n_after)
 
 
 def to_millivolts(trace: np.ndarray, padding: Padding) -> np.ndarray:
@@ -65,7 +94,7 @@ def to_millivolts(trace: np.ndarray, padding: Padding) -> np.ndarray:
     Returns:
         The ``(n, 12)`` float32 samples, halved, which is exact.
     """
-    return trace[padding.start : TRACE_SAMPLES - padding.end] * _HALF
+    return trace[padding.values] * _HALF
 
 
 def authors_input(millivolts: np.ndarray, padding: Padding) -> np.ndarray:
@@ -88,5 +117,5 @@ def authors_input(millivolts: np.ndarray, padding: Padding) -> np.ndarray:
             f"a trace of {millivolts.shape[0]} samples with padding {tuple(padding)} isn't {TRACE_SAMPLES} samples"
         )
     trace = np.zeros((TRACE_SAMPLES, millivolts.shape[1]), dtype=np.float32)
-    trace[padding.start : TRACE_SAMPLES - padding.end] = millivolts * np.float32(SCALE)
+    trace[padding.values] = millivolts * np.float32(SCALE)
     return trace
