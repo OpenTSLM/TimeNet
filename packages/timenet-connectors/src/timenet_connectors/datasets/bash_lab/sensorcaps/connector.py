@@ -1,10 +1,12 @@
 """Convert pinned SensorCaps chat rows into lazy IMU Signals and streamed caption tasks.
 
-The connector downloads the original JSONL files at a pinned commit through the HuggingFace base,
-indexes rows by byte offset, and keeps just one decoded sensor row cached across the six channel
-loaders, so the complete corpus is never held in memory. Tasks use the original system message
-followed by the original derived-feature text as their prompt, with the activity summary and optional
-sensor location as input annotations. Feature text is streamed rather than retained across the corpus.
+The connector downloads the original JSONL files at a pinned commit through the HuggingFace base. Its
+``convert`` checks the number of rows in each file against the pinned inventory, and adds the dataset
+annotations: the source pin and the timing interpretation. These values do not come from the files.
+
+``SensorCapsLoader`` in ``loader.py`` does the rest: ``parse.py`` reads each row, and ``records.py``
+builds its Record with lazy values. The loader re-reads the files for the tasks, so the corpus is
+never held in memory.
 """
 
 from collections.abc import Mapping
@@ -24,20 +26,18 @@ from timenet_connectors.datasets.bash_lab.sensorcaps.records import (
 )
 
 
-DATASET_ANNOTATIONS = tuple(
+TIMING_ANNOTATIONS = tuple(
     Annotation(key=key, value=value)
     for key, value in (
-        ("source_repository", release.HF_REPO),
-        ("source_revision", release.SOURCE_REVISION),
         ("declared_sampling_rate_hz", DECLARED_SAMPLING_RATE_HZ),
         ("source_sampling_rate_hz", SOURCE_SAMPLING_RATE_HZ),
         ("source_window_samples", SOURCE_WINDOW_SAMPLES),
         ("time_axis_reconstruction", TIME_AXIS_RECONSTRUCTION),
     )
 )
-"""The source pin and the timing interpretation of the full dataset.
+"""The timing interpretation of the full dataset.
 
-They do not come from the files, so the connector adds them and not the loader.
+It does not come from the files, so the connector adds it and not the loader.
 """
 
 
@@ -67,7 +67,11 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
             if count != expected:
                 raise TimeFValidationError(f"{file.path} ({file.part}): expected {expected} rows, found {count}")
         dataset = TimeFDataset(metadata=self.metadata())
-        for annotation in DATASET_ANNOTATIONS:
+        # The pin comes from the class attributes that download reads, so the stored pin is the
+        # one that the connector downloaded.
+        dataset.annotate(Annotation(key="source_repository", value=self.HF_REPO))
+        dataset.annotate(Annotation(key="source_revision", value=self.SOURCE_REVISION))
+        for annotation in TIMING_ANNOTATIONS:
             dataset.annotate(annotation)
         return loader.populate(dataset)
 
