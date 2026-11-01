@@ -23,7 +23,6 @@ import asyncio
 from collections.abc import Iterator, Mapping
 import csv
 from dataclasses import dataclass
-from enum import StrEnum, unique
 from fractions import Fraction
 from pathlib import Path
 from typing import ClassVar
@@ -39,6 +38,7 @@ from timenet.types import (
     ureg,
 )
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
+from timenet_connectors.demographics import Sex
 from timenet_connectors.download import Artifact, download_files, ensure_archive, find_dir_containing
 
 
@@ -58,14 +58,6 @@ _ECG = TimeSeriesSpec(
     name="12-lead ECG",
     unit_value=ureg.millivolt,
 )
-
-
-@unique
-class Sex(StrEnum):
-    """A patient's sex, as the clinical context and the ``sex`` annotation state it."""
-
-    MALE = "male"
-    FEMALE = "female"
 
 
 # PTB-XL codes sex as 0 = male, 1 = female.
