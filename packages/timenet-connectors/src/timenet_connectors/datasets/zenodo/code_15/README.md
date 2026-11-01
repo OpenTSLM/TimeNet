@@ -54,7 +54,11 @@ order. That order isn't `exams.csv`'s.
   baseline wasn't removed.
 - **Scale.** A published value is twice the millivolt value; the author confirms the factor in
   `ecg-age-prediction` issue 5. Both READMEs say the values are "at the scale 1e-4V", which
-  contradicts itself and the files (issues 10 and 34 of `automatic-ecg-diagnosis`).
+  contradicts itself and the files (issues 10 and 34 of `automatic-ecg-diagnosis`). Measured on
+  the four CODE-15% exams whose raw WFDB files `ecg-preprocessing` publishes, the factor is
+  1.953125 (= 2 × 1000/1024), not 2: either those files' gains are off by 1.024, or a Record's
+  values are about 2.3% below the true millivolts. The connector keeps the author's 2 until
+  the author says which (VERIFICATION.md #19).
 - **Leads.** `--use_all_leads` computes DIII, AVR, AVL and AVF from DI and DII. The traces only
   partly agree. Of the 345,106 traces whose DI and DII aren't both zero, DIII equals DII − DI to
   within 10⁻⁶ of the peak in 250,910, and AVR, AVL and AVF are within 2% of their derivation in

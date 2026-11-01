@@ -1,5 +1,13 @@
 # The exams of exams.csv whose trace is zero in every lead and sample: one exam_id per line, sorted.
-# Found by scanning every part of the pinned release. They have no Record.
+# Found by scanning every part of the pinned release.
+#
+# The connector excludes these 670 exams: an all-zero trace holds no signal, so an age or abnormality
+# task on it would ask a model to predict from nothing. They have no Record and no tasks, so:
+# - the dataset has 345,109 Records and 690,218 tasks, not 345,779 and 691,558;
+# - 290 patients, whose every exam is here, have no Record at all;
+# - 419 patients' death and timey, which exams.csv states only on one of these exams, are lost. They
+#   aren't moved to another exam, because timey counts from the exam that states it.
+# Every build checks that the release's all-zero exams are exactly these, and fails otherwise.
 699
 1623
 2981

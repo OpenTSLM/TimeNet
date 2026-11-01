@@ -23,7 +23,10 @@ from timenet.errors import TimeFFormatError
 
 SCALE = 2
 """The published values are the millivolt values times 2. The author confirms the factor in
-``ecg-age-prediction`` issue 5; the READMEs' "scale 1e-4V" sentence is wrong."""
+``ecg-age-prediction`` issue 5; the READMEs' "scale 1e-4V" sentence is wrong.
+
+Measured against four of the authors' raw exams, the factor is 1.953125 (= 2 x 1000/1024), not 2: see
+VERIFICATION.md #19. Which side carries the 1000/1024 isn't known yet, so the factor stays the author's."""
 TRACE_SAMPLES = 4096
 """Every published trace's length: ``--new_len 4096``."""
 # Halving a float32 at least twice the smallest normal only lowers its exponent, so SCALE * (value * _HALF)

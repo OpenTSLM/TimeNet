@@ -68,6 +68,14 @@ PARTS = (
     Part(16, "b66f46d9fd17162453891732039f4a62d4df66bba445610444a08d205a89b927"),
     Part(17, "af7fd3e5fa9e091ab1936e720c7fc55f116cca0722592ce2bdbff644de22e2e9"),
 )
+"""The record's 18 zips, ``exams_part0.zip`` to ``exams_part17.zip``, each with the SHA-256 of its bytes.
+
+The hashes pin the release: the download fails with ``TimeFFormatError`` if a zip's bytes don't match its
+hash, before the zip is extracted, so a changed, truncated or corrupted file never reaches the build. Zenodo
+publishes only MD5s, so we computed these SHA-256s on the first download, whose zips matched the MD5s Zenodo
+lists. Once a zip is extracted, its marker skips the download, and the hash isn't checked again
+(VERIFICATION.md #3).
+"""
 
 TRACINGS_DATASET = "tracings"
 """Each HDF5 file's ``(N, 4096, 12)`` float32 tracings, in the order of its ``exam_id`` dataset."""
@@ -86,7 +94,8 @@ class PinnedCounts(NamedTuple):
     """Rows of ``exams.csv``, which is also the HDF5 rows without the filler rows."""
     patients: int
     all_zero_exam_ids: frozenset[int]
-    """Exams whose published trace is zero in every lead and sample. The connector skips them."""
+    """Exams whose published trace is zero in every lead and sample. The connector excludes them, and with
+    them some patients and mortality: see :data:`ALL_ZERO_EXAM_IDS_FILE`."""
 
     def check(self, root: Path, found: "PinnedCounts") -> None:
         """Compare the counts parsed from ``root`` with these.
@@ -121,6 +130,11 @@ def read_exam_ids(path: Path) -> frozenset[int]:
 
 
 ALL_ZERO_EXAM_IDS_FILE = Path(__file__).with_name("all_zero_exam_ids.txt")
-"""The 670 exams whose trace is zero everywhere, found by scanning every part of the pinned release."""
+"""The 670 exams whose trace is zero everywhere, found by scanning every part of the pinned release.
+
+The connector excludes them, as they hold no signal to predict from: they have no Record and no tasks. So
+the dataset loses every exam of 290 patients, and the death and timey of 419 patients, which ``exams.csv``
+states only on one of these exams.
+"""
 
 PINNED_COUNTS = PinnedCounts(exams=345_779, patients=233_770, all_zero_exam_ids=read_exam_ids(ALL_ZERO_EXAM_IDS_FILE))

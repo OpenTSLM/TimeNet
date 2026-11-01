@@ -13,9 +13,10 @@ dataset_id: zenodo/code-15
 dataset_version: 1.0.0
 name: CODE-15%
 description: >-
-  345,779 12-lead ECGs from 233,770 patients of the Telehealth Network of Minas
-  Gerais, Brazil (2010-2016), at 400 Hz, with the patient's age and sex, six
-  abnormality labels, and mortality follow-up.
+  12-lead ECGs of the Telehealth Network of Minas Gerais, Brazil (2010-2016), at
+  400 Hz, with the patient's age and sex, six abnormality labels, and mortality
+  follow-up. The release has 345,779 exams from 233,770 patients; the dataset
+  holds the 345,109 whose trace isn't zero everywhere, from 233,480 patients.
 license: CC-BY-4.0
 source_url: https://zenodo.org/records/4916206
 citation: >-
