@@ -4,7 +4,7 @@ from collections import Counter, defaultdict
 from collections.abc import Iterable, Iterator, Mapping
 from typing import Self
 
-from timenet.dataset import Record
+from timenet.dataset import Record, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, ClassificationTask, Split
 from timenet_connectors.bases.huggingface import HubFileRef
@@ -17,7 +17,7 @@ from timenet_connectors.datasets.time_ra.rats40k.rows import Row, read_rows
 from timenet_connectors.datasets.time_ra.rats40k.tasks import category_task
 
 
-class RATS40KDatasetLoader(DatasetLoader):
+class RATS40KDatasetLoader(DatasetLoader[HubFileRef]):
     """RATS40K's files, read and checked: one lazy Record per usable row, and one category task each.
 
     RATS40K defines one task (:func:`category_task`): name a row's anomaly category, with the published
@@ -77,20 +77,18 @@ class RATS40KDatasetLoader(DatasetLoader):
             variants.append(variant)
         return cls(tuple(variants), tuple(rows))
 
-    def dataset_annotations(self) -> tuple[Annotation, ...]:
-        """Return each loaded variant's category vocabulary and request template.
+    def annotate_dataset(self, dataset: TimeFDataset) -> None:
+        """Attach each loaded variant's category vocabulary and request template.
 
         A task names its vocabulary's key as its ``target_schema``. A name's index in the vocabulary is
         the authors' code, which ``ActionID`` doesn't always follow. The connector adds the provenance.
 
-        Returns:
-            Two annotations per variant.
+        Args:
+            dataset: The dataset that ``populate`` fills.
         """
-        annotations: list[Annotation] = []
         for variant in self._variants:
-            annotations.append(Annotation(key=category_vocabulary(variant), value=list(CATEGORY_NAMES[variant])))
-            annotations.append(Annotation(key=request_template(variant), value=TEMPLATES[variant]))
-        return tuple(annotations)
+            dataset.annotate(Annotation(key=category_vocabulary(variant), value=list(CATEGORY_NAMES[variant])))
+            dataset.annotate(Annotation(key=request_template(variant), value=TEMPLATES[variant]))
 
     def records(self) -> Iterator[Record]:
         """Return one Record per usable row, in file order, whose values stay in the files until written."""
