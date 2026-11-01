@@ -22,6 +22,7 @@ from pydantic import (
     StrictStr,
     StringConstraints,
     TypeAdapter,
+    ValidationError,
     ValidationInfo,
     field_validator,
     model_validator,
@@ -139,7 +140,10 @@ def parse_channels(observation: Any, variant: Variant) -> dict[str, list[float]]
         TimeFValidationError: If the observation violates its variant's format.
     """
     named = {"series": observation} if variant is Variant.UNI else _named_channels(observation)
-    channels = _CHANNELS.validate_python(named)
+    try:
+        channels = _CHANNELS.validate_python(named)
+    except ValidationError as exc:
+        raise TimeFValidationError(f"Observation: {exc}") from exc
     if not channels:
         raise TimeFValidationError("Observation has no channels")
     if len({len(values) for values in channels.values()}) != 1:

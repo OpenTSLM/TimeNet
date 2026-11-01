@@ -96,7 +96,7 @@ _EXPECTED_DATASET_ANNOTATIONS: dict[str, Any] = {
 }
 
 
-_LABEL_DESCRIPTION = "The release's Label, Normal or Anomaly, as published; it disagrees with the target in 1,184 rows."
+_LABEL_DESCRIPTION = "The release's Label, Normal or Anomaly, as published. It can disagree with the target."
 _ACTION_ID_DESCRIPTION = "The release's ActionID, as published; it doesn't always follow the prompt's numbering."
 
 
@@ -114,7 +114,7 @@ _FIXTURE_ROWS: dict[tuple[str, str], dict[str, Any]] = {
     ("uni", "test"): {
         "domain": "Server",
         "channels": {"series": [1.0, 8.0]},
-        "task_metadata": {"target_in_vocabulary": False, "Rank": ["model-b", "model-a"]},
+        "task_metadata": {"target_in_vocabulary": False, "rank": ["model-b", "model-a"]},
         "label": "Normal",
         "action_id": 2,
         "target": "Temporal Dependency Anomaly",
@@ -281,25 +281,48 @@ def _authors_code(response: str, vocabulary: list[str]) -> int | None:
     return None
 
 
-def test_targets_fit_the_authors_answer_format():
+def test_the_ported_parser_reads_every_category_name():
     for variant in Variant:
         vocabulary = _EXPECTED_DATASET_ANNOTATIONS[f"{variant}_category_vocabulary"]
         for code, name in enumerate(vocabulary):
             # A name in \boxed2{}, with or without the prompt's number, parses to its code.
             for answer in (f"Action: \\boxed2{{{name}}}", f"Action: \\boxed2{{{code}. {name}}}"):
                 assert _authors_code(f"Thought: \\boxed1{{x}}\n{answer}", vocabulary) == code
+
+
+# The authors' SFT target of each fixture row (train/train_sft_parser.py, line 76, at Time-RA 200b244),
+# and the code that the authors' parser reads from it.
+_EXPECTED_ANSWERS = {
+    ("uni", Split.TRAIN, "0"): (
+        "Thought: \\boxed1{A normal ECG waveform.\nNo abnormal changes — café.}\nAction: \\boxed2{Normal Sequence}",
+        0,
+    ),
+    # A multivariate name in the univariate test split: the authors' parser skips it, as it skips the
+    # 3,790 real ones.
+    ("uni", Split.TEST, "0"): (
+        "Thought: \\boxed1{A sudden spike at the second sample.}\nAction: \\boxed2{Temporal Dependency Anomaly}",
+        None,
+    ),
+    ("multi", Split.TRAIN, "0"): (
+        "Thought: \\boxed1{The joint behavior changes.\nKeep this complete explanation.}\n"
+        "Action: \\boxed2{Joint Space Anomaly}",
+        5,
+    ),
+    ("multi", Split.TEST, "0"): (
+        "Thought: \\boxed1{The ECG channels behave normally.}\nAction: \\boxed2{Normal Sequence}",
+        0,
+    ),
+}
+
+
+def test_each_task_rebuilds_the_authors_answer():
     dataset = _FixtureConnector().convert(_refs())
-    for (variant, _, _), task in _tasks_by_row(dataset).items():
-        vocabulary = _EXPECTED_DATASET_ANNOTATIONS[f"{variant}_category_vocabulary"]
-        answer = request.authors_answer(task)
-        assert task.targets is not None
-        (target,) = task.targets
-        rationale, name = read_value(task.rationale), read_value(target)
-        # The authors' SFT target: train/train_sft_parser.py, line 76, at Time-RA 200b244.
-        assert answer == f"Thought: \\boxed1{{{rationale}}}\nAction: \\boxed2{{{name}}}"
-        # The uni test fixture's multivariate name is skipped, as the authors' parser skips the 3,790 real ones.
-        expected = vocabulary.index(name) if task.metadata["target_in_vocabulary"] else None
-        assert _authors_code(answer, vocabulary) == expected
+    tasks = _tasks_by_row(dataset)
+    assert tasks.keys() == _EXPECTED_ANSWERS.keys()
+    for (variant, split, key), task in tasks.items():
+        answer, code = _EXPECTED_ANSWERS[variant, split, key]
+        assert request.authors_answer(task) == answer
+        assert _authors_code(answer, _EXPECTED_DATASET_ANNOTATIONS[f"{variant}_category_vocabulary"]) == code
 
 
 def test_template_without_placeholders_is_rejected():
@@ -370,13 +393,24 @@ def test_pinned_inventory_mismatch_fails():
         RATS40KConnector().convert(_refs())
 
 
+def test_pinned_null_keys_mismatch_fails(monkeypatch):
+    # The row counts match the fixtures, but another null entry is pinned.
+    inventory = {
+        variant: pinned._replace(null_keys={**pinned.null_keys, Split.TRAIN: frozenset({"999"})})
+        for variant, pinned in _FIXTURE_INVENTORY.items()
+    }
+    monkeypatch.setattr(_FixtureConnector, "SOURCE_INVENTORY", inventory)
+    with pytest.raises(TimeFValidationError, match="null keys"):
+        _FixtureConnector().convert(_refs())
+
+
 @pytest.mark.parametrize(
     ("variant", "field", "value", "message"),
     [
         ("multi", "Observation", '"a": [1]; "a": [2]', "duplicate channel"),
         ("multi", "Observation", '"a": [1]; "b": [2,3]', "lengths differ"),
         # Python-written JSON can contain NaN, which json accepts by default.
-        ("uni", "Observation", [1.0, float("nan")], r"(?s)Observation\.series\.1.*finite number"),
+        ("uni", "Observation", [1.0, float("nan")], r"(?s)Observation.*series\.1.*finite number"),
         # A JSON true is an int to Python, so the code must reject it explicitly.
         ("uni", "ActionID", True, r"(?s)ActionID.*valid integer"),
         # Observation reaches the row through its alias and the channel validator.

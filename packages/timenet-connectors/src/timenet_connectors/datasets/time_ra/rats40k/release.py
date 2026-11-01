@@ -54,7 +54,10 @@ class PinnedInventory(NamedTuple):
             TimeFValidationError: If the file isn't the pinned revision's.
         """
         if dict(rows) != dict(self.rows) or dict(null_keys) != dict(self.null_keys):
-            raise TimeFValidationError(f"{path}: pinned row counts or null entry keys differ")
+            raise TimeFValidationError(
+                f"{path}: pinned row counts or null entry keys differ: expected rows {dict(self.rows)} "
+                f"and null keys {dict(self.null_keys)}, found rows {dict(rows)} and null keys {dict(null_keys)}"
+            )
 
 
 # The eleven null entries are univariate test keys that the authors' labeling/rank_models.py starts as

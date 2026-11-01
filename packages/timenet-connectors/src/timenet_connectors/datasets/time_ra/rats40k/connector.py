@@ -40,11 +40,8 @@ class RATS40KConnector(BaseHuggingFaceConnector):
             A dataset with the provenance and vocabulary annotations, the Records, and a stream of every task.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        for key, value in (
-            (AnnotationKey.SOURCE_REPOSITORY, self.HF_REPO),
-            (AnnotationKey.SOURCE_REVISION, self.SOURCE_REVISION),
-        ):
-            dataset.annotate(Annotation(key=key, value=value))
+        dataset.annotate(Annotation(key=AnnotationKey.SOURCE_REPOSITORY, value=self.HF_REPO))
+        dataset.annotate(Annotation(key=AnnotationKey.SOURCE_REVISION, value=self.SOURCE_REVISION))
         loader = RATS40KDatasetLoader.parse_from(raw_refs, inventory=self.SOURCE_INVENTORY)
         return loader.populate(dataset)
 

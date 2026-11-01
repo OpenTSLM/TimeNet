@@ -9,7 +9,7 @@ from timenet_connectors.datasets.time_ra.rats40k.request import CATEGORY_NAMES, 
 from timenet_connectors.datasets.time_ra.rats40k.rows import Row
 
 
-_LABEL = "The release's Label, Normal or Anomaly, as published; it disagrees with the target in 1,184 rows."
+_LABEL = "The release's Label, Normal or Anomaly, as published. It can disagree with the target."
 _ACTION_ID = "The release's ActionID, as published; it doesn't always follow the prompt's numbering."
 
 
@@ -35,7 +35,7 @@ def category_task(row: Row, record: Record) -> ClassificationTask:
         "figure_path": row.figure_path,
     }
     if row.rank is not None:
-        metadata["Rank"] = row.rank
+        metadata["rank"] = row.rank
     task = ClassificationTask(
         inputs=(record,),
         prompt=TASK_PROMPTS[row.ref.variant],

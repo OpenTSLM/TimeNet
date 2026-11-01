@@ -44,7 +44,7 @@ def record_metadata(record: Record) -> RATS40KRecordMetadata:
 class ChannelLoader:
     """Load one channel of a row lazily, rereading each row once for all its channels.
 
-    A loader serves the Records of one load, like TRACE's ``WindowLoader``.
+    A loader serves the Records of one load.
     """
 
     def __init__(self) -> None:
