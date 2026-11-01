@@ -6,7 +6,7 @@ from typing import Self
 
 from timenet.dataset import Record
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, Split
+from timenet.types import Annotation, ClassificationTask, Split
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.bases.loader import DatasetLoader
 from timenet_connectors.datasets.time_ra.rats40k.keys import category_vocabulary, request_template
@@ -14,20 +14,20 @@ from timenet_connectors.datasets.time_ra.rats40k.records import ChannelLoader, b
 from timenet_connectors.datasets.time_ra.rats40k.release import PINNED_INVENTORY, PinnedInventory, SourceSplit, Variant
 from timenet_connectors.datasets.time_ra.rats40k.request import CATEGORY_NAMES, TEMPLATES
 from timenet_connectors.datasets.time_ra.rats40k.rows import Row, read_rows
-from timenet_connectors.datasets.time_ra.rats40k.tasks import RATS40KCategoryTask
+from timenet_connectors.datasets.time_ra.rats40k.tasks import category_task
 
 
-class RATS40KDatasetLoader(DatasetLoader[RATS40KCategoryTask]):
+class RATS40KDatasetLoader(DatasetLoader):
     """RATS40K's files, read and checked: one lazy Record per usable row, and one category task each.
 
-    RATS40K defines one task (:class:`RATS40KCategoryTask`): name a row's anomaly category, with the
-    published ``Thought`` as rationale. Select one split with ``tasks_of``.
+    RATS40K defines one task (:func:`category_task`): name a row's anomaly category, with the published
+    ``Thought`` as rationale. After ``populate``, ``TimeFDataset.get_split`` selects one split.
 
     The loader keeps each row's small fields, not its values, so tasks stream from memory and the signal
     loaders reread only their own entry. The source files must stay available until writing ends.
     """
 
-    TASK_KINDS = (RATS40KCategoryTask,)
+    TASK_TYPES = (ClassificationTask,)
 
     def __init__(self, variants: tuple[Variant, ...], rows: tuple[tuple[Row, Record], ...]) -> None:
         self._variants = variants
@@ -96,6 +96,6 @@ class RATS40KDatasetLoader(DatasetLoader[RATS40KCategoryTask]):
         """Return one Record per usable row, in file order, whose values stay in the files until written."""
         return (record for _, record in self._rows)
 
-    def tasks(self) -> Iterator[RATS40KCategoryTask]:
+    def tasks(self) -> Iterator[ClassificationTask]:
         """Return one task per usable row, in file order."""
-        return (RATS40KCategoryTask(row, record) for row, record in self._rows)
+        return (category_task(row, record) for row, record in self._rows)
