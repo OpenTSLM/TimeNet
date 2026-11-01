@@ -277,6 +277,18 @@ def test_pinned_counts_mismatch_fails(tmp_path):
         Code15DatasetLoader.parse_from([_release(tmp_path)], parts=_FIXTURE_PARTS, counts=PINNED_COUNTS)
 
 
+@pytest.mark.parametrize(
+    ("found", "message"),
+    [
+        (frozenset({20, 30}), r"pinned release: all-zero traces of exams \[30\] that aren't pinned$"),
+        (frozenset(), r"pinned release: pinned all-zero exams \[20\] whose trace isn't all zero$"),
+    ],
+)
+def test_pinned_counts_name_only_the_side_that_differs(tmp_path, found, message):
+    with pytest.raises(TimeFValidationError, match=message):
+        _FIXTURE_COUNTS.check(tmp_path, _FIXTURE_COUNTS._replace(all_zero_exam_ids=found))
+
+
 def _edit_csv(root: Path, old: str, new: str) -> None:
     path = root / "exams.csv"
     path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")

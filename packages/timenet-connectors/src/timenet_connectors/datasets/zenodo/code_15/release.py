@@ -101,10 +101,11 @@ class PinnedCounts(NamedTuple):
             for name in ("exams", "patients")
             if getattr(found, name) != getattr(self, name)
         ]
-        if found.all_zero_exam_ids != self.all_zero_exam_ids:
-            unpinned = sorted(found.all_zero_exam_ids - self.all_zero_exam_ids)
-            not_found = sorted(self.all_zero_exam_ids - found.all_zero_exam_ids)
+        unpinned = sorted(found.all_zero_exam_ids - self.all_zero_exam_ids)
+        if unpinned:
             differences.append(f"all-zero traces of exams {unpinned[:5]} that aren't pinned")
+        not_found = sorted(self.all_zero_exam_ids - found.all_zero_exam_ids)
+        if not_found:
             differences.append(f"pinned all-zero exams {not_found[:5]} whose trace isn't all zero")
         raise TimeFValidationError(f"{root}: CODE-15% differs from the pinned release: {'; '.join(differences)}")
 
