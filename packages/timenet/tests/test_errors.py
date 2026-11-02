@@ -8,6 +8,7 @@ from timenet.errors import (
     TimeFReaderError,
     TimeFValidationError,
     TimeNetAccessError,
+    TimeNetConnectorError,
     TimeNetDatasetNotFoundError,
     TimeNetDownloadError,
     TimeNetError,
@@ -24,12 +25,17 @@ def test_all_derive_from_base():
     for exc in (
         TimeNetRegistryError,
         TimeNetDatasetNotFoundError,
+        TimeNetConnectorError,
         TimeNetDownloadError,
         TimeFValidationError,
         TimeFFormatError,
         TimeFReaderError,
     ):
         assert issubclass(exc, TimeNetError)
+
+
+def test_a_download_error_is_a_connector_error():
+    assert issubclass(TimeNetDownloadError, TimeNetConnectorError)
 
 
 def test_validation_error_is_value_error():
