@@ -90,13 +90,19 @@ even when `nullable=True`. Consumers must handle missing data before tensor conv
 `slice()` returns a new Signal that holds only the steps a span covers. The span can be a
 `TimeInterval` on the Record timeline or a `StepInterval` that names this Signal.
 
+The span must select the Signal. A `StepInterval` must name it. A `TimeInterval` with no
+`time_series` selects every Signal, but one whose `time_series` lists other Signals only does not
+select this one. `slice()` raises `TimeFValidationError` for a span that does not select the Signal,
+and `overlaps_with()` returns `False` for it.
+
 By default the span must lie inside the Signal: a `TimeInterval` inside the window `span_us`
 reports, and a `StepInterval` that ends at or before `n_values`. A span that reaches past either
 end raises `TimeFValidationError`. Pass `clip=True` to keep only the part of the span inside the
 Signal instead.
 
 `overlaps_with()` tells you whether a `TimeInterval` reaches a Signal at all, so you can skip the
-Signals it misses, such as other segments of one recording. An interval can overlap a Signal only
+Signals it misses, such as other segments of one recording or Signals the interval is not scoped
+to. An interval can overlap a Signal only
 in part, so cut it with `clip=True`:
 
 ```python
@@ -112,7 +118,10 @@ overlaps it, but `slice()` raises `TimeFValidationError` for it, with or without
 
 The slice keeps the name, spec, metadata, and place on the timeline of the original Signal. It
 drops the annotations of the original, because they can fall outside the window. The slice reads
-no values when you make it: each read of the slice reads only its own steps from the original.
+no values when you make it. When you read it, it asks the original for its own steps only. That
+reads less than the whole original only when its values support range reads, as for `read_steps()`:
+stored values read only the chunks that cover the steps, but a plain loader callable reads all its
+values first.
 
 An ordinal Signal has no timeline. `overlaps_with()` and a `TimeInterval` passed to `slice()` raise
 `TimeFValidationError` on it, so scope an ordinal Signal in steps. `slice()` also raises for a
