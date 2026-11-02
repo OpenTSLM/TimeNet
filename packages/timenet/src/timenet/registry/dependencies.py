@@ -15,7 +15,13 @@ from typing import TYPE_CHECKING
 
 import pyarrow.fs as pafs
 
-from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError
+from timenet.errors import (
+    TimeFFormatError,
+    TimeFValidationError,
+    TimeNetDatasetNotFoundError,
+    TimeNetFileError,
+    TimeNetMissingParentError,
+)
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import FilePart, Manifest, PayloadSource
 from timenet.registry._paths import release_dir
@@ -76,9 +82,10 @@ def open_local_release(directory: Path, manifest: Manifest, *, sources_root: Pat
         A handle with each payload source opened and checked.
 
     Raises:
-        TimeFFormatError: If a file is missing or has another size than recorded, or a payload source
-            differs from the files the release pins.
-        TimeNetDatasetNotFoundError: If a payload source is not under ``sources_root``.
+        TimeNetFileError: If a file of the release or of a payload source is missing or has another
+            size than recorded.
+        TimeFFormatError: If a payload source differs from the files the release pins.
+        TimeNetMissingParentError: If a payload source is not under ``sources_root``.
         TimeFValidationError: If the release has payload sources but no ``sources_root``.
     """  # noqa: DOC502 - raised by the checks this function calls
     version = DatasetVersion(manifest, pafs.LocalFileSystem(), str(directory))
@@ -119,9 +126,10 @@ def attach_payload_sources(
         The release with each payload source attached.
 
     Raises:
-        TimeNetDatasetNotFoundError: If a payload source is absent.
+        TimeNetMissingParentError: If a payload source is absent.
+        TimeNetFileError: If a pinned local file is missing or has another size.
         TimeFFormatError: If a payload source's manifest names another release, lacks a pinned file,
-            records it differently, or a pinned local file is missing or has another size.
+            or records it differently.
     """  # noqa: DOC502 - mismatches are raised by the checks this function calls
     release = _reference(version.manifest)
     sources: dict[SourceKey, DatasetVersion] = {}
@@ -129,9 +137,7 @@ def attach_payload_sources(
         try:
             source = open_source(pinned.release)
         except TimeNetDatasetNotFoundError as error:
-            raise TimeNetDatasetNotFoundError(
-                f"payload source {pinned.release} of {release} is not in {searched}"
-            ) from error
+            raise TimeNetMissingParentError(pinned.release, release, True, searched) from error
         validate_manifest_reference(source.manifest, pinned.release)
         check_pins(release, pinned, source.manifest)
         check_file_sizes(source, pinned.files, owner=f"payload source {pinned.release} of {release}")
@@ -176,18 +182,19 @@ def check_file_sizes(version: DatasetVersion, parts: Iterable[FilePart], *, owne
         owner: The release, or payload source, that the files belong to, for the error message.
 
     Raises:
-        TimeFFormatError: Naming the first missing or resized file, its recorded and actual size.
+        TimeNetFileError: Naming the first missing or resized file, its recorded and actual size.
     """
     if not isinstance(version.filesystem, pafs.LocalFileSystem):
         return
     root = Path(version.root)
+    release = _reference(version.manifest)
     for part in parts:
         try:
             size = (root / part.path).stat().st_size
         except FileNotFoundError:
-            raise TimeFFormatError(f"{owner}: file {part.path!r} is missing; expected {part.size} bytes") from None
+            raise TimeNetFileError(release, owner, part.path, f"{part.size:,} bytes", None) from None
         if size != part.size:
-            raise TimeFFormatError(f"{owner}: file {part.path!r} has {size} bytes; expected {part.size}")
+            raise TimeNetFileError(release, owner, part.path, f"{part.size:,} bytes", f"{size:,} bytes")
 
 
 def prepare_local_copy(  # noqa: PLR0913

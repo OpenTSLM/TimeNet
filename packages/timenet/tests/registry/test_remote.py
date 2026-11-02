@@ -8,12 +8,14 @@ import pytest
 
 from timenet.client import TimeNet
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError, TimeNetFileError, TimeNetRegistryError
+from timenet.format.checksums import file_checksum
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, DatasetSchema, Domain, License
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
 
@@ -185,6 +187,51 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
     for part in manifest.files.all_parts():
         assert (dest / part).read_bytes() == (directory / part).read_bytes()
     assert (dest / "manifest.json").exists()
+
+
+def test_a_corrupted_remote_download_names_the_file_and_its_checksums(version_dir, tmp_path):
+    registry, _ = _remote(version_dir, tmp_path)
+    directory, manifest = version_dir
+    part = manifest.files.control[0]
+    original = (directory / part.path).read_bytes()
+    # The same size, so only the checksum shows the change.
+    (directory / part.path).write_bytes(bytes([original[0] ^ 1]) + original[1:])
+    release = DatasetRef(dataset_id=manifest.metadata.dataset_id, version=manifest.metadata.dataset_version)
+    dest = tmp_path / "out" / release.dataset_id / str(release.version)
+
+    with pytest.raises(TimeNetFileError) as caught:
+        registry.download_version(release.dataset_id, str(release.version), dest)
+
+    error = caught.value
+    # A caller that handles format errors still catches it.
+    assert isinstance(error, TimeFFormatError)
+    assert (error.release, error.path, error.expected) == (release, part.path, part.checksum)
+    assert error.actual == file_checksum(directory / part.path)
+    assert not dest.exists()
+
+
+def test_a_remote_download_whose_size_differs_from_its_record_names_both_sizes(version_dir, tmp_path):
+    registry, _ = _remote(version_dir, tmp_path)
+    directory, manifest = version_dir
+    payload = json.loads((directory / "manifest.json").read_text())
+    record = payload["files"]["control"][0]
+    # The manifest records one byte more. The checksum still matches, so only the size check sees it.
+    record["size"] += 1
+    (directory / "manifest.json").write_text(json.dumps(payload))
+    release = DatasetRef(dataset_id=manifest.metadata.dataset_id, version=manifest.metadata.dataset_version)
+    dest = tmp_path / "out" / release.dataset_id / str(release.version)
+
+    with pytest.raises(TimeNetFileError) as caught:
+        registry.download_version(release.dataset_id, str(release.version), dest)
+
+    error = caught.value
+    size = record["size"]
+    assert (error.release, error.owner, error.path) == (release, f"download of {release}", record["path"])
+    assert (error.expected, error.actual) == (f"{size:,} bytes", f"{size - 1:,} bytes")
+    assert str(error) == (
+        f"download of {release}: file '{record['path']}' has {size - 1:,} bytes, expected {size:,} bytes."
+    )
+    assert not dest.exists()
 
 
 @pytest.mark.parametrize("entry_point", ["open", "load"])

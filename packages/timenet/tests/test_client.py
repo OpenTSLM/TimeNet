@@ -16,7 +16,9 @@ from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import TIMENET_REGISTRY_URL, RemoteRegistry
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, DatasetMetadata, Domain, License, Version
+from timenet.types.access import AccessRequirement
 from timenet.types.parent_dataset_card import ParentDatasetCard
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
 
@@ -396,8 +398,8 @@ def test_load_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):
     client = TimeNet(tmp_path / "registry", storage_path=tmp_path / "store")
     _hosted(client, _card("org/gated", Access.CREDENTIALED, "https://physionet.example/dua"))
     message = (
-        "'org/gated' is credentialed: TimeNet does not host its data. Get access at "
-        "https://physionet.example/dua for org/gated@1.0.0. Then build it locally with `timenet-build build org/gated`."
+        "org/gated@1.0.0 is credentialed. Get access at https://physionet.example/dua for org/gated@1.0.0. "
+        "TimeNet does not host its data, so build it locally with `timenet-build build org/gated`."
     )
     for entry_point in (client.open, client.load, client.download):
         with pytest.raises(TimeNetAccessError) as caught:
@@ -417,8 +419,12 @@ def test_the_hint_for_a_hosted_child_names_the_access_page_of_each_ancestor(tmp_
     with pytest.raises(TimeNetAccessError) as caught:
         client.open("org/child")
 
+    assert caught.value.requirements == (
+        AccessRequirement(DatasetRef.parse("org/a@1.0.0"), Access.CREDENTIALED, "https://a.example"),
+        AccessRequirement(DatasetRef.parse("org/b@1.0.0"), Access.RESTRICTED, "https://b.example"),
+    )
     assert str(caught.value) == (
-        "'org/child' is restricted: TimeNet does not host its data. "
-        "Get access at https://a.example for org/a@1.0.0. Get access at https://b.example for org/b@1.0.0. "
-        "Then build it locally with `timenet-build build org/child`."
+        "org/child@1.0.0 is restricted. "
+        "Get access at https://a.example for org/a@1.0.0 and at https://b.example for org/b@1.0.0. "
+        "TimeNet does not host its data, so build it locally with `timenet-build build org/child`."
     )

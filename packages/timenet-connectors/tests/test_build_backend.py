@@ -3,6 +3,7 @@ import sys
 
 import pytest
 
+from timenet.errors import TimeNetInvalidCardError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
@@ -25,6 +26,18 @@ def test_knows_rejects_an_unknown_id_without_importing_a_connector():
     assert not ConnectorBuilder().knows("nope/nothing")
 
     assert leaf not in sys.modules
+
+
+def test_a_card_that_cannot_be_read_raises_and_only_a_missing_connector_gives_none(tmp_path, monkeypatch):
+    assert ConnectorBuilder().card("nope/nothing") is None
+    assert ConnectorBuilder().declared_version("nope/nothing") is None
+    (tmp_path / "dataset.yaml").write_text("dataset_id: [unclosed\n")
+    monkeypatch.setattr(backend_module, "connector_dir", lambda dataset_id: tmp_path)
+
+    with pytest.raises(TimeNetInvalidCardError, match="could not read dataset card"):
+        ConnectorBuilder().card("test/broken")
+    with pytest.raises(TimeNetInvalidCardError, match="could not read dataset card"):
+        ConnectorBuilder().declared_version("test/broken")
 
 
 @pytest.mark.parametrize("values_backend", [None, "zarr", "parquet"])
