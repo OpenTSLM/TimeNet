@@ -598,7 +598,7 @@ class Signal(SupportsAnnotate):
                 past the series' steps. If the located range is empty.
         """
         if isinstance(span, StepInterval):
-            if span.time_series is not self:
+            if not self.is_selected_by(span):
                 raise TimeFValidationError(
                     f"a step span counts on series {span.time_series.name!r}, not this series {self.name!r}"
                 )
@@ -609,18 +609,18 @@ class Signal(SupportsAnnotate):
             return (span.start, span.stop)
         if not isinstance(span, TimeInterval):  # a point (TimePoint or StepPoint) names no range
             raise TimeFValidationError(f"step_range needs an interval span, not a point, got {span!r}")
-        start, stop, _ = self._steps_in_time_range(span.start_us, span.end_us)
-        if start < 0 or stop > self.n_values:
+        steps = self._steps_in_time_range(span.start_us, span.end_us)
+        if steps.start < 0 or steps.stop > self.n_values:
             raise TimeFValidationError(
                 f"span {span!r} runs past the {self.n_values} steps of series {self.name!r}: "
-                f"it resolves to ({start}, {stop})"
+                f"it resolves to ({steps.start}, {steps.stop})"
             )
-        if stop <= start:
+        if steps.stop <= steps.start:
             raise TimeFValidationError(
                 f"span {span!r} covers no steps of series {self.name!r}: it resolves to the "
-                f"empty range ({start}, {stop}). A forecast horizon needs at least one step"
+                f"empty range ({steps.start}, {steps.stop}). A forecast horizon needs at least one step"
             )
-        return (start, stop)
+        return (steps.start, steps.stop)
 
     def _steps_in_time_range(self, start_us: int, end_us: int) -> _StepRange:
         """Return the steps whose time offsets fall in ``[start_us, end_us)``, without range checks.
@@ -725,6 +725,10 @@ class Signal(SupportsAnnotate):
             if signal.overlaps_with(interval):
                 part = signal.slice(interval, clip=True)
 
+        :meth:`overlaps_with` checks only the window :attr:`span_us` reports, so ``slice`` still
+        raises for an interval that falls between two values. Both raise for a time interval that
+        selects an ordinal series.
+
         Args:
             span: The interval to keep: a time interval within :attr:`span_us`, or a step interval on
                 this series that ends at or before :attr:`n_values`.
@@ -739,15 +743,15 @@ class Signal(SupportsAnnotate):
                 series. If the span does not select this series, whatever ``clip`` is. If the span
                 reaches past this series and ``clip`` is false, or covers no step of this series.
         """  # noqa: DOC502 (raised by _slice_range)
-        start, stop, offsets = self._slice_range(span, clip=clip)
+        steps = self._slice_range(span, clip=clip)
         axis = self.time_axis
         time_offsets: NumpyArray | None = None
         if isinstance(axis, RegularAxis):
-            axis = axis.at_index(start)
+            axis = axis.at_index(steps.start)
         elif isinstance(axis, IrregularAxis):
-            if offsets is None:  # a step span does not read the offsets to locate itself
-                offsets = self.time_offsets_us()
-            sliced = offsets[start:stop]
+            # A step span does not read the offsets to locate itself.
+            offsets = self.time_offsets_us() if steps.offsets is None else steps.offsets
+            sliced = offsets[steps.start : steps.stop]
             axis = IrregularAxis(first_us=int(sliced[0]), last_us=int(sliced[-1]))
             # Copy the slice's offsets, so a kept slice does not hold the original's whole array alive.
             time_offsets = NumpyArray(sliced.copy())
@@ -757,8 +761,8 @@ class Signal(SupportsAnnotate):
             spec=self.spec,
             time_axis=axis,
             name=self.name,
-            loader=_SlicedArray.from_handle(self._values, start, stop),
-            n_values=stop - start,
+            loader=_SlicedArray.from_handle(self._values, steps.start, steps.stop),
+            n_values=steps.stop - steps.start,
             time_offsets_loader=time_offsets,
             metadata=self.metadata,
         )
@@ -778,12 +782,12 @@ class Signal(SupportsAnnotate):
             TimeFValidationError: For each span :meth:`slice` rejects.
         """
         if isinstance(span, StepInterval):
+            if not clip:  # step_range checks the series and the length
+                return _StepRange(*self.step_range(span), None)
             if not self.is_selected_by(span):
                 raise TimeFValidationError(
                     f"a step span counts on series {span.time_series.name!r}, not this series {self.name!r}"
                 )
-            if not clip:
-                return _StepRange(*self.step_range(span), None)
             stop = min(span.stop, self.n_values)
             if stop <= span.start:
                 raise TimeFValidationError(

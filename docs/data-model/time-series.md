@@ -124,8 +124,7 @@ outside the window. The slice is a new Signal that belongs to no Source, so it h
 The slice reads no values when you make it. When you read it, it asks the original for its own
 steps only. That reads less than the whole original only when its values support range reads, as
 for `read_steps()`: stored values read only the chunks that cover the steps, but a plain loader
-callable reads all its values first. A slice of a slice reads the original values directly.
-Slicing an irregular Signal reads its time offsets once, and the slice keeps a copy of its own
+callable reads all its values first. Slicing an irregular Signal reads its time offsets once, and the slice keeps a copy of its own
 offsets only.
 
 An ordinal Signal has no timeline. `overlaps_with()` and `slice()` raise `TimeFValidationError` for

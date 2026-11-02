@@ -697,7 +697,7 @@ def test_slice_by_steps_on_a_regular_series():
     assert part.span_us == (4_000_000, 6_000_000)
 
 
-def test_a_slice_of_a_slice_reads_the_original_series_once():
+def test_a_slice_of_a_slice_flattens_to_one_handle_on_the_original():
     calls = []
     signal = _range_reads(10, calls)
     outer = signal.slice(TimeInterval.seconds(2, 8))
