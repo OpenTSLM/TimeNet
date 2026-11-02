@@ -55,7 +55,7 @@ Signals can reference the same immutable `TimeAxis`.
 | `sources` | Recursive sources, linked to their record and parent source by ID. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
-| `external_values` | File and row locations for external text and irregular time offsets. |
+| `external_values` | Locations of large text, string lists, and irregular time offsets. |
 | `tasks` | Concrete task type, typed scope columns, and subclass configuration columns. |
 | `task_targets` | Ordered inline targets, one typed row each. |
 | `task_record_refs` | Ordered task-to-record object relationships. |
@@ -63,7 +63,7 @@ Signals can reference the same immutable `TimeAxis`.
 | `task_dependencies` | Ordered task derivation relationships. |
 | `annotation_contents` | Reusable annotation content with one typed value column per value shape. |
 | `annotation_occurrences` | One attachment of content to an object, with its span. |
-| `signal_chunks` | Locations of Signal values in Parquet or Zarr. |
+| `signal_chunks` | Payload source and locations of Signal values in Parquet or Zarr. |
 | `imports` | Each parent alias of the release, with its exact parent release. |
 | `imported_objects` | For each copy: the parent alias, the object kind, the parent ID, and the ID of the copy. |
 
@@ -247,5 +247,21 @@ constraints. The writer then checkpoints and closes the database, records final 
 `timenet.format.control_audit` re-checks every relational invariant of a finished database with
 SQL scans, for tests and tooling.
 
-`TimeFReader.verify()` hashes every listed artifact. Normal reads stay lazy and verify the cached
-remote `control.duckdb` before opening it read-only.
+`TimeFReader.verify()` hashes every file that the release reads. A download makes sure that each
+file has its recorded size and checksum before it adds the complete copy to the cache. Opening a
+version makes sure that its local files exist with their recorded sizes, and hashes nothing. Reads
+then use the local files, or byte ranges of the remote files. Normal reads stay lazy. Before a
+reader opens a cached remote `control.duckdb` read-only, it makes sure that the file matches the
+manifest.
+
+## Catalogs of child datasets
+
+A child dataset holds every catalog row that it needs, also for the objects that it imports. A
+read of the child never opens the catalog of a parent. The `source_key` of a row in `signal_chunks`
+or `external_values` names the release that stores the file, as
+[Shared payloads](#shared-payloads) describes. The writer reuses the stored values of unchanged
+copies and decodes none of them.
+
+The `imports` and `imported_objects` tables map each parent ID to the ID of its copy. Only
+`get(..., parent=)` and `read()` use them. Other reads use the IDs of the child and the file
+locations in the catalog.
