@@ -92,8 +92,9 @@ even when `nullable=True`. Consumers must handle missing data before tensor conv
 
 The span must select the Signal. A `StepInterval` must name it. A `TimeInterval` with no
 `time_series` selects every Signal, but one whose `time_series` lists only other Signals does not
-select this one. `slice()` raises `TimeFValidationError` for a span that does not select the Signal,
-and `overlaps_with()` returns `False` for it.
+select this one. `is_selected_by()` applies this rule to any span, point or interval. `slice()`
+raises `TimeFValidationError` for a span that does not select the Signal, and `overlaps_with()`
+returns `False` for it.
 
 By default the span must lie inside the Signal: a `TimeInterval` inside the window `span_us`
 reports, and a `StepInterval` that ends at or before `n_values`. A span that reaches past either
@@ -115,12 +116,17 @@ if temperature.overlaps_with(interval):
 The span must still hold at least one value. An interval between two values of the Signal
 overlaps it, but `slice()` raises `TimeFValidationError` for it, with or without `clip`.
 
-The slice keeps the name, spec, metadata, and place on the timeline of the original Signal. It
-drops the annotations of the original, because they can fall outside the window. The slice reads
-no values when you make it. When you read it, it asks the original for its own steps only. That
-reads less than the whole original only when its values support range reads, as for `read_steps()`:
-stored values read only the chunks that cover the steps, but a plain loader callable reads all its
-values first.
+The slice keeps the name, spec, metadata, and place on the timeline of the original Signal: a
+regular axis starts at the slice's first step, an irregular axis keeps the sliced time offsets, and
+an ordinal axis stays as it is. It drops the annotations of the original, because they can fall
+outside the window. The slice is a new Signal that belongs to no Source, so it has no `id`.
+
+The slice reads no values when you make it. When you read it, it asks the original for its own
+steps only. That reads less than the whole original only when its values support range reads, as
+for `read_steps()`: stored values read only the chunks that cover the steps, but a plain loader
+callable reads all its values first. A slice of a slice reads the original values directly.
+Slicing an irregular Signal reads its time offsets once, and the slice keeps a copy of its own
+offsets only.
 
 An ordinal Signal has no timeline. `overlaps_with()` and `slice()` raise `TimeFValidationError` for
 a `TimeInterval` that selects it, so scope an ordinal Signal in steps. `slice()` also raises for a

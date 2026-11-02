@@ -2,7 +2,7 @@
 
 from collections.abc import Callable, Iterable, Sequence
 from dataclasses import dataclass, field
-from typing import TypeGuard, assert_never
+from typing import NamedTuple, TypeGuard, assert_never
 
 from jaxtyping import Shaped
 import numpy as np
@@ -16,9 +16,11 @@ from timenet.types import (
     Annotation,
     Span,
     StepInterval,
+    StepSpan,
     SupportsAnnotate,
     TimeInterval,
     TimeSeriesSpec,
+    TimeSpan,
 )
 from timenet.types.handles import ArrayHandle, ArrowArray, CallableArray, NumpyArray
 from timenet.types.ids import EntityId, assigned_id
@@ -143,11 +145,15 @@ def _array_handle(values: ArrayHandle | Callable[[], pa.Array]) -> ArrayHandle:
 
 
 @dataclass(frozen=True, eq=False, slots=True)
-class _StepWindow(ArrayHandle):
-    """Read the half-open step range ``[start, stop)`` of another array handle, only on request.
+class _SlicedArray(ArrayHandle):
+    """Array handle that reads only the steps ``[start, stop)`` of another handle, when it is read.
 
-    Steps count from the window's own first step. A window over a window reads the underlying
-    handle directly, so slicing a slice adds no layer of indirection.
+    :meth:`Signal.slice` uses it to stay lazy. A :class:`CallableArray` would read every value of
+    ``base`` and then cut them, and reading the steps at once would read them when the slice is
+    made. This handle turns each read into a range read on ``base`` instead.
+
+    Steps count from the slice's own first step. A slice of a slice reads ``base`` directly, so
+    slicing again adds no layer.
     """
 
     base: ArrayHandle
@@ -155,13 +161,15 @@ class _StepWindow(ArrayHandle):
     stop: int
 
     @classmethod
-    def over(cls, handle: ArrayHandle, start: int, stop: int) -> "_StepWindow":
-        """Return a window over ``[start, stop)`` of ``handle``, flattening a window over a window.
+    def from_handle(cls, handle: ArrayHandle, start: int, stop: int) -> "_SlicedArray":
+        """Return a handle on the steps ``[start, stop)`` of ``handle``.
+
+        If ``handle`` is itself a sliced array, the new handle reads its base directly.
 
         Returns:
-            The window, which reads nothing until it is read.
+            The handle, which reads nothing until it is read.
         """
-        if isinstance(handle, _StepWindow):
+        if isinstance(handle, _SlicedArray):
             return cls(handle.base, handle.start + start, handle.start + stop)
         return cls(handle, start, stop)
 
@@ -171,19 +179,33 @@ class _StepWindow(ArrayHandle):
         return self.base.is_loaded
 
     def read(self) -> pa.Array:
-        """Return the window's steps, read from the underlying handle."""
+        """Return the slice's steps, read from the underlying handle."""
         return self.base.read_steps(self.start, self.stop)
 
     def read_steps(self, start: int, stop: int) -> pa.Array:
-        """Return the window's steps ``[start, stop)`` by asking the underlying handle for only those.
+        """Return the slice's steps ``[start, stop)`` by asking the underlying handle for only those.
 
-        Like the default, a ``stop`` past the window's end reads to the end of the window.
+        Like the default, a ``stop`` past the slice's end reads to the end of the slice.
 
         Returns:
             The steps' values, in the form :meth:`read` returns.
         """
         stop = min(self.start + stop, self.stop)
         return self.base.read_steps(min(self.start + start, stop), stop)
+
+
+class _StepRange(NamedTuple):
+    """A half-open range of steps ``[start, stop)`` of a series, and the time offsets read to find it."""
+
+    start: int
+    """The first step in the range."""
+    stop: int
+    """The step just past the range."""
+    offsets: np.ndarray | None
+    """All time offsets of an irregular series, if they were read to find the range, else ``None``.
+
+    The caller can reuse them instead of reading them again.
+    """
 
 
 @dataclass(frozen=True, eq=False, init=False, kw_only=True)
@@ -587,7 +609,7 @@ class Signal(SupportsAnnotate):
             return (span.start, span.stop)
         if not isinstance(span, TimeInterval):  # a point (TimePoint or StepPoint) names no range
             raise TimeFValidationError(f"step_range needs an interval span, not a point, got {span!r}")
-        start, stop, _ = self._locate_time(span.start_us, span.end_us)
+        start, stop, _ = self._steps_in_time_range(span.start_us, span.end_us)
         if start < 0 or stop > self.n_values:
             raise TimeFValidationError(
                 f"span {span!r} runs past the {self.n_values} steps of series {self.name!r}: "
@@ -600,24 +622,25 @@ class Signal(SupportsAnnotate):
             )
         return (start, stop)
 
-    def _locate_time(self, start_us: int, end_us: int) -> tuple[int, int, np.ndarray | None]:
-        """Locate the steps whose time offsets fall in ``[start_us, end_us)``, without range checks.
+    def _steps_in_time_range(self, start_us: int, end_us: int) -> _StepRange:
+        """Return the steps whose time offsets fall in ``[start_us, end_us)``, without range checks.
+
+        The caller checks the result. On a regular axis, the range can start before step 0 or end
+        past :attr:`n_values`, and it is empty when no step falls in the time range.
 
         Returns:
-            ``(start, stop, offsets)``. A regular axis can give a range outside ``[0, n_values]``.
-            ``offsets`` holds the time offsets read to locate the range on an irregular axis, and is
-            ``None`` on a regular one, which reads none.
+            The step range. Its ``offsets`` are set on an irregular axis only.
 
         Raises:
             TimeFValidationError: If the series is ordinal, which has no timeline.
         """
         axis = self.time_axis
         if isinstance(axis, RegularAxis):
-            return axis.index_at_or_after(start_us), axis.index_at_or_after(end_us), None
+            return _StepRange(axis.index_at_or_after(start_us), axis.index_at_or_after(end_us), None)
         if isinstance(axis, IrregularAxis):
             offsets = self.time_offsets_us()
             start = int(np.searchsorted(offsets, start_us, side="left"))
-            return start, int(np.searchsorted(offsets, end_us, side="left")), offsets
+            return _StepRange(start, int(np.searchsorted(offsets, end_us, side="left")), offsets)
         if isinstance(axis, OrdinalAxis):
             raise TimeFValidationError(
                 f"a seconds span has no step range on ordinal series {self.name!r}, which has "
@@ -633,28 +656,27 @@ class Signal(SupportsAnnotate):
         that only partly overlaps the series still overlaps it, so cut it with
         ``slice(interval, clip=True)``.
 
-        An interval scoped to other series (its ``time_series`` is set and does not hold this series)
-        shares no time with this one, so the answer is ``False``. An interval with no ``time_series``
-        covers every series.
+        An interval that does not select this series (see :meth:`is_selected_by`) shares no time with
+        it, so the answer is ``False``.
 
         Args:
             interval: A time interval on the record timeline.
 
         Returns:
-            ``True`` if the interval may select this series and shares at least one microsecond with the
-            window :attr:`span_us` reports. ``False`` if it is scoped to other series, ends before this
-            series starts, or starts after it ends.
+            ``True`` if the interval selects this series and shares at least one microsecond with the
+            window :attr:`span_us` reports. ``False`` if it does not select this series, ends before
+            this series starts, or starts after it ends.
 
         Raises:
             TimeFValidationError: If ``interval`` is not a :class:`~timenet.types.TimeInterval`. If the
-                series is ordinal and the interval may select it. An ordinal series has no timeline, so a
+                series is ordinal and the interval selects it. An ordinal series has no timeline, so a
                 time interval can neither overlap it nor miss it.
         """
         if not isinstance(interval, TimeInterval):
             raise TimeFValidationError(
                 f"overlaps_with needs a time interval, got {type(interval).__name__} {interval!r}"
             )
-        if not self._in_scope_of(interval):
+        if not self.is_selected_by(interval):
             return False
         window = self.span_us
         if window is None:
@@ -665,46 +687,47 @@ class Signal(SupportsAnnotate):
         first_us, end_us = window
         return interval.start_us < end_us and interval.end_us > first_us
 
-    def _in_scope_of(self, interval: TimeInterval) -> bool:
-        """Return whether ``interval`` may select this series: it names no series, or names this one.
+    def is_selected_by(self, span: Span) -> bool:
+        """Return whether ``span`` applies to this series.
 
-        Series are compared by identity, as a step span compares the series it counts on.
+        A step span selects only the series it counts on. A time span with no ``time_series``
+        selects every series, and a time span with ``time_series`` set selects only the series it
+        lists. Series are compared by identity, not by name.
+
+        This checks the scope only, not the time or steps the span covers. Use :meth:`overlaps_with`
+        for that.
+
+        Args:
+            span: A time or step span, point or interval.
+
+        Returns:
+            ``True`` if the span applies to this series.
+
+        Raises:
+            TimeFValidationError: If ``span`` is neither a time span nor a step span.
         """
-        return interval.time_series is None or any(series is self for series in interval.time_series)
+        if isinstance(span, StepSpan):
+            return span.time_series is self
+        if isinstance(span, TimeSpan):
+            return span.time_series is None or any(series is self for series in span.time_series)
+        raise TimeFValidationError(f"is_selected_by needs a time or step span, got {type(span).__name__} {span!r}")
 
     def slice(self, span: Span, *, clip: bool = False) -> "Signal":
         """Return a new lazy series that holds only the steps ``span`` covers.
 
-        The span must select this series. A step span must name it, and a time span scoped to some
-        series (its ``time_series`` is set) must hold it. A time span with no ``time_series`` selects
-        every series.
+        The span must select this series (see :meth:`is_selected_by`) and hold at least one of its
+        steps. The slice keeps this series' name, spec, metadata, and place on the timeline, and drops
+        its annotations, which can fall outside the slice. It reads no values until it is read, and
+        then reads only its own steps where this series supports range reads (see :meth:`read_steps`).
 
-        By default the span must also lie inside this series. A time span must lie inside the window
-        :attr:`span_us` reports, on a regular and an irregular axis alike, and a step span must end at
-        or before :attr:`n_values`. A span that reaches past either end raises.
+        To cut every series a time interval reaches, including the ones it only partly covers::
 
-        With ``clip=True``, the slice keeps the part of the span that lies inside this series. A time
-        span is cut to the window :attr:`span_us` reports, and a step span is cut to end at
-        :attr:`n_values`. Use it after :meth:`overlaps_with` to cut an interval that only partly
-        overlaps the series.
-
-        Either way, the span must hold at least one step of this series. A time span between two
-        values raises, because no value falls inside it.
-
-        The slice keeps this series' name, spec, metadata, and place on the recording timeline: a
-        regular axis starts at the slice's first step, an irregular axis keeps the sliced time offsets,
-        and an ordinal axis stays as it is. The slice drops this series' annotations, because they can
-        fall outside it. It is a new series that belongs to no source, so it has no :attr:`id`.
-
-        The slice reads no values when it is built. When it is read, it asks this series for its own
-        steps only, and :meth:`read_steps` on the slice asks for only the steps it needs. Those range
-        reads read less than the whole series only when this series' values support range reads, as
-        :meth:`read_steps` explains: stored values read only the chunks that cover the range, but a
-        plain loader callable reads all its values first. An irregular series reads its time offsets
-        once, to place the slice.
+            if signal.overlaps_with(interval):
+                part = signal.slice(interval, clip=True)
 
         Args:
-            span: The interval to keep. It must select this series.
+            span: The interval to keep: a time interval within :attr:`span_us`, or a step interval on
+                this series that ends at or before :attr:`n_values`.
             clip: Keep the part of the span inside this series instead of raising when the span reaches
                 past it.
 
@@ -713,8 +736,8 @@ class Signal(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: If ``span`` is a point, or a time span that selects an ordinal
-                series. If the span names other series and not this one, whatever ``clip`` is. If the span reaches
-                past this series and ``clip`` is false, or covers no step of this series.
+                series. If the span does not select this series, whatever ``clip`` is. If the span
+                reaches past this series and ``clip`` is false, or covers no step of this series.
         """  # noqa: DOC502 (raised by _slice_range)
         start, stop, offsets = self._slice_range(span, clip=clip)
         axis = self.time_axis
@@ -734,38 +757,43 @@ class Signal(SupportsAnnotate):
             spec=self.spec,
             time_axis=axis,
             name=self.name,
-            loader=_StepWindow.over(self._values, start, stop),
+            loader=_SlicedArray.from_handle(self._values, start, stop),
             n_values=stop - start,
             time_offsets_loader=time_offsets,
             metadata=self.metadata,
         )
 
-    def _slice_range(self, span: Span, *, clip: bool) -> tuple[int, int, np.ndarray | None]:
-        """Locate the steps :meth:`slice` keeps, with the time offsets read to locate them, if any.
+    def _slice_range(self, span: Span, *, clip: bool) -> _StepRange:
+        """Check ``span`` for :meth:`slice` and return the steps the slice keeps.
+
+        It checks that the span is an interval that selects this series. It then turns a time span
+        into steps, after it cuts the span to this series (``clip=True``) or checks that the span lies
+        inside it. A step span needs no conversion, only the same cut or check.
 
         Returns:
-            ``(start, stop, offsets)``, where ``offsets`` is ``None`` unless an irregular axis was read.
+            The steps to keep. Its ``offsets`` are the time offsets read to find a time span's steps
+            on an irregular axis, so :meth:`slice` does not read them again.
 
         Raises:
             TimeFValidationError: For each span :meth:`slice` rejects.
         """
         if isinstance(span, StepInterval):
-            if span.time_series is not self:
+            if not self.is_selected_by(span):
                 raise TimeFValidationError(
                     f"a step span counts on series {span.time_series.name!r}, not this series {self.name!r}"
                 )
             if not clip:
-                return (*self.step_range(span), None)
+                return _StepRange(*self.step_range(span), None)
             stop = min(span.stop, self.n_values)
             if stop <= span.start:
                 raise TimeFValidationError(
                     f"step span ({span.start}, {span.stop}) covers no steps of the {self.n_values} "
                     f"steps of series {self.name!r}"
                 )
-            return span.start, stop, None
+            return _StepRange(span.start, stop, None)
         if not isinstance(span, TimeInterval):  # a point (TimePoint or StepPoint) names no range
             raise TimeFValidationError(f"slice needs an interval span, not a point, got {span!r}")
-        if not self._in_scope_of(span):
+        if not self.is_selected_by(span):
             raise TimeFValidationError(f"time span {span!r} is scoped to other series, not series {self.name!r}")
         window = self.span_us
         if window is None:
@@ -784,9 +812,9 @@ class Signal(SupportsAnnotate):
             )
         if stop_us <= start_us:
             raise TimeFValidationError(f"span {span!r} does not overlap series {self.name!r}")
-        start, stop, offsets = self._locate_time(start_us, stop_us)
-        if stop <= start:
+        steps = self._steps_in_time_range(start_us, stop_us)
+        if steps.stop <= steps.start:
             raise TimeFValidationError(
                 f"span {span!r} covers no steps of series {self.name!r}: no value falls inside it"
             )
-        return start, stop, offsets
+        return steps

@@ -7,7 +7,7 @@ import pytest
 
 from timenet.dataset import Signal
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
-from timenet.dataset.time_series import _StepWindow
+from timenet.dataset.time_series import _SlicedArray
 from timenet.errors import TimeFNullValuesError, TimeFValidationError
 from timenet.types import (
     Annotation,
@@ -703,10 +703,10 @@ def test_a_slice_of_a_slice_reads_the_original_series_once():
     outer = signal.slice(TimeInterval.seconds(2, 8))
     inner = outer.slice(StepInterval(time_series=outer, start=1, stop=3))
     assert inner.span_us == (3_000_000, 5_000_000)
-    # The inner slice reads the original handle, not the outer slice's window.
-    window = inner._values
-    assert isinstance(window, _StepWindow)
-    assert window.base is signal._values
+    # The inner slice reads the original handle, not the outer slice's handle.
+    handle = inner._values
+    assert isinstance(handle, _SlicedArray)
+    assert handle.base is signal._values
     assert inner.to_arrow().to_pylist() == [3.0, 4.0]
     assert calls == [(3, 5)]
 
@@ -868,6 +868,29 @@ def test_a_time_span_scoped_to_this_series_selects_it(with_others):
     assert signal.overlaps_with(interval)
     assert signal.slice(interval).to_numpy().tolist() == [1.0, 2.0]
     assert signal.slice(interval, clip=True).to_numpy().tolist() == [1.0, 2.0]
+
+
+@pytest.mark.parametrize(
+    ("make_span", "selects"),
+    [
+        (lambda this, other: StepInterval(time_series=this, start=0, stop=2), True),
+        (lambda this, other: StepPoint(time_series=this, start=1), True),
+        (lambda this, other: StepInterval(time_series=other, start=0, stop=2), False),
+        (lambda this, other: TimeInterval.seconds(1, 3), True),
+        (lambda this, other: TimePoint.seconds(1), True),
+        (lambda this, other: TimeInterval.seconds(1, 3, time_series=(other, this)), True),
+        (lambda this, other: TimePoint.seconds(1, time_series=(other,)), False),
+    ],
+)
+def test_is_selected_by_checks_the_series_a_span_names(make_span, selects):
+    signal, other = _counting(6, axis=RegularAxis.from_rate_hz(1)), _counting(6, axis=RegularAxis.from_rate_hz(1))
+    assert signal.is_selected_by(make_span(signal, other)) is selects
+
+
+def test_is_selected_by_rejects_a_value_that_is_not_a_span():
+    signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
+    with pytest.raises(TimeFValidationError, match="needs a time or step span"):
+        signal.is_selected_by((0, 2))
 
 
 @pytest.mark.parametrize(
