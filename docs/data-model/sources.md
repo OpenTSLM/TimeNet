@@ -203,17 +203,3 @@ print(stored_watch.metadata, stored_watch.sources[0].name)
 Chest strap ['firmware', 'electrode_contact']
 {'model': 'Empatica EmbracePlus'} Accelerometer
 ```
-
-## Validation errors
-
-| Cause | Raised by | Error |
-| --- | --- | --- |
-| Empty `name` | `Source(...)` | `TimeFValidationError` |
-| Source under two parents, or a cycle | `walk_sources()`, `Record(...)` | `TimeFValidationError` |
-| Source or Signal already in another Record | `add_record()` | `TimeFValidationError` |
-| Signal attached twice in one Record | `add_record()` | `TimeFValidationError` |
-| Timed annotation with no timed Signals below | `annotate()` | `TimeFValidationError` |
-| Span with `time_series` set | `Annotation(...)` | `TimeFValidationError` |
-| Span outside the windows of the subtree | `annotate()` | `SpanOutsideWindowWarning` |
-| Unknown, ambiguous, or duplicate selection | `select()` | `TimeFValidationError` |
-| Record with no Sources | `write()` | `TimeFValidationError` |
