@@ -651,7 +651,6 @@ def test_slice_of_a_regular_series_keeps_its_place_on_the_timeline():
         data=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
         metadata={"lead": "II"},
     )
-    signal.annotate(Annotation(key="quality", value="good"))
     # 2 Hz from 1 s: [2 s, 3 s) holds the values at 2 s and 2.5 s.
     part = signal.slice(TimeInterval.seconds(2, 3))
     assert part is not signal
@@ -661,7 +660,12 @@ def test_slice_of_a_regular_series_keeps_its_place_on_the_timeline():
     assert part.name == signal.name
     assert part.spec is signal.spec
     assert part.metadata == {"lead": "II"}
-    assert part.annotations == ()
+
+
+def test_slice_drops_annotations():
+    signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
+    signal.annotate(Annotation(key="quality", value="good"))
+    assert signal.slice(TimeInterval.seconds(2, 4)).annotations == ()
 
 
 def test_slice_of_an_irregular_series_keeps_the_sliced_time_offsets():
@@ -717,24 +721,16 @@ def test_a_slice_of_a_sliced_irregular_series_keeps_its_time_offsets():
 
 
 @pytest.mark.parametrize(
-    ("make_span", "message"),
+    "make_span",
     [
-        (lambda _: TimePoint.seconds(1), "not a point"),
-        (lambda ts: StepPoint(time_series=ts, start=1), "not a point"),
-        (lambda _: TimeInterval.seconds(1, 20), "runs past"),
-        (lambda ts: StepInterval(time_series=ts, start=0, stop=7), "runs past"),
+        lambda _: TimeInterval.seconds(1, 20),
+        lambda ts: StepInterval(time_series=ts, start=0, stop=7),
     ],
 )
-def test_slice_rejects_a_point_or_a_span_past_the_series(make_span, message):
+def test_slice_rejects_a_span_past_the_series(make_span):
     signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
-    with pytest.raises(TimeFValidationError, match=message):
+    with pytest.raises(TimeFValidationError, match="runs past"):
         signal.slice(make_span(signal))
-
-
-def test_slice_rejects_a_time_span_on_an_ordinal_series():
-    signal = Signal.from_values([1.0, 2.0], spec=_spec(), name="c", time_axis=OrdinalAxis())
-    with pytest.raises(TimeFValidationError, match="no timeline"):
-        signal.slice(TimeInterval.seconds(0.0, 1.0))
 
 
 # A regular series with values at 10, 11, 12, 13 s covers [10 s, 14 s). An irregular one with values
@@ -803,27 +799,27 @@ def test_slice_rejects_a_step_span_naming_another_series(clip):
         _counting(6).slice(StepInterval(time_series=_counting(6), start=0, stop=3), clip=clip)
 
 
+@pytest.mark.parametrize("make_point", [lambda _: TimePoint.seconds(1), lambda ts: StepPoint(time_series=ts, start=1)])
 @pytest.mark.parametrize("clip", [False, True])
-def test_clip_still_rejects_a_point(clip):
+def test_slice_rejects_a_point(make_point, clip):
+    signal = _counting(6)
     with pytest.raises(TimeFValidationError, match="not a point"):
-        _counting(6).slice(TimePoint.seconds(1), clip=clip)
+        signal.slice(make_point(signal), clip=clip)
 
 
 @pytest.mark.parametrize("clip", [False, True])
-def test_clip_still_rejects_a_time_span_on_an_ordinal_series(clip):
+def test_slice_rejects_a_time_span_on_an_ordinal_series(clip):
     ordinal = Signal.from_values([1.0, 2.0], spec=_spec(), name="c", time_axis=OrdinalAxis())
     with pytest.raises(TimeFValidationError, match="no timeline"):
         ordinal.slice(TimeInterval.seconds(0.0, 1.0), clip=clip)
 
 
-def test_slice_of_an_irregular_series_reads_its_time_offsets_once():
-    reads = []
-
+def _counting_offset_reads(reads: list) -> Signal:
     def offsets():
         reads.append(1)
         return pa.array([0, 10, 20, 30], type=pa.int64())
 
-    signal = Signal.from_loader(
+    return Signal.from_loader(
         spec=_spec(),
         name="events",
         time_axis=IrregularAxis(first_us=0, last_us=30),
@@ -831,11 +827,21 @@ def test_slice_of_an_irregular_series_reads_its_time_offsets_once():
         loader=lambda: pa.array([0.0, 1.0, 2.0, 3.0], type=pa.float32()),
         time_offsets_loader=offsets,
     )
-    part = signal.slice(TimeInterval(start_us=5, end_us=25))
+
+
+def test_slice_by_a_time_span_reads_irregular_time_offsets_once():
+    reads = []
+    part = _counting_offset_reads(reads).slice(TimeInterval(start_us=5, end_us=25))
     assert len(reads) == 1
     assert part.time_axis == IrregularAxis(first_us=10, last_us=20)
-    signal.slice(StepInterval(time_series=signal, start=1, stop=3))
-    assert len(reads) == 2
+
+
+def test_slice_by_a_step_span_reads_irregular_time_offsets_once():
+    reads = []
+    signal = _counting_offset_reads(reads)
+    part = signal.slice(StepInterval(time_series=signal, start=1, stop=3))
+    assert len(reads) == 1
+    assert part.time_axis == IrregularAxis(first_us=10, last_us=20)
 
 
 def test_a_time_span_scoped_to_other_series_does_not_overlap_this_one():
