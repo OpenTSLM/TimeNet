@@ -646,9 +646,14 @@ class Signal(SupportsAnnotate):
             series starts, or starts after it ends.
 
         Raises:
-            TimeFValidationError: If the series is ordinal and the interval may select it. An ordinal
-                series has no timeline, so a time interval can neither overlap it nor miss it.
+            TimeFValidationError: If ``interval`` is not a :class:`~timenet.types.TimeInterval`. If the
+                series is ordinal and the interval may select it. An ordinal series has no timeline, so a
+                time interval can neither overlap it nor miss it.
         """
+        if not isinstance(interval, TimeInterval):
+            raise TimeFValidationError(
+                f"overlaps_with needs a time interval, got {type(interval).__name__} {interval!r}"
+            )
         if not self._in_scope_of(interval):
             return False
         window = self.span_us
@@ -721,7 +726,8 @@ class Signal(SupportsAnnotate):
                 offsets = self.time_offsets_us()
             sliced = offsets[start:stop]
             axis = IrregularAxis(first_us=int(sliced[0]), last_us=int(sliced[-1]))
-            time_offsets = NumpyArray(sliced)
+            # Copy the slice's offsets, so a kept slice does not hold the original's whole array alive.
+            time_offsets = NumpyArray(sliced.copy())
         elif not isinstance(axis, OrdinalAxis):  # an ordinal axis counts steps only, so it stays as is
             assert_never(axis)
         return Signal.from_loader(

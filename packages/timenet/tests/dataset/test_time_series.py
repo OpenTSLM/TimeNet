@@ -847,3 +847,19 @@ def test_a_time_span_scoped_to_this_series_selects_it(with_others):
     assert signal.overlaps_with(interval)
     assert signal.slice(interval).to_numpy().tolist() == [1.0, 2.0]
     assert signal.slice(interval, clip=True).to_numpy().tolist() == [1.0, 2.0]
+
+
+@pytest.mark.parametrize(
+    "make_span", [lambda ts: StepInterval(time_series=ts, start=0, stop=2), lambda _: TimePoint.seconds(1)]
+)
+def test_overlaps_with_rejects_a_span_that_is_not_a_time_interval(make_span):
+    signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
+    with pytest.raises(TimeFValidationError, match="needs a time interval"):
+        signal.overlaps_with(make_span(signal))
+
+
+def test_a_slice_of_an_irregular_series_copies_only_its_time_offsets():
+    signal = Signal.from_irregular([0.0, 1.0, 2.0, 3.0], time_offsets_us=[0, 10, 20, 30], spec=_spec(), name="c")
+    part = signal.slice(TimeInterval(start_us=10, end_us=25))
+    assert part.time_offsets_us().tolist() == [10, 20]
+    assert not np.shares_memory(part.time_offsets_us(), signal.time_offsets_us())

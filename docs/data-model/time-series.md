@@ -102,8 +102,7 @@ Signal instead.
 
 `overlaps_with()` tells you whether a `TimeInterval` reaches a Signal at all, so you can skip the
 Signals it misses, such as other segments of one recording or Signals the interval is not scoped
-to. An interval can overlap a Signal only
-in part, so cut it with `clip=True`:
+to. An interval can overlap a Signal only in part, so cut it with `clip=True`:
 
 ```python
 from timenet.types import TimeInterval
