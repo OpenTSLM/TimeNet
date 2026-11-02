@@ -27,7 +27,7 @@ from timenet.types import (
     TimeInterval,
 )
 from timenet.types.text import read_value
-from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey, Condition, Question
+from timenet_connectors.datasets.physionet.sleep_edfx.keys import SEX_LETTERS, AnnotationKey, Condition, Question
 
 
 # The epoch the release scores in, from the 1968 Rechtschaffen and Kales manual.
@@ -53,7 +53,7 @@ ASLEEP_LABELS = frozenset(STAGE_LABELS[1:6])
 
 # The sexes, after each sheet is decoded. The two sheets code the column with opposite
 # meanings, so a raw code never reaches a task.
-SEX_LABELS = ("F", "M")
+SEX_LABELS = tuple(SEX_LETTERS.values())
 
 # The two nights of the telemetry study.
 CONDITION_LABELS = tuple(Condition)
