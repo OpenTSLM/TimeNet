@@ -209,7 +209,8 @@ def plan_parents(
     exact version. If a local output holds a damaged copy, the plan fetches the release again and
     does not build it. A registry that is not local holds only releases whose cards declare
     ``access: open``. So for such an output, each release that the plan visits must declare
-    ``access: open``.
+    ``access: open``. If ``fetch_from`` is not local, each release that the plan fetches from it
+    must declare ``access: open`` too.
 
     The plan works in two phases. First, a walk from the requested release finds the graph of the
     releases that the build needs. Then :class:`graphlib.TopologicalSorter` orders the graph and
@@ -239,7 +240,8 @@ def plan_parents(
         TimeNetFileError: If a local output holds a damaged copy of a parent, and the plan cannot
             fetch the parent again.
         TimeNetAccessError: If the output is not local and the plan visits a release whose card, or
-            a card in its lineage, does not declare ``access: open``.
+            a card in its lineage, does not declare ``access: open``. Also if ``fetch_from`` is not
+            local and the plan would fetch such a release from it.
     """  # noqa: DOC502 - raised by the helpers of the walk
     if fetch_from is not None and not isinstance(output, LocalRegistry):
         # A registry that is not local accepts a child only if it already holds the parents. Also, a
@@ -341,8 +343,9 @@ def _locate(
     Raises:
         TimeNetFileError: If a local output holds a copy with a missing file or a file of another
             size, and the plan cannot fetch the release again.
-        TimeNetAccessError: If the output is not local and holds the release, and the card of the
-            release, or a card in its lineage, does not declare ``access: open``.
+        TimeNetAccessError: If the card of the release, or a card in its lineage, does not declare
+            ``access: open``, and the output that holds the release, or the ``fetch_from`` registry
+            to fetch it from, is not local.
     """  # noqa: DOC502 - the damage is raised from a variable, the access error by require_open_access
     manifest = _manifest(output, reference)
     damage = None
@@ -362,6 +365,10 @@ def _locate(
         return manifest, None
     fetched = None if fetch_from is None else _manifest(fetch_from, reference)
     if fetched is not None:
+        # A registry that is not local holds only releases whose cards declare access: open. So the
+        # plan refuses another release before any download.
+        if not isinstance(fetch_from, LocalRegistry):
+            require_open_access(fetched.metadata, fetched.lineage)
         return fetched, "fetch"
     if damage is not None:
         raise damage
