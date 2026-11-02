@@ -12,12 +12,12 @@ from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
 from timenet.types import DatasetMetadata
+from timenet.types.references import DatasetRef
 
 
 if TYPE_CHECKING:
     from timenet.manifest import PayloadSource
     from timenet.registry import BaseRegistry
-    from timenet.types.references import DatasetRef
 
 
 ENTRY_POINT_GROUP = "timenet.builders"
@@ -136,3 +136,24 @@ def find_card(dataset_id: str) -> DatasetMetadata | None:
     """  # noqa: DOC502 - raised by the backend
     builder = find_builder(dataset_id)
     return None if builder is None else builder.card(dataset_id)
+
+
+def exact_builder(reference: DatasetRef) -> BuilderBackend | None:
+    """Return the backend that can build exactly this release.
+
+    A connector builds only the dataset version that its card declares. So a pinned release can only
+    be built by a connector whose card declares that exact version.
+
+    Args:
+        reference: The dataset ID and the version.
+
+    Returns:
+        The backend, or ``None`` if no installed backend claims the dataset or its card declares
+        another version.
+
+    Raises:
+        TimeNetInvalidCardError: If the card of the connector cannot be read.
+    """  # noqa: DOC502 - raised by the backend
+    builder = find_builder(reference.dataset_id)
+    card = None if builder is None else builder.card(reference.dataset_id)
+    return builder if card is not None and card.dataset_version == reference.version else None
