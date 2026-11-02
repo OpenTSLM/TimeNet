@@ -6,7 +6,8 @@ import shutil
 import pyarrow.fs as pafs
 import pytest
 
-from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetFileError
+from timenet.format.checksums import file_checksum
 from timenet.manifest import PayloadSource
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.registry.dependencies import open_cached_or_remote, prepare_local_copy
@@ -104,7 +105,7 @@ def test_preparation_caches_only_verified_complete_releases(registry_root, tmp_p
     source_version = open_local_version(_version_dir(registry_root))
     part = source_version.manifest.files.time_series[0]
     source_file = Path(source_version.root) / part.path
-    expected = source_file.read_bytes()
+    original = source_file.read_bytes()
     reference = DatasetRef.parse("demo/ecg@2.0.0")
     cache = tmp_path / "cache"
     registry = LocalRegistry(registry_root)
@@ -112,24 +113,34 @@ def test_preparation_caches_only_verified_complete_releases(registry_root, tmp_p
     destination = directory / part.path
 
     if corruption is not None:
-        damaged = expected[:-1] if corruption == "truncated" else bytes([expected[0] ^ 1]) + expected[1:]
+        damaged = original[:-1] if corruption == "truncated" else bytes([original[0] ^ 1]) + original[1:]
         source_file.write_bytes(damaged)
-        with pytest.raises(TimeFFormatError, match="checksum or size mismatch"):
+        with pytest.raises(TimeNetFileError, match=r"has ([\d,]+ bytes|sha256:\w+), expected") as caught:
             prepare_local_copy(cache, reference, fetch_from=registry)
+        error = caught.value
+        # A caller that handles format errors still catches it.
+        assert isinstance(error, TimeFFormatError)
+        # The size is compared first, so a truncated file names its size and a changed one its checksum.
+        if corruption == "truncated":
+            expected, actual = f"{part.size:,} bytes", f"{part.size - 1:,} bytes"
+        else:
+            expected, actual = part.checksum, file_checksum(source_file)
+        assert (error.release, error.path, error.expected, error.actual) == (reference, part.path, expected, actual)
+        assert error.owner == f"download of demo/ecg@2.0.0 from {registry}"
         assert not destination.exists()
         assert not (directory / "manifest.json").exists()
         assert not list(directory.parent.glob("2.0.0.tmp-*"))
-        source_file.write_bytes(expected)
+        source_file.write_bytes(original)
 
     cached = prepare_local_copy(cache, reference, fetch_from=registry)
     assert cached.resolve_file_path(part.path) == str(destination)
-    assert destination.read_bytes() == expected
+    assert destination.read_bytes() == original
 
     # A cached file must remain readable without contacting the registry again.
     source_file.unlink()
     cached = prepare_local_copy(cache, reference, fetch_from=registry)
     assert cached.resolve_file_path(part.path) == str(destination)
-    assert destination.read_bytes() == expected
+    assert destination.read_bytes() == original
 
 
 def test_preparation_needs_only_the_direct_payload_sources(registry_root, tmp_path):

@@ -109,7 +109,8 @@ payload sources:
   cached copies and otherwise reads remotely. See [Opening a version](timef-reader.md#opening-a-version)
   for the checks and their errors.
 - `download_version` downloads complete copies of the version and of each payload source, and checks
-  each source against the pins.
+  each source against the pins. If a downloaded file has another size or checksum than its manifest
+  records, the download raises `TimeNetFileError` and keeps no partial copy.
 - `store` refuses a version whose payload sources the registry does not hold, holds in another form,
   or that read payloads of the version itself. The [writer](timef-writer.md) checks this at the
   first reuse of each source, and raises the errors that opening raises for a missing or differing

@@ -10,6 +10,8 @@ from importlib.metadata import entry_points
 from pathlib import Path
 from typing import Protocol
 
+from timenet.types import DatasetMetadata
+
 
 ENTRY_POINT_GROUP = "timenet.builders"
 
@@ -42,7 +44,27 @@ class BuilderBackend(Protocol):
             dataset_id: The dataset id.
 
         Returns:
-            The declared version string, or ``None`` if it cannot be read.
+            The declared version string, or ``None`` if the backend has no connector for the id.
+
+        Raises:
+            TimeNetInvalidCardError: If the card of the connector cannot be read.
+        """
+        ...
+
+    def card(self, dataset_id: str) -> DatasetMetadata | None:
+        """Return the card the connector declares, without importing or building it.
+
+        A build planner reads the card for a parent's exact version, its own parents, and its access
+        requirement before anything runs. Answer without importing the connector, like :meth:`knows`.
+
+        Args:
+            dataset_id: The dataset id.
+
+        Returns:
+            The validated card, or ``None`` if the backend has no connector for the id.
+
+        Raises:
+            TimeNetInvalidCardError: If the card cannot be read.
         """
         ...
 
@@ -74,3 +96,19 @@ def find_builder(dataset_id: str) -> BuilderBackend | None:
         if backend.knows(dataset_id):
             return backend
     return None
+
+
+def find_card(dataset_id: str) -> DatasetMetadata | None:
+    """Return the card of the installed connector that claims this dataset.
+
+    Args:
+        dataset_id: The dataset id.
+
+    Returns:
+        The card, or ``None`` when no installed package claims the dataset.
+
+    Raises:
+        TimeNetInvalidCardError: If the card of the connector cannot be read.
+    """  # noqa: DOC502 - raised by the backend
+    builder = find_builder(dataset_id)
+    return None if builder is None else builder.card(dataset_id)

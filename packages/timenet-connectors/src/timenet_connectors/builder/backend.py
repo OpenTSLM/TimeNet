@@ -4,6 +4,7 @@ from pathlib import Path
 
 from timenet.config import settings
 from timenet.engine import run_pipeline
+from timenet.types import DatasetMetadata
 from timenet_connectors.builder.env import run_isolated
 from timenet_connectors.discovery import connector_dir, has_connector, resolve
 
@@ -22,23 +23,38 @@ class ConnectorBuilder:
         """
         return has_connector(dataset_id)
 
-    def declared_version(self, dataset_id: str) -> str | None:  # noqa: PLR6301 (protocol)
+    def declared_version(self, dataset_id: str) -> str | None:
         """Read the version the connector's card declares, without importing or building it.
 
         Args:
             dataset_id: The dataset id.
 
         Returns:
-            The declared version string, or ``None`` if no readable card exists.
-        """
-        from timenet.errors import TimeNetInvalidCardError  # noqa: PLC0415
-        from timenet.types import DatasetMetadata  # noqa: PLC0415
+            The declared version string, or ``None`` if no connector exists for the dataset.
 
+        Raises:
+            TimeNetInvalidCardError: If the card of the connector cannot be read or is not a mapping.
+        """  # noqa: DOC502 - raised by card()
+        card = self.card(dataset_id)
+        return None if card is None else str(card.dataset_version)
+
+    def card(self, dataset_id: str) -> DatasetMetadata | None:  # noqa: PLR6301 (protocol)
+        """Read the connector's ``dataset.yaml`` card, without importing or building the connector.
+
+        Args:
+            dataset_id: The dataset id.
+
+        Returns:
+            The validated card, or ``None`` if no connector exists for the dataset.
+
+        Raises:
+            TimeNetInvalidCardError: If the card cannot be read or is not a mapping.
+        """  # noqa: DOC502 - raised by DatasetMetadata.from_yaml
         try:
-            card = DatasetMetadata.from_yaml(connector_dir(dataset_id) / "dataset.yaml")
-        except (LookupError, TimeNetInvalidCardError):
+            directory = connector_dir(dataset_id)
+        except LookupError:
             return None
-        return str(card.dataset_version)
+        return DatasetMetadata.from_yaml(directory / "dataset.yaml")
 
     def build(  # noqa: PLR6301 (protocol)
         self,
