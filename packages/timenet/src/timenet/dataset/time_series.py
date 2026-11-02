@@ -150,10 +150,8 @@ class _SlicedArray(ArrayHandle):
 
     :meth:`Signal.slice` uses it to stay lazy. A :class:`CallableArray` would read every value of
     ``base`` and then cut them, and reading the steps at once would read them when the slice is
-    made. This handle turns each read into a range read on ``base`` instead.
-
-    Steps count from the slice's own first step. A slice of a slice reads ``base`` directly, so
-    slicing again adds no layer.
+    made. This handle turns each read into a range read on ``base`` instead. Steps count from the
+    slice's own first step.
     """
 
     base: ArrayHandle
@@ -164,7 +162,8 @@ class _SlicedArray(ArrayHandle):
     def from_handle(cls, handle: ArrayHandle, start: int, stop: int) -> "_SlicedArray":
         """Return a handle on the steps ``[start, stop)`` of ``handle``.
 
-        If ``handle`` is itself a sliced array, the new handle reads its base directly.
+        If ``handle`` is itself a sliced array, the new handle reads its base directly, so a slice of
+        a slice adds no layer.
 
         Returns:
             The handle, which reads nothing until it is read.
@@ -215,10 +214,7 @@ class _StepRange(NamedTuple):
     stop: int
     """The step just past the range."""
     offsets: np.ndarray | None
-    """All time offsets of an irregular series, if they were read to find the range, else ``None``.
-
-    The caller can reuse them instead of reading them again.
-    """
+    """All time offsets of an irregular series if they were read to find the range, so callers need not reread them."""
 
 
 @dataclass(frozen=True, eq=False, init=False, kw_only=True)
@@ -685,15 +681,10 @@ class Signal(SupportsAnnotate):
     def overlaps_with(self, span: TimeSpan) -> bool:
         """Return whether at least one value of this series falls inside ``span``.
 
-        A record can hold several series that cover different parts of its timeline, such as two
-        segments of one recording. Use this to find the series a time span reaches. A value is inside
-        the span when its time offset falls in ``[start_us, exclusive_end)``, the same rule
-        :meth:`slice` uses. So for a time interval, ``slice(span, clip=True)`` keeps at least one value
-        whenever this returns ``True``.
-
-        This compares times only and ignores the span's ``time_series``. Ask :meth:`is_selected_by`
-        whether the span applies to this series. On an irregular series this reads the time offsets,
-        unless the span lies outside the window :attr:`span_us` reports.
+        A value is inside when its time offset falls in ``[start_us, exclusive_end)``, the rule
+        :meth:`slice` uses, so for a time interval ``slice(span, clip=True)`` keeps a value whenever
+        this returns ``True``. This compares times only and ignores the span's ``time_series``: ask
+        :meth:`is_selected_by` whether the span applies to this series.
 
         Args:
             span: A time interval or time point on the record timeline.
@@ -728,8 +719,7 @@ class Signal(SupportsAnnotate):
         lists. Series are compared by identity, not by name, so a span does not select a slice of a
         series it names: the slice is a new series.
 
-        This checks the scope only, not the time or steps the span covers. :meth:`overlaps_with` and
-        :meth:`slice` compare times only, so call this first when the scope matters.
+        This checks the scope only, not the time.
 
         Args:
             span: A time or step span, point or interval.
@@ -749,20 +739,15 @@ class Signal(SupportsAnnotate):
     def slice(self, span: Span, *, clip: bool = False) -> "Signal":
         """Return a new lazy series that holds only the steps ``span`` covers.
 
-        The span must hold at least one of this series' steps. A step span must count on this series,
-        because its steps mean nothing on another. A time span is placed by time only, and its
-        ``time_series`` is not checked, so ask :meth:`is_selected_by` first when the scope matters.
-        That also lets you cut a slice again with the span it was cut with.
+        The span must hold at least one value. A step span must count on this series. A time span is
+        placed by time only, so ask :meth:`is_selected_by` first when the scope matters. The slice
+        keeps the name, spec, metadata, and place on the timeline, drops annotations, and reads no
+        values until it is read::
 
-        The slice keeps this series' name, spec, metadata, and place on the timeline, and drops its
-        annotations, which can fall outside the slice. It reads no values until it is read, and then
-        reads only its own steps where this series supports range reads (see :meth:`read_steps`).
+            if signal.overlaps_with(interval):
+                part = signal.slice(interval, clip=True)
 
-        To cut every series of a record that a time interval selects and reaches::
-
-            for signal in record.walk_signals():
-                if signal.is_selected_by(interval) and not signal.is_ordinal and signal.overlaps_with(interval):
-                    parts.append(signal.slice(interval, clip=True))
+        The "Cut a window" docs show how to cut every signal of a record.
 
         Args:
             span: The interval to keep: a time interval within :attr:`span_us`, or a step interval on
@@ -803,11 +788,7 @@ class Signal(SupportsAnnotate):
         )
 
     def _slice_range(self, span: Span, *, clip: bool) -> _StepRange:
-        """Check ``span`` for :meth:`slice` and return the steps the slice keeps.
-
-        It checks that the span is an interval, and that a step span counts on this series. It then
-        turns a time span into steps, after it cuts the span to this series (``clip=True``) or checks
-        that the span lies inside it. A step span needs no conversion, only the same cut or check.
+        """Check ``span`` for :meth:`slice` and return the steps to keep.
 
         Returns:
             The steps to keep. Its ``offsets`` are the time offsets read to find a time span's steps

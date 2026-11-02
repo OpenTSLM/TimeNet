@@ -114,9 +114,10 @@ reports.
 
 An ordinal Signal has no timeline. `overlaps_with()` and `slice()` raise `TimeFValidationError` for
 a time span on it, so test `is_ordinal` first and scope an ordinal Signal in steps. `slice()` also
-raises for a point span. To cut every Signal of a Record that an interval selects, ask
-`is_selected_by()` first, and cut with `clip=True`, because an interval can overlap a Signal only
-in part:
+raises for a point span.
+
+To cut every Signal of a Record that an interval selects, ask `is_selected_by()` first, and cut
+with `clip=True`, because an interval can overlap a Signal only in part:
 
 ```python
 from timenet.types import TimeInterval
@@ -146,8 +147,8 @@ outside the window. The slice is a new Signal that belongs to no Source, so it h
 The slice reads no values when you make it. When you read it, it asks the original for its own
 steps only. That reads less than the whole original only when its values support range reads, as
 for `read_steps()`: stored values read only the chunks that cover the steps, but a plain loader
-callable reads all its values first. Slicing an irregular Signal reads its time offsets once, and
-the slice keeps a copy of its own offsets only. On in-memory NumPy values, `to_numpy()` on the
+callable reads all its values first. Slicing an irregular Signal reads its time offsets, and the
+slice keeps a copy of its own offsets only. On in-memory NumPy values, `to_numpy()` on the
 slice returns a read-only view, with no copy.
 
 ## Lazy values
