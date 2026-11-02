@@ -352,8 +352,9 @@ def test_step_range_rejects_a_point():
 
 
 def test_step_range_rejects_a_steps_span_naming_another_series():
-    with pytest.raises(TimeFValidationError, match="not this series"):
-        _counting(6).step_range(StepInterval(time_series=_counting(6), start=0, stop=3))
+    other = _series(name="V5")
+    with pytest.raises(TimeFValidationError, match="counts on series 'V5', not on series 'II'"):
+        _counting(6).step_range(StepInterval(time_series=other, start=0, stop=3))
 
 
 def test_step_range_rejects_a_steps_span_past_the_series():
@@ -809,8 +810,17 @@ def test_clip_rejects_a_step_span_that_starts_past_the_series():
 
 @pytest.mark.parametrize("clip", [False, True])
 def test_slice_rejects_a_step_span_naming_another_series(clip):
-    with pytest.raises(TimeFValidationError, match="not this series"):
+    with pytest.raises(TimeFValidationError, match="another series named 'II'"):
         _counting(6).slice(StepInterval(time_series=_counting(6), start=0, stop=3), clip=clip)
+
+
+@pytest.mark.parametrize("clip", [False, True])
+def test_a_step_span_on_the_original_cannot_cut_its_slice(clip):
+    # The slice keeps the name "II", so the message must not read "series 'II', not series 'II'".
+    signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
+    part = signal.slice(StepInterval(time_series=signal, start=1, stop=5))
+    with pytest.raises(TimeFValidationError, match="build the step span on this series itself"):
+        part.slice(StepInterval(time_series=signal, start=0, stop=2), clip=clip)
 
 
 @pytest.mark.parametrize("make_point", [lambda _: TimePoint.seconds(1), lambda ts: StepPoint(time_series=ts, start=1)])

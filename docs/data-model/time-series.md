@@ -126,14 +126,17 @@ parts = []
 for signal in record.walk_signals():
     if not signal.is_selected_by(interval):
         continue
-    if signal.is_ordinal:
-        if interval.time_series is None:
-            # Unscoped: keep the ordinal Signal whole (the caller's choice).
-            parts.append(signal)
+    if signal.is_ordinal and interval.time_series is None:
+        # Unscoped: keep the ordinal Signal whole (the caller's choice).
+        parts.append(signal)
         continue
+    # Raises for an ordinal Signal that the interval names: it has no timeline.
     if signal.overlaps_with(interval):
         parts.append(signal.slice(interval, clip=True))
 ```
+
+The loop skips a Signal that the interval selects but holds no value of. If every Signal that the
+interval names must hold a value, raise when `overlaps_with()` returns `False` for one of them.
 
 The slice keeps the name, spec, metadata, and place on the timeline of the original Signal: a
 regular axis starts at the slice's first step, an irregular axis keeps the sliced time offsets, and

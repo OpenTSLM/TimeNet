@@ -616,10 +616,7 @@ class Signal(SupportsAnnotate):
                 past the series' steps. If the located range is empty.
         """
         if isinstance(span, StepInterval):
-            if not self.is_selected_by(span):
-                raise TimeFValidationError(
-                    f"a step span counts on series {span.time_series.name!r}, not this series {self.name!r}"
-                )
+            self._check_step_span_counts_on_this(span)
             if span.stop > self.n_values:
                 raise TimeFValidationError(
                     f"step span ({span.start}, {span.stop}) runs past this series' {self.n_values} steps"
@@ -639,6 +636,25 @@ class Signal(SupportsAnnotate):
                 f"empty range ({steps.start}, {steps.stop}). A forecast horizon needs at least one step"
             )
         return (steps.start, steps.stop)
+
+    def _check_step_span_counts_on_this(self, span: StepInterval) -> None:
+        """Reject a step span that counts on another series, whose steps mean nothing on this one.
+
+        Raises:
+            TimeFValidationError: If ``span`` does not name this series.
+        """
+        if self.is_selected_by(span):
+            return
+        other = span.time_series.name
+        if other == self.name:
+            # A slice keeps its original's name, so a step span on the original lands here.
+            raise TimeFValidationError(
+                f"step span ({span.start}, {span.stop}) counts on another series named {other!r}. A slice "
+                f"is a new series with its original's name, so build the step span on this series itself"
+            )
+        raise TimeFValidationError(
+            f"step span ({span.start}, {span.stop}) counts on series {other!r}, not on series {self.name!r}"
+        )
 
     def _steps_in_time_range(self, start_us: int, end_us: int) -> _StepRange:
         """Return the steps whose time offsets fall in ``[start_us, end_us)``, without range checks.
@@ -803,10 +819,7 @@ class Signal(SupportsAnnotate):
         if isinstance(span, StepInterval):
             if not clip:  # step_range checks the series and the length
                 return _StepRange(*self.step_range(span), None)
-            if not self.is_selected_by(span):
-                raise TimeFValidationError(
-                    f"a step span counts on series {span.time_series.name!r}, not this series {self.name!r}"
-                )
+            self._check_step_span_counts_on_this(span)
             stop = min(span.stop, self.n_values)
             if stop <= span.start:
                 raise TimeFValidationError(
