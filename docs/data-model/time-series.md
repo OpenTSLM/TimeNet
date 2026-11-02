@@ -90,31 +90,50 @@ even when `nullable=True`. Consumers must handle missing data before tensor conv
 `slice()` returns a new Signal that holds only the steps a span covers. The span can be a
 `TimeInterval` on the Record timeline or a `StepInterval` that names this Signal.
 
-The span must select the Signal. A `StepInterval` must name it. A `TimeInterval` with no
-`time_series` selects every Signal, but one whose `time_series` lists only other Signals does not
-select this one. `is_selected_by()` applies this rule to any span, point or interval. `slice()`
-raises `TimeFValidationError` for a span that does not select the Signal, and `overlaps_with()`
-returns `False` for it.
+Which Signals a span applies to and which values it holds are separate questions:
+
+- `is_selected_by()` answers which Signals. A `StepInterval` selects only the Signal it names. A
+  `TimeInterval` with no `time_series` selects every Signal, and one with `time_series` set selects
+  only the Signals it lists. Signals compare by identity, so a span does not select a slice of a
+  Signal it names: the slice is a new Signal.
+- `overlaps_with()` and `slice()` answer which values, by time only. They ignore a time span's
+  `time_series`, so a slice can be cut again with the span it was cut with. A `StepInterval` must
+  still name the Signal it slices, because its steps mean nothing on another one.
 
 By default the span must lie inside the Signal: a `TimeInterval` inside the window `span_us`
 reports, and a `StepInterval` that ends at or before `n_values`. A span that reaches past either
 end raises `TimeFValidationError`. Pass `clip=True` to keep only the part of the span inside the
 Signal instead.
 
-`overlaps_with()` tells you whether a `TimeInterval` reaches a Signal at all, so you can skip the
-Signals it misses, such as other segments of one recording or Signals the interval is not scoped
-to. An interval can overlap a Signal only in part, so cut it with `clip=True`:
+`overlaps_with()` tells you whether a `TimeInterval` or `TimePoint` holds at least one value of a
+Signal, so you can skip the Signals it misses, such as other segments of one recording. It uses the
+same rule as `slice()`: a value is inside when its time offset falls in the span. An interval
+between two values, or after the last one, holds no value. On an irregular Signal,
+`overlaps_with()` reads the time offsets, unless the span lies outside the window `span_us`
+reports.
+
+An ordinal Signal has no timeline. `overlaps_with()` and `slice()` raise `TimeFValidationError` for
+a time span on it, so test `is_ordinal` first and scope an ordinal Signal in steps. `slice()` also
+raises for a point span. To cut every Signal of a Record that an interval selects, ask
+`is_selected_by()` first, and cut with `clip=True`, because an interval can overlap a Signal only
+in part:
 
 ```python
 from timenet.types import TimeInterval
 
 interval = TimeInterval.seconds(1, 3)
-if temperature.overlaps_with(interval):
-    part = temperature.slice(interval, clip=True)
+parts = []
+for signal in record.walk_signals():
+    if not signal.is_selected_by(interval):
+        continue
+    if signal.is_ordinal:
+        if interval.time_series is None:
+            # Unscoped: keep the ordinal Signal whole (the caller's choice).
+            parts.append(signal)
+        continue
+    if signal.overlaps_with(interval):
+        parts.append(signal.slice(interval, clip=True))
 ```
-
-The span must still hold at least one value. An interval between two values of the Signal
-overlaps it, but `slice()` raises `TimeFValidationError` for it, with or without `clip`.
 
 The slice keeps the name, spec, metadata, and place on the timeline of the original Signal: a
 regular axis starts at the slice's first step, an irregular axis keeps the sliced time offsets, and
@@ -124,12 +143,9 @@ outside the window. The slice is a new Signal that belongs to no Source, so it h
 The slice reads no values when you make it. When you read it, it asks the original for its own
 steps only. That reads less than the whole original only when its values support range reads, as
 for `read_steps()`: stored values read only the chunks that cover the steps, but a plain loader
-callable reads all its values first. Slicing an irregular Signal reads its time offsets once, and the slice keeps a copy of its own
-offsets only.
-
-An ordinal Signal has no timeline. `overlaps_with()` and `slice()` raise `TimeFValidationError` for
-a `TimeInterval` that selects it, so scope an ordinal Signal in steps. `slice()` also raises for a
-point span.
+callable reads all its values first. Slicing an irregular Signal reads its time offsets once, and
+the slice keeps a copy of its own offsets only. On in-memory NumPy values, `to_numpy()` on the
+slice returns a read-only view, with no copy.
 
 ## Lazy values
 

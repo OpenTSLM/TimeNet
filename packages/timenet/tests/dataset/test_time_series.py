@@ -582,30 +582,44 @@ def _at(offset_us: int, n: int = 4) -> Signal:
         (0, 11, True),  # partly before the series
         (11, 13, True),  # inside the series
         (13, 20, True),  # partly after the series
+        (13.5, 20, False),  # inside the window [10 s, 14 s), but after the last value
         (14, 20, False),  # starts one period after the last value
+        (10.2, 10.8, False),  # between two values
         (0, 20, True),  # covers the whole series
     ],
 )
 def test_overlaps_with_on_a_regular_axis(start_s, end_s, overlaps):
-    # Values at 10, 11, 12, 13 s; the series covers [10 s, 14 s).
+    # Values at 10, 11, 12, 13 s.
     signal = _at(10_000_000)
     assert signal.overlaps_with(TimeInterval.seconds(start_s, end_s)) is overlaps
 
 
 @pytest.mark.parametrize(
     ("start_us", "end_us", "overlaps"),
-    [(0, 10, False), (0, 11, True), (20, 21, True), (21, 30, False)],
+    [(0, 10, False), (0, 11, True), (12, 18, False), (20, 21, True), (21, 30, False)],
 )
 def test_overlaps_with_on_an_irregular_axis(start_us, end_us, overlaps):
-    # The series covers its first time offset through its last one, inclusive.
+    # Values at 10 and 20 us.
     signal = Signal.from_irregular([1.0, 2.0], time_offsets_us=[10, 20], spec=_spec(), name="events")
     assert signal.overlaps_with(TimeInterval(start_us=start_us, end_us=end_us)) is overlaps
 
 
-def test_overlaps_with_rejects_an_ordinal_series():
+@pytest.mark.parametrize(("at_s", "overlaps"), [(11, True), (11.5, False), (14, False)])
+def test_overlaps_with_a_time_point_needs_a_value_at_that_time(at_s, overlaps):
+    assert _at(10_000_000).overlaps_with(TimePoint.seconds(at_s)) is overlaps
+
+
+@pytest.mark.parametrize("scoped_to_other", [False, True])
+def test_overlaps_with_rejects_an_ordinal_series(scoped_to_other):
     signal = Signal.from_values([1.0, 2.0], spec=_spec(), name="c", time_axis=OrdinalAxis())
-    with pytest.raises(TimeFValidationError, match="no timeline"):
-        signal.overlaps_with(TimeInterval.seconds(0.0, 1.0))
+    scope = (_counting(3),) if scoped_to_other else None
+    assert signal.is_ordinal
+    with pytest.raises(TimeFValidationError, match="is ordinal"):
+        signal.overlaps_with(TimeInterval.seconds(0.0, 1.0, time_series=scope))
+
+
+def test_a_series_with_a_timeline_is_not_ordinal():
+    assert not _at(10_000_000).is_ordinal
 
 
 def _range_reads(n: int, calls: list, axis=None) -> Signal:
@@ -767,10 +781,10 @@ def test_slice_of_a_partly_overlapping_interval_raises_unless_clipped(axis, star
 
 @pytest.mark.parametrize(("axis", "start_s", "end_s"), [(_REGULAR_AT_10_S, 10.2, 10.8), (_IRREGULAR_AT_10_S, 12, 18)])
 @pytest.mark.parametrize("clip", [False, True])
-def test_slice_of_an_interval_between_two_values_raises(axis, start_s, end_s, clip):
+def test_an_interval_between_two_values_does_not_overlap_and_cannot_be_sliced(axis, start_s, end_s, clip):
     signal = _at_10_s(axis)
     interval = TimeInterval.seconds(start_s, end_s)
-    assert signal.overlaps_with(interval)
+    assert not signal.overlaps_with(interval)
     with pytest.raises(TimeFValidationError, match="covers no steps"):
         signal.slice(interval, clip=clip)
 
@@ -844,21 +858,19 @@ def test_slice_by_a_step_span_reads_irregular_time_offsets_once():
     assert part.time_axis == IrregularAxis(first_us=10, last_us=20)
 
 
-def test_a_time_span_scoped_to_other_series_does_not_overlap_this_one():
-    signal, other = _counting(6, axis=RegularAxis.from_rate_hz(1)), _counting(6, axis=RegularAxis.from_rate_hz(1))
-    assert not signal.overlaps_with(TimeInterval.seconds(1, 3, time_series=(other,)))
+def test_overlaps_with_reads_no_time_offsets_for_a_span_outside_the_series():
+    reads = []
+    assert not _counting_offset_reads(reads).overlaps_with(TimeInterval(start_us=100, end_us=200))
+    assert reads == []
 
 
 @pytest.mark.parametrize("clip", [False, True])
-def test_slice_rejects_a_time_span_scoped_to_other_series(clip):
+def test_overlaps_with_and_slice_compare_times_only_and_ignore_the_scope(clip):
     signal, other = _counting(6, axis=RegularAxis.from_rate_hz(1)), _counting(6, axis=RegularAxis.from_rate_hz(1))
-    with pytest.raises(TimeFValidationError, match="scoped to other series"):
-        signal.slice(TimeInterval.seconds(1, 3, time_series=(other,)), clip=clip)
-
-
-def test_a_time_span_scoped_to_other_series_skips_an_ordinal_series():
-    ordinal = Signal.from_values([1.0, 2.0], spec=_spec(), name="c", time_axis=OrdinalAxis())
-    assert not ordinal.overlaps_with(TimeInterval.seconds(0, 1, time_series=(_counting(3),)))
+    interval = TimeInterval.seconds(1, 3, time_series=(other,))
+    assert not signal.is_selected_by(interval)
+    assert signal.overlaps_with(interval)
+    assert signal.slice(interval, clip=clip).to_numpy().tolist() == [1.0, 2.0]
 
 
 @pytest.mark.parametrize("with_others", [False, True])
@@ -868,6 +880,23 @@ def test_a_time_span_scoped_to_this_series_selects_it(with_others):
     assert signal.overlaps_with(interval)
     assert signal.slice(interval).to_numpy().tolist() == [1.0, 2.0]
     assert signal.slice(interval, clip=True).to_numpy().tolist() == [1.0, 2.0]
+
+
+def test_a_slice_can_be_cut_again_with_the_span_it_was_cut_with():
+    signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
+    scope = TimeInterval.seconds(1, 4, time_series=(signal,))
+    part = signal.slice(scope)
+    assert part.overlaps_with(scope)
+    assert part.slice(scope).to_numpy().tolist() == [1.0, 2.0, 3.0]
+
+
+def test_a_span_scoped_to_a_series_does_not_select_its_slices():
+    # A slice is a new series, so scope compares by identity and names neither a slice nor a sibling.
+    signal = _counting(10, axis=RegularAxis.from_rate_hz(1))
+    first, second = signal.slice(TimeInterval.seconds(0, 5)), signal.slice(TimeInterval.seconds(5, 10))
+    assert not first.is_selected_by(TimeInterval.seconds(0, 10, time_series=(signal,)))
+    assert not second.is_selected_by(TimeInterval.seconds(3, 7, time_series=(first,)))
+    assert not signal.is_selected_by(TimeInterval.seconds(3, 7, time_series=(first,)))
 
 
 @pytest.mark.parametrize(
@@ -894,12 +923,22 @@ def test_is_selected_by_rejects_a_value_that_is_not_a_span():
 
 
 @pytest.mark.parametrize(
-    "make_span", [lambda ts: StepInterval(time_series=ts, start=0, stop=2), lambda _: TimePoint.seconds(1)]
+    "make_span",
+    [lambda ts: StepInterval(time_series=ts, start=0, stop=2), lambda ts: StepPoint(time_series=ts, start=1)],
 )
-def test_overlaps_with_rejects_a_span_that_is_not_a_time_interval(make_span):
+def test_overlaps_with_rejects_a_step_span(make_span):
     signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
-    with pytest.raises(TimeFValidationError, match="needs a time interval"):
+    with pytest.raises(TimeFValidationError, match="needs a time span"):
         signal.overlaps_with(make_span(signal))
+
+
+def test_to_numpy_on_a_slice_of_numpy_values_is_a_read_only_view():
+    values = np.arange(6, dtype=np.float32)
+    signal = Signal.from_values(values, spec=_spec(), name="c", time_axis=RegularAxis.from_rate_hz(1))
+    part = signal.slice(StepInterval(time_series=signal, start=2, stop=5)).to_numpy()
+    assert part.tolist() == [2.0, 3.0, 4.0]
+    assert np.shares_memory(part, values)
+    assert not part.flags.writeable
 
 
 def test_a_slice_of_an_irregular_series_copies_only_its_time_offsets():
