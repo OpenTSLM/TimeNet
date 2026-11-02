@@ -140,7 +140,8 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
         Args:
             parent: A reader of the parent release.
-            alias: The parent alias to import under, when several aliases declare the parent.
+            alias: The parent alias that declares the parent. By default, the alias that the card
+                declares for its release.
             records: The parent IDs of the Records to copy whole.
             signals: The parent IDs of the Signals to copy.
             tasks: The parent IDs of the tasks to copy.

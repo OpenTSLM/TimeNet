@@ -3,6 +3,7 @@ from dataclasses import fields, replace
 import shutil
 
 import numpy as np
+from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import OrdinalAxis, Record, RegularAxis, Signal, Source, TimeFDataset, composition
@@ -906,24 +907,35 @@ def test_an_alias_must_declare_the_parent(tmp_path):
     assert (child.records, child.parent_cards) == ((), {})
 
 
-def test_a_parent_declared_under_two_aliases_is_imported_under_one(tmp_path):
+def test_a_card_that_declares_one_parent_under_two_aliases_is_refused():
+    release = DatasetRef.parse("test/tree@1.0.0")
+    other = DatasetRef.parse("test/other@1.0.0")
+    parents = {ParentAlias("b"): release, ParentAlias("c"): other, ParentAlias("a"): release}
+    with pytest.raises(
+        ValidationError, match=r"declares the parent test/tree@1\.0\.0 under the parent aliases \['a', 'b'\]"
+    ):
+        DatasetMetadata(
+            dataset_id="test/child",
+            dataset_version=Version(1, 0, 0),
+            name="Child",
+            description="d",
+            license=License.MIT,
+            parents=parents,
+        )
+
+
+def test_a_parent_that_the_child_imports_under_another_alias_is_rejected(tmp_path):
     parent = _tree()
     ids = _ids(parent)
     with _reader(tmp_path, parent) as reader:
-        child = _child(reader, reader, aliases=(ParentAlias("a"), ParentAlias("b")))
-        with pytest.raises(TimeFValidationError, match=r"under the parent aliases \['a', 'b'\]; pass alias="):
+        # The card declares the release under base, while the parent cards it kept hold it under old.
+        child = _child(reader)
+        child._import_state.parent_cards[ParentAlias("old")] = ParentDatasetCard(metadata=reader.metadata)
+        with pytest.raises(
+            TimeFValidationError, match=r"already imports test/tree@1\.0\.0 under the parent alias 'old'"
+        ):
             child.import_from(reader, records=[ids["rec"]])
-        child.import_from(reader, alias=ParentAlias("a"), records=[ids["rec"]])
-        with pytest.raises(TimeFValidationError, match=r"already imports test/tree@1\.0\.0 under the parent alias 'a'"):
-            child.import_from(reader, alias=ParentAlias("b"), records=[ids["other"]])
-        # The check reads the parent cards, not the import map: a dataset with the cards and no map
-        # is refused too.
-        carded = _child(reader, reader, aliases=(ParentAlias("a"), ParentAlias("b")))
-        carded._import_state = ImportState(parent_cards=dict(child.parent_cards))
-        with pytest.raises(TimeFValidationError, match="under the parent alias 'a'"):
-            carded.import_from(reader, alias=ParentAlias("b"), records=[ids["other"]])
-    assert len(child.records) == 1
-    assert carded.records == ()
+    assert child.records == ()
 
 
 def test_an_alias_that_imports_another_release_is_rejected(tmp_path):
@@ -1308,14 +1320,15 @@ def test_a_cascading_removal_drops_task_copies_that_a_later_import_brings_back(t
     assert len(child.tasks) == 2
 
 
-def test_two_children_of_one_parent_keep_metadata_separate_and_reuse_payloads(tmp_path):
+def test_two_children_of_one_parent_keep_metadata_separate_and_reuse_payloads_under_different_aliases(tmp_path):
     original = make_dataset()
     original_id = original.records[0].id
     base_path = store(tmp_path, original)
     with TimeFReader(open_local_version(base_path)) as reader:
         children = []
-        for name in ("left", "right"):
-            child = _child(reader, dataset_id=f"test/{name}")
+        # The two children declare the grandparent under different aliases.
+        for name, alias in (("left", "g"), ("right", "base")):
+            child = _child(reader, dataset_id=f"test/{name}", aliases=(ParentAlias(alias),))
             imported = child.import_from(reader, records=[original_id])
             imported.records[original_id].metadata["branch"] = name
             children.append((store(tmp_path, child), imported.records[original_id].id))
@@ -1335,6 +1348,10 @@ def test_two_children_of_one_parent_keep_metadata_separate_and_reuse_payloads(tm
             reader.close()
     version = open_local_version(merged_path)
     assert not version.manifest.files.time_series
+    # The lineage lists each release once: the grandparent, and each child.
+    grandparent = DatasetRef(dataset_id=original.metadata.dataset_id, version=original.metadata.dataset_version)
+    lineage = sorted(str(card.source) for card in version.manifest.lineage)
+    assert lineage == sorted([str(grandparent), "test/left@1.0.0", "test/right@1.0.0"])
     sources = version.manifest.payload_sources.values()
     assert {source.release.dataset_id for source in sources} == {original.metadata.dataset_id}
     for path in [base_path, *(path for path, _ in children)]:

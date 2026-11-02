@@ -867,13 +867,15 @@ def _parent_ids(selection: str, ids: Iterable[EntityId]) -> tuple[EntityId, ...]
 def _resolve_alias(child: "TimeFDataset", parent: DatasetRef, alias: ParentAlias | None) -> ParentAlias:
     """Return the parent alias under which the card of the child declares ``parent``.
 
+    A card declares each parent release under one alias only. If ``alias`` is given, it must be that
+    alias.
+
     Returns:
         The alias.
 
     Raises:
         TimeFValidationError: If the ``metadata.parents`` of the child or ``alias`` does not declare
-            ``parent``, if the card declares ``parent`` under several aliases and ``alias`` is not
-            given, if the child imports ``parent`` under another alias already, or if ``alias``
+            ``parent``, if the child imports ``parent`` under another alias already, or if ``alias``
             imports another release already.
     """
     dataset_id = child.metadata.dataset_id
@@ -883,12 +885,8 @@ def _resolve_alias(child: "TimeFDataset", parent: DatasetRef, alias: ParentAlias
         raise TimeFValidationError(
             f"{dataset_id} does not declare {parent} as a parent; declare it in metadata.parents to import from it"
         )
-    # Without alias=, the release must have exactly one alias on the card.
+    # Without alias=, use the alias that the card declares for the release.
     if alias is None:
-        if len(declared) > 1:
-            raise TimeFValidationError(
-                f"{dataset_id} declares {parent} under the parent aliases {declared}; pass alias= to choose one"
-            )
         alias = declared[0]
     # With alias=, that alias must declare this release.
     elif alias not in declared:

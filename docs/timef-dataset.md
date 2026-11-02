@@ -291,9 +291,8 @@ describes.
 
 ### The parent
 
-Pass a reader of the parent release. The child must declare that exact release. If several aliases
-declare it, pass `alias=` to choose one. The child imports a release under one alias only, and an
-alias imports one release only.
+Pass a reader of the parent release. The child must declare that exact release. A card declares each
+release under one alias only, and the import uses that alias. An alias imports one release only.
 
 Each import records the parent in the child. `parent_cards` holds a copy of the card of each
 parent, by parent alias. `lineage` holds the card of each ancestor release. An ancestor release is a

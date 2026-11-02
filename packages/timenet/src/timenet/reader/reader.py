@@ -332,7 +332,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
                 Sources and annotations are read through the objects that hold them.
             id: The object's ID, a positive int64.
             parent: The parent the object was imported from: the ``ParentAlias`` it was imported
-                under, or its exact release as a ``DatasetRef`` when one alias alone imports it.
+                under, or its exact release as a ``DatasetRef``.
             load: Which kinds of stored values to load into the object and what it references. The
                 default loads none.
 
@@ -343,9 +343,8 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
             TimeFNotFoundError: If the ID or ``parent`` names nothing, or the stored object is not a
                 ``kind``.
             TimeFValidationError: If ``kind`` is ``Source``, ``Annotation``, or another kind not
-                listed above, ``id`` is not a positive int64, such as a string, ``parent`` is
-                neither a ``ParentAlias`` nor a ``DatasetRef``, such as a plain string, or several
-                aliases import the ``parent`` release.
+                listed above, ``id`` is not a positive int64, such as a string, or ``parent`` is
+                neither a ``ParentAlias`` nor a ``DatasetRef``, such as a plain string.
             TimeFFormatError: If the catalog names no parent release or another one for the alias
                 than the manifest does, or lists the alias or a parent ID more than once.
         """  # noqa: DOC502 - raised by get_many
@@ -372,8 +371,7 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
             ids: The objects' IDs, positive int64s in a list, tuple, or other iterable. With
                 ``parent``, the IDs the parent dataset gives the objects.
             parent: The parent the objects were imported from: the ``ParentAlias`` they were
-                imported under, or its exact release as a ``DatasetRef`` when one alias alone
-                imports it.
+                imported under, or its exact release as a ``DatasetRef``.
             load: Which kinds of stored values to load into the objects and what they reference.
                 The default loads none.
 
@@ -384,9 +382,9 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
             TimeFNotFoundError: If an ID or ``parent`` names nothing, or a stored object is not a
                 ``kind``. Nothing is returned then.
             TimeFValidationError: If ``kind`` is ``Source``, ``Annotation``, or another kind not
-                listed above, ``ids`` is a string or holds anything but positive int64s,
+                listed above, ``ids`` is a string or holds anything but positive int64s, or
                 ``parent`` is neither a ``ParentAlias`` nor a ``DatasetRef``, such as a plain
-                string, or several aliases import the ``parent`` release.
+                string.
             TimeFFormatError: If the catalog names no parent release or another one for the alias
                 than the manifest does, or lists the alias or a parent ID more than once.
         """  # noqa: DOC502 - TimeFFormatError is raised by _local_ids
@@ -603,13 +601,14 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
     def _import_alias(self, parent: ParentAlias | DatasetRef) -> ParentAlias:
         """Return the alias that ``parent`` names among the manifest's parent cards.
 
+        A manifest holds each parent release under one alias only.
+
         Returns:
             The alias: ``parent`` itself, or the one alias whose parent card holds the release
             ``parent`` names.
 
         Raises:
-            TimeFValidationError: If ``parent`` is neither a ``ParentAlias`` nor a ``DatasetRef``,
-                or several aliases import the release.
+            TimeFValidationError: If ``parent`` is neither a ``ParentAlias`` nor a ``DatasetRef``.
             TimeFNotFoundError: If the dataset declares no such alias, or imports from no such
                 release.
         """
@@ -619,11 +618,6 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
             matches = sorted(alias for alias, card in cards.items() if card.source == parent)
             if not matches:
                 raise TimeFNotFoundError(f"{dataset_id} declares no parent {parent}")
-            if len(matches) > 1:
-                raise TimeFValidationError(
-                    f"{dataset_id} imports {parent} under the parent aliases {matches}; "
-                    "pass parent=ParentAlias(...) to choose one"
-                )
             return ParentAlias(matches[0])
         if isinstance(parent, ParentAlias):
             if parent not in cards:
