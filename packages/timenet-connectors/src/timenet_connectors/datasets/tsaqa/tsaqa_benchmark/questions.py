@@ -36,7 +36,7 @@ _CHOICES = "\n\nChoices:\n"
 _PATCHES = "\n\nPatches:\n"
 _RESPOND = re.compile(
     # The letters read "T or F", "A, B", "A, B, C, D" or "A, B, C, or D".
-    r"\nRespond ONLY with the letter of the correct choice \((?P<letters>[A-Z](?:(?:, | or |, or )[A-Z])*)\)\.$"
+    r"\nRespond ONLY with the letter of the correct choice \((?P<letters>[A-Z](?:(?:, | or |, or )[A-Z])*)\)\.\Z"
 )
 _CHOICE_LINE = re.compile(r"(?P<letter>[A-Z]): (?P<text>.*)")
 _TRUE_OR_FALSE_LINES = ("True.", "False.")
@@ -109,11 +109,7 @@ def series_text(values: Sequence[float]) -> str:
     Returns:
         The series' text.
     """
-    return (
-        "["
-        + ", ".join("0" if value == 0 and not math.copysign(1, value) < 0 else repr(value) for value in values)
-        + "]"
-    )
+    return "[" + ", ".join("0" if value == 0 and math.copysign(1, value) > 0 else repr(value) for value in values) + "]"
 
 
 def parse_question(text: str, task: SourceTask) -> tuple[Question, tuple[list[float], ...]]:

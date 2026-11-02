@@ -87,6 +87,9 @@ class Row:
     """A digest of the row's question about its series: task, question type, question and ``input_ts``.
     Rows with equal digests ask the same question about the same series, whatever their context says:
     some UCR series are published under two dataset names."""
+    ambiguous_answer: bool
+    """Whether another answer is as right as the published one: two of a puzzle's patches are equal,
+    or another choice repeats the right choice's series or text."""
 
     @property
     def format(self) -> QuestionFormat:
@@ -110,14 +113,15 @@ class Row:
         try:
             text = {column: _text(values.get(column), column) for column in _READ_COLUMNS}
             task = _enum(SourceTask, text["task"], "task")
-            question, _ = parse_question(text["question"], task)
+            question, printed = parse_question(text["question"], task)
+            answer = _answer(text["answer"], question)
             entries = context_entries(task, question.format)
             return cls(
                 ref=ref,
                 task=task,
                 question_type=_enum(QuestionType, text["question_type"], "question_type"),
                 question=question,
-                answer=_answer(text["answer"], question),
+                answer=answer,
                 input_lengths=tuple(len(series) for series in parse_inputs(text["input_ts"], task)),
                 meta_info=_context(text["meta_info"], entries, "meta_info"),
                 domain=_context(text["domain"], entries, "domain"),
@@ -125,6 +129,7 @@ class Row:
                 question_digest=hashlib.blake2b(
                     "\0".join(text[column] for column in _QUESTION_COLUMNS).encode(), digest_size=16
                 ).digest(),
+                ambiguous_answer=_ambiguous_answer(question, printed, answer),
             )
         except (ValueError, RecursionError) as exc:
             raise TimeFValidationError(f"{ref.context}: {exc}") from exc
@@ -174,6 +179,27 @@ def _answer(answer: str, question: Question) -> str:
     elif answer not in question.letters:
         raise TimeFValidationError(f"the answer {answer!r} is not one of the question's letters {question.letters}")
     return answer
+
+
+def _ambiguous_answer(question: Question, printed: tuple[list[float], ...], answer: str) -> bool:
+    """Return whether another answer is as right as the published one, because two candidates are equal.
+
+    A puzzle has another right order when two of its patches are equal: swapping them rebuilds the
+    same sequence. A multiple-choice answer has another right letter when another choice prints the
+    same series, or reads the same text, as the published one. A true-or-false answer is never ambiguous.
+
+    Returns:
+        Whether only the published answer scores although another one is as right.
+    """
+    candidates: dict[str, tuple[float, ...] | str] = dict(question.choices)
+    for label, values in zip(question.series_labels, printed, strict=True):
+        if label is not None:
+            candidates[label] = tuple(values)
+    if question.format is QuestionFormat.PUZZLING:
+        return len(set(candidates.values())) < len(candidates)
+    if question.format is QuestionFormat.MULTIPLE_CHOICE:
+        return sum(candidate == candidates[answer] for candidate in candidates.values()) > 1
+    return False
 
 
 def _context(text: str, entries: int | None, column: str) -> str:

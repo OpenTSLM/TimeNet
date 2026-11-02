@@ -29,28 +29,42 @@ class SourceIssue(StrEnum):
     question. Every such row also has ``repeated_question`` or ``conflicting_answer``."""
     CONFLICTING_ANSWER = "conflicting_answer"
     """Another row asks the same question about the same series, and expects another answer."""
+    AMBIGUOUS_ANSWER = "ambiguous_answer"
+    """Another answer is as right as the published one, but only the published one scores: two of a
+    puzzle's patches are equal, or another choice prints the same series or text as the right one."""
 
 
 T = TypeVar("T", bound=Task)
+_ISSUE_NAMES = [issue.value for issue in SourceIssue]
 
 
 def without_source_issues(tasks: Iterable[T], issues: Collection[SourceIssue] = tuple(SourceIssue)) -> Iterator[T]:
     """Leave out the tasks whose row has any of ``issues``.
 
+    ``issues`` is checked at the call. Each task is checked when the result reaches it: reading a task
+    that has no ``source_issues`` list of issue names raises ``TimeFValidationError``.
+
     Args:
         tasks: The tasks to filter.
         issues: The issues that exclude a task. All of them by default.
 
-    Yields:
-        Each task whose row has none of ``issues``, in order.
+    Returns:
+        An iterator over each task whose row has none of ``issues``, in order.
 
     Raises:
-        TimeFValidationError: If a task's ``source_issues`` isn't a list of issue names.
-    """  # noqa: DOC502 - raised by _issues_of
-    excluded = {SourceIssue(issue) for issue in issues}
-    for task in tasks:
-        if excluded.isdisjoint(_issues_of(task)):
-            yield task
+        TimeFValidationError: If ``issues`` isn't a collection of issue names.
+    """
+    if isinstance(issues, str):
+        raise TimeFValidationError(f"issues is a collection of issue names, got the text {issues!r}")
+    if not isinstance(issues, Iterable):
+        raise TimeFValidationError(f"issues is a collection of issue names, got {issues!r}")
+    excluded: set[SourceIssue] = set()
+    for issue in issues:
+        # Check the type first: an entry such as a list can't be looked up in a set.
+        if not isinstance(issue, str) or issue not in set(SourceIssue):
+            raise TimeFValidationError(f"unknown source issue {issue!r}, expected one of {_ISSUE_NAMES}")
+        excluded.add(SourceIssue(issue))
+    return (task for task in tasks if excluded.isdisjoint(_issues_of(task)))
 
 
 def _issues_of(task: Task) -> set[SourceIssue]:
@@ -60,9 +74,13 @@ def _issues_of(task: Task) -> set[SourceIssue]:
         The issues the task's metadata names.
 
     Raises:
-        TimeFValidationError: If the metadata value isn't a list of issue names.
+        TimeFValidationError: If the metadata has no such list, so the task's issues are unknown.
     """
-    found = task.metadata.get(TaskKey.SOURCE_ISSUES, [])
+    if TaskKey.SOURCE_ISSUES not in task.metadata:
+        raise TimeFValidationError(
+            f"task metadata has no {TaskKey.SOURCE_ISSUES.value!r} list, so its source issues are unknown"
+        )
+    found = task.metadata[TaskKey.SOURCE_ISSUES]
     message = f"task metadata {TaskKey.SOURCE_ISSUES.value!r} must list issue names, got {found!r}"
     if not isinstance(found, list):
         raise TimeFValidationError(message)

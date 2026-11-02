@@ -1,7 +1,8 @@
 """The Records: one per series a row gives a model, its input series first, then each series its question prints.
 
 Each Record has one Source and one lazy Signal on an ordinal axis. The release gives no timestamps or
-units: every input series is z-score normalized and printed to 4 decimals (paper Section 3.3), and a
+units: the paper says every input series is z-score normalized and printed to 4 decimals (Section 3.3;
+the README counts the rows where it isn't), and a
 data transformation question's series are transforms of such series. A Signal rereads its row from the
 split file when read.
 

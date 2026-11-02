@@ -10,7 +10,7 @@ from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.index import ReleaseIndex
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.keys import AnnotationKey
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.records import ReleaseRecords, SeriesLoader
-from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.release import PINNED_INVENTORY, InventoryKey, SourceSplit
+from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.release import InventoryKey, SourceSplit
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.rows import Row
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.tasks import (
     BUILDERS,
@@ -53,7 +53,7 @@ class TSAQADatasetLoader:
         cls,
         refs: Iterable[HubFileRef],
         *,
-        inventory: Mapping[SourceSplit, Mapping[InventoryKey, int]] | None = PINNED_INVENTORY,
+        inventory: Mapping[SourceSplit, Mapping[InventoryKey, int]],
     ) -> Self:
         """Read and check each split file once, and build one lazy Record per series of each row.
 
@@ -62,7 +62,8 @@ class TSAQADatasetLoader:
 
         Args:
             refs: The downloaded split files.
-            inventory: Each file's pinned row counts, or ``None`` to skip the check, as test fixtures do.
+            inventory: Each split's expected row counts, by task, published type and format. Every file
+                read needs an entry.
 
         Returns:
             The loaded release.

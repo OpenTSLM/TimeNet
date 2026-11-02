@@ -27,9 +27,10 @@ The paper (Section 3) defines six tasks in two groups:
 
 TF is true-or-false, MC multiple-choice and PZ puzzling (Section 3.1). GPT-4o writes the
 characterization and comparison questions, and a weighted vote of four models sets their answers
-(Appendix B.3). The other tasks use templates (Appendix B.5 to B.8). Every series is z-score
-normalized and printed to 4 decimals, and, except for classification, is 32 to 256 values long
-(Section 3.3).
+(Appendix B.3). The other tasks use templates (Appendix B.5 to B.8). The paper says every series is
+z-score normalized and printed to 4 decimals, and, except for classification, is 32 to 256 values long
+(Section 3.3). Some are not normalized, as [Questions the inputs can't answer](#questions-the-inputs-cant-answer)
+counts.
 
 ### Files and columns
 
@@ -223,10 +224,85 @@ own `dataset` and `meta_info`, so they differ only in context.
 ### Conflicting answers
 
 550 rows ask the same question about the same series as another row, but expect another answer.
-532 are puzzles whose patches repeat, as on a flat stretch. When patches are identical, more than
-one order is right, but only the published one scores. 935 puzzles in all have two or more
-identical patches. The other conflicts are 11 temporal relationship and 5 data transformation
-true-or-false questions, and 2 classification questions.
+532 are puzzles whose patches repeat, as on a flat stretch. The other conflicts are 11 temporal
+relationship and 5 data transformation true-or-false questions, and 2 classification questions.
+
+### Ambiguous answers
+
+975 rows have another answer that is as right as the published one, but only the published one
+scores. The connector flags them `ambiguous_answer`:
+
+- 935 puzzles have two or more identical patches, so more than one order rebuilds the sequence.
+  They include the 532 conflicting puzzles.
+- 39 multiple-choice questions print the right choice's series again as another choice: 21 data
+  transformation and 18 temporal relationship questions.
+- 1 comparison question (test row 28172) offers the right choice's text twice.
+
+### Questions the inputs can't answer
+
+The paper says every series is z-score normalized. In 57,333 of the 60,000 comparison and
+characterization rows, every input is: its mean is within 0.01 of 0 and its standard deviation
+(over all values) is within 0.01 of 1. The other 2,667 rows are not: 1,665 have a flat input whose
+values are all 0, and 1,002 have an input with a standard deviation from 0.91 to 0.99. Some of the
+questions on z-scored inputs ask about the scale that z-scoring removes. GPT-4o writes them, and a vote of four models sets their answers (Appendix B.3), so an
+answer isn't computed from the series. The connector keeps these rows as published, and no source
+issue flags them. The table counts only rows whose inputs are all z-scored:
+
+| Question | Train | Val | Test | Total |
+| --- | --- | --- | --- | --- |
+| Which of two series has the higher variance or standard deviation | 636 | 101 | 206 | 943 |
+| Which absolute number describes the values, such as a range or a peak | 469 | 66 | 120 | 655 |
+
+- **Spread comparisons.** In all 943 rows both inputs have standard deviation 1, so the inputs
+  can't tell the series apart. The unread `raw_ts` column doesn't explain the answers either. The
+  check covers the 536 rows whose question names the two series as "time series 1" and "time series
+  2" (or "first" and "second"), so that an answer maps to one series. In 179 of 325 true-or-false rows
+  and 116 of 211 multiple-choice rows, the answer follows the raw series' order of standard
+  deviation, close to chance. The other 407 rows name their series another way, such as by domain, so
+  the check skips them. A spread question about a change inside a series, such as a variance shift,
+  can be answered and isn't counted.
+- **Absolute numbers.** In 285 of the 655 rows, the right number is one of the input's values or its
+  maximum, minimum, mean, standard deviation, variance or range, so the input can answer it. 14 match
+  only `raw_ts`. 356 match neither: 115 of them carry a physical unit, such as `From -8.86 mm to 3.19
+  mm` or `1.5 kW`, which a z-scored input can't show. The other 241 may be statistics that this count
+  doesn't compute, such as the number of peaks.
+
+The counts read each question's text, so a question that words its scale differently isn't counted.
+The rules, applied to comparison and characterization rows whose inputs are all z-scored:
+
+- A **spread comparison** is a comparison whose question says "higher", "greater", "larger", "lower",
+  "smaller", "less" or "more" next to "variance", "standard deviation", "variability" or "spread". It
+  must not contain "shift", "change", "local", "rolling", "within", "half", "segment", "window" or
+  "revert".
+- An **absolute-number question** is a multiple-choice question that names a statistic (such as
+  "standard deviation", "variance", "mean", "range", "maximum", "minimum", "peak" or "amplitude")
+  and offers three or more choices that are all numbers, with or without a unit.
+- A right number is **found in the input** when it is within 0.05% of one of the input's values, or
+  within 0.5% of its maximum, minimum, mean, standard deviation, variance or range. "Found in
+  `raw_ts`" uses the same test on `raw_ts`.
+- A series is **shared** when its published values are the same, as JSON text, in a row of another
+  split.
+
+### Series shared across splits
+
+10,110 rows have an input series that is also the input of a row in another split: 5,764 train, 1,565
+validation and 2,781 test rows. 4,504 of them ask the same question about it, and the connector flags
+them `repeated_across_splits` (see [Questions repeated in the release](#questions-repeated-in-the-release)).
+The other 5,606 ask another question, so a model can train on a test series under another question,
+and no source issue flags them:
+
+| Task | Same question | Another question only | Total |
+| --- | --- | --- | --- |
+| Classification | 3,440 | 1,906 | 5,346 |
+| Comparison | 0 | 1,438 | 1,438 |
+| Temporal relationship | 408 | 539 | 947 |
+| Characterization | 2 | 899 | 901 |
+| Data transformation | 22 | 824 | 846 |
+| Anomaly detection | 632 | 0 | 632 |
+
+The counts compare each input series exactly, so a comparison counts when either of its two series
+is shared. 3,377 distinct series are shared. A series cut from the same source at another offset
+isn't counted, because the release names no source sequence.
 
 ### Other notes
 
@@ -253,8 +329,11 @@ none. The issues are the values of `issues.SourceIssue`:
 | `repeated_question` | 8,635 | Another row asks the same question about the same series, with the same answer |
 | `repeated_across_splits` | 4,504 | A copy is in another split |
 | `conflicting_answer` | 550 | Another row asks the same question about the same series, with another answer |
+| `ambiguous_answer` | 975 | Another answer is as right as the published one |
 
-18,930 tasks have at least one issue. The connector keeps them all.
+19,367 tasks have at least one issue. The connector keeps them all. No issue flags the
+[questions the inputs can't answer](#questions-the-inputs-cant-answer), or the
+[series shared across splits](#series-shared-across-splits) under another question.
 `issues.without_source_issues` leaves them out, and the connector doesn't call it:
 
 ```python
@@ -264,13 +343,15 @@ from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.issues import (
 )
 
 # Leave out the test questions a model may have seen in training,
-# and the ones with more than one right answer.
+# the ones whose copies expect another answer, and the ones with
+# more than one right answer.
 clean = list(
     without_source_issues(
         tasks,
         issues=[
             SourceIssue.REPEATED_ACROSS_SPLITS,
             SourceIssue.CONFLICTING_ANSWER,
+            SourceIssue.AMBIGUOUS_ANSWER,
         ],
     )
 )
@@ -280,20 +361,10 @@ Report which issues were left out, and how many tasks remain, with any score.
 
 ## Data flow and validation
 
-A build reads each file in stages, one module each:
-
-1. `rows.py` validates every row as a strict `Row`:
-   - `questions.py` reads its question against its task's template;
-   - the answer must be one of the question's letters;
-   - every series must be a nonempty list of finite numbers.
-
-   A row keeps its series' lengths, not their values.
-2. `index.py` checks each file's rows against the pinned counts in `release.py`, by task, published
-   type and format. It then finds each row's source issues.
-3. `records.py` builds the Records. Their values stay in the files. A Signal rereads its row when
-   read, holding one file's `input_ts` and `question` columns at a time, and fails if the row no
-   longer holds the series it was built from.
-4. `tasks.py` and `request.py` build each task. The loader streams them.
+A build validates every row against its task's template, checks each file's rows against the
+pinned counts in `release.py`, and keeps the series in the files until they are written. Each
+module's docstring describes its stage: `rows.py`, `index.py`, `records.py`, then `tasks.py` and
+`request.py`.
 
 The tests read a small fixture release, real rows of the pinned release with all their columns
 (`tests/release_fixtures.py` names each one).

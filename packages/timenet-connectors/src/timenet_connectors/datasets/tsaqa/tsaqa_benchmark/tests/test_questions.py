@@ -94,6 +94,12 @@ def test_series_text_spells_zero_as_the_authors_do():
             "the instruction offers",
         ),
         ("Which is it?\n\nChoices:\nA: x\nB: y\n", SourceTask.CHARACTERIZATION, "Respond ONLY"),
+        # An extra blank line before the choices: the instruction must end the stem.
+        (
+            "Which is it?\nRespond ONLY with the letter of the correct choice (A, B).\n\n\nChoices:\nA: x\nB: y\n",
+            SourceTask.CHARACTERIZATION,
+            "ends with the 'Respond ONLY",
+        ),
         (
             f"Determine whether the given time series contains anomalies.\n{_TF}",
             SourceTask.CLASSIFICATION,

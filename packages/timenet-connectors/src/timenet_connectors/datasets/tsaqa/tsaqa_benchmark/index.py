@@ -32,23 +32,27 @@ class ReleaseIndex:
     def from_files(
         cls,
         paths: Mapping[SourceSplit, Path],
-        inventory: Mapping[SourceSplit, Mapping[InventoryKey, int]] | None,
+        inventory: Mapping[SourceSplit, Mapping[InventoryKey, int]],
     ) -> Self:
         """Read and check each file once, in :class:`SourceSplit` order.
 
         Args:
             paths: The local path of each split file to read, at least one.
-            inventory: Each file's pinned row counts, or ``None`` to skip the check, as test fixtures do.
+            inventory: Each split's expected row counts, by task, published type and format. Every file
+                read needs an entry.
 
         Returns:
             The index.
 
         Raises:
-            TimeFValidationError: If no file is given, a row is malformed, or a file's rows differ from
-                its pinned inventory.
+            TimeFValidationError: If no file is given, a file's split has no inventory entry, a row is
+                malformed, or a file's rows differ from its inventory.
         """
         if not paths:
             raise TimeFValidationError("TSAQA needs at least one of its split files")
+        missing = [split.value for split in SourceSplit if split in paths and split not in inventory]
+        if missing:
+            raise TimeFValidationError(f"the inventory has no row counts for the split files {missing}")
         rows: list[Row] = []
         for split in SourceSplit:
             if split not in paths:
@@ -57,7 +61,7 @@ class ReleaseIndex:
             for row in read_rows(paths[split], split):
                 counts[row.task, row.question_type, row.format] += 1
                 rows.append(row)
-            check_inventory(paths[split], counts, None if inventory is None else inventory[split])
+            check_inventory(paths[split], counts, inventory[split])
         return cls(dict(paths), tuple(rows), _issues(rows))
 
     def issues_of(self, row: Row) -> frozenset[SourceIssue]:
@@ -66,7 +70,7 @@ class ReleaseIndex:
 
 
 def _issues(rows: list[Row]) -> dict[RowRef, frozenset[SourceIssue]]:
-    """Find each row's source issues: a mislabelled question type, and copies of its question elsewhere.
+    """Find each row's source issues: a mislabelled question type, an ambiguous answer, and copies of its question.
 
     Returns:
         The issues of each row that has any.
@@ -79,6 +83,8 @@ def _issues(rows: list[Row]) -> dict[RowRef, frozenset[SourceIssue]]:
         found: set[SourceIssue] = set()
         if row.question_type is not row.format.question_type:
             found.add(SourceIssue.QUESTION_TYPE_MISMATCH)
+        if row.ambiguous_answer:
+            found.add(SourceIssue.AMBIGUOUS_ANSWER)
         for other in copies[row.question_digest]:
             if other is row:
                 continue

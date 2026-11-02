@@ -44,18 +44,18 @@ InventoryKey = tuple[SourceTask, QuestionType, QuestionFormat]
 """A row's published ``task`` and ``question_type``, and the format its question has."""
 
 
-def check_inventory(path: Path, found: Counter[InventoryKey], pinned: Mapping[InventoryKey, int] | None) -> None:
+def check_inventory(path: Path, found: Counter[InventoryKey], pinned: Mapping[InventoryKey, int]) -> None:
     """Compare one file's rows, counted by task, published type and format, with its pinned inventory.
 
     Args:
         path: The file, for the error message.
         found: The file's rows, counted.
-        pinned: The pinned counts, or ``None`` to skip the check, as test fixtures do.
+        pinned: The pinned counts.
 
     Raises:
         TimeFValidationError: If the counts differ from the pinned release's.
     """
-    if pinned is not None and dict(found) != dict(pinned):
+    if dict(found) != dict(pinned):
         differs = sorted(
             f"{'/'.join(key)}: expected {pinned.get(key, 0)}, found {found.get(key, 0)}"
             for key in set(found) | set(pinned)

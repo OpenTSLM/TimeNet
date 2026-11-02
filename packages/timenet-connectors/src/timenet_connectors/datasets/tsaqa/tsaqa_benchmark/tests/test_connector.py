@@ -1,5 +1,6 @@
 from collections import Counter
 from collections.abc import Mapping
+from dataclasses import replace
 import json
 from pathlib import Path
 import re
@@ -11,6 +12,7 @@ import pytest
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.json import JsonValue
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
 from timenet.types import AnswerTask, ClassificationTask, Split
@@ -54,10 +56,12 @@ _FIXTURE_INVENTORY: dict[SourceSplit, dict[InventoryKey, int]] = {
 _EXPECTED_ISSUES = {
     ("train.parquet", 12): ["question_type_mismatch"],
     ("train.parquet", 13): ["question_type_mismatch"],
+    # Four equal flat patches, so every order of them is right.
+    ("train.parquet", 14): ["ambiguous_answer"],
     ("train.parquet", 15): ["repeated_across_splits", "repeated_question"],
-    ("train.parquet", 16): ["conflicting_answer", "repeated_across_splits"],
+    ("train.parquet", 16): ["ambiguous_answer", "conflicting_answer", "repeated_across_splits"],
     ("val.parquet", 0): ["repeated_across_splits", "repeated_question"],
-    ("test.parquet", 0): ["conflicting_answer", "repeated_across_splits"],
+    ("test.parquet", 0): ["ambiguous_answer", "conflicting_answer", "repeated_across_splits"],
 }
 _PRINTED_SERIES = re.compile(r"^(?:[A-D]: )?(\[[-0-9., e]*\])$", re.MULTILINE)
 
@@ -162,7 +166,7 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     }
 
 
-def test_task_kinds_and_issue_filter():
+def test_each_question_format_has_its_task_type():
     dataset = _FixtureConnector().convert(_refs())
     kinds = Counter((type(task).__name__, task.metadata["question_format"]) for task in dataset.iter_tasks())
     assert kinds == {
@@ -170,8 +174,102 @@ def test_task_kinds_and_issue_filter():
         ("AnswerTask", "multiple_choice"): 8,
         ("AnswerTask", "puzzling"): 3,
     }
+
+
+def test_issue_filter_leaves_out_the_tasks_with_the_named_issues():
+    dataset = _FixtureConnector().convert(_refs())
     clean = list(without_source_issues(dataset.iter_tasks(), issues=[SourceIssue.REPEATED_ACROSS_SPLITS]))
-    assert len(clean) == 19 - 4
+    assert len(clean) == 15
+
+
+@pytest.mark.parametrize(
+    ("metadata", "message"),
+    [
+        ({}, "has no 'source_issues' list"),
+        ({"source_issues": "repeated_question"}, "must list issue names, got 'repeated_question'"),
+        ({"source_issues": ["unknown"]}, r"must list issue names, got \['unknown'\]"),
+    ],
+)
+def test_issue_filter_rejects_a_task_whose_issues_are_unknown(metadata, message):
+    task = next(iter(_FixtureConnector().convert(_refs()).iter_tasks()))
+    clean = without_source_issues([replace(task, metadata=metadata)])
+    with pytest.raises(TimeFValidationError, match=message):
+        list(clean)
+
+
+@pytest.mark.parametrize(
+    ("issues", "message"),
+    [
+        ("repeated_question", "got the text 'repeated_question'"),
+        # An empty text would otherwise exclude nothing.
+        ("", "got the text ''"),
+        # An empty YAML value, or a number, is not a collection at all.
+        (None, "issues is a collection of issue names, got None"),
+        (5, "issues is a collection of issue names, got 5"),
+        (["unknown"], "unknown source issue 'unknown'"),
+        # One level of nesting too many, as from a config file: not a name, and not hashable.
+        ([["repeated_question"]], r"unknown source issue \['repeated_question'\]"),
+    ],
+)
+def test_issue_filter_rejects_issues_that_are_not_issue_names_at_the_call(issues, message):
+    with pytest.raises(TimeFValidationError, match=message):
+        without_source_issues([], issues=issues)
+
+
+def _issues_after_rewrite(tmp_path: Path, position: int, printed: str, replacement: str) -> JsonValue:
+    """Replace one text in a train row's question, convert the fixtures, and return that row's issues."""
+    shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
+    question = pq.read_table(tmp_path / "train.parquet").column("question")[position].as_py()
+    assert printed in question
+    _rewrite(tmp_path / "train.parquet", position, question=question.replace(printed, replacement))
+    tasks = _FixtureConnector().convert(_refs(tmp_path)).iter_tasks()
+    return next(task for task in tasks if _row_of(task) == ("train.parquet", position)).metadata["source_issues"]
+
+
+@pytest.mark.parametrize(
+    ("printed", "replacement", "issues"),
+    [
+        # D prints the right choice B's series, so D is as right as B.
+        ("D: [1.0069, 0.1787, 1.3382, 0.6093, 1.3713, 0.2449]", "D: [0, 0, 0, 0, 0, 0]", ["ambiguous_answer"]),
+        # A prints C's series, but both are wrong, so only B is right.
+        (
+            "A: [0.4973, 0.1671, -0.2276, -0.7165, -1.2239, -1.7123]",
+            "A: [-0.873, -0.4457, 0.8337, 2.7393, 0.8221, -0.3572]",
+            [],
+        ),
+    ],
+)
+def test_a_series_choice_makes_the_answer_ambiguous_only_when_it_equals_the_right_one(
+    tmp_path, printed, replacement, issues
+):
+    # Train row 11 is a multiple-choice temporal relationship question whose answer B is a flat series.
+    assert _issues_after_rewrite(tmp_path, 11, printed, replacement) == issues
+
+
+def test_a_text_choice_equal_to_the_right_one_makes_the_answer_ambiguous(tmp_path):
+    # Train row 5 is a multiple-choice comparison question whose answer is A.
+    printed = "B: Lag persistence is high and consistent."
+    assert _issues_after_rewrite(tmp_path, 5, printed, "B: There is no persistence in lags.") == ["ambiguous_answer"]
+
+
+_FLAT_PATCHES = "\n".join(f"{letter}: [0, 0, 0, 0, 0, 0]" for letter in "ABCD")
+
+
+@pytest.mark.parametrize(
+    ("patches", "issues"),
+    [
+        # Four different patches: only the published order rebuilds the sequence.
+        (("1.0", "2.0", "3.0", "4.0"), []),
+        # Only A and C are equal: swapping them is a second right order.
+        (("1.0", "2.0", "1.0", "4.0"), ["ambiguous_answer"]),
+    ],
+)
+def test_a_puzzle_is_ambiguous_only_when_two_patches_are_equal(tmp_path, patches, issues):
+    # Train row 14 is a puzzle whose four patches are all the flat series.
+    replacement = "\n".join(
+        f"{letter}: [{value}, 0, 0, 0, 0, 0]" for letter, value in zip("ABCD", patches, strict=True)
+    )
+    assert _issues_after_rewrite(tmp_path, 14, _FLAT_PATCHES, replacement) == issues
 
 
 def test_each_format_has_its_own_method():
@@ -229,6 +327,22 @@ def test_declares_the_pinned_release():
 def test_pinned_inventory_mismatch_fails():
     with pytest.raises(TimeFValidationError, match="differ from the pinned release"):
         TSAQAConnector().convert(_refs())
+
+
+def test_a_file_that_names_no_split_fails():
+    with pytest.raises(TimeFValidationError, match="'dev' is not a TSAQA split"):
+        TSAQADatasetLoader.parse_from([HubFileRef(_FIXTURES / "val.parquet", "dev")], inventory=_FIXTURE_INVENTORY)
+
+
+def test_a_split_without_inventory_counts_fails():
+    inventory = {split: counts for split, counts in _FIXTURE_INVENTORY.items() if split is not SourceSplit.VAL}
+    with pytest.raises(TimeFValidationError, match=r"no row counts for the split files \['val'\]"):
+        TSAQADatasetLoader.parse_from(_refs(), inventory=inventory)
+
+
+def test_no_split_file_fails():
+    with pytest.raises(TimeFValidationError, match="needs at least one of its split files"):
+        TSAQADatasetLoader.parse_from([], inventory=_FIXTURE_INVENTORY)
 
 
 def _rewrite(path: Path, position: int, **columns: str) -> None:
