@@ -119,6 +119,16 @@ payload sources:
 A version lists every payload source it reads from, so a registry resolves only those, never the
 sources' own sources.
 
+A client of a local registry prepares the version and its payload sources before a read. For each
+of these releases, the client reuses a complete copy, or copies the release from `fetch_from`. If
+`auto_build` is set, the client can also build the release. If the client cannot get a release,
+the read raises an error. The client builds a payload source with its own connector, at the exact
+version of the source.
+
+If `fetch_from` is set, the client repairs a damaged copy from that registry. Without `fetch_from`,
+the read raises `TimeNetFileError` for a damaged copy. A remote client never runs connector code.
+It rejects `fetch_from`. See [Open, load, or download](client.md#open-load-or-download).
+
 ## Writing to a registry
 
 A `WritableRegistry` adds one write method to the read contract. As a result,

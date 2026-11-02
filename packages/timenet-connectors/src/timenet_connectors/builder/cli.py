@@ -140,7 +140,9 @@ def build(  # noqa: PLR0913, PLR0917 (a typer command: one parameter per option)
     registry. ``--fetch-from`` names a registry to copy a missing parent from. ``--build-parents``
     builds a missing parent from its own connector. If neither option obtains a missing parent, the
     build fails before any download. The build prepares every parent before the dataset itself. It
-    never builds a parent over a release that the output already holds.
+    never builds a parent over a release that the output already holds. If the output already holds
+    the version, the build needs only the payload sources of the version. It prepares them the same
+    way as a parent.
 
     ``--values-backend`` overrides the values-plane storage the connector declares. This process
     resolves the connector's default for an in-process build; an isolated child resolves its own,
@@ -219,9 +221,11 @@ def build_one(  # noqa: PLR0913
     missing parent, the build fails before any download. A parent builds the same way as this
     dataset. A parent never builds with ``force``. If another builder backend claims a parent, the
     ``build`` method of that backend builds the parent with its pins. If ``force`` is not set and
-    the output already holds the version, no connector runs. The connector runs in an environment
-    built from its requirements. If isolation is off, the connector runs in this interpreter. A
-    local output gets a version directory. A remote output gets a published version.
+    the output already holds the version, the build prepares only the missing payload sources of
+    the version. In that case, the build does not run the connector of this dataset. The connector
+    runs in an environment built from its requirements. If isolation is off, the connector runs in
+    this interpreter. A local output gets a version directory. A remote output gets a published
+    version.
 
     Args:
         dataset_id: The dataset id.
