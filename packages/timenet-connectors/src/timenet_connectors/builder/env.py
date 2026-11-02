@@ -7,7 +7,8 @@ environment. uv owns resolution and caching. A repeat build with an unchanged re
 cache hit.
 """
 
-from collections.abc import Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import Distribution, PackageNotFoundError
 import json
@@ -16,6 +17,7 @@ from pathlib import Path
 import shlex
 import subprocess  # noqa: S404 - the command is a fixed argument vector
 import sys
+import tempfile
 import threading
 from urllib.parse import urlparse
 from urllib.request import url2pathname
@@ -23,6 +25,8 @@ from urllib.request import url2pathname
 from uv import find_uv_bin
 
 from timenet.errors import TimeNetBuildError
+from timenet.manifest import PayloadSource
+from timenet.types.references import DatasetRef
 from timenet_connectors.discovery import requirements_for
 
 
@@ -105,6 +109,7 @@ def run_isolated(  # noqa: PLR0913
     keep_cache: bool = False,
     values_backend: str | None = None,
     quiet: bool = False,
+    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
     """Build a dataset in its own environment and return what the child printed on stdout.
 
@@ -124,6 +129,9 @@ def run_isolated(  # noqa: PLR0913
             ``"zarr"``). ``None`` forwards nothing, leaving the child on the connector's
             declared backend.
         quiet: Suppress the child's status output, as ``--quiet`` does in this process.
+        pinned_by: The releases that already read files of the dataset, with their pins. The child
+            receives them in a file through the hidden ``--pinned-by`` option, and publishes only
+            if it reproduces each pinned file.
 
     Returns:
         The child's last non-empty stdout line: a version directory or a published version.
@@ -140,10 +148,14 @@ def run_isolated(  # noqa: PLR0913
         argv.append("--keep-cache")
     if values_backend is not None:
         argv += ["--values-backend", values_backend]
-    command = uv_command(env_spec(dataset_id, values_backend=values_backend), argv)
+    spec = env_spec(dataset_id, values_backend=values_backend)
     # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
     child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
-    stdout, stderr, returncode = _run_build(command, child_env)
+    with _pins_file(pinned_by) as pins:
+        if pins is not None:
+            argv += ["--pinned-by", str(pins)]
+        command = uv_command(spec, argv)
+        stdout, stderr, returncode = _run_build(command, child_env)
     if returncode != 0:
         tail = "\n".join(stderr.splitlines()[-15:]).strip()
         detail = f"\n{tail}" if tail else " The child produced no error output."
@@ -154,6 +166,23 @@ def run_isolated(  # noqa: PLR0913
     if not lines:
         raise TimeNetBuildError(f"building {dataset_id!r} printed no version")
     return lines[-1]
+
+
+@contextmanager
+def _pins_file(pinned_by: Mapping[DatasetRef, PayloadSource] | None) -> Generator[Path | None]:
+    """Write the pins for an isolated child to a temporary JSON file, keyed by the reading release.
+
+    Yields:
+        The file while the child runs, or ``None`` when nothing pins the build.
+    """
+    if not pinned_by:
+        yield None
+        return
+    with tempfile.TemporaryDirectory(prefix="timenet-pins-") as directory:
+        path = Path(directory) / "pins.json"
+        pins = {str(release): pinned.model_dump(mode="json") for release, pinned in pinned_by.items()}
+        path.write_text(json.dumps(pins), encoding="utf-8")
+        yield path
 
 
 def _run_build(command: list[str], env: dict[str, str]) -> tuple[str, str, int]:
