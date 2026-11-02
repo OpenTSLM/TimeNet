@@ -18,13 +18,14 @@ import uuid
 
 import httpx
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetFileError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.registry._paths import safe_version_path
 from timenet.registry.base import ProgressCallback
 from timenet.registry.remote._http import RegistryHttpClient, _download_path, _raise_for_status, _redirect_target
 from timenet.registry.shared import complete_copy
+from timenet.types.references import DatasetRef
 
 
 _CHUNK_BYTES = 1 << 20
@@ -97,9 +98,13 @@ async def _download_all(  # noqa: PLR0913, PLR0917
         staging: The staging directory to write into.
         max_concurrency: Maximum concurrent file downloads.
         progress_cb: Called with each chunk's byte count as it is written, or ``None``.
-    """
+
+    Raises:
+        TimeNetFileError: If a downloaded file's checksum or size differs from its manifest record.
+    """  # noqa: DOC502 - raised by each download task and by _stream_one
     semaphore = asyncio.Semaphore(max_concurrency)
     headers = http.api_headers()
+    release = DatasetRef.parse(f"{dataset_id}@{version}")
     async with http.new_async_client() as client:
 
         async def one(part: FilePart) -> None:
@@ -107,9 +112,12 @@ async def _download_all(  # noqa: PLR0913, PLR0917
                 # Reject a manifest path that would escape the staging dir before writing anything.
                 dest = safe_version_path(staging, part.path)
                 url = await _resolve(client, headers, dataset_id, version, part.path)
-                await _stream_one(client, url, dest, expected_checksum=part.checksum, progress_cb=progress_cb)
-                if dest.stat().st_size != part.size:
-                    raise TimeFFormatError(f"size mismatch for {part.path!r} in {dataset_id}@{version}")
+                await _stream_one(client, url, dest, release=release, record=part, progress_cb=progress_cb)
+                size = dest.stat().st_size
+                if size != part.size:
+                    raise TimeNetFileError(
+                        release, f"download of {release}", part.path, f"{part.size:,} bytes", f"{size:,} bytes"
+                    )
 
         await asyncio.gather(*(one(part) for part in files))
 
@@ -135,12 +143,13 @@ async def _resolve(client: httpx.AsyncClient, headers: dict, dataset_id: str, ve
     return _redirect_target(response, path)
 
 
-async def _stream_one(
+async def _stream_one(  # noqa: PLR0913
     client: httpx.AsyncClient,
     url: str,
     dest: Path,
     *,
-    expected_checksum: str | None = None,
+    release: DatasetRef,
+    record: FilePart,
     progress_cb: ProgressCallback | None = None,
 ) -> None:
     """Stream one presigned URL to ``dest`` via a ``.part`` temp file, renamed on success.
@@ -149,15 +158,16 @@ async def _stream_one(
         client: The async HTTP client.
         url: The presigned URL.
         dest: The target file path.
-        expected_checksum: The manifest's ``sha256:<hex>`` digest to verify the bytes against.
+        release: The release that the file belongs to, for the error.
+        record: The manifest record of the file, whose ``sha256:<hex>`` digest the bytes must match.
         progress_cb: Called with each chunk's byte count as it is written, or ``None``.
 
     Raises:
-        TimeFFormatError: If ``expected_checksum`` is set and the downloaded bytes do not match it.
+        TimeNetFileError: If the downloaded bytes do not match the checksum of ``record``.
     """
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.parent / f"{dest.name}.part"
-    digest = hashlib.sha256() if expected_checksum else None
+    digest = hashlib.sha256()
     try:
         async with client.stream("GET", url) as response:
             if response.is_error:
@@ -166,12 +176,12 @@ async def _stream_one(
             with part.open("wb") as handle:
                 async for chunk in response.aiter_bytes(_CHUNK_BYTES):
                     handle.write(chunk)  # buffered write: a fast memcpy, the OS flushes lazily
-                    if digest is not None:
-                        digest.update(chunk)
+                    digest.update(chunk)
                     if progress_cb is not None:
                         progress_cb(len(chunk))
-        if digest is not None and f"sha256:{digest.hexdigest()}" != expected_checksum:
-            raise TimeFFormatError(f"checksum mismatch for {dest.name!r}: expected {expected_checksum}")
+        checksum = f"sha256:{digest.hexdigest()}"
+        if checksum != record.checksum:
+            raise TimeNetFileError(release, f"download of {release}", record.path, record.checksum, checksum)
         part.replace(dest)
     except BaseException:
         part.unlink(missing_ok=True)

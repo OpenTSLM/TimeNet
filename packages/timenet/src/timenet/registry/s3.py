@@ -11,7 +11,7 @@ search are unsupported. Use it to ``store`` and to fetch by an explicit ``org/na
 boto3 is optional. Install the ``timenet[s3]`` extra to use this backend.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 import os
 from pathlib import Path
 import shutil
@@ -26,7 +26,7 @@ from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
-from timenet.manifest import Manifest
+from timenet.manifest import Manifest, PayloadSource
 from timenet.registry._paths import release_dir
 from timenet.registry.lazy_read import LazyReadRegistry
 from timenet.registry.version import DatasetVersion
@@ -157,6 +157,7 @@ class S3Registry(LazyReadRegistry):
         force: bool = False,
         values_backend: str = "parquet",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
+        pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
     ) -> str:
         """Compile a dataset locally and upload it under this registry's prefix.
 
@@ -170,6 +171,8 @@ class S3Registry(LazyReadRegistry):
             force: Publish even if the version is already committed.
             values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
             progress_cb: Optional writer progress callback.
+            pinned_by: The releases that already read files of this release, with their pins. The
+                writer publishes only if it reproduced each pinned file.
 
         Returns:
             The stored version string.
@@ -187,7 +190,12 @@ class S3Registry(LazyReadRegistry):
         try:
             # The writer stages locally but checks every payload source against this registry.
             with TimeFWriter(
-                staging, dataset, values_backend=values_backend, progress_cb=progress_cb, registry=self
+                staging,
+                dataset,
+                values_backend=values_backend,
+                progress_cb=progress_cb,
+                registry=self,
+                pinned_by=pinned_by,
             ) as writer:
                 writer.write()
             version_dir = release_dir(staging, DatasetRef.parse(f"{dataset_id}@{version}"))
