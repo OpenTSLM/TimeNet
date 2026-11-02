@@ -712,8 +712,8 @@ class Signal(SupportsAnnotate):
             A lazy :class:`Signal` that holds the steps the span covers.
 
         Raises:
-            TimeFValidationError: If ``span`` is a point, or a time span on an ordinal series. If the
-                span names other series and not this one, whatever ``clip`` is. If the span reaches
+            TimeFValidationError: If ``span`` is a point, or a time span that selects an ordinal
+                series. If the span names other series and not this one, whatever ``clip`` is. If the span reaches
                 past this series and ``clip`` is false, or covers no step of this series.
         """  # noqa: DOC502 (raised by _slice_range)
         start, stop, offsets = self._slice_range(span, clip=clip)

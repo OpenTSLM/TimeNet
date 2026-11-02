@@ -91,7 +91,7 @@ even when `nullable=True`. Consumers must handle missing data before tensor conv
 `TimeInterval` on the Record timeline or a `StepInterval` that names this Signal.
 
 The span must select the Signal. A `StepInterval` must name it. A `TimeInterval` with no
-`time_series` selects every Signal, but one whose `time_series` lists other Signals only does not
+`time_series` selects every Signal, but one whose `time_series` lists only other Signals does not
 select this one. `slice()` raises `TimeFValidationError` for a span that does not select the Signal,
 and `overlaps_with()` returns `False` for it.
 
@@ -122,8 +122,8 @@ reads less than the whole original only when its values support range reads, as 
 stored values read only the chunks that cover the steps, but a plain loader callable reads all its
 values first.
 
-An ordinal Signal has no timeline. `overlaps_with()` and a `TimeInterval` passed to `slice()` raise
-`TimeFValidationError` on it, so scope an ordinal Signal in steps. `slice()` also raises for a
+An ordinal Signal has no timeline. `overlaps_with()` and `slice()` raise `TimeFValidationError` for
+a `TimeInterval` that selects it, so scope an ordinal Signal in steps. `slice()` also raises for a
 point span.
 
 ## Lazy values

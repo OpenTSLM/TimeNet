@@ -787,18 +787,30 @@ def test_clip_rejects_an_interval_outside_the_series(axis):
 
 def test_clip_cuts_a_step_span_at_the_series_end():
     signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
-    assert signal.slice(StepInterval(time_series=signal, start=4, stop=9), clip=True).to_numpy().tolist() == [4.0, 5.0]
+    part = signal.slice(StepInterval(time_series=signal, start=4, stop=9), clip=True)
+    assert part.to_numpy().tolist() == [4.0, 5.0]
+
+
+def test_clip_rejects_a_step_span_that_starts_past_the_series():
+    signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
     with pytest.raises(TimeFValidationError, match="covers no steps"):
         signal.slice(StepInterval(time_series=signal, start=6, stop=9), clip=True)
-    with pytest.raises(TimeFValidationError, match="not this series"):
-        signal.slice(StepInterval(time_series=_counting(6), start=0, stop=3), clip=True)
 
 
 @pytest.mark.parametrize("clip", [False, True])
-def test_clip_still_rejects_a_point_and_a_time_span_on_an_ordinal_series(clip):
-    signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
+def test_slice_rejects_a_step_span_naming_another_series(clip):
+    with pytest.raises(TimeFValidationError, match="not this series"):
+        _counting(6).slice(StepInterval(time_series=_counting(6), start=0, stop=3), clip=clip)
+
+
+@pytest.mark.parametrize("clip", [False, True])
+def test_clip_still_rejects_a_point(clip):
     with pytest.raises(TimeFValidationError, match="not a point"):
-        signal.slice(TimePoint.seconds(1), clip=clip)
+        _counting(6).slice(TimePoint.seconds(1), clip=clip)
+
+
+@pytest.mark.parametrize("clip", [False, True])
+def test_clip_still_rejects_a_time_span_on_an_ordinal_series(clip):
     ordinal = Signal.from_values([1.0, 2.0], spec=_spec(), name="c", time_axis=OrdinalAxis())
     with pytest.raises(TimeFValidationError, match="no timeline"):
         ordinal.slice(TimeInterval.seconds(0.0, 1.0), clip=clip)
@@ -826,13 +838,16 @@ def test_slice_of_an_irregular_series_reads_its_time_offsets_once():
     assert len(reads) == 2
 
 
-def test_a_time_span_scoped_to_other_series_does_not_select_this_one():
+def test_a_time_span_scoped_to_other_series_does_not_overlap_this_one():
     signal, other = _counting(6, axis=RegularAxis.from_rate_hz(1)), _counting(6, axis=RegularAxis.from_rate_hz(1))
-    interval = TimeInterval.seconds(1, 3, time_series=(other,))
-    assert not signal.overlaps_with(interval)
-    for clip in (False, True):
-        with pytest.raises(TimeFValidationError, match="scoped to other series"):
-            signal.slice(interval, clip=clip)
+    assert not signal.overlaps_with(TimeInterval.seconds(1, 3, time_series=(other,)))
+
+
+@pytest.mark.parametrize("clip", [False, True])
+def test_slice_rejects_a_time_span_scoped_to_other_series(clip):
+    signal, other = _counting(6, axis=RegularAxis.from_rate_hz(1)), _counting(6, axis=RegularAxis.from_rate_hz(1))
+    with pytest.raises(TimeFValidationError, match="scoped to other series"):
+        signal.slice(TimeInterval.seconds(1, 3, time_series=(other,)), clip=clip)
 
 
 def test_a_time_span_scoped_to_other_series_skips_an_ordinal_series():
