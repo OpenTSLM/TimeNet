@@ -22,7 +22,7 @@ from timenet.errors import (
 )
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
-from timenet.format.control_reader import TASK_BATCH_SIZE, DuckDBControlReader
+from timenet.format.control_reader import RECORD_BATCH_SIZE, TASK_BATCH_SIZE, DuckDBControlReader
 from timenet.format.stored_array import ChunkLocation, StoredArray
 from timenet.format.stored_values import (
     ANNOTATION_COLUMNS,
@@ -598,22 +598,47 @@ class TimeFReader:  # noqa: PLR0904 - one public method per kind of read
         record_ids: Iterable[EntityId] | None = None,
         *,
         with_annotations: bool = True,
+        load: LoadPlan = LoadPlan.ALL_LAZY,
+        batch_size: int = RECORD_BATCH_SIZE,
     ) -> Iterator[Record]:
-        """Yield complete records, in a requested ID order or in the release's record order.
+        """Yield complete records a bounded batch at a time, in a requested ID order or in record order.
+
+        The stream builds and loads each batch on its own, before it yields the batch. The records
+        of a batch share the objects that the batch builds. So the signals on one irregular axis
+        share one handle to the time offsets of that axis.
+
+        Batches share nothing. So after the stream yields the objects of a batch, it keeps none of
+        them. It holds one batch of objects at a time. If two batches request one record ID, each
+        batch builds that record as a separate object. The stream checks every requested ID before
+        it builds the first batch.
 
         Args:
             record_ids: IDs to read in result order, or ``None`` for every record in the order of
                 :meth:`record_ids`.
             with_annotations: Whether to build annotations on the records and descendants.
+            load: The kinds of stored values to load into the records that each batch builds. The
+                default loads none.
+            batch_size: The most records that a batch holds. By default, a batch holds up to 1,000
+                records (``RECORD_BATCH_SIZE``). The stream holds one batch at a time, with every
+                value that the plan loaded. So with an eager plan, a smaller batch holds fewer
+                arrays in memory.
 
         Yields:
-            Records whose stored values stay behind their value handles.
+            Records with loaded values for each kind of value that the plan names. Other stored
+            values stay behind their value handles.
         """
         with self._as_format_error(preserve_validation=True):
-            yield from self._control_reader().read_records(
+            for batch in self._control_reader().iter_record_batches(
                 record_ids,
                 with_annotations=with_annotations,
-            )
+                batch_size=batch_size,
+            ):
+                values = ValueLoad(load)
+                values.add(batch)
+                values.run()
+                yield from batch
+                # Hold no batch while the stream builds the next one.
+                del batch
 
     def _import_alias(self, parent: ParentAlias | DatasetRef) -> ParentAlias:
         """Return the alias that ``parent`` names among the manifest's parent cards.
