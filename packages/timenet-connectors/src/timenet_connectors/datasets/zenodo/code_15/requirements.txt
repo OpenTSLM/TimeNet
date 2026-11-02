@@ -1,0 +1,2 @@
+# h5py reads the release's HDF5 parts.
+h5py>=3.10
