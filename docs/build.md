@@ -121,7 +121,10 @@ For each release, the build uses the first of these steps that works:
 3. If `--build-parents` is set, build the release from its own connector.
 
 If no step works, the build stops before any download. The error names the missing release. The
-build prepares each parent before its children.
+build prepares each parent before its children. If the output already holds the requested version
+and `--force` is not set, the build prepares only the missing payload sources of that version. It
+uses the same steps in the same order. The build does not run the connector of the requested
+dataset.
 
 ```bash
 timenet-build build org/name --out .timenet-registry \

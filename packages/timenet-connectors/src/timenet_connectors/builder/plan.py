@@ -164,7 +164,8 @@ class _Graph:
         """Make one step for each release that the plan fetches or builds, in the order of :meth:`order`.
 
         Args:
-            requested: The requested release. It gets no step, because the caller builds it.
+            requested: The requested release. The caller builds it, so it gets no "build" step. If
+                the output holds it, it gets a "fetch" step under the same rule as an opened parent.
 
         Returns:
             The steps, each after the steps of the releases that it depends on.
@@ -174,9 +175,9 @@ class _Graph:
         """  # noqa: DOC502 - order() raises the cycle error
         steps: list[ParentStep] = []
         for reference in self.order():
-            if reference == requested:
-                continue
             release = self.releases[reference]
+            if reference == requested and release.action == "build":
+                continue
             if release.action == "build":
                 steps.append(ParentStep(reference, "build", pinned_by=self.pins.get(reference, {})))
             # A fetch of an opened release also copies each payload source that the output does not
@@ -202,7 +203,8 @@ def plan_parents(
     For each declared parent, a build needs the parent and the payload sources of that parent. It
     does not need the payload sources of those payload sources. The plan visits the declared parents
     of a release only if the plan builds that release. So if the output already holds the requested
-    release, the plan visits its parents only if ``force_build`` is set.
+    release, the plan visits its parents only if ``force_build`` is set. If ``force_build`` is not
+    set, the plan visits only the payload sources of that release.
 
     If the output does not hold a release, the plan fetches it from ``fetch_from``. If ``fetch_from``
     does not hold it either, the plan builds it with the installed connector that declares that
@@ -251,18 +253,29 @@ def plan_parents(
     if card is None:
         raise LookupError(f"no installed connector declares a card for {dataset_id!r}")
     # For a dataset without parents, the plan does not read the output, so the build makes no extra request.
-    if not card.parents or (not force_build and output.exists(card.dataset_id, str(card.dataset_version))):
+    if not card.parents:
         return []
-    if not isinstance(output, LocalRegistry):
+    root = DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)
+    # If the output already holds the requested release, a reader needs only its payload sources to
+    # open it. Its declared parents matter only to a rebuild.
+    held = None if force_build else _manifest(output, root)
+    if held is None and not isinstance(output, LocalRegistry):
         require_open_access(card)
     searched = str(output) if fetch_from is None else f"{output} or {fetch_from}"
     graph = _Graph(output, fetch_from, build_parents=build_parents, searched=searched)
-    root = DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)
-    # The graph holds the requested release before the walk starts. So a parent that declares it
+    # The graph holds the requested release before the walk starts. So a release that depends on it
     # closes a cycle, and the walk does not look it up again.
-    graph.releases[root] = _Release(opened=True, action="build", dependencies=tuple(card.parents.values()))
-    for parent in card.parents.values():
-        graph.visit(parent, root)
+    if held is None:
+        graph.releases[root] = _Release(opened=True, action="build", dependencies=tuple(card.parents.values()))
+        for parent in card.parents.values():
+            graph.visit(parent, root)
+    else:
+        sources = list(held.payload_sources.values())
+        graph.releases[root] = _Release(
+            opened=True, action=None, dependencies=tuple(source.release for source in sources)
+        )
+        for source in sources:
+            graph.visit(source.release, root, source)
     return graph.steps(root)
 
 
