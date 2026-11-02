@@ -1,15 +1,23 @@
 """The build pipeline that turns a connector into a stored dataset."""
 
 from collections.abc import Callable
+from contextlib import ExitStack
 from pathlib import Path
 import shutil
 
 from timenet.config import settings
-from timenet.connectors import BaseConnector
+from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
+from timenet.dataset.composition import _record_parent
 from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.reader import TimeFReader
+from timenet.registry.base import BaseRegistry
+from timenet.registry.dependencies import prepare_local_copy
+from timenet.registry.local import LocalRegistry
 from timenet.registry.writable import WritableRegistry
+from timenet.types import DatasetMetadata
+from timenet.types.reference_keys import ParentAlias
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
@@ -28,9 +36,13 @@ def run_pipeline(  # noqa: PLR0913
 
     This function is idempotent. If the target version is already committed, it skips the expensive
     ``download``, ``convert``, and ``store`` stages and returns the existing directory. Pass ``force``
-    to rebuild it. Otherwise the stages run in order: create the cache directory, ``download`` raw
-    references into it, ``convert`` them into a dataset, ``derive_schema``, ``store``, then delete
-    the cache directory. The engine only writes local files. Publishing to a remote registry is a
+    to rebuild it. Otherwise the stages run in order: create the cache directory, open the declared
+    parents from ``root``, ``download`` raw references into the cache, ``compose`` them into a
+    dataset, check that the dataset has the card that the engine read, record each declared parent
+    in it, ``derive_schema``, ``store``, then delete the cache directory. Parents must already be in
+    ``root``; the engine never fetches or builds them. A card that declares parents needs a
+    connector that overrides ``compose``; otherwise the build raises before it opens a parent or
+    downloads anything. The engine only writes local files. Publishing to a remote registry is a
     separate step.
 
     Args:
@@ -48,7 +60,12 @@ def run_pipeline(  # noqa: PLR0913
 
     Returns:
         The committed version directory.
-    """
+
+    Raises:
+        TimeFValidationError: If the card declares parents and the connector does not override
+            ``compose``, or the dataset that ``compose`` returns has another card than the one that
+            the engine read. The build then stores no release.
+    """  # noqa: DOC502 - raised by _check_composes and _compose
     resolved_backend = _resolve_values_backend(connector, values_backend)
     # Read only the connector's dataset.yaml card, a tiny local file, not the dataset itself. This lets
     # us resolve the version directory and skip the expensive download and convert when it exists.
@@ -57,17 +74,19 @@ def run_pipeline(  # noqa: PLR0913
     committed = (version_dir / MANIFEST_FILE).exists()
     if committed and not force:
         return version_dir
+    _check_composes(connector, metadata)
 
     cache = cache_dir if cache_dir is not None else settings().cache_dir / metadata.dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
-    raw_refs = connector.download(cache)
-    dataset = connector.convert(raw_refs)
-    # Derive the schema before writing. store_dataset() derives one only for a dataset that has none.
-    dataset.derive_schema()
-    # A forced rebuild replaces the committed version only once the new one is ready, so a failed
-    # write keeps the old one.
-    store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb, replace=force)
+    # Open the declared parents before downloading, so a missing parent fails before any raw I/O.
+    with open_parents(metadata, LocalRegistry(root)) as context:
+        dataset = _compose(connector, metadata, cache, context)
+        # Derive the schema before writing. store_dataset() derives one only for a dataset that has none.
+        dataset.derive_schema()
+        # A forced rebuild replaces the committed version only once the new one is ready, so a failed
+        # write keeps the old one.
+        store_dataset(dataset, root, values_backend=resolved_backend, progress_cb=progress_cb, replace=force)
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
     if not keep_cache and cache_dir is None and cache.is_dir():
@@ -90,6 +109,8 @@ def publish_pipeline(  # noqa: PLR0913
     Like :func:`run_pipeline`, but the converted dataset is handed to ``registry.store`` instead of
     written to a local directory, so it also targets a remote or S3 registry. It is idempotent: an
     already-committed version skips the ``download`` and ``convert`` stages and returns unless ``force``.
+    Like :func:`run_pipeline`, it checks after ``compose`` that the dataset has the card that the
+    engine read.
 
     Args:
         connector: The connector to build.
@@ -103,23 +124,108 @@ def publish_pipeline(  # noqa: PLR0913
 
     Returns:
         The published version string.
-    """
+
+    Raises:
+        TimeFValidationError: If the card declares parents and the connector does not override
+            ``compose``, or the dataset that ``compose`` returns has another card than the one that
+            the engine read. Nothing is published then.
+    """  # noqa: DOC502 - raised by _check_composes and _compose
     resolved_backend = _resolve_values_backend(connector, values_backend)
     metadata = connector.metadata()
     dataset_id = metadata.dataset_id
     version = str(metadata.dataset_version)
     if not force and registry.exists(dataset_id, version):
         return version
+    _check_composes(connector, metadata)
 
     cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
     cache.mkdir(parents=True, exist_ok=True)
 
-    dataset = connector.convert(connector.download(cache))
-    dataset.derive_schema()
-    registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
+    with open_parents(metadata, registry) as context:
+        dataset = _compose(connector, metadata, cache, context)
+        dataset.derive_schema()
+        registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb)
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version
+
+
+def open_parents(metadata: DatasetMetadata, registry: BaseRegistry) -> BuildContext:
+    """Open each declared parent of a card from the registry a build writes to.
+
+    A local registry must hold every parent complete, with its payload sources. A remote registry
+    resolves the payload source manifests upfront, and the readers read catalogs and payloads only
+    when the connector needs them. The engine never fetches or builds a parent here.
+
+    Args:
+        metadata: The child dataset card with exact parent references.
+        registry: The registry the child is written to.
+
+    Returns:
+        The opened readers, keyed by parent alias. Close the context after the write.
+
+    Raises:
+        TimeNetDatasetNotFoundError: If the registry does not hold a declared parent.
+    """  # noqa: DOC502 - registry preparation raises the documented error
+    parents: dict[ParentAlias, TimeFReader] = {}
+    # If a parent fails to open, the stack closes the readers that are already open. After the loop,
+    # the stack lets the readers go, and the context closes them.
+    with ExitStack() as stack:
+        for alias, ref in metadata.parents.items():
+            version = (
+                prepare_local_copy(registry.root, ref)
+                if isinstance(registry, LocalRegistry)
+                else registry.open_version(ref.dataset_id, str(ref.version))
+            )
+            parents[alias] = stack.enter_context(TimeFReader(version))
+        stack.pop_all()
+    return BuildContext(references=dict(metadata.parents), parents=parents)
+
+
+def _check_composes(connector: BaseConnector, metadata: DatasetMetadata) -> None:
+    """Reject a connector that declares parents but cannot receive them.
+
+    Raises:
+        TimeFValidationError: If the card declares parents and the connector does not override
+            ``compose``.
+    """
+    if metadata.parents and type(connector).compose is BaseConnector.compose:
+        raise TimeFValidationError(
+            f"{metadata.dataset_id} declares parents {sorted(metadata.parents)}, so its connector must "
+            "implement compose() to receive them"
+        )
+
+
+def _compose(connector: BaseConnector, metadata: DatasetMetadata, cache: Path, context: BuildContext) -> TimeFDataset:
+    """Download, compose, check the card of the dataset, then record each declared parent in it.
+
+    The engine decides from ``metadata``, the card that it read, whether to build, which parents to
+    open, and which version to report. So the dataset that ``compose`` returns must have that card.
+    The engine compares the card of the dataset with a deep copy of ``metadata`` that it takes before
+    ``compose`` runs. Then a connector that changes the card in place cannot hide a difference.
+    Recording a parent sets its card and its lineage, whether or not the connector copied objects
+    from it.
+
+    Returns:
+        The composed dataset.
+
+    Raises:
+        TimeFValidationError: If the card of the dataset differs from the copy of ``metadata``. The
+            message names the fields that differ.
+    """
+    # If metadata() returns the same object each time, compose() can change the card that the engine
+    # read in place.
+    read = metadata.model_copy(deep=True)
+    dataset = connector.compose(connector.download(cache), context)
+    fields = DatasetMetadata.model_fields
+    differ = sorted(name for name in fields if getattr(dataset.metadata, name) != getattr(read, name))
+    if differ:
+        raise TimeFValidationError(
+            f"the dataset that compose() returned has another card than {metadata.dataset_id}: {', '.join(differ)}"
+        )
+    for alias, parent in context.parents.items():
+        _record_parent(dataset, alias, parent)
+    return dataset
 
 
 def _resolve_values_backend(connector: BaseConnector, override: str | None) -> str:

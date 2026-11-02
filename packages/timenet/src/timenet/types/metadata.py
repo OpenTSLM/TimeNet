@@ -93,6 +93,20 @@ class DatasetMetadata(TimeFModel):
             raise ValueError(f"access_url is required when access is {self.access.value!r}")
         return self
 
+    @model_validator(mode="after")
+    def _one_alias_per_parent(self) -> Self:
+        # A child imports a release under one alias only, so its card declares the release once.
+        aliases: dict[str, list[str]] = {}
+        for alias, ref in self.parents.items():
+            aliases.setdefault(str(ref), []).append(alias)
+        for release, names in aliases.items():
+            if len(names) > 1:
+                raise ValueError(
+                    f"{self.dataset_id} declares the parent {release} under the parent aliases {sorted(names)}; "
+                    "declare each parent release under one alias only"
+                )
+        return self
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "DatasetMetadata":
         """Load and validate a dataset card YAML into metadata.

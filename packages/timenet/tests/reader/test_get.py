@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
+from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -437,16 +439,17 @@ def test_a_parent_that_is_neither_an_alias_nor_a_release_raises_with_a_hint(chil
             reader.get_many(Record, [_PARENT_IDS["record"]], parent=parent)
 
 
-def test_a_release_that_several_aliases_import_needs_an_alias(child, objects):
-    card = Manifest.model_validate_json((child / "manifest.json").read_text()).parent_cards[_BASE]
-    _declare_control_file(child, parent_cards={_BASE: card, ParentAlias("again"): card})
-    with TimeFReader(open_local_version(child)) as reader:
-        with pytest.raises(
-            TimeFValidationError, match=r"under the parent aliases \['again', 'base'\]; pass parent=ParentAlias"
-        ) as raised:
-            reader.get(Record, _PARENT_IDS["record"], parent=_PARENT)
-        assert not isinstance(raised.value, TimeFNotFoundError)
-        assert reader.get(Record, _PARENT_IDS["record"], parent=_BASE).id == objects.record0.id
+def test_a_manifest_with_two_parent_cards_for_one_release_is_refused(child):
+    path = child / "manifest.json"
+    doubled = Manifest.model_validate_json(path.read_text()).to_dict()
+    doubled["parent_cards"]["again"] = doubled["parent_cards"][_BASE]
+    match = r"parent_cards hold the parent test/parent@1\.0\.0 under the parent aliases \['again', 'base'\]"
+    with pytest.raises(ValidationError, match=match):
+        Manifest.model_validate(doubled)
+    # A release stored with such a manifest fails to open, before a reader reads anything.
+    path.write_text(json.dumps(doubled))
+    with pytest.raises(ValidationError, match=match):
+        open_local_version(child)
 
 
 def test_a_read_restores_the_import_map_the_parent_cards_and_the_lineage(child, objects):
@@ -488,7 +491,9 @@ def test_a_catalog_that_names_another_parent_than_its_manifest_raises_a_format_e
 
 def test_a_catalog_without_a_parent_alias_of_its_manifest_raises_a_format_error(child, objects):
     card = Manifest.model_validate_json((child / "manifest.json").read_text()).parent_cards[_BASE]
-    _declare_control_file(child, parent_cards={_BASE: card, ParentAlias("again"): card})
+    # The manifest declares a second parent, which the catalog does not name.
+    other = ParentDatasetCard(metadata=card.metadata.model_copy(update={"dataset_id": "test/other"}))
+    _declare_control_file(child, parent_cards={_BASE: card, ParentAlias("again"): other})
     with TimeFReader(open_local_version(child)) as reader:
         with pytest.raises(TimeFFormatError, match=r"differ from its manifest's parent cards"):
             reader.read()

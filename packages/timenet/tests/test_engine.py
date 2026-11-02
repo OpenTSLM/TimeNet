@@ -1,17 +1,23 @@
 from pathlib import Path
 import tempfile
-from typing import cast
+from typing import Any, ClassVar, cast
 
 import pytest
 
 from timenet.config import settings
-from timenet.connectors import BaseConnector
+from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
-from timenet.engine import publish_pipeline, run_pipeline, store_dataset
-from timenet.errors import TimeFValidationError
+from timenet.engine import open_parents, publish_pipeline, run_pipeline, store_dataset
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
+from timenet.reader import TimeFReader
+from timenet.registry import LocalRegistry
 from timenet.registry.writable import WritableRegistry
 from timenet.testing import make_dataset
+from timenet.types import Access, Version
+from timenet.types.access import effective_access
+from timenet.types.reference_keys import ParentAlias
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
 
@@ -244,3 +250,215 @@ def test_run_pipeline_keeps_the_cache_when_convert_fails(tmp_path, monkeypatch):
     with pytest.raises(RuntimeError, match="convert blew up"):
         run_pipeline(_FailingConnector(), tmp_path / "root")
     assert (settings().cache_dir / make_dataset().metadata.dataset_id).exists()
+
+
+_PARENT = DatasetRef(dataset_id=make_dataset().metadata.dataset_id, version=make_dataset().metadata.dataset_version)
+
+
+def _store_credentialed_parent(root: Path) -> None:
+    """Store the demo dataset as a credentialed release, so the effective access of a child is credentialed."""
+    parent = make_dataset()
+    parent._metadata = parent.metadata.model_copy(
+        update={"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
+    )
+    LocalRegistry(root).store(parent)
+
+
+class _ChildConnector(BaseConnector[str]):
+    """Declares the demo dataset under the parent alias ``parent`` and imports one record with ``IMPORT``."""
+
+    IMPORT: ClassVar[dict[str, Any] | None] = {}
+
+    def metadata(self):
+        return make_dataset().metadata.model_copy(
+            update={"dataset_id": "test/child", "parents": {ParentAlias("parent"): _PARENT}}
+        )
+
+    def download(self, cache_dir):
+        return []
+
+    def compose(self, raw_refs, context):
+        dataset = TimeFDataset(metadata=self.metadata())
+        if self.IMPORT is not None:
+            dataset.import_from(
+                context.parents[ParentAlias("parent")], records=[make_dataset().records[0].id], **self.IMPORT
+            )
+        return dataset
+
+
+@pytest.mark.parametrize(
+    "imported", [{}, {"alias": ParentAlias("parent")}, None], ids=["inferred", "explicit", "nothing-imported"]
+)
+def test_run_pipeline_records_each_declared_parent_with_its_access(tmp_path, monkeypatch, imported):
+    _store_credentialed_parent(tmp_path)
+    monkeypatch.setattr(_ChildConnector, "IMPORT", imported)
+
+    version_dir = run_pipeline(_ChildConnector(), tmp_path, cache_dir=tmp_path / "cache")
+
+    manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
+    assert {alias: card.source for alias, card in manifest.parent_cards.items()} == {"parent": _PARENT}
+    assert [card.source for card in manifest.lineage] == [_PARENT]
+    # The card of a child that only reads a credentialed parent stays open. Its effective level is
+    # credentialed, and the access page stays in the card of the parent.
+    assert (manifest.metadata.access, manifest.metadata.access_url) == (Access.OPEN, None)
+    assert effective_access(manifest.metadata, manifest.lineage) is Access.CREDENTIALED
+
+
+class _ConvertOnlyChild(_ChildConnector):
+    """Declares a parent but implements only ``convert``, so it cannot receive the opened parents."""
+
+    compose = BaseConnector.compose
+
+    def convert(self, raw_refs):
+        return TimeFDataset(metadata=self.metadata())
+
+
+@pytest.mark.parametrize("pipeline", ["run", "publish"])
+def test_a_connector_without_compose_fails_before_opening_parents_or_downloading(tmp_path, monkeypatch, pipeline):
+    monkeypatch.setattr(_ConvertOnlyChild, "download", lambda self, cache_dir: pytest.fail("downloaded"))
+    # The parent is missing too: the check runs before the engine looks for it.
+    with pytest.raises(TimeFValidationError, match=r"declares parents \['parent'\].*implement compose"):
+        if pipeline == "run":
+            run_pipeline(_ConvertOnlyChild(), tmp_path, cache_dir=tmp_path / "cache")
+        else:
+            publish_pipeline(_ConvertOnlyChild(), LocalRegistry(tmp_path), cache_dir=tmp_path / "cache")
+    assert not (tmp_path / "cache").exists()
+
+
+class _DroppedParentChild(_ChildConnector):
+    """Returns a dataset whose card leaves out the declared parent."""
+
+    def compose(self, raw_refs, context):
+        return TimeFDataset(metadata=self.metadata().model_copy(update={"parents": {}}))
+
+
+class _OtherVersionChild(_ChildConnector):
+    """Returns a dataset whose card has another version than the card that the engine read."""
+
+    def compose(self, raw_refs, context):
+        return TimeFDataset(metadata=self.metadata().model_copy(update={"dataset_version": Version(2, 0, 0)}))
+
+
+class _InPlaceDroppedParentChild(_ChildConnector):
+    """Returns the same card object from each ``metadata()`` call, and removes the parent from it in place."""
+
+    def __init__(self) -> None:
+        self._card = super().metadata()
+
+    def metadata(self):
+        return self._card
+
+    def compose(self, raw_refs, context):
+        dataset = TimeFDataset(metadata=self.metadata())
+        del dataset.metadata.parents[ParentAlias("parent")]
+        return dataset
+
+
+@pytest.mark.parametrize("pipeline", ["run", "publish"])
+@pytest.mark.parametrize(
+    ("connector", "differ"),
+    [
+        (_DroppedParentChild, "parents"),
+        (_OtherVersionChild, "dataset_version"),
+        (_InPlaceDroppedParentChild, "parents"),
+    ],
+    ids=["dropped-parent", "other-version", "dropped-parent-in-place"],
+)
+def test_a_dataset_with_another_card_than_the_engine_read_fails_and_stores_no_release(
+    tmp_path, pipeline, connector, differ
+):
+    root = tmp_path / "root"
+    LocalRegistry(root).store(make_dataset())
+    before = sorted(root.rglob("*"))
+    with pytest.raises(
+        TimeFValidationError,
+        match=rf"the dataset that compose\(\) returned has another card than test/child: {differ}$",
+    ):
+        if pipeline == "run":
+            run_pipeline(connector(), root, cache_dir=tmp_path / "cache")
+        else:
+            publish_pipeline(connector(), LocalRegistry(root), cache_dir=tmp_path / "cache")
+    assert sorted(root.rglob("*")) == before
+
+
+def test_run_pipeline_fails_on_a_missing_parent_before_downloading(tmp_path, monkeypatch):
+    monkeypatch.setattr(_ChildConnector, "download", lambda self, cache_dir: pytest.fail("downloaded"))
+
+    with pytest.raises(TimeNetDatasetNotFoundError, match=str(_PARENT)):
+        run_pipeline(_ChildConnector(), tmp_path, cache_dir=tmp_path / "cache")
+
+
+def test_open_parents_closes_the_parents_it_opened_when_a_later_one_is_missing(tmp_path, monkeypatch):
+    LocalRegistry(tmp_path).store(make_dataset())
+    missing = DatasetRef.parse("test/missing@1.0.0")
+    metadata = (
+        _ChildConnector()
+        .metadata()
+        .model_copy(update={"parents": {ParentAlias("parent"): _PARENT, ParentAlias("missing"): missing}})
+    )
+    closed = []
+    close = TimeFReader.close
+
+    def record_close(reader):
+        closed.append(reader.metadata.dataset_id)
+        close(reader)
+
+    monkeypatch.setattr(TimeFReader, "close", record_close)
+
+    with pytest.raises(TimeNetDatasetNotFoundError, match=str(missing)):
+        open_parents(metadata, LocalRegistry(tmp_path))
+
+    assert closed == [_PARENT.dataset_id]
+
+
+def test_a_parent_reader_that_fails_to_close_does_not_keep_the_other_open(tmp_path, monkeypatch):
+    second = make_dataset()
+    second._metadata = second.metadata.model_copy(update={"dataset_id": "test/second"})
+    for dataset in (make_dataset(), second):
+        LocalRegistry(tmp_path).store(dataset)
+    parents = {ParentAlias("parent"): _PARENT, ParentAlias("second"): DatasetRef.parse("test/second@1.0.0")}
+    context = open_parents(
+        _ChildConnector().metadata().model_copy(update={"parents": parents}), LocalRegistry(tmp_path)
+    )
+    closed = []
+    close = TimeFReader.close
+
+    def fail_the_first_close(reader):
+        dataset_id = reader.metadata.dataset_id
+        close(reader)
+        closed.append(dataset_id)
+        if len(closed) == 1:
+            raise RuntimeError(f"{dataset_id} failed to close")
+
+    monkeypatch.setattr(TimeFReader, "close", fail_the_first_close)
+
+    with pytest.raises(RuntimeError, match="test/second failed to close"):
+        context.close()
+
+    # The reader opened last closes first. The other reader still closes.
+    assert closed == ["test/second", _PARENT.dataset_id]
+
+
+def test_a_build_context_made_directly_closes_its_parent_readers(tmp_path, monkeypatch):
+    second = make_dataset()
+    second._metadata = second.metadata.model_copy(update={"dataset_id": "test/second"})
+    registry = LocalRegistry(tmp_path)
+    for dataset in (make_dataset(), second):
+        registry.store(dataset)
+    readers = {
+        ParentAlias("parent"): TimeFReader(registry.open_version(_PARENT.dataset_id, str(_PARENT.version))),
+        ParentAlias("second"): TimeFReader(registry.open_version("test/second", "1.0.0")),
+    }
+    closed = []
+    close = TimeFReader.close
+
+    def record_close(reader):
+        closed.append(reader.metadata.dataset_id)
+        close(reader)
+
+    monkeypatch.setattr(TimeFReader, "close", record_close)
+
+    with BuildContext(parents=readers):
+        assert closed == []
+
+    assert closed == ["test/second", _PARENT.dataset_id]

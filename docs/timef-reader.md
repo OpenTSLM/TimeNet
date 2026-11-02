@@ -182,9 +182,8 @@ An ID that names nothing, an unknown alias or parent, and a stored object of ano
 `TimeFValidationError` and `LookupError`. An edit such as `remove_records` can remove the copy of a
 parent object. The parent ID of that object then names nothing, because the edit drops that import.
 `get_many` raises it, naming every missing ID, before it returns anything. `Source`, `Annotation`, and any other kind not listed above, an ID
-that is not a positive int64, a single string passed to `get_many`, a `parent` that is neither a
-`ParentAlias` nor a `DatasetRef`, and a release that several aliases import raise
-`TimeFValidationError`.
+that is not a positive int64, a single string passed to `get_many`, and a `parent` that is neither a
+`ParentAlias` nor a `DatasetRef` raise `TimeFValidationError`.
 
 ## Loading values at read time
 
