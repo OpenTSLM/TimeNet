@@ -142,6 +142,50 @@ def _array_handle(values: ArrayHandle | Callable[[], pa.Array]) -> ArrayHandle:
     return CallableArray(values)
 
 
+@dataclass(frozen=True, eq=False, slots=True)
+class _StepWindow(ArrayHandle):
+    """Read the half-open step range ``[start, stop)`` of another array handle, only on request.
+
+    Steps count from the window's own first step. A window over a window reads the underlying
+    handle directly, so slicing a slice adds no layer of indirection.
+    """
+
+    base: ArrayHandle
+    start: int
+    stop: int
+
+    @classmethod
+    def over(cls, handle: ArrayHandle, start: int, stop: int) -> "_StepWindow":
+        """Return a window over ``[start, stop)`` of ``handle``, flattening a window over a window.
+
+        Returns:
+            The window, which reads nothing until it is read.
+        """
+        if isinstance(handle, _StepWindow):
+            return cls(handle.base, handle.start + start, handle.start + stop)
+        return cls(handle, start, stop)
+
+    @property
+    def is_loaded(self) -> bool:
+        """Return whether the underlying handle holds its values in memory."""
+        return self.base.is_loaded
+
+    def read(self) -> pa.Array:
+        """Return the window's steps, read from the underlying handle."""
+        return self.base.read_steps(self.start, self.stop)
+
+    def read_steps(self, start: int, stop: int) -> pa.Array:
+        """Return the window's steps ``[start, stop)``, reading only those from the underlying handle.
+
+        Like the default, a ``stop`` past the window's end reads to the end of the window.
+
+        Returns:
+            The steps' values, in the form :meth:`read` returns.
+        """
+        stop = min(self.start + stop, self.stop)
+        return self.base.read_steps(min(self.start + start, stop), stop)
+
+
 @dataclass(frozen=True, eq=False, init=False, kw_only=True)
 class Signal(SupportsAnnotate):
     """Reference to one logical stream of time-series data, with optional windowing and lazy values.
@@ -568,3 +612,80 @@ class Signal(SupportsAnnotate):
                 f"empty range ({start}, {stop}). A forecast horizon needs at least one step"
             )
         return (start, stop)
+
+    def overlaps_with(self, interval: TimeInterval) -> bool:
+        """Return whether ``interval`` shares any time with this series' recording.
+
+        A record can hold several series that cover different parts of its timeline, such as two
+        segments of one recording. Use this to find the series a time interval reaches before you
+        call :meth:`slice` or :meth:`step_range`. An interval that only partly overlaps the series
+        still overlaps it. The test compares time only: it ignores which series the interval names.
+
+        Args:
+            interval: A time interval on the record timeline.
+
+        Returns:
+            ``True`` if the interval and the window :attr:`span_us` reports share at least one
+            microsecond, and ``False`` if the interval ends before the series starts or starts after
+            it ends.
+
+        Raises:
+            TimeFValidationError: If the series is ordinal. It has no timeline, so a time interval can
+                neither overlap it nor miss it.
+        """
+        window = self.span_us
+        if window is None:
+            raise TimeFValidationError(
+                f"a time interval cannot select part of ordinal series {self.name!r}, which has no "
+                "timeline; scope in steps instead"
+            )
+        first_us, end_us = window
+        return interval.start_us < end_us and interval.end_us > first_us
+
+    def slice(self, span: Span) -> "Signal":
+        """Return a new lazy series that holds only the steps ``span`` covers.
+
+        :meth:`step_range` locates the steps, so ``span`` follows its rules. The slice keeps this
+        series' name, spec, metadata, and place on the recording timeline: a regular axis starts at the
+        slice's first step, an irregular axis keeps the sliced time offsets, and an ordinal axis stays as
+        it is. The slice drops this series' annotations, because they can fall outside it. It is a new
+        series that belongs to no source, so it has no :attr:`id`.
+
+        The slice reads no values when it is built. Each read of the slice reads only its own steps from
+        this series, and :meth:`read_steps` on the slice reads only the steps it asks for.
+
+        Args:
+            span: The interval to keep. A step span must name this series.
+
+        Returns:
+            A lazy :class:`Signal` with ``stop - start`` values.
+
+        Raises:
+            TimeFValidationError: For every span that :meth:`step_range` rejects: a point, a step span
+                that names another series or runs past this one, a time span on an ordinal series, or a
+                span that resolves past this series or to no steps.
+        """
+        start, stop = self.step_range(span)
+        axis = self.time_axis
+        time_offsets: _StepWindow | None = None
+        if isinstance(axis, RegularAxis):
+            axis = axis.at_index(start)
+        elif isinstance(axis, IrregularAxis):
+            if self._time_offsets is None:  # __post_init__ rules this out; checked for the type checker
+                raise TimeFValidationError(f"irregular series {self.name!r} has no time offsets")
+            # The offsets stay behind a window too; only the slice's two endpoints are read here.
+            time_offsets = _StepWindow.over(self._time_offsets, start, stop)
+            first_us = time_offsets.read_steps(0, 1)[0].as_py()
+            last_us = time_offsets.read_steps(stop - start - 1, stop - start)[0].as_py()
+            axis = IrregularAxis(first_us=first_us, last_us=last_us)
+        elif not isinstance(axis, OrdinalAxis):  # an ordinal axis counts steps only, so it stays as is
+            assert_never(axis)
+        return Signal.from_loader(
+            spec=self.spec,
+            time_axis=axis,
+            name=self.name,
+            loader=_StepWindow.over(self._values, start, stop),
+            n_values=stop - start,
+            time_offsets_loader=time_offsets,
+            metadata=self.metadata,
+        )

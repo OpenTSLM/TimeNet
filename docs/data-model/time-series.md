@@ -85,6 +85,29 @@ present = values.is_valid()
 The mask marks present timesteps. The PyTorch adapter raises `TimeFValidationError` for actual nulls,
 even when `nullable=True`. Consumers must handle missing data before tensor conversion.
 
+## Cut a window
+
+`slice()` returns a new Signal that holds only the steps a span covers. The span can be a
+`TimeInterval` on the Record timeline or a `StepInterval` that names this Signal.
+`overlaps_with()` tells you whether a `TimeInterval` reaches a Signal at all, so you can skip the
+Signals it misses, such as other segments of one recording:
+
+```python
+from timenet.types import TimeInterval
+
+interval = TimeInterval.seconds(1, 3)
+if temperature.overlaps_with(interval):
+    part = temperature.slice(interval)
+```
+
+The slice keeps the name, spec, metadata, and place on the timeline of the original Signal. It
+drops the annotations of the original, because they can fall outside the window. The slice reads
+no values when you make it: each read of the slice reads only its own steps from the original.
+
+An ordinal Signal has no timeline. `overlaps_with()` and a `TimeInterval` passed to `slice()` raise
+`TimeFValidationError` on it, so scope an ordinal Signal in steps. `slice()` also raises for a
+point span, and for a span that runs past the Signal or covers none of its steps.
+
 ## Lazy values
 
 A connector can construct a Signal from in-memory `data`. It can also use `Signal.from_loader()` for

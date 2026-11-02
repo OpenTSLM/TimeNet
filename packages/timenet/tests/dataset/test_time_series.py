@@ -8,7 +8,16 @@ import pytest
 from timenet.dataset import Signal
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFNullValuesError, TimeFValidationError
-from timenet.types import ArrayHandle, StepInterval, StepPoint, TimeInterval, TimeSeriesSpec, ureg
+from timenet.types import (
+    Annotation,
+    ArrayHandle,
+    StepInterval,
+    StepPoint,
+    TimeInterval,
+    TimePoint,
+    TimeSeriesSpec,
+    ureg,
+)
 from timenet.types.handles import ArrowArray, CallableArray, NumpyArray
 
 
@@ -558,3 +567,166 @@ def test_a_signal_built_in_memory_survives_pickling(source, irregular):
     np.testing.assert_array_equal(back.to_numpy(), ts.to_numpy())
     if irregular:
         np.testing.assert_array_equal(back.time_offsets_us(), ts.time_offsets_us())
+
+
+def _at(offset_us: int, n: int = 4) -> Signal:
+    # 1 Hz, so value k sits at offset_us + k seconds.
+    return _counting(n, axis=RegularAxis.from_rate_hz(1, offset_us=offset_us))
+
+
+@pytest.mark.parametrize(
+    ("start_s", "end_s", "overlaps"),
+    [
+        (0, 2, False),  # ends where the series starts
+        (0, 11, True),  # partly before the series
+        (11, 13, True),  # inside the series
+        (13, 20, True),  # partly after the series
+        (14, 20, False),  # starts one period after the last value
+        (0, 20, True),  # covers the whole series
+    ],
+)
+def test_overlaps_with_on_a_regular_axis(start_s, end_s, overlaps):
+    # Values at 10, 11, 12, 13 s; the series covers [10 s, 14 s).
+    signal = _at(10_000_000)
+    assert signal.overlaps_with(TimeInterval.seconds(start_s, end_s)) is overlaps
+
+
+@pytest.mark.parametrize(
+    ("start_us", "end_us", "overlaps"),
+    [(0, 10, False), (0, 11, True), (20, 21, True), (21, 30, False)],
+)
+def test_overlaps_with_on_an_irregular_axis(start_us, end_us, overlaps):
+    # The series covers its first time offset through its last one, inclusive.
+    signal = Signal.from_irregular([1.0, 2.0], time_offsets_us=[10, 20], spec=_spec(), name="events")
+    assert signal.overlaps_with(TimeInterval(start_us=start_us, end_us=end_us)) is overlaps
+
+
+def test_overlaps_with_rejects_an_ordinal_series():
+    signal = Signal.from_values([1.0, 2.0], spec=_spec(), name="c", time_axis=OrdinalAxis())
+    with pytest.raises(TimeFValidationError, match="no timeline"):
+        signal.overlaps_with(TimeInterval.seconds(0.0, 1.0))
+
+
+def _range_reads(n: int, calls: list, axis=None) -> Signal:
+    class RangeHandle(ArrayHandle):
+        @property
+        def is_loaded(self):
+            return False
+
+        def read(self):
+            calls.append("full")
+            return pa.array([float(i) for i in range(n)], type=pa.float32())
+
+        def read_steps(self, start, stop):
+            calls.append((start, stop))
+            return pa.array([float(i) for i in range(start, stop)], type=pa.float32())
+
+    return _series(n_values=n, time_axis=axis or RegularAxis.from_rate_hz(1), loader=RangeHandle())
+
+
+def test_slice_reads_no_values_until_it_is_read():
+    calls = []
+    signal = _range_reads(10, calls)
+    part = signal.slice(TimeInterval.seconds(2, 6))
+    assert calls == []
+    assert part.to_arrow().to_pylist() == [2.0, 3.0, 4.0, 5.0]
+    assert calls == [(2, 6)]
+
+
+def test_a_range_read_of_a_slice_reads_only_that_range():
+    calls = []
+    part = _range_reads(10, calls).slice(TimeInterval.seconds(2, 6))
+    assert part.read_steps(1, 3).to_pylist() == [3.0, 4.0]
+    # A stop past the slice's end reads to the slice's end, never past it.
+    assert part.read_steps(2, 10).to_pylist() == [4.0, 5.0]
+    assert calls == [(3, 5), (4, 6)]
+
+
+def test_slice_of_a_regular_series_keeps_its_place_on_the_timeline():
+    signal = Signal(
+        spec=_spec(),
+        name="II",
+        time_axis=RegularAxis.from_rate_hz(2, offset_us=1_000_000),
+        data=[0.0, 1.0, 2.0, 3.0, 4.0, 5.0],
+        metadata={"lead": "II"},
+    )
+    signal.annotate(Annotation(key="quality", value="good"))
+    # 2 Hz from 1 s: [2 s, 3 s) holds the values at 2 s and 2.5 s.
+    part = signal.slice(TimeInterval.seconds(2, 3))
+    assert part is not signal
+    assert part.to_numpy().tolist() == [2.0, 3.0]
+    assert part.n_values == 2
+    assert part.span_us == (2_000_000, 3_000_000)
+    assert part.name == signal.name
+    assert part.spec is signal.spec
+    assert part.metadata == {"lead": "II"}
+    assert part.annotations == ()
+
+
+def test_slice_of_an_irregular_series_keeps_the_sliced_time_offsets():
+    signal = Signal.from_irregular(
+        [10.0, 11.0, 12.0, 13.0],
+        time_offsets_us=[0, 1_500_000, 2_500_000, 5_000_000],
+        spec=_spec(),
+        name="events",
+    )
+    part = signal.slice(TimeInterval.seconds(1, 4))
+    assert part.to_numpy().tolist() == [11.0, 12.0]
+    assert part.time_offsets_us().tolist() == [1_500_000, 2_500_000]
+    assert part.time_axis == IrregularAxis(first_us=1_500_000, last_us=2_500_000)
+
+
+def test_slice_of_an_ordinal_series_by_steps_keeps_the_axis():
+    axis = OrdinalAxis()
+    signal = Signal.from_values([0.0, 1.0, 2.0, 3.0], spec=_spec(), name="c", time_axis=axis)
+    part = signal.slice(StepInterval(time_series=signal, start=1, stop=3))
+    assert part.to_numpy().tolist() == [1.0, 2.0]
+    assert part.time_axis is axis
+    assert part.span_us is None
+
+
+def test_slice_by_steps_on_a_regular_series():
+    signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
+    part = signal.slice(StepInterval(time_series=signal, start=4, stop=6))
+    assert part.to_numpy().tolist() == [4.0, 5.0]
+    assert part.span_us == (4_000_000, 6_000_000)
+
+
+def test_a_slice_of_a_slice_reads_the_original_series_once():
+    calls = []
+    signal = _range_reads(10, calls)
+    outer = signal.slice(TimeInterval.seconds(2, 8))
+    inner = outer.slice(StepInterval(time_series=outer, start=1, stop=3))
+    assert inner.span_us == (3_000_000, 5_000_000)
+    assert inner.to_arrow().to_pylist() == [3.0, 4.0]
+    assert calls == [(3, 5)]
+
+
+def test_a_slice_of_a_sliced_irregular_series_keeps_its_time_offsets():
+    signal = Signal.from_irregular(
+        [0.0, 1.0, 2.0, 3.0, 4.0], time_offsets_us=[0, 10, 20, 30, 40], spec=_spec(), name="events"
+    )
+    inner = signal.slice(TimeInterval(start_us=10, end_us=41)).slice(TimeInterval(start_us=20, end_us=31))
+    assert inner.to_numpy().tolist() == [2.0, 3.0]
+    assert inner.time_offsets_us().tolist() == [20, 30]
+
+
+@pytest.mark.parametrize(
+    ("make_span", "message"),
+    [
+        (lambda _: TimePoint.seconds(1), "not a point"),
+        (lambda ts: StepPoint(time_series=ts, start=1), "not a point"),
+        (lambda _: TimeInterval.seconds(1, 20), "runs past"),
+        (lambda ts: StepInterval(time_series=ts, start=0, stop=7), "runs past"),
+    ],
+)
+def test_slice_rejects_what_step_range_rejects(make_span, message):
+    signal = _counting(6, axis=RegularAxis.from_rate_hz(1))
+    with pytest.raises(TimeFValidationError, match=message):
+        signal.slice(make_span(signal))
+
+
+def test_slice_rejects_a_time_span_on_an_ordinal_series():
+    signal = Signal.from_values([1.0, 2.0], spec=_spec(), name="c", time_axis=OrdinalAxis())
+    with pytest.raises(TimeFValidationError, match="no timeline"):
+        signal.slice(TimeInterval.seconds(0.0, 1.0))
