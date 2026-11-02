@@ -48,12 +48,17 @@ versions used for the build.
 
 The engine runs these stages:
 
-1. Read and validate the connector's `dataset.yaml` card.
-2. Download raw artifacts into the build cache.
-3. Convert local artifacts into a `TimeFDataset`.
-4. Derive the dataset schema.
-5. Write or publish the complete TimeF version.
-6. Remove the raw cache after success, unless `--keep-cache` is set.
+1. Read and validate the connector's `dataset.yaml` card. If the output registry is not local, the
+   card must declare `access: open`.
+2. Open the parent releases that the card declares. The output registry must hold them, as
+   [Prepare parent releases](#prepare-parent-releases) describes.
+3. Download raw artifacts into the build cache.
+4. Compose the parents and the raw artifacts into a `TimeFDataset`. Record each parent in it.
+5. Derive the dataset schema.
+6. Write or publish the complete TimeF version. Then close the parent releases. Before a publish to
+   a registry that is not local, the build makes sure that each card in the lineage also declares
+   `access: open`.
+7. Remove the raw cache after success, unless `--keep-cache` is set.
 
 `--force` rebuilds or republishes a version that already exists. Without this flag, the pipeline
 returns the committed version and skips expensive work. A forced local build replaces the old
@@ -97,11 +102,11 @@ version = publish_pipeline(connector, registry)
 Both functions accept `force`, `keep_cache`, `cache_dir`, `values_backend`, `pinned_by`, and a
 writer progress callback.
 
-A registry that is not local holds open releases only. `publish_pipeline()` checks the card before
-it downloads anything. A credentialed or restricted card raises `TimeNetAccessError` for such a
-registry. After the connector composes the dataset, `publish_pipeline()` checks the dataset again
-with its lineage, before it writes. A child whose card is open but whose parent is credentialed
-raises there.
+A registry that is not local holds only releases with access declared `open`. `publish_pipeline()`
+checks the card before it downloads anything. A credentialed or restricted card raises
+`TimeNetAccessError` for such a registry. After the connector composes the dataset,
+`publish_pipeline()` checks the dataset again with its lineage, before it writes. If the card of a
+child declares `access: open` but its parent is credentialed, the second check raises the error.
 
 The error names the release and its effective access level, which is the strictest level of its
 card and of the cards in its lineage. It also names each `access_url` that a user needs, with the
