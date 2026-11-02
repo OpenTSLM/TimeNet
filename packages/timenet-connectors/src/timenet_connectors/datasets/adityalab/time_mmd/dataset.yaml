@@ -1,0 +1,34 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+# Dataset Card for the adityalab/time-mmd connector: the single source for this dataset's metadata.
+# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
+# derived from the data into manifest.json.
+#
+# Scope: the Energy and Environment domains of the release, one record each. The other seven
+# domains of Time-MMD are not converted yet. Text rows are interval annotations on the record,
+# verbatim, including the 'NA' markers the release writes. The forecasting tasks follow the
+# sliding-window protocol the paper evaluates with, split 70/10/20 chronologically.
+yaml_schema_version: 1
+dataset_id: adityalab/time-mmd
+dataset_version: 1.0.0
+name: Time-MMD
+description: >-
+  Weekly U.S. retail gasoline prices (Energy) and the daily New York air quality index
+  (Environment), each paired with dated text the Time-MMD authors collected from reports and
+  web searches and split into facts and predictions with Llama3-70B. One record per domain, with
+  forecasting tasks over the target series at the paper's lookback and horizons.
+license: ODC-By-1.0
+license_url: https://opendatacommons.org/licenses/by/1-0/
+source_url: https://github.com/AdityaLab/Time-MMD
+citation: >-
+  Liu et al. Time-MMD: A New Multi-Domain Multimodal Dataset for Time Series Analysis.
+  NeurIPS 2024 Datasets and Benchmarks Track. https://arxiv.org/abs/2406.08627
+domains:
+  - energy
+  - environment
+tags:
+  - forecasting
+  - multimodal
+  - text
+  - gasoline-prices
+  - air-quality
+  - github
