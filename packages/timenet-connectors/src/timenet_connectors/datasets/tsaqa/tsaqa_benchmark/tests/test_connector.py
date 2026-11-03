@@ -289,12 +289,40 @@ def _rewrite(path: Path, position: int, **columns: str) -> None:
     pq.write_table(type(table).from_pylist(rows, schema=table.schema), path)
 
 
-def test_a_reread_that_no_longer_matches_its_row_fails(tmp_path):
+def _bump_first_value(series: str) -> str:
+    """Return a series with its first value changed and its length kept."""
+    values = json.loads(series)
+    values[0] += 1.0
+    return json.dumps(values)
+
+
+def _bump_first_printed_value(question: str) -> str:
+    """Return a question whose first printed series has its first value changed and its length kept."""
+    match = _PRINTED_SERIES.search(question)
+    assert match is not None
+    return question[: match.start(1)] + _bump_first_value(match[1]) + question[match.end(1) :]
+
+
+@pytest.mark.parametrize(
+    ("position", "rewrite"),
+    [
+        (0, lambda row: {"input_ts": "[1.0, 2.0]"}),
+        # The lengths stay, so only the values tell the file changed.
+        (0, lambda row: {"input_ts": _bump_first_value(row["input_ts"])}),
+        (6, lambda row: {"question": _bump_first_printed_value(row["question"])}),
+    ],
+    ids=["shorter-series", "changed-input-value", "changed-printed-value"],
+)
+def test_a_reread_that_no_longer_matches_its_row_fails(tmp_path, position, rewrite):
     shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
     dataset: TimeFDataset = _FixtureConnector().convert(_refs(tmp_path))
-    _rewrite(tmp_path / "train.parquet", 0, input_ts="[1.0, 2.0]")
-    first = next(record for record in dataset.records if record.metadata["file"] == "train.parquet")
-    with pytest.raises(TimeFFormatError, match=r"train.parquet row 0: the series differ"):
+    _rewrite(tmp_path / "train.parquet", position, **rewrite(_published()["train.parquet", position]))
+    first = next(
+        record
+        for record in dataset.records
+        if (record.metadata["file"], record.metadata["row"]) == ("train.parquet", position)
+    )
+    with pytest.raises(TimeFFormatError, match=rf"train.parquet row {position}: the series differ"):
         first.signals[0].to_numpy()
 
 

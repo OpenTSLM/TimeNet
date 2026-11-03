@@ -362,13 +362,13 @@ Report which issues were left out, and how many tasks remain, with any score.
 ## Data flow and validation
 
 A build reads every file once to check each row and keep its small fields: its answer, question
-format, series lengths and source issues. Source issues need all three splits, so a build without one
+format, series lengths, a digest of the series values, and source issues. Source issues need all three splits, so a build without one
 of them fails. It checks that every column is text, the task and question type are known, a
 multiple-choice question offers A to D in order, the answer fits the question's letters, each choice
 or patch of a data transformation or temporal relationship question prints one series, and every
 series is a nonempty list of finite numbers. The series values stay in the files until they are
-written, and the connector rereads a file when the writer comes back to it. Everything is in
-`connector.py`.
+written, and the connector rereads a file when the writer comes back to it. A reread fails if the
+lengths or the values of a row's series differ from the build. Everything is in `connector.py`.
 
 The tests read a small fixture release, real rows of the pinned release with all their columns
 (`tests/README.md` names each one).

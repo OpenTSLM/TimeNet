@@ -9,8 +9,9 @@ Metadata is provenance and never model input. An annotation is model input only 
 names it in ``input_annotations``.
 """
 
+from array import array
 from collections import defaultdict
-from collections.abc import Collection, Iterable, Iterator, Mapping
+from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum, unique
 from functools import lru_cache, partial
@@ -20,7 +21,7 @@ import json
 import math
 from pathlib import Path
 import re
-from typing import Any, ClassVar, TypeVar
+from typing import Any, ClassVar, NamedTuple, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
@@ -34,8 +35,44 @@ from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFi
 from timenet_connectors.sources.parquet import iter_parquet_rows
 
 
-_SPLITS = {"train": Split.TRAIN, "val": Split.VALIDATION, "test": Split.TEST}
-"""The release's split files, as named in the Hub repository without ``.parquet``, and their TimeNet splits."""
+@unique
+class _SplitFile(StrEnum):
+    """A split file of the release, named as in the Hub repository without ``.parquet``."""
+
+    TRAIN = "train"
+    VALIDATION = "val"
+    TEST = "test"
+
+    @property
+    def filename(self) -> str:
+        return f"{self.value}.parquet"
+
+
+_SPLITS = {_SplitFile.TRAIN: Split.TRAIN, _SplitFile.VALIDATION: Split.VALIDATION, _SplitFile.TEST: Split.TEST}
+"""The TimeNet split of each split file."""
+
+
+@unique
+class _Task(StrEnum):
+    """The six source tasks of the release, as its ``task`` column names them."""
+
+    ANOMALY_DETECTION = "anomaly_detection"
+    CLASSIFICATION = "classification"
+    CHARACTERIZATION = "characterization"
+    COMPARISON = "comparison"
+    DATA_TRANSFORMATION = "data_transformation"
+    TEMPORAL_RELATIONSHIP = "temporal_relationship"
+
+
+@unique
+class _Role(StrEnum):
+    """The role of a Record that is not a printed candidate series, which has its letter as its role."""
+
+    INPUT = "input"
+    SECOND_INPUT = "second_input"
+    SEQUENCE = "sequence"
+    """The series a true-or-false question prints, which has no letter."""
+
 
 _TRUE_OR_FALSE_VOCABULARY = "true_or_false_vocabulary"
 """The dataset annotation naming the choices of every true-or-false task, as its ``target_schema``."""
@@ -48,13 +85,16 @@ _DIGEST_COLUMNS = ("task", "input_ts", "question")
 """The columns that make a row's question: the same question about the same series, whatever its
 context or published ``question_type`` says. The model sees neither."""
 
-_COMPARISON = "comparison"
 _COMPARISON_SERIES = 2
 """How many series a comparison row has."""
 _MIN_CHOICES = 2
 _LETTERS = ("A", "B", "C", "D")
 """A puzzle's patch letters, and the most letters a multiple-choice question offers."""
-_PRINTING_TASKS = {"data_transformation", "temporal_relationship"}
+_TRUE_OR_FALSE_LETTERS = ("T", "F")
+"""The letters of a true-or-false question: T stands for 'True.' and F for 'False.'"""
+_INPUT_ROLES = (_Role.INPUT, _Role.SECOND_INPUT)
+"""The roles of the input series, in order."""
+_PRINTING_TASKS = {_Task.DATA_TRANSFORMATION, _Task.TEMPORAL_RELATIONSHIP}
 """The tasks whose questions print candidate series of their own."""
 
 
@@ -76,6 +116,34 @@ _QUESTION_TYPES = {
 _PRINTED = re.compile(r"^(?:([A-D]): )?(\[[^\n]*\])$", re.MULTILINE)
 """A series printed on a line of its own, behind a choice or patch letter or alone after a stem."""
 _TRUE_OR_FALSE_LINES = "\nT: True.\nF: False.\n"
+
+
+class _Printed(NamedTuple):
+    """A series a question prints."""
+
+    label: str | None
+    """The choice or patch letter, ``None`` for a true-or-false question's sequence."""
+    values: list[float]
+
+
+class _QuestionReading(NamedTuple):
+    """What a question's text says besides its series."""
+
+    question_format: _QuestionFormat
+    choices: dict[str, str]
+    """The choice texts of a multiple-choice question whose choices are text, else empty."""
+    ambiguous: bool
+    """Whether another answer is as right as the published one."""
+
+
+class _RowKey(NamedTuple):
+    """A row's place in the release."""
+
+    split: _SplitFile
+    index: int
+    """The row's position in its file, counted from 0."""
+
+
 _TRANSFORMS = {
     "Fourier Transform": ("tsaqa_fourier_transform", "Fourier transform"),
     "Wavelet Transform": ("tsaqa_wavelet_transform", "Wavelet transform"),
@@ -161,12 +229,12 @@ def _task_issues(task: Task) -> set[SourceIssue]:
 
 @dataclass(frozen=True)
 class _Row:
-    """A published row, validated, with its series' lengths but not their values."""
+    """A published row, validated, with its series' lengths and digest but not their values."""
 
-    split: str
+    split: _SplitFile
     index: int
     """The row's position in its file, counted from 0."""
-    task: str
+    task: _Task
     question_type: str
     """As published, which may disagree with :attr:`question_format`."""
     question_format: _QuestionFormat
@@ -176,10 +244,12 @@ class _Row:
     """The question with a placeholder in place of each series it prints."""
     choices: Mapping[str, str]
     """A multiple-choice question's choice texts, empty when its choices are series."""
-    printed_labels: tuple[str | None, ...]
-    """The label of each printed series: a choice or patch letter, ``None`` for a true-or-false sequence."""
+    printed_roles: tuple[str, ...]
+    """The role of each printed series: its choice or patch letter, or ``sequence`` for a true-or-false one."""
     lengths: tuple[int, ...]
     """The length of each series in Record order: the inputs, then the printed series."""
+    values_digest: bytes
+    """The digest of every series' values in Record order, to tell a reread of the same values from another."""
     n_inputs: int
     input_contexts: tuple[Mapping[str, str], ...]
     """One published context per input series."""
@@ -190,11 +260,23 @@ class _Row:
 
     @property
     def file(self) -> str:
-        return f"{self.split}.parquet"
+        return self.split.filename
 
     @property
-    def key(self) -> tuple[str, int]:
-        return self.split, self.index
+    def key(self) -> _RowKey:
+        return _RowKey(self.split, self.index)
+
+
+def _values_digest(series: Iterable[Sequence[float]]) -> bytes:
+    """Digest the values of series in order, as float64 bytes.
+
+    Returns:
+        A 16-byte digest that differs when any value, or the order of the series, differs.
+    """
+    digest = hashlib.blake2b(digest_size=16)
+    for values in series:
+        digest.update(array("d", values).tobytes())
+    return digest.digest()
 
 
 def _series_values(value: Any) -> list[float]:
@@ -207,7 +289,7 @@ def _is_finite(item: Any) -> bool:
     return isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item)
 
 
-def _input_series(task: str, text: str) -> list[list[float]]:
+def _input_series(task: _Task, text: str) -> list[list[float]]:
     """Decode a row's ``input_ts``: one series, or a list of two for comparison.
 
     Returns:
@@ -217,14 +299,14 @@ def _input_series(task: str, text: str) -> list[list[float]]:
         ValueError: If a comparison's ``input_ts`` doesn't hold two series, or a series isn't finite numbers.
     """
     value = json.loads(text)
-    if task != _COMPARISON:
+    if task is not _Task.COMPARISON:
         return [_series_values(value)]
     if not isinstance(value, list) or len(value) != _COMPARISON_SERIES:
         raise ValueError(f"a comparison input_ts holds {_COMPARISON_SERIES} series")
     return [_series_values(series) for series in value]
 
 
-def _printed_series(task: str, question: str) -> list[tuple[str | None, list[float]]]:
+def _printed_series(task: _Task, question: str) -> list[_Printed]:
     """Find the series a question prints, with each one's label.
 
     Returns:
@@ -232,10 +314,10 @@ def _printed_series(task: str, question: str) -> list[tuple[str | None, list[flo
     """
     if task not in _PRINTING_TASKS:
         return []
-    return [(match[1], _series_values(json.loads(match[2]))) for match in _PRINTED.finditer(question)]
+    return [_Printed(match[1], _series_values(json.loads(match[2]))) for match in _PRINTED.finditer(question)]
 
 
-def _input_contexts(task: str, text: Mapping[str, str]) -> tuple[Mapping[str, str], ...]:
+def _input_contexts(task: _Task, text: Mapping[str, str]) -> tuple[Mapping[str, str], ...]:
     """Return the context of each input series: the published texts, or a comparison's entry for each series.
 
     Returns:
@@ -244,7 +326,7 @@ def _input_contexts(task: str, text: Mapping[str, str]) -> tuple[Mapping[str, st
     Raises:
         ValueError: If a comparison's context isn't a JSON list of two texts.
     """
-    if task != _COMPARISON:
+    if task is not _Task.COMPARISON:
         return ({key: text[key] for key in _CONTEXT_KEYS},)
     entries = {key: json.loads(text[key]) for key in _CONTEXT_KEYS}
     for key, entry in entries.items():
@@ -257,9 +339,7 @@ def _input_contexts(task: str, text: Mapping[str, str]) -> tuple[Mapping[str, st
     return tuple({key: entries[key][position] for key in _CONTEXT_KEYS} for position in range(_COMPARISON_SERIES))
 
 
-def _read_question(
-    task: str, question: str, answer: str, printed: list[tuple[str | None, list[float]]]
-) -> tuple[_QuestionFormat, dict[str, str], bool]:
+def _read_question(task: _Task, question: str, answer: str, printed: list[_Printed]) -> _QuestionReading:
     """Read a question's format, its text choices, and whether another answer is as right as the published one.
 
     A puzzle has another right order when two patches are equal. A multiple-choice answer has another
@@ -277,7 +357,7 @@ def _read_question(
     if "\n\nPatches:\n" in question:
         fmt, letters = _QuestionFormat.PUZZLING, _LETTERS
     elif _TRUE_OR_FALSE_LINES in question:
-        fmt, letters = _QuestionFormat.TRUE_OR_FALSE, ("T", "F")
+        fmt, letters = _QuestionFormat.TRUE_OR_FALSE, _TRUE_OR_FALSE_LETTERS
     else:
         fmt, letters = _QuestionFormat.MULTIPLE_CHOICE, tuple(letter for letter, _ in lines)
         if not _MIN_CHOICES <= len(letters) <= len(_LETTERS) or letters != _LETTERS[: len(letters)]:
@@ -288,24 +368,24 @@ def _read_question(
     if not fits:
         raise ValueError(f"the answer {answer!r} does not fit the question's letters {letters}")
     expected_labels = [None] if fmt is _QuestionFormat.TRUE_OR_FALSE else list(letters)
-    labels = [label for label, _ in printed]
+    labels = [item.label for item in printed]
     if task in _PRINTING_TASKS and labels != expected_labels:
         raise ValueError(f"a {task} question prints series labelled {expected_labels}, got {labels}")
     choices: dict[str, str] = {}
     if fmt is _QuestionFormat.MULTIPLE_CHOICE and task not in _PRINTING_TASKS:
         choices = dict(lines)
     candidates: dict[str, tuple[float, ...] | str] = dict(choices)
-    candidates.update({label: tuple(series) for label, series in printed if label is not None})
+    candidates.update({item.label: tuple(item.values) for item in printed if item.label is not None})
     if fmt is _QuestionFormat.PUZZLING:
         ambiguous = len(set(candidates.values())) < len(candidates)
     elif fmt is _QuestionFormat.MULTIPLE_CHOICE:
         ambiguous = list(candidates.values()).count(candidates[answer]) > 1
     else:
         ambiguous = False
-    return fmt, choices, ambiguous
+    return _QuestionReading(fmt, choices, ambiguous)
 
 
-def _prompt(question: str, first_series: int, printed: list[tuple[str | None, list[float]]]) -> str:
+def _prompt(question: str, first_series: int, printed: list[_Printed]) -> str:
     """Return the question with a placeholder, such as ``<series 2>``, in place of each series it prints.
 
     Args:
@@ -328,7 +408,7 @@ def _prompt(question: str, first_series: int, printed: list[tuple[str | None, li
     return _PRINTED.sub(placeholder, question)
 
 
-def _parse_row(values: Mapping[str, Any], split: str, index: int) -> _Row:
+def _parse_row(values: Mapping[str, Any], split: _SplitFile, index: int) -> _Row:
     """Validate a published row against what a conversion needs of it.
 
     Returns:
@@ -343,37 +423,40 @@ def _parse_row(values: Mapping[str, Any], split: str, index: int) -> _Row:
             if not isinstance(values[column], str) or not values[column].strip():
                 raise ValueError(f"{column} is nonblank text")
             text[column] = values[column]
-        task, question = text["task"], text["question"]
-        if task not in {"anomaly_detection", "classification", "characterization", _COMPARISON, *_PRINTING_TASKS}:
-            raise ValueError(f"unknown task {task!r}")
+        question = text["question"]
+        if text["task"] not in set(_Task):
+            raise ValueError(f"unknown task {text['task']!r}")
+        task = _Task(text["task"])
         if text["question_type"] not in _QUESTION_TYPES.values():
             raise ValueError(f"unknown question_type {text['question_type']!r}")
         inputs, printed = _input_series(task, text["input_ts"]), _printed_series(task, question)
-        fmt, choices, ambiguous = _read_question(task, question, text["answer"], printed)
+        all_series = [*inputs, *(item.values for item in printed)]
+        reading = _read_question(task, question, text["answer"], printed)
         return _Row(
             split=split,
             index=index,
             task=task,
             question_type=text["question_type"],
-            question_format=fmt,
+            question_format=reading.question_format,
             answer=text["answer"],
             prompt=_prompt(question, len(inputs) + 1, printed),
-            choices=choices,
-            printed_labels=tuple(label for label, _ in printed),
-            lengths=tuple(len(series) for series in [*inputs, *(series for _, series in printed)]),
+            choices=reading.choices,
+            printed_roles=tuple(_Role.SEQUENCE if item.label is None else item.label for item in printed),
+            lengths=tuple(len(values) for values in all_series),
+            values_digest=_values_digest(all_series),
             n_inputs=len(inputs),
             input_contexts=_input_contexts(task, text),
             transform=_transform(task, question),
             question_digest=hashlib.blake2b(
                 "\0".join(text[c] for c in _DIGEST_COLUMNS).encode(), digest_size=16
             ).digest(),
-            has_ambiguous_answer=ambiguous,
+            has_ambiguous_answer=reading.ambiguous,
         )
     except (ValueError, KeyError, IndexError, RecursionError) as exc:
-        raise TimeFValidationError(f"{split}.parquet row {index}: {exc}") from exc
+        raise TimeFValidationError(f"{split.filename} row {index}: {exc}") from exc
 
 
-def _transform(task: str, question: str) -> str | None:
+def _transform(task: _Task, question: str) -> str | None:
     """Read the transform a data transformation question names.
 
     Returns:
@@ -382,7 +465,7 @@ def _transform(task: str, question: str) -> str | None:
     Raises:
         ValueError: If a data transformation question names no known transform.
     """
-    if task != "data_transformation":
+    if task is not _Task.DATA_TRANSFORMATION:
         return None
     match = _TRANSFORM.search(question)
     if match is None:
@@ -390,7 +473,7 @@ def _transform(task: str, question: str) -> str | None:
     return match[1]
 
 
-def _read_rows(path: Path, split: str) -> Iterator[_Row]:
+def _read_rows(path: Path, split: _SplitFile) -> Iterator[_Row]:
     """Validate every row of one split file, in file order.
 
     Yields:
@@ -406,7 +489,7 @@ def _read_rows(path: Path, split: str) -> Iterator[_Row]:
         raise TimeFFormatError(f"{path}: {exc}") from exc
 
 
-def _find_issues(rows: list[_Row]) -> dict[tuple[str, int], frozenset[SourceIssue]]:
+def _find_issues(rows: list[_Row]) -> dict[_RowKey, frozenset[SourceIssue]]:
     """Find each row's source issues, which depend on the copies of its question in every split.
 
     Returns:
@@ -415,7 +498,7 @@ def _find_issues(rows: list[_Row]) -> dict[tuple[str, int], frozenset[SourceIssu
     copies: defaultdict[bytes, list[_Row]] = defaultdict(list)
     for row in rows:
         copies[row.question_digest].append(row)
-    issues: dict[tuple[str, int], frozenset[SourceIssue]] = {}
+    issues: dict[_RowKey, frozenset[SourceIssue]] = {}
     for row in rows:
         found: set[SourceIssue] = set()
         if row.question_type != _QUESTION_TYPES[row.question_format]:
@@ -433,11 +516,20 @@ def _find_issues(rows: list[_Row]) -> dict[tuple[str, int], frozenset[SourceIssu
     return issues
 
 
+class _ParsedSeries(NamedTuple):
+    """A row's series as read from its file, with their digest."""
+
+    series: list[list[float]]
+    """The series in Record order: the inputs, then the printed series."""
+    digest: bytes
+
+
 class _SeriesLoader:
     """Load one series of a row lazily, holding one split file's series text and parsing each row once.
 
     Reading the Records in order reads each split file once. The writer sorts the series by spec type,
-    so it returns to each file once per spec type, and the loader reads a file again then.
+    so it returns to each file once per spec type, and the loader reads a file again then. A series
+    loads only if its row's lengths and values digest equal those kept at conversion.
     """
 
     def __init__(self, paths: Mapping[str, Path]) -> None:
@@ -446,7 +538,7 @@ class _SeriesLoader:
         # A row's Records load one after another, so one parsed row suffices.
         self._series = lru_cache(maxsize=1)(self._parse)
 
-    def _read_columns(self, split: str) -> tuple[pa.StringArray, pa.StringArray]:
+    def _read_columns(self, split: _SplitFile) -> tuple[pa.StringArray, pa.StringArray]:
         try:
             table = pq.read_table(self._paths[split], columns=_SERIES_COLUMNS).combine_chunks()
         except (OSError, pa.ArrowException) as exc:
@@ -454,21 +546,22 @@ class _SeriesLoader:
         input_ts, question = (table.column(name).chunk(0) for name in _SERIES_COLUMNS)
         return input_ts, question
 
-    def _parse(self, split: str, index: int, task: str) -> list[list[float]]:
+    def _parse(self, split: _SplitFile, index: int, task: _Task) -> _ParsedSeries:
         input_ts, question = self._columns(split)
         try:
             printed = _printed_series(task, str(question[index].as_py()))
-            return [*_input_series(task, str(input_ts[index].as_py())), *(series for _, series in printed)]
+            series = [*_input_series(task, str(input_ts[index].as_py())), *(item.values for item in printed)]
+            return _ParsedSeries(series, _values_digest(series))
         except (ValueError, IndexError) as exc:
-            raise TimeFFormatError(f"{split}.parquet row {index}: {exc}; the file changed since conversion") from exc
+            raise TimeFFormatError(f"{split.filename} row {index}: {exc}; the file changed since conversion") from exc
 
     def __call__(self, row: _Row, position: int) -> pa.Array:
-        series = self._series(row.split, row.index, row.task)
-        if tuple(len(values) for values in series) != row.lengths:
+        parsed = self._series(row.split, row.index, row.task)
+        if tuple(len(values) for values in parsed.series) != row.lengths or parsed.digest != row.values_digest:
             raise TimeFFormatError(
                 f"{row.file} row {row.index}: the series differ from the converted row; the file changed"
             )
-        return pa.array(series[position], type=pa.float64())
+        return pa.array(parsed.series[position], type=pa.float64())
 
 
 def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
@@ -477,9 +570,7 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
     Returns:
         The row's Records.
     """
-    roles = ("input", "second_input")[: row.n_inputs] + tuple(
-        "sequence" if label is None else label for label in row.printed_labels
-    )
+    roles = (*_INPUT_ROLES[: row.n_inputs], *row.printed_roles)
     records = []
     for position, (role, length) in enumerate(zip(roles, row.lengths, strict=True)):
         is_input = position < row.n_inputs
@@ -490,7 +581,7 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
             n_values=length,
             loader=partial(loader, row, position),
         )
-        metadata: dict[str, JsonValue] = {"file": row.file, "row": row.index, "role": role}
+        metadata: dict[str, JsonValue] = {"file": row.file, "row": row.index, "role": str(role)}
         record = Record(sources=(Source(name="series", signals=(signal,)),), metadata=metadata)
         if is_input:
             for key, value in row.input_contexts[position].items():
@@ -508,7 +599,7 @@ def _task(row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue])
     annotations = itertools.chain.from_iterable(record.annotations for record in inputs)
     input_annotations = tuple(a for a in annotations if a.key in _CONTEXT_KEYS)
     metadata: dict[str, JsonValue] = {
-        "task": row.task,
+        "task": row.task.value,
         "question_type": row.question_type,
         "question_format": row.question_format.value,
         "file": row.file,
@@ -544,7 +635,7 @@ class TSAQAConnector(BaseHuggingFaceConnector):
 
     HF_REPO = "TSAQA/TSAQA-Benchmark"
     SOURCE_REVISION = "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd"
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {split: f"{split}.parquet" for split in _SPLITS}
+    SOURCE_FILES: ClassVar[Mapping[str, str]] = {split.value: split.filename for split in _SplitFile}
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Convert each split file into lazy Records and a stream of one task per row.
@@ -565,10 +656,10 @@ class TSAQAConnector(BaseHuggingFaceConnector):
         paths = {ref.part: ref.path for ref in raw_refs}
         if paths.keys() != _SPLITS.keys():
             raise TimeFValidationError(
-                f"TSAQA needs all its split files, missing {sorted(_SPLITS.keys() - paths.keys())}"
+                f"TSAQA needs all its split files, missing {sorted(split.value for split in _SplitFile if split not in paths)}"
             )
         rows: list[_Row] = []
-        for split in _SPLITS:
+        for split in _SplitFile:
             rows.extend(_read_rows(paths[split], split))
         issues = _find_issues(rows)
         loader = _SeriesLoader(paths)
@@ -580,7 +671,7 @@ class TSAQAConnector(BaseHuggingFaceConnector):
         dataset.annotate(
             Annotation(
                 key=_TRUE_OR_FALSE_VOCABULARY,
-                value=["T", "F"],
+                value=list(_TRUE_OR_FALSE_LETTERS),
                 description="The choices of every true-or-false question: T stands for 'True.' and F for 'False.'",
             )
         )
