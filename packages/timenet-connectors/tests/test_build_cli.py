@@ -1,3 +1,4 @@
+import json
 import os
 from pathlib import Path
 import subprocess
@@ -6,11 +7,18 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
-from timenet.errors import TimeNetVersionUnavailableError
-from timenet.manifest import Manifest
+from timenet.connectors import BaseConnector
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
+from timenet.manifest import Manifest, PayloadSource
+from timenet.manifest.files import FilePart
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
-from timenet_connectors.builder import cli as cli_module
+from timenet.testing import make_dataset
+from timenet.types import DatasetMetadata, Version
+from timenet.types.reference_keys import ParentAlias
+from timenet.types.references import DatasetRef
+from timenet_connectors.builder import backend as backend_module, cli as cli_module
+from timenet_connectors.builder.backend import ConnectorBuilder
 from timenet_connectors.builder.cli import app
 
 
@@ -183,3 +191,97 @@ def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path):
     # The isolated child is the sole narrator: each status line appears exactly once.
     assert result.stderr.count("🔧 Building 'timenet/hello-world'…") == 1
     assert result.stderr.count("✅ Built 'timenet/hello-world' → 1.0.0") == 1
+
+
+_PARENT = DatasetRef.parse("test/parent@1.0.0")
+
+
+def _demo_card(dataset_id: str, **update) -> DatasetMetadata:
+    """Return the card of the demo dataset under ``dataset_id``, at version 1.0.0."""
+    return make_dataset().metadata.model_copy(
+        update={"dataset_id": dataset_id, "dataset_version": Version(1, 0, 0), **update}
+    )
+
+
+class _Parent(BaseConnector[str]):
+    """Builds the demo dataset as test/parent."""
+
+    def metadata(self):
+        return _demo_card(_PARENT.dataset_id)
+
+    def download(self, cache_dir):
+        return []
+
+    def convert(self, raw_refs):
+        dataset = make_dataset()
+        dataset._metadata = self.metadata()
+        return dataset
+
+
+class _Child(_Parent):
+    """Builds the demo dataset as test/child, which declares test/parent as its parent."""
+
+    def metadata(self):
+        return _demo_card("test/child", parents={ParentAlias("parent"): _PARENT})
+
+    def compose(self, raw_refs, context):
+        return self.convert(raw_refs)
+
+
+def test_the_build_release_command_does_not_plan(monkeypatch, tmp_path):
+    # The installed connectors build test/child and its parent test/parent, in this process.
+    connectors = {"test/child": _Child, _PARENT.dataset_id: _Parent}
+    monkeypatch.setattr(ConnectorBuilder, "dataset_ids", lambda self: list(connectors))
+    monkeypatch.setattr(ConnectorBuilder, "card", lambda self, dataset_id: connectors[dataset_id]().metadata())
+    monkeypatch.setattr(backend_module, "resolve", connectors.__getitem__)
+    monkeypatch.setenv("TIMENET_ISOLATION", "off")
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(cli_module.console, "quiet", False)
+
+    # The store lacks the parent. A planner would build it first. The command must fail on the
+    # missing parent instead.
+    result = runner.invoke(app, ["build-release", "test/child@1.0.0", "--store", str(tmp_path / "store")])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, TimeNetDatasetNotFoundError), result.exception
+    assert str(result.exception).startswith(f"complete release {_PARENT} is missing")
+    assert not (tmp_path / "store" / _PARENT.dataset_id).exists()
+
+
+def test_the_build_release_command_builds_a_release_without_parents(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIMENET_ISOLATION", "off")
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(cli_module.console, "quiet", False)
+
+    result = runner.invoke(app, ["build-release", "timenet/hello-world@1.0.0", "--store", str(tmp_path / "store")])
+
+    assert result.exit_code == 0, result.output
+    assert (tmp_path / "store/timenet/hello-world/1.0.0/manifest.json").is_file()
+    assert result.output.count("🔧 Building 'timenet/hello-world'…") == 1
+    assert result.output.count("✅ Built 'timenet/hello-world' → 1.0.0") == 1
+    assert result.stdout == ""
+
+
+@pytest.mark.parametrize("quiet", [False, True])
+def test_the_build_release_command_passes_the_pins_and_the_options(monkeypatch, tmp_path, quiet):
+    release = DatasetRef.parse("timenet/hello-world@1.0.0")
+    pinned = PayloadSource(release=release, files=(FilePart(path="a.bin", checksum="sha256:" + "0" * 64, size=1),))
+    pins_file = tmp_path / "pins.json"
+    pins_file.write_text(json.dumps({"test/reader@1.0.0": pinned.model_dump(mode="json")}), encoding="utf-8")
+    calls = []
+    monkeypatch.setattr(
+        ConnectorBuilder,
+        "build_prepared",
+        lambda self, release, store, **kwargs: calls.append((release, store, kwargs)),
+    )
+    monkeypatch.setattr(cli_module.console, "quiet", False)
+    options = ["--store", str(tmp_path), "--force", "--keep-cache", "--pinned-by", str(pins_file)]
+
+    result = runner.invoke(app, [*(["--quiet"] if quiet else []), "build-release", str(release), *options])
+
+    assert result.exit_code == 0, result.output
+    ((built, store, kwargs),) = calls
+    assert (built, store.root, kwargs["force"]) == (release, tmp_path, True)
+    assert kwargs["pinned_by"] == {DatasetRef.parse("test/reader@1.0.0"): pinned}
+    assert kwargs["options"].keep_cache is True
+    assert (kwargs["options"].progress is None) is quiet
