@@ -10,7 +10,7 @@ from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
-from typing import TYPE_CHECKING, Protocol
+from typing import TYPE_CHECKING, Literal, Protocol
 
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
 from timenet.progress import ProgressCallback
@@ -34,11 +34,13 @@ class BuildOptions:
         keep_cache: Keep the raw download cache after the build.
         progress: The callback for build progress events, or ``None``.
         quiet: Suppress output from the backend and its child processes.
+        isolation: Build in an environment of its own (``"on"``) or here (``"off"``); ``None`` keeps ``TIMENET_ISOLATION``.
     """
 
     keep_cache: bool = False
     progress: ProgressCallback | None = None
     quiet: bool = False
+    isolation: Literal["on", "off"] | None = None
 
 
 class BuilderBackend(Protocol):
