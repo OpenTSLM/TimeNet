@@ -6,8 +6,7 @@ time. To add one, drop a ``datasets/<org>/<name>/`` package with a ``connector.p
 ``CONNECTOR`` and a ``dataset.yaml`` card. You do not register it here.
 """
 
-from collections.abc import Generator, Mapping
-from contextlib import contextmanager, nullcontext
+from collections.abc import Mapping
 import json
 from pathlib import Path
 
@@ -17,6 +16,7 @@ from timenet.builders import BuilderBackend, BuildOptions, declared, find_card, 
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console, progress_renderer
 from timenet.config import settings
+from timenet.coordinator.build import build_release
 from timenet.coordinator.plan import Step, prepare_parents
 from timenet.engine import publish_pipeline, run_pipeline
 from timenet.errors import (
@@ -27,20 +27,19 @@ from timenet.errors import (
     TimeNetRegistryError,
 )
 from timenet.manifest import PayloadSource
-from timenet.progress import BytesMoved
 from timenet.registry import (
     BaseRegistry,
     LocalRegistry,
     WritableRegistry,
+    copy_release,
     local_registry_path,
     open_registry,
     open_writable_registry,
 )
+from timenet.registry._paths import release_dir  # ruff: ignore[import-private-name]
 from timenet.types.references import DatasetRef, split_ref
-from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.builder.env import run_isolated
 from timenet_connectors.discovery import known_ids, resolve
-from timenet_connectors.download import DownloadProgress, progress_sink
 
 
 app = typer.Typer(help="Build TimeNet datasets from connectors.", no_args_is_help=True)
@@ -85,11 +84,13 @@ def build(
         help="Output registry: a local directory or a timenet:// / http(s):// / s3:// URL "
         "(default: $TIMENET_REGISTRY, else the local registry).",
     ),
-    force: bool = typer.Option(False, "--force", "-f", help="Rebuild even if the version is already built."),
+    force: bool = typer.Option(
+        False, "--force", "-f", help="Build the release again, even if the local registry holds it."
+    ),
     fetch_from: str | None = typer.Option(
         None,
         "--fetch-from",
-        help="Copy missing parent releases from this registry URI (local --out only).",
+        help="Copy missing parent releases from this registry URI.",
     ),
     build_parents: bool = typer.Option(
         False, "--build-parents", help="Build missing parent releases from their installed connectors."
@@ -113,31 +114,38 @@ def build(
     """Run a connector through the engine and write or publish its dataset.
 
     A local ``--out`` writes a dataset-layout directory and prints its path to stdout. A remote
-    ``--out`` (``timenet://`` / ``http(s)://`` / ``s3://``) publishes through the registry and prints
-    the version. Either way an emoji summary goes to stderr, so scripts can capture stdout. A built
-    version is reused unless you give ``--force``.
+    ``--out`` (``timenet://`` / ``http(s)://`` / ``s3://``) gets the release in two steps. First, the
+    release builds into the default local registry. Then a copy publishes it with its payload
+    sources, and the command prints the version. If the remote registry already holds the version
+    and ``--force`` is not set, nothing builds and nothing is copied. Either way an emoji summary goes
+    to stderr, so scripts can capture stdout. A built version is reused unless you give ``--force``.
+    A published version never changes. So ``--force`` with a remote ``--out`` that holds the version
+    is a usage error, and nothing runs.
 
     The build runs in an environment built from the connector's ``requirements.txt``. Pass
     ``--no-isolation`` (or set ``TIMENET_ISOLATION=off``) to run it in the current interpreter
     instead, which is what you want while writing a connector.
 
-    A dataset whose card declares ``parents`` needs those exact parent releases in the output
+    A dataset whose card declares ``parents`` needs those exact parent releases in the local
     registry. ``--fetch-from`` names a registry to copy a missing parent from. ``--build-parents``
     builds a missing parent from its own connector. If neither option obtains a missing parent, the
     build fails before any download. The build prepares every parent before the dataset itself. It
-    never builds a parent over a release that the output already holds. If the output already holds
-    the version, the build needs only the payload sources of the version. It prepares them the same
-    way as a parent.
+    never builds a parent over a release that the local registry already holds.
+    If the local registry already holds the version, the build needs only the payload sources of
+    the version. It prepares them the same way as a parent.
 
     Raises:
-        BadParameter: If ``dataset_id`` has no known connector.
+        BadParameter: If ``dataset_id`` has no known connector. Also if ``--force`` is set and the
+            remote ``--out`` holds the version. Nothing runs then.
         TimeNetVersionUnavailableError: If the connector cannot build the requested version.
         TimeNetMissingParentError: If a parent is missing. The hint of the error names the flags.
-        TimeNetFileError: If a copy of a parent in the output is damaged, or a fetched file does not
-            match its manifest record. The hint of the error names the flags.
+        TimeNetFileError: If a copy of a parent in the local registry is damaged, or a copied file
+            does not match its manifest record. The hint of the error names the flags.
         TimeNetAccessError: If the output is remote and gets a release without access declared
             ``open``.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by declared and the build
+        TimeNetVersionConflictError: If the copy to the remote ``--out`` finds other files of the
+            version, or of a payload source of it, in that registry. Nothing is copied then.
+    """  # ruff: ignore[docstring-extraneous-exception] - the copy raises TimeNetVersionConflictError
     # known_ids() imports no connector. So an unknown id fails before any environment exists.
     dataset_id, version = split_ref(release)
     known = known_ids()
@@ -145,21 +153,22 @@ def build(
         raise typer.BadParameter(f"no connector for {dataset_id!r}; known: {', '.join(known) or '(none)'}")
     if version is not None:
         declared(dataset_id, version)
-    forwarded = out if out is not None else settings().registry
-    if forwarded is None:
-        forwarded = str(settings().registry_path)
     try:
-        result = build_one(
-            dataset_id,
-            forwarded,
-            fetch_from=fetch_from,
-            build_parents=build_parents,
-            force=force,
-            keep_cache=keep_cache,
-            isolation=isolation,
-            narrate=True,
-            pinned_by=None if pinned_by is None else _read_pins(pinned_by),
-        )
+        # The parent shows each copy and build step. An isolated child shows its own downloads and shards.
+        with progress_renderer() as progress:
+            result = _build_to(
+                dataset_id,
+                _resolve_target(out),
+                fetch_from=None if fetch_from is None else open_registry(fetch_from),
+                build_parents=build_parents,
+                force=force,
+                pinned_by=None if pinned_by is None else _read_pins(pinned_by),
+                options=BuildOptions(
+                    keep_cache=keep_cache,
+                    progress=progress,
+                    isolation=None if isolation is None else ("on" if isolation else "off"),
+                ),
+            )
     except TimeNetMissingParentError as error:
         error.hint = "Fetch it with --fetch-from <registry> or build it with --build-parents."
         raise
@@ -174,6 +183,70 @@ def build(
         error.hint = "A remote --out holds open releases only. Build it into a local --out instead."
         raise
     typer.echo(result)
+
+
+def _build_to(  # ruff: ignore[too-many-arguments]
+    dataset_id: str,
+    target: WritableRegistry | Path,
+    *,
+    fetch_from: BaseRegistry | None,
+    build_parents: bool,
+    force: bool,
+    pinned_by: Mapping[DatasetRef, PayloadSource] | None,
+    options: BuildOptions,
+) -> str:
+    """Build a release into a local output, or build it locally and copy it to a remote output.
+
+    If nothing runs, because the local output holds the release or the remote output holds the
+    version, this function says so on the console.
+
+    Args:
+        dataset_id: The dataset ID.
+        target: The local directory, or the registry that is not local.
+        fetch_from: The registry to copy missing parents from, or ``None``.
+        build_parents: Build missing parents with their installed connectors.
+        force: Build the release again, even if the local registry holds it.
+        pinned_by: The releases that already read files of the release, with their pins.
+        options: The options of each build.
+
+    Returns:
+        The version directory for a local output, or the version for a remote one.
+
+    Raises:
+        BadParameter: If ``force`` is set and the remote output holds the version. Nothing runs then.
+    """
+    release = declared(dataset_id).release
+    if isinstance(target, Path):
+        store, remote = LocalRegistry(target), None
+    elif target.exists(release.dataset_id, str(release.version)):
+        if force:
+            raise typer.BadParameter(
+                f"the remote --out holds {release}, and a published version never changes. --force builds "
+                "a release again only for a local --out, or for a version that the remote --out does not hold.",
+                param_hint="--force",
+            )
+        console.success(f"Nothing to do: '{release.dataset_id}' {release.version} is already in the remote --out")
+        return str(release.version)
+    else:
+        store, remote = LocalRegistry(settings().registry_path), target
+    # A remote registry holds only open releases. So for a remote output, the build refuses another
+    # release before any download, as a build into that registry would.
+    plan = build_release(
+        dataset_id,
+        store=store,
+        fetch_from=fetch_from,
+        build_parents=build_parents,
+        force=force,
+        pinned_by=pinned_by,
+        open_access_only=remote is not None,
+        options=options,
+    )
+    if remote is not None:
+        copy_release(release, store, remote, progress=options.progress)
+        return str(release.version)
+    if not plan.steps:
+        console.success(f"Nothing to do: '{release.dataset_id}' {release.version} is already in {store}")
+    return str(release_dir(store.root, release))
 
 
 @app.command("build-prepared-release", hidden=True)
@@ -210,13 +283,19 @@ def build_one(  # ruff: ignore[too-many-arguments]
     force: bool = False,
     keep_cache: bool = False,
     isolation: bool | None = None,
-    narrate: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
     """Prepare a dataset's parents, then build or reuse its release.
 
-    The build fails before downloading if it cannot copy or build a missing parent.
-    A new release must match every file record in ``pinned_by`` before publication.
+    The ``build()`` method of :class:`~timenet_connectors.builder.backend.ConnectorBuilder` calls
+    this function. If ``fetch_from`` or ``build_parents`` does not obtain a missing parent, the
+    build fails before any download. A parent builds the same way as this dataset. A parent never
+    builds with ``force``. If another builder backend claims a parent, the ``build`` method of that
+    backend builds the parent with its pins. If ``force`` is not set and the output already holds
+    the version, the build prepares only the missing payload sources of the version. In that case,
+    the build does not run the connector of this dataset. The connector runs in an environment
+    built from its requirements. If isolation is off, the connector runs in this interpreter. A
+    local output gets a version directory. A remote output gets a published version.
 
     Args:
         dataset_id: The dataset ID.
@@ -225,9 +304,10 @@ def build_one(  # ruff: ignore[too-many-arguments]
         build_parents: Build missing parents with installed connectors.
         force: Rebuild an existing version.
         keep_cache: Keep the raw download cache after building.
-        isolation: Use a separate environment if true, this interpreter if false, or ``TIMENET_ISOLATION`` if ``None``.
-        narrate: Print status and download progress when isolation is off.
-        pinned_by: The expected file records for this release, grouped by the releases that read them.
+        isolation: If true, build in an environment built from the connector's requirements.
+            If ``None``, use the ``TIMENET_ISOLATION`` setting.
+        pinned_by: The releases that already read files of this release, with their pins. The build
+            publishes the release only if it reproduces each pinned file.
 
     Returns:
         The committed version directory for a local output, or the published version.
@@ -249,7 +329,6 @@ def build_one(  # ruff: ignore[too-many-arguments]
             output,
             isolated=isolated,
             keep_cache=keep_cache,
-            narrate=narrate,
             pinned_by=step.pinned_by,
         )
 
@@ -263,9 +342,6 @@ def build_one(  # ruff: ignore[too-many-arguments]
     )
     committed = None if force else _committed(dataset_id, target, registry)
     if committed is not None:
-        if narrate:
-            built = f"Built '{dataset_id}' → {Path(committed).name}"
-            console.success(built if isinstance(target, Path) else f"Published '{dataset_id}' → {committed}")
         return committed
     return _build(
         dataset_id,
@@ -274,7 +350,6 @@ def build_one(  # ruff: ignore[too-many-arguments]
         isolated=isolated,
         force=force,
         keep_cache=keep_cache,
-        narrate=narrate,
         pinned_by=pinned_by,
     )
 
@@ -341,7 +416,6 @@ def _build(  # ruff: ignore[too-many-arguments]
     isolated: bool,
     force: bool = False,
     keep_cache: bool = False,
-    narrate: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
     """Build a dataset in a local directory or writable registry.
@@ -353,8 +427,7 @@ def _build(  # ruff: ignore[too-many-arguments]
         isolated: Build in an environment built from the connector's requirements.
         force: Rebuild an existing version.
         keep_cache: Keep the raw download cache after building.
-        narrate: Print status and download progress when isolation is off.
-        pinned_by: Releases that read this dataset's files, with file pins the build must match.
+        pinned_by: The releases that already read files of this release, with their pins.
 
     Returns:
         The committed version directory for a local output, or the published version.
@@ -375,35 +448,23 @@ def _build(  # ruff: ignore[too-many-arguments]
             quiet=console.quiet,
             pinned_by=pinned_by,
         )
-    if narrate:
-        console.status("🔧", f"Building '{dataset_id}'…")
     connector = resolve(dataset_id)()
-    progress_cb = _report_progress if narrate else None
-    # A connector's downloads report through the ambient progress sink. _download_progress renders them.
-    with _download_progress() if narrate else nullcontext():
-        if isinstance(target, Path):
-            version_dir = run_pipeline(
-                connector,
-                target,
-                progress_cb=progress_cb,
-                force=force,
-                keep_cache=keep_cache,
-                pinned_by=pinned_by,
-            )
-            if narrate:
-                console.success(f"Built '{dataset_id}' → {version_dir.name}")
-            return str(version_dir)
-        version = publish_pipeline(
+    if isinstance(target, Path):
+        version_dir = run_pipeline(
             connector,
             target,
-            progress_cb=progress_cb,
             force=force,
             keep_cache=keep_cache,
             pinned_by=pinned_by,
         )
-        if narrate:
-            console.success(f"Published '{dataset_id}' → {version}")
-        return version
+        return str(version_dir)
+    return publish_pipeline(
+        connector,
+        target,
+        force=force,
+        keep_cache=keep_cache,
+        pinned_by=pinned_by,
+    )
 
 
 def _read_pins(path: Path) -> dict[DatasetRef, PayloadSource]:
@@ -414,34 +475,6 @@ def _read_pins(path: Path) -> dict[DatasetRef, PayloadSource]:
     """
     pins = json.loads(path.read_text(encoding="utf-8"))
     return {DatasetRef.parse(key): PayloadSource.model_validate(value) for key, value in pins.items()}
-
-
-def _report_progress(event: WriteProgressEvent) -> None:
-    """Relay writer progress to the console.
-
-    The shared console coordinates with any live download bars, so this renders above them.
-
-    Args:
-        event: The writer progress event.
-    """
-    if event.stage is ProgressStage.SHARD_FINALIZED:
-        console.status("💾", f"wrote shard {event.completed}")
-
-
-@contextmanager
-def _download_progress() -> Generator[None]:
-    """Display download progress during the ``with`` block."""
-    with progress_renderer() as render:
-        if render is None:
-            with progress_sink(None):
-                yield
-            return
-
-        def report(event: DownloadProgress) -> None:
-            render(BytesMoved(event.url, event.downloaded, event.total))
-
-        with progress_sink(report):
-            yield
 
 
 def main() -> None:
