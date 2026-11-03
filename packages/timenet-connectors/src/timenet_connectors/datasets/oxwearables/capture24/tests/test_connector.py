@@ -9,9 +9,9 @@ from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
-from timenet.types import ClassificationTask, Split, TimeInterval
+from timenet.types import TimeInterval
 from timenet.types.text import read_value
-from timenet_connectors.datasets.oxwearables.capture24 import Capture24Connector
+from timenet_connectors.datasets.oxwearables.capture24 import Capture24Connector, connector
 
 
 _SLEEP = "7030 sleeping;MET 0.95"
@@ -61,12 +61,18 @@ def _p101() -> list[tuple[int, str]]:
     return first + second
 
 
+def _p100() -> list[tuple[int, str]]:
+    """One bin of sleep: the last participant of the train split."""
+    return [(index * 10_000, _SLEEP) for index in range(1000)]
+
+
 def _release(tmp_path: Path) -> Path:
     root = tmp_path / "capture24"
     root.mkdir()
     (root / "annotation-label-dictionary.csv").write_text(_DICTIONARY, encoding="utf-8")
-    (root / "metadata.csv").write_text("pid,age,sex\nP001,38-52,F\nP101,18-29,M\n", encoding="utf-8")
+    (root / "metadata.csv").write_text("pid,age,sex\nP001,38-52,F\nP100,30-37,F\nP101,18-29,M\n", encoding="utf-8")
     _write_recording(root / "P001.csv.gz", _p001())
+    _write_recording(root / "P100.csv.gz", _p100())
     _write_recording(root / "P101.csv.gz", _p101())
     return root
 
@@ -132,6 +138,11 @@ _EXPECTED = {
             "annotations": {"age": "38-52", "sex": "F", "recording_start_local": "2016-11-13T02:18:00"},
             "sources": [{"name": "Axivity AX3 segment 0", "signals": _signals(4500, 0)}],
         },
+        "P100": {
+            "file": "P100.csv.gz",
+            "annotations": {"age": "30-37", "sex": "F", "recording_start_local": "2016-11-13T02:18:00"},
+            "sources": [{"name": "Axivity AX3 segment 0", "signals": _signals(1000, 0)}],
+        },
         "P101": {
             "file": "P101.csv.gz",
             "annotations": {"age": "18-29", "sex": "M", "recording_start_local": "2016-11-13T02:18:00"},
@@ -166,6 +177,9 @@ _EXPECTED = {
             "train",
         ),
         ("P001", 20_000_000, 30_000_000, "walmsley_2020_vocabulary", ("light",), "train"),
+        # P100 is the last train participant and P101 the first test one.
+        ("P100", 0, 10_000_000, "willetts_specific_2018_vocabulary", ("sleep",), "train"),
+        ("P100", 0, 10_000_000, "walmsley_2020_vocabulary", ("sleep",), "train"),
         ("P101", 0, 10_000_000, "willetts_specific_2018_vocabulary", ("sitting",), "test"),
         ("P101", 0, 10_000_000, "walmsley_2020_vocabulary", ("sedentary",), "test"),
         # The bin [3620 s, 3630 s) of the first segment's grid. Its samples start 5 ms into it, so the
@@ -183,20 +197,38 @@ _EXPECTED = {
 }
 
 
+# The rows of each recording that make up each segment, by participant and segment name.
+_SEGMENT_ROWS = {
+    ("P001", "Axivity AX3 segment 0"): range(4500),
+    ("P100", "Axivity AX3 segment 0"): range(1000),
+    ("P101", "Axivity AX3 segment 0"): range(1500),
+    ("P101", "Axivity AX3 segment 1"): range(1500, 2932),
+}
+
+
+def _assert_values(dataset) -> None:
+    """Check every segment's x, y and z against the text the fixture wrote, parsed."""
+    expected = {}
+    for key, rows in _SEGMENT_ROWS.items():
+        expected[*key, "x"] = [float(f"{index * 0.001:.8f}") for index in rows]
+        expected[*key, "y"] = [float(f"{-index * 0.001:.8f}") for index in rows]
+        expected[*key, "z"] = [0.98765432] * len(rows)
+    actual = {
+        (record.metadata["subject_id"], source.name, signal.name): signal.to_numpy()
+        for record in dataset.records
+        for source in record.sources
+        for signal in source.signals
+    }
+    assert actual.keys() == expected.keys()
+    for key, values in actual.items():
+        assert values.dtype == np.float64
+        np.testing.assert_array_equal(values, expected[key], err_msg=str(key))
+
+
 def test_converts_the_fixture(tmp_path):
     dataset = Capture24Connector().convert([_release(tmp_path)])
     assert _output(dataset) == _EXPECTED
-    assert all(isinstance(task, ClassificationTask) for task in dataset.iter_tasks())
-
-
-def test_signals_reread_their_segment(tmp_path):
-    dataset = Capture24Connector().convert([_release(tmp_path)])
-    p101 = next(record for record in dataset.records if record.metadata["subject_id"] == "P101")
-    second = next(source for source in p101.sources if source.name.endswith("segment 1"))
-    x = next(signal for signal in second.signals if signal.name == "x").to_numpy()
-    assert x.dtype == np.float64
-    # Row 1500 is the second segment's first sample. The values are the written text, parsed.
-    np.testing.assert_array_equal(x, [float(f"{index * 0.001:.8f}") for index in range(1500, 2932)])
+    _assert_values(dataset)
 
 
 def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
@@ -205,8 +237,22 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     registry.store(original)
     with TimeFReader(registry.open_version("oxwearables/capture24", "1.0.0")) as reader:
         restored = reader.read()
-    assert _output(original) == _EXPECTED
-    assert _output(restored) == _EXPECTED
+        assert _output(restored) == _EXPECTED
+        _assert_values(restored)
+
+
+def test_storing_reads_each_recording_once(tmp_path, monkeypatch):
+    reads = []
+    read_acceleration = connector._read_acceleration
+
+    def spy(participant):
+        reads.append(participant.person.path.name)
+        return read_acceleration(participant)
+
+    monkeypatch.setattr(connector, "_read_acceleration", spy)
+    original = Capture24Connector().convert([_release(tmp_path)])
+    LocalRegistry(tmp_path / "registry").store(original)
+    assert reads == ["P001.csv.gz", "P100.csv.gz", "P101.csv.gz"]
 
 
 def test_tasks_mark_only_their_window_as_input(tmp_path):
@@ -237,19 +283,16 @@ def test_tasks_mark_only_their_window_as_input(tmp_path):
         assert dict(task.metadata) == {}
 
 
-def test_tasks_follow_the_benchmark_split(tmp_path):
-    dataset = Capture24Connector().convert([_release(tmp_path)])
-    test_tasks = list(dataset.iter_tasks(split=Split.TEST))
-    assert {task.inputs[0].metadata["subject_id"] for task in test_tasks} == {"P101"}
-    assert len(test_tasks) == 4
-    assert len(list(dataset.iter_tasks(split=Split.TRAIN))) == 6
-
-
 def _rewrite(path: Path, edit) -> None:
     with gzip.open(path, "rt", encoding="utf-8") as handle:
         lines = handle.read().splitlines()
     with gzip.open(path, "wt", encoding="utf-8") as handle:
         handle.write("\n".join(edit(lines)) + "\n")
+
+
+def _with_x(line: str, value: str) -> str:
+    time, _, *rest = line.split(",", 2)
+    return ",".join([time, value, *rest])
 
 
 @pytest.mark.parametrize(
@@ -259,6 +302,8 @@ def _rewrite(path: Path, edit) -> None:
         (lambda lines: [lines[0], lines[2], lines[1], *lines[3:]], "doesn't follow the one before it"),
         (lambda lines: [*lines[:5], lines[5].replace(_SLEEP, "unknown;MET 1.0"), *lines[6:]], "label dictionary"),
         (lambda lines: [*lines[:5], ",0.1,0.2,0.3,", *lines[6:]], "have no timestamp"),
+        (lambda lines: [*lines[:5], _with_x(lines[5], ""), *lines[6:]], "have no x value"),
+        (lambda lines: [*lines[:5], _with_x(lines[5], "nan"), *lines[6:]], "a x value is not finite"),
     ],
 )
 def test_malformed_recording_fails_with_its_path(tmp_path, edit, message):
@@ -269,20 +314,28 @@ def test_malformed_recording_fails_with_its_path(tmp_path, edit, message):
     assert "P001.csv.gz" in str(error.value)
 
 
-def _with_x(line: str, value: str) -> str:
-    time, _, *rest = line.split(",", 2)
-    return ",".join([time, value, *rest])
+def _x_of(dataset, pid: str):
+    record = next(record for record in dataset.records if record.metadata["subject_id"] == pid)
+    return next(signal for signal in record.signals if signal.name == "x")
 
 
-@pytest.mark.parametrize(("value", "message"), [("", "have no x value"), ("nan", "is not finite")])
-def test_bad_acceleration_fails_when_read(tmp_path, value, message):
+@pytest.mark.parametrize(
+    ("edit", "message"),
+    [
+        (lambda lines: lines[:-1], "holds 4499 rows, 4500 when it was read"),
+        # The same number of rows: z of one row rewritten, and two rows swapped.
+        (lambda lines: [*lines[:5], lines[5].replace("0.98765432", "0.98765433"), *lines[6:]], "values differ"),
+        (lambda lines: [*lines[:5], lines[6], lines[5], *lines[7:]], "values differ"),
+    ],
+)
+def test_changed_recording_fails_when_reread(tmp_path, edit, message):
     root = _release(tmp_path)
-    _rewrite(root / "P001.csv.gz", lambda lines: [*lines[:5], _with_x(lines[5], value), *lines[6:]])
     dataset = Capture24Connector().convert([root])
-    p001 = next(record for record in dataset.records if record.metadata["subject_id"] == "P001")
-    x = next(signal for signal in p001.signals if signal.name == "x")
-    with pytest.raises(TimeFFormatError, match=message):
-        x.to_numpy()
+    _rewrite(root / "P001.csv.gz", edit)
+    with pytest.raises(TimeFFormatError, match=message) as error:
+        _x_of(dataset, "P001").to_numpy()
+    assert "P001.csv.gz" in str(error.value)
+    assert "the file changed" in str(error.value)
 
 
 def test_metadata_and_recordings_must_name_the_same_participants(tmp_path):
