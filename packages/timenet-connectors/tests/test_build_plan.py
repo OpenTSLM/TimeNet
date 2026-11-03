@@ -22,7 +22,7 @@ from timenet.errors import (
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, S3Registry, WritableRegistry
 from timenet.registry._paths import release_dir
-from timenet.testing import make_dataset
+from timenet.testing import install_backends, make_dataset
 from timenet.types import Access, TimeSeriesSpec, ureg
 from timenet.types.access import AccessRequirement
 from timenet.types.parent_dataset_card import ParentDatasetCard
@@ -48,6 +48,9 @@ class _CardBackend:
     def __init__(self, cards):
         self.cards = cards
 
+    def dataset_ids(self):
+        return list(self.cards)
+
     def knows(self, dataset_id):
         return dataset_id in self.cards
 
@@ -67,19 +70,14 @@ class _InRepoCards(ConnectorBuilder):
     def __init__(self, cards):
         self.cards = cards
 
+    def dataset_ids(self):
+        return list(self.cards)
+
     def knows(self, dataset_id):
         return dataset_id in self.cards
 
     def card(self, dataset_id):
         return self.cards.get(dataset_id)
-
-
-class _Entry:
-    def __init__(self, backend):
-        self._backend = backend
-
-    def load(self):
-        return lambda: self._backend
 
 
 def _cards(**parents: dict[str, DatasetRef]) -> dict:
@@ -104,7 +102,7 @@ def _install_cards(monkeypatch, **parents: dict[str, DatasetRef]) -> dict:
         The cards by dataset ID, which a test may change.
     """
     cards = _cards(**parents)
-    monkeypatch.setattr(builders, "entry_points", lambda group: [_Entry(_InRepoCards(cards))])
+    install_backends(monkeypatch, _InRepoCards(cards))
     return cards
 
 
@@ -238,8 +236,7 @@ def test_the_plan_reads_each_card_from_the_backend_that_claims_the_dataset(tmp_p
     del cards[GRAND.dataset_id]
     # The in-repo backend claims GRAND (the hello-world connector) but none of the test datasets,
     # which only the second backend knows.
-    entries = [_Entry(ConnectorBuilder()), _Entry(_CardBackend(cards))]
-    monkeypatch.setattr(builders, "entry_points", lambda group: entries)
+    install_backends(monkeypatch, ConnectorBuilder(), _CardBackend(cards))
 
     steps = plan_parents(CHILD.dataset_id, LocalRegistry(tmp_path), build_parents=True)
 
@@ -252,10 +249,9 @@ def test_the_plan_reads_each_card_from_the_backend_that_claims_the_dataset(tmp_p
 def test_a_parent_whose_card_cannot_be_read_fails_the_plan_with_the_card_error(tmp_path, monkeypatch):
     (tmp_path / "dataset.yaml").write_text("dataset_id: [unclosed\n")
     # The in-repo backend claims PARENT, whose card cannot be read. The second backend serves CHILD.
-    monkeypatch.setattr(backend_module, "has_connector", lambda dataset_id: dataset_id == PARENT.dataset_id)
+    monkeypatch.setattr(backend_module, "known_ids", lambda: [PARENT.dataset_id])
     monkeypatch.setattr(backend_module, "connector_dir", lambda dataset_id: tmp_path)
-    entries = [_Entry(ConnectorBuilder()), _Entry(_CardBackend(_cards(child={"parent": PARENT})))]
-    monkeypatch.setattr(builders, "entry_points", lambda group: entries)
+    install_backends(monkeypatch, ConnectorBuilder(), _CardBackend(_cards(child={"parent": PARENT})))
 
     with pytest.raises(TimeNetInvalidCardError, match="could not read dataset card") as caught:
         plan_parents(CHILD.dataset_id, LocalRegistry(tmp_path / "output"), build_parents=True)
@@ -468,8 +464,8 @@ def _isolated_builds(calls: list) -> object:
 
 
 def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch):
-    _install_cards(monkeypatch, child={"parent": PARENT, "grand": GRAND}, parent={})
-    monkeypatch.setattr(cli_module, "connector_dir", lambda dataset_id: tmp_path)
+    cards = _install_cards(monkeypatch, child={"parent": PARENT, "grand": GRAND}, parent={})
+    monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
@@ -604,7 +600,7 @@ def test_a_fetch_of_a_release_that_is_not_open_fails_before_any_download(tmp_pat
 
 
 def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, monkeypatch):
-    _install_cards(monkeypatch, child={"parent": PARENT}, parent={"parent": GRAND})
+    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={"parent": GRAND})
     output = LocalRegistry(tmp_path / "output")
     _parent_without_its_source(output)
     pins = output.get_manifest(PARENT.dataset_id).payload_sources[SourceKey(str(GRAND))]
@@ -627,7 +623,7 @@ def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, mo
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(env_module, "requirements_for", lambda dataset_id: None)
     monkeypatch.setattr(env_module, "_run_build", child)
-    monkeypatch.setattr(cli_module, "connector_dir", lambda dataset_id: tmp_path)
+    monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
     monkeypatch.setattr(cli_module, "resolve", lambda dataset_id: _Grand)
     monkeypatch.setattr(cli_module, "run_pipeline", run_pipeline)
 
@@ -669,7 +665,7 @@ def test_a_parent_that_another_backend_claims_builds_there_with_its_pins(tmp_pat
     calls, isolated = [], []
     # The in-repo backend comes first but claims none of the test datasets.
     backends = [ConnectorBuilder(), _CopyBackend(_cards(child={"parent": PARENT}, parent={}, stored={}), saved, calls)]
-    monkeypatch.setattr(builders, "entry_points", lambda group: [_Entry(backend) for backend in backends])
+    install_backends(monkeypatch, *backends)
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(cli_module, "run_isolated", _isolated_builds(isolated))
     if output_kind == "remote":
@@ -708,7 +704,7 @@ def test_a_subclass_of_the_in_repo_backend_builds_a_parent_through_its_own_build
     cards = _cards(child={"parent": PARENT}, parent={})
     own, isolated = [], []
     backend = _OwnBuild(cards, own) if overrides else _InRepoCards(cards)
-    monkeypatch.setattr(builders, "entry_points", lambda group: [_Entry(backend)])
+    install_backends(monkeypatch, backend)
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(cli_module, "run_isolated", _isolated_builds(isolated))
     output = LocalRegistry(tmp_path / "output")
@@ -741,7 +737,7 @@ def test_a_proxy_backend_builds_a_parent_through_the_build_of_its_instance(tmp_p
     # The class of the proxy has no build(). The instance forwards build() to a backend that records it.
     backend = _Proxy(_OwnBuild(_cards(child={"parent": PARENT}, parent={}), own))
     assert not hasattr(_Proxy, "build")
-    monkeypatch.setattr(builders, "entry_points", lambda group: [_Entry(backend)])
+    install_backends(monkeypatch, backend)
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(cli_module, "run_isolated", _isolated_builds(isolated))
     output = LocalRegistry(tmp_path / "output")
@@ -758,7 +754,7 @@ def test_a_proxy_backend_builds_a_parent_through_the_build_of_its_instance(tmp_p
 @pytest.mark.parametrize("case", ["missing", "damaged", "not-open"])
 def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    monkeypatch.setattr(cli_module, "connector_dir", lambda dataset_id: tmp_path)
+    monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
     out = LocalRegistry(tmp_path / "out")
     if case == "damaged":
         out.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))

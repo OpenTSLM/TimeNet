@@ -6,25 +6,60 @@ SDK's whole knowledge of building to one protocol and one lookup, and lets a thi
 package plug in the same way the first-party one does.
 """
 
-from collections.abc import Mapping
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass
 from importlib.metadata import entry_points
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from timenet.progress import ProgressCallback
 from timenet.types import DatasetMetadata
 from timenet.types.references import DatasetRef
 
 
 if TYPE_CHECKING:
     from timenet.manifest import PayloadSource
-    from timenet.registry import BaseRegistry
+    from timenet.registry import BaseRegistry, LocalRegistry
 
 
 ENTRY_POINT_GROUP = "timenet.builders"
 
 
+@dataclass(frozen=True)
+class BuildOptions:
+    """Options of a build that do not change the files of the release.
+
+    Attributes:
+        keep_cache: Keep the raw download cache after the build.
+        progress: Receives the progress events of the build, or ``None``.
+    """
+
+    keep_cache: bool = False
+    progress: ProgressCallback | None = None
+
+
 class BuilderBackend(Protocol):
-    """Something that can build a dataset from its connector."""
+    """Something that can build a dataset release from its connector.
+
+    The build coordinator plans the build first. It puts each parent of a release, and each payload
+    source of such a parent, into the local store before it calls :meth:`build_prepared` for that
+    release. So :meth:`build_prepared` builds exactly one release, and it does not plan, copy or
+    build other releases.
+    """
+
+    def dataset_ids(self) -> Iterable[str]:
+        """Return the IDs of the datasets that this backend can build.
+
+        Implementations must answer without importing a connector: this runs before any connector
+        environment exists.
+
+        Returns:
+            The dataset IDs.
+
+        Raises:
+            TimeNetInvalidCardError: If the card of a connector cannot be read.
+        """
+        ...
 
     def knows(self, dataset_id: str) -> bool:
         """Report whether this backend has a connector for the id.
@@ -105,19 +140,56 @@ class BuilderBackend(Protocol):
         """
         ...
 
+    def build_prepared(
+        self,
+        release: DatasetRef,
+        store: "LocalRegistry",
+        *,
+        force: bool,
+        pinned_by: "Mapping[DatasetRef, PayloadSource]",
+        options: BuildOptions,
+    ) -> None:
+        """Build exactly this release into the store.
+
+        Each parent of the release, and each payload source of such a parent, is already in
+        ``store`` when this method runs. If ``pinned_by`` is not empty, other releases already
+        read files of this release. The build then publishes the release only if it writes each
+        pinned file again with the same path, size and checksum. Otherwise it publishes nothing
+        and raises an error.
+
+        Args:
+            release: The exact dataset ID and version to build.
+            store: The local registry to build into.
+            force: Build the release again, even if ``store`` already holds it.
+            pinned_by: The releases that already read files of this release, with their pins.
+            options: The options of the build that do not change its files.
+
+        Raises:
+            TimeNetDatasetNotFoundError: If this backend does not know the dataset ID of ``release``.
+            TimeFValidationError: If the connector declares another version than ``release``.
+            TimeFFormatError: If the build does not reproduce a pinned file. Nothing is published
+                then.
+            TimeNetBuildError: If the build runs but fails.
+        """
+        ...
+
 
 def find_builder(dataset_id: str) -> BuilderBackend | None:
-    """Return the first registered backend that claims this dataset id.
+    """Return the first registered backend whose dataset IDs hold this dataset ID.
 
     Args:
         dataset_id: The dataset id.
 
     Returns:
         The backend, or ``None`` when no installed package claims the id.
-    """
+
+    Raises:
+        TimeNetInvalidCardError: If a backend cannot list its dataset IDs, because the card of a
+            connector cannot be read.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
     for entry in entry_points(group=ENTRY_POINT_GROUP):
         backend = entry.load()()
-        if backend.knows(dataset_id):
+        if dataset_id in backend.dataset_ids():
             return backend
     return None
 
