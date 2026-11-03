@@ -7,7 +7,7 @@ from typer.testing import CliRunner
 
 from timenet import builders
 from timenet.connectors import BaseConnector
-from timenet.coordinator.plan import ParentStep, plan_parents, prepare_parents
+from timenet.coordinator.plan import Step, plan_parents, prepare_parents
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.engine import open_parents, run_pipeline
 from timenet.errors import (
@@ -93,8 +93,8 @@ def _cards(**parents: dict[str, DatasetRef]) -> dict:
     return cards
 
 
-def _no_build(step: ParentStep) -> None:
-    pytest.fail(f"the plan built {step.reference}")
+def _no_build(step: Step) -> None:
+    pytest.fail(f"the plan built {step.release}")
 
 
 def _install_cards(monkeypatch, **parents: dict[str, DatasetRef]) -> dict:
@@ -111,9 +111,9 @@ def _install_cards(monkeypatch, **parents: dict[str, DatasetRef]) -> dict:
 @pytest.mark.parametrize(
     ("grand_in", "expected"),
     [
-        ("output", [ParentStep(PARENT, "build")]),
-        ("origin", [ParentStep(GRAND, "fetch"), ParentStep(PARENT, "build")]),
-        ("nowhere", [ParentStep(GRAND, "build"), ParentStep(PARENT, "build")]),
+        ("output", [Step(PARENT, "build")]),
+        ("origin", [Step(GRAND, "copy"), Step(PARENT, "build", depends_on=(GRAND,))]),
+        ("nowhere", [Step(GRAND, "build"), Step(PARENT, "build", depends_on=(GRAND,))]),
     ],
 )
 def test_plan_uses_fetches_or_builds_each_parent_once_before_its_children(tmp_path, monkeypatch, grand_in, expected):
@@ -213,7 +213,7 @@ def test_a_declared_parent_needs_only_its_direct_payload_sources(tmp_path, monke
 
     # DECLARED opens with SOURCE, its direct payload source, which a fetch of DECLARED brings; GRAND,
     # SOURCE's own source, is not needed.
-    assert steps == ([] if where == "output" else [ParentStep(DECLARED, "fetch")])
+    assert steps == ([] if where == "output" else [Step(DECLARED, "copy")])
     prepare_parents(CHILD.dataset_id, output, build=_no_build, fetch_from=origin)
     for reference in (DECLARED, SOURCE):
         assert output.exists(reference.dataset_id, str(reference.version))
@@ -230,7 +230,7 @@ def test_a_payload_source_that_is_later_a_declared_parent_brings_its_own_payload
 
     steps = plan_parents(CHILD.dataset_id, output, build_parents=True)
 
-    assert steps == [ParentStep(GRAND, "build", pinned_by={SOURCE: pins})]
+    assert steps == [Step(GRAND, "build", pinned_by={SOURCE: pins})]
 
 
 def test_the_plan_reads_each_card_from_the_backend_that_claims_the_dataset(tmp_path, monkeypatch):
@@ -243,7 +243,7 @@ def test_the_plan_reads_each_card_from_the_backend_that_claims_the_dataset(tmp_p
 
     steps = plan_parents(CHILD.dataset_id, LocalRegistry(tmp_path), build_parents=True)
 
-    assert steps == [ParentStep(GRAND, "build"), ParentStep(PARENT, "build")]
+    assert steps == [Step(GRAND, "build"), Step(PARENT, "build", depends_on=(GRAND,))]
     cards[PARENT.dataset_id] = cards[PARENT.dataset_id].model_copy(update={"dataset_version": "2.0.0"})
     with pytest.raises(TimeFValidationError, match=r"test/parent@1\.0\.0 is missing .* builds version 2\.0\.0"):
         plan_parents(CHILD.dataset_id, LocalRegistry(tmp_path), build_parents=True)
@@ -306,7 +306,7 @@ def test_a_pinned_source_is_rebuilt_in_staging_and_published_only_if_it_matches(
 
     steps = plan_parents(CHILD.dataset_id, output, build_parents=True)
 
-    assert steps == [ParentStep(GRAND, "build", pinned_by={PARENT: pins})]
+    assert steps == [Step(GRAND, "build", pinned_by={PARENT: pins})]
 
     def build(step):
         run_pipeline(_Grand(), output.root, pinned_by=step.pinned_by)
@@ -338,7 +338,7 @@ def test_a_payload_source_that_two_releases_read_is_built_against_the_pins_of_bo
 
     steps = plan_parents(CHILD.dataset_id, output, build_parents=True)
 
-    assert steps == [ParentStep(GRAND, "build", pinned_by=pins)]
+    assert steps == [Step(GRAND, "build", pinned_by=pins)]
 
 
 def test_a_built_release_needs_only_its_payload_sources(tmp_path, monkeypatch):
@@ -351,14 +351,14 @@ def test_a_built_release_needs_only_its_payload_sources(tmp_path, monkeypatch):
         plan_parents(PARENT.dataset_id, output)
     # The source that PARENT reads builds against its pins.
     assert plan_parents(PARENT.dataset_id, output, build_parents=True) == [
-        ParentStep(GRAND, "build", pinned_by={PARENT: pins})
+        Step(GRAND, "build", pinned_by={PARENT: pins})
     ]
     # A rebuild of PARENT needs its declared parents instead, and pins the new files.
-    assert plan_parents(PARENT.dataset_id, output, build_parents=True, force_build=True) == [ParentStep(GRAND, "build")]
+    assert plan_parents(PARENT.dataset_id, output, build_parents=True, force_build=True) == [Step(GRAND, "build")]
     # A registry that holds the source fills the gap: the local PARENT is reused and GRAND is copied.
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
-    assert plan_parents(PARENT.dataset_id, output, fetch_from=origin) == [ParentStep(PARENT, "fetch")]
+    assert plan_parents(PARENT.dataset_id, output, fetch_from=origin) == [Step(PARENT, "copy")]
     prepare_parents(PARENT.dataset_id, output, build=_no_build, fetch_from=origin)
     assert output.exists(GRAND.dataset_id, str(GRAND.version))
 
@@ -374,7 +374,7 @@ def test_a_damaged_parent_is_fetched_again_but_never_built_over(tmp_path, monkey
         plan_parents(CHILD.dataset_id, output, build_parents=True)
     assert caught.value.release == PARENT
 
-    assert plan_parents(CHILD.dataset_id, output, fetch_from=origin) == [ParentStep(PARENT, "fetch")]
+    assert plan_parents(CHILD.dataset_id, output, fetch_from=origin) == [Step(PARENT, "copy")]
     prepare_parents(CHILD.dataset_id, output, build=_no_build, fetch_from=origin)
     assert plan_parents(CHILD.dataset_id, output) == []
 
@@ -791,3 +791,16 @@ def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
     error, hint = hints[case]
     assert isinstance(result.exception, error)
     assert str(result.exception).endswith(hint)
+
+
+def test_plan_steps_name_their_dependencies(tmp_path, monkeypatch):
+    cards = _cards(child={"parent": PARENT}, parent={"grand": GRAND})
+    del cards[GRAND.dataset_id]
+    entries = [_Entry(ConnectorBuilder()), _Entry(_CardBackend(cards))]
+    monkeypatch.setattr(builders, "entry_points", lambda group: entries)
+
+    steps = plan_parents(CHILD.dataset_id, LocalRegistry(tmp_path), build_parents=True)
+
+    by_release = {step.release: step for step in steps}
+    assert by_release[GRAND].depends_on == ()
+    assert by_release[PARENT].depends_on == (GRAND,)

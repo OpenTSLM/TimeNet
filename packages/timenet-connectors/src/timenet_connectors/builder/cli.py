@@ -28,7 +28,7 @@ from timenet.cache import human_bytes
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console
 from timenet.config import settings
-from timenet.coordinator.plan import ParentStep, prepare_parents
+from timenet.coordinator.plan import Step, prepare_parents
 from timenet.engine import publish_pipeline, run_pipeline
 from timenet.errors import (
     TimeFValidationError,
@@ -219,14 +219,14 @@ def build_one(  # ruff: ignore[too-many-arguments]
     override = None if isolation is None else ("on" if isolation else "off")
     isolated = settings(isolation=override).isolation == "on"
 
-    def build_parent(step: ParentStep) -> object:
-        builder = find_builder(step.reference.dataset_id)
+    def build_parent(step: Step) -> object:
+        builder = find_builder(step.release.dataset_id)
         if builder is not None and not _in_repo(builder):
             return _build_with(builder, step, target)
         # Each parent builds like the dataset itself. An isolated child makes the plan again. The
         # child finds every parent in the output, so it only opens the parents.
         return _build(
-            step.reference.dataset_id,
+            step.release.dataset_id,
             target,
             output,
             isolated=isolated,
@@ -282,7 +282,7 @@ def _in_repo(builder: BuilderBackend) -> bool:
     return isinstance(builder, ConnectorBuilder) and type(builder).build is ConnectorBuilder.build
 
 
-def _build_with(builder: BuilderBackend, step: ParentStep, target: WritableRegistry | Path) -> Path:
+def _build_with(builder: BuilderBackend, step: Step, target: WritableRegistry | Path) -> Path:
     """Build a parent through the builder backend that claims it, with the pins of its step.
 
     The plan already prepared the parents of this parent. So the backend gets no options for
@@ -297,10 +297,10 @@ def _build_with(builder: BuilderBackend, step: ParentStep, target: WritableRegis
     """
     if not isinstance(target, Path):
         raise TimeFValidationError(
-            f"parent release {step.reference} builds through another builder backend, which writes to a "
+            f"parent release {step.release} builds through another builder backend, which writes to a "
             "local directory; build it into a local output and publish it first"
         )
-    return builder.build(step.reference.dataset_id, target, pinned_by=step.pinned_by or None)
+    return builder.build(step.release.dataset_id, target, pinned_by=step.pinned_by or None)
 
 
 def _committed(dataset_id: str, target: WritableRegistry | Path, registry: WritableRegistry) -> str | None:
