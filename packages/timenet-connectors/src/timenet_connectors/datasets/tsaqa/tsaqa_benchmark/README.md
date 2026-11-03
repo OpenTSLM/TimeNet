@@ -50,7 +50,8 @@ The release has three parquet files, `train.parquet`, `val.parquet` and `test.pa
 | `raw_ts` | The series before normalization |
 
 For comparison, data transformation and temporal relationship rows, `meta_info`, `domain` and
-`dataset` are JSON lists:
+`dataset` are JSON lists of the same length. No source documents what each entry describes. The
+data suggests this pattern, but the connector does not rely on it:
 
 - A comparison names the source of each of its two series.
 - A true-or-false data transformation or temporal relationship question names the input's sequence,
@@ -119,15 +120,15 @@ Appendix E.1 measures a model's input as `len(ts + description + domain + datase
 question_type + question)`. Appendix E.2 says domain names "are provided to the model as textual
 description". The paper doesn't say how these are joined, and no prompt code is published.
 
-The connector keeps `meta_info`, `domain` and `dataset` as published, as annotations of those names
-on the input Record. Each task names them in its `input_annotations`, so the model gets them as
-context. A comparison's lists hold one entry per series, so each of its input Records gets its own
-entry. A data transformation or temporal relationship row publishes a list that starts with its
-input's entry and goes on with the entries of its distractors, which come from unrelated series. The
-input Record keeps only the first entry, its own description. The complete lists are annotations of
-the task, `published_meta_info`, `published_domain` and `published_dataset`. They are not model
-input. Every other value is the published text. An annotation key has one value type in TimeF, so
-the Record's keys hold texts and the task's keys hold the lists.
+The connector keeps `meta_info`, `domain` and `dataset` as published, as annotations of the first
+input Record. Each task names them in its `input_annotations`, so the model gets them as context.
+A row that publishes one text for each column keeps the texts under those names. A comparison, data
+transformation or temporal relationship row publishes lists, and the connector does not split them,
+because no source says which entry belongs to which series. It keeps each whole list under
+`published_meta_info`, `published_domain` or `published_dataset`, and it writes no `meta_info`,
+`domain` or `dataset` key for that row. A row whose three lists differ in length fails. An
+annotation key has one value type in TimeF, so the plain keys hold texts and the `published_*` keys
+hold lists.
 
 The model also reads the published `task` and `question_type`. Each distinct value is an annotation
 of the dataset, and every task names its two in `input_annotations`. The 10,000 rows that publish a

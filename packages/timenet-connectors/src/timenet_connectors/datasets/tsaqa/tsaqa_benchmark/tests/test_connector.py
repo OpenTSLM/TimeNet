@@ -94,17 +94,17 @@ def _check_task(task, row: dict[str, Any]) -> None:
     published = [("task", row["task"]), ("question_type", row["question_type"])]
     # The model reads the context, then the published task and question_type.
     context = [(a.key, a.value) for a in task.input_annotations]
-    if row["task"] == "comparison":
-        context_values = [(key, json.loads(row[key])[position]) for position in range(2) for key in keys]
-    elif row["task"] in {"data_transformation", "temporal_relationship"}:
-        # The input's Record keeps its own context, the first entry. The task keeps the complete lists.
-        context_values = [(key, json.loads(row[key])[0]) for key in keys]
-        assert [(a.key, a.value) for a in task.annotations] == [
-            (f"published_{key}", json.loads(row[key])) for key in keys
-        ]
+    if row["task"] in {"comparison", "data_transformation", "temporal_relationship"}:
+        # No source says what each entry describes, so the lists stay whole, under published_* keys.
+        context_values = [(f"published_{key}", json.loads(row[key])) for key in keys]
     else:
         context_values = [(key, row[key]) for key in keys]
     assert context == context_values + published
+    # The context is on the first input Record only, and nothing is left on the task.
+    first, *others = task.inputs
+    assert [(a.key, a.value) for a in first.annotations] == context_values
+    assert all(not record.annotations for record in others)
+    assert not task.annotations
     assert task.metadata["task"] == row["task"]
     assert task.metadata["question_type"] == row["question_type"]
     assert task.metadata["source_issues"] == _EXPECTED_ISSUES.get(_row_of(task), [])
@@ -348,6 +348,7 @@ def test_a_reread_that_no_longer_matches_its_row_fails(tmp_path, position, rewri
         (0, {"task": "forecasting"}, "unknown task"),
         (0, {"input_ts": "[1.0, NaN]"}, "finite numbers"),
         (4, {"meta_info": '["only one entry"]'}, "JSON list of 2 texts"),
+        (9, {"domain": '["energy"]'}, "context lists differ in length"),
         (14, {"answer": "A,B,C"}, "does not fit"),
         (6, {"question": "Is it?\n"}, "offers A to D in order"),
     ],

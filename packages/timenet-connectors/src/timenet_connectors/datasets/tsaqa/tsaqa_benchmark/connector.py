@@ -79,7 +79,7 @@ _TRUE_OR_FALSE_VOCABULARY = "true_or_false_vocabulary"
 _CONTEXT_KEYS = ("meta_info", "domain", "dataset")
 """The published columns an input Record is annotated with, and its task gives the model as context."""
 _PUBLISHED_LISTS = {key: f"published_{key}" for key in _CONTEXT_KEYS}
-"""The task annotation that holds the complete published list of each context column, for a row that has one."""
+"""The annotation key of each context column for a row that publishes the column as a list."""
 _READ_COLUMNS = ("task", "question_type", "input_ts", "question", "answer", *_CONTEXT_KEYS)
 """The columns a conversion reads. The release's ninth, ``raw_ts``, holds the series before normalization."""
 _SERIES_COLUMNS = ["input_ts", "question"]
@@ -139,12 +139,10 @@ class _QuestionReading(NamedTuple):
 
 
 class _Contexts(NamedTuple):
-    """The context a row publishes."""
+    """The context a row publishes, as the annotations of its first input Record."""
 
-    per_input: tuple[Mapping[str, str], ...]
-    """One published context per input series."""
-    listed: Mapping[str, tuple[str, ...]]
-    """The complete lists of a data transformation or temporal relationship row, else empty."""
+    on_input: Mapping[str, str | tuple[str, ...]]
+    """Each published text under its column name, or each published list under its ``published_*`` key."""
 
 
 class _RowKey(NamedTuple):
@@ -332,17 +330,19 @@ def _printed_series(task: _Task, question: str) -> list[_Printed]:
 def _input_contexts(task: _Task, text: Mapping[str, str]) -> _Contexts:
     """Read the context a row publishes.
 
-    A comparison publishes one entry per input series. A data transformation or temporal relationship
-    row publishes its input's entry first, then those of its distractors. Any other row publishes one text.
+    A comparison, data transformation or temporal relationship row publishes each context column as a
+    list. No source says what each entry describes, so the connector keeps the lists whole, under their
+    ``published_*`` keys. Any other row publishes one text for each column, under its own name.
 
     Returns:
-        The context of each input series, and the complete lists of a row that publishes them.
+        The annotations of the row's first input Record.
 
     Raises:
-        ValueError: If a published list isn't a JSON list of texts, or a comparison's doesn't hold two.
+        ValueError: If a published list isn't a JSON list of texts, a comparison's doesn't hold two, or
+            the three lists differ in length.
     """
     if task is not _Task.COMPARISON and task not in _PRINTING_TASKS:
-        return _Contexts(({key: text[key] for key in _CONTEXT_KEYS},), {})
+        return _Contexts({key: text[key] for key in _CONTEXT_KEYS})
     expected = f"{_COMPARISON_SERIES} texts" if task is _Task.COMPARISON else "texts"
     lists: dict[str, tuple[str, ...]] = {}
     for key in _CONTEXT_KEYS:
@@ -352,11 +352,10 @@ def _input_contexts(task: _Task, text: Mapping[str, str]) -> _Contexts:
         if task is _Task.COMPARISON and len(entries) != _COMPARISON_SERIES:
             raise ValueError(f"a {task} row's {key} is a JSON list of {expected}")
         lists[key] = tuple(entries)
-    if task is _Task.COMPARISON:
-        return _Contexts(
-            tuple({key: lists[key][position] for key in _CONTEXT_KEYS} for position in range(_COMPARISON_SERIES)), {}
-        )
-    return _Contexts(({key: lists[key][0] for key in _CONTEXT_KEYS},), lists)
+    lengths = {key: len(entries) for key, entries in lists.items()}
+    if len(set(lengths.values())) != 1:
+        raise ValueError(f"a {task} row's context lists differ in length: {lengths}")
+    return _Contexts({_PUBLISHED_LISTS[key]: entries for key, entries in lists.items()})
 
 
 def _question_letters(question: str, lines: list[tuple[str, str]]) -> tuple[_QuestionFormat, tuple[str, ...]]:
@@ -486,7 +485,7 @@ def _validate_row(values: Mapping[str, Any], split: _SplitFile, index: int) -> _
 
     Raises:
         TimeFValidationError: If the row is malformed, with its file and row.
-    """  # noqa: DOC501 - the ValueErrors are caught and re-raised as TimeFValidationError
+    """  # ruff: ignore[docstring-missing-exception] - the ValueErrors are caught and re-raised as TimeFValidationError
     try:
         text: dict[str, str] = {}
         for column in _READ_COLUMNS:
@@ -656,9 +655,9 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
         )
         metadata: dict[str, JsonValue] = {"file": row.file, "row": row.index, "role": str(role)}
         record = Record(sources=(Source(name="series", signals=(signal,)),), metadata=metadata)
-        if is_input:
-            for key, value in row.contexts.per_input[position].items():
-                record.annotate(Annotation(key=key, value=value))
+        if position == 0:
+            for key, value in row.contexts.on_input.items():
+                record.annotate(Annotation(key=key, value=value if isinstance(value, str) else list(value)))
         records.append(record)
     return tuple(records)
 
@@ -673,10 +672,10 @@ def _task(
 ) -> Task:
     """Build a row's task: a true-or-false row is a classification task, any other an answer task.
 
-    The model reads what Appendix E.1 lists: the input's context, then the published ``task`` and
-    ``question_type``, then the question. The input's own context is on its Record. A row that publishes
-    lists of contexts also keeps the complete lists as annotations of the task. The question format read
-    from the question stays in the metadata, for routing.
+    The model reads what Appendix E.1 lists: the published context, then the published ``task`` and
+    ``question_type``, then the question. The context is on the first input Record: published texts
+    under their column names, or published lists under their ``published_*`` keys. The question format
+    read from the question stays in the metadata, for routing.
 
     Args:
         row: The row.
@@ -689,7 +688,7 @@ def _task(
     """
     annotations = itertools.chain.from_iterable(record.annotations for record in inputs)
     input_annotations = (
-        *(a for a in annotations if a.key in _CONTEXT_KEYS),
+        *(a for a in annotations if a.key in _CONTEXT_KEYS or a.key in _PUBLISHED_LISTS.values()),
         *(labels[label] for label in _published_labels(row)),
     )
     metadata: dict[str, JsonValue] = {
@@ -702,9 +701,6 @@ def _task(
     if row.transform is not None:
         metadata["transform"] = row.transform
     metadata[_SOURCE_ISSUES] = [issue.value for issue in sorted(issues)]
-    listed = tuple(
-        Annotation(key=_PUBLISHED_LISTS[key], value=list(row.contexts.listed[key])) for key in row.contexts.listed
-    )
     if row.question_format is _QuestionFormat.TRUE_OR_FALSE:
         return ClassificationTask(
             inputs=inputs,
@@ -713,7 +709,6 @@ def _task(
             split=_SPLITS[row.split],
             input_annotations=input_annotations,
             target_schema=_TRUE_OR_FALSE_VOCABULARY,
-            annotations=listed,
             metadata=metadata,
         )
     if row.choices:
@@ -724,7 +719,6 @@ def _task(
         targets=(row.answer,),
         split=_SPLITS[row.split],
         input_annotations=input_annotations,
-        annotations=listed,
         metadata=metadata,
     )
 
