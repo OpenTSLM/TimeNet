@@ -11,7 +11,10 @@ from timenet.manifest import PayloadSource
 from timenet.manifest.files import FilePart
 from timenet.types.references import DatasetRef
 from timenet_connectors.builder import env as env_module
-from timenet_connectors.builder.env import EnvSpec, env_spec, run_isolated, run_isolated_build, uv_command
+from timenet_connectors.builder.env import EnvSpec, env_spec, run_isolated_build, uv_command
+
+
+HELLO = DatasetRef.parse("timenet/hello-world@1.0.0")
 
 
 def _spec(requirements=None, base=("--with", "timenet==0.1.0")):
@@ -117,101 +120,30 @@ def test_isolated_environment_installs_backend_dependencies(monkeypatch, tmp_pat
 
     def run(command, env):
         captured["command"] = command
-        return str(tmp_path), "", 0
+        return "", 0
 
     monkeypatch.setattr(env_module, "_run_build", run)
-    run_isolated("timenet/hello-world", tmp_path)
+    run_isolated_build(HELLO, tmp_path, force=False, keep_cache=False, quiet=False, pinned_by={})
     dependencies = captured["command"][: captured["command"].index("timenet-build")]
     assert "timenet[zarr]==9.9.9" in dependencies
 
 
-def test_run_isolated_disables_isolation_in_the_child(monkeypatch, tmp_path):
-    captured = {}
-
-    def _fake(command, env):
-        captured["env"] = env
-        return f"{tmp_path}/timenet/hello-world/1.0.0\n", "", 0
-
-    monkeypatch.setattr(env_module, "_run_build", _fake)
-    run_isolated("timenet/hello-world", tmp_path)
-
-    assert captured["env"]["TIMENET_ISOLATION"] == "off"
-
-
-def test_run_isolated_returns_the_version_directory(monkeypatch, tmp_path):
-    stdout = f"noise\n{tmp_path}/timenet/hello-world/1.0.0\n"
-    monkeypatch.setattr(env_module, "_run_build", lambda command, env: (stdout, "", 0))
-
-    assert run_isolated("timenet/hello-world", tmp_path) == f"{tmp_path}/timenet/hello-world/1.0.0"
-
-
-def test_run_isolated_raises_on_a_failed_child(monkeypatch, tmp_path):
-    monkeypatch.setattr(env_module, "_run_build", lambda command, env: ("", "", 2))
-
-    with pytest.raises(TimeNetBuildError, match="exit code 2"):
-        run_isolated("timenet/hello-world", tmp_path)
-
-
-def test_run_isolated_failure_message_includes_the_child_stderr(monkeypatch, tmp_path):
-    monkeypatch.setattr(env_module, "_run_build", lambda command, env: ("", "boom: the disk is full", 1))
-
-    with pytest.raises(TimeNetBuildError, match="the disk is full"):
-        run_isolated("timenet/hello-world", tmp_path)
-
-
-def test_run_isolated_raises_when_the_child_prints_no_directory(monkeypatch, tmp_path):
-    monkeypatch.setattr(env_module, "_run_build", lambda command, env: ("\n", "", 0))
-
-    with pytest.raises(TimeNetBuildError, match="no version"):
-        run_isolated("timenet/hello-world", tmp_path)
-
-
-def test_run_isolated_forwards_the_build_flags(monkeypatch, tmp_path):
+def test_run_isolated_build_omits_quiet_when_the_parent_is_not_quiet(monkeypatch, tmp_path):
     captured = {}
 
     def _fake(command, env):
         captured["command"] = command
-        return f"{tmp_path}/x\n", "", 0
+        return "", 0
 
     monkeypatch.setattr(env_module, "_run_build", _fake)
-    run_isolated("timenet/hello-world", tmp_path, force=True, keep_cache=True)
-
-    assert "--force" in captured["command"]
-    assert "--keep-cache" in captured["command"]
-
-
-def test_run_isolated_forwards_quiet_ahead_of_the_subcommand(monkeypatch, tmp_path):
-    captured = {}
-
-    def _fake(command, env):
-        captured["command"] = command
-        return f"{tmp_path}/x\n", "", 0
-
-    monkeypatch.setattr(env_module, "_run_build", _fake)
-    run_isolated("timenet/hello-world", tmp_path, quiet=True)
-
-    command = captured["command"]
-    # --quiet is a root option on timenet-build, so build never sees it.
-    assert command.index("--quiet") == command.index("build") - 1
-
-
-def test_run_isolated_omits_quiet_when_the_parent_is_not_quiet(monkeypatch, tmp_path):
-    captured = {}
-
-    def _fake(command, env):
-        captured["command"] = command
-        return f"{tmp_path}/x\n", "", 0
-
-    monkeypatch.setattr(env_module, "_run_build", _fake)
-    run_isolated("timenet/hello-world", tmp_path)
+    run_isolated_build(HELLO, tmp_path, force=False, keep_cache=False, quiet=False, pinned_by={})
 
     assert "--quiet" not in captured["command"]
 
 
-def test_run_build_captures_stdout_and_stderr_and_the_exit_code():
-    command = [sys.executable, "-c", "import sys; print('out'); print('an error', file=sys.stderr); sys.exit(3)"]
-    stdout, stderr, code = env_module._run_build(command, dict(os.environ))
-    assert stdout.strip() == "out"
+def test_run_build_captures_stderr_and_the_exit_code():
+    command = [sys.executable, "-c", "import sys; print('an error', file=sys.stderr); sys.exit(3)"]
+    stderr, code = env_module._run_build(command, dict(os.environ))
     assert "an error" in stderr
     assert code == 3
 
@@ -242,7 +174,7 @@ def test_run_isolated_build_runs_build_release_with_the_store_and_the_pins(monke
         # The pins file exists only while the child runs.
         pins = json.loads(Path(command[command.index("--pinned-by") + 1]).read_text(encoding="utf-8"))
         captured.update(argv=command[command.index("timenet-build") :], env=env, pins=pins)
-        return "", "", 0
+        return "", 0
 
     monkeypatch.setattr(env_module, "_run_build", run)
     pins = {DatasetRef.parse("test/reader@1.0.0"): pinned}
@@ -255,3 +187,10 @@ def test_run_isolated_build_runs_build_release_with_the_store_and_the_pins(monke
     assert {"--force", "--keep-cache"} <= set(argv)
     assert captured["pins"] == {"test/reader@1.0.0": pinned.model_dump(mode="json")}
     assert captured["env"]["TIMENET_ISOLATION"] == "off"
+
+
+def test_run_isolated_build_raises_with_the_tail_of_the_child_stderr(monkeypatch, tmp_path):
+    monkeypatch.setattr(env_module, "_run_build", lambda command, env: ("boom: the disk is full", 1))
+
+    with pytest.raises(TimeNetBuildError, match=r"timenet/hello-world@1\.0\.0.*exit code 1(.|\n)*the disk is full"):
+        run_isolated_build(HELLO, tmp_path, force=False, keep_cache=False, quiet=False, pinned_by={})

@@ -13,6 +13,7 @@ from timenet.client import TimeNet
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import (
     TimeFFormatError,
+    TimeFValidationError,
     TimeNetAccessError,
     TimeNetDatasetNotFoundError,
     TimeNetFileError,
@@ -385,6 +386,15 @@ def test_put_dataset_publishes_uploads_and_finalizes(tmp_path):
     assert set(state["store"]) == set(state["published"])
 
 
+def test_put_dataset_refuses_force_and_uploads_nothing(tmp_path):
+    transport, state = build_publish_fake(token="tok_rw")
+    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path)
+    with pytest.raises(TimeFValidationError, match="never writes a published version again"):
+        registry.put_dataset(make_dataset(), force=True)
+    assert state["manifest"] is None
+    assert not state["store"]
+
+
 def test_put_dataset_refuses_a_payload_source_the_service_does_not_hold_before_publishing(tmp_path):
     local = LocalRegistry(tmp_path / "local")
     local.put_dataset(make_dataset())
@@ -413,6 +423,9 @@ def test_put_dataset_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path)
     def handler(request):
         # The service omits every declared file from its upload list. put_dataset() must reject that before
         # uploading, rather than publish an incomplete version.
+        if request.method == "GET":
+            # The service does not hold the version yet.
+            return httpx.Response(404)
         if request.url.path.endswith("/publish"):
             return httpx.Response(200, json={"files": []})
         return httpx.Response(200, json={})
@@ -421,11 +434,14 @@ def test_put_dataset_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path)
         "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
     )
     with pytest.raises(TimeNetRegistryError, match="disagrees with the manifest"):
-        registry.put_dataset(make_dataset(), force=True)
+        registry.put_dataset(make_dataset())
 
 
 def test_put_dataset_rejects_unsafe_publish_paths(tmp_path):
     def handler(request):
+        if request.method == "GET":
+            # The service does not hold the version yet.
+            return httpx.Response(404)
         if request.url.path.endswith("/publish"):
             return httpx.Response(200, json={"files": ["../escape"]})
         return httpx.Response(200, json={})
@@ -434,11 +450,14 @@ def test_put_dataset_rejects_unsafe_publish_paths(tmp_path):
         "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
     )
     with pytest.raises(ValidationError, match="stay within the dataset root"):
-        registry.put_dataset(make_dataset(), force=True)
+        registry.put_dataset(make_dataset())
 
 
 def test_put_dataset_rejects_malformed_upload_grant(tmp_path):
     def handler(request):
+        if request.method == "GET":
+            # The service does not hold the version yet.
+            return httpx.Response(404)
         if request.url.path.endswith("/publish"):
             manifest = json.loads(request.content)
             files = [part["path"] for group in manifest["files"].values() for part in group]
@@ -451,7 +470,7 @@ def test_put_dataset_rejects_malformed_upload_grant(tmp_path):
         "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
     )
     with pytest.raises(ValidationError, match="headers"):
-        registry.put_dataset(make_dataset(), force=True)
+        registry.put_dataset(make_dataset())
 
 
 def test_latest_detail_rejects_non_string_version(tmp_path):

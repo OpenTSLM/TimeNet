@@ -60,7 +60,7 @@ class _Backend:
     def card(self, dataset_id):
         return self.cards.get(dataset_id)
 
-    def build_prepared(self, release, store, *, force, pinned_by, options):
+    def build(self, release, store, *, force, pinned_by, options):
         self.calls.append((release, force, dict(pinned_by)))
         store.put_dataset(_demo(self.cards[release.dataset_id]), force=force, pinned_by=pinned_by or None)
 

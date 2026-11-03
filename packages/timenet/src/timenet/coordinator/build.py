@@ -139,7 +139,7 @@ def _build(step: Step, store: LocalRegistry, *, force: bool, options: BuildOptio
     builder = declared(step.release.dataset_id, step.release.version).backend
     if options.progress is not None:
         options.progress(StepStarted(step.release, "build"))
-    builder.build_prepared(step.release, store, force=force, pinned_by=step.pinned_by, options=options)
+    builder.build(step.release, store, force=force, pinned_by=step.pinned_by, options=options)
     # After a successful build, the local registry must hold the exact release with its payload sources.
     prepare_local_copy(store.root, step.release)
     if options.progress is not None:

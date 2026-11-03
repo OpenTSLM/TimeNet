@@ -8,6 +8,7 @@ import tempfile
 from typing import ClassVar
 
 from timenet.dataset import TimeFDataset
+from timenet.errors import TimeFValidationError
 from timenet.manifest import PayloadSource
 from timenet.registry._paths import release_dir
 from timenet.registry.dependencies import open_cached_or_remote
@@ -38,24 +39,31 @@ class LazyReadRegistry(WritableRegistry, ABC):
     ) -> DatasetRef:
         """Write a dataset locally and publish it to this registry.
 
-        Return the existing release's reference unless ``force`` is set.
+        If the version already exists, return its reference. A published version never changes.
 
         Args:
             dataset: The dataset to write.
-            force: Publish even if the version already exists.
+            force: Must be false, because this registry never writes a published version again.
             values_backend: Storage format for values (``"parquet"`` or ``"zarr"``).
             progress_cb: Optional callback for write progress.
             pinned_by: Releases that already read this release's files, with the pins that the new files must match.
 
         Returns:
             A reference to the stored release.
+
+        Raises:
+            TimeFValidationError: If ``force`` is set.
         """
+        if force:
+            raise TimeFValidationError(
+                f"force=True needs a local registry: {self} never writes a published version again"
+            )
         if dataset.schema is None:
             dataset.derive_schema()
         dataset_id = dataset.metadata.dataset_id
         version = str(dataset.metadata.dataset_version)
         reference = DatasetRef.parse(f"{dataset_id}@{version}")
-        if not force and self.exists(dataset_id, version):
+        if self.exists(dataset_id, version):
             return reference
         staging = Path(tempfile.mkdtemp(prefix=self._staging_prefix))
         try:
