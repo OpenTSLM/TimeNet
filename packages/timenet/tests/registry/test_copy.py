@@ -1,0 +1,389 @@
+"""``copy_release()`` copies a release with its payload sources and never changes a published version.
+
+The ``source`` registry holds a parent from ``make_dataset()`` and a child that keeps one of its
+Records, so the child reads payloads that the parent stores: the parent is a payload source of the
+child. The ``chain_source`` registry adds one level: a grandchild reads a middle release, which reads
+a grandparent.
+"""
+
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+
+from _fake_registry import build_service_fake
+import numpy as np
+import pytest
+
+from timenet.dataset import Record, Signal, Source, TimeFDataset
+from timenet.errors import TimeFFormatError, TimeNetAccessError, TimeNetVersionConflictError
+from timenet.manifest import PayloadSource
+from timenet.progress import ProgressEvent, StepFinished, StepStarted
+from timenet.reader import TimeFReader
+from timenet.registry import LocalRegistry, RemoteRegistry, WritableRegistry, open_local_version
+from timenet.registry.copy import copy_release
+from timenet.registry.shared import complete_copy
+from timenet.testing import make_dataset
+from timenet.types import Access, Annotation, DatasetMetadata, DatasetSchema, License, TimeSeriesSpec, Version, ureg
+from timenet.types.reference_keys import SourceKey
+from timenet.types.references import DatasetRef
+from timenet.writer import TimeFWriter
+
+
+parent_ref = DatasetRef.parse("timenet/hello-world@1.0.0")
+child_ref = DatasetRef.parse("test/child@1.0.0")
+parent = (parent_ref.dataset_id, str(parent_ref.version))
+child = (child_ref.dataset_id, str(child_ref.version))
+
+grandparent_ref = DatasetRef.parse("test/grandparent@1.0.0")
+middle_ref = DatasetRef.parse("test/middle@1.0.0")
+grandchild_ref = DatasetRef.parse("test/grandchild@1.0.0")
+chain = [(ref.dataset_id, str(ref.version)) for ref in (grandparent_ref, middle_ref, grandchild_ref)]
+
+_SPEC = TimeSeriesSpec(spec_type="env", name="env", unit_value=ureg.dimensionless)
+_CREDENTIALED = {"access": Access.CREDENTIALED, "access_url": "https://example.org/access"}
+_OPEN = {"access": Access.OPEN, "access_url": None}
+
+
+def _derive(loaded: TimeFDataset, dataset_id: str, records, **card) -> TimeFDataset:
+    """Return a release under ``dataset_id`` that keeps read Records and their ids, as an edit does.
+
+    ``card`` sets other fields of the card of the release.
+    """
+    return TimeFDataset.from_parts(
+        metadata=loaded.metadata.model_copy(update={"dataset_id": dataset_id, **card}),
+        records=records,
+        tasks=(),
+        schema=DatasetSchema(),
+        last_ids=loaded.last_ids,
+    )
+
+
+def _write(root: Path, dataset: TimeFDataset) -> Path:
+    dataset.derive_schema()
+    with TimeFWriter(root, dataset) as writer:
+        writer.write()
+    return root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
+
+
+def _write_parent_and_child(root: Path, *, credentialed: DatasetRef | None = None) -> None:
+    """Write the parent and a child that reads payloads of the parent under ``root``.
+
+    With ``credentialed``, the card of that release declares credentialed access, and the other card
+    declares open access.
+    """
+    dataset = make_dataset()
+    if credentialed == parent_ref:
+        dataset._metadata = dataset.metadata.model_copy(update=_CREDENTIALED)
+    parent_dir = _write(root, dataset)
+    with TimeFReader(open_local_version(parent_dir)) as reader:
+        loaded = reader.read()
+        card = _CREDENTIALED if credentialed == child_ref else _OPEN
+        _write(root, _derive(loaded, child_ref.dataset_id, [loaded.records[0]], **card))
+
+
+def _release(dataset_id: str, records: list[Record]) -> TimeFDataset:
+    dataset = TimeFDataset(
+        metadata=DatasetMetadata(
+            dataset_id=dataset_id,
+            dataset_version=Version(1, 0, 0),
+            name=dataset_id,
+            description="d",
+            license=License.MIT,
+        )
+    )
+    for record in records:
+        dataset.add_record(record=record)
+    return dataset
+
+
+def _record(name: str) -> Record:
+    """Return a named Record whose Signal values are held in memory."""
+    signal = Signal.from_irregular(
+        np.arange(3, dtype=np.float32), time_offsets_us=[0, 1_000, 2_000], spec=_SPEC, name=name
+    )
+    return Record(sources=(Source(name="env", signals=(signal,)),), metadata={"name": name})
+
+
+def _write_chain(root: Path, *, grandchild_reads_grandparent: bool) -> None:
+    """Write a grandparent, a middle release that reads it, and a grandchild that reads the middle release.
+
+    The middle release keeps the grandparent's Record ``"a"`` and stores its own Record ``"b"``. The
+    grandchild keeps ``"b"``, so it reads only the middle release. With ``grandchild_reads_grandparent``,
+    it also keeps ``"a"``, so it reads the grandparent too.
+    """
+    grandparent_dir = _write(root, _release(grandparent_ref.dataset_id, [_record("a")]))
+    with TimeFReader(open_local_version(grandparent_dir)) as reader:
+        loaded = reader.read()
+        middle = _derive(loaded, middle_ref.dataset_id, loaded.records)
+        middle.add_record(record=_record("b"))
+        middle_dir = _write(root, middle)
+    with TimeFReader(open_local_version(middle_dir)) as reader:
+        loaded = reader.read()
+        kept = [record for record in loaded.records if grandchild_reads_grandparent or record.metadata["name"] == "b"]
+        _write(root, _derive(loaded, grandchild_ref.dataset_id, kept))
+
+
+def _payload_sources(registry: WritableRegistry, reference: DatasetRef) -> list[DatasetRef]:
+    manifest = registry.get_manifest(reference.dataset_id, str(reference.version))
+    return [pinned.release for pinned in manifest.payload_sources.values()]
+
+
+def _other_build(dataset_id: str) -> TimeFDataset:
+    """Return a release of ``dataset_id`` at version 1.0.0 whose files differ from the source's copy."""
+    dataset = make_dataset()
+    dataset._metadata = dataset.metadata.model_copy(update={"dataset_id": dataset_id})
+    dataset.records[0].annotate(Annotation(key="build", value="another"))
+    return dataset
+
+
+def _remote(tmp_path: Path, name: str, *, token: str | None = None) -> tuple[RemoteRegistry, Path]:
+    """Return a remote registry over the service fake, and the directory that the fake serves."""
+    root = tmp_path / name
+    root.mkdir(exist_ok=True)
+    transport, _ = build_service_fake(root, token=token)
+    registry = RemoteRegistry(
+        f"http://{name}.local", token=token, cache_dir=tmp_path / f"{name}-cache", transport=transport
+    )
+    return registry, root
+
+
+@pytest.fixture
+def source(tmp_path) -> LocalRegistry:
+    root = tmp_path / "source"
+    _write_parent_and_child(root)
+    return LocalRegistry(root)
+
+
+@pytest.fixture
+def chain_source(tmp_path) -> LocalRegistry:
+    root = tmp_path / "chain"
+    _write_chain(root, grandchild_reads_grandparent=False)
+    registry = LocalRegistry(root)
+    assert _payload_sources(registry, grandchild_ref) == [middle_ref]
+    assert _payload_sources(registry, middle_ref) == [grandparent_ref]
+    return registry
+
+
+@pytest.fixture(params=["local", "remote"])
+def dest(request, tmp_path) -> WritableRegistry:
+    if request.param == "local":
+        return LocalRegistry(tmp_path / "dest")
+    registry, _ = _remote(tmp_path, "dest", token="tok_rw")
+    return registry
+
+
+def test_copy_release_copies_a_release_and_its_payload_sources(source, dest):
+    copy_release(child_ref, source, dest)
+    assert dest.exists(*child) and dest.exists(*parent)
+    assert dest.get_manifest(*child) == source.get_manifest(*child)
+    assert dest.get_manifest(*parent) == source.get_manifest(*parent)
+
+
+def test_copy_release_does_nothing_for_the_same_release(source, dest, monkeypatch):
+    copy_release(child_ref, source, dest)
+
+    def unexpected(*args, **kwargs):
+        pytest.fail("a copy of the same release must not download or upload it again")
+
+    monkeypatch.setattr(dest, "put_release", unexpected)
+    monkeypatch.setattr(source, "_download_release", unexpected)
+    events: list[ProgressEvent] = []
+    copy_release(child_ref, source, dest, progress=events.append)  # no error, no second upload
+    assert events == []
+
+
+def test_copy_release_ignores_manifest_fields_other_than_the_file_records(source, tmp_path):
+    dest = LocalRegistry(tmp_path / "dest")
+    copy_release(child_ref, source, dest)
+    manifest = dest.get_manifest(*child)
+    renamed = manifest.model_copy(update={"metadata": manifest.metadata.model_copy(update={"name": "Another name"})})
+    (dest.root / child_ref.dataset_id / str(child_ref.version) / "manifest.json").write_text(renamed.to_json())
+    # A fresh registry: the rewrite can keep the mtime of the first write, so a cached manifest could stay.
+    events: list[ProgressEvent] = []
+    copy_release(child_ref, source, LocalRegistry(dest.root), progress=events.append)
+    assert events == []
+    assert LocalRegistry(dest.root).get_manifest(*child).metadata.name == "Another name"
+
+
+def test_copy_release_refuses_another_build_of_the_version(source, dest):
+    # the destination holds child_ref built from other records
+    dest.put_dataset(_other_build(child_ref.dataset_id))
+    before = dest.get_manifest(*child)
+    with pytest.raises(TimeNetVersionConflictError, match="new version") as raised:
+        copy_release(child_ref, source, dest)
+    assert (raised.value.release, raised.value.needed_by) == (child_ref, None)
+    assert (raised.value.registry, raised.value.source) == (str(dest), str(source))
+    assert dest.get_manifest(*child) == before
+    assert not dest.exists(*parent)  # nothing is copied, not even the payload source
+
+
+def test_copy_release_refuses_a_payload_source_with_other_files(source, tmp_path):
+    dest = LocalRegistry(tmp_path / "dest")
+    # the destination holds parent_ref with other files
+    dest.put_dataset(_other_build(parent_ref.dataset_id))
+    before = dest.get_manifest(*parent)
+    with pytest.raises(TimeNetVersionConflictError, match=str(parent_ref)) as raised:
+        copy_release(child_ref, source, dest)
+    assert (raised.value.release, raised.value.needed_by) == (parent_ref, child_ref)
+    assert not dest.exists(*child)
+    assert dest.get_manifest(*parent) == before
+
+
+def test_copy_release_repairs_a_damaged_local_copy(source, tmp_path):
+    dest = LocalRegistry(tmp_path / "dest")
+    copy_release(child_ref, source, dest)
+    child_dir = dest.root / child_ref.dataset_id / str(child_ref.version)
+    manifest = dest.get_manifest(*child)
+    (child_dir / manifest.files.control[0].path).unlink()
+    assert not complete_copy(child_dir, manifest)
+    events: list[ProgressEvent] = []
+    copy_release(child_ref, source, dest, progress=events.append)
+    assert complete_copy(child_dir, manifest)
+    assert events == [StepStarted(child_ref, "copy"), StepFinished(child_ref, "copy")]
+
+
+def test_copy_release_reports_each_copied_release(source, tmp_path):
+    events: list[ProgressEvent] = []
+    copy_release(child_ref, source, LocalRegistry(tmp_path / "dest"), progress=events.append)
+    assert [(e.action, e.release) for e in events if isinstance(e, StepStarted)] == [
+        ("copy", parent_ref),
+        ("copy", child_ref),
+    ]
+    assert events == [
+        StepStarted(parent_ref, "copy"),
+        StepFinished(parent_ref, "copy"),
+        StepStarted(child_ref, "copy"),
+        StepFinished(child_ref, "copy"),
+    ]
+
+
+def test_copy_release_copies_the_payload_sources_of_a_payload_source(chain_source, dest):
+    events: list[ProgressEvent] = []
+    copy_release(grandchild_ref, chain_source, dest, progress=events.append)
+    assert all(dest.exists(*release) for release in chain)
+    assert [e.release for e in events if isinstance(e, StepStarted)] == [grandparent_ref, middle_ref, grandchild_ref]
+
+
+def test_copy_release_copies_a_shared_payload_source_once(tmp_path):
+    root = tmp_path / "chain"
+    _write_chain(root, grandchild_reads_grandparent=True)
+    shared_source = LocalRegistry(root)
+    assert set(_payload_sources(shared_source, grandchild_ref)) == {grandparent_ref, middle_ref}
+    events: list[ProgressEvent] = []
+    copy_release(grandchild_ref, shared_source, LocalRegistry(tmp_path / "dest"), progress=events.append)
+    assert [e.release for e in events if isinstance(e, StepStarted)] == [grandparent_ref, middle_ref, grandchild_ref]
+
+
+def test_copy_release_refuses_a_payload_source_of_a_payload_source_with_other_files(chain_source, dest):
+    # the destination holds the grandparent with other files
+    dest.put_dataset(_other_build(grandparent_ref.dataset_id))
+    before = dest.get_manifest(*chain[0])
+    with pytest.raises(TimeNetVersionConflictError, match=str(grandparent_ref)) as raised:
+        copy_release(grandchild_ref, chain_source, dest)
+    assert (raised.value.release, raised.value.needed_by) == (grandparent_ref, grandchild_ref)
+    assert not dest.exists(*chain[1])
+    assert not dest.exists(*chain[2])
+    assert dest.get_manifest(*chain[0]) == before
+
+
+def test_copy_release_refuses_payload_sources_that_form_a_cycle(chain_source, tmp_path):
+    # a damaged registry: the grandparent claims to read the middle release, which reads the grandparent
+    middle_files = chain_source.get_manifest(*chain[1]).files.control
+    grandparent_manifest = chain_source.get_manifest(*chain[0])
+    cycle = grandparent_manifest.model_copy(
+        update={"payload_sources": {SourceKey(str(middle_ref)): PayloadSource(release=middle_ref, files=middle_files)}}
+    )
+    (chain_source.root / grandparent_ref.dataset_id / "1.0.0" / "manifest.json").write_text(cycle.to_json())
+    dest = LocalRegistry(tmp_path / "dest")
+    with pytest.raises(TimeFFormatError, match="cycle"):
+        copy_release(grandchild_ref, LocalRegistry(chain_source.root), dest)
+    assert not any(dest.exists(*release) for release in chain)
+
+
+def test_copy_release_between_remote_registries_removes_its_download(tmp_path, monkeypatch):
+    remote_source, source_root = _remote(tmp_path, "source")
+    _write_parent_and_child(source_root)
+    dest, _ = _remote(tmp_path, "dest", token="tok_rw")
+    downloads = tmp_path / "tmp"
+    downloads.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(downloads))
+    copy_release(child_ref, remote_source, dest)
+    assert dest.get_manifest(*child) == remote_source.get_manifest(*child)
+    assert dest.get_manifest(*parent) == remote_source.get_manifest(*parent)
+    assert list(downloads.iterdir()) == []
+
+
+def test_copy_release_between_remote_registries_downloads_only_the_releases_that_dest_lacks(tmp_path, monkeypatch):
+    remote_source, source_root = _remote(tmp_path, "source")
+    _write_parent_and_child(source_root)
+    dest, _ = _remote(tmp_path, "dest", token="tok_rw")
+    copy_release(parent_ref, remote_source, dest)
+    downloads: list[DatasetRef] = []
+    download = remote_source._download_release
+
+    def counting(dataset_id, version, *args, **kwargs):
+        downloads.append(DatasetRef.parse(f"{dataset_id}@{version}"))
+        return download(dataset_id, version, *args, **kwargs)
+
+    monkeypatch.setattr(remote_source, "_download_release", counting)
+    copy_release(child_ref, remote_source, dest)
+    assert downloads == [child_ref]  # dest already holds the parent
+    assert dest.get_manifest(*child) == remote_source.get_manifest(*child)
+
+
+def test_copy_release_removes_its_download_after_an_error(tmp_path, monkeypatch):
+    remote_source, source_root = _remote(tmp_path, "source")
+    _write_parent_and_child(source_root)
+    dest, _ = _remote(tmp_path, "dest", token="tok_rw")
+    downloads = tmp_path / "tmp"
+    downloads.mkdir()
+    monkeypatch.setattr(tempfile, "tempdir", str(downloads))
+
+    def refuse(directory):
+        raise RuntimeError("upload failed")
+
+    monkeypatch.setattr(dest, "put_release", refuse)
+    with pytest.raises(RuntimeError, match="upload failed"):
+        copy_release(child_ref, remote_source, dest)
+    assert list(downloads.iterdir()) == []
+
+
+@pytest.mark.parametrize("credentialed", [child_ref, parent_ref], ids=["release", "payload-source"])
+def test_copy_release_refuses_a_release_that_is_not_open_for_a_registry_that_is_not_local(credentialed, tmp_path):
+    root = tmp_path / "source"
+    _write_parent_and_child(root, credentialed=credentialed)
+    dest, _ = _remote(tmp_path, "dest", token="tok_rw")
+    with pytest.raises(TimeNetAccessError) as raised:
+        copy_release(child_ref, LocalRegistry(root), dest)
+    assert raised.value.dataset == credentialed
+    assert not dest.exists(*child)
+    assert not dest.exists(*parent)
+
+
+@pytest.mark.parametrize("credentialed", [child_ref, parent_ref], ids=["release", "payload-source"])
+def test_copy_release_copies_a_release_that_is_not_open_between_local_registries(credentialed, tmp_path):
+    root = tmp_path / "source"
+    _write_parent_and_child(root, credentialed=credentialed)
+    dest = LocalRegistry(tmp_path / "dest")
+    copy_release(child_ref, LocalRegistry(root), dest)
+    assert dest.get_manifest(*child).metadata.access is (
+        Access.CREDENTIALED if credentialed == child_ref else Access.OPEN
+    )
+    assert dest.exists(*parent)
+
+
+def test_copy_release_refuses_to_fetch_a_release_that_is_not_open_from_a_registry_that_is_not_local(tmp_path):
+    remote_source, source_root = _remote(tmp_path, "source")
+    _write_parent_and_child(source_root, credentialed=child_ref)
+    dest = LocalRegistry(tmp_path / "dest")
+    with pytest.raises(TimeNetAccessError) as raised:
+        copy_release(child_ref, remote_source, dest)
+    assert raised.value.dataset == child_ref
+    assert not dest.exists(*child)
+    assert not dest.exists(*parent)  # the open parent is not copied either: every check runs first
+
+
+def test_copy_release_imports_nothing_from_timenet_connectors():
+    code = "import sys, timenet.registry.copy; assert 'timenet_connectors' not in sys.modules"
+    subprocess.run([sys.executable, "-c", code], check=True)

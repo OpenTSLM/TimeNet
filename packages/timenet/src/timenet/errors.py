@@ -58,6 +58,40 @@ class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
         return message if self.hint is None else f"{message} {self.hint}"
 
 
+class TimeNetVersionConflictError(TimeNetError):
+    """A registry holds a release with other files than the copy that would go there.
+
+    A published version cannot change. Other files need a new version.
+
+    Attributes:
+        release: The release that the registry holds with other files.
+        registry: The registry that holds it, as text.
+        source: The registry that the copy comes from, as text.
+        needed_by: The release that the copy is for, if ``release`` is a payload source that it
+            needs, directly or through another payload source. ``None`` if ``release`` is the
+            release that the copy is for.
+        hint: What the caller can do instead, added by the front end, or ``None``.
+    """
+
+    def __init__(
+        self, release: "DatasetRef", registry: str, source: str, needed_by: "DatasetRef | None" = None
+    ) -> None:
+        super().__init__(release, registry, source, needed_by)
+        self.release = release
+        self.registry = registry
+        self.source = source
+        self.needed_by = needed_by
+        self.hint: str | None = None
+
+    def __str__(self) -> str:
+        held = str(self.release) if self.needed_by is None else f"{self.release}, a payload source of {self.needed_by},"
+        message = (
+            f"{self.registry} already holds {held} with other files than {self.source}. "
+            "A published version cannot change, so other files need a new version."
+        )
+        return message if self.hint is None else f"{message} {self.hint}"
+
+
 class TimeNetAccessError(TimeNetError):
     """A dataset needs credentialed or restricted access, so only the user's own registry may hold its data.
 

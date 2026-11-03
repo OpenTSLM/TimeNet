@@ -15,6 +15,7 @@ from timenet.errors import (
     TimeNetFileError,
     TimeNetMissingParentError,
     TimeNetRegistryError,
+    TimeNetVersionConflictError,
 )
 from timenet.types import Access
 from timenet.types.access import AccessRequirement
@@ -112,6 +113,18 @@ _PAGE_C = AccessRequirement(_C, Access.RESTRICTED, "https://c.example")
             TimeNetAccessError(_A, Access.CREDENTIALED, ()),
             {"requirements": ()},
             "org/a@1.0.0 is credentialed.",
+        ),
+        (
+            TimeNetVersionConflictError(_A, "registry here", "registry there"),
+            {"release": _A, "registry": "registry here", "source": "registry there", "needed_by": None},
+            "registry here already holds org/a@1.0.0 with other files than registry there. "
+            "A published version cannot change, so other files need a new version.",
+        ),
+        (
+            TimeNetVersionConflictError(_A, "registry here", "registry there", _B),
+            {"release": _A, "needed_by": _B},
+            "registry here already holds org/a@1.0.0, a payload source of org/b@2.0.0, with other files than "
+            "registry there. A published version cannot change, so other files need a new version.",
         ),
     ],
 )
