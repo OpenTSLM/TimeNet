@@ -7,6 +7,7 @@ a grandparent.
 """
 
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -16,7 +17,12 @@ import numpy as np
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.errors import TimeFFormatError, TimeNetAccessError, TimeNetVersionConflictError
+from timenet.errors import (
+    TimeFFormatError,
+    TimeNetAccessError,
+    TimeNetMissingParentError,
+    TimeNetVersionConflictError,
+)
 from timenet.manifest import PayloadSource
 from timenet.progress import ProgressEvent, StepFinished, StepStarted
 from timenet.reader import TimeFReader
@@ -228,6 +234,65 @@ def test_copy_release_refuses_a_payload_source_with_other_files(source, tmp_path
     assert (raised.value.release, raised.value.needed_by) == (parent_ref, child_ref)
     assert not dest.exists(*child)
     assert dest.get_manifest(*parent) == before
+
+
+def _without_parent(source: LocalRegistry) -> LocalRegistry:
+    """Remove the parent from ``source``, and return a new registry over its directory.
+
+    The new registry does not keep a cached manifest of the parent.
+    """
+    shutil.rmtree(source.root / parent_ref.dataset_id)
+    return LocalRegistry(source.root)
+
+
+def test_copy_release_reads_a_payload_source_that_only_dest_holds(source, dest):
+    copy_release(parent_ref, source, dest)
+    before = dest.get_manifest(*parent)
+    events: list[ProgressEvent] = []
+    copy_release(child_ref, _without_parent(source), dest, progress=events.append)
+    assert dest.get_manifest(*child) == source.get_manifest(*child)
+    assert dest.get_manifest(*parent) == before
+    assert events == [StepStarted(child_ref, "copy"), StepFinished(child_ref, "copy")]
+
+
+def test_copy_release_refuses_a_payload_source_that_only_dest_holds_with_other_files(source, dest):
+    # the destination holds parent_ref with other payload files than the child pins
+    dest.put_dataset(_release(parent_ref.dataset_id, [_record("other")]))
+    before = dest.get_manifest(*parent)
+    with pytest.raises(TimeFFormatError, match=f"payload source {parent_ref} differs"):
+        copy_release(child_ref, _without_parent(source), dest)
+    assert not dest.exists(*child)
+    assert dest.get_manifest(*parent) == before
+
+
+def test_copy_release_checks_the_access_of_a_payload_source_that_only_dest_holds(tmp_path):
+    root = tmp_path / "source"
+    _write_parent_and_child(root, credentialed=parent_ref)
+    dest, dest_root = _remote(tmp_path, "dest", token="tok_rw")
+    # the service holds the parent, whose card declares credentialed access
+    shutil.copytree(root / parent_ref.dataset_id, dest_root / parent_ref.dataset_id)
+    with pytest.raises(TimeNetAccessError) as raised:
+        copy_release(child_ref, _without_parent(LocalRegistry(root)), dest)
+    assert raised.value.dataset == parent_ref
+    assert not dest.exists(*child)
+
+
+def test_copy_release_refuses_a_payload_source_that_no_registry_holds(source, dest):
+    with pytest.raises(TimeNetMissingParentError) as raised:
+        copy_release(child_ref, _without_parent(source), dest)
+    assert (raised.value.missing, raised.value.needed_by) == (parent_ref, child_ref)
+    assert not dest.exists(*child)
+
+
+def test_copy_release_refuses_a_payload_source_that_only_dest_holds_damaged(source, tmp_path):
+    dest = LocalRegistry(tmp_path / "dest")
+    copy_release(parent_ref, source, dest)
+    parent_dir = dest.root / parent_ref.dataset_id / str(parent_ref.version)
+    (parent_dir / dest.get_manifest(*parent).files.control[0].path).unlink()
+    with pytest.raises(TimeNetMissingParentError) as raised:
+        copy_release(child_ref, _without_parent(source), dest)
+    assert (raised.value.missing, raised.value.needed_by) == (parent_ref, child_ref)
+    assert not dest.exists(*child)
 
 
 def test_copy_release_repairs_a_damaged_local_copy(source, tmp_path):

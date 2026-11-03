@@ -42,6 +42,11 @@ def copy_release(
     manifests record the same files: the same paths, sizes and checksums. Other manifest fields do not
     count.
 
+    ``source`` must hold the release. A payload source can come from ``dest`` instead: if ``source``
+    does not hold it, but ``dest`` holds a complete copy, this function uses that copy and does not
+    copy it again. That copy must also match the files that each release that reads it pins. A local
+    copy is complete if each file of its manifest is present with its recorded size.
+
     This function checks every release first, and then copies. For each release, it does one of these:
 
     - If ``dest`` does not hold the release, it copies the release. A local ``dest`` gets the release
@@ -74,12 +79,15 @@ def copy_release(
             release is open if its card and each card in its lineage declare access ``open``. Nothing
             is copied then.
         TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
-        TimeNetMissingParentError: If ``source`` does not hold a payload source that the release needs.
-        TimeFFormatError: If a manifest in ``source`` names another release, a payload source differs from
-            the files that a release that reads it pins, or the payload sources form a cycle.
+        TimeNetMissingParentError: If a payload source that the release needs is neither in ``source``
+            nor complete in ``dest``. Nothing is copied then.
+        TimeFFormatError: If a manifest names another release, a payload source in ``source``, or the
+            copy in ``dest`` that this function uses, differs from the files that a release that reads
+            it pins, or the payload sources form a cycle. Nothing is copied then.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
-    manifests = _source_manifests(reference, source)
-    # Check every release before anything is copied, so that a refusal leaves dest unchanged.
+    manifests = _manifests(reference, source, dest)
+    # Check every release before anything is copied, so that a refusal leaves dest unchanged. A payload
+    # source that only dest holds is complete there, so it is never pending.
     pending = [ref for ref, manifest in manifests.items() if _needs_copy(reference, ref, manifest, source, dest)]
     _check_access(manifests, set(pending), source, dest)
     if not pending:
@@ -143,21 +151,24 @@ def _check_access(
             require_open_access(manifest.metadata, manifest.lineage)
 
 
-def _source_manifests(reference: DatasetRef, source: BaseRegistry) -> dict[DatasetRef, Manifest]:
-    """Return the manifests in ``source`` of a release and of every payload source that it needs.
+def _manifests(reference: DatasetRef, source: BaseRegistry, dest: WritableRegistry) -> dict[DatasetRef, Manifest]:
+    """Return the manifests of a release and of every payload source that it needs.
 
-    Each payload source must match the files that each release that reads it pins.
+    Each manifest comes from ``source``. A payload source that ``source`` does not hold comes from
+    ``dest``, if ``dest`` holds a complete copy. Each payload source must match the files that each
+    release that reads it pins.
 
     Args:
         reference: The release.
         source: The registry to copy from.
+        dest: The registry to copy to.
 
     Returns:
         Each manifest by its release, once for each release. Each payload source comes before the
         releases that read it, and the requested release comes last.
 
     Raises:
-        TimeNetMissingParentError: If ``source`` does not hold a payload source.
+        TimeNetMissingParentError: If a payload source is neither in ``source`` nor complete in ``dest``.
         TimeFFormatError: If the payload sources form a cycle.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _payload_source_manifest
     manifests: dict[DatasetRef, Manifest] = {}
@@ -170,7 +181,7 @@ def _source_manifests(reference: DatasetRef, source: BaseRegistry) -> dict[Datas
             if pinned.release in open_releases:
                 raise TimeFFormatError(f"the payload sources of {reference} form a cycle at {pinned.release}")
             known = manifests.get(pinned.release)
-            held = known if known is not None else _payload_source_manifest(source, pinned.release, release)
+            held = known if known is not None else _payload_source_manifest(source, dest, pinned.release, release)
             check_pins(release, pinned, held)
             if known is None:
                 add(pinned.release, held)
@@ -183,11 +194,14 @@ def _source_manifests(reference: DatasetRef, source: BaseRegistry) -> dict[Datas
     return manifests
 
 
-def _payload_source_manifest(source: BaseRegistry, reference: DatasetRef, needed_by: DatasetRef) -> Manifest:
-    """Return the manifest of a payload source in ``source``.
+def _payload_source_manifest(
+    source: BaseRegistry, dest: WritableRegistry, reference: DatasetRef, needed_by: DatasetRef
+) -> Manifest:
+    """Return the manifest of a payload source in ``source``, or of its complete copy in ``dest``.
 
     Args:
         source: The registry to copy from.
+        dest: The registry to copy to.
         reference: The payload source.
         needed_by: The release that reads the payload source.
 
@@ -195,12 +209,19 @@ def _payload_source_manifest(source: BaseRegistry, reference: DatasetRef, needed
         The manifest of the payload source.
 
     Raises:
-        TimeNetMissingParentError: If ``source`` does not hold the payload source.
+        TimeNetMissingParentError: If the payload source is neither in ``source`` nor complete in
+            ``dest``.
     """
     try:
         manifest = source.get_manifest(reference.dataset_id, str(reference.version))
     except TimeNetDatasetNotFoundError as error:
-        raise TimeNetMissingParentError(reference, needed_by, True, str(source)) from error
+        try:
+            held = dest.get_manifest(reference.dataset_id, str(reference.version))
+        except TimeNetDatasetNotFoundError:
+            held = None
+        if held is None or not _complete(reference, held, dest):
+            raise TimeNetMissingParentError(reference, needed_by, True, str(source)) from error
+        manifest = held
     validate_manifest_reference(manifest, reference)
     return manifest
 
@@ -217,7 +238,7 @@ def _needs_copy(
     Args:
         requested: The release that the copy is for, for the error.
         reference: The release to check: ``requested`` or a payload source that it needs.
-        manifest: The manifest of the release in ``source``.
+        manifest: The manifest of the release in ``source``, or in ``dest`` if only ``dest`` holds it.
         source: The registry to copy from, for the error.
         dest: The registry to copy to.
 
@@ -234,7 +255,24 @@ def _needs_copy(
     if _file_records(held) != _file_records(manifest):
         needed_by = None if reference == requested else requested
         raise TimeNetVersionConflictError(reference, str(dest), str(source), needed_by)
-    return isinstance(dest, LocalRegistry) and not complete_copy(release_dir(dest.root, reference), manifest)
+    return not _complete(reference, manifest, dest)
+
+
+def _complete(reference: DatasetRef, manifest: Manifest, dest: WritableRegistry) -> bool:
+    """Return whether ``dest`` holds a release complete, if it holds the release.
+
+    A registry that is not local publishes a version only as a whole, so it holds each release
+    complete. A local copy is complete if each file of the manifest is present with its recorded size.
+
+    Args:
+        reference: The release.
+        manifest: The manifest of the release, with the files that ``dest`` holds.
+        dest: The registry to copy to.
+
+    Returns:
+        ``False`` only for a local copy with a missing or resized file.
+    """
+    return not isinstance(dest, LocalRegistry) or complete_copy(release_dir(dest.root, reference), manifest)
 
 
 def _file_records(manifest: Manifest) -> frozenset[tuple[str, int, str]]:
