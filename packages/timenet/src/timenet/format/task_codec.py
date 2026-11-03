@@ -69,7 +69,7 @@ def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality
 
     Raises:
         TimeFFormatError: If a stored input kind is unknown or repeated.
-    """  # noqa: DOC502 - raised by cached validation
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by cached validation
     return _decode_input_modalities(tuple(values or ()))
 
 
@@ -204,7 +204,7 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
     return {}
 
 
-def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding branch
+def decode_target(  # ruff: ignore[too-many-return-statements] - each target kind has one direct decoding branch
     row: Mapping[str, object] | TargetValueRow,
     *,
     records: Mapping[EntityId, Record],

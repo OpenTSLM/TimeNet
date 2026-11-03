@@ -117,7 +117,7 @@ class TimeNet:
         dataset_id, version = _resolve_ref(dataset_id, version)
         return self._registry.get_manifest(dataset_id, version)
 
-    def search(  # noqa: PLR0913
+    def search(  # ruff: ignore[too-many-arguments]
         self,
         *,
         query: _OrList[str] = None,
@@ -196,6 +196,7 @@ class TimeNet:
         auto_build: bool = True,
         fetch_from: str | BaseRegistry | None = None,
     ) -> TimeFReader:
+        # ruff: ignore[docstring-extraneous-exception] (raised by _reject_unhosted_access, _prepare, and the builder)
         """Prepare a dataset version and its payload sources, then open it for lazy reads.
 
         Opening reads the version's manifest, but neither its catalog nor any value. The reader's
@@ -243,7 +244,7 @@ class TimeNet:
             TimeFFormatError: If the build of a payload source does not reproduce the pinned files.
             TimeNetBuildError: If the build runs but fails.
             TimeFValidationError: If a remote client gets ``fetch_from``.
-        """  # noqa: DOC502 (raised by _reject_unhosted_access, _prepare, and the builder)
+        """
         dataset_id, version = _resolve_ref(dataset_id, version)
         registry = self._registry
         if not isinstance(registry, LocalRegistry):
@@ -302,7 +303,7 @@ class TimeNet:
             TimeFFormatError: If the build of a payload source does not reproduce the pinned files.
             TimeNetBuildError: If the build runs but fails.
             TimeFValidationError: If a remote client gets ``fetch_from``.
-        """  # noqa: DOC502 (all come from open())
+        """  # ruff: ignore[docstring-extraneous-exception] (all come from open())
         with self.open(dataset_id, version, auto_build=auto_build, fetch_from=fetch_from) as reader:
             return reader.read(load=LoadPlan.ALL_EAGER)
 
@@ -357,7 +358,7 @@ class TimeNet:
             A :class:`~timenet.torch.TimeFTorchDataset` over a reader of the version, which reads
             and loads one batch of records at a time.
         """
-        from timenet.torch import TimeFTorchDataset  # noqa: PLC0415
+        from timenet.torch import TimeFTorchDataset  # ruff: ignore[import-outside-top-level]
 
         return TimeFTorchDataset.from_reader(
             self.open(dataset_id, version, auto_build=auto_build, fetch_from=fetch_from), load=load
@@ -407,7 +408,7 @@ def _prepare(
         TimeNetMissingParentError: If a payload source is absent and this function cannot copy or
             build it.
         TimeNetInvalidCardError: If the card of a connector cannot be read.
-    """  # noqa: DOC502 - raised by _obtain and exact_builder
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _obtain and exact_builder
     try:
         manifest = registry.get_manifest(dataset_id, version)
     except TimeNetDatasetNotFoundError as miss:
@@ -437,7 +438,7 @@ def _prepare(
             built.add(source)
 
 
-def _obtain(  # noqa: PLR0913
+def _obtain(  # ruff: ignore[too-many-arguments]
     registry: LocalRegistry,
     dataset_id: str,
     version: str | None,
@@ -458,7 +459,7 @@ def _obtain(  # noqa: PLR0913
             or if the connector declares another version. In the first case, the message names each
             keyword that the call did not use and that can provide the version.
         TimeNetInvalidCardError: If the card of the connector cannot be read.
-    """  # noqa: DOC502 - raised by declared_version
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by declared_version
     if fetch_from is not None:
         try:
             return fetch_from.get_manifest(dataset_id, version)

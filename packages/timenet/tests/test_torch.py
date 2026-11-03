@@ -8,14 +8,14 @@ from timenet.dataset import Record, Source
 
 torch = pytest.importorskip("torch")
 
-from torch.utils.data import Dataset  # noqa: E402
+from torch.utils.data import Dataset  # ruff: ignore[module-import-not-at-top-of-file]
 
-from timenet.dataset import Signal, TimeFDataset  # noqa: E402
-from timenet.dataset.axis import RegularAxis  # noqa: E402
-from timenet.errors import TimeFValidationError  # noqa: E402
-from timenet.testing import make_dataset  # noqa: E402
-from timenet.torch import TimeFTorchDataset  # noqa: E402
-from timenet.types import (  # noqa: E402
+from timenet.dataset import Signal, TimeFDataset  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.dataset.axis import RegularAxis  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.errors import TimeFValidationError  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.testing import make_dataset  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.torch import TimeFTorchDataset  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.types import (  # ruff: ignore[module-import-not-at-top-of-file]
     AnswerTask,
     DatasetMetadata,
     Domain,
@@ -116,9 +116,9 @@ def test_str_series_has_no_tensor_representation():
 
 
 def test_reader_backed_view_builds_a_batch_with_the_same_items(tmp_path):
-    from timenet.reader import TimeFReader  # noqa: PLC0415
-    from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
-    from timenet.writer import TimeFWriter  # noqa: PLC0415
+    from timenet.reader import TimeFReader  # ruff: ignore[import-outside-top-level]
+    from timenet.registry.dependencies import open_local_version  # ruff: ignore[import-outside-top-level]
+    from timenet.writer import TimeFWriter  # ruff: ignore[import-outside-top-level]
 
     dataset = make_dataset()
     # A prompt this long is packed, so it stays behind its handle unless a read loads it.
@@ -156,10 +156,10 @@ def test_reader_backed_view_builds_a_batch_with_the_same_items(tmp_path):
 
 @pytest.mark.parametrize("arrays_loaded", [True, False], ids=["default-plan", "text-only-plan"])
 def test_reader_backed_view_loads_each_batch_with_its_plan(tmp_path, arrays_loaded):
-    from timenet.reader import Loading, LoadPlan, TimeFReader  # noqa: PLC0415
-    from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
-    from timenet.types import TSCorrespondenceTask  # noqa: PLC0415
-    from timenet.writer import TimeFWriter  # noqa: PLC0415
+    from timenet.reader import Loading, LoadPlan, TimeFReader  # ruff: ignore[import-outside-top-level]
+    from timenet.registry.dependencies import open_local_version  # ruff: ignore[import-outside-top-level]
+    from timenet.types import TSCorrespondenceTask  # ruff: ignore[import-outside-top-level]
+    from timenet.writer import TimeFWriter  # ruff: ignore[import-outside-top-level]
 
     dataset = make_dataset()
     record0, record1, record2 = dataset.records
@@ -199,8 +199,8 @@ def test_reader_backed_view_loads_each_batch_with_its_plan(tmp_path, arrays_load
 
 @pytest.mark.parametrize("closing", ["close", "with"])
 def test_a_reader_backed_view_closes_its_reader(tmp_path, monkeypatch, closing):
-    from timenet.reader import TimeFReader  # noqa: PLC0415
-    from timenet.writer import TimeFWriter  # noqa: PLC0415
+    from timenet.reader import TimeFReader  # ruff: ignore[import-outside-top-level]
+    from timenet.writer import TimeFWriter  # ruff: ignore[import-outside-top-level]
 
     dataset = make_dataset()
     dataset.derive_schema()
@@ -237,11 +237,11 @@ def test_a_dataset_backed_view_has_no_reader_to_close():
 
 @pytest.mark.skipif("fork" not in multiprocessing.get_all_start_methods(), reason="needs the fork start method")
 def test_forked_workers_open_their_own_catalog_after_len(tmp_path):
-    from torch.utils.data import DataLoader  # noqa: PLC0415
+    from torch.utils.data import DataLoader  # ruff: ignore[import-outside-top-level]
 
-    from timenet.reader import TimeFReader  # noqa: PLC0415
-    from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
-    from timenet.writer import TimeFWriter  # noqa: PLC0415
+    from timenet.reader import TimeFReader  # ruff: ignore[import-outside-top-level]
+    from timenet.registry.dependencies import open_local_version  # ruff: ignore[import-outside-top-level]
+    from timenet.writer import TimeFWriter  # ruff: ignore[import-outside-top-level]
 
     dataset = make_dataset()
     dataset.derive_schema()

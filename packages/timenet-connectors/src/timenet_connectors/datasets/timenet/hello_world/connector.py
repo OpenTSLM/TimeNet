@@ -95,7 +95,9 @@ def _wave(
 class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
     """A deterministic, offline demo connector for the ``timenet/hello-world`` dataset."""
 
-    def download(self, cache_dir: Path) -> list[HelloWorldRecording]:  # noqa: ARG002, PLR6301 (override: the data is synthetic, so this method needs no cache)
+    # Override: the data is synthetic, so this method needs no cache.
+    # ruff: ignore[unused-method-argument, no-self-use]
+    def download(self, cache_dir: Path) -> list[HelloWorldRecording]:
         """Return deterministic recording descriptions.
 
         This method uses no network and does not use ``cache_dir``.

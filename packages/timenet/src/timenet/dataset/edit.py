@@ -310,8 +310,10 @@ def _copy_signal(signal: Signal, copies: dict[int, Annotation]) -> Signal:
         The copy.
     """
     duplicate = copy(signal)
-    object.__setattr__(duplicate, "metadata", deepcopy(signal.metadata))  # noqa: PLC2801 (Signal is frozen)
-    object.__setattr__(duplicate, "annotations", _copied(signal.annotations, copies))  # noqa: PLC2801
+    # ruff: ignore[unnecessary-dunder-call] (Signal is frozen)
+    object.__setattr__(duplicate, "metadata", deepcopy(signal.metadata))
+    # ruff: ignore[unnecessary-dunder-call]
+    object.__setattr__(duplicate, "annotations", _copied(signal.annotations, copies))
     return duplicate
 
 

@@ -14,7 +14,7 @@ if TYPE_CHECKING:
     from timenet.registry import BaseRegistry
 
 
-def build(  # noqa: PLR0913
+def build(  # ruff: ignore[too-many-arguments]
     dataset_id: str,
     *,
     version: str | None = None,
@@ -24,6 +24,7 @@ def build(  # noqa: PLR0913
     fetch_from: "str | BaseRegistry | None" = None,
     build_parents: bool = False,
 ) -> Path:
+    # ruff: ignore[docstring-extraneous-exception] (raised by _check_version and the parent planner, not directly here)
     """Build a dataset into a local registry by connector id.
 
     This is the producer-side one-liner over the engine. The build reuses an already-built version
@@ -55,10 +56,10 @@ def build(  # noqa: PLR0913
             declared version.
         TimeNetMissingParentError: If a parent release is missing, with a hint that names the
             keywords.
-    """  # noqa: DOC502 (raised by _check_version and the parent planner, not directly here)
-    from timenet.errors import TimeNetMissingParentError  # noqa: PLC0415
-    from timenet.registry import default_registry_path  # noqa: PLC0415
-    from timenet_connectors.builder.cli import build_one  # noqa: PLC0415
+    """
+    from timenet.errors import TimeNetMissingParentError  # ruff: ignore[import-outside-top-level]
+    from timenet.registry import default_registry_path  # ruff: ignore[import-outside-top-level]
+    from timenet_connectors.builder.cli import build_one  # ruff: ignore[import-outside-top-level]
 
     if version is not None:
         _check_version(dataset_id, version)
@@ -74,6 +75,7 @@ def build(  # noqa: PLR0913
 
 
 def _check_version(dataset_id: str, version: str) -> None:
+    # ruff: ignore[docstring-extraneous-exception] (LookupError and TimeNetInvalidCardError come from the calls below)
     """Reject a requested version the connector does not build.
 
     Deliberately import-free, like :func:`timenet_connectors.discovery.requirements_for`. This guard
@@ -88,10 +90,10 @@ def _check_version(dataset_id: str, version: str) -> None:
         TimeFValidationError: If the connector declares a different version.
         LookupError: If no connector exists for the id.
         TimeNetInvalidCardError: If the connector's card is missing or invalid.
-    """  # noqa: DOC502 (LookupError and TimeNetInvalidCardError come from the calls below)
-    from timenet.errors import TimeFValidationError  # noqa: PLC0415
-    from timenet.types import DatasetMetadata  # noqa: PLC0415
-    from timenet_connectors.discovery import connector_dir  # noqa: PLC0415
+    """
+    from timenet.errors import TimeFValidationError  # ruff: ignore[import-outside-top-level]
+    from timenet.types import DatasetMetadata  # ruff: ignore[import-outside-top-level]
+    from timenet_connectors.discovery import connector_dir  # ruff: ignore[import-outside-top-level]
 
     card = DatasetMetadata.from_yaml(connector_dir(dataset_id) / "dataset.yaml")
     available = str(card.dataset_version)
@@ -124,7 +126,7 @@ def load(
     Returns:
         The loaded dataset.
     """
-    from timenet.client import TimeNet  # noqa: PLC0415
+    from timenet.client import TimeNet  # ruff: ignore[import-outside-top-level]
 
     build(dataset_id, version=version, fetch_from=fetch_from, build_parents=build_parents)
     return TimeNet().load(dataset_id, version, fetch_from=fetch_from)

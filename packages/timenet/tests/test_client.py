@@ -77,7 +77,8 @@ class _Builder:
         version = DatasetRef.parse(f"{dataset_id}@{self.VERSION}").version
         return make_dataset().metadata.model_copy(update={"dataset_id": dataset_id, "dataset_version": version})
 
-    def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_from=None, pinned_by=None):  # noqa: PLR0913
+    # ruff: ignore[too-many-arguments]
+    def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_from=None, pinned_by=None):
         self.calls.append((dataset_id, force, build_parents, fetch_from, pinned_by))
         dataset = make_dataset()
         dataset._metadata = self.card(dataset_id)
@@ -431,7 +432,7 @@ def test_load_reads_in_place_without_downloading(registry_root, tmp_path):
 
 def test_open_torch(registry_root, tmp_path, monkeypatch):
     torch = pytest.importorskip("torch")
-    from torch.utils.data import Dataset  # noqa: PLC0415
+    from torch.utils.data import Dataset  # ruff: ignore[import-outside-top-level]
 
     def read_everything(*args, **kwargs):
         raise AssertionError("open_torch reads one batch at a time, not the whole dataset")
