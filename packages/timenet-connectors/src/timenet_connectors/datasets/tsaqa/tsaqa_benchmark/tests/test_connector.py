@@ -38,6 +38,8 @@ _EXPECTED_ISSUES = {
     ("train.parquet", 16): ["ambiguous_answer", "conflicting_answer", "repeated_across_splits"],
     ("val.parquet", 0): ["repeated_across_splits", "repeated_question"],
     ("test.parquet", 0): ["ambiguous_answer", "conflicting_answer", "repeated_across_splits"],
+    # The input and the sequence are all zeros, so the sequence is the first-order difference: not "F".
+    ("train.parquet", 17): ["wrong_transform_target"],
 }
 _PRINTED_SERIES = re.compile(r"^(?:[A-D]: )?(\[[-0-9., e]*\])$", re.MULTILINE)
 
@@ -88,13 +90,21 @@ def _check_task(task, row: dict[str, Any]) -> None:
     assert "[" not in prompt or row["task"] not in {"data_transformation", "temporal_relationship"}
     for record in task.inputs:
         assert (record.metadata["file"], record.metadata["row"]) == _row_of(task)
+    keys = ("meta_info", "domain", "dataset")
+    published = [("task", row["task"]), ("question_type", row["question_type"])]
+    # The model reads the context, then the published task and question_type.
     context = [(a.key, a.value) for a in task.input_annotations]
     if row["task"] == "comparison":
-        assert context == [
-            (key, json.loads(row[key])[position]) for position in range(2) for key in ("meta_info", "domain", "dataset")
+        context_values = [(key, json.loads(row[key])[position]) for position in range(2) for key in keys]
+    elif row["task"] in {"data_transformation", "temporal_relationship"}:
+        # The input's Record keeps its own context, the first entry. The task keeps the complete lists.
+        context_values = [(key, json.loads(row[key])[0]) for key in keys]
+        assert [(a.key, a.value) for a in task.annotations] == [
+            (f"published_{key}", json.loads(row[key])) for key in keys
         ]
     else:
-        assert context == [(key, row[key]) for key in ("meta_info", "domain", "dataset")]
+        context_values = [(key, row[key]) for key in keys]
+    assert context == context_values + published
     assert task.metadata["task"] == row["task"]
     assert task.metadata["question_type"] == row["question_type"]
     assert task.metadata["source_issues"] == _EXPECTED_ISSUES.get(_row_of(task), [])
@@ -119,24 +129,29 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     published = _published()
     with TimeFReader(registry.open_version("tsaqa/tsaqa-benchmark", "1.0.0")) as reader:
         restored = reader.read()
-        assert {a.key: a.value for a in restored.annotations} == {
+        assert {a.key: a.value for a in restored.annotations if a.key not in {"task", "question_type"}} == {
             "source_repository": "TSAQA/TSAQA-Benchmark",
             "source_revision": "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd",
             "true_or_false_vocabulary": ["T", "F"],
         }
+        labels = [(a.key, a.value) for a in restored.annotations if a.key in {"task", "question_type"}]
+        expected = {("task", row["task"]) for row in published.values()}
+        expected |= {("question_type", row["question_type"]) for row in published.values()}
+        assert len(labels) == len(expected)
+        assert all(label in labels for label in expected)
         tasks = list(restored.iter_tasks())
         assert len(tasks) == len(published)
         for task in tasks:
             _check_task(task, published[_row_of(task)])
         specs = Counter(record.signals[0].spec.spec_type for record in restored.records)
-    # 19 inputs and the comparisons' second ones, and the temporal relationship series; then the
+    # 20 inputs and the comparisons' second ones, and the temporal relationship series; then the
     # sequences of one Fourier, one wavelet and one first-order difference question, and the four
     # choices of the first-order difference multiple-choice question.
     assert specs == {
-        "tsaqa_series": 43,
+        "tsaqa_series": 44,
         "tsaqa_fourier_transform": 1,
         "tsaqa_wavelet_transform": 1,
-        "tsaqa_first_order_difference": 5,
+        "tsaqa_first_order_difference": 6,
     }
 
 
@@ -144,7 +159,7 @@ def test_each_question_format_has_its_task_type():
     dataset = _FixtureConnector().convert(_refs())
     kinds = Counter((type(task).__name__, task.metadata["question_format"]) for task in dataset.iter_tasks())
     assert kinds == {
-        ("ClassificationTask", "true_or_false"): 8,
+        ("ClassificationTask", "true_or_false"): 9,
         ("AnswerTask", "multiple_choice"): 8,
         ("AnswerTask", "puzzling"): 3,
     }
@@ -153,7 +168,7 @@ def test_each_question_format_has_its_task_type():
 def test_issue_filter_leaves_out_the_tasks_with_the_named_issues():
     dataset = _FixtureConnector().convert(_refs())
     clean = list(without_source_issues(dataset.iter_tasks(), issues=[SourceIssue.REPEATED_ACROSS_SPLITS]))
-    assert len(clean) == 15
+    assert len(clean) == 16
 
 
 @pytest.mark.parametrize(
@@ -394,3 +409,10 @@ def test_a_file_that_is_not_parquet_fails_as_a_format_error(tmp_path):
     (tmp_path / "test.parquet").write_text("not parquet")
     with pytest.raises(TimeFFormatError, match=r"test\.parquet"):
         _FixtureConnector().convert(_refs(tmp_path))
+
+
+def test_a_zero_input_whose_zero_sequence_is_called_the_transform_is_not_flagged(tmp_path):
+    shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
+    _rewrite(tmp_path / "train.parquet", 17, answer="T")
+    tasks = _FixtureConnector().convert(_refs(tmp_path)).iter_tasks()
+    assert next(task for task in tasks if _row_of(task) == ("train.parquet", 17)).metadata["source_issues"] == []

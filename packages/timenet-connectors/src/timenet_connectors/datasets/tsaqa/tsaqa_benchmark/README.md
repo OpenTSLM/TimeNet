@@ -29,7 +29,7 @@ TF is true-or-false, MC multiple-choice and PZ puzzling (Section 3.1). GPT-4o wr
 characterization and comparison questions, and a weighted vote of four models sets their answers
 (Appendix B.3). The other tasks use templates (Appendix B.5 to B.8). The paper says every series is
 z-score normalized and printed to 4 decimals, and, except for classification, is 32 to 256 values long
-(Section 3.3). Some are not normalized, as [Questions the inputs can't answer](#questions-the-inputs-cant-answer)
+(Section 3.3). Some are not normalized, as [Answers not computable from the series](#answers-not-computable-from-the-series)
 counts.
 
 ### Files and columns
@@ -100,9 +100,17 @@ description". The paper doesn't say how these are joined, and no prompt code is 
 The connector keeps `meta_info`, `domain` and `dataset` as published, as annotations of those names
 on the input Record. Each task names them in its `input_annotations`, so the model gets them as
 context. A comparison's lists hold one entry per series, so each of its input Records gets its own
-entry. Every other value is the published text, a JSON list's text included. An annotation key has
-one value type in TimeF, so lists aren't decoded. `task` and `question_type` are task metadata, not
-context: the question already states both, and 10,000 rows give a wrong `question_type`.
+entry. A data transformation or temporal relationship row publishes a list that starts with its
+input's entry and goes on with the entries of its distractors, which come from unrelated series. The
+input Record keeps only the first entry, its own description. The complete lists are annotations of
+the task, `published_meta_info`, `published_domain` and `published_dataset`. They are not model
+input. Every other value is the published text. An annotation key has one value type in TimeF, so
+the Record's keys hold texts and the task's keys hold the lists.
+
+The model also reads the published `task` and `question_type`. Each distinct value is an annotation
+of the dataset, and every task names its two in `input_annotations`. The 10,000 rows that publish a
+wrong `question_type` keep the published value here. The question format that the connector reads
+from the question is separate: it is in the task metadata, and it decides the task type.
 
 ### Tasks
 
@@ -150,8 +158,9 @@ the connector reads each such line of a data transformation or temporal relation
 series.
 
 **Task metadata**, never model input:
-- `task` and `question_type`, as published;
-- `question_format`, read from the question;
+- `task` and `question_type`, as published. The model reads the same values through
+  `input_annotations`;
+- `question_format`, read from the question, which routes the row to its task type;
 - `file` and `row`;
 - `transform`, for a data transformation question;
 - `answer_text`, for a multiple-choice question with text choices;
@@ -238,7 +247,8 @@ scores. The connector flags them `ambiguous_answer`:
   transformation and 18 temporal relationship questions.
 - 1 comparison question (test row 28172) offers the right choice's text twice.
 
-### Questions the inputs can't answer
+### Questions that can't be answered by inputs
+
 
 The paper says every series is z-score normalized. In 57,333 of the 60,000 comparison and
 characterization rows, every input is: its mean is within 0.01 of 0 and its standard deviation
@@ -304,6 +314,15 @@ The counts compare each input series exactly, so a comparison counts when either
 is shared. 3,377 distinct series are shared. A series cut from the same source at another offset
 isn't counted, because the release names no source sequence.
 
+### Wrong transformation answers
+
+Four true-or-false data transformation rows have an input of zeros and a sequence of zeros, and
+the answer `F`. The Fourier transform, the wavelet transform and the first-order difference of a
+zero series are all zeros, so `T` is the only answer that fits. They are train rows 106397,
+106493, 120546 and 121942. Rows 106397 and 106493 also have `conflicting_answer`. The connector
+keeps the published answer and flags the rows `wrong_transform_target`. It does not correct a
+label. No multiple-choice row names a nonzero sequence as the answer for an all-zero input.
+
 ### Other notes
 
 - **Classification choices.** All 3,999 TwoPatterns questions print each class's case count in its
@@ -330,9 +349,10 @@ none. The issues are the values of `SourceIssue`:
 | `repeated_across_splits` | 4,514 | A copy is in another split |
 | `conflicting_answer` | 556 | Another row asks the same question about the same series, with another answer |
 | `ambiguous_answer` | 975 | Another answer is as right as the published one |
+| `wrong_transform_target` | 4 | The input is all zeros, so its transform is zeros, and the answer says otherwise |
 
-19,379 tasks have at least one issue. The connector keeps them all. No issue flags the
-[questions the inputs can't answer](#questions-the-inputs-cant-answer), or the
+19,381 tasks have at least one issue. The connector keeps them all. No issue flags the
+[answers not computable from the series](#answers-not-computable-from-the-series), or the
 [series shared across splits](#series-shared-across-splits) under another question.
 `without_source_issues` leaves them out, and the connector doesn't call it:
 

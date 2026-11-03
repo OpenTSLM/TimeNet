@@ -78,6 +78,8 @@ _TRUE_OR_FALSE_VOCABULARY = "true_or_false_vocabulary"
 """The dataset annotation naming the choices of every true-or-false task, as its ``target_schema``."""
 _CONTEXT_KEYS = ("meta_info", "domain", "dataset")
 """The published columns an input Record is annotated with, and its task gives the model as context."""
+_PUBLISHED_LISTS = {key: f"published_{key}" for key in _CONTEXT_KEYS}
+"""The task annotation that holds the complete published list of each context column, for a row that has one."""
 _READ_COLUMNS = ("task", "question_type", "input_ts", "question", "answer", *_CONTEXT_KEYS)
 """The columns a conversion reads. The release's ninth, ``raw_ts``, holds the series before normalization."""
 _SERIES_COLUMNS = ["input_ts", "question"]
@@ -136,6 +138,15 @@ class _QuestionReading(NamedTuple):
     """Whether another answer is as right as the published one."""
 
 
+class _Contexts(NamedTuple):
+    """The context a row publishes."""
+
+    per_input: tuple[Mapping[str, str], ...]
+    """One published context per input series."""
+    listed: Mapping[str, tuple[str, ...]]
+    """The complete lists of a data transformation or temporal relationship row, else empty."""
+
+
 class _RowKey(NamedTuple):
     """A row's place in the release."""
 
@@ -174,6 +185,9 @@ class SourceIssue(StrEnum):
     """Another row asks the same question about the same series, and expects another answer."""
     AMBIGUOUS_ANSWER = "ambiguous_answer"
     """Another answer is as right as the published one: two patches, or a choice and the right one, are equal."""
+    WRONG_TRANSFORM_TARGET = "wrong_transform_target"
+    """The input of a data transformation question is all zeros, which every transform maps to zeros,
+    and the published answer says otherwise."""
 
 
 _TaskT = TypeVar("_TaskT", bound=Task)
@@ -251,12 +265,12 @@ class _Row:
     values_digest: bytes
     """The digest of every series' values in Record order, to tell a reread of the same values from another."""
     n_inputs: int
-    input_contexts: tuple[Mapping[str, str], ...]
-    """One published context per input series."""
+    contexts: _Contexts
     transform: str | None
     question_digest: bytes
     """Equal for rows that ask the same question about the same series, whatever their context says."""
     has_ambiguous_answer: bool
+    has_wrong_target: bool
 
     @property
     def file(self) -> str:
@@ -317,26 +331,82 @@ def _printed_series(task: _Task, question: str) -> list[_Printed]:
     return [_Printed(match[1], _series_values(json.loads(match[2]))) for match in _PRINTED.finditer(question)]
 
 
-def _input_contexts(task: _Task, text: Mapping[str, str]) -> tuple[Mapping[str, str], ...]:
-    """Return the context of each input series: the published texts, or a comparison's entry for each series.
+def _input_contexts(task: _Task, text: Mapping[str, str]) -> _Contexts:
+    """Read the context a row publishes.
+
+    A comparison publishes one entry per input series. A data transformation or temporal relationship
+    row publishes its input's entry first, then those of its distractors. Any other row publishes one text.
 
     Returns:
-        One mapping of context texts per input series.
+        The context of each input series, and the complete lists of a row that publishes them.
 
     Raises:
-        ValueError: If a comparison's context isn't a JSON list of two texts.
+        ValueError: If a published list isn't a JSON list of texts, or a comparison's doesn't hold two.
     """
-    if task is not _Task.COMPARISON:
-        return ({key: text[key] for key in _CONTEXT_KEYS},)
-    entries = {key: json.loads(text[key]) for key in _CONTEXT_KEYS}
-    for key, entry in entries.items():
-        if (
-            not isinstance(entry, list)
-            or len(entry) != _COMPARISON_SERIES
-            or not all(isinstance(e, str) for e in entry)
-        ):
-            raise ValueError(f"a comparison's {key} is a JSON list of {_COMPARISON_SERIES} texts")
-    return tuple({key: entries[key][position] for key in _CONTEXT_KEYS} for position in range(_COMPARISON_SERIES))
+    if task is not _Task.COMPARISON and task not in _PRINTING_TASKS:
+        return _Contexts(({key: text[key] for key in _CONTEXT_KEYS},), {})
+    expected = f"{_COMPARISON_SERIES} texts" if task is _Task.COMPARISON else "texts"
+    lists: dict[str, tuple[str, ...]] = {}
+    for key in _CONTEXT_KEYS:
+        entries = json.loads(text[key])
+        if not isinstance(entries, list) or not entries or not all(isinstance(entry, str) for entry in entries):
+            raise ValueError(f"a {task} row's {key} is a JSON list of {expected}")
+        if task is _Task.COMPARISON and len(entries) != _COMPARISON_SERIES:
+            raise ValueError(f"a {task} row's {key} is a JSON list of {expected}")
+        lists[key] = tuple(entries)
+    if task is _Task.COMPARISON:
+        return _Contexts(
+            tuple({key: lists[key][position] for key in _CONTEXT_KEYS} for position in range(_COMPARISON_SERIES)), {}
+        )
+    return _Contexts(({key: lists[key][0] for key in _CONTEXT_KEYS},), lists)
+
+
+def _question_letters(question: str, lines: list[tuple[str, str]]) -> tuple[_QuestionFormat, tuple[str, ...]]:
+    """Read a question's format and the letters it offers.
+
+    Returns:
+        The format and its letters, in order.
+
+    Raises:
+        ValueError: If a multiple-choice question doesn't offer A to D in order.
+    """
+    if "\n\nPatches:\n" in question:
+        return _QuestionFormat.PUZZLING, _LETTERS
+    if _TRUE_OR_FALSE_LINES in question:
+        return _QuestionFormat.TRUE_OR_FALSE, _TRUE_OR_FALSE_LETTERS
+    letters = tuple(letter for letter, _ in lines)
+    if not _MIN_CHOICES <= len(letters) <= len(_LETTERS) or letters != _LETTERS[: len(letters)]:
+        raise ValueError(f"a multiple-choice question offers A to D in order, got {letters}")
+    return _QuestionFormat.MULTIPLE_CHOICE, letters
+
+
+def _check_answer(question_format: _QuestionFormat, answer: str, letters: tuple[str, ...]) -> None:
+    """Check that the answer is one of the letters, or for a puzzle an order of all of them.
+
+    Raises:
+        ValueError: If the answer doesn't fit.
+    """
+    if question_format is _QuestionFormat.PUZZLING:
+        fits = sorted(answer.split(",")) == sorted(letters)
+    else:
+        fits = answer in letters
+    if not fits:
+        raise ValueError(f"the answer {answer!r} does not fit the question's letters {letters}")
+
+
+def _has_another_right_answer(
+    question_format: _QuestionFormat, answer: str, candidates: Mapping[str, tuple[float, ...] | str]
+) -> bool:
+    """Tell whether another answer is as right as the published one, from the question's candidates.
+
+    Returns:
+        ``True`` if two patches, or the answer's choice and another, are equal.
+    """
+    if question_format is _QuestionFormat.PUZZLING:
+        return len(set(candidates.values())) < len(candidates)
+    if question_format is _QuestionFormat.MULTIPLE_CHOICE:
+        return list(candidates.values()).count(candidates[answer]) > 1
+    return False
 
 
 def _read_question(task: _Task, question: str, answer: str, printed: list[_Printed]) -> _QuestionReading:
@@ -354,35 +424,37 @@ def _read_question(task: _Task, question: str, answer: str, printed: list[_Print
             question's letters or an order of all four patches, or the printed series don't match the letters.
     """
     lines = re.findall(r"^([A-Z]): (.*)$", question.partition("\n\nChoices:\n")[2], re.MULTILINE)
-    if "\n\nPatches:\n" in question:
-        fmt, letters = _QuestionFormat.PUZZLING, _LETTERS
-    elif _TRUE_OR_FALSE_LINES in question:
-        fmt, letters = _QuestionFormat.TRUE_OR_FALSE, _TRUE_OR_FALSE_LETTERS
-    else:
-        fmt, letters = _QuestionFormat.MULTIPLE_CHOICE, tuple(letter for letter, _ in lines)
-        if not _MIN_CHOICES <= len(letters) <= len(_LETTERS) or letters != _LETTERS[: len(letters)]:
-            raise ValueError(f"a multiple-choice question offers A to D in order, got {letters}")
-    fits = answer in letters
-    if fmt is _QuestionFormat.PUZZLING:
-        fits = sorted(answer.split(",")) == sorted(letters)
-    if not fits:
-        raise ValueError(f"the answer {answer!r} does not fit the question's letters {letters}")
-    expected_labels = [None] if fmt is _QuestionFormat.TRUE_OR_FALSE else list(letters)
+    question_format, letters = _question_letters(question, lines)
+    _check_answer(question_format, answer, letters)
+    expected_labels = [None] if question_format is _QuestionFormat.TRUE_OR_FALSE else list(letters)
     labels = [item.label for item in printed]
     if task in _PRINTING_TASKS and labels != expected_labels:
         raise ValueError(f"a {task} question prints series labelled {expected_labels}, got {labels}")
     choices: dict[str, str] = {}
-    if fmt is _QuestionFormat.MULTIPLE_CHOICE and task not in _PRINTING_TASKS:
+    if question_format is _QuestionFormat.MULTIPLE_CHOICE and task not in _PRINTING_TASKS:
         choices = dict(lines)
     candidates: dict[str, tuple[float, ...] | str] = dict(choices)
     candidates.update({item.label: tuple(item.values) for item in printed if item.label is not None})
-    if fmt is _QuestionFormat.PUZZLING:
-        ambiguous = len(set(candidates.values())) < len(candidates)
-    elif fmt is _QuestionFormat.MULTIPLE_CHOICE:
-        ambiguous = list(candidates.values()).count(candidates[answer]) > 1
-    else:
-        ambiguous = False
-    return _QuestionReading(fmt, choices, ambiguous)
+    return _QuestionReading(question_format, choices, _has_another_right_answer(question_format, answer, candidates))
+
+
+def _contradicts_zero_input(
+    task: _Task, question_format: _QuestionFormat, answer: str, inputs: list[list[float]], printed: list[_Printed]
+) -> bool:
+    """Tell whether a data transformation answer contradicts an all-zero input.
+
+    Fourier, wavelet and first-order difference transforms all turn zeros into zeros. So the right
+    candidate of such an input is the one of zeros.
+
+    Returns:
+        ``True`` if the input is all zeros and the answer rejects the zero candidate or picks another.
+    """
+    if task is not _Task.DATA_TRANSFORMATION or any(inputs[0]):
+        return False
+    if question_format is _QuestionFormat.TRUE_OR_FALSE:
+        return (answer == "T") != (not any(printed[0].values))
+    chosen = next(item for item in printed if item.label == answer)
+    return any(chosen.values)
 
 
 def _prompt(question: str, first_series: int, printed: list[_Printed]) -> str:
@@ -408,8 +480,8 @@ def _prompt(question: str, first_series: int, printed: list[_Printed]) -> str:
     return _PRINTED.sub(placeholder, question)
 
 
-def _parse_row(values: Mapping[str, Any], split: _SplitFile, index: int) -> _Row:
-    """Validate a published row against what a conversion needs of it.
+def _validate_row(values: Mapping[str, Any], split: _SplitFile, index: int) -> _Row:
+    """Validate a published row against what a conversion needs of it, and keep its small fields.
 
     Returns:
         The row.
@@ -445,12 +517,13 @@ def _parse_row(values: Mapping[str, Any], split: _SplitFile, index: int) -> _Row
             lengths=tuple(len(values) for values in all_series),
             values_digest=_values_digest(all_series),
             n_inputs=len(inputs),
-            input_contexts=_input_contexts(task, text),
+            contexts=_input_contexts(task, text),
             transform=_transform(task, question),
             question_digest=hashlib.blake2b(
                 "\0".join(text[c] for c in _DIGEST_COLUMNS).encode(), digest_size=16
             ).digest(),
             has_ambiguous_answer=reading.ambiguous,
+            has_wrong_target=_contradicts_zero_input(task, reading.question_format, text["answer"], inputs, printed),
         )
     except (ValueError, KeyError, IndexError, RecursionError) as exc:
         raise TimeFValidationError(f"{split.filename} row {index}: {exc}") from exc
@@ -484,7 +557,7 @@ def _read_rows(path: Path, split: _SplitFile) -> Iterator[_Row]:
     """
     try:
         for index, values in enumerate(iter_parquet_rows(path, columns=_READ_COLUMNS)):
-            yield _parse_row(values, split, index)
+            yield _validate_row(values, split, index)
     except (OSError, pa.ArrowException) as exc:
         raise TimeFFormatError(f"{path}: {exc}") from exc
 
@@ -505,6 +578,8 @@ def _find_issues(rows: list[_Row]) -> dict[_RowKey, frozenset[SourceIssue]]:
             found.add(SourceIssue.QUESTION_TYPE_MISMATCH)
         if row.has_ambiguous_answer:
             found.add(SourceIssue.AMBIGUOUS_ANSWER)
+        if row.has_wrong_target:
+            found.add(SourceIssue.WRONG_TRANSFORM_TARGET)
         for other in copies[row.question_digest]:
             if other is row:
                 continue
@@ -584,20 +659,41 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
         metadata: dict[str, JsonValue] = {"file": row.file, "row": row.index, "role": str(role)}
         record = Record(sources=(Source(name="series", signals=(signal,)),), metadata=metadata)
         if is_input:
-            for key, value in row.input_contexts[position].items():
+            for key, value in row.contexts.per_input[position].items():
                 record.annotate(Annotation(key=key, value=value))
         records.append(record)
     return tuple(records)
 
 
-def _task(row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue]) -> Task:
+def _published_labels(row: _Row) -> tuple[tuple[str, str], tuple[str, str]]:
+    """Return the published ``task`` and ``question_type`` of a row, as annotation keys and values."""
+    return ("task", row.task.value), ("question_type", row.question_type)
+
+
+def _task(
+    row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue], labels: Mapping[tuple[str, str], Annotation]
+) -> Task:
     """Build a row's task: a true-or-false row is a classification task, any other an answer task.
+
+    The model reads what Appendix E.1 lists: the input's context, then the published ``task`` and
+    ``question_type``, then the question. The input's own context is on its Record. A row that publishes
+    lists of contexts also keeps the complete lists as annotations of the task. The question format read
+    from the question stays in the metadata, for routing.
+
+    Args:
+        row: The row.
+        inputs: The row's input Records.
+        issues: The row's source issues.
+        labels: The dataset's annotation of each published ``task`` and ``question_type`` value.
 
     Returns:
         The task, its target the published answer.
     """
     annotations = itertools.chain.from_iterable(record.annotations for record in inputs)
-    input_annotations = tuple(a for a in annotations if a.key in _CONTEXT_KEYS)
+    input_annotations = (
+        *(a for a in annotations if a.key in _CONTEXT_KEYS),
+        *(labels[label] for label in _published_labels(row)),
+    )
     metadata: dict[str, JsonValue] = {
         "task": row.task.value,
         "question_type": row.question_type,
@@ -608,6 +704,9 @@ def _task(row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue])
     if row.transform is not None:
         metadata["transform"] = row.transform
     metadata[_SOURCE_ISSUES] = [issue.value for issue in sorted(issues)]
+    listed = tuple(
+        Annotation(key=_PUBLISHED_LISTS[key], value=list(row.contexts.listed[key])) for key in row.contexts.listed
+    )
     if row.question_format is _QuestionFormat.TRUE_OR_FALSE:
         return ClassificationTask(
             inputs=inputs,
@@ -616,6 +715,7 @@ def _task(row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue])
             split=_SPLITS[row.split],
             input_annotations=input_annotations,
             target_schema=_TRUE_OR_FALSE_VOCABULARY,
+            annotations=listed,
             metadata=metadata,
         )
     if row.choices:
@@ -626,6 +726,7 @@ def _task(row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue])
         targets=(row.answer,),
         split=_SPLITS[row.split],
         input_annotations=input_annotations,
+        annotations=listed,
         metadata=metadata,
     )
 
@@ -675,13 +776,18 @@ class TSAQAConnector(BaseHuggingFaceConnector):
                 description="The choices of every true-or-false question: T stands for 'True.' and F for 'False.'",
             )
         )
+        # The model reads the published task and question_type, so each distinct value is a dataset annotation.
+        labels = {
+            label: dataset.annotate(Annotation(key=label[0], value=label[1]))
+            for label in sorted({label for row in rows for label in _published_labels(row)})
+        }
         for row_records in records:
             for record in row_records:
                 dataset.add_record(record=record)
 
         def tasks() -> Iterator[Task]:
             for row, inputs in zip(rows, records, strict=True):
-                yield _task(row, inputs, issues.get(row.key, frozenset()))
+                yield _task(row, inputs, issues.get(row.key, frozenset()), labels)
 
         dataset.set_task_stream((ClassificationTask, AnswerTask), tasks)
         return dataset
