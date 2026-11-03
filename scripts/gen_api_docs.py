@@ -40,6 +40,7 @@ PACKAGE_ROOTS = {
 EXCLUDE = {
     "timenet.cli",  # console-script plumbing (Typer app), not a code API
     "timenet.cache",  # cache-inspection helper
+    "timenet.coordinator",  # internal planner, not a user API
     "timenet.torch",  # optional torch adapter (covered in the guide)
     "timenet.schemas",  # packaged JSON-Schema data, not code
     "timenet.testing",  # test-support helpers shipped in src
