@@ -1,10 +1,10 @@
 import json
 import os
-from pathlib import Path
 import subprocess
 import sys
 
 import pytest
+from rich.console import Console
 from typer.testing import CliRunner
 
 from timenet.connectors import BaseConnector
@@ -12,7 +12,7 @@ from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailabl
 from timenet.manifest import Manifest, PayloadSource
 from timenet.manifest.files import FilePart
 from timenet.reader import TimeFReader
-from timenet.registry import open_local_version
+from timenet.registry import LocalRegistry, open_local_version
 from timenet.testing import make_dataset
 from timenet.types import DatasetMetadata, Version
 from timenet.types.reference_keys import ParentAlias
@@ -23,96 +23,118 @@ from timenet_connectors.builder.cli import app
 
 
 runner = CliRunner()
+HELLO = DatasetRef.parse("timenet/hello-world@1.0.0")
+
+
+def _isolated_child(calls):
+    """Return a stand-in for ``run_isolated_build`` that stores the demo dataset and records each call."""
+
+    def run(release, store_root, *, force=False, quiet=False, **_):
+        calls.append({"release": release, "store_root": store_root, "quiet": quiet})
+        LocalRegistry(store_root).put_dataset(make_dataset(), force=force)
+
+    return run
+
+
+def _in_process(calls):
+    """Return a stand-in for ``run_pipeline`` that stores the demo dataset and records each call."""
+
+    def run(connector, root, **kwargs):
+        calls.append({"connector": connector, **kwargs})
+        LocalRegistry(root).put_dataset(make_dataset())
+
+    return run
+
+
+def _unexpected(*args, **kwargs):
+    raise AssertionError(f"should not have run: {args} {kwargs}")
 
 
 def test_build_runs_isolated_by_default(monkeypatch, tmp_path):
-    captured = {}
+    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
+    calls = []
+    monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
+    monkeypatch.setattr(backend_module, "run_pipeline", _unexpected)
 
-    def _fake_isolated(  # ruff: ignore[too-many-arguments] (mirrors run_isolated's full keyword surface)
-        dataset_id, root, *, force=False, keep_cache=False, quiet=False, pinned_by=None
-    ):
-        captured["dataset_id"] = dataset_id
-        captured["root"] = root
-        return Path(root) / "timenet/hello-world/1.0.0"
-
-    monkeypatch.setattr(cli_module, "run_isolated", _fake_isolated)
     result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path)])
 
-    assert result.exit_code == 0
-    assert captured["dataset_id"] == "timenet/hello-world"
+    assert result.exit_code == 0, result.output
+    assert [(call["release"], call["store_root"]) for call in calls] == [(HELLO, tmp_path)]
+    assert result.stdout == f"{tmp_path / 'timenet/hello-world/1.0.0'}\n"
 
 
-def test_build_no_isolation_runs_in_process(monkeypatch, tmp_path):
-    called = {"isolated": False, "pipeline": False}
+@pytest.mark.parametrize("how", ["flag", "setting"])
+def test_build_runs_in_process_without_isolation(monkeypatch, tmp_path, how):
+    calls = []
+    monkeypatch.setattr(backend_module, "run_isolated_build", _unexpected)
+    monkeypatch.setattr(backend_module, "run_pipeline", _in_process(calls))
+    if how == "flag":
+        monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
+    else:
+        monkeypatch.setenv("TIMENET_ISOLATION", "off")
 
-    monkeypatch.setattr(cli_module, "run_isolated", lambda *a, **k: called.__setitem__("isolated", True))
+    result = runner.invoke(
+        app, ["build", "timenet/hello-world", "--out", str(tmp_path), *(["--no-isolation"] if how == "flag" else [])]
+    )
 
-    def _fake_pipeline(connector, root, **kwargs):
-        called["pipeline"] = True
-        return Path(root) / "timenet/hello-world/1.0.0"
-
-    monkeypatch.setattr(cli_module, "run_pipeline", _fake_pipeline)
-    result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path), "--no-isolation"])
-
-    assert result.exit_code == 0
-    assert called["pipeline"] is True
-    assert called["isolated"] is False
-
-
-def test_build_runs_in_process_when_the_setting_is_off(monkeypatch, tmp_path):
-    called = {"isolated": False, "pipeline": False}
-    monkeypatch.setenv("TIMENET_ISOLATION", "off")
-
-    monkeypatch.setattr(cli_module, "run_isolated", lambda *a, **k: called.__setitem__("isolated", True))
-
-    def _fake_pipeline(connector, root, **kwargs):
-        called["pipeline"] = True
-        return Path(root) / "timenet/hello-world/1.0.0"
-
-    monkeypatch.setattr(cli_module, "run_pipeline", _fake_pipeline)
-    result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path)])
-
-    assert result.exit_code == 0
-    assert called["pipeline"] is True
-    assert called["isolated"] is False
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
 
 
 def test_build_isolates_when_the_flag_overrides_the_setting(monkeypatch, tmp_path):
-    called = {"isolated": False}
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
+    calls = []
+    monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
+    monkeypatch.setattr(backend_module, "run_pipeline", _unexpected)
 
-    def _fake_isolated(  # ruff: ignore[too-many-arguments] (mirrors run_isolated's full keyword surface)
-        dataset_id, root, *, force=False, keep_cache=False, quiet=False, pinned_by=None
-    ):
-        called["isolated"] = True
-        return Path(root) / "timenet/hello-world/1.0.0"
-
-    def _unexpected_pipeline(*args, **kwargs):
-        raise AssertionError("an explicit --isolation must win over TIMENET_ISOLATION=off")
-
-    monkeypatch.setattr(cli_module, "run_isolated", _fake_isolated)
-    monkeypatch.setattr(cli_module, "run_pipeline", _unexpected_pipeline)
     result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path), "--isolation"])
 
-    assert result.exit_code == 0
-    assert called["isolated"] is True
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+
+
+def test_build_without_isolation_shows_each_build_line_once(monkeypatch, tmp_path):
+    # In this process, the coordinator sends the build step, and the renderer shows it. Nothing else
+    # prints a build line.
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+
+    result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path / "out"), "--no-isolation"])
+
+    assert result.exit_code == 0, result.output
+    assert result.stderr.count("🔧 Building 'timenet/hello-world'…") == 1
+    assert result.stderr.count("✅ Built 'timenet/hello-world' → 1.0.0") == 1
+
+
+@pytest.mark.parametrize("quiet", [False, True])
+def test_a_build_that_reuses_the_release_says_so_on_stderr(monkeypatch, tmp_path, quiet):
+    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
+    # The line names a long path, so the console must not wrap it.
+    monkeypatch.setattr(cli_module.console, "rich", Console(stderr=True, width=1000))
+    calls = []
+    monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
+    command = [*(["--quiet"] if quiet else []), "build", "timenet/hello-world", "--out", str(tmp_path)]
+    assert runner.invoke(app, command).exit_code == 0
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 0, result.output
+    assert len(calls) == 1
+    assert result.stdout == f"{tmp_path / 'timenet/hello-world/1.0.0'}\n"
+    reused = f"✅ Nothing to do: 'timenet/hello-world' 1.0.0 is already in local registry {tmp_path}"
+    assert result.stderr.splitlines() == ([] if quiet else [reused])
 
 
 def test_build_takes_an_exact_release_and_refuses_another_version(monkeypatch, tmp_path):
-    built = []
-
-    def _fake_isolated(dataset_id, root, **kwargs):
-        built.append(dataset_id)
-        return Path(root) / "timenet/hello-world/1.0.0"
-
-    monkeypatch.setattr(cli_module, "run_isolated", _fake_isolated)
+    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
+    calls = []
+    monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
     result = runner.invoke(app, ["build", "timenet/hello-world@1.0.0", "--out", str(tmp_path)])
 
-    assert result.exit_code == 0
-    assert built == ["timenet/hello-world"]
+    assert result.exit_code == 0, result.output
+    assert [call["release"] for call in calls] == [HELLO]
     result = runner.invoke(app, ["build", "timenet/hello-world@9.9.9", "--out", str(tmp_path)])
     assert isinstance(result.exception, TimeNetVersionUnavailableError)
-    assert built == ["timenet/hello-world"]
+    assert len(calls) == 1
 
 
 def test_build_rejects_an_unknown_id_without_importing_anything(monkeypatch, tmp_path):
@@ -141,30 +163,28 @@ def test_build_rejects_an_id_that_no_card_declares_and_names_the_known_ids(tmp_p
     assert "timenet/hello-world" in result.output
 
 
-def test_build_forwards_quiet_to_the_isolated_child(monkeypatch, tmp_path):
-    captured = {}
+@pytest.mark.parametrize("quiet", [False, True])
+def test_build_forwards_quiet_to_the_isolated_child(monkeypatch, tmp_path, quiet):
+    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     # The console is a process-wide singleton; monkeypatch restores it for the tests that follow.
     monkeypatch.setattr(cli_module.console, "quiet", False)
+    calls = []
+    monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
 
-    def _fake_isolated(  # ruff: ignore[too-many-arguments] (mirrors run_isolated's full keyword surface)
-        dataset_id, root, *, force=False, keep_cache=False, quiet=False, pinned_by=None
-    ):
-        captured["quiet"] = quiet
-        return Path(root) / "timenet/hello-world/1.0.0"
+    result = runner.invoke(
+        app, [*(["--quiet"] if quiet else []), "build", "timenet/hello-world", "--out", str(tmp_path)]
+    )
 
-    monkeypatch.setattr(cli_module, "run_isolated", _fake_isolated)
-    result = runner.invoke(app, ["--quiet", "build", "timenet/hello-world", "--out", str(tmp_path)])
-
-    assert result.exit_code == 0
-    assert captured["quiet"] is True
+    assert result.exit_code == 0, result.output
+    assert [call["quiet"] for call in calls] == [quiet]
 
 
 @pytest.mark.slow
 def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path):
-    # run_isolated reads the child's last non-empty stdout line as the version directory, so the
-    # real isolated CLI must keep stdout clean and end on that path. Drive it as a subprocess (not
-    # CliRunner) so the child's inherited stderr is captured here too, where a double-narration
-    # regression would surface.
+    # A script reads the last non-empty stdout line as the version directory, so the real isolated
+    # CLI must keep stdout clean and end on that path. Drive it as a subprocess (not CliRunner) so
+    # the child's inherited stderr is captured here too, where a double-narration regression would
+    # surface: the parent and the child both see the build step.
     registry = tmp_path / "registry"
     env = {**os.environ, "TIMENET_HOME": str(tmp_path / "home")}
     env.pop("TIMENET_ISOLATION", None)  # default is "on"; make sure nothing forces it off

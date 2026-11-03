@@ -123,7 +123,7 @@ class ConnectorBuilder:
         """Build a release in a local registry.
 
         The registry must already contain all parent releases and their payload sources.
-        Set ``TIMENET_ISOLATION=off`` to build in this interpreter.
+        ``options.isolation``, else ``TIMENET_ISOLATION``, set to ``"off"`` builds in this interpreter.
 
         Args:
             release: The exact dataset ID and version to build.
@@ -142,7 +142,7 @@ class ConnectorBuilder:
             raise TimeNetDatasetNotFoundError(f"no connector builds {release.dataset_id!r}")
         if card.dataset_version != release.version:
             raise TimeNetVersionUnavailableError(release, card.dataset_version)
-        if settings().isolation == "on":
+        if settings(isolation=options.isolation).isolation == "on":
             # The parent reads only the card: the connector and its dependencies exist only in the child.
             run_isolated_build(
                 release,
