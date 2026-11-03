@@ -6,8 +6,7 @@ import httpx
 from pydantic import ValidationError
 import pytest
 
-from timenet import client as client_module
-from timenet.builders import InstalledBuilder
+from timenet import builders as builders_module, client as client_module
 from timenet.client import TimeNet
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
@@ -19,6 +18,7 @@ from timenet.errors import (
     TimeNetDatasetNotFoundError,
     TimeNetFileError,
     TimeNetMissingParentError,
+    TimeNetVersionUnavailableError,
 )
 from timenet.format.stored_values import StoredText
 from timenet.manifest import Manifest
@@ -71,28 +71,32 @@ class _Builder:
     def dataset_ids(self):
         return ("test/child", "timenet/hello-world")
 
-    def knows(self, dataset_id):
-        return True
-
-    def declared_version(self, dataset_id):
-        return self.VERSION
-
     def card(self, dataset_id):
         version = DatasetRef.parse(f"{dataset_id}@{self.VERSION}").version
         return make_dataset().metadata.model_copy(update={"dataset_id": dataset_id, "dataset_version": version})
 
-    # ruff: ignore[too-many-arguments]
-    def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_from=None, pinned_by=None):
-        self.calls.append((dataset_id, force, build_parents, fetch_from, pinned_by))
+    def build(self, release, store, *, force, pinned_by, options):
+        self.calls.append((release, force, dict(pinned_by)))
         dataset = make_dataset()
-        dataset._metadata = self.card(dataset_id)
-        LocalRegistry(root).put_dataset(dataset, force=force, values_backend=self.BACKEND, pinned_by=pinned_by)
-        return root / dataset_id / self.VERSION
+        dataset._metadata = self.card(release.dataset_id)
+        store.put_dataset(dataset, force=force, values_backend=self.BACKEND, pinned_by=pinned_by or None)
 
 
-def _installed_builders(builder, card=None):
-    """Return a stand-in for ``installed_builder`` that answers every dataset with ``builder``, and with ``card`` or its card."""
-    return lambda dataset_id: InstalledBuilder(builder, card or builder.card(dataset_id))
+def _record_build_requests(monkeypatch):
+    """Record the dataset, ``fetch_from`` and ``build_parents`` of each build that the client asks for.
+
+    Returns:
+        The list that receives one ``(dataset, fetch_from, build_parents)`` entry for each request.
+    """
+    requests = []
+    build_release = client_module.build_release
+
+    def record(dataset, **options):
+        requests.append((dataset, options.get("fetch_from"), options.get("build_parents")))
+        return build_release(dataset, **options)
+
+    monkeypatch.setattr(client_module, "build_release", record)
+    return requests
 
 
 def test_a_local_child_copies_its_missing_payload_source_from_fetch_from(tmp_path):
@@ -121,17 +125,49 @@ def test_a_missing_version_is_copied_from_fetch_from_before_it_is_built(tmp_path
     if in_fetch_from:
         _child_of_the_demo(origin.root)
     calls = []
-    monkeypatch.setattr(client_module, "installed_builder", _installed_builders(_Builder(calls)))
+    install_backends(monkeypatch, _Builder(calls))
+    requests = _record_build_requests(monkeypatch)
 
     with TimeNet(tmp_path / "local").open("test/child", fetch_from=origin) as reader:
         assert reader.read().records
 
     if in_fetch_from:
-        assert calls == []
+        assert calls == requests == []
         assert (tmp_path / "local/test/child/1.0.0/manifest.json").is_file()
         return
     # The build gets the same registry to copy its own missing parents from.
-    assert calls == [("test/child", False, True, origin, None)]
+    assert requests == [("test/child", origin, True)]
+    assert calls == [(DatasetRef.parse("test/child@1.0.0"), False, {})]
+
+
+class _Requester(_Builder):
+    """A builder backend that also builds ``test/req``, whose card declares ``test/child`` as its parent."""
+
+    def dataset_ids(self):
+        return (*super().dataset_ids(), "test/req")
+
+    def card(self, dataset_id):
+        card = super().card(dataset_id)
+        if dataset_id != "test/req":
+            return card
+        return card.model_copy(update={"parents": {ParentAlias("child"): DatasetRef.parse("test/child@1.0.0")}})
+
+
+def test_a_build_reuses_a_held_parent_and_copies_only_its_missing_payload_source(tmp_path, monkeypatch):
+    # The registry holds the parent test/child, but not its payload source. The registry to copy from
+    # holds only the payload source.
+    registry, reference = _child_of_the_demo(tmp_path / "registry")
+    shutil.rmtree(registry.root / reference.dataset_id)
+    origin = LocalRegistry(tmp_path / "origin")
+    origin.put_dataset(make_dataset())
+    calls = []
+    install_backends(monkeypatch, _Requester(calls))
+
+    with TimeNet(registry).open("test/req", fetch_from=origin) as reader:
+        assert reader.read().records
+
+    assert calls == [(DatasetRef.parse("test/req@1.0.0"), False, {})]
+    assert registry.exists(reference.dataset_id, str(reference.version))
 
 
 class _Resampled(BaseConnector[str]):
@@ -197,6 +233,7 @@ def test_a_missing_payload_source_builds_with_its_own_connector_against_the_pins
     monkeypatch.setattr(_Builder, "VERSION", "2.0.0" if case == "other-version" else "1.0.0")
     monkeypatch.setattr(_Builder, "BACKEND", "zarr" if case == "differs" else "parquet")
     install_backends(monkeypatch, _Builder(calls))
+    requests = _record_build_requests(monkeypatch)
 
     with pytest.raises(TimeNetMissingParentError, match=r"auto_build=True\.$"):
         TimeNet(registry).open("test/child", auto_build=False)
@@ -205,7 +242,7 @@ def test_a_missing_payload_source_builds_with_its_own_connector_against_the_pins
         # No installed connector declares the exact version of the source that the child pins.
         with pytest.raises(TimeNetMissingParentError, match=r"\. Copy it with fetch_from=<registry>\.$"):
             TimeNet(registry).open("test/child")
-        assert calls == []
+        assert calls == requests == []
         return
     if case == "differs":
         pytest.importorskip("zarr")
@@ -222,7 +259,8 @@ def test_a_missing_payload_source_builds_with_its_own_connector_against_the_pins
             assert signal.to_arrow().equals(make_dataset().records[0].signals[0].to_arrow())
     # The source builds with its own connector, which prepares its parents in the same order, against
     # the pins of the child that reads it.
-    assert calls == [(reference.dataset_id, False, True, fetch_from, {DatasetRef.parse("test/child@1.0.0"): pins})]
+    assert requests == [(str(reference), fetch_from, True)]
+    assert calls == [(reference, False, {DatasetRef.parse("test/child@1.0.0"): pins})]
 
 
 @pytest.mark.parametrize("damaged", ["requested", "payload-source"])
@@ -236,7 +274,6 @@ def test_a_damaged_release_is_repaired_from_fetch_from_and_never_built_over(tmp_
     control.write_bytes(b"cut short")
     calls = []
     install_backends(monkeypatch, _Builder(calls))
-    monkeypatch.setattr(client_module, "installed_builder", _installed_builders(_Builder(calls)))
 
     with pytest.raises(TimeNetFileError) as caught:
         TimeNet(registry).open("test/child")
@@ -265,7 +302,7 @@ def test_a_corrupted_copy_from_fetch_from_names_the_transfer_without_the_repair_
 
 def test_a_remote_client_takes_no_fetch_from_and_never_builds(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(client_module, "installed_builder", _installed_builders(_Builder(calls)))
+    install_backends(monkeypatch, _Builder(calls))
     remote = RemoteRegistry(
         "http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)), cache_dir=tmp_path
     )
@@ -550,49 +587,40 @@ def test_version_given_twice_raises(versioned_registry, tmp_path):
 def test_load_names_the_buildable_version_when_a_pin_cannot_be_built(registry_root, tmp_path, monkeypatch):
     # The builder declares only one version, so a pin it cannot satisfy must say which version it
     # builds, and must fail before the expensive build rather than after it.
-    class _Builder:
-        built = False
-
-        def knows(self, dataset_id):
-            return True
-
-        def declared_version(self, dataset_id):
-            return "1.0.0"
-
-        def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_from=None):
-            self.built = True
-            return Path(root) / dataset_id / "1.0.0"
-
-    builder = _Builder()
-    monkeypatch.setattr(client_module, "installed_builder", _installed_builders(builder, make_dataset().metadata))
+    calls = []
+    install_backends(monkeypatch, _Builder(calls))
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
 
-    with pytest.raises(TimeNetDatasetNotFoundError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
+    with pytest.raises(TimeNetVersionUnavailableError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
         client.load("timenet/hello-world@9.9.9")
-    assert not builder.built  # the pin was rejected before the build ran
+    assert calls == []  # the pin was rejected before the build ran
+
+
+@pytest.mark.parametrize("fetch_from", [None, "empty"])
+def test_a_missing_version_that_no_connector_builds_names_the_keyword_that_can_get_it(
+    tmp_path, monkeypatch, fetch_from
+):
+    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
+    client = TimeNet(tmp_path / "reg", storage_path=tmp_path / "store")
+    with pytest.raises(TimeNetDatasetNotFoundError) as miss:
+        LocalRegistry(tmp_path / "reg").get_manifest("x/y")
+    source = None if fetch_from is None else LocalRegistry(tmp_path / fetch_from)
+
+    with pytest.raises(TimeNetDatasetNotFoundError) as caught:
+        client.open("x/y", fetch_from=source)
+
+    # The hint names only the keyword that the call did not use.
+    expected = f"{miss.value}. Copy it with fetch_from=<registry>." if source is None else str(miss.value)
+    assert str(caught.value) == expected
 
 
 @pytest.mark.parametrize("pin", [None, "latest", ""])
 def test_load_accepts_the_latest_sentinels_after_a_build(tmp_path, monkeypatch, pin):
     # Every registry reads "latest" and "" as the latest version, so they are not pins the build
     # can miss: the version the builder just committed satisfies them.
-    class _Builder:
-        def knows(self, dataset_id):
-            return True
-
-        def declared_version(self, dataset_id):
-            return "1.0.0"
-
-        def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_from=None):
-            dataset = make_dataset()
-            dataset.derive_schema()
-            with TimeFWriter(Path(root), dataset) as writer:
-                writer.write()
-            return Path(root) / dataset_id / "1.0.0"
-
     empty_root = tmp_path / "reg"
     empty_root.mkdir()
-    monkeypatch.setattr(client_module, "installed_builder", _installed_builders(_Builder(), make_dataset().metadata))
+    install_backends(monkeypatch, _Builder([]))
     client = TimeNet(empty_root, storage_path=tmp_path / "store")
 
     assert str(client.load("timenet/hello-world", pin).metadata.dataset_version) == "1.0.0"
@@ -603,30 +631,18 @@ def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, m
     # A caller can opt out of the build-on-miss, so a notebook load fails fast instead of starting a
     # multi-GB download and a build. The builder declares the requested version, so only
     # auto_build=False keeps it from running.
-    class _Builder:
-        built = False
-
-        def knows(self, dataset_id):
-            return True
-
-        def declared_version(self, dataset_id):
-            return "9.9.9"
-
-        def build(self, dataset_id, root, *, force=False, build_parents=False, fetch_from=None):
-            self.built = True
-            return Path(root) / dataset_id / "1.0.0"
-
     if entry_point == "open_torch":
         pytest.importorskip("torch")
-    builder = _Builder()
-    monkeypatch.setattr(client_module, "installed_builder", _installed_builders(builder, make_dataset().metadata))
+    calls = []
+    monkeypatch.setattr(_Builder, "VERSION", "9.9.9")
+    install_backends(monkeypatch, _Builder(calls))
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
 
     # The hint names the keywords that could obtain the release, in a sentence of its own.
     hint = r"\. Copy it with fetch_from=<registry> or build it from its connector with auto_build=True\.$"
     with pytest.raises(TimeNetDatasetNotFoundError, match=hint):
         getattr(client, entry_point)("timenet/hello-world@9.9.9", auto_build=False)
-    assert not builder.built  # auto_build=False skips the connector entirely
+    assert calls == []  # auto_build=False skips the connector entirely
 
 
 def _card(dataset_id, access, access_url=None):

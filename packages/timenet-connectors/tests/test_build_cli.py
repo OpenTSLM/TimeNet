@@ -288,7 +288,7 @@ def test_the_build_prepared_release_command_passes_the_pins_and_the_options(monk
     calls = []
     monkeypatch.setattr(
         ConnectorBuilder,
-        "build_prepared",
+        "build",
         lambda self, release, store, **kwargs: calls.append((release, store, kwargs)),
     )
     monkeypatch.setattr(cli_module.console, "quiet", False)

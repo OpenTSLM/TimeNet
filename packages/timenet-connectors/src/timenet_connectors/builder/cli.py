@@ -6,21 +6,17 @@ time. To add one, drop a ``datasets/<org>/<name>/`` package with a ``connector.p
 ``CONNECTOR`` and a ``dataset.yaml`` card. You do not register it here.
 """
 
-from collections.abc import Mapping
 import json
 from pathlib import Path
 
 import typer
 
-from timenet.builders import BuilderBackend, BuildOptions, declared, find_card, installed_builder
+from timenet.builders import BuildOptions, declared
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console, progress_renderer
 from timenet.config import settings
 from timenet.coordinator.build import build_release
-from timenet.coordinator.plan import Step, prepare_parents
-from timenet.engine import publish_pipeline, run_pipeline
 from timenet.errors import (
-    TimeFValidationError,
     TimeNetAccessError,
     TimeNetFileError,
     TimeNetMissingParentError,
@@ -38,8 +34,8 @@ from timenet.registry import (
 )
 from timenet.registry._paths import release_dir  # ruff: ignore[import-private-name]
 from timenet.types.references import DatasetRef, split_ref
-from timenet_connectors.builder.env import run_isolated
-from timenet_connectors.discovery import known_ids, resolve
+from timenet_connectors.builder.backend import ConnectorBuilder
+from timenet_connectors.discovery import known_ids
 
 
 app = typer.Typer(help="Build TimeNet datasets from connectors.", no_args_is_help=True)
@@ -103,13 +99,6 @@ def build(
         "--isolation/--no-isolation",
         help="Run the build in an environment built from the connector's requirements.",
     ),
-    pinned_by: Path | None = typer.Option(
-        None,
-        "--pinned-by",
-        hidden=True,
-        help="A JSON file of the releases that read files of this release, with their pins. The parent "
-        "of an isolated build passes it.",
-    ),
 ) -> None:
     """Run a connector through the engine and write or publish its dataset.
 
@@ -163,7 +152,6 @@ def build(
                 fetch_from=None if fetch_from is None else open_registry(fetch_from),
                 build_parents=build_parents,
                 force=force,
-                pinned_by=None if pinned_by is None else _read_pins(pinned_by),
                 options=BuildOptions(
                     keep_cache=keep_cache,
                     progress=progress,
@@ -194,7 +182,6 @@ def _build_to(  # ruff: ignore[too-many-arguments]
     fetch_from: BaseRegistry | None,
     build_parents: bool,
     force: bool,
-    pinned_by: Mapping[DatasetRef, PayloadSource] | None,
     options: BuildOptions,
 ) -> str:
     """Build a release locally and copy it to a remote output if needed.
@@ -206,9 +193,8 @@ def _build_to(  # ruff: ignore[too-many-arguments]
         target: The local output directory or remote registry.
         fetch_from: The registry to copy missing parents from, or ``None`` to use the remote output if present.
         build_parents: Build missing parents with their installed connectors.
-        force: Rebuild the release even if it exists in the local registry.
-        pinned_by: The file records that dependent releases require this build to match.
-        options: The settings for each build.
+        force: Build the release again, even if the local registry holds it.
+        options: The options of each build.
 
     Returns:
         The local version directory or remote version as a string.
@@ -241,7 +227,6 @@ def _build_to(  # ruff: ignore[too-many-arguments]
         fetch_from=fetch_from,
         build_parents=build_parents,
         force=force,
-        pinned_by=pinned_by,
         open_access_only=remote is not None,
         options=options,
     )
@@ -268,198 +253,11 @@ def build_prepared_release_command(
     The registry must already contain all parent releases and their payload sources.
     Status and progress go to stderr, and nothing goes to stdout.
     """
-    # backend.py imports this module, so a module-level import here would be circular.
-    from timenet_connectors.builder.backend import ConnectorBuilder  # ruff: ignore[import-outside-top-level]
-
     reference = DatasetRef.parse(release)
     pins = {} if pinned_by is None else _read_pins(pinned_by)
     with progress_renderer() as progress:
         options = BuildOptions(keep_cache=keep_cache, progress=progress, quiet=console.quiet)
-        ConnectorBuilder().build_prepared(reference, LocalRegistry(store), force=force, pinned_by=pins, options=options)
-
-
-def build_one(  # ruff: ignore[too-many-arguments]
-    dataset_id: str,
-    output: str | Path,
-    *,
-    fetch_from: str | BaseRegistry | None = None,
-    build_parents: bool = False,
-    force: bool = False,
-    keep_cache: bool = False,
-    isolation: bool | None = None,
-    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-) -> str:
-    """Prepare parent releases and build a dataset.
-
-    A missing parent comes from ``fetch_from`` or ``build_parents``, or the build fails before any download. If the
-    output has the version and ``force`` is off, the build only prepares missing releases that supply its data files.
-
-    Args:
-        dataset_id: The dataset ID.
-        output: A local directory, or a ``timenet://``, ``http(s)://`` or ``s3://`` URL.
-        fetch_from: The registry, or its URI, to copy missing parent releases from.
-        build_parents: Build missing parents with installed connectors.
-        force: Rebuild the release even if it exists in the output.
-        keep_cache: Keep downloaded source files after the build.
-        isolation: Use a separate environment if true, this process if false, or ``TIMENET_ISOLATION`` if ``None``.
-        pinned_by: The file records that dependent releases require this build to match.
-
-    Returns:
-        The local version directory or published version as a string.
-    """
-    target = _resolve_target(str(output))
-    registry = LocalRegistry(target) if isinstance(target, Path) else target
-    override = None if isolation is None else ("on" if isolation else "off")
-    isolated = settings(isolation=override).isolation == "on"
-
-    def build_parent(step: Step) -> object:
-        found = installed_builder(step.release.dataset_id)
-        if found is not None and not _in_repo(found.backend):
-            return _build_with(found.backend, step, target)
-        # Each parent builds like the dataset itself. An isolated child makes the plan again. The
-        # child finds every parent in the output, so it only opens the parents.
-        return _build(
-            step.release.dataset_id,
-            target,
-            output,
-            isolated=isolated,
-            keep_cache=keep_cache,
-            pinned_by=step.pinned_by,
-        )
-
-    prepare_parents(
-        dataset_id,
-        registry,
-        build=build_parent,
-        fetch_from=open_registry(fetch_from) if isinstance(fetch_from, str) else fetch_from,
-        build_parents=build_parents,
-        force_build=force,
-    )
-    committed = None if force else _committed(dataset_id, target, registry)
-    if committed is not None:
-        return committed
-    return _build(
-        dataset_id,
-        target,
-        output,
-        isolated=isolated,
-        force=force,
-        keep_cache=keep_cache,
-        pinned_by=pinned_by,
-    )
-
-
-def _in_repo(builder: BuilderBackend) -> bool:
-    """Report whether a parent that ``builder`` claims builds through :func:`_build`.
-
-    :class:`~timenet_connectors.builder.backend.ConnectorBuilder` builds through :func:`_build`. A
-    subclass that does not override ``build()`` also builds through :func:`_build`. A subclass that
-    overrides ``build()`` builds through its own ``build()``.
-
-    A backend that is not a ``ConnectorBuilder`` builds through its own ``build()``. This function
-    does not read ``build`` from the class of such a backend. So the backend can provide ``build``
-    only on the instance, for example through ``__getattr__``.
-
-    Returns:
-        Whether ``builder`` is a :class:`~timenet_connectors.builder.backend.ConnectorBuilder` and
-        its ``build()`` is the ``build()`` of ``ConnectorBuilder``.
-    """
-    # backend.py imports this module, so this import runs only at call time. TNET-157 removes the cycle.
-    from timenet_connectors.builder.backend import ConnectorBuilder  # ruff: ignore[import-outside-top-level]
-
-    return isinstance(builder, ConnectorBuilder) and type(builder).build is ConnectorBuilder.build
-
-
-def _build_with(builder: BuilderBackend, step: Step, target: WritableRegistry | Path) -> Path:
-    """Build a parent release with its file pins through the given backend.
-
-    ``target`` must already hold the parents of ``step.release``.
-
-    Returns:
-        The committed version directory.
-
-    Raises:
-        TimeFValidationError: If ``target`` is not a local ``Path``.
-    """
-    if not isinstance(target, Path):
-        raise TimeFValidationError(
-            f"parent release {step.release} builds through another builder backend, which writes to a "
-            "local directory; build it into a local output and publish it first"
-        )
-    return builder.build(step.release.dataset_id, target, pinned_by=step.pinned_by or None)
-
-
-def _committed(dataset_id: str, target: WritableRegistry | Path, registry: WritableRegistry) -> str | None:
-    """Return the result of a build whose version the output already holds.
-
-    Returns:
-        The version directory for a local output, or the version for a remote output. ``None`` if
-        the output does not hold the version.
-    """
-    card = find_card(dataset_id)
-    if card is None or not registry.exists(card.dataset_id, str(card.dataset_version)):
-        return None
-    version = str(card.dataset_version)
-    return str(target / card.dataset_id / version) if isinstance(target, Path) else version
-
-
-def _build(  # ruff: ignore[too-many-arguments]
-    dataset_id: str,
-    target: WritableRegistry | Path,
-    forwarded: str | Path,
-    *,
-    isolated: bool,
-    force: bool = False,
-    keep_cache: bool = False,
-    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-) -> str:
-    """Build a dataset in a local directory or remote registry.
-
-    Args:
-        dataset_id: The dataset ID.
-        target: The output directory or registry when building in this interpreter.
-        forwarded: The output path or URI when building in a separate environment.
-        isolated: Build in a separate environment with the connector's required packages.
-        force: Rebuild the release even if it exists in the output.
-        keep_cache: Keep downloaded source files after the build.
-        pinned_by: The file records that dependent releases require this build to match.
-
-    Returns:
-        The local version directory or published version as a string.
-    """
-    pinned_by = pinned_by or None
-    if isolated:
-        # The child is this same CLI and inherits stderr, so it is the only narrator: it prints the
-        # status lines and the richer download and shard progress. This branch stays quiet and only
-        # relays what the child printed on stdout. Do not call resolve() here; it imports the connector
-        # module, which needs the dependencies the child is about to install. run_isolated forwards
-        # --out unchanged. So a remote target publishes from inside the environment, as a local
-        # target writes to a directory.
-        return run_isolated(
-            dataset_id,
-            forwarded,
-            force=force,
-            keep_cache=keep_cache,
-            quiet=console.quiet,
-            pinned_by=pinned_by,
-        )
-    connector = resolve(dataset_id)()
-    if isinstance(target, Path):
-        version_dir = run_pipeline(
-            connector,
-            target,
-            force=force,
-            keep_cache=keep_cache,
-            pinned_by=pinned_by,
-        )
-        return str(version_dir)
-    return publish_pipeline(
-        connector,
-        target,
-        force=force,
-        keep_cache=keep_cache,
-        pinned_by=pinned_by,
-    )
+        ConnectorBuilder().build(reference, LocalRegistry(store), force=force, pinned_by=pins, options=options)
 
 
 def _read_pins(path: Path) -> dict[DatasetRef, PayloadSource]:
