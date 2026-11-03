@@ -8,11 +8,22 @@ from timenet.registry import BaseRegistry
 from timenet.types import DatasetMetadata
 from timenet.types.references import DatasetRef
 from timenet_connectors.builder.cli import build_one
-from timenet_connectors.discovery import connector_dir, has_connector
+from timenet_connectors.discovery import connector_dir, has_connector, known_ids
 
 
 class ConnectorBuilder:
     """Builds a dataset by running its connector in an environment built from its requirements."""
+
+    def dataset_ids(self) -> list[str]:  # ruff: ignore[no-self-use] (BuilderBackend protocol method)
+        """List the dataset IDs of the connector cards in this package, without importing a connector.
+
+        Returns:
+            The dataset IDs, sorted.
+
+        Raises:
+            TimeNetInvalidCardError: If a card cannot be read or is not a mapping.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by known_ids
+        return known_ids()
 
     def knows(self, dataset_id: str) -> bool:  # ruff: ignore[no-self-use] (BuilderBackend protocol method)
         """Report whether a connector package exists for the id, without importing it.

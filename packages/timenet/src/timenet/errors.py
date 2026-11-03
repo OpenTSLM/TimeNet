@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from timenet.types.access import Access, AccessRequirement
     from timenet.types.references import DatasetRef
+    from timenet.types.version import Version
 
 
 class TimeNetError(Exception):
@@ -159,6 +160,33 @@ class TimeFEditError(TimeFValidationError):
 
 class TimeFNullValuesError(TimeFValidationError):
     """Values contain nulls where the requested form, such as a NumPy array, cannot hold them."""
+
+
+class TimeNetVersionUnavailableError(TimeNetDatasetNotFoundError, TimeFValidationError):
+    """The installed connector of a dataset builds another version than the requested one.
+
+    A connector builds only the version that its card declares. So the requested version does not
+    exist for the caller that wants to read it, and it is invalid input for the caller that wants to
+    build it.
+
+    Attributes:
+        release: The requested release.
+        declared: The version that the connector builds.
+        hint: What the caller can do instead, added by the front end, or ``None``.
+    """
+
+    def __init__(self, release: "DatasetRef", declared: "Version") -> None:
+        super().__init__(release, declared)
+        self.release = release
+        self.declared = declared
+        self.hint: str | None = None
+
+    def __str__(self) -> str:
+        message = (
+            f"connector for {self.release.dataset_id!r} builds version {self.declared}, "
+            f"not the requested {self.release.version}."
+        )
+        return message if self.hint is None else f"{message} {self.hint}"
 
 
 class TimeNetInvalidCardError(TimeNetError, ValueError):

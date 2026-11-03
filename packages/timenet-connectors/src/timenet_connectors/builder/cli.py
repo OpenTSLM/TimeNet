@@ -49,7 +49,7 @@ from timenet.registry import (
 from timenet.types.references import DatasetRef
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.builder.env import run_isolated
-from timenet_connectors.discovery import connector_dir, resolve
+from timenet_connectors.discovery import known_ids, resolve
 from timenet_connectors.download import DownloadProgress, ProgressCallback, progress_sink
 
 
@@ -147,11 +147,10 @@ def build(
         TimeNetAccessError: If the output is remote and gets a release without access declared
             ``open``.
     """
-    try:
-        # connector_dir imports no connector. So an unknown id fails before any environment exists.
-        connector_dir(dataset_id)
-    except LookupError as exc:
-        raise typer.BadParameter(str(exc)) from exc
+    # known_ids imports no connector. So an unknown id fails before any environment exists.
+    known = known_ids()
+    if dataset_id not in known:
+        raise typer.BadParameter(f"no connector for {dataset_id!r}; known: {', '.join(known) or '(none)'}")
     forwarded = out if out is not None else settings().registry
     if forwarded is None:
         forwarded = str(settings().registry_path)
