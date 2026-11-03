@@ -59,6 +59,14 @@ data suggests this pattern, but the connector does not rely on it:
 - A multiple-choice one names the input's sequence, then three distractors', in no letter order.
 - A puzzle names the one sequence its patches come from.
 
+A check of the release at the pinned revision supports this order for two tasks. Many input series
+also appear in an anomaly detection, classification or characterization row, which publishes one
+text for each column. Take each such series that has at least two distinct values and one known
+context. Entry k of a comparison describes input k in 300 of 300 cases. Entry 0 of a data
+transformation describes the input in 120 of 120 cases. A near-constant series looks the same in
+several datasets after normalization, so it cannot be checked. Few temporal relationship series can
+be checked, so the order is not verified for that task.
+
 ## The TimeNet dataset
 
 ### Records
