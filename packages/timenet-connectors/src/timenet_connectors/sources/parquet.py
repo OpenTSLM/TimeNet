@@ -6,6 +6,8 @@ from typing import Any
 
 import pyarrow.parquet as pq
 
+from timenet.errors import TimeFFormatError
+
 
 _BATCH_ROWS = 65536  # parquet rows decoded per batch
 
@@ -19,8 +21,14 @@ def iter_parquet_rows(path: Path, columns: Sequence[str] | None = None) -> Itera
 
     Yields:
         Each row, keyed by column name, in file order.
+
+    Raises:
+        TimeFFormatError: If ``columns`` names a column the file doesn't have.
     """
-    for batch in pq.ParquetFile(path).iter_batches(
-        batch_size=_BATCH_ROWS, columns=None if columns is None else list(columns)
-    ):
+    parquet_file = pq.ParquetFile(path)
+    if columns is not None:
+        missing = [name for name in columns if name not in parquet_file.schema_arrow.names]
+        if missing:
+            raise TimeFFormatError(f"{path}: no column {missing}")
+    for batch in parquet_file.iter_batches(batch_size=_BATCH_ROWS, columns=None if columns is None else list(columns)):
         yield from batch.to_pylist()

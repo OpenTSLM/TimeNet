@@ -203,14 +203,15 @@ answer, its position score equals accuracy.
 
 ### Questions repeated in the release
 
-8,635 rows ask the same question about the same series as another row, with the same answer.
-4,504 of them have a copy in another split, so a model can train on a test question:
+8,669 rows ask the same question about the same series as another row, with the same answer.
+The published `question_type` does not count, since the model never sees it. 4,514 of them have a
+copy in another split, so a model can train on a test question:
 
 | Task | Repeated | Across splits |
 | --- | --- | --- |
 | Classification | 7,227 | 3,440 |
 | Anomaly detection | 965 | 632 |
-| Temporal relationship | 355 | 408 |
+| Temporal relationship | 389 | 418 |
 | Data transformation | 84 | 22 |
 | Characterization | 4 | 2 |
 
@@ -222,8 +223,8 @@ own `dataset` and `meta_info`, so they differ only in context.
 
 ### Conflicting answers
 
-550 rows ask the same question about the same series as another row, but expect another answer.
-532 are puzzles whose patches repeat, as on a flat stretch. The other conflicts are 11 temporal
+556 rows ask the same question about the same series as another row, but expect another answer.
+532 are puzzles whose patches repeat, as on a flat stretch. The other conflicts are 17 temporal
 relationship and 5 data transformation true-or-false questions, and 2 classification questions.
 
 ### Ambiguous answers
@@ -285,9 +286,9 @@ The rules, applied to comparison and characterization rows whose inputs are all 
 ### Series shared across splits
 
 10,110 rows have an input series that is also the input of a row in another split: 5,764 train, 1,565
-validation and 2,781 test rows. 4,504 of them ask the same question about it, and the connector flags
+validation and 2,781 test rows. 4,514 of them ask the same question about it, and the connector flags
 them `repeated_across_splits` (see [Questions repeated in the release](#questions-repeated-in-the-release)).
-The other 5,606 ask another question, so a model can train on a test series under another question,
+The other 5,596 ask another question, so a model can train on a test series under another question,
 and no source issue flags them:
 
 | Task | Same question | Another question only | Total |
@@ -325,12 +326,12 @@ none. The issues are the values of `SourceIssue`:
 | Issue | Rows | Meaning |
 | --- | --- | --- |
 | `question_type_mismatch` | 10,000 | `question_type` names another format than the question has |
-| `repeated_question` | 8,635 | Another row asks the same question about the same series, with the same answer |
-| `repeated_across_splits` | 4,504 | A copy is in another split |
-| `conflicting_answer` | 550 | Another row asks the same question about the same series, with another answer |
+| `repeated_question` | 8,669 | Another row asks the same question about the same series, with the same answer |
+| `repeated_across_splits` | 4,514 | A copy is in another split |
+| `conflicting_answer` | 556 | Another row asks the same question about the same series, with another answer |
 | `ambiguous_answer` | 975 | Another answer is as right as the published one |
 
-19,367 tasks have at least one issue. The connector keeps them all. No issue flags the
+19,379 tasks have at least one issue. The connector keeps them all. No issue flags the
 [questions the inputs can't answer](#questions-the-inputs-cant-answer), or the
 [series shared across splits](#series-shared-across-splits) under another question.
 `without_source_issues` leaves them out, and the connector doesn't call it:
@@ -360,13 +361,17 @@ Report which issues were left out, and how many tasks remain, with any score.
 
 ## Data flow and validation
 
-A build reads every file once for each row's small fields: its answer, question format, series lengths
-and source issues. It checks that every column is text, the task and question type are known, the
-answer fits the question's letters, and every series is a nonempty list of finite numbers. It keeps
-the series values in the files until they are written. Everything is in `connector.py`.
+A build reads every file once to check each row and keep its small fields: its answer, question
+format, series lengths and source issues. Source issues need all three splits, so a build without one
+of them fails. It checks that every column is text, the task and question type are known, a
+multiple-choice question offers A to D in order, the answer fits the question's letters, each choice
+or patch of a data transformation or temporal relationship question prints one series, and every
+series is a nonempty list of finite numbers. The series values stay in the files until they are
+written, and the connector rereads a file when the writer comes back to it. Everything is in
+`connector.py`.
 
 The tests read a small fixture release, real rows of the pinned release with all their columns
-(`tests/release_fixtures.py` names each one).
+(`tests/README.md` names each one).
 
 On the full release, run on 2026-10-29: every one of the 210,000 tasks read back from a full build
 matches its row:

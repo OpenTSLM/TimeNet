@@ -44,10 +44,16 @@ _CONTEXT_KEYS = ("meta_info", "domain", "dataset")
 _READ_COLUMNS = ("task", "question_type", "input_ts", "question", "answer", *_CONTEXT_KEYS)
 """The columns a conversion reads. The release's ninth, ``raw_ts``, holds the series before normalization."""
 _SERIES_COLUMNS = ["input_ts", "question"]
-_DIGEST_COLUMNS = ("task", "question_type", "input_ts", "question")
-"""The columns that make a row's question: the same question about the same series, whatever its context."""
+_DIGEST_COLUMNS = ("task", "input_ts", "question")
+"""The columns that make a row's question: the same question about the same series, whatever its
+context or published ``question_type`` says. The model sees neither."""
 
 _COMPARISON = "comparison"
+_COMPARISON_SERIES = 2
+"""How many series a comparison row has."""
+_MIN_CHOICES = 2
+_LETTERS = ("A", "B", "C", "D")
+"""A puzzle's patch letters, and the most letters a multiple-choice question offers."""
 _PRINTING_TASKS = {"data_transformation", "temporal_relationship"}
 """The tasks whose questions print candidate series of their own."""
 
@@ -213,8 +219,8 @@ def _input_series(task: str, text: str) -> list[list[float]]:
     value = json.loads(text)
     if task != _COMPARISON:
         return [_series_values(value)]
-    if not isinstance(value, list) or len(value) != 2:  # noqa: PLR2004
-        raise ValueError("a comparison input_ts holds 2 series")
+    if not isinstance(value, list) or len(value) != _COMPARISON_SERIES:
+        raise ValueError(f"a comparison input_ts holds {_COMPARISON_SERIES} series")
     return [_series_values(series) for series in value]
 
 
@@ -241,9 +247,14 @@ def _input_contexts(task: str, text: Mapping[str, str]) -> tuple[Mapping[str, st
     if task != _COMPARISON:
         return ({key: text[key] for key in _CONTEXT_KEYS},)
     entries = {key: json.loads(text[key]) for key in _CONTEXT_KEYS}
-    if not all(isinstance(e, list) and len(e) == 2 and all(isinstance(x, str) for x in e) for e in entries.values()):  # noqa: PLR2004
-        raise ValueError("a comparison's context is a JSON list of 2 texts")
-    return tuple({key: entries[key][position] for key in _CONTEXT_KEYS} for position in range(2))
+    for key, entry in entries.items():
+        if (
+            not isinstance(entry, list)
+            or len(entry) != _COMPARISON_SERIES
+            or not all(isinstance(e, str) for e in entry)
+        ):
+            raise ValueError(f"a comparison's {key} is a JSON list of {_COMPARISON_SERIES} texts")
+    return tuple({key: entries[key][position] for key in _CONTEXT_KEYS} for position in range(_COMPARISON_SERIES))
 
 
 def _read_question(
@@ -259,29 +270,62 @@ def _read_question(
         The format, the choice texts of a multiple-choice question whose choices are text, and the ambiguity.
 
     Raises:
-        ValueError: If the answer is not one of the question's letters, or an order of all four patches.
+        ValueError: If a multiple-choice question doesn't offer A to D in order, the answer is not one of the
+            question's letters or an order of all four patches, or the printed series don't match the letters.
     """
     lines = re.findall(r"^([A-Z]): (.*)$", question.partition("\n\nChoices:\n")[2], re.MULTILINE)
     if "\n\nPatches:\n" in question:
-        fmt, letters = _QuestionFormat.PUZZLING, ("A", "B", "C", "D")
+        fmt, letters = _QuestionFormat.PUZZLING, _LETTERS
     elif _TRUE_OR_FALSE_LINES in question:
         fmt, letters = _QuestionFormat.TRUE_OR_FALSE, ("T", "F")
     else:
         fmt, letters = _QuestionFormat.MULTIPLE_CHOICE, tuple(letter for letter, _ in lines)
-    if (sorted(answer.split(",")) != sorted(letters)) if fmt is _QuestionFormat.PUZZLING else (answer not in letters):
+        if not _MIN_CHOICES <= len(letters) <= len(_LETTERS) or letters != _LETTERS[: len(letters)]:
+            raise ValueError(f"a multiple-choice question offers A to D in order, got {letters}")
+    fits = answer in letters
+    if fmt is _QuestionFormat.PUZZLING:
+        fits = sorted(answer.split(",")) == sorted(letters)
+    if not fits:
         raise ValueError(f"the answer {answer!r} does not fit the question's letters {letters}")
+    expected_labels = [None] if fmt is _QuestionFormat.TRUE_OR_FALSE else list(letters)
+    labels = [label for label, _ in printed]
+    if task in _PRINTING_TASKS and labels != expected_labels:
+        raise ValueError(f"a {task} question prints series labelled {expected_labels}, got {labels}")
     choices: dict[str, str] = {}
     if fmt is _QuestionFormat.MULTIPLE_CHOICE and task not in _PRINTING_TASKS:
         choices = dict(lines)
     candidates: dict[str, tuple[float, ...] | str] = dict(choices)
     candidates.update({label: tuple(series) for label, series in printed if label is not None})
     if fmt is _QuestionFormat.PUZZLING:
-        return fmt, choices, len(set(candidates.values())) < len(candidates)
-    return (
-        fmt,
-        choices,
-        fmt is _QuestionFormat.MULTIPLE_CHOICE and sum(c == candidates[answer] for c in candidates.values()) > 1,
-    )
+        ambiguous = len(set(candidates.values())) < len(candidates)
+    elif fmt is _QuestionFormat.MULTIPLE_CHOICE:
+        ambiguous = list(candidates.values()).count(candidates[answer]) > 1
+    else:
+        ambiguous = False
+    return fmt, choices, ambiguous
+
+
+def _prompt(question: str, first_series: int, printed: list[tuple[str | None, list[float]]]) -> str:
+    """Return the question with a placeholder, such as ``<series 2>``, in place of each series it prints.
+
+    Args:
+        question: The published question.
+        first_series: The number of the first printed series, counted from 1 after the input series.
+        printed: The series the question prints. A task that prints none keeps its question as published,
+            so a text choice such as ``[13, 17]`` is not taken for a series.
+
+    Returns:
+        The prompt.
+    """
+    if not printed:
+        return question
+    numbers = itertools.count(first_series)
+
+    def placeholder(match: re.Match[str]) -> str:
+        label = f"{match[1]}: " if match[1] else ""
+        return f"{label}<series {next(numbers)}>"
+
+    return _PRINTED.sub(placeholder, question)
 
 
 def _parse_row(values: Mapping[str, Any], split: str, index: int) -> _Row:
@@ -306,7 +350,6 @@ def _parse_row(values: Mapping[str, Any], split: str, index: int) -> _Row:
             raise ValueError(f"unknown question_type {text['question_type']!r}")
         inputs, printed = _input_series(task, text["input_ts"]), _printed_series(task, question)
         fmt, choices, ambiguous = _read_question(task, question, text["answer"], printed)
-        count = itertools.count(len(inputs) + 1)
         return _Row(
             split=split,
             index=index,
@@ -314,7 +357,7 @@ def _parse_row(values: Mapping[str, Any], split: str, index: int) -> _Row:
             question_type=text["question_type"],
             question_format=fmt,
             answer=text["answer"],
-            prompt=_PRINTED.sub(lambda m: f"{m[1] + ': ' if m[1] else ''}<series {next(count)}>", question),
+            prompt=_prompt(question, len(inputs) + 1, printed),
             choices=choices,
             printed_labels=tuple(label for label, _ in printed),
             lengths=tuple(len(series) for series in [*inputs, *(series for _, series in printed)]),
@@ -348,8 +391,19 @@ def _transform(task: str, question: str) -> str | None:
 
 
 def _read_rows(path: Path, split: str) -> Iterator[_Row]:
-    for index, values in enumerate(iter_parquet_rows(path, columns=_READ_COLUMNS)):
-        yield _parse_row(values, split, index)
+    """Validate every row of one split file, in file order.
+
+    Yields:
+        Each row.
+
+    Raises:
+        TimeFFormatError: If the file can't be read as parquet.
+    """
+    try:
+        for index, values in enumerate(iter_parquet_rows(path, columns=_READ_COLUMNS)):
+            yield _parse_row(values, split, index)
+    except (OSError, pa.ArrowException) as exc:
+        raise TimeFFormatError(f"{path}: {exc}") from exc
 
 
 def _find_issues(rows: list[_Row]) -> dict[tuple[str, int], frozenset[SourceIssue]]:
@@ -382,7 +436,8 @@ def _find_issues(rows: list[_Row]) -> dict[tuple[str, int], frozenset[SourceIssu
 class _SeriesLoader:
     """Load one series of a row lazily, holding one split file's series text and parsing each row once.
 
-    The writer reads Records in order, so each split file is read once while its Records are written.
+    Reading the Records in order reads each split file once. The writer sorts the series by spec type,
+    so it returns to each file once per spec type, and the loader reads a file again then.
     """
 
     def __init__(self, paths: Mapping[str, Path]) -> None:
@@ -450,7 +505,8 @@ def _task(row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue])
     Returns:
         The task, its target the published answer.
     """
-    input_annotations = tuple(a for record in inputs for a in record.annotations if a.key in _CONTEXT_KEYS)
+    annotations = itertools.chain.from_iterable(record.annotations for record in inputs)
+    input_annotations = tuple(a for a in annotations if a.key in _CONTEXT_KEYS)
     metadata: dict[str, JsonValue] = {
         "task": row.task,
         "question_type": row.question_type,
@@ -493,18 +549,27 @@ class TSAQAConnector(BaseHuggingFaceConnector):
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
         """Convert each split file into lazy Records and a stream of one task per row.
 
-        Every file is read once up front for its rows' small fields, which the source issues need
-        across all splits. The series values stay in the files until written, so the files must
-        stay available until then. A malformed row raises ``TimeFValidationError``.
+        Every file is read once up front to check each row and keep its small fields. The source issues
+        need all three splits, because a copy of a question may be in another one. The series values stay
+        in the files until written, so the files must stay available until then.
 
         Args:
             raw_refs: The downloaded split files.
 
         Returns:
             A dataset with the provenance and vocabulary annotations, the Records, and a stream of every task.
+
+        Raises:
+            TimeFValidationError: If a split file is missing, or a row is malformed.
         """
         paths = {ref.part: ref.path for ref in raw_refs}
-        rows = [row for split in _SPLITS if split in paths for row in _read_rows(paths[split], split)]
+        if paths.keys() != _SPLITS.keys():
+            raise TimeFValidationError(
+                f"TSAQA needs all its split files, missing {sorted(_SPLITS.keys() - paths.keys())}"
+            )
+        rows: list[_Row] = []
+        for split in _SPLITS:
+            rows.extend(_read_rows(paths[split], split))
         issues = _find_issues(rows)
         loader = _SeriesLoader(paths)
         records = [_records(row, loader) for row in rows]
@@ -522,12 +587,12 @@ class TSAQAConnector(BaseHuggingFaceConnector):
         for row_records in records:
             for record in row_records:
                 dataset.add_record(record=record)
-        dataset.set_task_stream(
-            (ClassificationTask, AnswerTask),
-            lambda: (
-                _task(row, inputs, issues.get(row.key, frozenset())) for row, inputs in zip(rows, records, strict=True)
-            ),
-        )
+
+        def tasks() -> Iterator[Task]:
+            for row, inputs in zip(rows, records, strict=True):
+                yield _task(row, inputs, issues.get(row.key, frozenset()))
+
+        dataset.set_task_stream((ClassificationTask, AnswerTask), tasks)
         return dataset
 
 

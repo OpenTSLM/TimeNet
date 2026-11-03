@@ -26,9 +26,11 @@ from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.connector import (
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _SPLITS = {"train": Split.TRAIN, "val": Split.VALIDATION, "test": Split.TEST}
-# Each fixture row's issues, by file and row, written out from tests/release_fixtures.py.
+# Each fixture row's issues, by file and row, written out from tests/README.md.
 _EXPECTED_ISSUES = {
-    ("train.parquet", 12): ["question_type_mismatch"],
+    # Rows 10 and 12 ask the same question about the same series, and only row 12 has another question_type.
+    ("train.parquet", 10): ["repeated_question"],
+    ("train.parquet", 12): ["question_type_mismatch", "repeated_question"],
     ("train.parquet", 13): ["question_type_mismatch"],
     # Four equal flat patches, so every order of them is right.
     ("train.parquet", 14): ["ambiguous_answer"],
@@ -244,7 +246,7 @@ def test_a_puzzle_is_ambiguous_only_when_two_patches_are_equal(tmp_path, patches
     assert _issues_after_rewrite(tmp_path, 14, _FLAT_PATCHES, replacement) == issues
 
 
-def test_each_split_file_is_read_once_for_all_its_series(monkeypatch):
+def test_reading_the_records_in_order_reads_each_split_file_once(monkeypatch):
     reads = Counter()
     read = connector.pq.read_table
 
@@ -304,11 +306,63 @@ def test_a_reread_that_no_longer_matches_its_row_fails(tmp_path):
         (0, {"input_ts": "[1.0, NaN]"}, "finite numbers"),
         (4, {"meta_info": '["only one entry"]'}, "JSON list of 2 texts"),
         (14, {"answer": "A,B,C"}, "does not fit"),
-        (6, {"question": "Is it?\n"}, "does not fit"),
+        (6, {"question": "Is it?\n"}, "offers A to D in order"),
     ],
 )
 def test_malformed_rows_name_their_file_and_row(tmp_path, position, columns, message):
     shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
     _rewrite(tmp_path / "train.parquet", position, **columns)
     with pytest.raises(TimeFValidationError, match=rf"train.parquet row {position}: .*{message}"):
+        _FixtureConnector().convert(_refs(tmp_path))
+
+
+def test_a_text_choice_that_looks_like_a_series_stays_in_the_prompt(tmp_path):
+    # Four characterization questions of the release have choices such as "[13, 17]": intervals, not series.
+    shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
+    rows = pq.read_table(tmp_path / "train.parquet").to_pylist()
+    position = next(i for i, row in enumerate(rows) if row["task"] == "characterization" and "\nB: " in row["question"])
+    question = re.sub(r"\nB: .*", "\nB: [13, 17]", rows[position]["question"])
+    _rewrite(tmp_path / "train.parquet", position, question=question)
+    tasks = _FixtureConnector().convert(_refs(tmp_path)).iter_tasks()
+    task = next(task for task in tasks if _row_of(task) == ("train.parquet", position))
+    assert task.prompt is not None
+    assert task.prompt.read() == question
+    assert len(task.inputs) == 1
+
+
+def _position(tmp_path: Path, wanted) -> tuple[int, dict[str, Any]]:
+    """Copy the fixtures and return the position and row of the first train row that ``wanted`` accepts."""
+    shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
+    rows = pq.read_table(tmp_path / "train.parquet").to_pylist()
+    return next((i, row) for i, row in enumerate(rows) if wanted(row))
+
+
+def test_a_true_or_false_question_without_its_final_newline_fails(tmp_path):
+    position, row = _position(tmp_path, lambda row: row["task"] == "characterization" and "T: True." in row["question"])
+    _rewrite(tmp_path / "train.parquet", position, question=row["question"].removesuffix("\n"))
+    with pytest.raises(TimeFValidationError, match=rf"train.parquet row {position}: .*offers A to D in order"):
+        _FixtureConnector().convert(_refs(tmp_path))
+
+
+def test_a_printed_series_that_loses_its_line_fails_naming_the_labels(tmp_path):
+    position, row = _position(
+        tmp_path, lambda row: row["task"] == "temporal_relationship" and "\nB: [" in row["question"]
+    )
+    # A trailing space makes the line something else than a printed series.
+    question = re.sub(r"(\nB: \[[^\n]*\])", r"\1 ", row["question"])
+    _rewrite(tmp_path / "train.parquet", position, question=question)
+    with pytest.raises(TimeFValidationError, match=rf"train.parquet row {position}: .*prints series labelled"):
+        _FixtureConnector().convert(_refs(tmp_path))
+
+
+def test_a_conversion_needs_every_split_file():
+    refs = [ref for ref in _refs() if ref.part == "test"]
+    with pytest.raises(TimeFValidationError, match=r"missing \['train', 'val'\]"):
+        _FixtureConnector().convert(refs)
+
+
+def test_a_file_that_is_not_parquet_fails_as_a_format_error(tmp_path):
+    shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
+    (tmp_path / "test.parquet").write_text("not parquet")
+    with pytest.raises(TimeFFormatError, match=r"test\.parquet"):
         _FixtureConnector().convert(_refs(tmp_path))
