@@ -1,9 +1,9 @@
-"""Plan and prepare the parent releases needed to build a dataset.
+"""Plan the parent releases that a build needs, before any connector runs.
 
 Each :class:`Step` copies or builds one release after the releases it needs.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Mapping
 from dataclasses import dataclass, field
 from graphlib import CycleError, TopologicalSorter
 from typing import Literal
@@ -20,10 +20,9 @@ from timenet.errors import (
 )
 from timenet.manifest import Manifest, PayloadSource
 from timenet.registry.base import BaseRegistry
-from timenet.registry.dependencies import check_file_sizes, prepare_local_copy
+from timenet.registry.dependencies import check_file_sizes
 from timenet.registry.local import LocalRegistry
 from timenet.registry.version import DatasetVersion
-from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
 from timenet.types.access import require_open_access
 from timenet.types.references import DatasetRef
@@ -73,7 +72,7 @@ class _Release:
 class _Graph:
     """The releases a build needs and the dependencies between them."""
 
-    output: WritableRegistry
+    output: LocalRegistry
     fetch_from: BaseRegistry | None
     build_parents: bool
     open_only: bool
@@ -198,7 +197,7 @@ class _Graph:
 
 def plan_parents(  # ruff: ignore[too-many-arguments]
     dataset_id: str,
-    output: WritableRegistry,
+    output: LocalRegistry,
     *,
     fetch_from: BaseRegistry | None = None,
     build_parents: bool = False,
@@ -208,12 +207,11 @@ def plan_parents(  # ruff: ignore[too-many-arguments]
     """Plan the copy and build steps for a dataset's parents.
 
     Copy missing parents and their payload sources from ``fetch_from``, or build them if enabled.
-    Remote registries and ``open_access_only`` require open access for releases and their lineage.
 
     Args:
         dataset_id: The dataset to build.
-        output: The registry that the build writes to.
-        fetch_from: The registry to copy missing parents from for a local output, or ``None``.
+        output: The local registry that the build writes to.
+        fetch_from: The registry to copy missing parents from, or ``None``.
         build_parents: Build missing parents with their installed connectors.
         force_build: Plan parents for a rebuild even if the requested release already exists.
         open_access_only: Require ``access: open`` for each release, including the requested release.
@@ -224,23 +222,16 @@ def plan_parents(  # ruff: ignore[too-many-arguments]
     Raises:
         LookupError: If no installed connector declares a card for ``dataset_id``.
         TimeNetInvalidCardError: If an installed connector's card cannot be read.
-        TimeFValidationError: If parents form a cycle, versions conflict, or a copy targets a remote output.
+        TimeFValidationError: If parents form a cycle or versions conflict.
         TimeNetMissingParentError: If a parent or payload source is missing and ``build_parents`` is false.
         TimeNetDatasetNotFoundError: If a parent is missing and no installed connector builds it.
         TimeNetFileError: If a local parent is damaged and no replacement is available.
         TimeNetAccessError: If a release or its lineage lacks required open access.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers of the walk
-    if fetch_from is not None and not isinstance(output, LocalRegistry):
-        # A registry that is not local accepts a child only if it already holds the parents. A copy
-        # step writes a parent only to a local directory, never to such a registry.
-        raise TimeFValidationError(
-            "copying parents from a registry needs a local output; publish the parents to the registry first"
-        )
     card = find_card(dataset_id)
     if card is None:
         raise LookupError(f"no installed connector declares a card for {dataset_id!r}")
-    open_only = open_access_only or output.requires_open_access
-    if open_only:
+    if open_access_only:
         require_open_access(card)
     # For a dataset without parents, the plan does not read the output, so the build makes no extra request.
     if not card.parents:
@@ -249,11 +240,11 @@ def plan_parents(  # ruff: ignore[too-many-arguments]
     # If the output already holds the requested release, a reader needs only its payload sources to
     # open it. Its declared parents matter only to a rebuild.
     held = None if force_build else _manifest(output, root)
-    if held is not None and open_only:
+    if held is not None and open_access_only:
         # The installed card has no lineage, so the check above does not see an ancestor that is not open.
         require_open_access(held.metadata, held.lineage)
     searched = str(output) if fetch_from is None else f"{output} or {fetch_from}"
-    graph = _Graph(output, fetch_from, build_parents=build_parents, open_only=open_only, searched=searched)
+    graph = _Graph(output, fetch_from, build_parents=build_parents, open_only=open_access_only, searched=searched)
     # The graph holds the requested release before the walk starts. So a release that depends on it
     # closes a cycle, and the walk does not look it up again.
     if held is None:
@@ -268,48 +259,6 @@ def plan_parents(  # ruff: ignore[too-many-arguments]
         for source in sources:
             graph.visit(source.release, root, source)
     return graph.steps(root)
-
-
-def prepare_parents(  # ruff: ignore[too-many-arguments]
-    dataset_id: str,
-    output: WritableRegistry,
-    *,
-    build: Callable[[Step], object],
-    fetch_from: BaseRegistry | None = None,
-    build_parents: bool = False,
-    force_build: bool = False,
-) -> None:
-    """Copy or build a dataset's required parent releases.
-
-    The ``build`` callback must publish each release only if its files match the step's
-    ``pinned_by`` records.
-
-    Args:
-        dataset_id: The dataset to build.
-        output: The destination registry.
-        build: The function that builds one parent into ``output``.
-        fetch_from: The registry to copy missing parents from, or ``None`` to copy nothing.
-        build_parents: Build missing parents with their installed connectors.
-        force_build: Prepare a rebuild's parents even if ``output`` holds the requested release.
-
-    Raises:
-        TimeNetDatasetNotFoundError: If ``build`` does not publish the release of its step.
-    """
-    steps = plan_parents(
-        dataset_id, output, fetch_from=fetch_from, build_parents=build_parents, force_build=force_build
-    )
-    for step in steps:
-        if step.action == "copy":
-            prepare_local_copy(output.local_root, step.release, fetch_from=fetch_from)
-        else:
-            build(step)
-            # After a successful build, the output must hold the exact release with its payload sources.
-            if isinstance(output, LocalRegistry):
-                prepare_local_copy(output.root, step.release)
-            else:
-                if _manifest(output, step.release) is None:
-                    raise TimeNetDatasetNotFoundError(f"builder did not publish parent release {step.release}")
-                output.open_version(step.release.dataset_id, str(step.release.version))
 
 
 def _manifest(registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
@@ -333,7 +282,7 @@ def _manifest(registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
 
 
 def _locate(
-    output: WritableRegistry, fetch_from: BaseRegistry | None, reference: DatasetRef, *, open_only: bool
+    output: LocalRegistry, fetch_from: BaseRegistry | None, reference: DatasetRef, *, open_only: bool
 ) -> tuple[Manifest | None, Literal["copy"] | None]:
     # The damage is raised from a variable, the access error by require_open_access.
     # ruff: ignore[docstring-extraneous-exception]
@@ -351,7 +300,7 @@ def _locate(
     """
     manifest = _manifest(output, reference)
     damage = None
-    if manifest is not None and isinstance(output, LocalRegistry):
+    if manifest is not None:
         directory = output.root / reference.dataset_id / str(reference.version)
         try:
             check_file_sizes(

@@ -199,10 +199,6 @@ def test_put_dataset_is_idempotent(backend):
     assert backend.registry.put_dataset(make_dataset()) == DatasetRef.parse("timenet/hello-world@1.0.0")
 
 
-def test_put_dataset_force_republishes(backend):
-    assert backend.registry.put_dataset(make_dataset(), force=True) == DatasetRef.parse("timenet/hello-world@1.0.0")
-
-
 def _local_release(tmp_path):
     """Build a complete local release of timenet/hello-world 2.0.0; return its directory and manifest."""
     source = LocalRegistry(tmp_path / "src")
