@@ -1,11 +1,10 @@
 from collections import Counter
-from collections.abc import Mapping
 from dataclasses import replace
 import json
 from pathlib import Path
 import re
 import shutil
-from typing import Any, ClassVar
+from typing import Any
 
 import pyarrow.parquet as pq
 import pytest
@@ -17,41 +16,16 @@ from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
 from timenet.types import AnswerTask, ClassificationTask, Split
 from timenet_connectors.bases.huggingface import HubFileRef
-from timenet_connectors.datasets.tsaqa.tsaqa_benchmark import TSAQAConnector, records
-from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.issues import SourceIssue, without_source_issues
-from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.loader import TSAQADatasetLoader
-from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.records import record_metadata
-from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.release import PINNED_INVENTORY, InventoryKey, SourceSplit
-from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.request import authors_question
-from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.vocabulary import (
-    QuestionFormat as F,
-    QuestionType as Q,
-    SourceTask as T,
+from timenet_connectors.datasets.tsaqa.tsaqa_benchmark import connector
+from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.connector import (
+    SourceIssue,
+    TSAQAConnector,
+    without_source_issues,
 )
 
 
 _FIXTURES = Path(__file__).parent / "fixtures"
 _SPLITS = {"train": Split.TRAIN, "val": Split.VALIDATION, "test": Split.TEST}
-# The fixture files' rows, counted as release.check_inventory counts them (tests/release_fixtures.py).
-_FIXTURE_INVENTORY: dict[SourceSplit, dict[InventoryKey, int]] = {
-    SourceSplit.TRAIN: {
-        (T.ANOMALY_DETECTION, Q.TRUE_OR_FALSE, F.TRUE_OR_FALSE): 1,
-        (T.CLASSIFICATION, Q.MULTIPLE_CHOICES, F.MULTIPLE_CHOICE): 2,
-        (T.CHARACTERIZATION, Q.TRUE_OR_FALSE, F.TRUE_OR_FALSE): 1,
-        (T.CHARACTERIZATION, Q.MULTIPLE_CHOICES, F.MULTIPLE_CHOICE): 1,
-        (T.COMPARISON, Q.TRUE_OR_FALSE, F.TRUE_OR_FALSE): 1,
-        (T.COMPARISON, Q.MULTIPLE_CHOICES, F.MULTIPLE_CHOICE): 1,
-        (T.DATA_TRANSFORMATION, Q.TRUE_OR_FALSE, F.TRUE_OR_FALSE): 3,
-        (T.DATA_TRANSFORMATION, Q.MULTIPLE_CHOICES, F.MULTIPLE_CHOICE): 1,
-        (T.TEMPORAL_RELATIONSHIP, Q.TRUE_OR_FALSE, F.TRUE_OR_FALSE): 1,
-        (T.TEMPORAL_RELATIONSHIP, Q.MULTIPLE_CHOICES, F.MULTIPLE_CHOICE): 1,
-        (T.TEMPORAL_RELATIONSHIP, Q.ORDERING, F.TRUE_OR_FALSE): 1,
-        (T.TEMPORAL_RELATIONSHIP, Q.ORDERING, F.MULTIPLE_CHOICE): 1,
-        (T.TEMPORAL_RELATIONSHIP, Q.ORDERING, F.PUZZLING): 2,
-    },
-    SourceSplit.VAL: {(T.CLASSIFICATION, Q.MULTIPLE_CHOICES, F.MULTIPLE_CHOICE): 1},
-    SourceSplit.TEST: {(T.TEMPORAL_RELATIONSHIP, Q.ORDERING, F.PUZZLING): 1},
-}
 # Each fixture row's issues, by file and row, written out from tests/release_fixtures.py.
 _EXPECTED_ISSUES = {
     ("train.parquet", 12): ["question_type_mismatch"],
@@ -67,10 +41,9 @@ _PRINTED_SERIES = re.compile(r"^(?:[A-D]: )?(\[[-0-9., e]*\])$", re.MULTILINE)
 
 
 class _FixtureConnector(TSAQAConnector):
-    """The connector, pinned to the fixtures' inventory instead of the release's."""
+    """The connector with the card of this dataset, which the base reads."""
 
     CARD = Path(__file__).parents[1] / "dataset.yaml"
-    SOURCE_INVENTORY: ClassVar[Mapping[SourceSplit, Mapping[InventoryKey, int]]] = _FIXTURE_INVENTORY
 
 
 def _refs(directory: Path = _FIXTURES) -> list[HubFileRef]:
@@ -105,7 +78,6 @@ def _check_task(task, row: dict[str, Any]) -> None:
     assert isinstance(task, ClassificationTask if true_or_false else AnswerTask)
     assert task.targets == (row["answer"],)
     assert task.split is _SPLITS[task.metadata["file"].removesuffix(".parquet")]
-    assert authors_question(task) == row["question"]
     series = _published_series(row)
     assert [record.signals[0].to_numpy().tolist() for record in task.inputs] == series
     prompt = task.prompt.read()
@@ -113,7 +85,7 @@ def _check_task(task, row: dict[str, Any]) -> None:
     assert re.findall(r"<series (\d+)>", prompt) == [str(n) for n in range(first_printed, len(series) + 1)]
     assert "[" not in prompt or row["task"] not in {"data_transformation", "temporal_relationship"}
     for record in task.inputs:
-        assert (record_metadata(record).file, record_metadata(record).row) == _row_of(task)
+        assert (record.metadata["file"], record.metadata["row"]) == _row_of(task)
     context = [(a.key, a.value) for a in task.input_annotations]
     if row["task"] == "comparison":
         assert context == [
@@ -272,31 +244,15 @@ def test_a_puzzle_is_ambiguous_only_when_two_patches_are_equal(tmp_path, patches
     assert _issues_after_rewrite(tmp_path, 14, _FLAT_PATCHES, replacement) == issues
 
 
-def test_each_format_has_its_own_method():
-    loader = TSAQADatasetLoader.parse_from(_refs(), inventory=_FIXTURE_INVENTORY)
-    assert len(list(loader.true_or_false_tasks())) == 8
-    assert len([task for task in loader.multiple_choice_tasks() if task.split is Split.VALIDATION]) == 1
-    assert [task.split for task in loader.puzzling_tasks()] == [Split.TRAIN, Split.TRAIN, Split.TEST]
-    # tasks() keeps the file order, and holds exactly the tasks of the three methods.
-    by_format = [*loader.true_or_false_tasks(), *loader.multiple_choice_tasks(), *loader.puzzling_tasks()]
-    assert sorted(map(_row_of, loader.tasks())) == sorted(map(_row_of, by_format))
-    assert [_row_of(task) for task in loader.tasks()] == [
-        (f"{split}.parquet", row)
-        for split in _SPLITS
-        for row in range(len(pq.read_table(_FIXTURES / f"{split}.parquet")))
-    ]
-    assert (ClassificationTask, AnswerTask) == loader.TASK_TYPES
-
-
 def test_each_split_file_is_read_once_for_all_its_series(monkeypatch):
     reads = Counter()
-    read = records.read_series_columns
+    read = connector.pq.read_table
 
-    def counted(path):
+    def counted(path, *args, **kwargs):
         reads[path.name] += 1
-        return read(path)
+        return read(path, *args, **kwargs)
 
-    monkeypatch.setattr(records, "read_series_columns", counted)
+    monkeypatch.setattr(connector.pq, "read_table", counted)
     dataset = _FixtureConnector().convert(_refs())
     for record in dataset.records:
         record.signals[0].to_numpy()
@@ -311,38 +267,16 @@ def test_declares_the_pinned_release():
         "val": "val.parquet",
         "test": "test.parquet",
     }
-    # The paper's 70/10/20 split of 210,000 rows, and its question type counts (Section 3.4).
-    assert {split: sum(counts.values()) for split, counts in PINNED_INVENTORY.items()} == {
-        SourceSplit.TRAIN: 147000,
-        SourceSplit.VAL: 21000,
-        SourceSplit.TEST: 42000,
-    }
-    by_type = Counter()
-    for counts in PINNED_INVENTORY.values():
-        for (_, question_type, _), count in counts.items():
-            by_type[question_type] += count
-    assert by_type == {Q.TRUE_OR_FALSE: 84632, Q.MULTIPLE_CHOICES: 85479, Q.ORDERING: 39889}
-
-
-def test_pinned_inventory_mismatch_fails():
-    with pytest.raises(TimeFValidationError, match="differ from the pinned release"):
-        TSAQAConnector().convert(_refs())
 
 
 def test_a_file_that_names_no_split_fails():
-    with pytest.raises(TimeFValidationError, match="'dev' is not a TSAQA split"):
-        TSAQADatasetLoader.parse_from([HubFileRef(_FIXTURES / "val.parquet", "dev")], inventory=_FIXTURE_INVENTORY)
-
-
-def test_a_split_without_inventory_counts_fails():
-    inventory = {split: counts for split, counts in _FIXTURE_INVENTORY.items() if split is not SourceSplit.VAL}
-    with pytest.raises(TimeFValidationError, match=r"no row counts for the split files \['val'\]"):
-        TSAQADatasetLoader.parse_from(_refs(), inventory=inventory)
+    with pytest.raises(TimeFValidationError, match="has no source part dev"):
+        _FixtureConnector().convert([HubFileRef(_FIXTURES / "val.parquet", "dev")])
 
 
 def test_no_split_file_fails():
-    with pytest.raises(TimeFValidationError, match="needs at least one of its split files"):
-        TSAQADatasetLoader.parse_from([], inventory=_FIXTURE_INVENTORY)
+    with pytest.raises(TimeFValidationError, match="nonempty"):
+        _FixtureConnector().convert([])
 
 
 def _rewrite(path: Path, position: int, **columns: str) -> None:
@@ -357,7 +291,7 @@ def test_a_reread_that_no_longer_matches_its_row_fails(tmp_path):
     shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
     dataset: TimeFDataset = _FixtureConnector().convert(_refs(tmp_path))
     _rewrite(tmp_path / "train.parquet", 0, input_ts="[1.0, 2.0]")
-    first = next(record for record in dataset.records if record_metadata(record).file == "train.parquet")
+    first = next(record for record in dataset.records if record.metadata["file"] == "train.parquet")
     with pytest.raises(TimeFFormatError, match=r"train.parquet row 0: the series differ"):
         first.signals[0].to_numpy()
 
@@ -365,12 +299,12 @@ def test_a_reread_that_no_longer_matches_its_row_fails(tmp_path):
 @pytest.mark.parametrize(
     ("position", "columns", "message"),
     [
-        (0, {"answer": "Z"}, "not one of the question's letters"),
-        (0, {"task": "forecasting"}, "is not one of"),
-        (0, {"input_ts": "[1.0, NaN]"}, "NaN"),
-        (4, {"meta_info": '["only one entry"]'}, "JSON list of 2 entries"),
-        (14, {"answer": "A,B,C"}, "a puzzle's answer orders"),
-        (6, {"question": "Is it?\n"}, "lists its choices once"),
+        (0, {"answer": "Z"}, "does not fit the question's letters"),
+        (0, {"task": "forecasting"}, "unknown task"),
+        (0, {"input_ts": "[1.0, NaN]"}, "finite numbers"),
+        (4, {"meta_info": '["only one entry"]'}, "JSON list of 2 texts"),
+        (14, {"answer": "A,B,C"}, "does not fit"),
+        (6, {"question": "Is it?\n"}, "does not fit"),
     ],
 )
 def test_malformed_rows_name_their_file_and_row(tmp_path, position, columns, message):

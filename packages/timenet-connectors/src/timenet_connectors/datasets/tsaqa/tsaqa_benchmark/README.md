@@ -83,7 +83,7 @@ changes. Its spec says what the values are:
 | `tsaqa_wavelet_transform` | 24,871 | A wavelet transform question's choices or sequence |
 | `tsaqa_first_order_difference` | 24,903 | A first-order difference question's choices or sequence |
 
-A Record's metadata, `records.TSAQARecordMetadata`, names its row and role: the `file`, the `row`
+A Record's metadata names its row and role: the `file`, the `row`
 counted from 0, and the `role`. Metadata is provenance and never model input.
 
 **`raw_ts` is not read.** It holds each series before normalization: in every row but 3 anomaly
@@ -107,14 +107,14 @@ context: the question already states both, and 10,000 rows give a wrong `questio
 ### Tasks
 
 Each row is one task. The question's format, read from the question's text, decides its TimeNet
-type, so each format has its own loader method. `tasks()` keeps the file order, in which the formats
-alternate. The row's paper task is its `task` metadata.
+type. Tasks keep the file order, in which the formats alternate. The row's paper task is its `task`
+metadata.
 
-| Loader method | TimeNet type | Target | Train | Validation | Test |
+| Format | TimeNet type | Target | Train | Validation | Test |
 | --- | --- | --- | --- | --- | --- |
-| `true_or_false_tasks()` | `ClassificationTask` | `T` or `F` | 62,757 | 8,931 | 17,993 |
-| `multiple_choice_tasks()` | `AnswerTask` | One letter, `A` to `D` | 63,311 | 9,090 | 18,029 |
-| `puzzling_tasks()` | `AnswerTask` | Four letters, such as `C,B,D,A` | 20,932 | 2,979 | 5,978 |
+| `true_or_false` | `ClassificationTask` | `T` or `F` | 62,757 | 8,931 | 17,993 |
+| `multiple_choice` | `AnswerTask` | One letter, `A` to `D` | 63,311 | 9,090 | 18,029 |
+| `puzzling` | `AnswerTask` | Four letters, such as `C,B,D,A` | 20,932 | 2,979 | 5,978 |
 
 - **A true-or-false question** is a classification, since `T` and `F` mean the same in every
   question. Its `target_schema` is the `true_or_false_vocabulary` dataset annotation, `["T", "F"]`.
@@ -145,10 +145,9 @@ C: <series 4>
 D: <series 5>
 ```
 
-The placeholder is the connector's choice. `request.authors_question(task)` prints each series back
-the way the release does: a zero as `0`, any other value as Python's `repr` of the float. This gives
-the published question exactly. Every question of the release reads back this way, and the build
-fails if one doesn't.
+The placeholder is the connector's choice. The release prints each series as a line of its own, so
+the connector reads each such line of a data transformation or temporal relationship question as a
+series.
 
 **Task metadata**, never model input:
 - `task` and `question_type`, as published;
@@ -321,7 +320,7 @@ isn't counted, because the release names no source sequence.
 ## Filtering rows with source issues
 
 Each task lists its row's issues in its metadata under `source_issues`, an empty list when it has
-none. The issues are the values of `issues.SourceIssue`:
+none. The issues are the values of `SourceIssue`:
 
 | Issue | Rows | Meaning |
 | --- | --- | --- |
@@ -334,10 +333,10 @@ none. The issues are the values of `issues.SourceIssue`:
 19,367 tasks have at least one issue. The connector keeps them all. No issue flags the
 [questions the inputs can't answer](#questions-the-inputs-cant-answer), or the
 [series shared across splits](#series-shared-across-splits) under another question.
-`issues.without_source_issues` leaves them out, and the connector doesn't call it:
+`without_source_issues` leaves them out, and the connector doesn't call it:
 
 ```python
-from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.issues import (
+from timenet_connectors.datasets.tsaqa.tsaqa_benchmark import (
     SourceIssue,
     without_source_issues,
 )
@@ -361,17 +360,16 @@ Report which issues were left out, and how many tasks remain, with any score.
 
 ## Data flow and validation
 
-A build validates every row against its task's template, checks each file's rows against the
-pinned counts in `release.py`, and keeps the series in the files until they are written. Each
-module's docstring describes its stage: `rows.py`, `index.py`, `records.py`, then `tasks.py` and
-`request.py`.
+A build reads every file once for each row's small fields: its answer, question format, series lengths
+and source issues. It checks that every column is text, the task and question type are known, the
+answer fits the question's letters, and every series is a nonempty list of finite numbers. It keeps
+the series values in the files until they are written. Everything is in `connector.py`.
 
 The tests read a small fixture release, real rows of the pinned release with all their columns
 (`tests/release_fixtures.py` names each one).
 
 On the full release, run on 2026-10-29: every one of the 210,000 tasks read back from a full build
 matches its row:
-- `authors_question` gives the published question;
 - the target is the answer;
 - every Record's values are the published series;
 - the context annotations are the published text.
