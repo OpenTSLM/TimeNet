@@ -161,9 +161,7 @@ class S3Registry(LazyReadRegistry):
     ) -> str:
         """Compile a dataset locally and upload it under this registry's prefix.
 
-        Uploads every file to a temporary ``<version>.tmp-<uuid>`` prefix first. Then moves each object
-        into the final ``<version>/`` prefix with a server-side copy, writing ``manifest.json`` last as
-        the commit marker. A failed publish then never leaves a partial version a reader can trust. An
+        Compiles to a temporary directory, then publishes it with :meth:`put_release`. An
         already-committed version is skipped unless ``force``.
 
         Args:
@@ -183,9 +181,6 @@ class S3Registry(LazyReadRegistry):
         version = str(dataset.metadata.dataset_version)
         if not force and self.exists(dataset_id, version):
             return version
-        client = self._client()
-        final_base = self._key(dataset_id, version)
-        temp_base = f"{final_base}.tmp-{uuid.uuid4().hex}"
         staging = Path(tempfile.mkdtemp(prefix="timenet-s3-"))
         try:
             # The writer stages locally but checks every payload source against this registry.
@@ -199,19 +194,45 @@ class S3Registry(LazyReadRegistry):
             ) as writer:
                 writer.write()
             version_dir = release_dir(staging, DatasetRef.parse(f"{dataset_id}@{version}"))
+            manifest = Manifest.model_validate_json((version_dir / MANIFEST_FILE).read_text())
+            self.put_release(version_dir, manifest)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+        return version
+
+    def put_release(self, directory: Path, manifest: Manifest) -> None:
+        """Upload a complete local release directory under this registry's prefix.
+
+        Before it uploads anything, this method makes sure that ``directory`` holds a ``manifest.json``
+        equal to ``manifest`` and every file that the manifest declares, with its recorded size. It
+        uploads only those files and ``manifest.json`` to a temporary ``<version>.tmp-<uuid>`` prefix
+        first. Then it moves each object into the final ``<version>/`` prefix with a server-side copy,
+        writing ``manifest.json`` last as the commit marker. A failed publish then never leaves a
+        partial version a reader can trust.
+
+        Args:
+            directory: The local release directory, with ``manifest.json`` and every declared file.
+            manifest: The manifest of the release.
+
+        Raises:
+            TimeNetFileError: If ``manifest.json`` is missing from ``directory`` or differs from
+                ``manifest``, or a declared file is missing or has another size than recorded.
+                Nothing is uploaded then.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the check this method calls
+        self._check_release_files(directory, manifest)
+        client = self._client()
+        final_base = self._key(manifest.dataset_id, str(manifest.metadata.dataset_version))
+        temp_base = f"{final_base}.tmp-{uuid.uuid4().hex}"
+        try:
             self._delete_prefix(client, f"{final_base}.tmp-")  # sweep a prior crashed publish's temp prefix
-            files = sorted(path for path in version_dir.rglob("*") if path.is_file())
-            for path in files:
-                relpath = path.relative_to(version_dir).as_posix()
-                client.upload_file(str(path), self._bucket, f"{temp_base}/{relpath}")
-            data_relpaths = [path.relative_to(version_dir).as_posix() for path in files if path.name != MANIFEST_FILE]
+            data_relpaths = sorted({part.path for part in manifest.files.all_files()})
+            for relpath in (*data_relpaths, MANIFEST_FILE):
+                client.upload_file(str(directory / relpath), self._bucket, f"{temp_base}/{relpath}")
             for relpath in data_relpaths:
                 self._move(client, f"{temp_base}/{relpath}", f"{final_base}/{relpath}")
             self._move(client, f"{temp_base}/{MANIFEST_FILE}", f"{final_base}/{MANIFEST_FILE}")
         finally:
-            shutil.rmtree(staging, ignore_errors=True)
             self._delete_prefix(client, f"{temp_base}/")  # remove any objects left staged in the temp prefix
-        return version
 
     @staticmethod
     def _s3_filesystem() -> pafs.S3FileSystem:

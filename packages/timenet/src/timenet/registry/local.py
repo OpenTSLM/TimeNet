@@ -2,7 +2,9 @@
 
 from collections.abc import Callable, Mapping
 from pathlib import Path
+import shutil
 from typing import BinaryIO
+import uuid
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
@@ -16,6 +18,7 @@ from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
 from timenet.types.references import DatasetRef, is_latest
 from timenet.writer import TimeFWriter, WriteProgressEvent
+from timenet.writer.writer import publish_directory
 
 
 class LocalRegistry(WritableRegistry):
@@ -188,6 +191,40 @@ class LocalRegistry(WritableRegistry):
         ) as writer:
             writer.write()
         return version
+
+    def put_release(self, directory: Path, manifest: Manifest) -> None:
+        """Copy a complete local release directory into this registry's directory tree.
+
+        Before it copies anything, this method makes sure that ``directory`` holds a ``manifest.json``
+        equal to ``manifest`` and every file that the manifest declares, with its recorded size. It
+        copies only those files and ``manifest.json`` to a sibling ``<version>.tmp-*`` directory, and
+        then publishes it with a single rename, as the writer does. An existing copy of the version is
+        renamed aside first and removed after the rename. If the rename fails, the old copy moves back.
+
+        Args:
+            directory: The local release directory, with ``manifest.json`` and every declared file.
+            manifest: The manifest of the release.
+
+        Raises:
+            TimeNetFileError: If ``manifest.json`` is missing from ``directory`` or differs from
+                ``manifest``, or a declared file is missing or has another size than recorded.
+                Nothing is published then.
+            OSError: If the copy or the rename fails. The old copy of the version stays in place,
+                or the error names the ``<version>.old-<uuid>`` directory that holds it.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the check and by publish_directory
+        self._check_release_files(directory, manifest)
+        reference = DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
+        final = release_dir(self._root, reference)
+        final.parent.mkdir(parents=True, exist_ok=True)
+        staging = final.with_name(f"{final.name}.tmp-{uuid.uuid4().hex}")
+        try:
+            for relpath in (*sorted({part.path for part in manifest.files.all_files()}), MANIFEST_FILE):
+                target = staging / relpath
+                target.parent.mkdir(parents=True, exist_ok=True)
+                shutil.copy2(directory / relpath, target)
+            publish_directory(staging, final)
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
 
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
         """Open a committed version as a local, random-access handle.
