@@ -13,6 +13,7 @@ from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._fields import ValueField
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import EntityId, assigned_id
+from timenet.types.label_sets import LabelSet
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
@@ -355,15 +356,57 @@ class Task(SupportsAnnotate):
     def check_against_scope(self) -> None:
         """Validate configuration that depends on the finalized scope."""
 
+    def check_targets(self) -> None:
+        """Make sure that the finished targets fit the configuration of the concrete task class."""
+
 
 @final
 @dataclass(kw_only=True)
 class ClassificationTask(Task):
-    """Classify the inputs, optionally using a named label vocabulary."""
+    """Classify the inputs, optionally against a closed set of labels."""
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
+    label_set: LabelSet | None = None
+    """Optional set of labels that the target takes, and how many of them. With ``None``, TimeNet does
+    not examine the labels."""
     target_schema: str | None = None
-    """Optional name of the label vocabulary."""
+    """Deprecated: the name of the label vocabulary. Use ``label_set``, which also holds the labels."""
+
+    def __post_init__(self) -> None:
+        """Normalize the common fields and make sure that the label set has the right type.
+
+        Raises:
+            TimeFValidationError: If ``label_set`` is neither a LabelSet nor ``None``.
+        """
+        super().__post_init__()
+        if self.label_set is not None and not isinstance(self.label_set, LabelSet):
+            raise TimeFValidationError(
+                f"ClassificationTask label_set must be a LabelSet or None, got {type(self.label_set).__name__}"
+            )
+
+    def check_targets(self) -> None:
+        """Make sure that the target fits the label set.
+
+        The labels are the inline targets or the values of the target annotations. Each label must
+        be text. This method does not examine a task that has no label set. A dataset calls it
+        when it adds or streams the task, after the targets are final.
+
+        Raises:
+            TimeFValidationError: If a label is not text, or the labels do not fit the label set.
+        """
+        if self.label_set is None:
+            return
+        name = f"ClassificationTask {self.id!r}"
+        values = self.targets if self.targets is not None else [one.value for one in self.target_annotations]
+        labels: list[str] = []
+        for value in values:
+            if not isinstance(value, TextHandle):
+                raise TimeFValidationError(
+                    f"{name} has label set {self.label_set.name!r}, so each label must be text, "
+                    f"not {type(value).__name__}"
+                )
+            labels.append(value.read())
+        self.label_set.check_targets(labels, name)
 
 
 @final

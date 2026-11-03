@@ -23,6 +23,8 @@ from timenet.types import (
     ClassificationTask,
     EntityId,
     InputModality,
+    LabelMode,
+    LabelSet,
     LocalizationMode,
     ObjectKind,
     ScalarPredictionTask,
@@ -58,7 +60,8 @@ ANNOTATION_FIELDS = frozenset({TaskRelationshipField.INPUT_ANNOTATIONS, TaskRela
 
 
 PAYLOAD_COLUMNS = ("target_schema", "unit", "target_name", "mode")
-"""The ``tasks`` columns that hold subclass-specific configuration. Unused ones are NULL."""
+"""The ``tasks`` columns that hold subclass-specific configuration. Unused ones are NULL. A
+classification task names its label set in ``label_sets`` with ``tasks.label_set_id``."""
 
 
 def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality]:
@@ -202,6 +205,38 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
     if task_type is TaskType.TEMPORAL_LOCALIZATION:
         return {"mode": LocalizationMode(columns.get("mode") or LocalizationMode.SPARSE)}
     return {}
+
+
+def encode_label_set(label_set: LabelSet, label_set_id: int) -> dict[str, object]:
+    """Encode a label set as one ``label_sets`` row.
+
+    Returns:
+        The row, with one description per label, ``None`` where a label has none.
+    """
+    return {
+        "label_set_id": label_set_id,
+        "name": label_set.name,
+        "labels": list(label_set.labels),
+        "label_descriptions": list(label_set.label_descriptions),
+        "mode": str(label_set.mode),
+    }
+
+
+def decode_label_set(name: str, labels: list[str], label_descriptions: list[str | None], mode: str) -> LabelSet:
+    """Decode one ``label_sets`` row.
+
+    Returns:
+        The label set.
+
+    Raises:
+        TimeFFormatError: If the row does not hold a valid label set.
+    """
+    try:
+        return LabelSet(
+            name=name, labels=tuple(labels), label_descriptions=tuple(label_descriptions), mode=LabelMode(mode)
+        )
+    except ValueError as exc:
+        raise TimeFFormatError(f"the stored label set {name!r} is not valid: {exc}") from exc
 
 
 def decode_target(  # ruff: ignore[too-many-return-statements] - each target kind has one direct decoding branch

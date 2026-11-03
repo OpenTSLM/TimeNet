@@ -56,6 +56,7 @@ Signals can reference the same immutable `TimeAxis`.
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
 | `axes` | Regular, irregular, and ordinal axis definitions. |
 | `external_values` | Locations of large text, string lists, and irregular time offsets. |
+| `label_sets` | The label sets of classification tasks, one row per set. |
 | `tasks` | Concrete task type, typed scope columns, and subclass configuration columns. |
 | `task_targets` | Ordered inline targets, one typed row each. |
 | `task_record_refs` | Ordered task-to-record object relationships. |
@@ -153,7 +154,7 @@ content once: its key (`name`), unit, description, metadata, and value. The dedi
 column is separate from metadata, which can contain its own `description` key. The value sits in
 one typed column selected by `value_kind`: `text_value`, `integer_value`, `float_value`,
 `boolean_value`, or `text_list_value`
-for a list of strings such as a target vocabulary. A marker annotation, which only places a span,
+for a list of strings such as the subject IDs of a record. A marker annotation, which only places a span,
 has `NULL` in all of them. `annotation_occurrences` says where the content applies. It points at
 the content through `content_id`. It also carries the span as `span_type`, `start_us`, and
 `end_us`, plus provenance, confidence, and occurrence metadata.
@@ -175,6 +176,11 @@ its own `occurrence_id` and temporal placement.
 Python subclass. Four typed columns store the scope: `scope_type`, `scope_start`, `scope_end`, and
 `scope_signal_ids`. Subclass configuration uses one nullable column per field (`target_schema`,
 `unit`, `target_name`, `mode`). With these columns, SQL can filter tasks without parsing JSON.
+
+A classification task names its label set with `label_set_id`. Each set is one `label_sets` row:
+`name`, `labels`, `label_descriptions` and `mode`. `label_descriptions` holds one entry per label, in
+label order, and `NULL` where a label has no description. The writer numbers the sets from 1 each
+time that it writes a release, and `name` is unique within the release.
 
 Each inline target is one row in `task_targets`. Its `target_kind` names the typed value column
 that is set. A target stores public IDs directly: `record_id` for a Record, `signal_id` for a

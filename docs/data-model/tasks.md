@@ -12,12 +12,14 @@ A Task describes one modeling problem. It holds ordered input Records and one re
 expected output.
 
 ```python
-from timenet.types import ClassificationTask
+from timenet.types import ClassificationTask, LabelSet
+
+CONDITION = LabelSet(name="condition", labels=("healthy", "faulty"))
 
 task = ClassificationTask(
     inputs=(record,),
     targets=("faulty",),
-    target_schema="condition",
+    label_set=CONDITION,
 )
 dataset.add_task(task=task)
 ```
@@ -203,14 +205,41 @@ dataset.add_task(task=age_question(record, 64))
 ### Classification
 
 ```python
-ClassificationTask(
-    inputs=(record,),
-    targets=("healthy",),
-    target_schema="condition",
+from timenet.types import LabelMode, LabelSet
+
+CONDITION = LabelSet(
+    name="condition",
+    labels=("healthy", "faulty"),
+    label_descriptions={"faulty": "A bearing fault."},
 )
+FINDINGS = LabelSet(
+    name="findings",
+    labels=("AF", "PVC", "LBBB"),
+    mode=LabelMode.MULTI,
+)
+
+ClassificationTask(inputs=(record,), targets=("healthy",), label_set=CONDITION)
+ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS)
 ```
 
-`target_schema` can name a dataset-level Annotation that holds the label vocabulary.
+A `LabelSet` is the closed set of labels that a classification target takes. Its `mode` says how
+many of them a target holds:
+
+- `LabelMode.SINGLE`, the default: exactly one label.
+- `LabelMode.MULTI`: every label that applies, and only those. A label left out does not apply, so
+  an empty target says that none applies. The order of the labels has no meaning.
+
+`add_task()` and a task stream make sure that each target fits its label set. Every label must be in
+the set, no label can repeat, and a single-label target must hold exactly one label. The labels are
+the inline targets or the text of the target annotations. TimeNet does not examine the labels of a
+task that has no label set.
+
+Tasks that ask the same kind of question share one label set. Within a dataset, a name stands for
+one set. If two different sets have the same name, the writer stops with an error. TimeF stores
+each set once, and the reader gives every task that uses the set the same object.
+
+Do not use `target_schema`, the name of a vocabulary without its labels. A later release removes
+it. Use `label_set`.
 
 ### Answer and rationale
 

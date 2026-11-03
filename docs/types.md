@@ -218,7 +218,8 @@ The main string enums are:
 - `License` for supported SPDX-style identifiers;
 - `Access` for open, credentialed, and restricted data;
 - `TaskType` for the built-in task classes;
-- `LocalizationMode` for sparse or exhaustive temporal localization.
+- `LocalizationMode` for sparse or exhaustive temporal localization;
+- `LabelMode` for single-label or multi-label classification.
 
 They are `StrEnum` values and compare equal to their stored string values.
 

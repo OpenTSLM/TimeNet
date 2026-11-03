@@ -143,7 +143,7 @@ So the type only says what *kind* of answer it is.
 
 | Task | Answer | Extra payload |
 | --- | --- | --- |
-| `ClassificationTask` | `target: str` (a label) | optional `target_schema` |
+| `ClassificationTask` | `target: str` (a label) | optional `label_set`: a `LabelSet` with the allowed labels, their meanings, and a single- or multi-label mode. Do not use the deprecated `target_schema`. |
 | `AnswerTask` | `targets: tuple[str, ...]` (free text, which is a caption when there is no `prompt`) | — |
 | `ScalarPredictionTask` | `target: float` | optional `unit`, `target_name` |
 | `TemporalLocalizationTask` | `target: tuple[Span, ...]` | `mode` (`SPARSE` / `EXHAUSTIVE`) |

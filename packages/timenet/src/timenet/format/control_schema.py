@@ -271,6 +271,22 @@ ANNOTATION_OCCURRENCES = Table(
 or Task, or the storage id of a Source. Ids are unique only within one kind, so the type is part of
 the reference. ``object_id`` is NULL exactly when the owner is the Dataset."""
 
+LABEL_SETS = Table(
+    "label_sets",
+    (
+        _required("label_set_id", ColumnType.BIGINT),
+        _required("name"),
+        _required("labels", ColumnType.VARCHAR_LIST),
+        _required("label_descriptions", ColumnType.VARCHAR_LIST),
+        _required("mode"),
+    ),
+    unique=(("label_set_id",), ("name",)),
+)
+"""The table stores each label set that a classification task uses, one row per set.
+``label_descriptions`` holds one entry per label, in label order, NULL where a label has no
+description. The writer numbers the sets from 1 each time that it writes a release, and tasks refer
+to them by ``tasks.label_set_id``."""
+
 TASKS = Table(
     "tasks",
     (
@@ -285,6 +301,7 @@ TASKS = Table(
         Column("scope_signal_ids", ColumnType.BIGINT_LIST),
         _required("has_inline_targets", ColumnType.BOOLEAN),
         Column("target_schema", ColumnType.VARCHAR),
+        Column("label_set_id", ColumnType.BIGINT),
         Column("unit", ColumnType.VARCHAR),
         Column("target_name", ColumnType.VARCHAR),
         Column("mode", ColumnType.VARCHAR),
@@ -292,7 +309,10 @@ TASKS = Table(
         _required("metadata", ColumnType.JSON),
     ),
     unique=(("task_id",),),
-    foreign_keys=(ForeignKey("scope_signal_ids", "signals", "signal_id", many=True),),
+    foreign_keys=(
+        ForeignKey("scope_signal_ids", "signals", "signal_id", many=True),
+        ForeignKey("label_set_id", "label_sets", "label_set_id"),
+    ),
 )
 
 TASK_TARGETS = Table(
@@ -414,6 +434,7 @@ CONTROL_TABLES: tuple[Table, ...] = (
     SIGNAL_CHUNKS,
     ANNOTATION_CONTENTS,
     ANNOTATION_OCCURRENCES,
+    LABEL_SETS,
     TASKS,
     TASK_TARGETS,
     TASK_RECORD_REFS,

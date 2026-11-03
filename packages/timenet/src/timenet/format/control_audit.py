@@ -24,7 +24,7 @@ from timenet.format.duckdb import check_control_schema
 from timenet.format.stored_values import PackedField, PackedValueKind
 from timenet.format.task_codec import ANNOTATION_FIELDS, RECORD_FIELDS, TaskRelationshipField
 from timenet.format.task_target_kind import SPAN_KINDS, TaskTargetKind
-from timenet.types import ObjectKind
+from timenet.types import LabelMode, ObjectKind, TaskType
 
 
 def _sql_in(values: Iterable[str]) -> str:
@@ -35,6 +35,7 @@ _TARGET_KINDS = _sql_in(TaskTargetKind)
 _ANNOTATION_VALUE_KINDS = _sql_in(AnnotationValueKind)
 _TIME_TARGET_KINDS = _sql_in((TaskTargetKind.TIME_POINT, TaskTargetKind.TIME_INTERVAL))
 _SPAN_KINDS = _sql_in(SPAN_KINDS)
+_LABEL_MODES = _sql_in(LabelMode)
 _RECORD_FIELDS = _sql_in(RECORD_FIELDS)
 _ANNOTATION_FIELDS = _sql_in(ANNOTATION_FIELDS)
 _OBJECT_TYPES_SQL = _sql_in(ANNOTATED_OBJECT_TYPES)
@@ -55,6 +56,7 @@ _ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
     ("signals", "signal_id"),
     ("annotation_contents", "content_id"),
     ("annotation_occurrences", "occurrence_id"),
+    ("label_sets", "label_set_id"),
     ("tasks", "task_id"),
 )
 """The primary id column of each entity table."""
@@ -105,9 +107,54 @@ _DOMAIN_CHECKS = f"""
     SELECT 'tasks.scope_type' FROM tasks
     WHERE scope_type NOT IN ({_SPAN_KINDS})
     UNION ALL
+    SELECT 'label_sets.mode' FROM label_sets
+    WHERE mode NOT IN ({_LABEL_MODES})
+    UNION ALL
+    SELECT 'label_sets.label_descriptions' FROM label_sets
+    WHERE len(label_descriptions) <> len(labels)
+    UNION ALL
+    SELECT 'label_sets.labels' FROM label_sets
+    WHERE len(labels) = 0 OR len(list_distinct(labels)) <> len(labels) OR list_contains(labels, '')
+    UNION ALL
+    SELECT 'tasks.label_set_id' FROM tasks
+    WHERE label_set_id IS NOT NULL AND task_type <> '{TaskType.CLASSIFICATION}'
+    UNION ALL
     {_ENTITY_ID_CHECKS}
     LIMIT 1
 """  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values and fixed table names
+
+_LABELLED_TARGETS = f"""
+    WITH labelled AS (
+        SELECT t.task_id, s.labels, s.mode FROM tasks t JOIN label_sets s USING (label_set_id)
+    ),
+    targets AS (
+        SELECT x.task_id, x.target_kind AS kind, x.text_value AS label,
+               EXISTS (SELECT 1 FROM external_values e
+                       WHERE e.object_kind = '{ObjectKind.TASK}' AND e.object_id = x.task_id
+                         AND e.field = '{PackedField.TARGETS}' AND e.position = x.position) AS packed
+        FROM task_targets x JOIN labelled USING (task_id)
+        UNION ALL
+        SELECT r.task_id, c.value_kind, c.text_value,
+               EXISTS (SELECT 1 FROM external_values e
+                       WHERE e.object_kind = '{ObjectKind.ANNOTATION_CONTENT}' AND e.object_id = c.content_id
+                         AND e.field = '{PackedField.VALUE}')
+        FROM task_annotation_refs r
+        JOIN labelled USING (task_id)
+        JOIN annotation_occurrences o USING (occurrence_id)
+        JOIN annotation_contents c USING (content_id)
+        WHERE r.field = '{TaskRelationshipField.TARGET_ANNOTATIONS}'
+    )
+    SELECT l.task_id FROM labelled l
+    WHERE EXISTS (SELECT 1 FROM targets x
+                  WHERE x.task_id = l.task_id
+                    AND (x.kind IS DISTINCT FROM 'text' OR (NOT x.packed AND NOT list_contains(l.labels, x.label))))
+       OR (l.mode = '{LabelMode.SINGLE}' AND (SELECT count(*) FROM targets x WHERE x.task_id = l.task_id) <> 1)
+       OR EXISTS (SELECT 1 FROM targets x WHERE x.task_id = l.task_id AND NOT x.packed
+                  GROUP BY x.label HAVING count(*) > 1)
+    LIMIT 1
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
+"""The query finds the classification tasks whose stored labels do not fit their label set. The audit
+does not compare a packed label, because the catalog holds only its placeholder."""
 
 _OWNERLESS = {
     object_type: (
@@ -258,8 +305,8 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
 
     Raises:
         TimeFFormatError: If a key is repeated, a relationship dangles, a value is outside its
-            domain, the Source tree is not a forest of per-Record trees, or an axis or chunk length
-            disagrees with its Signal.
+            domain, the Source tree is not a forest of per-Record trees, an axis or chunk length
+            disagrees with its Signal, or the labels of a classification task do not fit its label set.
     """
     for table in CONTROL_TABLES:
         _audit_unique_keys(connection, table)
@@ -302,6 +349,10 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
 
     _audit_external_values(connection)
     _audit_imported_objects(connection)
+
+    misfit = connection.execute(_LABELLED_TARGETS).fetchone()
+    if misfit is not None:
+        raise TimeFFormatError(f"classification task {misfit[0]!r} has labels that do not fit its label set")
 
     invalid_clock_scope = connection.execute(_TASK_RECORD_SCOPE).fetchone()
     if invalid_clock_scope is not None:
