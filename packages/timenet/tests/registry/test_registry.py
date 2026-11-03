@@ -4,6 +4,7 @@ from pydantic import ValidationError
 import pytest
 
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import (
     TIMENET_REGISTRY_URL,
@@ -287,6 +288,68 @@ def test_a_failed_forced_store_keeps_the_committed_release(tmp_path, monkeypatch
         registry.store(make_dataset(), force=True)
     assert (version_dir / "manifest.json").read_bytes() == before
     assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]
+
+
+def _release_directory(root: Path, *, annotation: str | None = None) -> tuple[Path, Manifest]:
+    """Store timenet/hello-world 1.0.0 under ``root``; return its directory and manifest."""
+    dataset = make_dataset()
+    if annotation is not None:
+        dataset.records[0].annotate(Annotation(key=annotation, value=1))
+    source = LocalRegistry(root)
+    source.store(dataset)
+    return root / "timenet/hello-world/1.0.0", source.get_manifest("timenet/hello-world", "1.0.0")
+
+
+def test_put_release_replaces_a_committed_copy(tmp_path):
+    registry = LocalRegistry(tmp_path / "reg")
+    registry.put_release(*_release_directory(tmp_path / "first"))
+    directory, manifest = _release_directory(tmp_path / "second", annotation="replaced")
+    registry.put_release(directory, manifest)
+    # A fresh registry, so that no cached manifest of the first copy answers.
+    assert LocalRegistry(registry.root).get_manifest("timenet/hello-world", "1.0.0") == manifest
+    version_dir = registry.root / "timenet/hello-world/1.0.0"
+    assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]  # no .tmp-* or .old-* left
+
+
+def test_a_put_release_stopped_during_the_rename_moves_the_old_copy_back(tmp_path, monkeypatch):
+    registry = LocalRegistry(tmp_path / "reg")
+    registry.put_release(*_release_directory(tmp_path / "first"))
+    version_dir = registry.root / "timenet/hello-world/1.0.0"
+    before = (version_dir / "manifest.json").read_bytes()
+    directory, manifest = _release_directory(tmp_path / "second", annotation="replaced")
+    rename = Path.replace
+
+    def replace(self, target):
+        if ".tmp-" in self.name:
+            raise KeyboardInterrupt
+        return rename(self, target)
+
+    monkeypatch.setattr(Path, "replace", replace)
+    with pytest.raises(KeyboardInterrupt):
+        registry.put_release(directory, manifest)
+    assert (version_dir / "manifest.json").read_bytes() == before
+    assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]
+
+
+def test_a_put_release_that_cannot_restore_the_old_copy_names_where_it_is(tmp_path, monkeypatch):
+    registry = LocalRegistry(tmp_path / "reg")
+    registry.put_release(*_release_directory(tmp_path / "first"))
+    version_dir = registry.root / "timenet/hello-world/1.0.0"
+    before = (version_dir / "manifest.json").read_bytes()
+    directory, manifest = _release_directory(tmp_path / "second", annotation="replaced")
+    rename = Path.replace
+
+    def replace(self, target):
+        if ".tmp-" in self.name or ".old-" in self.name:
+            raise OSError("rename failed")
+        return rename(self, target)
+
+    monkeypatch.setattr(Path, "replace", replace)
+    with pytest.raises(OSError, match=r"it is in .*/1\.0\.0\.old-[0-9a-f]+, so rename that to") as raised:
+        registry.put_release(directory, manifest)
+    (old,) = version_dir.parent.glob("1.0.0.old-*")
+    assert str(old) in str(raised.value)
+    assert (old / "manifest.json").read_bytes() == before
 
 
 # ---- s3 catalog -------------------------------------------------------------------------------

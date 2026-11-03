@@ -246,32 +246,14 @@ class TimeFWriter:
                 write as pinned. Nothing is published.
             OSError: If publishing fails and the old release cannot be moved back either. The
                 error names the ``<version>.old-<uuid>`` directory that holds it.
-        """  # ruff: ignore[docstring-extraneous-exception] - _check_pinned_by raises TimeFFormatError
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_pinned_by and publish_directory
         if not self._written:
             raise RuntimeError("write() must run successfully before close()")
         self._check_pinned_by(self._write_manifest())
         self._final_dir.parent.mkdir(parents=True, exist_ok=True)
-        old = None
-        if self._final_dir.exists():
-            # A committed version reaches here only with replace=True, which LocalRegistry.store()
-            # and run_pipeline() pass for force. Otherwise the caller pre-created the directory.
-            old = self._final_dir.with_name(f"{self._final_dir.name}.old-{uuid.uuid4().hex}")
-            self._final_dir.replace(old)
-        try:
-            self._staging_dir.replace(self._final_dir)
-        except BaseException as error:
-            if old is not None:
-                try:
-                    old.replace(self._final_dir)
-                except OSError as restore_error:
-                    raise OSError(
-                        f"could not publish {self._final_dir} ({error}) or move the old release back "
-                        f"({restore_error}); it is in {old}, so rename that to {self._final_dir} to recover it"
-                    ) from error
-            raise
-        if old is not None:
-            # The new release is published, so failing to delete the old one must not fail the write.
-            shutil.rmtree(old, ignore_errors=True)
+        # A committed version can be in place only with replace=True, which LocalRegistry.store() and
+        # run_pipeline() pass for force. Otherwise the caller pre-created the directory.
+        publish_directory(self._staging_dir, self._final_dir)
         self._emit(ProgressStage.COMMIT, 1, 1)
 
     def abort(self) -> None:
@@ -552,3 +534,40 @@ class TimeFWriter:
     def _emit(self, stage: ProgressStage, completed: int, total: int | None) -> None:
         if self._progress_cb is not None:
             self._progress_cb(WriteProgressEvent(stage=stage, completed=completed, total=total))
+
+
+def publish_directory(staging: Path, final: Path) -> None:
+    """Move a complete staging directory into place with a rename, and keep an old copy until it succeeds.
+
+    An existing ``final`` directory is renamed aside to a sibling ``<name>.old-<uuid>`` first. The
+    staging directory then takes its place, and the old directory is deleted. If that rename fails
+    or is stopped, the old directory moves back. A hard kill between the two renames leaves the old
+    directory in ``<name>.old-<uuid>``, which no sweep deletes, so it can be renamed back.
+
+    Args:
+        staging: The complete new directory, a sibling of ``final``.
+        final: The directory to publish to. Its parent must exist.
+
+    Raises:
+        OSError: If publishing fails and the old directory cannot be moved back either. The error
+            names the ``<name>.old-<uuid>`` directory that holds it.
+    """
+    old = None
+    if final.exists():
+        old = final.with_name(f"{final.name}.old-{uuid.uuid4().hex}")
+        final.replace(old)
+    try:
+        staging.replace(final)
+    except BaseException as error:
+        if old is not None:
+            try:
+                old.replace(final)
+            except OSError as restore_error:
+                raise OSError(
+                    f"could not publish {final} ({error}) or move the old release back "
+                    f"({restore_error}); it is in {old}, so rename that to {final} to recover it"
+                ) from error
+        raise
+    if old is not None:
+        # The new directory is published, so failing to delete the old one must not fail the publish.
+        shutil.rmtree(old, ignore_errors=True)
