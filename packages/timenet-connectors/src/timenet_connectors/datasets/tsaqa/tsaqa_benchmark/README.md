@@ -2,7 +2,7 @@
 
 TSAQA, the Time Series Analysis Question Answering benchmark of Jing et al.
 ([arXiv:2601.23204](https://arxiv.org/abs/2601.23204), v2). It has 210,000 closed questions about
-z-score normalized series from 13 domains. They span six tasks and three question formats. The
+series from 13 domains. They span six tasks and three question formats. The
 connector reads the Hugging Face release `TSAQA/TSAQA-Benchmark` at commit `883dcb0f`.
 
 ## The source data
@@ -78,13 +78,35 @@ changes. Its spec says what the values are:
 
 | Spec | Signals | Values |
 | --- | --- | --- |
-| `tsaqa_series` | 435,051 | A normalized series, or a patch of one |
+| `tsaqa_series` | 435,051 | A series as published, or a patch of one. [Not every one is z-scored](#normalization) |
 | `tsaqa_fourier_transform` | 25,268 | A Fourier transform question's choices or sequence |
 | `tsaqa_wavelet_transform` | 24,871 | A wavelet transform question's choices or sequence |
 | `tsaqa_first_order_difference` | 24,903 | A first-order difference question's choices or sequence |
 
 A Record's metadata names its row and role: the `file`, the `row`
 counted from 0, and the `role`. Metadata is provenance and never model input.
+
+#### Normalization
+
+The paper says every series is z-score normalized. The spec does not say so, because the published
+input series do not all follow it. A series counts as z-scored here when its mean is within 0.01 of
+0 and its standard deviation is within 0.01 of 1. A flat series has a standard deviation of 0.
+
+| Task | Input series | Z-scored | Flat |
+| --- | --- | --- | --- |
+| Classification | 30,000 | 30,000 | 0 |
+| Characterization | 30,000 | 29,080 | 548 |
+| Comparison | 60,000 | 58,119 | 1,193 |
+| Data transformation | 30,000 | 28,976 | 622 |
+| Anomaly detection | 30,000 | 21 | 1,463 |
+| Temporal relationship | 60,000 | 344 | 1,460 |
+
+- **Anomaly detection and temporal relationship.** Almost no input is z-scored on its own. Each may
+  have been normalized before it was cut from a longer series. The release does not say.
+- **Printed series.** The series a question prints are not z-scored either. Only 194 of the 75,042
+  data transformation candidates and 218 of the 195,051 temporal relationship series are. That is
+  expected for a transform. For a patch, the release does not say how it was scaled.
+- The values are kept as published. No value is rescaled.
 
 **`raw_ts` is not read.** It holds each series before normalization: in every row but 3 anomaly
 detection rows and the flat ones, `raw_ts[0]` maps onto the input by one scale and offset. Neither

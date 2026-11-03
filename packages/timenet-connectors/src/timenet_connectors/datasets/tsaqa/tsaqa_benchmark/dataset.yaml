@@ -5,7 +5,7 @@ dataset_version: 1.0.0
 name: TSAQA
 description: >-
   Time series analysis question answering: 210,000 closed questions about
-  z-score normalized series from 13 domains (147,000 train, 21,000
+  series from 13 domains (147,000 train, 21,000
   validation, 42,000 test), across six tasks: anomaly detection,
   classification, characterization, comparison, data transformation and
   temporal relationship. True-or-false questions are classification tasks;

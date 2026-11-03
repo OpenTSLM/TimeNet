@@ -162,9 +162,7 @@ _TRANSFORMS = {
 }
 _TRANSFORM = re.compile(rf"the ({'|'.join(_TRANSFORMS)}) of the given time series")
 _AXIS = OrdinalAxis()
-_SERIES_SPEC = TimeSeriesSpec(
-    spec_type="tsaqa_series", name="TSAQA z-score normalized series", unit_value=None, dtype="float64"
-)
+_SERIES_SPEC = TimeSeriesSpec(spec_type="tsaqa_series", name="TSAQA series", unit_value=None, dtype="float64")
 _TRANSFORM_SPECS = {
     transform: TimeSeriesSpec(spec_type=spec_type, name=f"{label} of a TSAQA series", unit_value=None, dtype="float64")
     for transform, (spec_type, label) in _TRANSFORMS.items()
