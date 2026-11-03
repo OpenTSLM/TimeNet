@@ -37,8 +37,36 @@ class StepFinished:
     action: Literal["copy", "build"]
 
 
-ProgressEvent = StepStarted | StepFinished
-"""An event that marks the start or successful end of a copy or build."""
+@dataclass(frozen=True)
+class BytesMoved:
+    """Bytes of a transfer moved.
+
+    Attributes:
+        url: Where the bytes come from or go to.
+        done: The number of bytes moved so far.
+        total: The number of bytes of the whole transfer, or ``None`` if it is not known.
+    """
+
+    url: str
+    done: int
+    total: int | None
+
+
+@dataclass(frozen=True)
+class ShardWritten:
+    """A build wrote shards of a release.
+
+    Attributes:
+        release: The release that the build writes.
+        count: The number of shards written so far.
+    """
+
+    release: DatasetRef
+    count: int
+
+
+ProgressEvent = StepStarted | StepFinished | BytesMoved | ShardWritten
+"""One progress event."""
 
 ProgressCallback = Callable[[ProgressEvent], None]
 """A callback that receives a progress event and returns nothing."""

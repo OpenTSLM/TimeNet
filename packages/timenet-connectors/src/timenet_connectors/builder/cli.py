@@ -6,8 +6,9 @@ time. To add one, drop a ``datasets/<org>/<name>/`` package with a ``connector.p
 ``CONNECTOR`` and a ``dataset.yaml`` card. You do not register it here.
 """
 
-from collections.abc import Generator, Mapping
+from collections.abc import Callable, Generator, Mapping
 from contextlib import contextmanager, nullcontext
+from functools import partial
 import json
 from pathlib import Path
 import sys
@@ -23,7 +24,7 @@ from rich.progress import (
 )
 import typer
 
-from timenet.builders import BuilderBackend, declared, find_card, installed_builder
+from timenet.builders import BuilderBackend, BuildOptions, declared, find_card, installed_builder
 from timenet.cache import human_bytes
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console
@@ -38,6 +39,7 @@ from timenet.errors import (
     TimeNetRegistryError,
 )
 from timenet.manifest import PayloadSource
+from timenet.progress import BytesMoved, ProgressEvent, ShardWritten, StepFinished, StepStarted
 from timenet.registry import (
     BaseRegistry,
     LocalRegistry,
@@ -184,6 +186,36 @@ def build(
         error.hint = "A remote --out holds open releases only. Build it into a local --out instead."
         raise
     typer.echo(result)
+
+
+@app.command("build-release", hidden=True)
+def build_release_command(
+    release: str,
+    store: Path = typer.Option(..., "--store", help="The local registry to build into."),
+    force: bool = typer.Option(False, "--force", help="Build the release again, even if the local registry holds it."),
+    keep_cache: bool = typer.Option(False, "--keep-cache", help="Keep the raw download cache after building."),
+    pinned_by: Path | None = typer.Option(
+        None, "--pinned-by", help="A JSON file of the releases that read files of this release, with their pins."
+    ),
+) -> None:
+    """Build exactly one release into a local store that holds its parents and payload sources.
+
+    An isolated build runs this command in the environment of the connector. The command does not
+    plan, because the parent process already put each parent and payload source into the store. It
+    prints the status lines and the progress of the build to stderr, and nothing to stdout.
+    """
+    # backend.py imports this module, so a module-level import here would be circular.
+    from timenet_connectors.builder.backend import ConnectorBuilder  # ruff: ignore[import-outside-top-level]
+
+    reference = DatasetRef.parse(release)
+    pins = {} if pinned_by is None else _read_pins(pinned_by)
+    with _renderer() as progress:
+        if progress is not None:
+            progress(StepStarted(reference, "build"))
+        options = BuildOptions(keep_cache=keep_cache, progress=progress)
+        ConnectorBuilder().build_prepared(reference, LocalRegistry(store), force=force, pinned_by=pins, options=options)
+        if progress is not None:
+            progress(StepFinished(reference, "build"))
 
 
 def build_one(  # ruff: ignore[too-many-arguments]
@@ -433,7 +465,54 @@ def _download_progress() -> Generator[Progress | None]:
         with progress_sink(_text_download_reporter()):
             yield None
         return
-    progress = Progress(
+    progress = _download_bars()
+    with progress, progress_sink(_bar_reporter(progress)):
+        yield progress
+
+
+@contextmanager
+def _renderer() -> Generator[Callable[[ProgressEvent], None] | None]:
+    """Show the progress events of a build on the console.
+
+    Downloads show as live progress bars in an interactive terminal, else as throttled text lines.
+
+    Yields:
+        The callback that shows each event, or ``None`` if the console is quiet.
+    """
+    if console.quiet:
+        yield None
+        return
+    if not sys.stderr.isatty():
+        yield partial(_render, _text_download_reporter())
+        return
+    with _download_bars() as progress:
+        yield partial(_render, _bar_reporter(progress))
+
+
+def _render(report_download: ProgressCallback, event: ProgressEvent) -> None:
+    """Show one progress event of a build on the console.
+
+    Args:
+        report_download: Shows the progress of one download.
+        event: The event to show.
+    """
+    if isinstance(event, BytesMoved):
+        report_download(DownloadProgress(event.url, event.done, event.total))
+    elif isinstance(event, ShardWritten):
+        console.status("💾", f"wrote shard {event.count}")
+    elif isinstance(event, StepStarted) and event.action == "build":
+        console.status("🔧", f"Building '{event.release.dataset_id}'…")
+    elif isinstance(event, StepFinished) and event.action == "build":
+        console.success(f"Built '{event.release.dataset_id}' → {event.release.version}")
+
+
+def _download_bars() -> Progress:
+    """Make the live display that shows each download as a progress bar.
+
+    Returns:
+        The display. It shows only inside a ``with`` block.
+    """
+    return Progress(
         TextColumn("[bold blue]{task.fields[name]}", justify="right"),
         BarColumn(bar_width=None),
         "[progress.percentage]{task.percentage:>3.1f}%",
@@ -445,8 +524,6 @@ def _download_progress() -> Generator[Progress | None]:
         TimeRemainingColumn(),
         console=console.rich,
     )
-    with progress, progress_sink(_bar_reporter(progress)):
-        yield progress
 
 
 def _bar_reporter(progress: Progress) -> ProgressCallback:

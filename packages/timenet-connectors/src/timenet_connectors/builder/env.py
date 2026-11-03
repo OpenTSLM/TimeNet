@@ -2,7 +2,7 @@
 
 The parent resolves the connector's ``requirements.txt`` without importing the connector (see
 :func:`timenet_connectors.discovery.requirements_for`). It layers that over a base pinned to the
-parent's own ``timenet`` and ``timenet-connectors``, then runs ``timenet-build build`` in that
+parent's own ``timenet`` and ``timenet-connectors``, then runs ``timenet-build`` in that
 environment. uv owns resolution and caching. A repeat build with an unchanged requirement set is a
 cache hit.
 """
@@ -151,6 +151,55 @@ def run_isolated(  # ruff: ignore[too-many-arguments]
     if not lines:
         raise TimeNetBuildError(f"building {dataset_id!r} printed no version")
     return lines[-1]
+
+
+def run_isolated_build(  # ruff: ignore[too-many-arguments]
+    release: DatasetRef,
+    store_root: Path,
+    *,
+    force: bool = False,
+    keep_cache: bool = False,
+    quiet: bool = False,
+    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
+) -> None:
+    """Build one release into a local store, in the environment of its connector.
+
+    The child runs the hidden ``timenet-build build-release`` command. It builds only this release
+    and does not plan: each parent and payload source of the release must already be in the store.
+    The child's stderr is streamed live and also captured, so a failed build's message carries the
+    child's own error.
+
+    Args:
+        release: The exact dataset ID and version to build.
+        store_root: The directory of the local registry to build into.
+        force: Build the release again, even if the store already holds it.
+        keep_cache: Keep the raw download cache after building.
+        quiet: Suppress the child's status output.
+        pinned_by: The releases that already read files of this release, with their pins. The child
+            receives them in a file, and publishes the release only if it reproduces each pinned
+            file.
+
+    Raises:
+        TimeNetBuildError: If the child failed.
+        LookupError: If no connector exists for the dataset ID.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by env_spec, not directly here)
+    # --quiet belongs to timenet-build, not to build-release, so it goes before the subcommand.
+    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build-release", str(release)]
+    argv += ["--store", str(store_root), *(["--force"] if force else []), *(["--keep-cache"] if keep_cache else [])]
+    spec = env_spec(release.dataset_id)
+    # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
+    child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
+    with _pins_file(pinned_by) as pins:
+        if pins is not None:
+            argv += ["--pinned-by", str(pins)]
+        command = uv_command(spec, argv)
+        _, stderr, returncode = _run_build(command, child_env)
+    if returncode != 0:
+        tail = "\n".join(stderr.splitlines()[-15:]).strip()
+        detail = f"\n{tail}" if tail else " The child produced no error output."
+        raise TimeNetBuildError(
+            f"building {release} failed with exit code {returncode}. Command: {shlex.join(command)}.{detail}"
+        )
 
 
 @contextmanager

@@ -1,14 +1,23 @@
 """The build backend the SDK reaches through the ``timenet.builders`` entry point."""
 
 from collections.abc import Mapping
+from dataclasses import dataclass
 from pathlib import Path
 
+from timenet.builders import BuildOptions
+from timenet.config import settings
+from timenet.engine import run_pipeline
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
 from timenet.manifest import PayloadSource
-from timenet.registry import BaseRegistry
+from timenet.progress import BytesMoved, ProgressCallback, ShardWritten
+from timenet.registry import BaseRegistry, LocalRegistry
 from timenet.types import DatasetMetadata
 from timenet.types.references import DatasetRef
+from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.builder.cli import build_one
-from timenet_connectors.discovery import connector_dir, has_connector, known_ids
+from timenet_connectors.builder.env import run_isolated_build
+from timenet_connectors.discovery import connector_dir, has_connector, known_ids, resolve
+from timenet_connectors.download import DownloadProgress, progress_sink
 
 
 class ConnectorBuilder:
@@ -101,3 +110,118 @@ class ConnectorBuilder:
                 pinned_by=pinned_by,
             )
         )
+
+    def build_prepared(
+        self,
+        release: DatasetRef,
+        store: LocalRegistry,
+        *,
+        force: bool,
+        pinned_by: Mapping[DatasetRef, PayloadSource],
+        options: BuildOptions,
+    ) -> None:
+        """Build exactly this release into the store, in an isolated environment unless isolation is off.
+
+        Each parent of the release, and each payload source of such a parent, must already be in
+        ``store``, because this method does not plan. By default, the hidden ``timenet-build build-release`` command builds
+        the release in an environment built from the requirements of the connector. That child runs
+        with ``TIMENET_ISOLATION=off``, so it builds in its own interpreter and starts no other child.
+        ``TIMENET_ISOLATION=off`` builds in this interpreter, with the ``values_backend`` of the
+        connector.
+
+        Args:
+            release: The exact dataset ID and version to build.
+            store: The local registry to build into.
+            force: Build the release again, even if ``store`` already holds it.
+            pinned_by: The releases that already read files of this release, with their pins. The
+                build publishes the release only if it reproduces each pinned file.
+            options: The options of the build. An in-process build sends a
+                :class:`~timenet.progress.BytesMoved` event for the downloads and a
+                :class:`~timenet.progress.ShardWritten` event for each finished shard to
+                ``options.progress``. An isolated child prints its own progress, unless
+                ``options.progress`` is ``None``.
+
+        Raises:
+            TimeNetDatasetNotFoundError: If no connector exists for the dataset.
+            TimeFValidationError: If the card of the connector declares another version than
+                ``release``. Nothing runs then.
+            TimeNetBuildError: If the isolated child fails.
+        """  # ruff: ignore[docstring-extraneous-exception] - TimeNetBuildError is raised by run_isolated_build
+        card = self.card(release.dataset_id)
+        if card is None:
+            raise TimeNetDatasetNotFoundError(f"no connector builds {release.dataset_id!r}")
+        if card.dataset_version != release.version:
+            raise TimeFValidationError(
+                f"connector for {release.dataset_id!r} builds version {card.dataset_version}, "
+                f"not the requested {release.version}"
+            )
+        if settings().isolation == "on":
+            # Do not call resolve() here. It imports the connector, which needs the dependencies that
+            # only the environment of the child has.
+            run_isolated_build(
+                release,
+                store.root,
+                force=force,
+                keep_cache=options.keep_cache,
+                quiet=options.progress is None,
+                pinned_by=pinned_by,
+            )
+            return
+        _build_in_process(release, store.root, force=force, pinned_by=pinned_by, options=options)
+
+
+def _build_in_process(
+    release: DatasetRef,
+    root: Path,
+    *,
+    force: bool,
+    pinned_by: Mapping[DatasetRef, PayloadSource],
+    options: BuildOptions,
+) -> None:
+    """Build the release in this interpreter, with the ``values_backend`` of its connector.
+
+    Args:
+        release: The release to build. Its version is the version that the card declares.
+        root: The directory of the local registry to build into.
+        force: Build the release again, even if ``root`` already holds it.
+        pinned_by: The releases that already read files of this release, with their pins.
+        options: The options of the build.
+    """
+    connector = resolve(release.dataset_id)()
+    relay = None if options.progress is None else _ProgressRelay(release, options.progress)
+    # A connector reports its downloads through the ambient progress sink. Without a sink, a
+    # downloader skips the work that it does only to report progress.
+    with progress_sink(None if relay is None else relay.download):
+        run_pipeline(
+            connector,
+            root,
+            progress_cb=None if relay is None else relay.write,
+            force=force,
+            keep_cache=options.keep_cache,
+            pinned_by=pinned_by,
+        )
+
+
+@dataclass(frozen=True)
+class _ProgressRelay:
+    """Sends the download and writer progress of an in-process build as progress events of the build."""
+
+    release: DatasetRef
+    report: ProgressCallback
+
+    def download(self, event: DownloadProgress) -> None:
+        """Send the progress of a download as a :class:`~timenet.progress.BytesMoved` event.
+
+        Args:
+            event: The progress of the download.
+        """
+        self.report(BytesMoved(event.url, event.downloaded, event.total))
+
+    def write(self, event: WriteProgressEvent) -> None:
+        """Send each finished shard as a :class:`~timenet.progress.ShardWritten` event.
+
+        Args:
+            event: The progress of the writer.
+        """
+        if event.stage is ProgressStage.SHARD_FINALIZED:
+            self.report(ShardWritten(self.release, event.completed))
