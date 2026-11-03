@@ -16,8 +16,9 @@ from timenet.errors import (
     TimeNetMissingParentError,
     TimeNetRegistryError,
     TimeNetVersionConflictError,
+    TimeNetVersionUnavailableError,
 )
-from timenet.types import Access
+from timenet.types import Access, Version
 from timenet.types.access import AccessRequirement
 from timenet.types.references import DatasetRef
 
@@ -132,6 +133,11 @@ _PAGE_C = AccessRequirement(_C, Access.RESTRICTED, "https://c.example")
             "registry here already holds org/a@1.0.0, a payload source of org/b@2.0.0, with another card than "
             "registry there. A published version cannot change, so a changed release needs a new version.",
         ),
+        (
+            TimeNetVersionUnavailableError(_B, Version(1, 0, 0)),
+            {"release": _B, "declared": Version(1, 0, 0)},
+            "connector for 'org/b' builds version 1.0.0, not the requested 2.0.0.",
+        ),
     ],
 )
 def test_an_error_with_facts_ends_with_the_hint_of_its_front_end(error, facts, message):
@@ -142,3 +148,10 @@ def test_an_error_with_facts_ends_with_the_hint_of_its_front_end(error, facts, m
     assert {name: getattr(restored, name) for name in facts} == facts
     # The message ends with a period, and the hint follows as its own sentence.
     assert str(restored) == f"{message} Do this instead."
+
+
+def test_a_version_that_the_connector_does_not_build_is_not_found_and_invalid():
+    error = TimeNetVersionUnavailableError(_B, Version(1, 0, 0))
+    # The client reports a missing version, and a build reports invalid input. Both catch it.
+    assert isinstance(error, TimeNetDatasetNotFoundError)
+    assert isinstance(error, TimeFValidationError)

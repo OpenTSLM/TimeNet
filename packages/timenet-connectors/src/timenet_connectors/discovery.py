@@ -15,6 +15,7 @@ import pkgutil
 import yaml
 
 from timenet.connectors import BaseConnector
+from timenet.errors import TimeNetInvalidCardError
 import timenet_connectors.datasets as _datasets
 
 
@@ -47,7 +48,7 @@ def connector_dir(dataset_id: str) -> Path:
         path = Path(next(iter(spec.submodule_search_locations)))
         if (path / "dataset.yaml").is_file():
             return path
-    raise LookupError(f"no connector for {dataset_id!r}; known: {', '.join(_known_ids()) or '(none)'}")
+    raise LookupError(f"no connector for {dataset_id!r}; known: {', '.join(known_ids()) or '(none)'}")
 
 
 def has_connector(dataset_id: str) -> bool:
@@ -57,7 +58,7 @@ def has_connector(dataset_id: str) -> bool:
     answer here, not an exception.
 
     Args:
-        dataset_id: A flat (``hello_world``) or ``org/name`` id.
+        dataset_id: The dataset ID, as ``org/name``.
 
     Returns:
         Whether a connector package exists for the id.
@@ -73,7 +74,7 @@ def requirements_for(dataset_id: str) -> Path | None:
     """Return the connector's ``requirements.txt``, or ``None`` if it declares none.
 
     Args:
-        dataset_id: A flat (``hello_world``) or ``org/name`` id.
+        dataset_id: The dataset ID, as ``org/name``.
 
     Returns:
         The path to the connector's ``requirements.txt``, or ``None``.
@@ -85,21 +86,31 @@ def requirements_for(dataset_id: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def _known_ids() -> list[str]:
+def known_ids() -> list[str]:
     """List the dataset ids declared by the connector cards on disk, importing nothing.
 
-    :func:`available` answers the same question by importing every connector. The unknown-id error
-    path cannot afford that: those dependencies live in each connector's own environment, not this
-    one.
+    :func:`available` answers the same question by importing every connector. The builder backend
+    and the unknown-id error path cannot afford that: those dependencies live in each connector's
+    own environment, not this one. A dataset id matches exactly as its card declares it.
 
     Returns:
         The declared dataset ids, sorted.
+
+    Raises:
+        TimeNetInvalidCardError: If a card cannot be read or is not a mapping.
     """
     ids: set[str] = set()
     for root in _datasets.__path__:
         # A flat id sits at ``datasets/<name>/``, an ``org/name`` id one level deeper.
         for card in (*Path(root).glob("*/dataset.yaml"), *Path(root).glob("*/*/dataset.yaml")):
-            declared = (yaml.safe_load(card.read_text(encoding="utf-8")) or {}).get("dataset_id")
+            # A card that cannot be read fails each lookup, as DatasetMetadata.from_yaml fails for it.
+            try:
+                raw = yaml.safe_load(card.read_text(encoding="utf-8"))
+            except (OSError, yaml.YAMLError) as error:
+                raise TimeNetInvalidCardError(f"could not read dataset card {card}: {error}") from error
+            if not isinstance(raw, dict):
+                raise TimeNetInvalidCardError(f"dataset card {card} must be a YAML mapping, got {type(raw).__name__}")
+            declared = raw.get("dataset_id")
             if declared:
                 ids.add(declared)
     return sorted(ids)

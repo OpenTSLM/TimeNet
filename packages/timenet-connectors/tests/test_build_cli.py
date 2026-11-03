@@ -106,6 +106,15 @@ def test_build_rejects_an_unknown_id_without_importing_anything(monkeypatch, tmp
     assert connectors == []
 
 
+def test_build_rejects_an_id_that_no_card_declares_and_names_the_known_ids(tmp_path):
+    # The module path of the connector accepts this spelling, but a dataset ID must match its card.
+    result = runner.invoke(app, ["build", "timenet/hello_world", "--out", str(tmp_path)])
+
+    assert result.exit_code == 2
+    assert "no connector for 'timenet/hello_world'" in result.output
+    assert "timenet/hello-world" in result.output
+
+
 def test_build_forwards_quiet_to_the_isolated_child(monkeypatch, tmp_path):
     captured = {}
     # The console is a process-wide singleton; monkeypatch restores it for the tests that follow.
