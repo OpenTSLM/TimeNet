@@ -174,7 +174,7 @@ class _SlicedArray(ArrayHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return whether the underlying handle holds its values in memory."""
+        """Whether the underlying handle holds its values in memory."""
         return self.base.is_loaded
 
     def read(self) -> pa.Array:
@@ -762,7 +762,7 @@ class Signal(SupportsAnnotate):
             TimeFValidationError: If ``span`` is a point, a step span on another series, or a time
                 span on an ordinal series. If the span reaches past this series and ``clip`` is
                 false, or covers no step of this series.
-        """  # noqa: DOC502 (raised by _slice_range)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _slice_range)
         steps = self._slice_range(span, clip=clip)
         axis = self.time_axis
         time_offsets: NumpyArray | None = None
