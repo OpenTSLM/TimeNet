@@ -1,3 +1,4 @@
+import inspect
 from pathlib import Path
 import sys
 
@@ -42,21 +43,24 @@ def test_a_card_that_cannot_be_read_raises_and_only_a_missing_connector_gives_no
         ConnectorBuilder().declared_version("test/broken")
 
 
-@pytest.mark.parametrize("values_backend", [None, "zarr", "parquet"])
-def test_build_runs_in_an_isolated_environment_by_default(tmp_path, monkeypatch, values_backend):
+def test_build_runs_in_an_isolated_environment_by_default(tmp_path, monkeypatch):
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     calls = []
 
-    def fake_isolated(dataset_id, root, *, force=False, values_backend=None, **_):
-        calls.append((dataset_id, root, force, values_backend))
+    def fake_isolated(dataset_id, root, *, force=False, **_):
+        calls.append((dataset_id, root, force))
         return Path(root) / "1.0.0"
 
     monkeypatch.setattr(cli_module, "run_isolated", fake_isolated)
 
-    version_dir = ConnectorBuilder().build("timenet/hello-world", tmp_path, force=True, values_backend=values_backend)
+    version_dir = ConnectorBuilder().build("timenet/hello-world", tmp_path, force=True)
 
     assert version_dir == tmp_path / "1.0.0"
-    assert calls == [("timenet/hello-world", tmp_path, True, values_backend)]
+    assert calls == [("timenet/hello-world", tmp_path, True)]
+
+
+def test_connector_builder_build_takes_no_values_backend():
+    assert "values_backend" not in inspect.signature(ConnectorBuilder.build).parameters
 
 
 def test_build_hands_its_pins_to_the_build(tmp_path, monkeypatch):

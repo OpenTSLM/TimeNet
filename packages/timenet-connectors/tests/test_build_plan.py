@@ -7,6 +7,7 @@ from typer.testing import CliRunner
 
 from timenet import builders
 from timenet.connectors import BaseConnector
+from timenet.coordinator.plan import ParentStep, plan_parents, prepare_parents
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.engine import open_parents, run_pipeline
 from timenet.errors import (
@@ -32,7 +33,6 @@ from timenet_connectors import api as api_module
 from timenet_connectors.builder import backend as backend_module, cli as cli_module, env as env_module
 from timenet_connectors.builder.backend import ConnectorBuilder
 from timenet_connectors.builder.cli import app
-from timenet_connectors.builder.plan import ParentStep, plan_parents, prepare_parents
 
 
 GRAND = DatasetRef(dataset_id=make_dataset().metadata.dataset_id, version=make_dataset().metadata.dataset_version)
