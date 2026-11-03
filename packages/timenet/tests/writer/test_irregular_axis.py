@@ -25,6 +25,7 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     License,
+    TimeInterval,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -708,3 +709,26 @@ def test_zarr_time_offsets_live_in_packed_parquet(tmp_path):
     assert not (version / "time_series.zarr" / "_time_offsets").exists()
     payload = pq.read_table(next((version / "payloads").glob("*.parquet")))
     assert payload["time_offsets"][0].as_py() == _HATCH_US
+
+
+def test_a_slice_round_trips_with_its_place_on_the_timeline(tmp_path):
+    dataset = _dataset()
+    hatch = Signal.from_irregular(_HATCH_VALUES, time_offsets_us=_HATCH_US, spec=_spec(), name="hatch")
+    temperature = Signal.from_values(
+        [20.0, 21.0, 22.0, 23.0], spec=_spec("temp"), name="temp", time_axis=RegularAxis.from_rate_hz(1)
+    )
+    # The middle two hatch events, and temperature from 1 s to 3 s.
+    hatch_part = hatch.slice(TimeInterval(start_us=1, end_us=6_500_000_000))
+    temperature_part = temperature.slice(TimeInterval.seconds(1, 3))
+    dataset.add_record(record=Record(sources=(Source(name="Source", signals=(hatch_part, temperature_part)),)))
+    dataset.derive_schema()
+
+    reader = TimeFReader(open_local_version(_written(tmp_path, dataset)))
+    hatch_back, temperature_back = next(iter(reader.iter_records())).signals
+    assert hatch_back.time_axis == IrregularAxis(first_us=1_655_412_000, last_us=6_486_006_000)
+    assert hatch_back.time_offsets_us().tolist() == [1_655_412_000, 6_486_006_000]
+    assert hatch_back.to_numpy().tolist() == [0.0, 1.0]
+    assert hatch_back.span_us == hatch_part.span_us
+    assert temperature_back.time_axis == temperature_part.time_axis
+    assert temperature_back.to_numpy().tolist() == [21.0, 22.0]
+    assert temperature_back.span_us == (1_000_000, 3_000_000)
