@@ -7,7 +7,8 @@ does with the release, and the releases that it depends on. Then
 :class:`graphlib.TopologicalSorter` puts each release after the releases that it depends on, and
 finds cycles. A cycle, or a parent that the plan cannot get, fails here, before any download. If
 the steps of the plan run in this order, each release that the build opens is in place before the
-build starts. The build then only opens these releases.
+build starts. The build then only opens these releases. Each step is a :class:`Step`. Its action is
+``"copy"`` or ``"build"``, and it names the releases of the plan that it depends on.
 
 A payload source is a release whose stored files another release reads. The release that reads
 them records each file by path, size, and checksum. These records are the pins. If the plan builds
@@ -43,17 +44,27 @@ from timenet.types.references import DatasetRef
 
 
 @dataclass(frozen=True)
-class ParentStep:
-    """One release that the plan fetches or builds before the build of the requested release.
+class Step:
+    """One release that the plan copies or builds before the build of the requested release.
 
     The output does not hold the release, or it does not hold all payload sources of the release. A
-    fetch copies the release, and each payload source in its manifest that the output does not hold.
+    copy takes the release, and each payload source in its manifest that the output does not hold,
+    from another registry.
     """
 
-    reference: DatasetRef
-    action: Literal["fetch", "build"]
+    release: DatasetRef
+    action: Literal["copy", "build"]
+    depends_on: tuple[DatasetRef, ...] = ()
+    """The releases of the plan that must be in place before this step runs."""
     pinned_by: Mapping[DatasetRef, PayloadSource] = field(default_factory=dict, hash=False)
     """For a build: each release that already reads files of this release, with its pins on them."""
+
+
+@dataclass(frozen=True)
+class Plan:
+    """The steps that get each release that a build needs, in the order in which they run."""
+
+    steps: tuple[Step, ...]
 
 
 @dataclass(frozen=True)
@@ -63,8 +74,8 @@ class _Release:
     opened: bool
     """True if the build opens the release with its payload sources. False if the release is only a
     payload source of another release, and the build reads only its pinned files."""
-    action: Literal["fetch", "build"] | None
-    """``"fetch"`` or ``"build"``, or ``None`` if the output holds the release."""
+    action: Literal["copy", "build"] | None
+    """``"copy"`` or ``"build"``, or ``None`` if the output holds the release."""
     dependencies: tuple[DatasetRef, ...]
     """The releases that must be in place before this release. A release to build depends on the
     parents on its card. An opened release that the plan does not build depends on its payload
@@ -83,7 +94,7 @@ class _Graph:
     releases: dict[DatasetRef, _Release] = field(default_factory=dict)
     """The nodes, in the order in which the walk found them."""
     fetched: set[DatasetRef] = field(default_factory=set)
-    """The payload sources that the plan fetches only as part of a fetch of the release that reads them."""
+    """The payload sources that the plan fetches only as part of a copy of the release that reads them."""
     pins: dict[DatasetRef, dict[DatasetRef, PayloadSource]] = field(default_factory=dict)
     """For each payload source: each release that reads its files, with its pins on them."""
 
@@ -131,8 +142,8 @@ class _Graph:
                 self.visit(source.release, reference, source)
         else:
             self.releases[reference] = _Release(opened, action, ())
-            # A fetch of the release that reads this payload source also copies the payload source.
-            if action == "fetch":
+            # A copy of the release that reads this payload source also copies the payload source.
+            if action == "copy":
                 self.fetched.add(reference)
 
     def order(self) -> list[DatasetRef]:
@@ -160,34 +171,43 @@ class _Graph:
             path = " -> ".join(str(reference) for reference in (*cycle, cycle[0]))
             raise TimeFValidationError(f"dataset parent cycle: {path}") from error
 
-    def steps(self, requested: DatasetRef) -> list[ParentStep]:
-        """Make one step for each release that the plan fetches or builds, in the order of :meth:`order`.
+    def steps(self, requested: DatasetRef) -> list[Step]:
+        """Make one step for each release that the plan copies or builds, in the order of :meth:`order`.
 
         Args:
             requested: The requested release. The caller builds it, so it gets no "build" step. If
-                the output holds it, it gets a "fetch" step under the same rule as an opened parent.
+                the output holds it, it gets a "copy" step under the same rule as an opened parent.
 
         Returns:
-            The steps, each after the steps of the releases that it depends on.
+            The steps, each after the steps of the releases that it depends on. ``depends_on`` of a
+            step holds only the dependencies that have a step in the plan.
 
         Raises:
             TimeFValidationError: If the releases depend on each other in a cycle.
         """  # ruff: ignore[docstring-extraneous-exception] - order() raises the cycle error
-        steps: list[ParentStep] = []
+        chosen: dict[DatasetRef, Literal["copy", "build"]] = {}
         for reference in self.order():
             release = self.releases[reference]
             if reference == requested and release.action == "build":
                 continue
             if release.action == "build":
-                steps.append(ParentStep(reference, "build", pinned_by=self.pins.get(reference, {})))
-            # A fetch of an opened release also copies each payload source that the output does not
-            # hold. So if the plan fetches a payload source only with the release that reads it, the
-            # plan fetches that release again, even if the output holds it.
+                chosen[reference] = "build"
+            # A copy of an opened release also copies each payload source that the output does not
+            # hold. So if the plan copies a payload source only with the release that reads it, the
+            # plan copies that release again, even if the output holds it.
             elif release.opened and (
-                release.action == "fetch" or any(source in self.fetched for source in release.dependencies)
+                release.action == "copy" or any(source in self.fetched for source in release.dependencies)
             ):
-                steps.append(ParentStep(reference, "fetch"))
-        return steps
+                chosen[reference] = "copy"
+        return [
+            Step(
+                reference,
+                action,
+                depends_on=tuple(need for need in self.releases[reference].dependencies if need in chosen),
+                pinned_by=self.pins.get(reference, {}) if action == "build" else {},
+            )
+            for reference, action in chosen.items()
+        ]
 
 
 def plan_parents(
@@ -197,8 +217,8 @@ def plan_parents(
     fetch_from: BaseRegistry | None = None,
     build_parents: bool = False,
     force_build: bool = False,
-) -> list[ParentStep]:
-    """Plan how to fetch or build the releases a dataset needs.
+) -> list[Step]:
+    """Plan how to get each parent release that a build of ``dataset_id`` needs.
 
     Prefer complete copies, then ``fetch_from``, then builds if ``build_parents`` is true.
     An existing release needs only its payload sources unless ``force_build`` is set.
@@ -211,7 +231,8 @@ def plan_parents(
         force_build: Plan the requested release's parents even if the output already holds the release.
 
     Returns:
-        Fetch or build steps, ordered with dependencies first.
+        The steps to copy or build parents. Each step comes after the steps of the releases that it
+        depends on.
 
     Raises:
         LookupError: If no installed connector declares a dataset card for ``dataset_id``.
@@ -260,7 +281,7 @@ def prepare_parents(  # ruff: ignore[too-many-arguments]
     dataset_id: str,
     output: WritableRegistry,
     *,
-    build: Callable[[ParentStep], object],
+    build: Callable[[Step], object],
     fetch_from: BaseRegistry | None = None,
     build_parents: bool = False,
     force_build: bool = False,
@@ -285,17 +306,17 @@ def prepare_parents(  # ruff: ignore[too-many-arguments]
         dataset_id, output, fetch_from=fetch_from, build_parents=build_parents, force_build=force_build
     )
     for step in steps:
-        if step.action == "fetch":
-            prepare_local_copy(output.local_root, step.reference, fetch_from=fetch_from)
+        if step.action == "copy":
+            prepare_local_copy(output.local_root, step.release, fetch_from=fetch_from)
         else:
             build(step)
             # After a successful build, the output must hold the exact release with its payload sources.
             if isinstance(output, LocalRegistry):
-                prepare_local_copy(output.root, step.reference)
+                prepare_local_copy(output.root, step.release)
             else:
-                if _manifest(output, step.reference) is None:
-                    raise TimeNetDatasetNotFoundError(f"builder did not publish parent release {step.reference}")
-                output.open_version(step.reference.dataset_id, str(step.reference.version))
+                if _manifest(output, step.release) is None:
+                    raise TimeNetDatasetNotFoundError(f"builder did not publish parent release {step.release}")
+                output.open_version(step.release.dataset_id, str(step.release.version))
 
 
 def _manifest(registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
@@ -320,7 +341,7 @@ def _manifest(registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
 
 def _locate(
     output: WritableRegistry, fetch_from: BaseRegistry | None, reference: DatasetRef
-) -> tuple[Manifest | None, Literal["fetch"] | None]:
+) -> tuple[Manifest | None, Literal["copy"] | None]:
     # The damage is raised from a variable, the access error by require_open_access.
     # ruff: ignore[docstring-extraneous-exception]
     """Find a release in ``output`` or ``fetch_from``.
@@ -328,7 +349,8 @@ def _locate(
     A local copy is intact when every file has its recorded size.
 
     Returns:
-        ``(manifest, None)`` for an output copy, ``(manifest, "fetch")`` for a fetch, or ``(None, None)`` if absent.
+        The manifest and ``None`` if the output holds an intact copy. The manifest and ``"copy"`` if
+        the plan fetches the release. ``None`` and ``None`` if the plan builds it.
 
     Raises:
         TimeNetFileError: If the local copy has a missing or resized file and ``fetch_from`` lacks the release.
@@ -356,7 +378,7 @@ def _locate(
         # So the plan refuses another release before any download.
         if fetch_from is not None and fetch_from.requires_open_access:
             require_open_access(fetched.metadata, fetched.lineage)
-        return fetched, "fetch"
+        return fetched, "copy"
     if damage is not None:
         raise damage
     return None, None
