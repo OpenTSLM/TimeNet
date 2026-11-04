@@ -7,8 +7,8 @@
 # Training convention: the tasks are the authors' benchmark. Each 10 s window that
 # prepare_data.make_windows keeps has one ClassificationTask per scheme the authors' benchmark.py
 # scores (WillettsSpecific2018, Walmsley2020), split as that script runs it: P001-P100 train,
-# P101-P151 test. Signals are archival raw: each recording at 100 Hz, in g, with one Source per run
-# between its gaps.
+# P101-P151 test. Signals are the published values: each recording at 100 Hz, in g, with one Source
+# per run between its gaps. The authors resampled and calibrated them before release.
 yaml_schema_version: 1
 dataset_id: oxwearables/capture24
 dataset_version: 1.0.0
