@@ -9,6 +9,7 @@ from timenet.manifest.files import FilePart
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.types.references import DatasetRef
+from timenet.values_backends import ValuesBackend
 from timenet_connectors.builder import backend as backend_module, cli as cli_module
 from timenet_connectors.builder.backend import ConnectorBuilder
 
@@ -92,7 +93,7 @@ def test_build_runs_in_process_when_isolation_is_off(tmp_path, monkeypatch):
 def test_build_in_process_round_trips_the_connector_default_zarr_backend(tmp_path, monkeypatch):
     pytest.importorskip("zarr")
     connector_cls = cli_module.resolve("timenet/hello-world")
-    monkeypatch.setattr(connector_cls, "values_backend", "zarr")
+    monkeypatch.setattr(connector_cls, "values_backend", ValuesBackend.ZARR)
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     version_dir = ConnectorBuilder().build("timenet/hello-world", tmp_path / "registry")
@@ -101,20 +102,3 @@ def test_build_in_process_round_trips_the_connector_default_zarr_backend(tmp_pat
         dataset = reader.read()
         assert len(dataset.records) == 3
         assert len(dataset.records[0].signals[0].to_numpy()) == 16
-
-
-def test_build_in_process_uses_the_connector_default_values_backend(tmp_path, monkeypatch):
-    class Connector:
-        values_backend = "zarr"
-
-    captured = {}
-    monkeypatch.setenv("TIMENET_ISOLATION", "off")
-    monkeypatch.setattr(cli_module, "resolve", lambda dataset_id: Connector)
-
-    def pipeline(connector, root, *, force, values_backend, **_):
-        captured["backend"] = values_backend
-        return Path(root) / "1.0.0"
-
-    monkeypatch.setattr(cli_module, "run_pipeline", pipeline)
-    ConnectorBuilder().build("timenet/hello-world", tmp_path)
-    assert captured["backend"] == "zarr"

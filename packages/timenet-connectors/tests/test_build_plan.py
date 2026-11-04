@@ -28,6 +28,7 @@ from timenet.types.access import AccessRequirement
 from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias, SourceKey
 from timenet.types.references import DatasetRef
+from timenet.values_backends import ValuesBackend
 import timenet_connectors
 from timenet_connectors import api as api_module
 from timenet_connectors.builder import backend as backend_module, cli as cli_module, env as env_module
@@ -295,9 +296,10 @@ def test_a_missing_payload_source_names_the_release_that_reads_it(tmp_path, monk
     assert str(caught.value).startswith("payload source timenet/hello-world@1.0.0 of test/parent@1.0.0 is not in")
 
 
-@pytest.mark.parametrize("backend", ["parquet", "zarr"])
+@pytest.mark.parametrize("backend", [ValuesBackend.PARQUET, ValuesBackend.ZARR])
 def test_a_pinned_source_is_rebuilt_in_staging_and_published_only_if_it_matches(tmp_path, monkeypatch, backend):
     _install_cards(monkeypatch, child={"parent": PARENT}, parent={"parent": GRAND})
+    monkeypatch.setattr(_Grand, "values_backend", backend)
     output = LocalRegistry(tmp_path / "output")
     _parent_without_its_source(output)
     pins = output.get_manifest(PARENT.dataset_id).payload_sources[SourceKey(str(GRAND))]
@@ -307,9 +309,9 @@ def test_a_pinned_source_is_rebuilt_in_staging_and_published_only_if_it_matches(
     assert steps == [ParentStep(GRAND, "build", pinned_by={PARENT: pins})]
 
     def build(step):
-        run_pipeline(_Grand(), output.root, values_backend=backend, pinned_by=step.pinned_by)
+        run_pipeline(_Grand(), output.root, pinned_by=step.pinned_by)
 
-    if backend == "parquet":
+    if backend == ValuesBackend.PARQUET:
         prepare_parents(CHILD.dataset_id, output, build=build, build_parents=True)
         assert output.exists(GRAND.dataset_id, str(GRAND.version))
         return

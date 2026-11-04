@@ -83,14 +83,6 @@ def test_env_spec_uses_editable_paths_in_a_source_checkout():
     assert any(arg.endswith("packages/timenet-connectors") for arg in base)
 
 
-def test_env_spec_always_includes_the_zarr_extra(monkeypatch):
-    monkeypatch.setattr(env_module.Distribution, "from_name", lambda name: _FakeDist(version="9.9.9", direct_url=None))
-
-    spec = env_spec("timenet/hello-world")
-
-    assert any(arg.startswith("timenet[zarr]==") for arg in spec.base)
-
-
 def test_base_args_uses_editable_for_an_editable_install(monkeypatch, tmp_path):
     src = tmp_path / "src"
     direct_url = json.dumps({"url": src.as_uri(), "dir_info": {"editable": True}})
