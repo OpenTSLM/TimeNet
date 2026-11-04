@@ -203,7 +203,7 @@ def build_one(  # ruff: ignore[too-many-arguments]
         dataset_id: The dataset ID.
         output: A local directory or a ``timenet://``, ``http(s)://``, or ``s3://`` registry URL.
         fetch_from: The registry, or its URI, to copy missing parent releases from.
-        build_parents: Build missing parent releases from their installed connectors.
+        build_parents: Build missing parents with installed connectors.
         force: Rebuild an existing version.
         keep_cache: Keep the raw download cache after building.
         isolation: Use a separate environment if true, this interpreter if false, or ``TIMENET_ISOLATION`` if ``None``.

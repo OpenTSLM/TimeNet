@@ -1,8 +1,4 @@
-"""Build a release after each parent release that it needs.
-
-A copy step uses :func:`~timenet.registry.copy_release`. A build step uses ``build_prepared()`` of
-the backend that builds exactly that release.
-"""
+"""Prepare parent releases and build a dataset into a local registry."""
 
 from collections.abc import Mapping
 
@@ -31,38 +27,35 @@ def build_release(  # ruff: ignore[too-many-arguments]
     open_access_only: bool = False,
     options: BuildOptions | None = None,
 ) -> Plan:
-    """Build a release into the local store, after each release that its build needs.
+    """Prepare a release's dependencies and build it into a local registry.
 
-    The function copies each missing parent, and each missing payload source of a parent, from
-    ``fetch_from``, or builds it if ``build_parents`` is set. If ``store`` already holds the
-    requested release, the function builds it again only if ``force`` is set.
+    Copy missing dependencies from ``fetch_from``, or build them if ``build_parents`` is set.
+    Reuse an existing release unless ``force`` is set.
 
     Args:
-        dataset: The dataset ID, as ``org/name``, or one exact release, as ``org/name@1.2.0``.
+        dataset: A dataset ID such as ``org/name``, or an exact release such as ``org/name@1.2.0``.
         store: The local registry to build into.
         fetch_from: The registry to copy missing parents from, or ``None`` to copy nothing.
-        build_parents: Build missing parents with the backends that build them.
-        force: Build the requested release again, even if ``store`` holds it, and plan its parents.
-        pinned_by: The releases that already read files of the requested release, with their pins.
-            The build publishes the release only if it writes each pinned file again.
-        open_access_only: Refuse each release of the plan that does not declare ``access: open``,
-            the requested release included, before any step runs.
-        options: The options of each build, such as the progress callback.
+        build_parents: Build missing parents with installed connectors.
+        force: Rebuild the requested release and prepare its parents even if the release exists.
+        pinned_by: Releases that already read the requested release's files, with the pins the new build must match.
+        open_access_only: Require ``access: open`` for all releases and their lineage before running the plan.
+        options: Build settings, or ``None`` for defaults.
 
     Returns:
-        The plan that ran, with its steps in the order in which they ran.
+        The completed plan, with steps in execution order.
 
     Raises:
         TimeNetDatasetNotFoundError: If no installed backend builds the dataset or a missing parent.
-        TimeNetVersionUnavailableError: If ``dataset`` names another version than the card declares.
-        TimeNetVersionConflictError: If ``store`` holds a copied release with other files.
-        TimeFValidationError: If ``dataset`` is not a valid reference, or the parents form a cycle.
+        TimeNetVersionUnavailableError: If the connector declares a different version.
+        TimeNetVersionConflictError: If ``store`` holds a different copy of a release being copied.
+        TimeFValidationError: If the dataset reference, backend, or dependency plan is invalid.
         TimeNetMissingParentError: If a parent is missing and ``build_parents`` is not set.
-        TimeNetAccessError: If a release of the plan is not open where open access is required.
-        TimeNetInvalidCardError: If the card of an installed connector cannot be read.
-        TimeNetFileError: If ``store`` holds a damaged parent that the plan cannot copy again.
-        TimeFFormatError: If a build does not write again the files that other releases pin.
-        TimeNetBuildError: If a build runs but fails.
+        TimeNetAccessError: If a release or its lineage lacks required open access.
+        TimeNetInvalidCardError: If an installed connector's card cannot be read.
+        TimeNetFileError: If ``store`` holds a damaged parent and no replacement is available.
+        TimeFFormatError: If a build omits or changes a pinned file.
+        TimeNetBuildError: If a build fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the plan, the copy and the backends
     options = options or BuildOptions()
     dataset_id, version = split_ref(dataset)
@@ -99,16 +92,15 @@ def build_release(  # ruff: ignore[too-many-arguments]
 def _copy(
     release: DatasetRef, fetch_from: BaseRegistry, store: LocalRegistry, *, progress: ProgressCallback | None
 ) -> None:
-    """Run one copy step.
+    """Copy a release and its required payload sources into the store.
 
-    If ``store`` holds an intact copy of the release, the function copies only each payload source
-    that ``store`` lacks or holds damaged.
+    If the release is intact, copy only its missing or damaged payload sources.
 
     Args:
-        release: The release of the copy step.
+        release: The release to copy.
         fetch_from: The registry to copy from.
-        store: The local registry to copy to.
-        progress: Receives the progress events of each release that is copied, or ``None``.
+        store: The destination registry.
+        progress: The callback for copy progress events, or ``None``.
     """
     held = _intact_manifest(store, release)
     if held is None:
@@ -122,15 +114,14 @@ def _copy(
 
 
 def _intact_manifest(store: LocalRegistry, reference: DatasetRef) -> Manifest | None:
-    """Return the manifest of a release that the store holds with every file at its recorded size.
+    """Read a release's manifest and check its file sizes.
 
     Args:
         store: The local registry.
-        reference: The release.
+        reference: The release to check.
 
     Returns:
-        The manifest, or ``None`` if ``store`` lacks the release or a file of it, or holds a file of
-        another size.
+        The manifest, or ``None`` if the release or a file is missing or a file has the wrong size.
     """
     try:
         manifest = store.get_manifest(reference.dataset_id, str(reference.version))
@@ -140,17 +131,16 @@ def _intact_manifest(store: LocalRegistry, reference: DatasetRef) -> Manifest | 
 
 
 def _build(step: Step, store: LocalRegistry, *, force: bool, options: BuildOptions) -> None:
-    """Run one build step with the backend that builds exactly its release.
+    """Build a planned release and check its required files.
 
     Args:
         step: The build step.
         store: The local registry to build into.
-        force: Build the release again, even if ``store`` holds it.
-        options: The options of the build.
+        force: Rebuild even if ``store`` already holds the release.
+        options: The build settings.
 
     Raises:
-        TimeNetDatasetNotFoundError: If no installed backend builds the exact release, or if the
-            backend does not put the release or a payload source of it into ``store``.
+        TimeNetDatasetNotFoundError: If no backend builds this version or the result lacks a release or payload source.
     """
     builder = exact_builder(step.release)
     if builder is None:
