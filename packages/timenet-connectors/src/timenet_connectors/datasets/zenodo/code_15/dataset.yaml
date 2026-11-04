@@ -7,7 +7,7 @@
 # Lima et al. 2021 predict, is split test, as they hold CODE-15% out. Its abnormalities among the
 # six of Ribeiro et al. 2020, a multi-label task, are split train, as they train on the CODE cohort.
 # Signals are 12 leads at 400 Hz in millivolts: the published values halved, without the zero
-# padding; preprocessing.authors_input rebuilds the authors' 4096-sample input.
+# padding. The README says how to rebuild the authors' 4096-sample input.
 yaml_schema_version: 1
 dataset_id: zenodo/code-15
 dataset_version: 1.0.0

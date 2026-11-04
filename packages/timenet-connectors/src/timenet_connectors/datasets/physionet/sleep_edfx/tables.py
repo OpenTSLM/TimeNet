@@ -16,9 +16,8 @@ own sheet states.
 
 The two sheets code sex with opposite meanings. The cassette sheet heads its column
 ``sex (F=1)``. The telemetry sheet heads its own ``M1/F2``. Each description carries the map of
-its own sheet, and both decode into the shared :class:`~timenet_connectors.demographics.Sex`,
-which ``keys.SEX_LETTERS`` writes as ``F`` or ``M``. A raw code never leaves this module, because
-one code means the opposite thing in the other study.
+its own sheet, and both decode into the two letters ``F`` and ``M``. A raw code never leaves
+this module, because one code means the opposite thing in the other study.
 
 Both sheets state a lights-off time as a number. Excel stores a bare time as the fraction of a
 day past midnight, so a value below 0.5 is a time after midnight and not an error. The base
@@ -33,7 +32,6 @@ from datetime import time
 from timenet.errors import TimeFFormatError
 from timenet_connectors.bases.excel import decode_day_fraction_as_time, decode_whole_number
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import Condition
-from timenet_connectors.demographics import Sex
 
 
 # The two workbooks of the release, named here and by the description of each sheet.
@@ -76,7 +74,7 @@ class SheetShape:
     subject: int
     age: int
     sex: int
-    sex_codes: Mapping[int, Sex]
+    sex_codes: Mapping[int, str]
     key: tuple[str, ...]
     nights: tuple[NightColumns, ...]
 
@@ -100,7 +98,7 @@ class SubjectRow:
 
     subject: int
     age: int
-    sex: Sex
+    sex: str
     nights: tuple[SubjectNight, ...]
 
 
@@ -112,7 +110,7 @@ CASSETTE_SHEET = SheetShape(
     subject=0,
     age=2,
     sex=3,
-    sex_codes={1: Sex.FEMALE, 2: Sex.MALE},
+    sex_codes={1: "F", 2: "M"},
     key=(SUBJECT, NIGHT),
     nights=(NightColumns(night=1, lights_off=4, condition=None),),
 )
@@ -126,7 +124,7 @@ TELEMETRY_SHEET = SheetShape(
     subject=0,
     age=1,
     sex=2,
-    sex_codes={1: Sex.MALE, 2: Sex.FEMALE},
+    sex_codes={1: "M", 2: "F"},
     key=(SUBJECT,),
     nights=(
         NightColumns(night=3, lights_off=4, condition=Condition.PLACEBO),
@@ -277,17 +275,17 @@ def find_night(row: SubjectRow, night: int, recording_id: str) -> SubjectNight:
     return matches[0]
 
 
-def _decode_sex(cell: object, codes: Mapping[int, Sex], workbook: str, row_number: int) -> Sex:
+def _decode_sex(cell: object, codes: Mapping[int, str], workbook: str, row_number: int) -> str:
     """Decode a sex code with the map of the sheet it was read from.
 
     Args:
         cell: The value of the cell, as the workbook states it.
-        codes: The map of that sheet, from a code to a sex.
+        codes: The map of that sheet, from a code to a letter.
         workbook: The name of the workbook, for the error message.
         row_number: The row of the sheet, counted from 1, for the error message.
 
     Returns:
-        The decoded sex.
+        ``F`` or ``M``.
 
     Raises:
         TimeFFormatError: If the sheet defines no such code.

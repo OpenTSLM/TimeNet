@@ -12,7 +12,7 @@ import pyarrow as pa
 
 from timenet.dataset import Signal, TimeFDataset
 from timenet.dataset.time_series import _validate_enum_values
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import (
     DEFAULT_CHUNK_MAX_BYTES,
@@ -52,7 +52,7 @@ if TYPE_CHECKING:
 class TimeFWriter:
     """Context manager that serializes a dataset into the TimeF format and commits it atomically."""
 
-    def __init__(  # noqa: PLR0913
+    def __init__(  # ruff: ignore[too-many-arguments]
         self,
         root: Path,
         dataset: TimeFDataset,
@@ -68,6 +68,7 @@ class TimeFWriter:
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
         replace: bool = False,
         registry: "BaseRegistry | None" = None,
+        pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
     ) -> None:
         """Configure the writer.
 
@@ -94,6 +95,9 @@ class TimeFWriter:
             registry: The registry the release is published to. Each payload source of a reused
                 value is checked there at its first reuse. Defaults to a local registry over
                 ``root``. A remote store passes itself while it stages the release locally.
+            pinned_by: The releases that already read files of this release, each with its pins on
+                this release. A rebuild of a release that others pin must reproduce those files. If
+                a pinned file differs, :meth:`close` raises and discards the staged release.
 
         Raises:
             TimeFValidationError: If ``dataset.metadata.dataset_id`` is empty, ``values_backend`` or
@@ -131,6 +135,7 @@ class TimeFWriter:
         self._value_encoding: dict[str, ManifestValueEncoding] = {}
         self._progress_cb = progress_cb
         self._replace = replace
+        self._pinned_by = dict(pinned_by or {})
 
         version = str(dataset.metadata.dataset_version)
         self._final_dir = self._root / dataset.metadata.dataset_id / version
@@ -139,7 +144,7 @@ class TimeFWriter:
         self._written = False
         if registry is None:
             # The registry package imports the writer, so the default is resolved here.
-            from timenet.registry.local import LocalRegistry  # noqa: PLC0415
+            from timenet.registry.local import LocalRegistry  # ruff: ignore[import-outside-top-level]
 
             registry = LocalRegistry(self._root)
         self._storage_sources = StorageSources(
@@ -232,16 +237,19 @@ class TimeFWriter:
         The staging directory then takes its place, and the old directory is deleted. If that
         rename fails, the old directory moves back. A hard kill between the two renames leaves the
         old release in ``<version>.old-<uuid>``, which no sweep deletes, so it can be renamed back.
-        The manifest pins the payload source files that :meth:`write` checked.
+        The manifest pins the payload source files that :meth:`write` checked. Before the rename,
+        the written files are compared with the pins of each release in ``pinned_by``.
 
         Raises:
             RuntimeError: If :meth:`write` has not run successfully.
+            TimeFFormatError: If a release in ``pinned_by`` pins a file that this release did not
+                write as pinned. Nothing is published.
             OSError: If publishing fails and the old release cannot be moved back either. The
                 error names the ``<version>.old-<uuid>`` directory that holds it.
-        """
+        """  # ruff: ignore[docstring-extraneous-exception] - _check_pinned_by raises TimeFFormatError
         if not self._written:
             raise RuntimeError("write() must run successfully before close()")
-        self._write_manifest()
+        self._check_pinned_by(self._write_manifest())
         self._final_dir.parent.mkdir(parents=True, exist_ok=True)
         old = None
         if self._final_dir.exists():
@@ -272,7 +280,7 @@ class TimeFWriter:
 
     @property
     def payload_sources(self) -> Mapping[SourceKey, PayloadSource]:
-        """Return the releases that store the payloads this release reuses, pinned to their files.
+        """The releases that store the payloads this release reuses, pinned to their files.
 
         :meth:`write` fills it, and the manifest records it as ``payload_sources``.
         """
@@ -380,7 +388,7 @@ class TimeFWriter:
                 )
         return shared, owned
 
-    def _read_and_validate(self, ts: Signal) -> pa.Array:  # noqa: PLR6301
+    def _read_and_validate(self, ts: Signal) -> pa.Array:  # ruff: ignore[no-self-use]
         """Read a series' values and enforce the per-series array contract.
 
         Args:
@@ -433,10 +441,36 @@ class TimeFWriter:
             )
         return values
 
-    def _write_manifest(self) -> None:
+    def _check_pinned_by(self, manifest: Manifest) -> None:
+        """Compare the written files with the pins of each release that already reads this one.
+
+        Raises:
+            TimeFFormatError: Naming the first pinned file that differs, and the two ways out.
+        """
+        release = DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
+        written = {part.path: part for part in manifest.files.all_files()}
+        for reader, pinned in sorted(self._pinned_by.items(), key=lambda item: str(item[0])):
+            for part in sorted(pinned.files, key=lambda item: item.path):
+                actual = written.get(part.path)
+                if actual == part:
+                    continue
+                found = (
+                    "did not write it"
+                    if actual is None
+                    else f"wrote {actual.size} bytes with checksum {actual.checksum}"
+                )
+                raise TimeFFormatError(
+                    f"the build of {release} differs from the files that {reader} reads: {reader} pins "
+                    f"{part.path!r} as {part.size} bytes with checksum {part.checksum}, but the build {found}. "
+                    f"Nothing was published. Fetch the exact release {release} from a registry that holds it, "
+                    f"or rebuild {reader} with force so that it pins the new files"
+                )
+
+    def _write_manifest(self) -> Manifest:
         schema = self._dataset.schema
         if schema is None:  # unreachable: write() already checked, but keeps the type non-optional
             raise RuntimeError("schema was not derived")
+        import_state = self._dataset._import_state
         manifest = Manifest(
             dataset_id=self._dataset.metadata.dataset_id,
             metadata=self._dataset.metadata,
@@ -450,10 +484,13 @@ class TimeFWriter:
             values_backend=self._values_backend_name,
             value_encoding=self._value_encoding,
             payload_sources=self._storage_sources.sources,
+            parent_cards=import_state.parent_cards,
+            lineage=tuple(import_state.lineage.values()),
             build_env=build_env(),
             timef_format_version=1,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())
+        return manifest
 
     # ---- helpers -------------------------------------------------------------------------------
 
@@ -466,7 +503,8 @@ class TimeFWriter:
         with connect_control(self._staging_dir / CONTROL_FILE, read_only=True) as connection:
 
             def count(table: str) -> int:
-                row = connection.execute(f"SELECT count(*) FROM {table}").fetchone()  # noqa: S608
+                # ruff: ignore[hardcoded-sql-expression]
+                row = connection.execute(f"SELECT count(*) FROM {table}").fetchone()
                 if row is None:
                     raise TimeFValidationError(f"could not count rows in control table {table!r}")
                 return int(row[0])

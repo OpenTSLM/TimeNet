@@ -154,7 +154,7 @@ class Annotation:
 
     @property
     def _content_key(self) -> tuple[Hashable, ...]:
-        """Return the reusable payload, without occurrence-specific fields, as a hashable key.
+        """The reusable payload, without occurrence-specific fields, as a hashable key.
 
         The writer stores annotations with equal keys as one content row. The value type is part of
         the key, so ``True``, ``1`` and ``1.0`` differ. A float compares by its bits, so ``0.0`` and
@@ -174,7 +174,7 @@ class Annotation:
 
     @property
     def name(self) -> str:
-        """Return the annotation's public name."""
+        """The annotation's public name."""
         return self.key
 
     def _new_occurrence(self) -> "Annotation":
@@ -210,7 +210,7 @@ class SupportsAnnotate(Protocol):
 
     @property
     def annotations(self) -> tuple[Annotation, ...]:
-        """Return the occurrences attached to this object."""
+        """The occurrences attached to this object."""
         ...
 
     def annotate(self, annotation: Annotation) -> Annotation:
@@ -240,8 +240,8 @@ def value_type_of(value: Any) -> ValueType | None:
         value: The annotation's value.
 
     Returns:
-        One of ``"bool" | "int" | "float" | "str" | "list"``, or ``None`` for a pure marker. A list
-        holds strings only, such as the vocabulary of a classification target.
+        One of ``"bool" | "int" | "float" | "str" | "list"``, or ``None`` for a marker with no value.
+        A list holds only strings, such as the names of activities in a recording.
 
     Raises:
         TimeFValidationError: If ``value`` is a non-null value of an unsupported type.

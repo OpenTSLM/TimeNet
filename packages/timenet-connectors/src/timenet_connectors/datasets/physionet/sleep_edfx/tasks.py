@@ -6,8 +6,8 @@ values and gives tasks.
 No task names its own id. Nothing resolves one by id: each task holds its record in ``inputs``,
 and no task here states a lineage. Every task takes the id the dataset gives it.
 
-A ``target_schema`` names the key of the dataset annotation that holds the set, so
-``name_vocabulary`` builds both from one string.
+Each classification task draws its target from one closed set, a ``LabelSet`` named after the
+annotation key whose values it holds. The tasks that ask one question share one set.
 
 No task carries a prompt. The release states no question in words.
 """
@@ -20,6 +20,8 @@ from timenet.types import (
     US_PER_S,
     Annotation,
     ClassificationTask,
+    Label,
+    LabelSet,
     LocalizationMode,
     ScalarPredictionTask,
     Task,
@@ -27,7 +29,7 @@ from timenet.types import (
     TimeInterval,
 )
 from timenet.types.text import read_value
-from timenet_connectors.datasets.physionet.sleep_edfx.keys import SEX_LETTERS, AnnotationKey, Condition, Question
+from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey, Condition, Question
 
 
 # The epoch the release scores in, from the 1968 Rechtschaffen and Kales manual.
@@ -36,68 +38,37 @@ EPOCH_MICROSECONDS = 30 * US_PER_S
 
 # The labels the release writes for a scored epoch. Five name a stage of sleep. `Sleep stage W`
 # is wake, `Movement time` marks a disturbed epoch, and `Sleep stage ?` marks one the
-# technician left unscored.
-STAGE_LABELS = (
-    "Sleep stage W",
-    "Sleep stage 1",
-    "Sleep stage 2",
-    "Sleep stage 3",
-    "Sleep stage 4",
-    "Sleep stage R",
-    "Movement time",
-    "Sleep stage ?",
+# technician left unscored. Each classification task draws its target from one closed set, named
+# after the key whose values it holds, and each target is exactly one label.
+SLEEP_STAGES = LabelSet(
+    name=str(AnnotationKey.SLEEP_STAGE),
+    labels=(
+        Label(name="Sleep stage W", description="Wake."),
+        Label(name="Sleep stage 1"),
+        Label(name="Sleep stage 2"),
+        Label(name="Sleep stage 3"),
+        Label(name="Sleep stage 4"),
+        Label(name="Sleep stage R", description="Rapid eye movement (REM) sleep."),
+        Label(name="Movement time", description="An epoch that body movement obscures, so it has no stage."),
+        Label(name="Sleep stage ?", description="An epoch with no sleep-stage score from data collection."),
+    ),
 )
+STAGE_LABELS = SLEEP_STAGES.names
 
 # The five labels that say the subject was asleep. None of the other three bounds a night.
 ASLEEP_LABELS = frozenset(STAGE_LABELS[1:6])
 
 # The sexes, after each sheet is decoded. The two sheets code the column with opposite
 # meanings, so a raw code never reaches a task.
-SEX_LABELS = tuple(SEX_LETTERS.values())
+SEXES = LabelSet(
+    name=str(AnnotationKey.SEX),
+    labels=(Label(name="F", description="Female."), Label(name="M", description="Male.")),
+)
+SEX_LABELS = SEXES.names
 
 # The two nights of the telemetry study.
 CONDITION_LABELS = tuple(Condition)
-
-# The name of each closed set. A task states one of these in ``target_schema``. The annotation
-# that holds the set uses the same string as its key, so one lookup resolves it.
-_VOCABULARIES = (
-    (AnnotationKey.SLEEP_STAGE, STAGE_LABELS),
-    (AnnotationKey.SEX, SEX_LABELS),
-    (AnnotationKey.CONDITION, CONDITION_LABELS),
-)
-
-
-def name_vocabulary(key: AnnotationKey) -> str:
-    """Give the key of the annotation that holds one closed set.
-
-    Args:
-        key: The key whose values the set holds.
-
-    Returns:
-        The key, which a task also states as its ``target_schema``.
-    """
-    return f"{key}_vocabulary"
-
-
-def build_vocabularies() -> list[Annotation]:
-    """Give one annotation for each closed set a task draws its target from.
-
-    These belong to no record, so the caller attaches them to the dataset.
-
-    A set is one annotation and not one for each member. One annotation for each member states
-    that the values exist without stating that they are the whole set.
-
-    Returns:
-        One annotation for each set, in a stable order.
-    """
-    return [
-        Annotation(
-            key=name_vocabulary(key),
-            value=list(labels),
-            description=f"The values a {key!r} target takes, as the release writes them.",
-        )
-        for key, labels in _VOCABULARIES
-    ]
+CONDITIONS = LabelSet(name=str(AnnotationKey.CONDITION), labels=tuple(Label(name=str(one)) for one in Condition))
 
 
 def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation]) -> Iterator[ClassificationTask]:
@@ -123,7 +94,6 @@ def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation])
             write, or does not divide into whole epochs. Each message names the recording and
             the value that is wrong.
     """
-    schema = name_vocabulary(AnnotationKey.SLEEP_STAGE)
     for stage in span_annotations:
         label = read_value(stage.value)
         if stage.span is None:
@@ -156,7 +126,7 @@ def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation])
                 # The label the technician wrote. Merging stage 3 with stage 4 is a decision
                 # for whoever trains.
                 targets=(label,),
-                target_schema=schema,
+                label_set=SLEEP_STAGES,
                 scope=TimeInterval.micros(onset, onset + EPOCH_MICROSECONDS),
             )
 
@@ -206,14 +176,14 @@ def build_record_tasks(
         # The decoded letter, never the sheet's code. The two sheets code the column with
         # opposite meanings, so one code means two opposite things.
         targets=(_one_of(recording_id, stated, AnnotationKey.SEX, SEX_LABELS),),
-        target_schema=name_vocabulary(AnnotationKey.SEX),
+        label_set=SEXES,
     )
 
     # Only the telemetry sheet states a condition, so this one is optional.
     if AnnotationKey.CONDITION in stated:
         yield ClassificationTask(
             targets=(_one_of(recording_id, stated, AnnotationKey.CONDITION, CONDITION_LABELS),),
-            target_schema=name_vocabulary(AnnotationKey.CONDITION),
+            label_set=CONDITIONS,
         )
 
     night = find_sleep_period(span_annotations)
@@ -319,7 +289,7 @@ def iter_tasks(records: Sequence[Record]) -> Iterator[Task]:
     Raises:
         TimeFFormatError: If a scoring cannot be expanded into whole epochs. The message names
             the recording, because a task is one of hundreds of thousands.
-    """  # noqa: DOC502 (raised by build_epoch_tasks, not directly here)
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by build_epoch_tasks, not directly here)
     for record in records:
         # The two lists partition the annotations, so a key that neither builder asks about is
         # in one of them rather than in neither. Each builder then takes the part it reads.
@@ -350,7 +320,7 @@ def iter_tasks(records: Sequence[Record]) -> Iterator[Task]:
 
 
 def build_lights_off_task(
-    recording_id: str,  # noqa: ARG001 - keeps builder signatures and error context consistent
+    recording_id: str,  # ruff: ignore[unused-function-argument] - keeps builder signatures and error context consistent
     session: TimeInterval | None,
     span_annotations: Sequence[Annotation],
 ) -> TemporalLocalizationTask | None:

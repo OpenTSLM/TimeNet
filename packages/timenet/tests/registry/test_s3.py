@@ -4,16 +4,19 @@ import pytest
 boto3 = pytest.importorskip("boto3")
 pytest.importorskip("moto")
 
-from moto.server import ThreadedMotoServer  # noqa: E402
-import pyarrow.fs as pafs  # noqa: E402
+from moto.server import ThreadedMotoServer  # ruff: ignore[module-import-not-at-top-of-file]
+import pyarrow.fs as pafs  # ruff: ignore[module-import-not-at-top-of-file]
 
-from timenet.client import TimeNet  # noqa: E402
-from timenet.dataset import TimeFDataset  # noqa: E402
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError  # noqa: E402
-from timenet.reader import TimeFReader  # noqa: E402
-from timenet.registry import LocalRegistry, S3Registry  # noqa: E402
-from timenet.testing import assert_datasets_equal, make_dataset  # noqa: E402
-from timenet.types import DatasetSchema  # noqa: E402
+from timenet.client import TimeNet  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.dataset import TimeFDataset  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.errors import (  # ruff: ignore[module-import-not-at-top-of-file]
+    TimeNetDatasetNotFoundError,
+    TimeNetRegistryError,
+)
+from timenet.reader import TimeFReader  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.registry import LocalRegistry, S3Registry  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.testing import assert_datasets_equal, make_dataset  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.types import DatasetSchema  # ruff: ignore[module-import-not-at-top-of-file]
 
 
 @pytest.fixture
@@ -40,14 +43,20 @@ def s3_root(monkeypatch):
     server.stop()
 
 
+@pytest.mark.parametrize("entry_point", ["open", "load"])
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
-def test_store_and_remote_load_round_trip(s3_root, tmp_path, backend):
+def test_store_and_remote_load_round_trip(s3_root, tmp_path, backend, entry_point):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
     version = registry.store(make_dataset(), values_backend=backend)
     assert version == str(make_dataset().metadata.dataset_version)
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
-    loaded = client.load(make_dataset().metadata.dataset_id)
-    assert_datasets_equal(make_dataset(), loaded)
+    if entry_point == "open":
+        with client.open(make_dataset().metadata.dataset_id) as reader:
+            # The reader reads the release from S3, not from a downloaded copy.
+            assert isinstance(reader._version.filesystem, pafs.S3FileSystem)
+            assert_datasets_equal(make_dataset(), reader.read())
+    else:
+        assert_datasets_equal(make_dataset(), client.load(make_dataset().metadata.dataset_id))
     assert isinstance(registry.open_version(make_dataset().metadata.dataset_id).filesystem, pafs.S3FileSystem)
     assert not (tmp_path / "cache" / make_dataset().metadata.dataset_id).exists()
 
@@ -100,7 +109,7 @@ def test_download_then_load_serves_from_cache(s3_root, tmp_path):
 
 def test_get_bytes_reraises_non_404_client_errors(tmp_path, monkeypatch):
     # A missing object returns None, but any other S3 error (auth, throttling) must surface, not hide.
-    import botocore.exceptions  # noqa: PLC0415
+    import botocore.exceptions  # ruff: ignore[import-outside-top-level]
 
     registry = S3Registry("s3://tn-test/registry", cache_dir=tmp_path)
     denied = botocore.exceptions.ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "GetObject")

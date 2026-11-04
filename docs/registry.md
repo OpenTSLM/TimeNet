@@ -17,6 +17,9 @@ directory. The output of [build](build.md) is itself a valid local registry.
 
 ## Choosing a registry
 
+To read a dataset, use [`TimeNet.open()`](client.md#open-load-or-download) with its ID, or
+[`TimeFReader.open()`](timef-reader.md) with a version directory.
+
 ```python
 from timenet.registry import open_registry
 
@@ -67,21 +70,24 @@ uv add 'timenet[s3]'
 
 The layout under the prefix mirrors the local one, `org/name/version/…` with `manifest.json` beside the
 data files. `store` uploads to a temporary `version.tmp-<uuid>` prefix and moves each object into place
-(`manifest.json` last), so a failed publish never leaves a partial version. `load` reads lazily through
-a pyarrow `S3FileSystem` (range reads, no whole-version download), or from the local cache when a prior
-`download` populated it. The backend has no catalog, so `list` and `search` are unsupported: publish and
-fetch by an explicit `org/name@version`.
+(`manifest.json` last), so a failed publish never leaves a partial version. `open` reads lazily and
+`load` reads every value. Both reuse complete local copies where they exist. Otherwise they read
+remote payload ranges through a pyarrow `S3FileSystem`. The backend has no catalog, so `list` and
+`search` are unsupported: publish and fetch by an explicit `org/name@version`.
 
 ## `BaseRegistry`
 
-Every backend implements this contract: four data-access methods and one shared `search` method.
+Every backend implements this contract: four data-access methods and two shared methods,
+`download_version` and `search`.
 
 | Method | Description |
 | --- | --- |
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
 | `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version, or `TimeFFormatError` if the stored manifest's own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
+| `local_root` | The local registry or cache directory for complete releases. |
 | `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files, with its [payload sources](#payload-sources) opened from this registry. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. |
+| `download_version(dataset_id, version, dest_dir, *, force=False, manifest=None, progress_cb=None)` | Copy a version's files into a local directory (shared implementation). It stages the files under `<version>.tmp-*` with `manifest.json` last, then swaps the directory in with one rename. A subclass can override it: `RemoteRegistry` streams the files in parallel. |
 | `search(...)` | Filter datasets (shared implementation). |
 
 `LocalRegistry` serves a `<root>/<dataset_id>/<version>/` tree. `RemoteRegistry` serves the same layout
@@ -105,7 +111,8 @@ payload sources:
   cached copies and otherwise reads remotely. See [Opening a version](timef-reader.md#opening-a-version)
   for the checks and their errors.
 - `download_version` downloads complete copies of the version and of each payload source, and checks
-  each source against the pins.
+  each source against the pins. If a downloaded file has another size or checksum than its manifest
+  records, the download raises `TimeNetFileError` and keeps no partial copy.
 - `store` refuses a version whose payload sources the registry does not hold, holds in another form,
   or that read payloads of the version itself. The [writer](timef-writer.md) checks this at the
   first reuse of each source, and raises the errors that opening raises for a missing or differing
@@ -114,6 +121,32 @@ payload sources:
 A version lists every payload source it reads from, so a registry resolves only those, never the
 sources' own sources.
 
+A client of a local registry prepares the version and its payload sources before a read. For each
+of these releases, the client reuses a complete copy, or copies the release from `fetch_from`. If
+`auto_build` is set, the client can also build the release. If the client cannot get a release,
+the read raises an error. The client builds a payload source with its own connector, at the exact
+version of the source.
+
+If `fetch_from` is set, the client repairs a damaged copy from that registry. Without `fetch_from`,
+the read raises `TimeNetFileError` for a damaged copy. A remote client never runs connector code.
+It rejects `fetch_from`. See [Open, load, or download](client.md#open-load-or-download).
+
+### Remote reads of payload sources
+
+The `open_version()` method of an HTTP or S3 registry resolves the manifests of the payload sources
+before it returns. Reads then use complete cached copies where they exist. Otherwise they read byte
+ranges of the remote files, as each read needs them. The first read of Records or tasks downloads
+the catalog of the version and makes sure that it matches the manifest. A read never opens the
+catalog of a parent release.
+
+HTTP reads use the range reader and the read-ahead cache of fsspec. The object server must support
+byte ranges. The client requests a new signed URL after one expires. The registry token goes only
+with API requests.
+
+A read of byte ranges cannot make sure that a whole file matches its checksum. `download()` and
+`download_version()` copy complete files, and make sure that each file has its recorded size and
+checksum. `TimeFReader.verify()` reads and hashes every file that a release reads.
+
 ## Writing to a registry
 
 A `WritableRegistry` adds one write method to the read contract. As a result,
@@ -121,7 +154,7 @@ A `WritableRegistry` adds one write method to the read contract. As a result,
 
 | Method | Description |
 | --- | --- |
-| `store(dataset, *, force=False, progress_cb=None)` | Compile a dataset and publish it; returns the stored version. Derives the schema first if absent, skips an already-committed version unless `force`, and checks every payload source in this registry. |
+| `store(dataset, *, force=False, values_backend="parquet", progress_cb=None)` | Compile a dataset and publish it; returns the stored version. Derives the schema first if absent, skips an already-committed version unless `force`, and checks every payload source in this registry. `values_backend` picks the values plane format: `"parquet"` or `"zarr"`. |
 | `exists(dataset_id, version)` | Whether a committed version already exists (shared implementation). |
 
 `LocalRegistry` implements `store` by streaming the dataset through a [`TimeFWriter`](timef-writer.md),

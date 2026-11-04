@@ -7,11 +7,13 @@ local directory, an S3 prefix, or a remote service. So ``store`` is the one abst
 """
 
 from abc import ABC, abstractmethod
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDatasetNotFoundError
+from timenet.manifest import PayloadSource
 from timenet.registry.base import BaseRegistry
+from timenet.types.references import DatasetRef
 from timenet.writer import WriteProgressEvent
 
 
@@ -26,6 +28,7 @@ class WritableRegistry(BaseRegistry, ABC):
         force: bool = False,
         values_backend: str = "parquet",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
+        pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
     ) -> str:
         """Compile a dataset and publish it to this registry.
 
@@ -37,6 +40,8 @@ class WritableRegistry(BaseRegistry, ABC):
             force: Overwrite an already-committed version instead of skipping it.
             values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
             progress_cb: Optional writer progress callback.
+            pinned_by: The releases that already read files of this release, with their pins. The
+                writer publishes only if it reproduced each pinned file.
 
         Returns:
             The stored version string.

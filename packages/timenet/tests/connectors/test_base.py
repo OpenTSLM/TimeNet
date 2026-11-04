@@ -1,4 +1,3 @@
-from abc import ABC
 from pathlib import Path
 
 import pytest
@@ -8,15 +7,26 @@ from timenet.dataset import TimeFDataset
 from timenet.testing import make_dataset
 
 
-def test_base_connector_is_abstract():
-    assert issubclass(BaseConnector, ABC)
-    # download() is concrete now (it bridges to download_async); only convert() stays abstract.
-    assert BaseConnector.__abstractmethods__ == frozenset({"convert"})
+def test_connector_without_convert_or_compose_fails_at_construction():
+    class NoConversion(BaseConnector[str]):
+        def download(self, cache_dir):
+            return []
+
+    with pytest.raises(TypeError, match="must implement convert"):
+        NoConversion()
 
 
-def test_base_connector_cannot_instantiate():
-    with pytest.raises(TypeError):
-        BaseConnector()  # ty: ignore[call-non-callable]
+def test_connector_whose_init_skips_the_base_fails_without_convert_or_compose():
+    class NoConversion(BaseConnector[str]):
+        def __init__(self) -> None:
+            # Does not call super().__init__(), so the check runs in __new__.
+            self.ready = True
+
+        def download(self, cache_dir):
+            return []
+
+    with pytest.raises(TypeError, match=r"NoConversion must implement convert\(\) or compose\(\)"):
+        NoConversion()
 
 
 def test_concrete_connector_implements_contract(tmp_path):
@@ -70,4 +80,21 @@ def test_connector_implementing_neither_download_raises(tmp_path):
             return make_dataset()
 
     with pytest.raises(TypeError, match="download"):
+        NoDownload()
+
+
+def test_connector_whose_init_skips_the_base_fails_without_download(tmp_path):
+    card = _write_card(tmp_path)
+
+    class NoDownload(BaseConnector[str]):
+        CARD = card
+
+        def __init__(self) -> None:
+            # Does not call super().__init__(), so the check runs in __new__.
+            self.ready = True
+
+        def convert(self, raw_refs: list[str]) -> TimeFDataset:
+            return make_dataset()
+
+    with pytest.raises(TypeError, match=r"NoDownload must implement download\(\) or download_async\(\)"):
         NoDownload()

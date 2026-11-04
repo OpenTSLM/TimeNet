@@ -7,7 +7,7 @@ from datetime import datetime
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset.source import Source
+from timenet.dataset.source import Source, check_sibling_names
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
@@ -24,13 +24,13 @@ class Record(SupportsAnnotate):
     You create a record with :meth:`~timenet.dataset.TimeFDataset.add_record`. The record is mutable,
     so you can add ``annotations`` after construction.
 
-    A record has no metadata field. Record-level facts, such as a subject's age or the recording
-    device, are :class:`~timenet.types.Annotation` objects with no ``span``. Such an annotation can
+    Use ``metadata`` for untyped JSON details. Record-level facts, such as a subject's age or the
+    recording device, are :class:`~timenet.types.Annotation` objects with no ``span``. Such an annotation can
     also state a ``unit``, and it travels with every window drawn later from the record.
     """
 
     sources: tuple[Source, ...] = ()
-    """The root sources that belong to this recording."""
+    """The root sources that belong to this recording, each with a distinct name."""
     start_time: TimeOrigin = field(default_factory=TimeOrigin)
     """The common relative zero, with an optional absolute timestamp."""
     annotations: tuple[Annotation, ...] = ()
@@ -49,12 +49,28 @@ class Record(SupportsAnnotate):
         """Validate the record hierarchy and its optional single-clock session span.
 
         Raises:
-            TimeFValidationError: If ``time_span`` is not a whole-record ``TimeInterval`` or does not
-                contain some series' window.
+            TimeFValidationError: If two root sources have the same name, or ``time_span`` is not a
+                whole-record ``TimeInterval`` or does not contain some series' window.
         """
+        check_sibling_names(self.sources, self._label)
         if not isinstance(self.start_time, TimeOrigin):
             raise TimeFValidationError("Record.start_time must be a TimeOrigin")
         self.metadata = validate_json_mapping(self.metadata)
+        self._check_times()
+        for annotation in self.annotations:
+            self._validate_annotation(annotation)
+
+    def _check_times(self) -> None:
+        """Check the time of each Signal and the ``time_span``, as construction does.
+
+        A caller can assign ``time_span``, or the Signals of a Source, after construction. An import
+        that adds Signals to a copy runs this check again.
+
+        Raises:
+            TimeFValidationError: If the window of a Signal does not fit int64 microseconds, or
+                ``time_span`` is not a whole-record ``TimeInterval`` or does not contain some series'
+                window.
+        """
         for signal in self.signals:
             if (window := signal.span_us) is not None:
                 for endpoint in window:
@@ -78,9 +94,6 @@ class Record(SupportsAnnotate):
                         f"every series' window, but {ts.name!r} covers {window} us"
                     )
 
-        for annotation in self.annotations:
-            self._validate_annotation(annotation)
-
     @property
     def id(self) -> EntityId:
         """The record's id, unique among the records of its dataset.
@@ -89,7 +102,7 @@ class Record(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: If the record is not in a dataset yet.
-        """  # noqa: DOC502 (raised by assigned_id)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by assigned_id)
         return assigned_id(self._id, "Record")
 
     @property
@@ -99,7 +112,7 @@ class Record(SupportsAnnotate):
 
     @property
     def signals(self) -> tuple[Signal, ...]:
-        """Return every signal in this record's hierarchy."""
+        """Every signal in this record's hierarchy."""
         return tuple(self.walk_signals())
 
     def walk_sources(self) -> Iterable[Source]:
@@ -110,7 +123,7 @@ class Record(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: If a source is attached twice or the hierarchy contains a cycle.
-        """  # noqa: DOC502 - raised by the nested traversal helper
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the nested traversal helper
         seen: set[int] = set()
         active: set[int] = set()
 
@@ -129,6 +142,20 @@ class Record(SupportsAnnotate):
 
         for root in sorted(self.sources, key=lambda item: item.name):
             yield from walk(root)
+
+    def _check_source_names(self) -> None:
+        """Reject sibling Sources that share a name, anywhere in the hierarchy.
+
+        Construction checks the rule, but a caller can assign ``sources`` on the record or on a
+        source later.
+
+        Raises:
+            TimeFValidationError: If two root sources, or two child sources of one source, have the
+                same name.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by check_sibling_names
+        check_sibling_names(self.sources, self._label)
+        for source in self.walk_sources():
+            check_sibling_names(source.sources, f"source {source.name!r}")
 
     def walk_signals(self) -> Iterable[Signal]:
         """Yield every signal in deterministic source and signal order."""
@@ -198,7 +225,7 @@ class Record(SupportsAnnotate):
                 scoped span names a timeless series. If the span falls outside the window its scope
                 selects: the intersection of named series, the record's ``time_span``, or the union of
                 the series' windows and ``warn_when_outside`` is False.
-        """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _validate_annotation, not directly here)
         self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
         attached = annotation._new_occurrence()
         self.annotations = (*self.annotations, attached)
@@ -222,7 +249,7 @@ class Record(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: as documented on :meth:`annotate`.
-        """  # noqa: DOC502 (raised by _validate_annotation, not directly here)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _validate_annotation, not directly here)
         batch = tuple(annotations)
         for annotation in batch:
             self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
@@ -242,7 +269,7 @@ class Record(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: as documented on :meth:`annotate`.
-        """  # noqa: DOC502 (raised by check_span_within_window, not directly here)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by check_span_within_window, not directly here)
         if annotation.span is not None:
             check_span_within_window(
                 f"annotation {annotation.key!r}",

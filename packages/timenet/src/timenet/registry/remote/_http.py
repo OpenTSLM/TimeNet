@@ -242,7 +242,7 @@ class RegistryHttpClient:
 
         Raises:
             TimeNetRegistryError: If the download endpoint does not redirect.
-        """  # noqa: DOC502 - raised by _redirect_target
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _redirect_target
         path = _download_path(dataset_id, version, relpath)
         response = _send_with_retry(lambda: self._client.get(path, headers=self.api_headers(), follow_redirects=False))
         return _redirect_target(response, path)

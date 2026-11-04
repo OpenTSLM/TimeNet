@@ -21,7 +21,8 @@ represent ECGs, accelerometer traces, market series, and other sequential data.
 
 A [connector](connectors.md) turns a raw source into a TimeF version. A
 [registry](registry.md) stores immutable versions. The [client](client.md) searches the registry and
-loads datasets with lazy Signal values. Consumer code never runs a connector.
+opens datasets with lazy Signal values, or loads them with every value in memory. Consumer code
+never runs a connector.
 
 - [`BaseConnector`](connectors.md) is the only contract a new data source must satisfy.
 - [`TimeFDataset`](timef-dataset.md) is the in-memory model a connector populates during `convert()`.

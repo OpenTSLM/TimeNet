@@ -33,7 +33,7 @@ class ParentAlias(str):
         return super().__new__(cls, value)
 
     @classmethod
-    def __get_pydantic_core_schema__(  # noqa: PLW3201 - pydantic's hook for a custom type
+    def __get_pydantic_core_schema__(  # ruff: ignore[bad-dunder-method-name] - pydantic's hook for a custom type
         cls, source: Any, handler: GetCoreSchemaHandler
     ) -> core_schema.CoreSchema:
         return core_schema.no_info_after_validator_function(

@@ -117,7 +117,8 @@ def test_streamed_tasks_get_stable_ids_by_stream_position(tmp_path):
     record = dataset.add_record(record=_record())
     dataset.set_task_stream([AnswerTask], lambda: (AnswerTask(inputs=(record,), targets=(str(i),)) for i in range(3)))
 
-    restored = TimeFDataset.open(path=dataset.write(path=tmp_path))
+    with TimeFReader.open(dataset.write(path=tmp_path)) as reader:
+        restored = reader.read()
 
     assert {task.id: task.targets for task in restored.tasks} == {1: ("0",), 2: ("1",), 3: ("2",)}
     assert restored.last_ids[ObjectKind.TASK] == 3
@@ -130,7 +131,8 @@ def test_an_edit_continues_the_stored_counters_and_never_reuses_an_id(tmp_path):
     base_dir = dataset.write(path=tmp_path)
 
     edited_dir = edit_version(base_dir, dataset_version=Version(1, 1, 0), remove_record_ids=[3])
-    edited = TimeFDataset.open(path=edited_dir)
+    with TimeFReader.open(edited_dir) as reader:
+        edited = reader.read()
     added = edited.add_record(record=_record())
 
     assert [record.id for record in edited.records] == [1, 2, 4]

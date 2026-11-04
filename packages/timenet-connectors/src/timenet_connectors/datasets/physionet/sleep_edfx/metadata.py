@@ -25,8 +25,7 @@ from timenet.errors import TimeFValidationError
 from timenet.types import US_PER_S, Annotation, TimePoint
 from timenet_connectors.bases.edf import reader
 from timenet_connectors.datasets.physionet.sleep_edfx import tables
-from timenet_connectors.datasets.physionet.sleep_edfx.keys import SEX_LETTERS, AnnotationKey
-from timenet_connectors.demographics import Sex
+from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 
 
 # The patient field of an EDF header is anonymous in this release, and it keeps a sex and an age
@@ -135,7 +134,7 @@ def build_recording_start_local(recording_id: str, start_time: datetime) -> Anno
     )
 
 
-def build_demographics_note(patient_id: str, years: int, sex: Sex) -> Annotation | None:
+def build_demographics_note(patient_id: str, years: int, sex: str) -> Annotation | None:
     """Compare the two readings of a subject's demographics, and note where they differ.
 
     The EDF header keeps an age and a sex, and so does the subject table. The two sometimes
@@ -157,7 +156,7 @@ def build_demographics_note(patient_id: str, years: int, sex: Sex) -> Annotation
     if match is None:
         return None
 
-    header_sex = Sex.FEMALE if match[1].lower() == "female" else Sex.MALE
+    header_sex = "F" if match[1].lower() == "female" else "M"
     header_years = int(match[2])
     kinds = tuple(kind for kind, differs in (("age", header_years != years), ("sex", header_sex != sex)) if differs)
     if not kinds:
@@ -166,8 +165,8 @@ def build_demographics_note(patient_id: str, years: int, sex: Sex) -> Annotation
     return Annotation(
         key=AnnotationKey.DEMOGRAPHICS_NOTE,
         value=(
-            f"the EDF header states sex {SEX_LETTERS[header_sex]} and age {header_years}. The subject table "
-            f"states sex {SEX_LETTERS[sex]} and age {years}. This record carries what the table states."
+            f"the EDF header states sex {header_sex} and age {header_years}. The subject table states "
+            f"sex {sex} and age {years}. This record carries what the table states."
         ),
         description="The EDF header and the subject table disagree here on age or sex. See the connector README.",
     )
@@ -222,6 +221,7 @@ class SubjectTables:
         recording: RecordingIdentity,
         header: reader.EdfHeader,
     ) -> list[Annotation]:
+        # ruff: ignore[docstring-extraneous-exception] (raised by find_subject_row and find_night, not directly here)
         """Give every metadata annotation one recording carries.
 
         A value from a closed set comes from ``metadata_annotation``, so every record that
@@ -237,7 +237,7 @@ class SubjectTables:
 
         Raises:
             TimeFFormatError: If the table of that study holds no row for the recording.
-        """  # noqa: DOC502 (raised by find_subject_row and find_night, not directly here)
+        """
         shape = self._shapes[recording.study]
         row = tables.find_subject_row(
             self._tables[recording.study], shape, recording.subject_number, recording.night, recording.recording_id
@@ -247,7 +247,7 @@ class SubjectTables:
         built = [
             metadata_annotation.get_annotation(AnnotationKey.STUDY, recording.study),
             metadata_annotation.get_annotation(AnnotationKey.NIGHT, recording.night),
-            metadata_annotation.get_annotation(AnnotationKey.SEX, SEX_LETTERS[row.sex]),
+            metadata_annotation.get_annotation(AnnotationKey.SEX, row.sex),
             build_age(row.age),
             build_recording_start_local(recording.recording_id, header.start_time),
         ]

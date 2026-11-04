@@ -10,7 +10,10 @@ tags:
 
 A connector is the unit of dataset integration. Each dataset has one connector class. A connector
 fetches raw data and converts it into a [`TimeFDataset`](timef-dataset.md). A connector has no
-knowledge of the registry, the engine, or other connectors. The consumer SDK never runs a connector.
+knowledge of the registry, the engine, or other connectors. A child connector reads its parent
+releases only through the readers that the engine passes to it. The consumer SDK never imports
+connector code. On a local registry, `TimeNet.load` builds a missing dataset through the
+`timenet.builders` entry point. Pass `auto_build=False` to turn this off.
 
 `BaseConnector` is the connector contract in the `timenet` package. Concrete connectors ship in
 `timenet-connectors`, beside their [dataset cards](manifest.md).
@@ -36,8 +39,11 @@ The two stages stay separate. This lets the engine drive
 | --- | --- | --- |
 | `download(cache_dir)` | I/O only | Fetch or find raw files and return lightweight references. The method is idempotent and does not parse data. |
 | `convert(raw_refs)` | local work | Parse the references into a `TimeFDataset`. Do not use the network. |
+| `compose(raw_refs, context)` | local work | Build a child dataset from the references and the opened parent releases. The default calls `convert(raw_refs)`. |
 
-You must implement `convert`. It is the only required method. `download` depends on I/O, so it has
+You must implement `convert`. Unless the dataset card declares parent releases, it is the only
+required method. If the card declares parent releases, you implement `compose` instead, as
+[Compose a child dataset](#compose-a-child-dataset) describes. `download` depends on I/O, so it has
 two forms. You can override `download(cache_dir)` for a synchronous fetch. Alternatively, you can
 define `async download_async(cache_dir)` to fetch artifacts at the same time. Implement only one of
 these two forms. The engine always calls the synchronous `download()`. Its default implementation
@@ -53,98 +59,11 @@ writer after conversion.
 
 A connector takes no constructor arguments. Configuration comes from environment variables that
 `__init__` reads. `TRaw` is the reference type that the connector defines, for example a path, a small
-dataclass, or an S3 key. The connector is generic through PEP 695:
+dataclass, or an S3 key. The connector is generic over `TRaw`:
 `class MyConnector(BaseConnector[MyRawRef])`.
 
----
-
-## Converting with `DatasetLoader`
-
-Use `timenet_connectors.bases.loader.DatasetLoader` to keep the parsing out of the connector. The
-loader reads the downloaded files once, builds the Records, the tasks and the annotations that come
-from the files, and adds them to the dataset. The connector keeps `download`, adds the annotations
-that do not come from the files, such as the source revision, and calls the loader in `convert`.
-
-```python
-from timenet_connectors.bases.loader import DatasetLoader
-
-
-class MyDatasetLoader(DatasetLoader[MyRawRef]):
-    TASK_TYPES = (ClassificationTask,)
-
-    # Each dataset also implements parse_from(refs) and records().
-    # annotate_dataset sets the rhythm vocabulary when populate runs.
-    _rhythm_vocabulary: Annotation | None = None
-
-    def annotate_dataset(self, dataset: TimeFDataset) -> None:
-        # Keep the copy that annotate returns: the rhythm tasks refer to it.
-        self._rhythm_vocabulary = dataset.annotate(
-            Annotation(key="rhythm_vocabulary", value=self._rhythms)
-        )
-
-    def binary_label_tasks(self) -> Iterator[ClassificationTask]:
-        """Is the beat normal or abnormal?"""
-        for row in self._rows:
-            yield ClassificationTask(
-                inputs=(self._records[row.key],), targets=(row.binary,)
-            )
-
-    def rhythm_label_tasks(self) -> Iterator[ClassificationTask]:
-        """Which of the 5 rhythm classes is the beat?"""
-        if self._rhythm_vocabulary is None:
-            raise TimeFValidationError("call populate before the rhythm tasks")
-        for row in self._rows:
-            yield ClassificationTask(
-                inputs=(self._records[row.key],),
-                targets=(row.rhythm,),
-                input_annotations=(self._rhythm_vocabulary,),
-            )
-
-    def tasks(self) -> Iterator[Task]:
-        yield from self.binary_label_tasks()
-        yield from self.rhythm_label_tasks()
-
-
-class MyConnector(BaseConnector[MyRawRef]):
-    def convert(self, raw_refs: list[MyRawRef]) -> TimeFDataset:
-        dataset = TimeFDataset(metadata=self.metadata())
-        for annotation in PROVENANCE:
-            dataset.annotate(annotation)
-        return MyDatasetLoader.parse_from(raw_refs).populate(dataset)
-```
-
-| Method | Provided by | Contract |
-| --- | --- | --- |
-| `parse_from(refs)` | your loader | Read the downloaded files once and make sure that they are correct. `refs` has the type `TRaw` of the connector. |
-| `records()` | your loader | Return each Record once, in the same order on each run. The tasks use these same objects. |
-| `tasks()` | your loader | Return each TimeNet task. Each call starts again at the first task. |
-| `annotate_dataset(dataset)` | your loader, optional | Attach the annotations of the full dataset that come from the files. |
-| `populate(dataset)` | the base | Add the Records, attach the dataset annotations and stream the tasks, into a dataset that has no tasks. |
-
-The loader attaches each annotation that comes from the files. Attach the annotations of a Record,
-a Source or a Signal to that object in `parse_from`. Attach the annotations of the full dataset,
-such as a label vocabulary, in `annotate_dataset`. Attach the annotations of a task to the task.
-
-`annotate` attaches a copy of the annotation and returns that copy. A task that refers to an
-annotation in `input_annotations` or `target_annotations` must use that copy, so keep it. A task
-that uses the original fails when the dataset is written. The dataset reads the tasks only when it
-is written or read, after `populate` has called `annotate_dataset`. So `tasks()` can use the copies
-that `annotate_dataset` kept. These copies belong to one dataset, so a loader fills only one
-dataset.
-
-A loader lists each TimeNet task type that it makes in `TASK_TYPES`. `populate` gives these types to
-the dataset. When the dataset is written, the writer stops on a task whose type is not in this list.
-
-The dataset authors often define several tasks. Two of them can have the same TimeNet type, such as
-the binary and the rhythm label in the example. Give each task that the authors define its own
-method, with the name that the authors use. Then `loader.binary_label_tasks()` returns only the
-binary-label tasks. A test can call this method directly, without a dataset. A method that uses
-dataset annotations, such as `rhythm_label_tasks`, needs `populate` first.
-
-The dataset does not keep the tasks of a loader. It calls `tasks()` each time that it reads them. So
-`TimeFDataset.tasks`, `tasks_of` and `tasks_for` stay empty after `populate`. Use `iter_tasks` to
-read the tasks one by one. `get_split`, `get_splits` and `get_all` keep each selected task in
-memory.
+If an assumption about your source data, downloads, or parents does not hold, raise
+`TimeNetConnectorError` from `timenet.errors`.
 
 ---
 
@@ -176,7 +95,9 @@ directly. No splitter is needed:
 ```python
 from timenet.types.splits import Split
 
-task = make_task(sample, split=Split.TRAIN)
+record = make_record(sample)
+dataset.add_record(record=record)
+task = make_task(sample, record, split=Split.TRAIN)
 dataset.add_task(task=task)
 ```
 
@@ -248,13 +169,16 @@ When constructing TimeNet tasks, copy the partition name onto each task:
 ```python
 for split_name, samples_in_split in splits.items():
     for sample in samples_in_split:
-        task = make_task(sample, split=split_name)
+        record = make_record(sample)
+        dataset.add_record(record=record)
+        task = make_task(sample, record, split=split_name)
         dataset.add_task(task=task)
 ```
 
-Here `make_task` is the connector's own task-construction function. Consumers then select stored
-assignments through `dataset.get_train()`, `dataset.get_test()`, or `dataset.iter_tasks(split=...)`;
-they do not rerun the splitter.
+Here `make_record` and `make_task` are the connector's own construction functions. A task refers to
+its Record by object, so add the Record to the dataset before the task. Consumers then select stored
+assignments through `dataset.get_train()`, `dataset.get_test()`, or `dataset.iter_tasks(split=...)`.
+They do not run the splitter again.
 
 TSQA dataset version `1.1.0` introduced stored splits. Version `1.2.0` generates new assignments
 with scikit-learn 1.9.1: 80/10/10 train/validation/test using ten folds and seed 42, balanced by
@@ -305,8 +229,10 @@ automatically (needed only for gated or private sources). Downloaded source file
 A credentialed dataset (a PhysioNet DUA-gated one, for example) declares `access: credentialed`
 and an `access_url` on its card. TimeNet never hosts such data, so it is build-your-own: get access
 at the `access_url`, set the provider credential in the environment (the way `HF_TOKEN` already
-works), and run `timenet-build build <id>` yourself. A `load` or `download` of a credentialed
-dataset from a hosted registry raises with the `access_url` instead of serving bytes.
+works), and run `timenet-build build <id>` yourself. An `open`, `load`, or `download` of a
+credentialed dataset from a hosted registry raises `TimeNetAccessError` instead of serving bytes.
+The error names each `access_url` that the dataset needs, with the release that sets it. A child
+dataset can need the access pages of its ancestors.
 
 ## Downloading artifacts
 
@@ -360,12 +286,16 @@ pull their database archive.
 ## Example connectors
 
 - `timenet/hello-world` is a synthetic, offline reference connector. It needs no network and produces
-  a deterministic dataset for examples and round-trip tests. It covers nested Sources, shared
-  descriptors, windowed Signals, annotations, and several task types.
+  a deterministic dataset for examples and round-trip tests. It covers shared descriptors, windowed
+  Signals, annotations, and several task types.
 - `chengsenwang/tsqa` is a time-series QA dataset. Each row's series becomes a Signal, and each
   row's question and answer become an `AnswerTask`. It downloads the Hub's parquet conversion of
   the dataset at a pinned commit, through `BaseHuggingFaceConnector`, so its `requirements.txt` names
   `huggingface_hub`.
+- `physionet/ptb-xl` is a base dataset without tasks. It holds the PTB-XL recordings with their
+  clinical annotations, for children to import from.
+- The connector of `physionet/ecg-qa-cot` composes the dataset from `physionet/ptb-xl`. It imports
+  the recordings and adds questions with chain-of-thought rationales.
 
 ```bash
 timenet-build build timenet/hello-world             # offline, synthetic
@@ -385,6 +315,78 @@ references directly to `convert()` and skip `download`.
 After the build, you can load and inspect a dataset with the SDK. See `examples/load_tsqa.py`. This
 example loads a dataset and calls `describe()` to print its identity, its counts, its columns per
 spec, and a record preview.
+
+## Compose a child dataset
+
+A child dataset reuses objects of other datasets, its parent releases. Its card declares each
+parent release under `parents`, by a parent alias. A parent alias is the name that the child gives
+the parent:
+
+```yaml
+parents:
+  ptbxl: physionet/ptb-xl@1.0.0
+```
+
+The connector of a child overrides `compose(raw_refs, context)`. The default `compose` calls
+`convert(raw_refs)`. If the card declares parents and the connector does not override `compose`,
+the build raises before it opens a parent or downloads anything.
+
+Before the connector runs, the build prepares each parent release in the output registry, as
+[Prepare parent releases](build.md#prepare-parent-releases) describes. The engine then opens each
+parent as a `TimeFReader` and passes the readers in a `BuildContext`, by parent alias. The connector
+copies objects into the child with `dataset.import_from()`:
+
+```python
+from timenet.connectors.context import BuildContext
+from timenet.dataset import TimeFDataset
+from timenet.types.reference_keys import ParentAlias
+
+
+def compose(self, raw_refs, context: BuildContext) -> TimeFDataset:
+    dataset = TimeFDataset(metadata=self.metadata())
+    ptbxl = context.parents[ParentAlias("ptbxl")]
+    # Find parent Records by a key of the source in their metadata.
+    selected = [
+        record.id
+        for record in ptbxl.iter_records(with_annotations=False)
+        if record.metadata["ecg_id"] in {1, 2}
+    ]
+    # Import them by the IDs that the parent gives them.
+    imported = dataset.import_from(ptbxl, records=selected)
+    for copy in imported.records.values():
+        copy.metadata["cohort"] = "selected"
+    return dataset
+```
+
+[Importing from a parent](timef-dataset.md#importing-from-a-parent) describes what an import copies,
+how a later import reuses the copies, and how to remove imported objects.
+
+After `compose` returns, the engine records each declared parent in the dataset: its card and its
+lineage. It does this also for a parent that the connector imported nothing from. A connector
+therefore does not call `import_from()` only to record a parent. The card of the child keeps the
+access that its author declared. The effective access level of the child is the strictest level of
+its card and of the cards in its lineage, as [The parent](timef-dataset.md#the-parent) describes.
+
+The copies keep handles to the stored values of the parent. The engine therefore writes the dataset
+before it closes the parent readers. A test must do the same. Open the parents with
+`open_parents()` from `timenet.engine`. Write the composed dataset inside the `with` block:
+
+```python
+from timenet.engine import open_parents, store_dataset
+from timenet.registry import LocalRegistry
+
+connector = MyConnector()
+with open_parents(connector.metadata(), LocalRegistry(root)) as context:
+    dataset = connector.compose(connector.download(cache_dir), context)
+    store_dataset(dataset, root)
+```
+
+The written child stores no values for the copies. It reads them from the payload sources that its
+manifest pins, as [Shared payloads](timef-format.md#shared-payloads) describes.
+
+An import copies every annotation of the parent objects. The child decides which of them it
+publishes. For example, a parent can carry an official split as annotations. A child that follows
+that split keeps them. A child with a split of its own removes them and adds its own.
 
 ---
 

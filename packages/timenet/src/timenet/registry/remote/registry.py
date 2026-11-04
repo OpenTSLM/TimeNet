@@ -5,7 +5,7 @@ searches the catalog, fetches manifests, streams files, downloads versions, and 
 Artifact bytes never pass through the API. The service hands back presigned URLs.
 """
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from pathlib import Path
 import shutil
 import tempfile
@@ -17,7 +17,7 @@ import pyarrow.fs as pafs
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetRegistryError
-from timenet.manifest import Manifest
+from timenet.manifest import Manifest, PayloadSource
 from timenet.registry._paths import release_dir
 from timenet.registry.lazy_read import LazyReadRegistry
 from timenet.registry.remote._download import ProgressCallback, download_version_files
@@ -92,7 +92,7 @@ class RemoteRegistry(LazyReadRegistry):
 
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
-        """  # noqa: DOC502 (raised by the HTTP client on 404, not directly here)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by the HTTP client on 404, not directly here)
         resolved = self._resolve_latest(dataset_id) if is_latest(version) else version
         text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
         return Manifest.model_validate_json(text)
@@ -114,7 +114,8 @@ class RemoteRegistry(LazyReadRegistry):
         url = self._http.resolve_presigned(dataset_id, version, relpath)
         buffer = cast(
             BinaryIO,
-            tempfile.SpooledTemporaryFile(max_size=8 * 2**20),  # noqa: SIM115 (returned to the caller)
+            # ruff: ignore[open-file-with-context-handler] (returned to the caller)
+            tempfile.SpooledTemporaryFile(max_size=8 * 2**20),
         )
         self._http.stream_to(url, buffer)
         buffer.seek(0)
@@ -132,7 +133,7 @@ class RemoteRegistry(LazyReadRegistry):
         filesystem = RegistryFileSystem(self._base_url, files, token=self._http.token, transport=self._http.transport)
         return DatasetVersion(manifest, pafs.PyFileSystem(pafs.FSSpecHandler(filesystem)), root)
 
-    def _download_release(  # noqa: PLR0913
+    def _download_release(  # ruff: ignore[too-many-arguments]
         self,
         dataset_id: str,
         version: str,
@@ -165,6 +166,7 @@ class RemoteRegistry(LazyReadRegistry):
         force: bool = False,
         values_backend: str = "parquet",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
+        pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
     ) -> str:
         """Compile a dataset locally and publish it to the remote registry.
 
@@ -177,6 +179,8 @@ class RemoteRegistry(LazyReadRegistry):
             force: Publish even if the version is already committed.
             values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
             progress_cb: Optional writer progress callback.
+            pinned_by: The releases that already read files of this release, with their pins. The
+                writer publishes only if it reproduced each pinned file.
 
         Returns:
             The stored version string.
@@ -194,7 +198,12 @@ class RemoteRegistry(LazyReadRegistry):
         try:
             # The writer stages locally but checks every payload source against this registry.
             with TimeFWriter(
-                staging_root, dataset, values_backend=values_backend, progress_cb=progress_cb, registry=self
+                staging_root,
+                dataset,
+                values_backend=values_backend,
+                progress_cb=progress_cb,
+                registry=self,
+                pinned_by=pinned_by,
             ) as writer:
                 writer.write()
             version_dir = release_dir(staging_root, DatasetRef.parse(f"{dataset_id}@{version}"))
