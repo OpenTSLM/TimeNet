@@ -460,7 +460,7 @@ def test_metadata_and_recordings_must_name_the_same_participants(tmp_path, chang
         ("metadata.csv", "P101,18-29,M", "P101,18-29,", "no value for 'sex'"),
         ("metadata.csv", "P101,18-29,M", "P101,18-29", "no value for 'sex'"),
         ("annotation-label-dictionary.csv", "label:Walmsley2020", "label:Other", "expected the columns"),
-        # Reject unknown schemes so that every column follows a known schema.
+        # Reject an unknown scheme column, so that the connector checks every column it reads.
         (
             "annotation-label-dictionary.csv",
             "label:Walmsley2020\n",
