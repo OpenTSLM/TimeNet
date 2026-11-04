@@ -90,7 +90,7 @@ def build(
     fetch_from: str | None = typer.Option(
         None,
         "--fetch-from",
-        help="Copy missing parent releases from this registry URI.",
+        help="Copy missing parent releases from this registry URI (default for a remote --out: that registry).",
     ),
     build_parents: bool = typer.Option(
         False, "--build-parents", help="Build missing parent releases from their installed connectors."
@@ -127,10 +127,11 @@ def build(
     instead, which is what you want while writing a connector.
 
     A dataset whose card declares ``parents`` needs those exact parent releases in the local
-    registry. ``--fetch-from`` names a registry to copy a missing parent from. ``--build-parents``
-    builds a missing parent from its own connector. If neither option obtains a missing parent, the
-    build fails before any download. The build prepares every parent before the dataset itself. It
-    never builds a parent over a release that the local registry already holds.
+    registry. ``--fetch-from`` names a registry to copy a missing parent from. For a remote
+    ``--out``, that registry is the default, because it holds the parents of its releases.
+    ``--build-parents`` builds a missing parent from its own connector. If neither option obtains a
+    missing parent, the build fails before any download. The build prepares every parent before the
+    dataset itself. It never builds a parent over a release that the local registry already holds.
     If the local registry already holds the version, the build needs only the payload sources of
     the version. It prepares them the same way as a parent.
 
@@ -166,6 +167,7 @@ def build(
                 options=BuildOptions(
                     keep_cache=keep_cache,
                     progress=progress,
+                    quiet=console.quiet,
                     isolation=None if isolation is None else ("on" if isolation else "off"),
                 ),
             )
@@ -203,7 +205,8 @@ def _build_to(  # ruff: ignore[too-many-arguments]
     Args:
         dataset_id: The dataset ID.
         target: The local directory, or the registry that is not local.
-        fetch_from: The registry to copy missing parents from, or ``None``.
+        fetch_from: The registry to copy missing parents from, or ``None``. For a remote output,
+            ``None`` copies them from the remote output.
         build_parents: Build missing parents with their installed connectors.
         force: Build the release again, even if the local registry holds it.
         pinned_by: The releases that already read files of the release, with their pins.
@@ -229,6 +232,9 @@ def _build_to(  # ruff: ignore[too-many-arguments]
         return str(release.version)
     else:
         store, remote = LocalRegistry(settings().registry_path), target
+        # A build into the remote registry found the parents there. So without --fetch-from, the build
+        # copies a missing parent from the remote registry into the local one.
+        fetch_from = fetch_from if fetch_from is not None else remote
     # A remote registry holds only open releases. So for a remote output, the build refuses another
     # release before any download, as a build into that registry would.
     plan = build_release(

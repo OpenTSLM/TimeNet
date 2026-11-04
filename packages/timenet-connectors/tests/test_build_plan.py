@@ -870,6 +870,23 @@ def test_build_to_a_remote_out_builds_locally_and_copies(tmp_path, monkeypatch):
     assert not local.root.exists()
 
 
+def test_build_to_a_remote_out_copies_a_missing_parent_from_that_registry(tmp_path, monkeypatch):
+    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
+    remote, local, calls = _remote_out(tmp_path, monkeypatch, cards)
+    parent = make_dataset()
+    parent._metadata = cards[PARENT.dataset_id]
+    remote.put_dataset(parent)
+
+    result = runner.invoke(app, ["build", CHILD.dataset_id, "--out", "s3://bucket/registry"])
+
+    # Without --fetch-from, the build copies the parent from the remote --out, which holds it, into
+    # the local registry. So only the child builds.
+    assert result.exit_code == 0, result.output
+    assert calls == [(CHILD.dataset_id, False)]
+    assert local.exists(PARENT.dataset_id, str(PARENT.version))
+    assert remote.exists(CHILD.dataset_id, str(CHILD.version))
+
+
 def _files(root: Path) -> dict[Path, tuple[int, int]]:
     """Return the size and the modification time of each file under ``root``, by its path."""
     return {path: (path.stat().st_size, path.stat().st_mtime_ns) for path in root.rglob("*") if path.is_file()}
