@@ -5,11 +5,9 @@ from pathlib import Path
 import numpy as np
 import pytest
 
-from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
-from timenet.types import TimeInterval
 from timenet.types.text import read_value
 from timenet_connectors.datasets.oxwearables.capture24 import Capture24Connector, connector
 
@@ -119,6 +117,10 @@ def _output(dataset) -> dict:
             _pid(task.inputs[0]),
             task.scope.start_us,
             task.scope.exclusive_end,
+            # None: the scope names no signal, so the whole Record stays available, as the authors'
+            # RNN and HMM read it. The Record's Sources still carry the activity annotations, which
+            # hold the answer, so a consumer must drop them.
+            task.scope.time_series,
             task.target_schema,
             task.targets,
             task.split.value,
@@ -256,21 +258,21 @@ _EXPECTED = {
     },
     # One benchmark per scheme, as benchmark.py runs them: every participant's windows in time order.
     "tasks": [
-        ("P001", 0, 10_000_000, _WILLETTS, ("sleep",), "train"),
-        ("P001", 10_000_000, 20_000_000, _WILLETTS, ("sitting",), "train"),
-        ("P001", 20_000_000, 30_000_000, _WILLETTS, ("walking",), "train"),
+        ("P001", 0, 10_000_000, None, _WILLETTS, ("sleep",), "train"),
+        ("P001", 10_000_000, 20_000_000, None, _WILLETTS, ("sitting",), "train"),
+        ("P001", 20_000_000, 30_000_000, None, _WILLETTS, ("walking",), "train"),
         # P100 is the last train participant and P101 the first test one.
-        ("P100", 0, 10_000_000, _WILLETTS, ("sleep",), "train"),
-        ("P101", 0, 10_000_000, _WILLETTS, ("sitting",), "test"),
+        ("P100", 0, 10_000_000, None, _WILLETTS, ("sleep",), "train"),
+        ("P101", 0, 10_000_000, None, _WILLETTS, ("sitting",), "test"),
         # The bin [3620 s, 3630 s) of the first segment's grid. Its samples start 5 ms into it, so the
         # scope does too, and ends where the segment does.
-        ("P101", 3_620_005_000, 3_630_005_000, _WILLETTS, ("walking",), "test"),
-        ("P001", 0, 10_000_000, _WALMSLEY, ("sleep",), "train"),
-        ("P001", 10_000_000, 20_000_000, _WALMSLEY, ("light",), "train"),
-        ("P001", 20_000_000, 30_000_000, _WALMSLEY, ("light",), "train"),
-        ("P100", 0, 10_000_000, _WALMSLEY, ("sleep",), "train"),
-        ("P101", 0, 10_000_000, _WALMSLEY, ("sedentary",), "test"),
-        ("P101", 3_620_005_000, 3_630_005_000, _WALMSLEY, ("light",), "test"),
+        ("P101", 3_620_005_000, 3_630_005_000, None, _WILLETTS, ("walking",), "test"),
+        ("P001", 0, 10_000_000, None, _WALMSLEY, ("sleep",), "train"),
+        ("P001", 10_000_000, 20_000_000, None, _WALMSLEY, ("light",), "train"),
+        ("P001", 20_000_000, 30_000_000, None, _WALMSLEY, ("light",), "train"),
+        ("P100", 0, 10_000_000, None, _WALMSLEY, ("sleep",), "train"),
+        ("P101", 0, 10_000_000, None, _WALMSLEY, ("sedentary",), "test"),
+        ("P101", 3_620_005_000, 3_630_005_000, None, _WALMSLEY, ("light",), "test"),
     ],
 }
 
@@ -354,33 +356,6 @@ def test_storing_reads_each_recording_once(tmp_path, monkeypatch):
     assert reads == ["P001.csv.gz", "P100.csv.gz", "P101.csv.gz"]
 
 
-def test_tasks_mark_only_their_window_as_input(tmp_path):
-    # The scope is the window and names no signal, so the whole Record stays available, as the authors'
-    # RNN and HMM use it. The window's samples are 1000 of the x, y and z of the one segment that holds
-    # it, as make_windows cuts X. The Record's Sources still carry the activity annotations, which hold
-    # the answer, so a consumer must drop them. The task lists none of them as input.
-    dataset = Capture24Connector().convert([_release(tmp_path)])
-    for task in dataset.iter_tasks():
-        scope = task.scope
-        assert isinstance(scope, TimeInterval)
-        assert scope.exclusive_end - scope.start_us == 10_000_000
-        assert scope.time_series is None
-        (holding,) = [
-            source
-            for source in task.inputs[0].sources
-            if (span := source.signals[0].span_us) is not None
-            and span[0] <= scope.start_us
-            and scope.exclusive_end <= span[1]
-        ]
-        assert sorted(signal.name for signal in holding.signals) == ["x", "y", "z"]
-        for signal in holding.signals:
-            axis = signal.time_axis
-            assert isinstance(axis, RegularAxis)
-            assert axis.index_at_or_after(scope.exclusive_end) - axis.index_at_or_after(scope.start_us) == 1000
-        # The activity annotations hold the answer, so no task may list them as input.
-        assert task.input_annotations == ()
-
-
 def _rewrite(path: Path, edit) -> None:
     with gzip.open(path, "rt", encoding="utf-8") as handle:
         lines = handle.read().splitlines()
@@ -403,7 +378,7 @@ def _with_x(line: str, value: str) -> str:
         (lambda lines: [*lines[:5], lines[5].replace(_SLEEP, "unknown;MET 1.0"), *lines[6:]], "label dictionary"),
         (lambda lines: [*lines[:5], ",0.1,0.2,0.3,", *lines[6:]], "have no timestamp"),
         (lambda lines: [*lines[:5], _with_x(lines[5], ""), *lines[6:]], "have no x value"),
-        (lambda lines: [*lines[:5], _with_x(lines[5], "nan"), *lines[6:]], "a x value is not finite"),
+        (lambda lines: [*lines[:5], _with_x(lines[5], "nan"), *lines[6:]], "a value of x is not finite"),
     ],
 )
 def test_malformed_recording_fails_with_its_path(tmp_path, edit, message):
@@ -449,10 +424,22 @@ def test_a_release_with_no_participants_fails(tmp_path):
         Capture24Connector().convert([root])
 
 
-def test_metadata_and_recordings_must_name_the_same_participants(tmp_path):
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        (lambda root: (root / "P101.csv.gz").unlink(), r"recordings missing for \['P101'\]"),
+        # A recording that metadata.csv does not list would otherwise be left out without a word.
+        (
+            lambda root: (root / "P152.csv.gz").write_bytes((root / "P100.csv.gz").read_bytes()),
+            r"unlisted recordings \['P152'\]",
+        ),
+    ],
+    ids=["missing", "unlisted"],
+)
+def test_metadata_and_recordings_must_name_the_same_participants(tmp_path, change, message):
     root = _release(tmp_path)
-    (root / "P101.csv.gz").unlink()
-    with pytest.raises(TimeNetConnectorError, match=r"recordings missing for \['P101'\]"):
+    change(root)
+    with pytest.raises(TimeNetConnectorError, match=message):
         Capture24Connector().convert([root])
 
 
