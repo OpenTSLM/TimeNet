@@ -29,7 +29,7 @@ from timenet.types._model import TimeFModel
 from timenet.types.handles import ArrayHandle
 from timenet.types.object_kind import ObjectKind
 from timenet.types.reference_keys import SourceKey
-from timenet.types.text import TextHandle, TextListHandle, read_value
+from timenet.types.text import LazyText, LazyTextList, TextHandle, TextListHandle, read_value
 
 
 if TYPE_CHECKING:
@@ -38,10 +38,9 @@ if TYPE_CHECKING:
 
 
 INLINE_LIMIT = 4096
-"""Largest JSON-encoded size, in bytes, of text kept inline in the catalog.
+"""The largest JSON-encoded text size, in bytes, that the writer keeps in the catalog.
 
-Labels and short prompts stay queryable in SQL, while long text no longer inflates the catalog that
-every read loads.
+The writer stores larger text and lazy text handles in separate payload files to keep the catalog small.
 """
 
 _PACK_BYTES = 4 * 1024 * 1024
@@ -193,14 +192,14 @@ class PackedValueLocator(TimeFModel):
 
     @property
     def key(self) -> ExternalObjectFieldKey:
-        """Return the validated object field addressed by this locator."""
+        """The validated object field addressed by this locator."""
         return ExternalObjectFieldKey(
             object_kind=self.object_kind, object_id=self.object_id, field=self.field, position=self.position
         )
 
     @property
     def location(self) -> PackedLocation:
-        """Return where the value is packed."""
+        """Where the value is packed."""
         digest = self.value_digest
         return PackedLocation(
             source=self.source_key,
@@ -333,17 +332,17 @@ class StoredText(TextHandle):
 
     @property
     def _location(self) -> PackedLocation:
-        """Return where the string is packed."""
+        """Where the string is packed."""
         return self._packed_location
 
     @property
     def is_loaded(self) -> bool:
-        """Return whether the handle keeps the string, so reads need no payload access."""
+        """Whether the handle keeps the string, so reads need no payload access."""
         return self._kept.value is not None
 
     @property
     def length(self) -> int:
-        """Return the string's length, recorded in its location."""
+        """The string's length, recorded in its location."""
         return self._location.length
 
     def read(self) -> str:
@@ -359,7 +358,7 @@ class StoredText(TextHandle):
 
         Raises:
             TimeNetError: If the handle is already loaded.
-        """  # noqa: DOC502 - raised by WriteOnce.set
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by WriteOnce.set
         self._kept.set(self.read())
 
     def _content_key(self) -> Hashable:
@@ -395,17 +394,17 @@ class StoredTextList(TextListHandle):
 
     @property
     def _location(self) -> PackedLocation:
-        """Return where the list is packed."""
+        """Where the list is packed."""
         return self._packed_location
 
     @property
     def is_loaded(self) -> bool:
-        """Return whether the handle keeps the strings, so reads need no payload access."""
+        """Whether the handle keeps the strings, so reads need no payload access."""
         return self._kept.value is not None
 
     @property
     def length(self) -> int:
-        """Return the number of strings, recorded in the list's location."""
+        """The number of strings, recorded in the list's location."""
         return self._location.length
 
     def read(self) -> list[str]:
@@ -422,7 +421,7 @@ class StoredTextList(TextListHandle):
 
         Raises:
             TimeNetError: If the handle is already loaded.
-        """  # noqa: DOC502 - raised by WriteOnce.set
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by WriteOnce.set
         self._kept.set(tuple(self.read()))
 
     def _content_key(self) -> Hashable:
@@ -462,22 +461,22 @@ class StoredOffsets(ArrayHandle):
 
     @property
     def _location(self) -> PackedLocation:
-        """Return where the time offsets are packed."""
+        """Where the time offsets are packed."""
         return self._packed_location
 
     @property
     def is_loaded(self) -> bool:
-        """Return whether a read has kept the time offsets."""
+        """Whether a read has kept the time offsets."""
         return self._kept.value is not None
 
     @property
     def length(self) -> int:
-        """Return the number of time offsets, recorded in their location."""
+        """The number of time offsets, recorded in their location."""
         return self._location.length
 
     @property
     def digest(self) -> bytes:
-        """Return the time offsets' SHA-256 digest, recorded in their location.
+        """The time offsets' SHA-256 digest, recorded in their location.
 
         The catalog stores a digest with every axis's time offsets, so only a location built by hand
         can lack one.
@@ -574,7 +573,7 @@ class PackedValueReader:
 
         Raises:
             TimeFFormatError: If the manifest does not list the location's payload file.
-        """  # noqa: DOC502 - raised by checksum
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by checksum
         return PackedContentKey(checksum=self.checksum(location), row=location.row, kind=location.kind)
 
     def read_scalar(self, location: PackedLocation) -> pa.Scalar:
@@ -605,7 +604,7 @@ class PackedValueReader:
             TimeFFormatError: If the manifest does not list the location's payload file.
             TimeFValidationError: If the location holds time offsets, whose ``StoredOffsets`` also
                 needs their axis.
-        """  # noqa: DOC502 - raised by checksum
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by checksum
         self.checksum(location)
         kind = location.kind
         match kind:
@@ -634,7 +633,7 @@ class PackedValueReader:
 
         Raises:
             TimeFFormatError: If the manifest does not list the location's payload file.
-        """  # noqa: DOC502 - raised by checksum
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by checksum
         self.checksum(location)
         return StoredOffsets(self, location, axis_id=axis_id, first=first, last=last)
 
@@ -666,7 +665,8 @@ class PackedValueReader:
         columns = ", ".join(EXTERNAL_VALUES.column_names)
         try:
             rows = connection.execute(
-                f"SELECT {columns} FROM {EXTERNAL_VALUES.name} "  # noqa: S608 - fixed identifiers
+                # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+                f"SELECT {columns} FROM {EXTERNAL_VALUES.name} "
                 "WHERE object_kind = ? AND object_id IN (SELECT unnest(?))",
                 [kind.value, identities],
             ).fetchall()
@@ -803,7 +803,7 @@ class PackedValueWriter:
         self.locators: list[PackedValueLocator] = []
         self.bytes = 0
 
-    def pack(  # noqa: PLR0913 - a known digest spares hashing the time offsets twice
+    def pack(  # ruff: ignore[too-many-arguments] - a known digest spares hashing the time offsets twice
         self,
         kind: ObjectKind,
         object_id: int,
@@ -813,42 +813,42 @@ class PackedValueWriter:
         *,
         digest: bytes | None = None,
     ) -> CatalogValue | ExternalValue:
-        """Keep a value inline, pack it, or reuse the payload that stores it.
+        """Store a value in the catalog or a separate payload file.
 
-        A stored text or time-offsets handle keeps its payload row, so its value is neither read nor
-        copied. Its locator names the row in the release that stores it.
+        Time offsets, :class:`LazyText`, and :class:`LazyTextList` go into payload files.
+        If other text exceeds :data:`INLINE_LIMIT`, it also goes into a payload file.
+        Stored handles reuse their existing payload rows.
 
         Args:
-            kind: The kind of the object that owns the value.
-            object_id: The object's id in this write's catalog: a task id, the id of the
-                annotation content row that holds the value, or the id of the axis row.
-            field: The object's field that holds the value.
-            value: The value, a text handle, an int64 Arrow array of time offsets, or any value that
-                stays in the catalog.
-            position: The value's position in an ordered field, such as a task's targets.
-            digest: The ``offsets_digest()`` of time offsets, when the caller has it already.
-                Without it, the time offsets are hashed here. Text takes none.
+            kind: The kind of object that owns the value.
+            object_id: The object id in the output catalog: a task id, an annotation content id,
+                or an axis id.
+            field: The field that holds the value.
+            value: The text, time offsets, or other catalog value to store.
+            position: The position in a field with several values, such as task targets.
+            digest: An optional ``offsets_digest()`` result for time offsets.
+                If omitted, this method calculates it.
 
         Returns:
-            An explicit catalog value or the locator of a packed value. Catalog writers choose
-            the storage representation; this method never returns a placeholder.
+            A catalog value or a locator that identifies the value in a payload file.
 
         Raises:
-            TimeFValidationError: If the locator is invalid for this field, or a reused payload is
-                stored by the output release or missing from the release that stores it.
-        """  # noqa: DOC502 - raised by _add_locator and StorageSources.add
+            TimeFValidationError: If the locator is invalid for this field, the output release
+                stores a reused payload, or the source release lacks a reused payload.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _add_locator and StorageSources.add
         key = ExternalObjectFieldKey(object_kind=kind, object_id=object_id, field=field, position=position)
         if isinstance(value, StoredText | StoredTextList | StoredOffsets):
             stored = value._location
             source = self.sources.add(value.store.version, stored)
             return self._add_locator(key, replace(stored, source=source))
+        keep_lazy = isinstance(value, LazyText | LazyTextList)
         classified = _classify_value(value)
         if isinstance(classified, CatalogValue):
             return classified
         value = classified.value
         value_kind = classified.kind
         size = value.nbytes if isinstance(value, pa.Array) else len(json.dumps(value, ensure_ascii=False).encode())
-        if value_kind != PackedValueKind.TIME_OFFSETS and size <= INLINE_LIMIT:
+        if value_kind != PackedValueKind.TIME_OFFSETS and size <= INLINE_LIMIT and not keep_lazy:
             return CatalogValue(value)
         if isinstance(value, pa.Array) and digest is None:
             digest = offsets_digest(value)

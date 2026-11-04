@@ -23,6 +23,8 @@ from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
+    Label,
+    LabelSet,
     LocalizationMode,
     ScalarPredictionTask,
     TemporalLocalizationTask,
@@ -44,6 +46,16 @@ _COSINE = TimeSeriesSpec(
     spec_type="cosine",
     name="Cosine",
     unit_value=ureg.dimensionless,
+)
+# Each classification task draws its target from a label set that every task with the same question
+# shares.
+_RHYTHM = LabelSet(
+    name="rhythm",
+    labels=(Label(name="normal", description="A regular wave."), Label(name="abnormal")),
+)
+_EVENT = LabelSet(
+    name="event",
+    labels=(Label(name="onset", description="The moment the wave starts."), Label(name="offset")),
 )
 
 
@@ -95,7 +107,9 @@ def _wave(
 class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
     """A deterministic, offline demo connector for the ``timenet/hello-world`` dataset."""
 
-    def download(self, cache_dir: Path) -> list[HelloWorldRecording]:  # noqa: ARG002, PLR6301 (override: the data is synthetic, so this method needs no cache)
+    # Override: the data is synthetic, so this method needs no cache.
+    # ruff: ignore[unused-method-argument, no-self-use]
+    def download(self, cache_dir: Path) -> list[HelloWorldRecording]:
         """Return deterministic recording descriptions.
 
         This method uses no network and does not use ``cache_dir``.
@@ -163,6 +177,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         classification = ClassificationTask(
             inputs=(record0,),
             targets=("normal",),
+            label_set=_RHYTHM,
         )
         dataset.add_tasks(
             tasks=[
@@ -256,6 +271,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
             task=ClassificationTask(
                 inputs=(record2,),
                 targets=("onset",),
+                label_set=_EVENT,
                 scope=TimeInterval.seconds(0.5, 0.75, time_series=(window,)),
             ),
         )

@@ -1,7 +1,9 @@
+import json
 from pathlib import Path
 from typing import NamedTuple
 
 import numpy as np
+from pydantic import ValidationError
 import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -22,6 +24,7 @@ from timenet.types import (
     ObjectKind,
     Split,
     Task,
+    TSEditingTask,
     Version,
 )
 from timenet.types.parent_dataset_card import ParentDatasetCard
@@ -210,6 +213,130 @@ def test_get_takes_only_positive_int64_ids(reader, objects):
     assert record.id == objects.record0.id
 
 
+def _with_a_signal_target_outside_the_inputs() -> tuple[TimeFDataset, Task, Signal]:
+    """Return ``make_dataset()`` with an editing task whose input is record0 and whose target is record1's long Signal."""
+    dataset = make_dataset()
+    record0, record1, _ = dataset.records
+    target = record1.signals[1]
+    task = dataset.add_task(task=TSEditingTask(inputs=(record0,), targets=(target,)))
+    return dataset, task, target
+
+
+def _only_target(task: Task) -> Signal:
+    assert task.targets is not None
+    (signal,) = task.targets
+    assert isinstance(signal, Signal)
+    return signal
+
+
+@pytest.mark.parametrize("read", ["get", "get_many"])
+def test_a_task_read_by_id_builds_the_record_of_a_signal_target_outside_its_inputs(tmp_path, read):
+    dataset, expected, target = _with_a_signal_target_outside_the_inputs()
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        task = reader.get(Task, expected.id) if read == "get" else reader.get_many(TSEditingTask, [expected.id])[0]
+        signal = _only_target(task)
+        assert signal.id == target.id
+        assert signal.to_arrow().equals(target.to_arrow())
+
+
+@pytest.mark.parametrize("given", [True, False], ids=["given-records", "every-task"])
+@pytest.mark.parametrize("read", ["read_tasks", "iter_tasks"])
+def test_a_task_read_builds_the_record_of_a_signal_target_outside_its_inputs(tmp_path, read, given):
+    dataset, expected, target = _with_a_signal_target_outside_the_inputs()
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        inputs = tuple(reader.iter_records((dataset.records[0].id,))) if given else None
+        (task,) = (task for task in getattr(reader, read)(inputs=inputs) if task.id == expected.id)
+        signal = _only_target(task)
+        assert signal.id == target.id
+        assert signal.to_arrow().equals(target.to_arrow())
+        # A given Record stays the input; the target's Record is built beside it.
+        assert inputs is None or task.inputs[0] is inputs[0]
+
+
+def _with_annotations_on_the_record_of_a_signal_target() -> tuple[TimeFDataset, dict[str, Task]]:
+    """Return ``make_dataset()`` with one editing task for each owner of the annotation that it references.
+
+    Each task has record0 as its input and record1's long Signal as its target. So it references
+    record1 through the Signal target only. Its input annotation lies on record1 itself, on its
+    Source, or on its long Signal.
+
+    Returns:
+        The dataset, and the task of each owner: ``record``, ``source``, and ``signal``.
+    """
+    dataset = make_dataset()
+    record0, record1, _ = dataset.records
+    (source,) = record1.sources
+    target = record1.signals[1]
+    tasks: dict[str, Task] = {}
+    for owner, annotated in {"record": record1, "source": source, "signal": target}.items():
+        context = annotated.annotate(Annotation(key="context", value=owner))
+        task = TSEditingTask(inputs=(record0,), targets=(target,), input_annotations=(context,))
+        tasks[owner] = dataset.add_task(task=task)
+    return dataset, tasks
+
+
+@pytest.fixture
+def owners_release(tmp_path) -> tuple[Path, TimeFDataset, dict[str, Task]]:
+    """Write the dataset of ``_with_annotations_on_the_record_of_a_signal_target()``.
+
+    Returns:
+        The release directory, the dataset, and the task of each owner.
+    """
+    dataset, tasks = _with_annotations_on_the_record_of_a_signal_target()
+    return _write(tmp_path, dataset), dataset, tasks
+
+
+_READS = {
+    "read": lambda reader, _inputs, _task_ids: reader.read().tasks,
+    "get": lambda reader, _inputs, task_ids: tuple(reader.get(Task, task_id) for task_id in task_ids),
+    "get_many": lambda reader, _inputs, task_ids: reader.get_many(TSEditingTask, task_ids),
+    "read_tasks": lambda reader, inputs, _task_ids: reader.read_tasks(inputs=inputs),
+    "iter_tasks": lambda reader, inputs, _task_ids: tuple(reader.iter_tasks(inputs=inputs)),
+}
+
+
+# Only read_tasks and iter_tasks take inputs, so only they run with given Records.
+@pytest.mark.parametrize(
+    ("read", "given"),
+    [(read, False) for read in _READS] + [("read_tasks", True), ("iter_tasks", True)],
+    ids=[*_READS, "read_tasks-given-records", "iter_tasks-given-records"],
+)
+def test_a_task_read_resolves_an_annotation_on_the_record_of_a_signal_target(owners_release, read, given):
+    path, dataset, expected = owners_release
+    record0 = dataset.records[0]
+    with TimeFReader(open_local_version(path)) as reader:
+        inputs = tuple(reader.iter_records((record0.id,))) if given else None
+        found = {task.id: task for task in _READS[read](reader, inputs, [task.id for task in expected.values()])}
+    for owner, wanted in expected.items():
+        task = found[wanted.id]
+        assert (owner, task.input_annotations) == (owner, wanted.input_annotations)
+        assert [record.id for record in task.inputs] == [record0.id]
+        assert _only_target(task).id == _only_target(wanted).id
+        assert inputs is None or task.inputs[0] is inputs[0]
+
+
+def test_a_task_read_looks_up_the_record_of_a_signal_target_once_and_only_when_unbuilt(tmp_path, monkeypatch):
+    dataset, tasks = _with_annotations_on_the_record_of_a_signal_target()
+    edit = tasks["signal"]
+    record0, record1, _ = dataset.records
+    lookups: list[list[int]] = []
+    original = DuckDBControlReader._record_ids_of_signals
+
+    def spy(self, ids):
+        lookups.append(sorted(ids))
+        return original(self, ids)
+
+    monkeypatch.setattr(DuckDBControlReader, "_record_ids_of_signals", spy)
+    with TimeFReader(open_local_version(_write(tmp_path, dataset))) as reader:
+        # A read that builds every Record looks nothing up, nor does one given the Records.
+        reader.read()
+        reader.read_tasks(inputs=tuple(reader.iter_records((record0.id, record1.id))))
+        assert lookups == []
+        # One lookup builds record1, which also holds the annotation, so the annotation needs no other.
+        reader.get(Task, edit.id)
+        assert lookups == [[record1.signals[1].id]]
+
+
 def test_read_tasks_and_iter_tasks_take_inputs_by_keyword_only(reader, objects):
     records = tuple(reader.iter_records((objects.record0.id,)))
     with pytest.raises(TypeError):
@@ -312,30 +439,84 @@ def test_a_parent_that_is_neither_an_alias_nor_a_release_raises_with_a_hint(chil
             reader.get_many(Record, [_PARENT_IDS["record"]], parent=parent)
 
 
-def test_a_release_that_several_aliases_import_needs_an_alias(child, objects):
+def test_a_manifest_with_two_parent_cards_for_one_release_is_refused(child):
+    path = child / "manifest.json"
+    doubled = Manifest.model_validate_json(path.read_text()).to_dict()
+    doubled["parent_cards"]["again"] = doubled["parent_cards"][_BASE]
+    match = r"parent_cards hold the parent test/parent@1\.0\.0 under the parent aliases \['again', 'base'\]"
+    with pytest.raises(ValidationError, match=match):
+        Manifest.model_validate(doubled)
+    # A release stored with such a manifest fails to open, before a reader reads anything.
+    path.write_text(json.dumps(doubled))
+    with pytest.raises(ValidationError, match=match):
+        open_local_version(child)
+
+
+def test_a_read_restores_the_import_map_the_parent_cards_and_the_lineage(child, objects):
     card = Manifest.model_validate_json((child / "manifest.json").read_text()).parent_cards[_BASE]
-    _declare_control_file(child, parent_cards={_BASE: card, ParentAlias("again"): card})
+    _declare_control_file(child, lineage=(card,))
     with TimeFReader(open_local_version(child)) as reader:
-        with pytest.raises(
-            TimeFValidationError, match=r"under the parent aliases \['again', 'base'\]; pass parent=ParentAlias"
-        ) as raised:
-            reader.get(Record, _PARENT_IDS["record"], parent=_PARENT)
-        assert not isinstance(raised.value, TimeFNotFoundError)
-        assert reader.get(Record, _PARENT_IDS["record"], parent=_BASE).id == objects.record0.id
+        dataset = reader.read()
+    assert dataset._import_state.import_map == {
+        (_BASE, ObjectKind.RECORD, _PARENT_IDS["record"]): objects.record0.id,
+        (_BASE, ObjectKind.SIGNAL, _PARENT_IDS["signal"]): objects.shared.id,
+        (_BASE, ObjectKind.TASK, _PARENT_IDS["task"]): objects.answer.id,
+    }
+    assert all(
+        type(parent_id) is int and type(child_id) is int
+        for (_, _, parent_id), child_id in dataset._import_state.import_map.items()
+    )
+    assert dataset.parent_cards == {_BASE: card}
+    assert dataset.lineage == {"test/parent@1.0.0": card}
 
 
-def test_a_catalog_that_names_another_parent_than_its_manifest_raises_a_format_error(child):
+_GET_AND_READ = pytest.mark.parametrize(
+    "read",
+    [lambda reader: reader.get(Record, _PARENT_IDS["record"], parent=_BASE), TimeFReader.read],
+    ids=["get", "read"],
+)
+
+
+@_GET_AND_READ
+def test_a_catalog_that_names_another_parent_than_its_manifest_raises_a_format_error(child, read):
     with connect_control(child / "control.duckdb") as connection:
         connection.execute("UPDATE imports SET parent_ref = 'test/parent@1.0.1'")
     _declare_control_file(child)
     with (
         TimeFReader(open_local_version(child)) as reader,
-        pytest.raises(TimeFFormatError, match="differs from its manifest"),
+        pytest.raises(TimeFFormatError, match=r"differs? from its manifest"),
     ):
-        reader.get(Record, _PARENT_IDS["record"], parent=_BASE)
+        read(reader)
 
 
-def test_a_catalog_that_lists_a_parent_alias_twice_raises_a_format_error(child):
+def test_a_catalog_without_a_parent_alias_of_its_manifest_raises_a_format_error(child, objects):
+    card = Manifest.model_validate_json((child / "manifest.json").read_text()).parent_cards[_BASE]
+    # The manifest declares a second parent, which the catalog does not name.
+    other = ParentDatasetCard(metadata=card.metadata.model_copy(update={"dataset_id": "test/other"}))
+    _declare_control_file(child, parent_cards={_BASE: card, ParentAlias("again"): other})
+    with TimeFReader(open_local_version(child)) as reader:
+        with pytest.raises(TimeFFormatError, match=r"differ from its manifest's parent cards"):
+            reader.read()
+        with pytest.raises(TimeFFormatError, match="names no parent release for parent alias 'again'"):
+            reader.get(Record, _PARENT_IDS["record"], parent=ParentAlias("again"))
+        assert reader.get(Record, _PARENT_IDS["record"], parent=_BASE).id == objects.record0.id
+
+
+def test_a_read_of_a_catalog_with_a_corrupt_import_row_raises_a_format_error(child):
+    with connect_control(child / "control.duckdb") as connection:
+        connection.execute(
+            "UPDATE imported_objects SET object_kind = 'Bogus' WHERE parent_id = ?", [_PARENT_IDS["record"]]
+        )
+    _declare_control_file(child)
+    with (
+        TimeFReader(open_local_version(child)) as reader,
+        pytest.raises(TimeFFormatError, match="corrupt or inconsistent TimeF artifact"),
+    ):
+        reader.read()
+
+
+@_GET_AND_READ
+def test_a_catalog_that_lists_a_parent_alias_twice_raises_a_format_error(child, read):
     # The schema does not enforce the unique keys, so a corrupt catalog can hold two rows for one alias.
     with connect_control(child / "control.duckdb") as connection:
         connection.execute("INSERT INTO imports VALUES (?, ?)", [_BASE, "test/parent@1.0.1"])
@@ -344,7 +525,7 @@ def test_a_catalog_that_lists_a_parent_alias_twice_raises_a_format_error(child):
         TimeFReader(open_local_version(child)) as reader,
         pytest.raises(TimeFFormatError, match="the catalog lists parent alias 'base' more than once"),
     ):
-        reader.get(Record, _PARENT_IDS["record"], parent=_BASE)
+        read(reader)
 
 
 def test_a_catalog_that_lists_a_parent_id_twice_raises_a_format_error(child, objects):
@@ -361,3 +542,24 @@ def test_a_catalog_that_lists_a_parent_id_twice_raises_a_format_error(child, obj
             reader.get_many(Record, [_PARENT_IDS["record"]], parent=_BASE)
         # The other imported objects keep one row each, so they still read.
         assert reader.get(Signal, _PARENT_IDS["signal"], parent=_BASE).id == objects.shared.id
+
+
+@pytest.mark.parametrize("kind", [ObjectKind.RECORD, ObjectKind.SIGNAL])
+def test_a_read_of_a_catalog_that_lists_a_parent_id_twice_raises_a_format_error(child, objects, kind):
+    # The same object listed twice is a duplicate row too, not only two copies of one parent object.
+    parent_id = _PARENT_IDS[kind.value.lower()]
+    object_id = objects.record0.id if kind is ObjectKind.RECORD else objects.shared.id
+    with connect_control(child / "control.duckdb") as connection:
+        connection.execute(
+            "INSERT INTO imported_objects (alias, object_kind, parent_id, object_id) VALUES (?, ?, ?, ?)",
+            [_BASE, kind.value, parent_id, object_id],
+        )
+    _declare_control_file(child)
+    with (
+        TimeFReader(open_local_version(child)) as reader,
+        pytest.raises(
+            TimeFFormatError,
+            match=rf"the catalog lists {kind.value} {parent_id} more than once under parent alias 'base'",
+        ),
+    ):
+        reader.read()

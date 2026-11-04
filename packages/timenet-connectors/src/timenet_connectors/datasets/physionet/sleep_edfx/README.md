@@ -121,10 +121,12 @@ where the recording came from.
 
 ### How the connector writes them
 
-**The connector attaches the label vocabularies to the dataset, not to a record.** Three closed
-sets exist: the eight sleep stages, the two sexes and the two conditions. Each becomes one
-dataset annotation, and `target_schema` on a task names the set that its target draws from. A
-name alone tells a consumer nothing about what is in the set.
+Each classification task has a set of allowed target labels. The three sets contain eight sleep
+stages, two sexes, and two study conditions. Each `LabelSet` uses its annotation key as its name:
+`sleep_stage`, `sex`, or `condition`.
+
+Tasks that ask the same question share one label set. Each target must contain exactly one label
+from that set. TimeNet enforces this requirement when it writes the dataset.
 
 **The tasks stream, and the connector does not hold them in memory.** `set_task_stream` exists for
 a dataset with far more tasks than records. This release has about 2450 tasks for each recording.
@@ -135,7 +137,7 @@ such as cross-task derivations, do not run. Each task carries its own `inputs`.
 carry. A second read of the hypnograms can let the tasks and the annotations disagree.
 
 **The connector invents no prompt.** The release states no question in words. A consumer who wants
-a prompted form composes it from the task type and the vocabulary, and different consumers word it
+a prompted form composes it from the task type and the label set, and different consumers word it
 differently.
 
 ## Inconsistencies
@@ -198,8 +200,8 @@ release.
 
 **Decision.** The connector attaches the annotation as it derived it. It clips nothing and drops
 nothing, because the release states the clock time and this connector does not correct it. Those
-three carry no lights-off task, because nothing validates a streamed task. Such a target ships
-56 000 s past the end of its own recording with no warning.
+three carry no lights-off task, because the connector builds one only for a recording that holds
+the moment.
 
 **Consequence.** 194 of the 197 records answer the lights-off question, and three do not. A consumer
 that counts tasks thus finds fewer tasks than records. All 197 carry the annotation, and on those
@@ -217,7 +219,7 @@ value.
 annotation. A record never carries a raw code.
 
 **Consequence.** `sex` reads `F` or `M` on every record of both studies, and the sex task draws
-from a two-member vocabulary. It is not necessary for a consumer to know the origin of a record.
+from a two-member label set. It is not necessary for a consumer to know the origin of a record.
 
 ### The connector does not repair a truncated file — **Handled**
 

@@ -37,10 +37,10 @@ def _s3_client() -> Any:
         TimeNetBuildError: If ``boto3``, declared in the connector's requirements, is not installed.
     """
     try:
-        import boto3  # noqa: PLC0415
-        from botocore import UNSIGNED  # noqa: PLC0415
-        from botocore.config import Config  # noqa: PLC0415
-        from botocore.exceptions import BotoCoreError  # noqa: PLC0415
+        import boto3  # ruff: ignore[import-outside-top-level]
+        from botocore import UNSIGNED  # ruff: ignore[import-outside-top-level]
+        from botocore.config import Config  # ruff: ignore[import-outside-top-level]
+        from botocore.exceptions import BotoCoreError  # ruff: ignore[import-outside-top-level]
     except ImportError as exc:
         raise TimeNetBuildError(
             "downloading from S3 needs boto3, declared in the connector's requirements.txt. "

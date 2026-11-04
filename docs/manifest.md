@@ -39,7 +39,7 @@ Manifest(
     counts=counts,              # ManifestCounts (default: empty)
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
-    build_env=None,             # environment provenance (see below)
+    build_env={},               # {"python", "packages"} (default: empty)
     timef_format_version=1,     # required; validated against the supported set {1}
 )
 ```
@@ -82,7 +82,9 @@ and `counts` default to empty. Unknown fields are rejected. A malformed block ra
 
 - Known units serialize to their pint names (`"hertz"`, `"millivolt"`, `"dimensionless"`). An
   unknown unit serializes as `null`. The field remains required.
-- Device and origin information belongs to the hierarchy's `Source`, not to `TimeSeriesSpec`.
+- Device information belongs to a [`Source`](data-model/sources.md), in its name, metadata, or
+  annotations. The time origin belongs to the Record's `start_time`. Neither belongs to
+  `TimeSeriesSpec`.
 - Tasks serialize as `{"task_type": ...}`. On read, the reader resolves them against the built-in
   `TASKS` registry. An unknown `task_type` raises Pydantic's `ValidationError`. The annotation
   `value_type` round-trips as a string. The reader uses it to decode values.
@@ -106,6 +108,24 @@ Each entry is a `FilePart`. A `FilePart` carries the file's `path` (version-rela
 live in separate structures.
 
 `all_files()` returns every descriptor. `all_parts()` returns only the paths.
+
+## Parent and storage pins
+
+`metadata.parents` declares the exact parent releases of a child, by parent alias. `parent_cards`
+holds a copy of the card of each parent release. `lineage` holds the card of each ancestor release,
+the parents included. These cards record where the child comes from. A read does not need them.
+
+`payload_sources` maps each source key, `org/name@version`, to a release that stores payload files
+that this release reads. It pins each of these files as a copy of the `FilePart` record of that
+release (see [Shared payloads](timef-format.md#shared-payloads)). A payload source can be a parent,
+or another ancestor that stores the file. A registry never changes a published release. So opening
+compares the pins with the manifest of the source, and hashes no file. `files.payloads` lists the
+packed text and time-offset files that this release stores itself.
+
+A build needs the parent releases. A read needs only the payload sources. `TimeNet.open()`,
+`TimeNet.load()`, `TimeNet.open_torch()`, and `TimeFReader.open()` resolve the payload sources
+before the first read. A read never opens the catalog of a parent. `download()` copies the release
+and its payload sources. See [Payload sources](registry.md#payload-sources).
 
 ---
 

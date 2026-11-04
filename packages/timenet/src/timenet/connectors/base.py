@@ -2,18 +2,22 @@
 
 A connector fetches raw data and converts it into a :class:`~timenet.dataset.TimeFDataset`. It has no
 knowledge of the registry, engine, or any other connector. The engine drives it
-``download -> convert``, then stores the result itself. The consumer SDK never imports connector
-code: it builds only through the ``timenet.builders`` entry point.
+``download -> compose`` (which defaults to ``convert``), then stores the result itself. The consumer
+SDK never imports connector code: it builds only through the ``timenet.builders`` entry point.
 """
 
-from abc import ABC, abstractmethod
+from abc import ABC
 import asyncio
 import inspect
 from pathlib import Path
-from typing import ClassVar, Generic, TypeVar
+from typing import TYPE_CHECKING, ClassVar, Generic, Self, TypeVar
 
 from timenet.dataset import TimeFDataset
 from timenet.types import DatasetMetadata
+
+
+if TYPE_CHECKING:
+    from timenet.connectors.context import BuildContext
 
 
 TRaw = TypeVar("TRaw")
@@ -24,8 +28,8 @@ class BaseConnector(ABC, Generic[TRaw]):
 
     A connector lives in its own folder and declares its descriptive identity in a ``dataset.yaml``
     card beside it (read by :meth:`metadata`). Set :attr:`CARD` to point elsewhere. Subclasses
-    implement the two abstract stages. ``download`` is I/O-only and ``convert`` is CPU-only.
-    Connectors take no constructor arguments.
+    implement a download stage and either ``convert`` or ``compose``. Connectors take no constructor
+    arguments.
     """
 
     __test__ = False  # a connector named Test* (for example, the test_mean dataset) is not a pytest test class
@@ -37,12 +41,27 @@ class BaseConnector(ABC, Generic[TRaw]):
     values_backend: str = "parquet"
     """Default storage backend for this connector's values plane."""
 
-    def __init__(self) -> None:
-        cls = type(self)
+    def __new__(cls, *args: object, **kwargs: object) -> Self:
+        """Create a connector of a class that implements its hooks.
+
+        The check runs here, not in ``__init__``, so it also runs for a subclass whose ``__init__``
+        does not call ``super().__init__()``.
+
+        Returns:
+            The new connector, before ``__init__`` runs.
+
+        Raises:
+            TypeError: If the class implements neither ``download`` nor ``download_async``, or
+                neither ``convert`` nor ``compose``.
+        """
+        del args, kwargs  # __init__ takes the arguments
         # download() is concrete because it bridges to download_async. A subclass that overrides
         # neither would instantiate and only fail deep in the engine. Catch it at construction instead.
         if cls.download is BaseConnector.download and cls.download_async is BaseConnector.download_async:
             raise TypeError(f"{cls.__name__} must implement download() or download_async()")
+        if cls.convert is BaseConnector.convert and cls.compose is BaseConnector.compose:
+            raise TypeError(f"{cls.__name__} must implement convert() or compose()")
+        return super().__new__(cls)
 
     @classmethod
     def _card_path(cls) -> Path:
@@ -102,7 +121,25 @@ class BaseConnector(ABC, Generic[TRaw]):
             "a connector must implement download() (synchronous) or download_async() (asynchronous)"
         )
 
-    @abstractmethod
+    def compose(self, raw_refs: list[TRaw], context: "BuildContext") -> TimeFDataset:
+        """Build the dataset from raw references and the opened parent releases.
+
+        A connector whose card declares ``parents`` must override this hook. The connector reads
+        each parent through ``context.parents[alias]`` and copies objects with
+        ``dataset.import_from(...)``. After this hook returns, the engine records each declared
+        parent in the dataset: its card and its lineage. The default ignores ``context`` and calls
+        :meth:`convert`.
+
+        Args:
+            raw_refs: The references returned by :meth:`download`.
+            context: The opened parents, keyed by the parent aliases on the card.
+
+        Returns:
+            The populated dataset.
+        """
+        del context
+        return self.convert(raw_refs)
+
     def convert(self, raw_refs: list[TRaw]) -> TimeFDataset:
         """Parse raw references and populate a :class:`~timenet.dataset.TimeFDataset`.
 
@@ -114,4 +151,8 @@ class BaseConnector(ABC, Generic[TRaw]):
 
         Returns:
             The populated dataset.
+
+        Raises:
+            NotImplementedError: If called on a connector that only implements ``compose``.
         """
+        raise NotImplementedError("a connector must implement convert() or compose()")

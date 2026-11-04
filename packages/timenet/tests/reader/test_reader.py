@@ -16,9 +16,11 @@ import pyarrow.parquet as pq
 from pydantic import ValidationError
 import pytest
 
+from timenet.client import TimeNet
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFReaderError, TimeFValidationError, TimeNetFileError
+from timenet.format.checksums import file_checksum
 import timenet.format.control_cache as control_cache_module
 import timenet.format.control_reader as control_reader_module
 from timenet.format.control_reader import DuckDBControlReader
@@ -358,7 +360,8 @@ def test_iter_records_matches_full_read(tmp_path):
     assert streamed == materialized
 
 
-def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
+@pytest.mark.parametrize("entry_point", ["reader", "client", "path"])
+def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch, entry_point):
     version_dir = _write(tmp_path)
     original_open = pq.ParquetFile
     opens = 0
@@ -368,10 +371,19 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch):
         opens += 1
         return original_open(*args, **kwargs)
 
-    with TimeFReader(open_local_version(version_dir)) as reader:
-        signal_id = next(reader.iter_records()).signals[0].id
-        monkeypatch.setattr(pq, "ParquetFile", counting_open)
-        signal = reader.get(Signal, signal_id)
+    monkeypatch.setattr(pq, "ParquetFile", counting_open)
+    if entry_point == "reader":
+        reader = TimeFReader(open_local_version(version_dir))
+    elif entry_point == "client":
+        reader = TimeNet(tmp_path, storage_path=tmp_path / "store").open("timenet/hello-world")
+    else:
+        reader = TimeFReader.open(version_dir)
+    with reader:
+        assert isinstance(reader, TimeFReader)
+        assert reader.metadata.dataset_id == "timenet/hello-world"
+        # Opening reads neither the catalog nor a value file.
+        assert reader._control is None
+        signal = reader.get(Signal, make_dataset().records[0].signals[0].id)
         assert opens == 0
         signal.to_arrow()
         assert opens >= 1
@@ -548,9 +560,38 @@ def test_verify_accepts_an_intact_dataset_and_detects_a_changed_artifact(tmp_pat
     control_path.write_bytes(payload)
     with (
         TimeFReader(open_local_version(version_dir)) as reader,
-        pytest.raises(TimeFFormatError, match="checksum mismatch"),
+        pytest.raises(TimeFFormatError, match=r"^timenet/hello-world@1\.0\.0: file 'control\.duckdb' has sha256:"),
     ):
         reader.verify()
+
+
+@pytest.mark.parametrize("damage", ["changed", "truncated", "missing"])
+def test_verify_names_the_file_and_what_differs_from_its_manifest_record(tmp_path, damage):
+    version_dir = _write(tmp_path)
+    reader = TimeFReader(open_local_version(version_dir))
+    part = reader._manifest.files.time_series[0]
+    path = version_dir / part.path
+    original = path.read_bytes()
+    # The file changes after opening, which checked its size.
+    if damage == "changed":
+        path.write_bytes(bytes([original[0] ^ 1]) + original[1:])
+        expected, actual = part.checksum, file_checksum(path)
+    elif damage == "truncated":
+        path.write_bytes(original[:-1])
+        expected, actual = f"{part.size:,} bytes", f"{part.size - 1:,} bytes"
+    else:
+        path.unlink()
+        expected, actual = f"{part.size:,} bytes", None
+
+    with reader, pytest.raises(TimeNetFileError) as caught:
+        reader.verify()
+
+    error = caught.value
+    release = "timenet/hello-world@1.0.0"
+    assert (str(error.release), error.owner, error.path) == (release, release, part.path)
+    assert (error.expected, error.actual) == (expected, actual)
+    found = "is missing" if actual is None else f"has {actual}"
+    assert str(error) == f"{release}: file '{part.path}' {found}, expected {expected}."
 
 
 def test_iter_tasks_streams_one_record_and_points_at_its_built_objects(tmp_path):
@@ -627,7 +668,8 @@ def test_invalid_external_locator_is_rejected_before_exposing_placeholders(tmp_p
     version = open_local_version(version_dir)
     with connect_control(version_dir / "control.duckdb") as connection:
         connection.execute(
-            f"UPDATE external_values SET {column} = ? WHERE field = 'prompt'",  # noqa: S608 - fixed test columns
+            # ruff: ignore[hardcoded-sql-expression] - fixed test columns
+            f"UPDATE external_values SET {column} = ? WHERE field = 'prompt'",
             [value],
         )
 

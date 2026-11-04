@@ -7,15 +7,17 @@ environment. uv owns resolution and caching. A repeat build with an unchanged re
 cache hit.
 """
 
-from collections.abc import Sequence
+from collections.abc import Generator, Mapping, Sequence
+from contextlib import contextmanager
 from dataclasses import dataclass
 from importlib.metadata import Distribution, PackageNotFoundError
 import json
 import os
 from pathlib import Path
 import shlex
-import subprocess  # noqa: S404 - the command is a fixed argument vector
+import subprocess  # ruff: ignore[suspicious-subprocess-import] - the command is a fixed argument vector
 import sys
+import tempfile
 import threading
 from urllib.parse import urlparse
 from urllib.request import url2pathname
@@ -23,6 +25,8 @@ from urllib.request import url2pathname
 from uv import find_uv_bin
 
 from timenet.errors import TimeNetBuildError
+from timenet.manifest import PayloadSource
+from timenet.types.references import DatasetRef
 from timenet_connectors.discovery import requirements_for
 
 
@@ -57,7 +61,7 @@ def env_spec(dataset_id: str, *, values_backend: str | None = None) -> EnvSpec:
     Raises:
         LookupError: If no connector exists for the id.
         TimeNetBuildError: If a base distribution is not installed.
-    """  # noqa: DOC502 (raised by requirements_for and _base_args, not directly here)
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by requirements_for and _base_args, not directly here)
     base = _base_args()
     # The parent cannot import the connector before its dependencies exist. When its default is
     # unknown, include the optional backend too. An explicit Parquet build needs no Zarr dependency.
@@ -97,7 +101,7 @@ def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
     return [*command, *argv]
 
 
-def run_isolated(  # noqa: PLR0913
+def run_isolated(  # ruff: ignore[too-many-arguments]
     dataset_id: str,
     out: str | Path,
     *,
@@ -105,6 +109,7 @@ def run_isolated(  # noqa: PLR0913
     keep_cache: bool = False,
     values_backend: str | None = None,
     quiet: bool = False,
+    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
     """Build a dataset in its own environment and return what the child printed on stdout.
 
@@ -124,6 +129,9 @@ def run_isolated(  # noqa: PLR0913
             ``"zarr"``). ``None`` forwards nothing, leaving the child on the connector's
             declared backend.
         quiet: Suppress the child's status output, as ``--quiet`` does in this process.
+        pinned_by: The releases that already read files of the dataset, with their pins. The child
+            receives them in a file through the hidden ``--pinned-by`` option, and publishes only
+            if it reproduces each pinned file.
 
     Returns:
         The child's last non-empty stdout line: a version directory or a published version.
@@ -131,7 +139,7 @@ def run_isolated(  # noqa: PLR0913
     Raises:
         TimeNetBuildError: If the child failed, or printed nothing.
         LookupError: If no connector exists for the id.
-    """  # noqa: DOC502 (raised by env_spec, not directly here)
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by env_spec, not directly here)
     # --quiet belongs to timenet-build, not to build, so it goes before the subcommand.
     argv = ["timenet-build", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(out)]
     if force:
@@ -140,10 +148,14 @@ def run_isolated(  # noqa: PLR0913
         argv.append("--keep-cache")
     if values_backend is not None:
         argv += ["--values-backend", values_backend]
-    command = uv_command(env_spec(dataset_id, values_backend=values_backend), argv)
+    spec = env_spec(dataset_id, values_backend=values_backend)
     # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
     child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
-    stdout, stderr, returncode = _run_build(command, child_env)
+    with _pins_file(pinned_by) as pins:
+        if pins is not None:
+            argv += ["--pinned-by", str(pins)]
+        command = uv_command(spec, argv)
+        stdout, stderr, returncode = _run_build(command, child_env)
     if returncode != 0:
         tail = "\n".join(stderr.splitlines()[-15:]).strip()
         detail = f"\n{tail}" if tail else " The child produced no error output."
@@ -154,6 +166,23 @@ def run_isolated(  # noqa: PLR0913
     if not lines:
         raise TimeNetBuildError(f"building {dataset_id!r} printed no version")
     return lines[-1]
+
+
+@contextmanager
+def _pins_file(pinned_by: Mapping[DatasetRef, PayloadSource] | None) -> Generator[Path | None]:
+    """Write the pins for an isolated child to a temporary JSON file, keyed by the reading release.
+
+    Yields:
+        The file while the child runs, or ``None`` when nothing pins the build.
+    """
+    if not pinned_by:
+        yield None
+        return
+    with tempfile.TemporaryDirectory(prefix="timenet-pins-") as directory:
+        path = Path(directory) / "pins.json"
+        pins = {str(release): pinned.model_dump(mode="json") for release, pinned in pinned_by.items()}
+        path.write_text(json.dumps(pins), encoding="utf-8")
+        yield path
 
 
 def _run_build(command: list[str], env: dict[str, str]) -> tuple[str, str, int]:
@@ -170,7 +199,7 @@ def _run_build(command: list[str], env: dict[str, str]) -> tuple[str, str, int]:
     Returns:
         The child's captured stdout, its captured stderr, and its exit code.
     """
-    process = subprocess.Popen(  # noqa: S603
+    process = subprocess.Popen(  # ruff: ignore[subprocess-without-shell-equals-true]
         command, env=env, stdout=subprocess.PIPE, stderr=subprocess.PIPE, text=True
     )
     captured: list[str] = []

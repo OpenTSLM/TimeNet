@@ -32,9 +32,9 @@ Reusable content includes these fields:
 - `key`, `value`, `unit`, and `description`
 - `metadata`, which stores JSON-compatible content details
 
-Each occurrence adds its own source, confidence, and metadata. This design lets several objects
-share one long description without sharing occurrence details. The writer stores equal content
-once. Neither the content nor an occurrence has an ID in Python.
+Each occurrence adds its own `source`, `confidence`, and `occurrence_metadata`. This design lets
+several objects share one long description without sharing occurrence details. The writer stores
+equal content once. Neither the content nor an occurrence has an ID in Python.
 
 ## Reuse content
 
@@ -104,8 +104,9 @@ vibration.annotate(
 )
 ```
 
-The owner determines scope. A Signal annotation covers that Signal. A Source annotation covers its
-subtree. A Record annotation covers the Record. Annotation spans cannot specify Signal IDs.
+The owner determines scope. A Signal annotation covers that Signal. A
+[Source annotation](sources.md#annotate-a-source) covers its subtree. A Record annotation covers
+the Record. An annotation span cannot set `time_series`, because the owner sets the scope.
 
 Use `source.select(signals=(ecg, spo2)).annotate(annotation)` for a subset. Each selected Signal gets
 a separate occurrence with shared content. Other Signals remain unchanged.
@@ -115,8 +116,9 @@ Tasks on ordinal Signals.
 
 ## Valid values
 
-An annotation value can be a string, integer, float, Boolean, or list of strings. A list can define a
-closed label vocabulary.
+An annotation value can be a string, integer, float, Boolean, or list of strings. For example, a
+list of strings can hold the names of activities in a recording. To define the allowed labels for a
+classification target, use a `LabelSet`. See [Tasks](tasks.md).
 
 An Annotation must have a value, a span, or both. A marker can omit its value when its span carries
 the meaning.
@@ -135,3 +137,7 @@ task = AnswerTask(
 
 Use `input_annotations` for context. Use `target_annotations` for the answer. A Task cannot combine
 inline `targets` with `target_annotations`.
+
+The occurrences must lie on the dataset itself or on a Record that the Task references, as
+[Records that a Task references](tasks.md#records-that-a-task-references) describes. `add_task()`,
+`add_tasks()`, and the check of streamed Tasks reject an occurrence on any other Record.

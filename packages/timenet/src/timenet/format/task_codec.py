@@ -57,8 +57,11 @@ ANNOTATION_FIELDS = frozenset({TaskRelationshipField.INPUT_ANNOTATIONS, TaskRela
 """The fields stored in ``task_annotation_refs``."""
 
 
-PAYLOAD_COLUMNS = ("target_schema", "unit", "target_name", "mode")
-"""The ``tasks`` columns that hold subclass-specific configuration. Unused ones are NULL."""
+PAYLOAD_COLUMNS = ("label_set", "unit", "target_name", "mode")
+"""The ``tasks`` columns that hold configuration for each task type.
+
+Unused columns are NULL. A classification task stores its label set name in ``label_set``.
+The ``label_sets`` table stores the set itself."""
 
 
 def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality]:
@@ -69,7 +72,7 @@ def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality
 
     Raises:
         TimeFFormatError: If a stored input kind is unknown or repeated.
-    """  # noqa: DOC502 - raised by cached validation
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by cached validation
     return _decode_input_modalities(tuple(values or ()))
 
 
@@ -180,7 +183,7 @@ def encode_task_payload(task: Task) -> dict[str, str | None]:
     """
     columns: dict[str, str | None] = dict.fromkeys(PAYLOAD_COLUMNS)
     if isinstance(task, ClassificationTask):
-        columns["target_schema"] = task.target_schema
+        columns["label_set"] = task.label_set.name
     elif isinstance(task, ScalarPredictionTask):
         columns["unit"] = None if task.unit is None else str(task.unit)
         columns["target_name"] = task.target_name
@@ -195,8 +198,6 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
     Returns:
         Keyword arguments for the concrete Task constructor.
     """
-    if task_type is TaskType.CLASSIFICATION:
-        return {"target_schema": columns.get("target_schema")}
     if task_type is TaskType.SCALAR_PREDICTION:
         return {"unit": columns.get("unit"), "target_name": columns.get("target_name")}
     if task_type is TaskType.TEMPORAL_LOCALIZATION:
@@ -204,7 +205,7 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
     return {}
 
 
-def decode_target(  # noqa: PLR0911 - each target kind has one direct decoding branch
+def decode_target(  # ruff: ignore[too-many-return-statements] - each target kind has one direct decoding branch
     row: Mapping[str, object] | TargetValueRow,
     *,
     records: Mapping[EntityId, Record],

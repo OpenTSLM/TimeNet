@@ -12,12 +12,14 @@ A Task describes one modeling problem. It holds ordered input Records and one re
 expected output.
 
 ```python
-from timenet.types import ClassificationTask
+from timenet.types import ClassificationTask, Label, LabelSet
+
+CONDITION = LabelSet(name="condition", labels=(Label(name="healthy"), Label(name="faulty")))
 
 task = ClassificationTask(
     inputs=(record,),
     targets=("faulty",),
-    target_schema="condition",
+    label_set=CONDITION,
 )
 dataset.add_task(task=task)
 ```
@@ -79,9 +81,21 @@ A dataset that ships a partition marks each Task with its `split`. Records carry
 own: one Record may serve Tasks of several splits.
 
 ```python
-from timenet.types import ClassificationTask, Split
+from timenet.types import ClassificationTask, Label, LabelSet, Split
 
-dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("walking",), split=Split.TRAIN))
+ACTIVITY = LabelSet(
+    name="activity",
+    labels=(Label(name="walking"), Label(name="sitting")),
+)
+
+dataset.add_task(
+    task=ClassificationTask(
+        inputs=(record,),
+        targets=("walking",),
+        label_set=ACTIVITY,
+        split=Split.TRAIN,
+    )
+)
 ```
 
 `TimeFDataset.get_train()`, `get_validation()`, and `get_test()` return the Tasks of one split, and
@@ -126,7 +140,19 @@ Use `add_tasks()` for an atomic batch. A parent in `from_tasks` can appear in th
 
 For a large task corpus, use `set_task_stream()`. The writer validates each streamed Task before it
 writes the Task. A stream does not keep the complete task set in memory. TimeNet therefore cannot
-check duplicate task IDs or `from_tasks` relationships across streamed Tasks.
+validate `from_tasks` relationships across streamed Tasks.
+
+## Records that a Task references
+
+A Task references these Records:
+
+- Its inputs.
+- Its candidate Records.
+- Its Record targets.
+- Each Record that holds a Signal that the Task references, for example a Signal target.
+
+Only the inputs are Records that the Task takes as input. `tasks_for(record)` returns the Task only
+for its inputs, and `read_tasks(inputs=)` selects the Task only through its inputs.
 
 ## Scope an input
 
@@ -142,7 +168,8 @@ task = ClassificationTask(
         8.0,
         time_series=(vibration,),
     ),
-    targets=("fault_episode",),
+    targets=("faulty",),
+    label_set=CONDITION,
 )
 ```
 
@@ -191,14 +218,39 @@ dataset.add_task(task=age_question(record, 64))
 ### Classification
 
 ```python
-ClassificationTask(
-    inputs=(record,),
-    targets=("healthy",),
-    target_schema="condition",
+from timenet.types import Label, LabelSet
+
+CONDITION = LabelSet(
+    name="condition",
+    labels=(Label(name="healthy"), Label(name="faulty", description="A bearing fault.")),
 )
+FINDINGS = LabelSet(
+    name="findings",
+    labels=(Label(name="AF"), Label(name="PVC"), Label(name="LBBB")),
+    multi_label=True,
+)
+
+ClassificationTask(inputs=(record,), targets=("healthy",), label_set=CONDITION)
+ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS)
 ```
 
-`target_schema` can name a dataset-level Annotation that holds the label vocabulary.
+A `LabelSet` defines the allowed labels for a classification target. The `multi_label` flag controls
+how many labels a target can contain.
+
+If `multi_label=False`, the default, a target must contain exactly one label. If `multi_label=True`,
+a target contains all labels that apply. Omitted labels do not apply. An empty target means that no
+label applies. The order of labels does not matter.
+
+When the dataset adds or streams a task, it makes sure that the target follows the rules of its
+label set. Each label must be in the set. No label can repeat. A target with `multi_label=False`
+must contain exactly one label.
+
+Labels come from the targets stored directly on the task or from the text of its target
+annotations.
+
+Tasks can share the same label set object. Each name identifies one label set within a dataset.
+If two different sets have the same name, `add_task()`, the task stream, and the writer raise an
+error. TimeF stores each set once. The reader gives tasks that use the same set a shared object.
 
 ### Answer and rationale
 
@@ -293,6 +345,7 @@ An empty `candidate_records` tuple means that the candidate pool is dataset-wide
 label = ClassificationTask(
     inputs=(record,),
     targets=("faulty",),
+    label_set=CONDITION,
 )
 answer = AnswerTask(
     inputs=(record,),

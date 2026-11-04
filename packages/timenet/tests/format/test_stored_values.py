@@ -48,6 +48,8 @@ from timenet.types import (
     AnswerTask,
     ArrayHandle,
     DatasetSchema,
+    LazyText,
+    LazyTextList,
     ObjectKind,
     TextHandle,
     TextListHandle,
@@ -238,7 +240,7 @@ def test_stored_text_compares_by_content_with_inline_text_and_native_values(read
     prompt, reports = _stored(reader)
     assert prompt == InlineText(_TEXT)
     assert prompt == _TEXT
-    assert _TEXT == prompt  # noqa: SIM300 - the reflected comparison is the point
+    assert _TEXT == prompt  # ruff: ignore[yoda-conditions] - the reflected comparison is the point
     assert reports == InlineTextList(_TEXTS)
     assert reports == _TEXTS
     assert prompt != _TEXT[:-1] + "!"
@@ -412,7 +414,8 @@ def test_a_location_that_disagrees_with_its_payload_fails_the_read(tmp_path, ass
     # Opening checks the release's files, so open it before changing them.
     version = open_local_version(version_dir)
     with connect_control(version_dir / "control.duckdb") as connection:
-        connection.execute(f"UPDATE external_values SET {assignment} WHERE {condition}")  # noqa: S608 - fixed test SQL
+        # ruff: ignore[hardcoded-sql-expression] - fixed test SQL
+        connection.execute(f"UPDATE external_values SET {assignment} WHERE {condition}")
 
     with TimeFReader(version) as reader:
         handle = _stored(reader)[stored]
@@ -513,6 +516,53 @@ def test_large_text_is_packed(tmp_path, value, kind):
     )
 
 
+@pytest.mark.parametrize(
+    ("value", "kind"),
+    [
+        (LazyText(lambda: "short", length=5), PackedValueKind.TEXT),
+        (LazyTextList(lambda: ["a", "b"], length=2), PackedValueKind.TEXT_LIST),
+    ],
+)
+def test_a_lazy_handle_is_packed_whatever_its_size(tmp_path, value, kind):
+    packed = PackedValueWriter(tmp_path, StorageSources()).pack(
+        ObjectKind.ANNOTATION_CONTENT, 1, PackedField.VALUE, value
+    )
+    assert isinstance(packed, ExternalValue)
+    assert packed.locator.value_kind is kind
+    assert packed.locator.n_values == value.length
+
+
+def test_a_short_lazy_annotation_reads_back_as_stored_text(tmp_path):
+    dataset = make_dataset()
+    dataset.records[0].annotate(Annotation(key="feature", value=LazyText(lambda: "[0.1 0.2 0.3]", length=13)))
+    version_dir = _write_dataset(tmp_path, dataset)
+
+    (content_id,) = _content_ids(version_dir, "feature")
+    assert (ObjectKind.ANNOTATION_CONTENT.value, content_id, PackedField.VALUE.value, 0) in _external_rows(version_dir)
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        (feature,) = [
+            annotation.value
+            for record in reader.read(load=LoadPlan.ALL_LAZY).records
+            for annotation in record.annotations
+            if annotation.key == "feature"
+        ]
+    assert isinstance(feature, StoredText)
+    assert not feature.is_loaded
+    assert feature.read() == "[0.1 0.2 0.3]"
+
+
+def test_lazy_handles_over_one_function_with_different_lengths_do_not_share_a_row(tmp_path):
+    def read():
+        return "sleep"
+
+    dataset = make_dataset()
+    dataset.records[0].annotate(Annotation(key="right", value=LazyText(read, length=5)))
+    dataset.records[0].annotate(Annotation(key="wrong", value=LazyText(read, length=4)))
+
+    with pytest.raises(TimeFValidationError, match="returned 5 characters, but the handle was given length 4"):
+        _write_dataset(tmp_path, dataset)
+
+
 def test_locators_name_their_owner_by_kind_and_int_id(tmp_path):
     dataset, answer = _packed_dataset()
     version_dir = _write_dataset(tmp_path, dataset)
@@ -547,7 +597,8 @@ def test_locators_name_their_owner_by_kind_and_int_id(tmp_path):
 def test_the_audit_rejects_a_locator_without_its_owner(tmp_path, assignment, message):
     version_dir = _write(tmp_path)
     with connect_control(version_dir / "control.duckdb") as connection:
-        connection.execute(f"UPDATE external_values SET {assignment} WHERE field = 'prompt'")  # noqa: S608 - fixed test SQL
+        # ruff: ignore[hardcoded-sql-expression] - fixed test SQL
+        connection.execute(f"UPDATE external_values SET {assignment} WHERE field = 'prompt'")
         with pytest.raises(TimeFFormatError, match=message):
             audit_control_database(connection)
 

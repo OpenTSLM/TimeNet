@@ -9,31 +9,35 @@ tags:
 # TimeFReader
 
 `TimeFReader` opens a committed TimeF version and reconstructs a
-[`TimeFDataset`](timef-dataset.md). It reads through a [`DatasetVersion`](registry.md) handle. The
-handle contains the parsed manifest and access to the version files. The reader never imports or
-runs connector code.
+[`TimeFDataset`](timef-dataset.md). The reader never imports or runs connector code.
+
+There are two everyday ways to get a reader.
+[`TimeNet.open()`](client.md#open-load-or-download) opens a dataset by its ID, and
+`TimeFReader.open()` opens a version directory:
 
 ```python
+from timenet.client import TimeNet
 from timenet.reader import TimeFReader
-from timenet.registry import open_local_version, open_registry
 
-# Read through a registry.
-version = open_registry("~/timenet/registry").open_version(
-    "timenet/hello-world"
-)
-
-# You can also open a version directory directly.
-local_version = open_local_version(version_dir)
-
-with TimeFReader(version) as reader:
+# By dataset ID, through the client.
+with TimeNet().open("timenet/hello-world") as reader:
     dataset = reader.read()
     values = dataset.records[0].signals[0].to_arrow()
+
+# By version directory.
+with TimeFReader.open(version_dir) as reader:
+    dataset = reader.read()
 ```
+
+`TimeNet.load()` opens a reader, reads the dataset with every value loaded, and closes the reader.
+[Opening a version](#opening-a-version) describes the low-level way in.
 
 Use the reader as a context manager when possible. `close()` releases open value files and decoded
 chunk caches. For a remote release, the reader fetches and verifies `control.duckdb` once, and after
 `close()` its next read reopens the verified local copy. If that copy has been removed in the
 meantime, the reader fetches and verifies the catalog again.
+
+A reader is not safe to share between threads. Open one reader per thread.
 
 Catalog connections close before the process forks, because DuckDB cannot share a database across a
 fork. Each one opens again on its next query, in the parent and in a forked data-loader worker
@@ -43,8 +47,11 @@ raises `TimeFReaderError`. Use the `spawn` or `forkserver` start method there.
 
 ## What loads when
 
-Creating the reader does not open the control database. The first request for records, tasks, or
-annotations opens `control.duckdb` in read-only mode.
+A child dataset can read some of its values from the files of another release, for example a
+parent. The client finds these releases before it creates the reader, as
+[Opening a version](#opening-a-version) describes. Creating the reader does not open the control
+database. The first request for records, tasks, or annotations opens `control.duckdb` in read-only
+mode.
 
 Records load with their Sources, Signals, axes, and annotations. Signal values stay lazy unless the
 read's load plan asks for them, as [Loading values at read time](#loading-values-at-read-time)
@@ -85,8 +92,10 @@ on a Signal reads its axis's array and checks it against the axis and against th
 locator records. Within one read, the Signals on one axis share the checked array, so later calls
 on any of them read nothing.
 
-`iter_records(record_ids=...)` yields records one at a time. It takes int record IDs. It does not
-create a complete `TimeFDataset`.
+`iter_records()` yields Records in bounded batches. It does not create a complete `TimeFDataset`.
+Without `record_ids=`, it yields every Record in the order of `record_ids()`. With `record_ids=`,
+it yields the Records with these int IDs, in the order that you give. It makes sure that every
+requested ID exists before it yields the first Record.
 
 Tasks have four useful read paths:
 
@@ -100,6 +109,11 @@ Tasks have four useful read paths:
   [Reading objects by ID](#reading-objects-by-id) describes.
 - `read_task_table()`, `read_target_table()`, and `read_annotation_table()` return Arrow tables
   without creating Python task objects. Their ID columns are `int64`.
+  The Record, Signal, and Task columns hold the ids that the dataset assigned, for example
+  `task_id`, `input_record_ids`, `from_task_ids`, and `span_signal_ids`. `occurrence_id` and
+  `content_id` are storage row numbers of this version. The next write numbers them again. In
+  `read_annotation_table()`, `object_id` is a Record, Signal, or Task id, a storage row number for
+  a Source, or `NULL` for the dataset.
 
 One call returns one consistent set of objects. A Record that two tasks use is one object, and the
 Signals on one irregular axis share one handle to its time offsets. `read_tasks(inputs=records)`
@@ -117,6 +131,14 @@ reader itself keeps compact chunk locators for the Signals it has resolved until
 default, a batch holds up to 5,000 tasks (`TASK_BATCH_SIZE`). Pass `iter_tasks(batch_size=...)` for
 larger or smaller batches. With an eager plan the stream holds every value one batch loaded, so a
 smaller batch bounds the memory its arrays take.
+
+`iter_records()` builds each batch on its own in the same way. The Records of one batch share the
+objects that the batch builds. So the Signals on one irregular axis share one handle to its time
+offsets. Batches share nothing. The stream holds one batch at a time. A Record ID that you request
+in two batches arrives as two separate objects.
+
+By default, a batch of `iter_records()` holds up to 1,000 Records (`RECORD_BATCH_SIZE`). Pass
+`iter_records(batch_size=...)` for larger or smaller batches.
 
 ## Reading objects by ID
 
@@ -137,10 +159,11 @@ source gave a recording, read the objects with `iter_records()` or `read_tasks()
 `metadata`.
 
 ```python
+from timenet.client import TimeNet
 from timenet.dataset import Signal
 from timenet.types import AnswerTask, read_value
 
-with TimeFReader(version) as reader:
+with TimeNet().open("timenet/hello-world") as reader:
     task = reader.get(AnswerTask, task_id)
     # Reads this one text and keeps nothing; None without a prompt.
     prompt = read_value(task.prompt)
@@ -176,23 +199,24 @@ from whichever release stores them.
 
 An ID that names nothing, an unknown alias or parent, and a stored object of another kind, such as
 `get(AnswerTask, ...)` on a classification task, raise `TimeFNotFoundError`, which subclasses both
-`TimeFValidationError` and `LookupError`. `get_many` raises it, naming every missing ID, before it
-returns anything. `Source`, `Annotation`, and any other kind not listed above, an ID that is not a
-positive int64, a single string passed to `get_many`, a `parent` that is neither a `ParentAlias`
-nor a `DatasetRef`, and a release that several aliases import raise `TimeFValidationError`.
+`TimeFValidationError` and `LookupError`. An edit such as `remove_records` can remove the copy of a
+parent object. The parent ID of that object then names nothing, because the edit drops that import.
+`get_many` raises it, naming every missing ID, before it returns anything. `Source`, `Annotation`, and any other kind not listed above, an ID
+that is not a positive int64, a single string passed to `get_many`, and a `parent` that is neither a
+`ParentAlias` nor a `DatasetRef` raise `TimeFValidationError`.
 
 ## Loading values at read time
 
-`read()`, `read_tasks()`, `iter_tasks()`, `get()`, and `get_many()` take a `load=` plan that says
-which kinds of stored values the read loads into the objects it builds. A `LoadPlan` has one field
-per kind of value: `signal_values`, `time_offsets` for irregular axes, and `text` for packed
-prompts, rationales, text targets, and annotation values. Each field is `Loading.LAZY`, the
-default, or `Loading.EAGER`.
+`read()`, `iter_records()`, `read_tasks()`, `iter_tasks()`, `get()`, and `get_many()` take a
+`load=` plan that says which kinds of stored values the read loads into the objects it builds. A
+`LoadPlan` has one field per kind of value: `signal_values`, `time_offsets` for irregular axes, and
+`text` for packed prompts, rationales, text targets, and annotation values. Each field is
+`Loading.LAZY`, the default, or `Loading.EAGER`.
 
 ```python
 from timenet.reader import Loading, LoadPlan, TimeFReader
 
-with TimeFReader(version) as reader:
+with TimeFReader.open(version_dir) as reader:
     # Every value loads; the dataset needs no storage once the reader closes.
     dataset = reader.read(load=LoadPlan.ALL_EAGER)
     # Prompts and targets load; signal arrays stay lazy.
@@ -219,6 +243,11 @@ batch's tasks. What a batch reaches only through its tasks' `from_tasks` parents
 parents, their records, and their annotations, it builds but does not load, unless a task of the
 batch uses it too. A later batch that yields such a parent, or uses such a record or annotation,
 builds its own copy and loads it.
+
+`iter_records()` loads each batch before it yields the batch. For the Records of the batch, it
+loads the Signal arrays, time offsets, and annotation values that the plan names. A batch never
+loads the values of another batch. With `LoadPlan.ALL_EAGER`, the Records of a batch need no
+storage after the reader closes. The stream holds the values of one batch at a time.
 
 Values on lazy handles stay readable. `to_numpy()`, `read_steps()`, and a text handle's `read()`
 read them through the reader, which reopens its files on demand after `close()`.
@@ -254,14 +283,14 @@ and decoded Zarr chunks until it closes.
 | Member | Description |
 | --- | --- |
 | `read(load=...)` | Create the complete `TimeFDataset`, loading the values the plan names. |
-| `iter_records()` | Yield Records without building a dataset. |
+| `iter_records(record_ids=..., load=..., batch_size=...)` | Yield Records in bounded batches. Load the values that the plan names. |
 | `read_tasks(inputs=..., split=..., load=...)` | Build the matching tasks, or every task, in one pass. |
 | `iter_tasks(inputs=..., split=..., load=..., batch_size=...)` | Yield the matching tasks in bounded batches. |
 | `get(kind, id, parent=..., load=...)` | Read one Record, Signal, or task by ID. |
 | `get_many(kind, ids, parent=..., load=...)` | Read objects of one kind by ID, in order, in one batch. |
-| `read_task_table()` | Return the task table with public IDs. |
-| `read_target_table()` | Return ordered task targets with public IDs. |
-| `read_annotation_table()` | Return annotation occurrences with public IDs. |
+| `read_task_table()` | Return one row per task. |
+| `read_target_table()` | Return the ordered task targets. |
+| `read_annotation_table()` | Return one row per annotation occurrence. |
 | `verify()` | Hash every file the release reads, its own and its pinned payload source files. |
 | `metadata` | Return the dataset metadata. |
 | `schema` | Return the dataset schema. |
@@ -269,14 +298,34 @@ and decoded Zarr chunks until it closes.
 
 ## Opening a version
 
-`open_local_version()` and a registry's `open_version()` open a version eagerly, but read only
-metadata. Opening checks that:
+To read a version without the client, pass a [`DatasetVersion`](registry.md) to
+`TimeFReader(version)`. `open_local_version()` and the `open_version()` method of a registry
+return one. A `DatasetVersion` holds the parsed manifest and the local or remote file systems of
+the version and its payload sources. A reader that you open this way skips three parts of the
+client: the download cache, the access check, and `auto_build`. The two examples open a version
+from a registry and from a directory:
 
-- `manifest.json` is valid, with a supported format version;
-- every file the manifest lists, `control.duckdb` included, is present with its recorded size;
-- each payload source, a release whose payload files this version reuses, is found and still
-  records each pinned file as the version pins it; and
-- each pinned file of a local payload source is present with its recorded size.
+```python
+from timenet.reader import TimeFReader
+from timenet.registry import open_local_version, open_registry
+
+registry = open_registry("~/timenet/registry")
+with TimeFReader(registry.open_version("timenet/hello-world")) as reader:
+    dataset = reader.read()
+
+with TimeFReader(open_local_version(version_dir)) as reader:
+    dataset = reader.read()
+```
+
+`open_local_version()` and the `open_version()` method of a registry open a version at once, but
+they read only metadata. Opening makes sure that:
+
+- `manifest.json` is valid and has a supported format version.
+- Each file that the manifest lists, `control.duckdb` included, is present with its recorded size.
+- Each payload source is present, and its manifest still records each pinned file as the version
+  pins it. Another release, for example a parent, stores some values of a child. That release is a
+  payload source of the child.
+- Each pinned file of a local payload source is present with its recorded size.
 
 Opening hashes nothing and reads no values. A remote version's file sizes come from its manifest,
 and its reads and downloads check them.
@@ -289,7 +338,7 @@ releases that source reuses.
 | --- | --- | --- |
 | A payload source is missing | `TimeNetDatasetNotFoundError` | The source and the root searched |
 | A payload source differs from its pins | `TimeFFormatError` | The source and the first differing file |
-| A file is missing or has another size | `TimeFFormatError` | The file, its expected size, and its actual size |
+| A file is missing or has another size | `TimeNetFileError` | The file, its expected size, and its actual size |
 
 An invalid or unsupported manifest raises a validation error, and a missing one raises
 `FileNotFoundError`.
@@ -299,7 +348,8 @@ An invalid or unsupported manifest raises a validation error, and a missing one 
 Payload sources resolve relative to a registry root. By default, `open_local_version()` takes the
 root that holds the version as `<root>/<org>/<name>/<version>`, so a version and its sources keep
 working when they move to another root together. Pass `sources_root=` to find them under another
-root. A registry's `open_version()` finds them in that registry.
+root. `TimeFReader.open()` takes `sources_root=` too. A registry's `open_version()` finds them in
+that registry.
 
 A version without payload sources opens from any directory. A version with payload sources that is
 not stored as `<root>/<org>/<name>/<version>` needs `sources_root=`, and opening it without one
@@ -308,7 +358,9 @@ raises `TimeFValidationError`.
 ## Errors and integrity
 
 Values remain lazy. A values file that changes after opening fails when a Signal reads the affected
-chunk. Errors include the relevant file or table context.
+chunk. Opening does not look for remote files. A missing remote `control.duckdb` fails on the first
+read of Records or tasks. A missing remote values file fails when a Signal reads its chunk. Errors
+include the relevant file or table context.
 
 A catalog query raises `TimeFFormatError` when the catalog lacks a table, column, or type that the
 read expects, and `TimeFReaderError` when the reader's connection closed while the read ran, through
@@ -316,18 +368,33 @@ read expects, and `TimeFReaderError` when the reader's connection closed while t
 memory, or an interrupt, propagate unchanged.
 
 A request for an object, ID, or parent alias that the dataset does not have raises
-`TimeFNotFoundError`, a `TimeFValidationError`. A catalog that disagrees with its manifest, such as
-one that names another parent release for a parent alias, raises `TimeFFormatError`.
+`TimeFNotFoundError`, a `TimeFValidationError`. A catalog that disagrees with its manifest raises
+`TimeFFormatError`. For example, the catalog names no parent release for a parent alias of the
+manifest, or it names another release.
 
 Call `verify()` to hash every file before reading data: the version's own files, and the files it
-pins on each payload source. It raises `TimeFFormatError` when a file is missing or does not match
-its manifest record or pin.
+pins on each payload source. If a file is missing or does not match its manifest record or pin,
+`verify()` raises `TimeNetFileError`, a `TimeFFormatError`.
+
+## Inherited storage
+
+A child dataset holds a complete catalog of its own. Its chunk and external-value locators name the
+payload source that stores each file. A read never opens the catalog of a parent and never follows
+a chain of parents. `TimeNet.open()`, `TimeNet.open_torch()`, and `TimeFReader.open()` resolve the
+payload sources before the first read.
+
+The writer stores a read order for the Records, from the locations of their values. `read()` and
+`iter_records()` without IDs follow this order. Imported Records get IDs in the order of the
+imports, so the order of their IDs can differ from the read order. Requested Record IDs keep the
+order that the caller gives.
 
 ## Round-trip guarantee
 
 For valid writer input, the reader restores Records, Sources, Signals, annotations, and tasks. It
-also restores task relationships and Signal values with their original dtype and shape. Public IDs
-are the durable references. Entity IDs are ints. The dataset ID is its `org/name` string. The
-reader does not keep the Python object identity from the writer process.
+also restores task relationships and Signal values with their original dtype and shape.
+Relationships return as object references: task inputs are Records, spans hold Signals, and
+`from_tasks` holds Tasks. Records, Signals, and Tasks keep the `id` that the dataset assigned.
+Sources, axes, and annotations have no id. The reader does not keep the Python object identity
+from the writer process.
 
 See the [API reference for `timenet.reader`](api/reader.md) for all members.

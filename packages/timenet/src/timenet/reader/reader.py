@@ -12,10 +12,17 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar, cast
 import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFValidationError
+from timenet.dataset.composition import ImportState
+from timenet.errors import (
+    TimeFFormatError,
+    TimeFNotFoundError,
+    TimeFValidationError,
+    TimeNetFileError,
+    TimeNetMissingParentError,
+)
 from timenet.format.checksums import stream_checksum
 from timenet.format.control_cache import materialize_control
-from timenet.format.control_reader import TASK_BATCH_SIZE, DuckDBControlReader
+from timenet.format.control_reader import RECORD_BATCH_SIZE, TASK_BATCH_SIZE, DuckDBControlReader
 from timenet.format.stored_array import ChunkLocation, StoredArray
 from timenet.format.stored_values import (
     ANNOTATION_COLUMNS,
@@ -26,6 +33,7 @@ from timenet.format.stored_values import (
     materialize_table,
 )
 from timenet.reader.load_plan import LoadPlan, ValueLoad
+from timenet.registry.dependencies import open_local_version
 from timenet.types import (
     Annotation,
     DatasetMetadata,
@@ -44,9 +52,10 @@ from timenet.values_backends.reader import BaseValuesReader, make_values_reader
 
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from timenet.manifest import FilePart
     from timenet.registry.version import DatasetVersion
-    from timenet.types.references import DatasetRef
 
 
 _CHUNK_LOCATOR_BATCH_SIZE = 1_024
@@ -77,7 +86,7 @@ class _ReaderState:
     chunk_batches: tuple[tuple[int, ...], ...]
 
 
-class TimeFReader:
+class TimeFReader:  # ruff: ignore[too-many-public-methods] - one public method per kind of read
     """Read a committed TimeF dataset through its DuckDB control plane."""
 
     def __init__(self, version: DatasetVersion) -> None:
@@ -104,6 +113,37 @@ class TimeFReader:
         self._chunk_locator_batches: list[list[int]] = []
         self._chunk_locator_batch_by_id: dict[int, int] = {}
         self._chunk_locations: dict[int, ChunkLocation | None] = {}
+
+    @classmethod
+    def open(cls, path: str | Path, *, sources_root: str | Path | None = None) -> TimeFReader:
+        """Open a local version directory for reading.
+
+        Opening reads only metadata, as :func:`~timenet.registry.dependencies.open_local_version`
+        does. The reader opens the catalog on its first read. Close the reader after use, or use it
+        as a context manager.
+
+        Args:
+            path: The version directory, which holds ``manifest.json`` and ``control.duckdb``.
+            sources_root: The registry root to find payload sources under. By default this is the
+                root that holds ``path`` as ``<root>/<org>/<name>/<version>``.
+
+        Returns:
+            A reader for the version.
+
+        Raises:
+            FileNotFoundError: If ``path`` has no manifest.
+            TimeFValidationError: If the version has payload sources, is not stored as
+                ``<root>/<org>/<name>/<version>``, and no ``sources_root`` is given.
+            TimeNetMissingParentError: If a payload source is not under the sources root.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by open_local_version
+        try:
+            return cls(open_local_version(path, sources_root=sources_root))
+        except TimeNetMissingParentError as error:
+            error.hint = (
+                "Pass sources_root= with the registry root that holds it, or download the release with "
+                "its payload sources through TimeNet.download()."
+            )
+            raise
 
     def __getstate__(self) -> _ReaderState:
         """Return picklable state without open connections or decoded caches."""
@@ -154,24 +194,32 @@ class TimeFReader:
         These are the artifacts its manifest lists, and the files it pins on each payload source.
 
         Raises:
-            TimeFFormatError: If a file is missing or does not match its manifest entry or pin.
-        """  # noqa: DOC502 - raised by _verify_files
-        _verify_files(self._version, self._manifest.files.all_files())
+            TimeNetFileError: If a file is missing, or its size or checksum differs from the manifest
+                record that describes it: its own record, or the pin of a payload source file.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _verify_files
+        release = DatasetRef(dataset_id=self._manifest.dataset_id, version=self._manifest.metadata.dataset_version)
+        _verify_files(self._version, self._manifest.files.all_files(), release=release, owner=str(release))
         for key, pinned in self._manifest.payload_sources.items():
-            _verify_files(self._version.resolve_payload_source(key), pinned.files, source=pinned.release)
+            owner = f"payload source {pinned.release} of {release}"
+            _verify_files(self._version.resolve_payload_source(key), pinned.files, release=pinned.release, owner=owner)
 
     @property
     def metadata(self) -> DatasetMetadata:
-        """Return the dataset's descriptive metadata."""
+        """The dataset's descriptive metadata."""
         return self._manifest.metadata
 
     @property
     def schema(self) -> DatasetSchema:
-        """Return the dataset's type declaration."""
+        """The dataset's type declaration."""
         return self._manifest.dataset_schema
 
     def record_ids(self) -> tuple[EntityId, ...]:
-        """Return every Record ID without building a Record.
+        """Return the ID of every Record, without building the Records.
+
+        The IDs come in the release's record order, which `iter_records()` and `read()` also use.
+        Every reader of a release returns the same order. In a release with imported Records, the
+        order follows where the values are stored, so that a walk over the records reads the stored
+        values in sequence. In any other release, the order is by ID.
 
         Returns:
             The IDs in the order :meth:`iter_records` yields them when called without arguments.
@@ -218,7 +266,7 @@ class TimeFReader:
             values.run()
             return tasks
 
-    def iter_tasks(  # noqa: PLR0913 - one argument per task selection axis
+    def iter_tasks(  # ruff: ignore[too-many-arguments] - one argument per task selection axis
         self,
         *,
         inputs: Iterable[Record] | None = None,
@@ -300,7 +348,7 @@ class TimeFReader:
                 Sources and annotations are read through the objects that hold them.
             id: The object's ID, a positive int64.
             parent: The parent the object was imported from: the ``ParentAlias`` it was imported
-                under, or its exact release as a ``DatasetRef`` when one alias alone imports it.
+                under, or its exact release as a ``DatasetRef``.
             load: Which kinds of stored values to load into the object and what it references. The
                 default loads none.
 
@@ -311,12 +359,11 @@ class TimeFReader:
             TimeFNotFoundError: If the ID or ``parent`` names nothing, or the stored object is not a
                 ``kind``.
             TimeFValidationError: If ``kind`` is ``Source``, ``Annotation``, or another kind not
-                listed above, ``id`` is not a positive int64, such as a string, ``parent`` is
-                neither a ``ParentAlias`` nor a ``DatasetRef``, such as a plain string, or several
-                aliases import the ``parent`` release.
-            TimeFFormatError: If the catalog names another parent release for the alias than the
-                manifest does, or lists the alias or a parent ID more than once.
-        """  # noqa: DOC502 - raised by get_many
+                listed above, ``id`` is not a positive int64, such as a string, or ``parent`` is
+                neither a ``ParentAlias`` nor a ``DatasetRef``, such as a plain string.
+            TimeFFormatError: If the catalog names no parent release or another one for the alias
+                than the manifest does, or lists the alias or a parent ID more than once.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by get_many
         return self.get_many(kind, (id,), parent=parent, load=load)[0]
 
     def get_many(
@@ -340,8 +387,7 @@ class TimeFReader:
             ids: The objects' IDs, positive int64s in a list, tuple, or other iterable. With
                 ``parent``, the IDs the parent dataset gives the objects.
             parent: The parent the objects were imported from: the ``ParentAlias`` they were
-                imported under, or its exact release as a ``DatasetRef`` when one alias alone
-                imports it.
+                imported under, or its exact release as a ``DatasetRef``.
             load: Which kinds of stored values to load into the objects and what they reference.
                 The default loads none.
 
@@ -352,12 +398,12 @@ class TimeFReader:
             TimeFNotFoundError: If an ID or ``parent`` names nothing, or a stored object is not a
                 ``kind``. Nothing is returned then.
             TimeFValidationError: If ``kind`` is ``Source``, ``Annotation``, or another kind not
-                listed above, ``ids`` is a string or holds anything but positive int64s,
+                listed above, ``ids`` is a string or holds anything but positive int64s, or
                 ``parent`` is neither a ``ParentAlias`` nor a ``DatasetRef``, such as a plain
-                string, or several aliases import the ``parent`` release.
-            TimeFFormatError: If the catalog names another parent release for the alias than the
-                manifest does, or lists the alias or a parent ID more than once.
-        """  # noqa: DOC502 - TimeFFormatError is raised by _local_ids
+                string.
+            TimeFFormatError: If the catalog names no parent release or another one for the alias
+                than the manifest does, or lists the alias or a parent ID more than once.
+        """  # ruff: ignore[docstring-extraneous-exception] - TimeFFormatError is raised by _local_ids
         object_kind = _object_kind(kind)
         if isinstance(ids, str | bytes):
             raise TimeFValidationError(
@@ -466,7 +512,7 @@ class TimeFReader:
 
     @property
     def values_backend(self) -> str:
-        """Return the values-plane backend named by the manifest."""
+        """The values-plane backend named by the manifest."""
         return self._manifest.values_backend
 
     def read(self, *, load: LoadPlan = LoadPlan.ALL_LAZY) -> TimeFDataset:
@@ -476,12 +522,20 @@ class TimeFReader:
         handle and reads through to storage on access. With ``LoadPlan.ALL_EAGER``, the dataset
         needs no storage after the reader closes.
 
+        The dataset gets the parent cards and the lineage of the manifest, and the import map of the
+        catalog, so a later import into it reuses the copies it holds instead of copying them again.
+
         Args:
             load: Which kinds of stored values to load into the objects the read builds.
 
         Returns:
             The dataset.
-        """
+
+        Raises:
+            TimeFFormatError: If the catalog's parent aliases or their parent releases differ from the
+                manifest's parent cards, or the catalog lists an alias or a parent ID more than once.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _import_state
+        import_state = self._import_state()
         control = self._control_reader()
         records = control.read_records()
         occurrences: dict[int, Annotation] = {}
@@ -498,39 +552,104 @@ class TimeFReader:
             schema=self.schema,
             annotations=annotations,
             last_ids=control.read_last_ids(),
+            import_state=import_state,
         )
+
+    def _import_state(self) -> ImportState:
+        """Return the parent cards and the lineage of the manifest, and the import map of the catalog.
+
+        Returns:
+            The import state of the release. Its import map holds the child ID of each imported
+            object that the catalog lists, keyed by parent alias, kind, and parent ID.
+
+        Raises:
+            TimeFFormatError: If the catalog's parent aliases or their parent releases differ from the
+                manifest's parent cards, or the catalog lists an alias or a parent ID more than once.
+        """
+        with self._as_format_error():
+            releases, import_map = self._control_reader().import_map()
+        cards = {alias: str(card.source) for alias, card in self._manifest.parent_cards.items()}
+        if releases != cards:
+            raise TimeFFormatError(
+                f"the parent aliases and parent releases in the catalog at {self._root} differ from its manifest's "
+                f"parent cards: {releases} and {cards}"
+            )
+        return ImportState(
+            parent_cards=dict(self._manifest.parent_cards),
+            lineage={str(card.source): card for card in self._manifest.lineage},
+            import_map=import_map,
+        )
+
+    def _record_clock_ids(self, record_ids: tuple[EntityId, ...]) -> dict[EntityId, int]:
+        """Return the clock of each Record within this release, building no object.
+
+        ``TimeFDataset.import_from`` uses the clocks to give copies of Records on one clock one
+        ``TimeOrigin``, also across separate reads.
+
+        Returns:
+            The clock ID of each Record, by Record ID. An ID that names no Record is absent.
+        """
+        with self._as_format_error():
+            return self._control_reader().record_clock_ids(record_ids)
 
     def iter_records(
         self,
         record_ids: Iterable[EntityId] | None = None,
         *,
         with_annotations: bool = True,
+        load: LoadPlan = LoadPlan.ALL_LAZY,
+        batch_size: int = RECORD_BATCH_SIZE,
     ) -> Iterator[Record]:
-        """Yield complete records, optionally in a requested ID order.
+        """Yield complete records a bounded batch at a time, in a requested ID order or in record order.
+
+        The stream builds and loads each batch on its own, before it yields the batch. The records
+        of a batch share the objects that the batch builds. So the signals on one irregular axis
+        share one handle to the time offsets of that axis.
+
+        Batches share nothing. So after the stream yields the objects of a batch, it keeps none of
+        them. It holds one batch of objects at a time. If two batches request one record ID, each
+        batch builds that record as a separate object. The stream checks every requested ID before
+        it builds the first batch.
 
         Args:
-            record_ids: IDs to read in result order, or ``None`` for every record.
+            record_ids: IDs to read in result order, or ``None`` for every record in the order of
+                :meth:`record_ids`.
             with_annotations: Whether to build annotations on the records and descendants.
+            load: The kinds of stored values to load into the records that each batch builds. The
+                default loads none.
+            batch_size: The most records that a batch holds. By default, a batch holds up to 1,000
+                records (``RECORD_BATCH_SIZE``). The stream holds one batch at a time, with every
+                value that the plan loaded. So with an eager plan, a smaller batch holds fewer
+                arrays in memory.
 
         Yields:
-            Records whose stored values stay behind their value handles.
+            Records with loaded values for each kind of value that the plan names. Other stored
+            values stay behind their value handles.
         """
         with self._as_format_error(preserve_validation=True):
-            yield from self._control_reader().read_records(
+            for batch in self._control_reader().iter_record_batches(
                 record_ids,
                 with_annotations=with_annotations,
-            )
+                batch_size=batch_size,
+            ):
+                values = ValueLoad(load)
+                values.add(batch)
+                values.run()
+                yield from batch
+                # Hold no batch while the stream builds the next one.
+                del batch
 
     def _import_alias(self, parent: ParentAlias | DatasetRef) -> ParentAlias:
         """Return the alias that ``parent`` names among the manifest's parent cards.
+
+        A manifest holds each parent release under one alias only.
 
         Returns:
             The alias: ``parent`` itself, or the one alias whose parent card holds the release
             ``parent`` names.
 
         Raises:
-            TimeFValidationError: If ``parent`` is neither a ``ParentAlias`` nor a ``DatasetRef``,
-                or several aliases import the release.
+            TimeFValidationError: If ``parent`` is neither a ``ParentAlias`` nor a ``DatasetRef``.
             TimeFNotFoundError: If the dataset declares no such alias, or imports from no such
                 release.
         """
@@ -540,11 +659,6 @@ class TimeFReader:
             matches = sorted(alias for alias, card in cards.items() if card.source == parent)
             if not matches:
                 raise TimeFNotFoundError(f"{dataset_id} declares no parent {parent}")
-            if len(matches) > 1:
-                raise TimeFValidationError(
-                    f"{dataset_id} imports {parent} under the parent aliases {matches}; "
-                    "pass parent=ParentAlias(...) to choose one"
-                )
             return ParentAlias(matches[0])
         if isinstance(parent, ParentAlias):
             if parent not in cards:
@@ -564,12 +678,16 @@ class TimeFReader:
             The local IDs, one per parent ID, in order.
 
         Raises:
-            TimeFFormatError: If the catalog names another parent release for ``alias`` than the
-                manifest does, or lists ``alias`` or a parent ID more than once.
+            TimeFFormatError: If the catalog names no parent release or another one for ``alias``
+                than the manifest does, or lists ``alias`` or a parent ID more than once.
             TimeFNotFoundError: If a parent ID names no object imported under ``alias``.
         """
         parent_ref, imported = self._control_reader().imported_ids(alias, kind, dict.fromkeys(parent_ids))
-        if parent_ref is not None and parent_ref != str(self._manifest.parent_cards[alias].source):
+        if parent_ref is None:
+            raise TimeFFormatError(
+                f"the catalog names no parent release for parent alias {alias!r}, which its manifest declares"
+            )
+        if parent_ref != str(self._manifest.parent_cards[alias].source):
             raise TimeFFormatError(f"the catalog's parent release for parent alias {alias!r} differs from its manifest")
         missing = [identity for identity in parent_ids if identity not in imported]
         if missing:
@@ -577,6 +695,50 @@ class TimeFReader:
                 f"no {kind.value} {', '.join(map(repr, missing))} imported under parent alias {alias!r}"
             )
         return tuple(imported[identity] for identity in parent_ids)
+
+    def _record_ids_of_signals(self, signal_ids: tuple[EntityId, ...]) -> dict[EntityId, EntityId]:
+        """Return the ID of the Record that holds each Signal, building no object.
+
+        ``TimeFDataset.import_from`` uses it to read only the Records that hold the Signals it
+        imports.
+
+        Returns:
+            The Record ID of each Signal, by Signal ID.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored Signal.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the control reader
+        with self._as_format_error(preserve_validation=True):
+            return self._control_reader().signal_record_ids(signal_ids)
+
+    def _read_tasks_with_records(
+        self, task_ids: tuple[EntityId, ...], *, load: LoadPlan
+    ) -> tuple[dict[EntityId, Task], dict[EntityId, Record], tuple[Annotation, ...]]:
+        """Read tasks by ID, as :meth:`get_many` does, with every Record and dataset occurrence the read built for them.
+
+        ``TimeFDataset.import_from`` uses it, so the Records it copies are the objects that the tasks
+        reference, and every annotation the tasks reference lies on one of those Records or is one
+        of the dataset occurrences.
+
+        Args:
+            task_ids: The IDs of the tasks to read.
+            load: Which kinds of stored values to load into the tasks, the tasks they derive from,
+                and every Record the read built.
+
+        Returns:
+            The tasks by ID, the Records by ID, and the dataset's own occurrences that the tasks
+            reference.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored task.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the control reader
+        with self._as_format_error(preserve_validation=True):
+            tasks, records, on_dataset = self._control_reader()._read_tasks_with_records(task_ids)
+            values = ValueLoad(load)
+            values.add(tasks.values(), parents=True)
+            values.add(records.values())
+            values.run()
+            return tasks, records, on_dataset
 
     def _read_by_id(self, kind: ObjectKind, ids: tuple[EntityId, ...]) -> dict[EntityId, Entity]:
         """Build the objects of one kind with these IDs, each once, with every value unloaded.
@@ -706,34 +868,31 @@ class TimeFReader:
             raise TimeFFormatError(f"corrupt or inconsistent TimeF artifact at {self._root}: {exc}") from exc
 
 
-def _verify_files(version: DatasetVersion, parts: Iterable[FilePart], *, source: DatasetRef | None = None) -> None:
+def _verify_files(version: DatasetVersion, parts: Iterable[FilePart], *, release: DatasetRef, owner: str) -> None:
     """Hash each file of a release and compare it with its manifest record, or its pin.
 
     Args:
         version: The release that stores the files.
         parts: The records to check, which name each file relative to ``version``.
-        source: The payload source whose files the records pin, or ``None`` for the release's own.
+        release: The release that stores the files, for the error.
+        owner: The release, or the payload source, that the files belong to, for the error message.
 
     Raises:
-        TimeFFormatError: If a file is missing, or its size or checksum differs from its record.
+        TimeNetFileError: If a file is missing, or its size or checksum differs from its record.
     """
-    of, record = ("", "manifest says") if source is None else (f" of payload source {source}", "pinned")
     for part in sorted(parts, key=lambda item: item.path):
+        expected_size = f"{part.size:,} bytes"
         try:
             handle = version.filesystem.open_input_file(version.resolve_file_path(part.path))
         except FileNotFoundError as exc:
-            raise TimeFFormatError(f"manifest lists a missing file{of}: {part.path}") from exc
+            raise TimeNetFileError(release, owner, part.path, expected_size, None) from exc
         with handle:
             actual_size = handle.size()
             if actual_size != part.size:
-                raise TimeFFormatError(
-                    f"size mismatch for {part.path}{of}: {record} {part.size}, file is {actual_size}"
-                )
+                raise TimeNetFileError(release, owner, part.path, expected_size, f"{actual_size:,} bytes")
             actual_checksum = stream_checksum(handle)
         if actual_checksum != part.checksum:
-            raise TimeFFormatError(
-                f"checksum mismatch for {part.path}{of}: {record} {part.checksum}, file is {actual_checksum}"
-            )
+            raise TimeNetFileError(release, owner, part.path, part.checksum, actual_checksum)
 
 
 def _object_kind(kind: object) -> ObjectKind:

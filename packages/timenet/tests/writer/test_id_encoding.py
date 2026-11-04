@@ -12,6 +12,8 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     ForecastingTask,
+    Label,
+    LabelSet,
     License,
     StepInterval,
     TimeInterval,
@@ -23,6 +25,9 @@ from timenet.types import (
     ureg,
 )
 from timenet.writer import TimeFWriter
+
+
+LABELS = LabelSet(name="labels", labels=(Label(name="x"),))
 
 
 def _spec():
@@ -116,7 +121,7 @@ def test_a_span_reads_back_the_signals_of_its_record(tmp_path):
     other = _series()
     dataset.add_record(record=Record(sources=(Source(name="Other", signals=(other,)),)))
     scope = TimeInterval.seconds(0.0, 1.0, time_series=(series,))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), scope=scope))
+    dataset.add_task(task=ClassificationTask(label_set=LABELS, inputs=(record,), targets=("x",), scope=scope))
     dataset.derive_schema()
     version_dir = _write(tmp_path, dataset)
 
