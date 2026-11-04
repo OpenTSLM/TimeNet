@@ -171,6 +171,13 @@ def test_windows_become_records_of_their_subset_and_the_release_derives_one_sche
         ("walking",),
         ("normal",),
     }
+    # Each collection's label set holds the text labels of its windows, in sorted order.
+    assert {task.label_set.name: task.label_set.names for task in classified} == {
+        "sleepedf": ("deep slow wave sleep", "wakefulness with full awareness"),
+        "studentlife": ("medium stress",),
+        "wisdm": ("walking",),
+        "ppg_dm": ("normal",),
+    }
     assert all(
         read_value(task.prompt) is None and task.input_modalities == {InputModality.TIME_SERIES} for task in classified
     )

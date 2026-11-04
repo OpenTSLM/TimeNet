@@ -103,9 +103,9 @@ def hub_snapshot(repo: str, revision: str, cache_dir: Path, patterns: tuple[str,
     Raises:
         TimeNetDownloadError: If the revision cannot be listed or no files match.
     """
-    from fnmatch import fnmatchcase  # noqa: PLC0415
+    from fnmatch import fnmatchcase  # ruff: ignore[import-outside-top-level]
 
-    from huggingface_hub import list_repo_files  # noqa: PLC0415
+    from huggingface_hub import list_repo_files  # ruff: ignore[import-outside-top-level]
 
     try:
         names = list_repo_files(repo, repo_type="dataset", revision=revision)

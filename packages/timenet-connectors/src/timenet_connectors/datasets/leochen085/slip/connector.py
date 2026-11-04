@@ -12,7 +12,17 @@ from typing import TYPE_CHECKING
 from timenet.connectors import BaseConnector
 from timenet.dataset import OrdinalAxis, Record, RegularAxis, Source, TimeAxis, TimeFDataset
 from timenet.errors import TimeNetDownloadError
-from timenet.types import Annotation, AnswerTask, ClassificationTask, InputModality, Split, TimeSeriesSpec, read_value
+from timenet.types import (
+    Annotation,
+    AnswerTask,
+    ClassificationTask,
+    InputModality,
+    Label,
+    LabelSet,
+    Split,
+    TimeSeriesSpec,
+    read_value,
+)
 from timenet_connectors.datasets.leochen085.slip.shards import SlipRow, iter_rows
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
 
@@ -81,7 +91,7 @@ class SlipSource:
 class SlipConnector(BaseConnector[SlipSource]):
     """Connector for the SLIP release (Hub repo ``LeoChen085/SlipDataset``)."""
 
-    def download(self, cache_dir: Path) -> list[SlipSource]:  # noqa: PLR6301 - BaseConnector override
+    def download(self, cache_dir: Path) -> list[SlipSource]:  # ruff: ignore[no-self-use] - BaseConnector override
         """Fetch the corpus shards, ``meta.csv``, and the shards of every evaluation folder.
 
         Args:
@@ -177,24 +187,37 @@ def _corpus_annotations(row: SlipRow, metadata: dict[str, str]) -> list[Annotati
 def _add_evaluation_records(dataset: TimeFDataset, source: SlipSource) -> list[ClassificationTask]:
     """Add the labeled evaluation records and return their classification tasks.
 
+    Each collection has one label set: the text labels that its windows use, in sorted order. The
+    release lists no label set of its own, so the connector collects the labels before it builds the
+    tasks.
+
     Returns:
         One classification task per added evaluation record.
     """
-    classification_tasks: list[ClassificationTask] = []
+    labeled: list[tuple[str, Split, Record, str]] = []
     for folder, split, record_id, row in _walk(source.collections, _WINDOW):
         record = _record(record_id, folder, row, WINDOW, RegularAxis.from_rate_hz(_EVALUATION_RATES_HZ[folder]))
         dataset.add_record(record=record)
         record.add_annotations(_evaluation_annotations(folder, row))
         # The class is the text label, which is what SLIP's own zero-shot evaluation classifies by.
-        classification_tasks.append(
-            ClassificationTask(
-                inputs=(record,),
-                targets=(row.scalars["text_label"],),
-                input_modalities=frozenset({InputModality.TIME_SERIES}),
-                split=split,
-            )
+        labeled.append((folder, split, record, row.scalars["text_label"]))
+    names: dict[str, set[str]] = {}
+    for folder, _, _, text_label in labeled:
+        names.setdefault(folder, set()).add(text_label)
+    label_sets = {
+        folder: LabelSet(name=folder.lower(), labels=tuple(Label(name=name) for name in sorted(folder_names)))
+        for folder, folder_names in names.items()
+    }
+    return [
+        ClassificationTask(
+            inputs=(record,),
+            targets=(text_label,),
+            label_set=label_sets[folder],
+            input_modalities=frozenset({InputModality.TIME_SERIES}),
+            split=split,
         )
-    return classification_tasks
+        for folder, split, record, text_label in labeled
+    ]
 
 
 def _evaluation_annotations(folder: str, row: SlipRow) -> list[Annotation]:
