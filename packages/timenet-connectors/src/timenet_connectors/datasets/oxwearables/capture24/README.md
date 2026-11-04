@@ -7,7 +7,9 @@ diaries. The dataset supports human activity recognition.
 
 The connector reads the one zip of the [Oxford Research Archive record][ora], pinned by its
 SHA-256 (`69740c22…40e2`, 6.9 GB). The dataset card records the same digest as `source_revision`.
-The data license is CC BY 4.0. The authors' benchmark code is
+The data license is CC BY 4.0, and the dataset DOI is [10.5287/bodleian:NGx0JOMP5][doi]. The
+archive's terms also ask each user to keep the participants' data confidential and not to try to
+identify them. The authors' benchmark code is
 [OxWearables/capture24][code]; it is under a separate academic-use license, so the connector
 reimplements its windowing and copies no code.
 
@@ -16,7 +18,8 @@ download.
 
 [paper]: https://doi.org/10.1038/s41597-024-03960-3
 [ora]: https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001
-[code]: https://github.com/OxWearables/capture24
+[doi]: https://doi.org/10.5287/bodleian:NGx0JOMP5
+[code]: https://github.com/OxWearables/capture24/tree/f861b44
 
 ## The source data
 
@@ -28,15 +31,17 @@ The archive's `capture24/` directory holds:
 | `metadata.csv` | `pid,age,sex`: an age band (`18-29`, `30-37`, `38-52`, `53+`) and `F` or `M` |
 | `annotation-label-dictionary.csv` | Each of the 206 raw labels, and its class in six label schemes |
 
-- **Signal.** An Axivity AX3 on the wrist, three axes in g, at 100 Hz. Values are written with
+- **Signal.** An Axivity AX3 on the dominant wrist, three axes in g, at 100 Hz with a range of ±8
+  g. The values are not raw device output. The authors resampled each recording to exactly 100 Hz
+  with nearest-neighbor interpolation, and applied gravity autocalibration. Values are written with
   eight significant digits. The connector reads and stores them as float32, which keeps about
   seven, as the authors' own loader does. The rounding is far below the sensor's resolution, and
   float32 halves the stored size.
 - **Clock.** `time` is a timestamp with no zone. For anonymity the authors randomized the dates, so
-  every recording is dated 2016. They also shifted each timestamp by a small random amount, so the
-  time of day is close to the participant's local time but not exact. Every step is exactly 10 ms,
-  except for one gap of 1 to 4 hours in each of eight recordings (P008, P016, P017, P060, P077,
-  P094, P097, P142).
+  every recording is dated 2016. They also shifted each timestamp by a small random amount. The
+  paper names no time zone, so the time of day is as published, not an exact local time. Every step
+  is exactly 10 ms, except for one gap of 1 to 4 hours in each of eight recordings (P008, P016,
+  P017, P060, P077, P094, P097, P142).
 - **Labels.** `annotation` is a [Compendium of Physical Activity][cpa] entry, such as
   `7030 sleeping;MET 0.95`, or empty. An empty field is an unlabeled sample.
 
@@ -67,9 +72,9 @@ are kept instead:
 | Record annotation | `recording_start_local` | The first sample's published timestamp, in ISO 8601 with microseconds and no zone, such as `2016-11-13T02:18:00.000000` |
 
 `recording_start_local` is the anonymized timestamp that the authors published. Its date is not
-the recording's. Its time of day is the participant's local time, shifted by a small random amount.
-The annotation's `description` says this too, so a reader of the dataset alone does not take it as
-the true local time.
+the recording's, and its time of day is shifted by a small random amount. The annotation's
+`description` says this too, so a reader of the dataset alone does not take it as the true local
+time.
 
 ### Activity annotations
 
@@ -86,24 +91,20 @@ raw label becomes one annotation on the Source:
 Unlabeled samples belong to no run, so the annotations also show which samples have a label. A
 run never crosses a gap. The signals carry no annotations.
 
-The activity annotations hold the answer to every task. A model input must leave them out. A task
-names no annotation in `input_annotations`, so a model that reads only a task's inputs and scope
-does not see them.
-
-### Dataset annotations
-
-| Key | Value |
-| --- | --- |
-| `willetts_specific_2018_vocabulary` | WillettsSpecific2018's 10 classes, in string order |
-| `walmsley_2020_vocabulary` | Walmsley2020's 4 classes, in string order |
+The activity annotations hold the answer to every task, so a model input must leave them out.
+A task's `inputs` is the whole Record, and its Sources still carry these annotations. A task lists
+no annotation in `input_annotations`, but that field only names the annotations a task selects. It
+does not remove anything from the Record. A consumer that builds model input from a task must use
+the signal values in its scope and drop the Source annotations.
 
 ### Vocabularies
 
 Each task draws its target from one of two vocabularies, one for each scheme that the authors'
-`benchmark.py` scores. A vocabulary is the closed list of a scheme's classes. Each task names its
-vocabulary in `target_schema`.
+`benchmark.py` scores. A vocabulary is the closed list of a scheme's classes. The dataset stores
+each one as a dataset annotation, and each task names its vocabulary in `target_schema`. The
+dataset has no other dataset annotations.
 
-| Vocabulary | Classes, in string order |
+| Dataset annotation | Classes, in string order |
 | --- | --- |
 | `willetts_specific_2018_vocabulary` | `bicycling`, `household-chores`, `manual-work`, `mixed-activity`, `sitting`, `sleep`, `sports`, `standing`, `vehicle`, `walking` |
 | `walmsley_2020_vocabulary` | `light`, `moderate-vigorous`, `sedentary`, `sleep` |
@@ -180,7 +181,7 @@ a small fake release.
 ## Known issues upstream
 
 - **Window counts.** The paper reports 922,199 windows, and the datasheet in the authors'
-  repository 939,017. Their `make_windows` today keeps 934,762.
+  repository 939,017. Their `make_windows` at commit `f861b44` keeps 934,762.
 - **Values past the sensor range.** The AX3 was set to ±8 g. Some values reach 8 g or more in
   magnitude after the authors' gravity calibration. They are kept as published.
 - `train_deep_models.py` imports `old_code`, which is not in the repository, and loads
