@@ -2,7 +2,6 @@ from pathlib import Path
 
 import pytest
 
-from timenet import builders
 from timenet.errors import (
     TimeFValidationError,
     TimeNetRegistryError,
@@ -132,8 +131,7 @@ def test_installed_connectors_answer_not_found_for_another_version(monkeypatch):
     assert InstalledConnectors().resolve("x/y", None) == NotFound()
 
 
-def test_installed_connectors_without_a_package_answer_not_found(monkeypatch):
-    monkeypatch.setattr(builders, "entry_points", lambda group: [])
+def test_installed_connectors_without_a_package_answer_not_found():
     assert InstalledConnectors().resolve("timenet/hello-world", None) == NotFound()
     assert "no connector package is installed" in str(InstalledConnectors())
 

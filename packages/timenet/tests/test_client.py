@@ -8,7 +8,6 @@ import httpx
 from pydantic import ValidationError
 import pytest
 
-from timenet import builders as builders_module
 from timenet.client import TimeNet, default_sources
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
@@ -65,8 +64,7 @@ class _Builder:
         store.put_dataset(dataset, force=force, values_backend=self.BACKEND, pinned_by=pinned_by or None)
 
 
-def test_a_child_reads_its_missing_payload_source_from_a_later_registry(tmp_path, monkeypatch):
-    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
+def test_a_child_reads_its_missing_payload_source_from_a_later_registry(tmp_path):
     origin, reference = _child_of_the_demo(tmp_path / "origin")
     cache = tmp_path / "cache"
     shutil.copytree(origin.root / "test/child/1.0.0", cache / "test/child/1.0.0")
@@ -221,7 +219,6 @@ def test_the_default_list_follows_timenet_registry(tmp_path, monkeypatch, regist
 
 
 def test_timenet_registry_env_selects_a_local_registry(tmp_path, monkeypatch):
-    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "home" / "registry"))
     dataset = make_dataset()
@@ -363,8 +360,7 @@ def test_download_of_latest_fails_when_a_connector_declares_a_newer_version(regi
     assert client.download("timenet/hello-world") == store.root / "timenet/hello-world/1.0.0"
 
 
-def test_download_of_a_release_that_no_source_provides_names_each_source(tmp_path, monkeypatch):
-    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
+def test_download_of_a_release_that_no_source_provides_names_each_source(tmp_path):
     sources = [LocalRegistry(tmp_path / "store"), LocalRegistry(tmp_path / "empty"), InstalledConnectors()]
 
     with pytest.raises(TimeNetDatasetNotFoundError) as caught:
@@ -438,7 +434,6 @@ def test_download_names_the_store_when_no_other_registry_provides_its_copy(tmp_p
 
 @pytest.mark.parametrize("case", ["force", "damaged"])
 def test_download_counts_a_registry_over_the_directory_of_the_store_as_the_store(tmp_path, monkeypatch, case):
-    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
     root = tmp_path / "reg"
     LocalRegistry(root).put_dataset(make_dataset())
     directory = root / "timenet/hello-world/1.0.0"
@@ -773,8 +768,7 @@ def test_load_names_the_buildable_version_when_a_pin_cannot_be_built(registry_ro
 
 
 @pytest.mark.parametrize("connectors", [True, False])
-def test_a_release_that_no_source_provides_names_how_to_get_it(tmp_path, monkeypatch, connectors):
-    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
+def test_a_release_that_no_source_provides_names_how_to_get_it(tmp_path, connectors):
     sources = [
         LocalRegistry(tmp_path / "reg"),
         LocalRegistry(tmp_path / "empty"),
@@ -858,8 +852,7 @@ def test_load_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):
     assert not store.root.exists()
 
 
-def test_the_access_hint_says_that_no_installed_connector_builds_the_release(tmp_path, monkeypatch):
-    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
+def test_the_access_hint_says_that_no_installed_connector_builds_the_release(tmp_path):
     card = _card("org/gated", Access.CREDENTIALED, "https://physionet.example/dua")
     client = TimeNet(sources=[LocalRegistry(tmp_path / "store"), _hosted(tmp_path, card), InstalledConnectors()])
 

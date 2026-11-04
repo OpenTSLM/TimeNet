@@ -9,6 +9,9 @@ from pathlib import Path
 import sys
 
 from hypothesis import HealthCheck, settings
+import pytest
+
+from timenet.testing import install_backends
 
 
 # Make the test helpers of this directory (e.g. ``_demo_child``) importable by name under pytest's
@@ -24,3 +27,9 @@ settings.register_profile(
     suppress_health_check=[HealthCheck.too_slow],
 )
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
+
+
+@pytest.fixture(autouse=True)
+def _no_installed_connectors(monkeypatch):
+    """Install no builder backends, so that no test reads the connector packages of the environment."""
+    install_backends(monkeypatch)
