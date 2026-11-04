@@ -252,7 +252,7 @@ def test_load_full_round_trips(version_dir, tmp_path, entry_point):
     directory, manifest = version_dir
     with registry_server(directory) as server:
         registry = RemoteRegistry(server.url, cache_dir=tmp_path / "cache")
-        client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
+        client = TimeNet(sources=[registry])
         if entry_point == "open":
             with client.open(manifest.metadata.dataset_id) as reader:
                 assert_datasets_equal(make_dataset(), reader.read())
@@ -277,7 +277,7 @@ def test_load_full_round_trips_after_pickling_and_url_expiry(version_dir, tmp_pa
 
     with registry_server(directory, serve_file=single_use_download if expire_urls else None) as server:
         registry = RemoteRegistry(server.url, cache_dir=tmp_path / "cache")
-        client = TimeNet(registry=registry, storage_path=tmp_path / "storage")
+        client = TimeNet(sources=[registry])
         with client.open(manifest.metadata.dataset_id) as reader:
             # A worker must reopen its own clients, including after the main process has read values.
             reader.get(Signal, make_dataset().records[0].signals[0].id).to_arrow()
@@ -311,7 +311,7 @@ def test_small_signal_read_fetches_ranges_and_keeps_registry_token_private(tmp_p
 
     with registry_server(directory, serve_file=serve_file) as server:
         remote = RemoteRegistry(server.url, token="private-token", cache_dir=tmp_path / "cache")
-        with TimeNet(remote).open(dataset.metadata.dataset_id, "1.0.0") as reader:
+        with TimeNet(sources=[remote]).open(dataset.metadata.dataset_id, "1.0.0") as reader:
             assert all(response.request.url.path.startswith("/api/v1/") for response in server.responses)
             if not support_ranges:
                 # The get reads the catalog, which already needs range requests.
@@ -440,12 +440,13 @@ def test_latest_detail_rejects_non_string_version(tmp_path):
         registry.get_manifest("demo/example")
 
 
-def test_remote_registry_uses_client_storage_path(tmp_path):
-    # A URL-configured remote registry must cache under the client's storage_path, so download() and
-    # load() share one cache-first directory.
-    client = TimeNet(registry="https://registry.example.test", storage_path=tmp_path / "store")
-    assert isinstance(client._registry, RemoteRegistry)
-    assert client._registry._cache_dir == client._storage == tmp_path / "store"
+def test_a_registry_url_in_the_sources_caches_under_the_storage_directory(tmp_path, monkeypatch):
+    # A remote registry that the sources name by URL caches under the storage directory, where
+    # download() copies to, so download() and load() share one cache-first directory.
+    monkeypatch.setenv("TIMENET_STORAGE", str(tmp_path / "store"))
+    (registry,) = TimeNet(sources=["https://registry.example.test"])._sources
+    assert isinstance(registry, RemoteRegistry)
+    assert registry._cache_dir == tmp_path / "store"
 
 
 def test_put_dataset_without_write_token_is_rejected(tmp_path):
@@ -494,14 +495,14 @@ def test_child_streams_physical_sources_and_downloads_for_offline_reads(tmp_path
     cache = tmp_path / "cache"
     remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=cache)
     with range_server(origin) as blob_url:
-        with TimeNet(remote).open("test/child", "1.0.0") as reader:
+        with TimeNet(sources=[remote]).open("test/child", "1.0.0") as reader:
             assert all("/download/" not in path for path in requests)
             assert reader.get(Signal, signal_id).to_arrow().equals(expected)
             assert any(parent_id + "/1.0.0/download/" in path for path in requests)
             assert not any(parent_id + "/1.0.0/download/control.duckdb" in path for path in requests)
             assert not (cache / parent_id / "1.0.0").exists()
         remote.download_version("test/child", "1.0.0", cache / "test/child/1.0.0")
-    with TimeNet(remote).open("test/child", "1.0.0") as reader:
+    with TimeNet(sources=[remote]).open("test/child", "1.0.0") as reader:
         assert reader.get(Signal, signal_id).to_arrow().equals(expected)
     assert not any("test/build-only" in path for path in requests)
     assert (cache / parent_id / "1.0.0/control.duckdb").exists()
@@ -534,16 +535,19 @@ def _gated_release(origin: Path, page: str) -> tuple[str, DatasetRef]:
 
 
 @pytest.mark.parametrize("page", ["own", "ancestor"])
-def test_a_local_client_checks_access_before_it_reads_from_a_remote_registry(tmp_path, page):
+def test_a_read_checks_access_before_it_reads_from_a_remote_registry(tmp_path, page):
     dataset_id, release = _gated_release(tmp_path / "origin", page)
     transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
     remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
 
     with pytest.raises(TimeNetAccessError) as caught:
-        TimeNet(tmp_path / "local").open(dataset_id, auto_build=False, fetch_from=remote)
+        TimeNet(sources=[LocalRegistry(tmp_path / "local", store=True), remote]).open(dataset_id)
 
     assert caught.value.requirements == (AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua"),)
-    assert caught.value.hint == "Build it from its connector with auto_build=True."
+    assert caught.value.hint == (
+        "No source serves its files. Add InstalledConnectors() to the sources, or build it locally with "
+        f"`timenet-build build {dataset_id}`."
+    )
     assert not any("/download/" in request.url.path or request.url.host == "blob.local" for request in requests)
     assert not (tmp_path / "local").exists()
 
