@@ -6,6 +6,7 @@ builders can name it instead of comparing strings.
 
 from enum import IntEnum, StrEnum, unique
 
+import numpy as np
 import pyarrow as pa
 
 from timenet.types import Annotation, TimeSeriesSpec, ureg
@@ -57,6 +58,28 @@ _VOCABULARY = [label.text for label in EventLabel if label.is_event]
 
 
 @unique
+class SourceField(StrEnum):
+    """A field name in the authors' files: a window's JSON keys, and a retrieval row's columns and keys.
+
+    A channel's field is its ``Channel`` value.
+    """
+
+    STATION_ID = "station_id"
+    LATITUDE = "latitude"
+    LONGITUDE = "longitude"
+    LOCATION = "location"
+    MODE = "mode"
+    DATE = "DATE"
+    EVENT_TYPE = "event_type"
+    ID = "id"
+    DESCRIPTION = "description"
+    LABELS = "labels"
+    EVENTS = "events"
+    EVENT_ID = "event_id"
+    NARRATIVE = "narrative"
+
+
+@unique
 class AnnotationKey(StrEnum):
     """The key of an annotation the connector builds."""
 
@@ -67,11 +90,30 @@ class AnnotationKey(StrEnum):
     CHANNEL_DESCRIPTION = "channel_description"
 
 
-EVENT_ID = "event_id"
-"""The metadata key of a NOAA event's id, which joins a retrieval task to its event-type task."""
+@unique
+class MetadataKey(StrEnum):
+    """A key of the metadata the connector writes on a Record, a Source or a task. Metadata is never model input."""
 
-CHANNEL_ORDER = "channel_order"
-"""The Source metadata key that lists its channels in source order, which TimeF doesn't keep on read."""
+    # A Record: one distinct measurement.
+    STATION = "station"
+    COORDINATES = "coordinates"
+    SAMPLING = "sampling"
+    WINDOWS = "windows"
+    # A window, in its Record's ``windows`` and in its tasks.
+    WINDOW_ID = "window_id"
+    ANCHOR = "anchor"
+    SOURCE_FILE = "source_file"
+    COUNTY = "county"
+    EVENT_TYPE = "event_type"
+    # A task.
+    EVENT_TYPE_INDEX = "event_type_index"
+    EVENT_ID = "event_id"
+    """A NOAA event's id, which joins a retrieval task to its event-type task."""
+    # The station Source: its channels in source order, which TimeF does not keep on read.
+    CHANNEL_ORDER = "channel_order"
+    # A channel_description annotation: the channel it describes.
+    CHANNEL = "channel"
+
 
 DATASET_ANNOTATIONS = (
     Annotation(key=AnnotationKey.NO_EVENT_LABEL, value=EventLabel.NO_EVENT.value),
@@ -147,6 +189,13 @@ class Channel(StrEnum):
     def spec(self) -> TimeSeriesSpec:
         """The channel's TimeF spec: what it measures, and in which unit."""
         return _SPECS[self]
+
+    def to_arrow(self, values: np.ndarray) -> pa.Array:
+        """Return checked values as the channel stores them: float32, or sky cover codes as codebook indices."""
+        if self is Channel.SKY_COVER:
+            # The published codes are already indices into the codebook.
+            return pa.DictionaryArray.from_arrays(pa.array(values.astype(np.int32)), SKY_COVER_CODEBOOK)
+        return pa.array(values.astype(np.float32))
 
 
 # Units follow the Hugging Face release's field table; the archive itself states none. In 4-hourly

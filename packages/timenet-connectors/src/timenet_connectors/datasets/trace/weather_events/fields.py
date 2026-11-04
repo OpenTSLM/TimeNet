@@ -34,7 +34,8 @@ def field(published: dict[str, Any], name: str) -> Any:
         TimeFValidationError: If the object lacks the field.
     """
     if name not in published:
-        raise TimeFValidationError(f"missing field {name!r}")
+        # str() so that a StrEnum field reads as its name, not its repr.
+        raise TimeFValidationError(f"missing field {str(name)!r}")
     return published[name]
 
 

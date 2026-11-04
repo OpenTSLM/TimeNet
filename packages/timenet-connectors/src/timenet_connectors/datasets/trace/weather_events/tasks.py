@@ -1,22 +1,30 @@
-"""TRACE's three tasks, one per published window or retrieval row, each under the authors' split.
+"""TRACE's three tasks, one per qualifying window or retrieval row, each under the authors' split.
 
 - Event type: a classified ``pretrain`` window must name the event that followed it.
 - Retrieval: a retrieval row's generated description must find its window's Record.
 - Forecasting: a ``forecasting`` window's last values must follow from the rest.
 """
 
-from collections.abc import Iterator, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 
 from timenet.dataset import Record
 from timenet.types import Annotation, ClassificationTask, ForecastingTask, Task, TimeInterval, TSCorrespondenceTask
 from timenet_connectors.datasets.trace.weather_events.archive import SplitName
 from timenet_connectors.datasets.trace.weather_events.measurements import Measurement, WindowIndex
 from timenet_connectors.datasets.trace.weather_events.retrieval import RetrievalIndex
-from timenet_connectors.datasets.trace.weather_events.vocabulary import EVENT_ID, AnnotationKey, Channel
+from timenet_connectors.datasets.trace.weather_events.vocabulary import AnnotationKey, Channel, MetadataKey
 
 
 TASK_TYPES = (ClassificationTask, TSCorrespondenceTask, ForecastingTask)
 """The task types the stream yields, in stream order."""
+
+
+def _unique_records(records: Iterable[Record]) -> tuple[Record, ...]:
+    """Return each Record once, in first-seen order. Copies of one measurement share a Record."""
+    unique: dict[int, Record] = {}
+    for record in records:
+        unique.setdefault(id(record), record)
+    return tuple(unique.values())
 
 
 class TaskStream:
@@ -27,9 +35,7 @@ class TaskStream:
         self._retrieval = retrieval
         self._records = records
         # The authors rank each test description against every test window (context_align_task.py).
-        # Copies of one measurement share a Record, so each candidate Record appears once.
-        test_records = (records[window.measurement] for window in retrieval.test_windows())
-        self._test_candidates = tuple({id(record): record for record in test_records}.values())
+        self._test_candidates = _unique_records(records[window.measurement] for window in retrieval.test_windows())
 
     def tasks(self) -> Iterator[Task]:
         """Return every task: the event-type tasks, then the retrieval tasks, then the forecasting tasks.
@@ -45,9 +51,9 @@ class TaskStream:
 
     def _event_type_tasks(self) -> Iterator[ClassificationTask]:
         """Yield one classification task for each retrieval row whose window is classified."""
-        for _, window, row in self._retrieval.rows():
+        for checked in self._retrieval.rows():
             # A row has a report exactly when its window is classified, as RetrievalIndex.read checked.
-            report = row.report
+            report, window = checked.row.report, checked.window
             if report is None:
                 continue
             yield ClassificationTask(
@@ -58,7 +64,8 @@ class TaskStream:
                 # The report names the target and describes the event after the window, so it is
                 # supervision only, never an input.
                 rationale=report.text,
-                metadata=window.provenance() | {"event_type_index": report.event_type.value, EVENT_ID: report.event_id},
+                metadata=window.provenance()
+                | {MetadataKey.EVENT_TYPE_INDEX: report.event_type.value, MetadataKey.EVENT_ID: report.event_id},
             )
 
     def _retrieval_tasks(self) -> Iterator[TSCorrespondenceTask]:
@@ -70,16 +77,18 @@ class TaskStream:
         ``county`` metadata and ``window_start`` and ``window_end`` annotations also hold, so naming
         either as an input would let a model match by string.
         """
-        for file, window, row in self._retrieval.rows():
+        for checked in self._retrieval.rows():
+            file, window, row = checked.file, checked.window, checked.row
+            event = {} if row.report is None else {MetadataKey.EVENT_ID: row.report.event_id}
             task = TSCorrespondenceTask(
                 prompt=row.prompt,
                 targets=(self._records[window.measurement],),
-                # Test tasks rank the retrieval test windows' Records; train tasks name no candidates,
-                # since the authors draw their negatives per batch.
+                # Test tasks rank the retrieval test windows' Records. Train tasks pass no candidates, which
+                # TimeF reads as the dataset-wide pool, test Records included: see the README.
                 candidate_records=self._test_candidates if file.split is SplitName.TEST else (),
                 split=file.split.timef_split,
                 # The event id joins the row to its event-type task, whose rationale is the row's report.
-                metadata=window.provenance() | ({} if row.report is None else {EVENT_ID: row.report.event_id}),
+                metadata=window.provenance() | event,
             )
             # The authors embed each channel sentence on its own (generate_channel_description) and align
             # it with that channel's embedding. The sentences belong to this row, and copies of one
@@ -90,7 +99,7 @@ class TaskStream:
                         key=AnnotationKey.CHANNEL_DESCRIPTION,
                         value=sentence,
                         description="The authors' generated description of one channel over this window",
-                        metadata={"channel": channel.value},
+                        metadata={MetadataKey.CHANNEL: channel.value},
                     )
                 )
             yield task

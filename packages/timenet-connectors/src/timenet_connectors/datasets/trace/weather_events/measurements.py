@@ -12,7 +12,6 @@ from functools import lru_cache, partial
 from pathlib import Path
 from typing import NamedTuple
 
-import numpy as np
 import pyarrow as pa
 
 from timenet.dataset import Record, Signal, Source
@@ -20,22 +19,21 @@ from timenet.dataset.axis import IrregularAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.json import JsonValue
 from timenet.types import Annotation, TimeInterval
-from timenet_connectors.datasets.trace.weather_events.archive import Kind, TraceFile
+from timenet_connectors.datasets.trace.weather_events.archive import TraceFile
 from timenet_connectors.datasets.trace.weather_events.fields import as_object, field
 from timenet_connectors.datasets.trace.weather_events.vocabulary import (
-    CHANNEL_ORDER,
     FORECAST_HORIZON,
     MIN_TASK_VALUES,
-    SKY_COVER_CODEBOOK,
     AnnotationKey,
     Channel,
     EventLabel,
+    MetadataKey,
     Sampling,
+    SourceField,
 )
 from timenet_connectors.datasets.trace.weather_events.window_rows import (
     Coordinates,
     County,
-    LocalTimestamps,
     Readings,
     WindowRow,
     parse_sampling,
@@ -47,13 +45,18 @@ from timenet_connectors.time_axes import axis_for_offsets
 _DATE_NOTE = "station local clock time, no time zone. Not a retrieval input: every description restates these dates"
 
 
-class Located(NamedTuple):
-    """Where a Record's values sit in the window files, and the digest they had at conversion."""
+class WindowLocation(NamedTuple):
+    """Where a window's values sit in its JSON file, and the digest they had at conversion."""
 
     path: Path
     offset: int
     length: int
     digest: bytes
+
+    @property
+    def error_context(self) -> str:
+        """The file and byte range that error messages name."""
+        return f"{self.path} (bytes {self.offset}-{self.offset + self.length})"
 
 
 class WindowReader:
@@ -68,31 +71,28 @@ class WindowReader:
         self._readings = lru_cache(maxsize=1)(self._read)
 
     @staticmethod
-    def _read(located: Located) -> Readings:
-        context = f"{located.path} (bytes {located.offset}-{located.offset + located.length})"
-        raw = read_entry(located.path, located.offset, located.length)
+    def _read(location: WindowLocation) -> Readings:
+        raw = read_entry(location.path, location.offset, location.length)
         try:
             raw = as_object(raw)
             sampling = parse_sampling(raw)
             readings = Readings.parse(raw, sampling)
-            digest = readings.digest(field(raw, "station_id"), sampling.value)
+            digest = readings.digest(field(raw, SourceField.STATION_ID), sampling.value)
         except TimeFValidationError as exc:
-            raise TimeFFormatError(f"{context}: the window changed since conversion: {exc}") from exc
-        if digest != located.digest:
-            raise TimeFFormatError(f"{context}: the window differs from the one converted; the file changed")
+            raise TimeFFormatError(f"{location.error_context}: the window changed since conversion: {exc}") from exc
+        if digest != location.digest:
+            raise TimeFFormatError(
+                f"{location.error_context}: the window differs from the one converted; the file changed"
+            )
         return readings
 
-    def values(self, located: Located, channel: Channel) -> pa.Array:
-        """Return one channel of a window: float32 values, or ``sky_code`` as codebook indices."""
-        values = self._readings(located).values[channel]
-        if channel is Channel.SKY_COVER:
-            # The published codes are already indices into the codebook.
-            return pa.DictionaryArray.from_arrays(pa.array(values.astype(np.int32)), SKY_COVER_CODEBOOK)
-        return pa.array(values.astype(np.float32))
+    def values(self, location: WindowLocation, channel: Channel) -> pa.Array:
+        """Return one channel of a window, as the channel stores it."""
+        return channel.to_arrow(self._readings(location).values[channel])
 
-    def time_offsets(self, located: Located) -> pa.Array:
+    def time_offsets(self, location: WindowLocation) -> pa.Array:
         """Return a window's local-clock time offsets in microseconds, for a Record whose axis has gaps."""
-        return pa.array(self._readings(located).timestamps.offsets_us)
+        return pa.array(self._readings(location).timestamps.offsets_us)
 
 
 @dataclass(eq=False)
@@ -111,15 +111,15 @@ class Measurement:
     n_values: int
     axis: RegularAxis | IrregularAxis
     """The time axis the seven channels share: regular at the cadence if the window has no gaps."""
-    located: Located
+    location: WindowLocation
     windows: list["Window"]
 
     @classmethod
-    def first_seen_in(cls, row: WindowRow, located: Located) -> "Measurement":
+    def first_seen_in(cls, row: WindowRow, location: WindowLocation) -> "Measurement":
         """Return the measurement of a window not seen before, with no windows yet.
 
         Returns:
-            The measurement, whose values stay where ``located`` points.
+            The measurement, whose values stay where ``location`` points.
         """
         timestamps = row.readings.timestamps
         return cls(
@@ -130,7 +130,7 @@ class Measurement:
             last_date=timestamps.last,
             n_values=row.readings.n_values,
             axis=axis_for_offsets(timestamps.offsets_us, period_us=Fraction(row.sampling.cadence_us)),
-            located=located,
+            location=location,
             windows=[],
         )
 
@@ -143,10 +143,10 @@ class Measurement:
         """Return the Record's metadata: its station, where it stands, its sampling and every window."""
         windows = sorted(self.windows, key=lambda window: window.window_id)
         return {
-            "station": self.station_id,
-            "coordinates": self.coordinates._asdict(),
-            "sampling": self.sampling.value,
-            "windows": [window.metadata() for window in windows],
+            MetadataKey.STATION: self.station_id,
+            MetadataKey.COORDINATES: self.coordinates._asdict(),
+            MetadataKey.SAMPLING: self.sampling.value,
+            MetadataKey.WINDOWS: [window.metadata() for window in windows],
         }
 
     def to_record(self, reader: WindowReader) -> Record:
@@ -158,8 +158,8 @@ class Measurement:
         Returns:
             A Record with lazy signals on one shared time axis.
         """
-        located, axis = self.located, self.axis
-        offsets_loader = partial(reader.time_offsets, located) if isinstance(axis, IrregularAxis) else None
+        location, axis = self.location, self.axis
+        offsets_loader = partial(reader.time_offsets, location) if isinstance(axis, IrregularAxis) else None
         signals = tuple(
             Signal.from_loader(
                 name=channel.value,
@@ -167,7 +167,7 @@ class Measurement:
                 time_axis=axis,
                 time_offsets_loader=offsets_loader,
                 n_values=self.n_values,
-                loader=partial(reader.values, located, channel),
+                loader=partial(reader.values, location, channel),
             )
             for channel in Channel
         )
@@ -177,7 +177,7 @@ class Measurement:
             name="station",
             signals=signals,
             # TimeF does not keep signal order on read, so record the source's channel order.
-            metadata={CHANNEL_ORDER: [channel.value for channel in Channel]},
+            metadata={MetadataKey.CHANNEL_ORDER: [channel.value for channel in Channel]},
         )
         record = Record(sources=(source,), metadata=self.metadata())
         for key, date, which in (
@@ -206,13 +206,24 @@ class Window:
     forecast_target: TimeInterval | None
     """The span of a forecasting window's last ``FORECAST_HORIZON`` values, in offsets from its first."""
 
+    @classmethod
+    def from_row(cls, file: TraceFile, key: str, row: WindowRow, measurement: Measurement) -> "Window":
+        """Return a checked window of ``file``, with its forecast target if it gets a forecasting task.
+
+        Returns:
+            The window. It is not yet in its measurement's windows.
+        """
+        gets_forecast = file.kind.holds_forecasts and measurement.is_long_enough
+        target = row.readings.timestamps.span_of_last(FORECAST_HORIZON) if gets_forecast else None
+        return cls(file, key, measurement, row.county, row.label, target)
+
     @property
     def window_id(self) -> int:
         """The window's id, as the authors number it."""
         return int(self.key)
 
     @property
-    def where(self) -> str:
+    def error_context(self) -> str:
         """The file and key that error messages name."""
         return f"{self.file.path} (key {self.key})"
 
@@ -224,24 +235,17 @@ class Window:
     def provenance(self) -> dict[str, JsonValue]:
         """Return the window's published identity: its id, anchor and file."""
         return {
-            "window_id": self.window_id,
-            "anchor": Sampling.anchor_of(self.window_id),
-            "source_file": self.file.archive_path,
+            MetadataKey.WINDOW_ID: self.window_id,
+            MetadataKey.ANCHOR: Sampling.anchor_of(self.window_id),
+            MetadataKey.SOURCE_FILE: self.file.archive_path,
         }
 
     def metadata(self) -> dict[str, JsonValue]:
         """Return the window as its Record's metadata lists it: its identity, county and stated label."""
         return self.provenance() | {
-            "county": self.county._asdict(),
-            "event_type": None if self.label is None else self.label.value,
+            MetadataKey.COUNTY: self.county._asdict(),
+            MetadataKey.EVENT_TYPE: None if self.label is None else self.label.value,
         }
-
-
-def _forecast_target(file: TraceFile, timestamps: LocalTimestamps, measurement: Measurement) -> TimeInterval | None:
-    """Return a forecasting window's target, its last values, or ``None`` if the window gets no forecast."""
-    if file.kind is not Kind.FORECASTING or not measurement.is_long_enough:
-        return None
-    return timestamps.span_of_last(FORECAST_HORIZON)
 
 
 class WindowIndex:
@@ -259,11 +263,10 @@ class WindowIndex:
             TimeFValidationError: If a window is invalid, naming the file and key.
         """
         for key, published, offset, length in iter_object(file.path):
-            where = f"{file.path} (key {key})"
             try:
                 self._add(file, key, published, offset, length)
             except TimeFValidationError as exc:
-                raise TimeFValidationError(f"{where}: {exc}") from exc
+                raise TimeFValidationError(f"{file.path} (key {key}): {exc}") from exc
 
     def get(self, window_id: int) -> Window | None:
         """Return the window with this id, or ``None`` if no window file has it."""
@@ -279,14 +282,13 @@ class WindowIndex:
         digest = row.digest()
         measurement = self.measurements.get(digest)
         if measurement is None:
-            measurement = Measurement.first_seen_in(row, Located(file.path, offset, length, digest))
+            measurement = Measurement.first_seen_in(row, WindowLocation(file.path, offset, length, digest))
             self.measurements[digest] = measurement
         elif row.coordinates != measurement.coordinates:
             raise TimeFValidationError(
                 f"same measurements as window {measurement.windows[0].key}, but at "
                 f"{row.coordinates} instead of {measurement.coordinates}"
             )
-        target = _forecast_target(file, row.readings.timestamps, measurement)
-        window = Window(file, key, measurement, row.county, row.label, target)
+        window = Window.from_row(file, key, row, measurement)
         measurement.windows.append(window)
         self.windows[key] = window

@@ -1,8 +1,8 @@
 """Read the retrieval files: each row is one window's generated description and, for an event, its report.
 
 ``RetrievalIndex.read`` checks every row against the indexed windows (pass one) and keeps only which
-window each row names. ``RetrievalIndex.rows`` rereads the files for the task stream (pass two), one
-batch at a time, and checks the rows did not change.
+window each row names. ``RetrievalIndex.rows`` rereads the files for the task stream (pass two) and
+checks the rows did not change.
 """
 
 from collections.abc import Iterator, Sequence
@@ -11,7 +11,6 @@ import json
 from typing import NamedTuple
 
 import pyarrow as pa
-import pyarrow.parquet as pq
 
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet_connectors.datasets.trace.weather_events.archive import SplitName, TraceFile
@@ -24,14 +23,16 @@ from timenet_connectors.datasets.trace.weather_events.fields import (
     text_field,
 )
 from timenet_connectors.datasets.trace.weather_events.measurements import Window, WindowIndex
-from timenet_connectors.datasets.trace.weather_events.vocabulary import EVENT_ID, Channel, EventLabel
+from timenet_connectors.datasets.trace.weather_events.vocabulary import Channel, EventLabel, SourceField
+from timenet_connectors.sources.parquet import iter_parquet_rows
 
 
-_COLUMNS = ["id", "description", "events"]
+_COLUMNS = [SourceField.ID.value, SourceField.DESCRIPTION.value, SourceField.EVENTS.value]
 """The retrieval columns read. The ``timeseries`` column copies a window's series, which a Record holds."""
-_BATCH_ROWS = 1024
 # generate_dsp joins the channel sentences with this spacing.
 _SENTENCE_JOINER = " \n "
+# 16 bytes of BLAKE2b tell a changed row from the checked one; the digest is no security check.
+_ROW_DIGEST_BYTES = 16
 
 
 class Report(NamedTuple):
@@ -72,67 +73,74 @@ class RetrievalRow(NamedTuple):
             The row, with its prompt and channel sentences composed and its report read.
         """
         published = as_object(published)
-        description = as_object(field(published, "description"))
+        description = as_object(field(published, SourceField.DESCRIPTION))
         sentences = tuple(text_field(description, channel.value) for channel in Channel)
         prompt = (
-            f"Weather time series location: {text_field(description, 'location')} "
-            f"Time range: {text_field(description, 'DATE')} "
-            f"The weather is {text_field(description, 'labels')}. {_SENTENCE_JOINER.join(sentences)}"
+            f"Weather time series location: {text_field(description, SourceField.LOCATION)} "
+            f"Time range: {text_field(description, SourceField.DATE)} "
+            f"The weather is {text_field(description, SourceField.LABELS)}. {_SENTENCE_JOINER.join(sentences)}"
         )
-        events = field(published, "events")
+        events = field(published, SourceField.EVENTS)
         report = None
         if events is not None:
             events = as_object(events)
             report = Report(
-                event_id=exact_int(field(events, EVENT_ID), EVENT_ID),
-                event_type=event_label(field(events, "event_type"), "event_type"),
-                narrative=text(field(events, "narrative"), "narrative"),
+                event_id=exact_int(field(events, SourceField.EVENT_ID), SourceField.EVENT_ID),
+                event_type=event_label(field(events, SourceField.EVENT_TYPE), SourceField.EVENT_TYPE),
+                narrative=text(field(events, SourceField.NARRATIVE), SourceField.NARRATIVE),
             )
-        digest = hashlib.blake2b(json.dumps(published, sort_keys=True).encode(), digest_size=16).digest()
-        return cls(exact_int(field(published, "id"), "id"), prompt, sentences, report, digest)
+        serialized = json.dumps(published, sort_keys=True).encode()
+        digest = hashlib.blake2b(serialized, digest_size=_ROW_DIGEST_BYTES).digest()
+        window_id = exact_int(field(published, SourceField.ID), SourceField.ID)
+        return cls(window_id, prompt, sentences, report, digest)
 
-    def check_names(self, window: Window) -> None:
-        """Check that the row has an event report exactly when its window is classified, and the right one.
+    def check_report_matches(self, window: Window) -> None:
+        """Check that the row has an event report exactly when its window is classified, and the one for its label.
 
         Raises:
             TimeFValidationError: If the window's event report is missing, mismatched or unexpected.
         """
-        if window.is_classified:
-            if self.report is None or self.report.event_type != window.label:
-                raise TimeFValidationError(
-                    f"{window.where}: no event report with event_type {window.label.name if window.label else None}"
-                )
+        label = window.label
+        if label is not None and window.is_classified:
+            if self.report is None or self.report.event_type is not label:
+                raise TimeFValidationError(f"{window.error_context}: no event report with event_type {label.name}")
         elif self.report is not None:
-            raise TimeFValidationError(f"{window.where}: event report for a window without an event-type task")
+            raise TimeFValidationError(f"{window.error_context}: event report for a window without an event-type task")
 
 
 def _iter_rows(file: TraceFile) -> Iterator[RetrievalRow]:
-    """Read and check a retrieval file one batch at a time, so no pass holds a whole file's descriptions.
+    """Read and check a retrieval file a batch at a time, so no pass holds a whole file's descriptions.
 
     Yields:
         Each row, in file order.
 
     Raises:
         TimeFValidationError: If a row is invalid, naming the file and the row's id.
-        TimeFFormatError: If the file cannot be read as parquet with the columns the connector needs.
+        TimeFFormatError: If the file cannot be read as parquet, or lacks a column the connector reads.
     """
     try:
-        with pq.ParquetFile(file.path) as parquet:
-            for batch in parquet.iter_batches(batch_size=_BATCH_ROWS, columns=_COLUMNS):
-                for published in batch.to_pylist():
-                    try:
-                        yield RetrievalRow.parse(published)
-                    except TimeFValidationError as exc:
-                        raise TimeFValidationError(f"{file.path} (id {published['id']!r}): {exc}") from exc
+        for published in iter_parquet_rows(file.path, columns=_COLUMNS):
+            try:
+                yield RetrievalRow.parse(published)
+            except TimeFValidationError as exc:
+                raise TimeFValidationError(f"{file.path} (id {published.get(SourceField.ID)!r}): {exc}") from exc
     except (OSError, pa.ArrowException) as exc:
         raise TimeFFormatError(f"{file.path}: {exc}") from exc
 
 
-class _Named(NamedTuple):
+class _IndexedRow(NamedTuple):
     """The window a retrieval row names, and the digest the row had when it was checked."""
 
     window: Window
     digest: bytes
+
+
+class CheckedRow(NamedTuple):
+    """A reread retrieval row that matches the row pass one checked, with its file and its window."""
+
+    file: TraceFile
+    window: Window
+    row: RetrievalRow
 
 
 class RetrievalIndex:
@@ -142,8 +150,8 @@ class RetrievalIndex:
     of descriptions at a time.
     """
 
-    def __init__(self, named: dict[TraceFile, list[_Named]]) -> None:
-        self._named = named
+    def __init__(self, indexed: dict[TraceFile, list[_IndexedRow]]) -> None:
+        self._indexed = indexed
 
     @classmethod
     def read(cls, files: Sequence[TraceFile], windows: WindowIndex) -> "RetrievalIndex":
@@ -158,11 +166,11 @@ class RetrievalIndex:
         Raises:
             TimeFValidationError: If a row or a report is invalid.
         """
-        named: dict[TraceFile, list[_Named]] = {}
+        indexed: dict[TraceFile, list[_IndexedRow]] = {}
         seen: set[int] = set()
         orphans: list[int] = []
         for file in files:
-            named[file] = []
+            indexed[file] = []
             for row in _iter_rows(file):
                 if row.window_id in seen:
                     raise TimeFValidationError(f"{file.path}: window id {row.window_id} appears in more than one row")
@@ -171,14 +179,14 @@ class RetrievalIndex:
                 if window is None:
                     orphans.append(row.window_id)
                     continue
-                row.check_names(window)
-                named[file].append(_Named(window, row.digest))
+                row.check_report_matches(window)
+                indexed[file].append(_IndexedRow(window, row.digest))
         if orphans:
             raise TimeFValidationError(f"{len(orphans)} retrieval rows have no window, such as {min(orphans)}")
         for window in windows.windows.values():
             if window.is_classified and window.window_id not in seen:
-                raise TimeFValidationError(f"{window.where}: classified window has no retrieval row")
-        return cls(named)
+                raise TimeFValidationError(f"{window.error_context}: classified window has no retrieval row")
+        return cls(indexed)
 
     def test_windows(self) -> list[Window]:
         """Return the windows the retrieval test file's rows name, in file order.
@@ -186,24 +194,28 @@ class RetrievalIndex:
         They come from every window file, train and val included, since the retrieval split is the
         authors' own.
         """
-        return [item.window for file, items in self._named.items() if file.split is SplitName.TEST for item in items]
+        windows: list[Window] = []
+        for file, rows in self._indexed.items():
+            if file.split is SplitName.TEST:
+                windows.extend(row.window for row in rows)
+        return windows
 
-    def rows(self) -> Iterator[tuple[TraceFile, Window, RetrievalRow]]:
-        """Reread the checked retrieval files, one batch at a time.
+    def rows(self) -> Iterator[CheckedRow]:
+        """Reread the checked retrieval files, a batch at a time.
 
         Yields:
-            Each row's file, the window it names, and the row, in file order.
+            Each row with its file and the window it names, in file order.
 
         Raises:
             TimeFFormatError: If a file no longer holds the rows that were checked.
         """
-        for file, items in self._named.items():
+        for file, indexed in self._indexed.items():
             rows = _iter_rows(file)
-            for item in items:
+            for item in indexed:
                 row = self._next_row(rows, file)
                 if row is None or row.window_id != item.window.window_id or row.digest != item.digest:
                     raise TimeFFormatError(f"{file.path}: changed since it was checked, at window id {item.window.key}")
-                yield file, item.window, row
+                yield CheckedRow(file, item.window, row)
             if self._next_row(rows, file) is not None:
                 raise TimeFFormatError(f"{file.path}: changed since it was checked, it has more rows")
 

@@ -2,7 +2,7 @@
 
 The archive holds JSON window files (``pretrain`` and ``forecasting``) and parquet retrieval files, each
 under the authors' train, val and test splits. Windows with the same station, sampling, timestamps and
-values become one Record, and every published window or retrieval row keeps its own task: event type,
+values become one Record, and each window or retrieval row that qualifies keeps its own task: event type,
 retrieval or forecasting. README.md explains the source, the tasks, local clock time, and the leaks in
 the authors' splits.
 
@@ -69,7 +69,7 @@ class TraceWeatherEventsConnector(BaseConnector[TraceFile]):
         Pass one reads the six window files, groups identical windows into one measurement each, and
         checks every row of the two retrieval files against its window. The Records hold lazy signals
         whose values stay in the window files until written. The tasks stream, so the dataset does not
-        hold them: each published window keeps its own event-type, retrieval or forecasting task, under
+        hold them: each qualifying window keeps its own event-type, retrieval or forecasting task, under
         the authors' split. The files must stay unchanged until the dataset is written.
 
         Args:

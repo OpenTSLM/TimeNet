@@ -14,7 +14,7 @@ from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
 from timenet.types import ClassificationTask, ForecastingTask, Split, Task, TimeInterval, TSCorrespondenceTask
 from timenet.types.text import TextHandle
-from timenet_connectors.datasets.trace.weather_events import archive, connector as module, measurements
+from timenet_connectors.datasets.trace.weather_events import archive, connector as module
 from timenet_connectors.datasets.trace.weather_events.archive import FILES, Kind, SplitName, TraceFile
 from timenet_connectors.datasets.trace.weather_events.connector import TraceWeatherEventsConnector
 
@@ -35,16 +35,24 @@ _VOCABULARY = [
     "Flood",
     "Thunderstorm Wind",
 ]
+# The authors' thresholds, which the fixture windows are long enough to meet or just miss.
+_MIN_VALUES = 100
+_HORIZON = 24
+_HOUR_US = 3_600_000_000
 
 
-@pytest.fixture(autouse=True)
-def _small_windows(monkeypatch):
-    # The fixtures hold a few values per window, so lower the authors' thresholds where they apply.
-    monkeypatch.setattr(measurements, "MIN_TASK_VALUES", 3)
-    monkeypatch.setattr(measurements, "FORECAST_HORIZON", 2)
+def _steps(count: int, *, start: int = 0, gap_at: int | None = None) -> tuple[int, ...]:
+    """Return ``count`` consecutive steps from ``start``, leaving out the step at position ``gap_at``."""
+    steps = list(range(start, start + count + (gap_at is not None)))
+    if gap_at is not None:
+        del steps[gap_at]
+    return tuple(steps)
 
 
-def _window(station: str, mode: str, seed: int, location, *, steps=(0, 1, 2, 3), **extra) -> dict:
+_FULL_WEEK = _steps(168)
+
+
+def _window(station: str, mode: str, seed: int, location, *, steps=_FULL_WEEK, **extra) -> dict:
     """Return one published window: values derive from ``seed``, timestamps from ``steps`` on the cadence."""
     values = {
         name: [round(seed + 0.25 * index + channel, 2) for index in range(len(steps))]
@@ -67,28 +75,35 @@ def _window(station: str, mode: str, seed: int, location, *, steps=(0, 1, 2, 3),
 _COPY = {"station": "S2", "mode": "7day_hourly", "seed": 12}
 _WINDOWS = {
     "pretrain/train": {
-        # Exactly MIN_TASK_VALUES values: the shortest window that gets a task.
-        "0": _window("S1", "7day_hourly", 0, "MADERA,CALIFORNIA", steps=(0, 1, 2), event_type=1),
-        "1": _window("S1", "28day_4hourly", 1, "MADERA,CALIFORNIA", event_type=1),
+        # Exactly 100 values: the shortest window that gets a task. Lightning is label 0.
+        "0": _window("S1", "7day_hourly", 0, "MADERA,CALIFORNIA", steps=_steps(_MIN_VALUES), event_type=0),
+        "1": _window("S1", "28day_4hourly", 1, "MADERA,CALIFORNIA", event_type=0),
         "12": _window(**_COPY, location="FILLMORE,NEBRASKA", event_type=8),
         # A gap at step 2, and no event.
-        "30": _window("S3", "7day_hourly", 30, "KERN,CALIFORNIA", steps=(0, 1, 3, 4), event_type=-100),
+        "30": _window("S3", "7day_hourly", 30, "KERN,CALIFORNIA", steps=_steps(120, gap_at=2), event_type=-100),
         # A daily window with a gap, the third position of its anchor triplet.
-        "2": _window("S1", "180day_daily", 2, "MADERA,CALIFORNIA", steps=(0, 1, 3), event_type=-100),
-        # Too short for a task, though labelled.
-        "33": _window("S3", "7day_hourly", 33, "KERN,CALIFORNIA", steps=(0,), event_type=2),
+        "2": _window("S1", "180day_daily", 2, "MADERA,CALIFORNIA", steps=_steps(150, gap_at=2), event_type=-100),
+        # One value too short for a task, though labelled.
+        "33": _window("S3", "7day_hourly", 33, "KERN,CALIFORNIA", steps=_steps(_MIN_VALUES - 1), event_type=2),
     },
     "pretrain/val": {"15": _window(**_COPY, location="FURNAS,NEBRASKA", event_type=6)},
-    "pretrain/test": {"3": _window("S1", "7day_hourly", 3, "MADERA,CALIFORNIA", steps=(20, 21, 22, 23), event_type=2)},
-    "forecasting/train": {
-        "60": _window("S4", "7day_hourly", 60, ["Doña Ana County", "New Mexico"], steps=(0, 1, 2, 3, 4)),
-        "61": _window("S4", "28day_4hourly", 61, ["Doña Ana County", "New Mexico"], steps=(0, 1)),
+    "pretrain/test": {
+        "3": _window("S1", "7day_hourly", 3, "MADERA,CALIFORNIA", steps=_steps(_MIN_VALUES, start=20), event_type=2)
     },
-    "forecasting/val": {"63": _window("S4", "7day_hourly", 63, "DOÑA ANA,NEW MEXICO", steps=(9, 10, 11, 12, 13))},
-    "forecasting/test": {"66": _window("S4", "7day_hourly", 66, "DOÑA ANA,NEW MEXICO", steps=(20, 21, 23, 24, 25))},
+    "forecasting/train": {
+        "60": _window("S4", "7day_hourly", 60, ["Doña Ana County", "New Mexico"]),
+        # One value too short for a forecast.
+        "61": _window("S4", "28day_4hourly", 61, ["Doña Ana County", "New Mexico"], steps=_steps(_MIN_VALUES - 1)),
+    },
+    "forecasting/val": {
+        "63": _window("S4", "7day_hourly", 63, "DOÑA ANA,NEW MEXICO", steps=_steps(_MIN_VALUES, start=9))
+    },
+    "forecasting/test": {
+        "66": _window("S4", "7day_hourly", 66, "DOÑA ANA,NEW MEXICO", steps=_steps(120, start=20, gap_at=2))
+    },
 }
 _REPORTS = {
-    "retrieval/train": {"0": (1001, 1), "1": (1001, 1), "12": (1012, 8), "30": None},
+    "retrieval/train": {"0": (1001, 0), "1": (1001, 0), "12": (1012, 8), "30": None},
     "retrieval/test": {"3": (1003, 2), "15": (1015, 6), "60": None},
 }
 _EVENT = pa.struct([("event_id", pa.int64()), ("event_type", pa.int64()), ("narrative", pa.string())])
@@ -146,6 +161,13 @@ def _write(root: Path, windows=_WINDOWS, reports=_REPORTS) -> list[TraceFile]:
 
 def _convert(tmp_path, **kwargs):
     return TraceWeatherEventsConnector().convert(_write(tmp_path, **kwargs))
+
+
+def _windows_with(part: str, key: str, row) -> dict:
+    """Return a copy of the fixture windows with the window ``key`` of ``part`` set to ``row``."""
+    windows = {name: dict(rows) for name, rows in _WINDOWS.items()}
+    windows[part][key] = row
+    return windows
 
 
 def _window_of(record) -> dict[int, dict]:
@@ -288,7 +310,7 @@ def test_every_retrieval_row_becomes_a_retrieval_task(tmp_path):
         assert (task.rationale, task.input_annotations) == (None, ())
         # The seven channel sentences, in channel order, as the task's own annotations.
         assert _channel_sentences(task) == [(name, f"{name} of {window_id}") for name in _CHANNELS]
-        # Test tasks rank the test windows' Records, and train tasks name no pool.
+        # Test tasks rank the test windows' Records. Train tasks pass none, which TimeF reads as the whole dataset.
         pool = {candidate.id for candidate in task.candidate_records}
         assert pool == (test_records if task.split == Split.TEST else set())
     # An event row's task carries its event id, which joins it to the row's event-type task.
@@ -319,12 +341,12 @@ def test_forecasting_windows_forecast_their_last_values(tmp_path):
         (target,) = targets
         assert isinstance(target, TimeInterval)
         for signal in record.signals:
-            # The scope ends where the target starts: the model sees every value but the last two.
-            assert signal.step_range(scope) == (0, signal.n_values - 2)
-            assert signal.step_range(target) == (signal.n_values - 2, signal.n_values)
-    # Window 66 has hours 0, 1, 3, 4 and 5, so its last two values are at hours 4 and 5.
-    assert forecasts[66].targets == (TimeInterval(start_us=4 * 3_600_000_000, end_us=5 * 3_600_000_000 + 1),)
-    assert forecasts[66].scope == TimeInterval(start_us=0, end_us=4 * 3_600_000_000)
+            # The scope ends where the target starts: the model sees every value but the last 24.
+            assert signal.step_range(scope) == (0, signal.n_values - _HORIZON)
+            assert signal.step_range(target) == (signal.n_values - _HORIZON, signal.n_values)
+    # Window 66 has hours 0, 1, then 3 to 120 after its first timestamp, so its last 24 values span hours 97 to 120.
+    assert forecasts[66].targets == (TimeInterval(start_us=97 * _HOUR_US, end_us=120 * _HOUR_US + 1),)
+    assert forecasts[66].scope == TimeInterval(start_us=0, end_us=97 * _HOUR_US)
 
 
 def test_storage_round_trip_keeps_values_timestamps_and_tasks(tmp_path):
@@ -423,54 +445,55 @@ def test_a_retrieval_file_that_changed_after_conversion_fails_on_read(tmp_path, 
     ],
 )
 def test_malformed_windows_have_source_context(tmp_path, field, value, message):
-    windows = {part: dict(rows) for part, rows in _WINDOWS.items()}
-    row = dict(windows["pretrain/train"]["0"])
+    # A three-value window: the checks fail before any length threshold applies.
+    row = _window("S1", "7day_hourly", 0, "MADERA,CALIFORNIA", steps=(0, 1, 2), event_type=0)
     if field == "DATE":
         row = {**row, **{name: row[name][: len(value)] for name in _CHANNELS}}
     row[field] = value
-    windows["pretrain/train"]["0"] = row
     with pytest.raises(TimeFValidationError, match=message) as error:
-        _convert(tmp_path, windows=windows)
+        _convert(tmp_path, windows=_windows_with("pretrain/train", "0", row))
     assert "train.json (key 0)" in str(error.value)
 
 
 @pytest.mark.parametrize("field", ["station_id", "DATE", "visibility", "location", "mode", "event_type"])
 def test_a_window_without_a_field_names_it(tmp_path, field):
-    windows = {part: dict(rows) for part, rows in _WINDOWS.items()}
-    windows["pretrain/train"]["0"] = {k: v for k, v in windows["pretrain/train"]["0"].items() if k != field}
+    row = {name: value for name, value in _WINDOWS["pretrain/train"]["0"].items() if name != field}
     with pytest.raises(TimeFValidationError, match=f"train.json \\(key 0\\): missing field '{field}'"):
-        _convert(tmp_path, windows=windows)
+        _convert(tmp_path, windows=_windows_with("pretrain/train", "0", row))
 
 
-def test_a_window_that_is_not_an_object_fails(tmp_path):
-    windows = {part: dict(rows) for part, rows in _WINDOWS.items()}
-    windows["pretrain/train"]["0"] = [1, 2, 3]  # ty: ignore[invalid-assignment]
-    with pytest.raises(TimeFValidationError, match=r"train.json \(key 0\): expected a JSON object, got list"):
-        _convert(tmp_path, windows=windows)
+@pytest.mark.parametrize(
+    ("part", "key", "edit", "message"),
+    [
+        ("pretrain/train", "0", lambda row: [1, 2, 3], r"train.json \(key 0\): expected a JSON object, got list"),
+        # Only pretrain windows publish a label.
+        (
+            "forecasting/train",
+            "60",
+            lambda row: {**row, "event_type": 3},
+            r"train.json \(key 60\): a forecasting window must not publish",
+        ),
+        # Copies of one measurement must stand at one place.
+        (
+            "pretrain/val",
+            "15",
+            lambda row: {**row, "latitude": 40.6},
+            r"val.json \(key 15\): same measurements as window 12, but at .*40.6",
+        ),
+        # A second window 0, in another file.
+        ("pretrain/test", "0", lambda row: _WINDOWS["pretrain/train"]["0"], "window 0 also appears in"),
+    ],
+)
+def test_windows_that_contradict_their_file_or_copies_fail(tmp_path, part, key, edit, message):
+    row = edit(_WINDOWS[part].get(key))
+    with pytest.raises(TimeFValidationError, match=message):
+        _convert(tmp_path, windows=_windows_with(part, key, row))
 
 
-def test_forecasting_rows_must_not_carry_an_event_type(tmp_path):
-    windows = {part: dict(rows) for part, rows in _WINDOWS.items()}
-    windows["forecasting/train"]["60"] = {**windows["forecasting/train"]["60"], "event_type": 3}
-    with pytest.raises(TimeFValidationError, match=r"train.json \(key 60\): a forecasting window must not publish"):
-        _convert(tmp_path, windows=windows)
-
-
-def test_copies_must_agree_on_their_coordinates(tmp_path):
-    windows = {part: dict(rows) for part, rows in _WINDOWS.items()}
-    windows["pretrain/val"]["15"] = {**windows["pretrain/val"]["15"], "latitude": 40.6}
-    with pytest.raises(TimeFValidationError, match=r"key 15\): same measurements as window 12, but at .*40.6"):
-        _convert(tmp_path, windows=windows)
-
-
-def test_window_ids_must_be_canonical_and_distinct(tmp_path):
-    windows = {part: dict(rows) for part, rows in _WINDOWS.items()}
-    windows["pretrain/train"]["012"] = windows["pretrain/train"].pop("12")
+def test_window_ids_must_be_canonical(tmp_path):
+    windows = _windows_with("pretrain/train", "012", _WINDOWS["pretrain/train"]["12"])
+    del windows["pretrain/train"]["12"]
     with pytest.raises(TimeFValidationError, match="canonical decimal window id, got '012'"):
-        _convert(tmp_path, windows=windows)
-    windows = {part: dict(rows) for part, rows in _WINDOWS.items()}
-    windows["pretrain/test"]["0"] = windows["pretrain/train"]["0"]
-    with pytest.raises(TimeFValidationError, match="window 0 also appears in"):
         _convert(tmp_path, windows=windows)
 
 
@@ -479,16 +502,21 @@ def test_window_ids_must_be_canonical_and_distinct(tmp_path):
     [
         # A classified window without a retrieval row, or with another type's report.
         (
-            {"retrieval/train": {"0": (1001, 1), "1": (1001, 1), "30": None}},
+            {"retrieval/train": {"0": (1001, 0), "1": (1001, 0), "30": None}},
             r"key 12\): classified window has no retrieval row",
         ),
         (
-            {"retrieval/train": {"0": (1001, 1), "1": (1001, 1), "12": (1012, 6), "30": None}},
-            r"key 12\): no event report",
+            {"retrieval/train": {"0": (1001, 0), "1": (1001, 0), "12": (1012, 6), "30": None}},
+            r"key 12\): no event report with event_type THUNDERSTORM_WIND",
+        ),
+        # Lightning is label 0, so the message must still name it.
+        (
+            {"retrieval/train": {"0": (1001, 2), "1": (1001, 0), "12": (1012, 8), "30": None}},
+            r"key 0\): no event report with event_type LIGHTNING",
         ),
         # A report on a window the authors don't classify.
         (
-            {"retrieval/train": {"0": (1001, 1), "1": (1001, 1), "12": (1012, 8), "30": (1030, 2)}},
+            {"retrieval/train": {"0": (1001, 0), "1": (1001, 0), "12": (1012, 8), "30": (1030, 2)}},
             r"key 30\): event report for",
         ),
         # One window id in both retrieval files.
@@ -498,7 +526,7 @@ def test_window_ids_must_be_canonical_and_distinct(tmp_path):
         ),
         # A description without a window.
         (
-            {"retrieval/train": {"0": (1001, 1), "1": (1001, 1), "12": (1012, 8), "99": None}},
+            {"retrieval/train": {"0": (1001, 0), "1": (1001, 0), "12": (1012, 8), "99": None}},
             "1 retrieval rows have no window, such as 99",
         ),
     ],
@@ -528,11 +556,12 @@ def test_malformed_retrieval_rows_name_their_file_and_id(tmp_path, column, value
         TraceWeatherEventsConnector().convert(files)
 
 
-def test_a_retrieval_file_without_a_needed_column_names_the_field(tmp_path):
+@pytest.mark.parametrize("column", ["id", "description", "events"])
+def test_a_retrieval_file_without_a_needed_column_is_a_format_error(tmp_path, column):
     files = _write(tmp_path)
     path = tmp_path / "dataset" / "retrieval" / "train.parquet"
-    pq.write_table(pq.read_table(path).drop_columns(["events"]), path)
-    with pytest.raises(TimeFValidationError, match=r"train\.parquet \(id 0\): missing field 'events'"):
+    pq.write_table(pq.read_table(path).drop_columns([column]), path)
+    with pytest.raises(TimeFFormatError, match=rf"train\.parquet: no column \['{column}'\]"):
         TraceWeatherEventsConnector().convert(files)
 
 

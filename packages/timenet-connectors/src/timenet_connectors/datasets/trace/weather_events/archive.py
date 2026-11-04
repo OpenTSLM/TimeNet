@@ -37,6 +37,11 @@ class Kind(StrEnum):
         """Whether the folder's files hold windows, not text about windows."""
         return self is not Kind.RETRIEVAL
 
+    @property
+    def holds_forecasts(self) -> bool:
+        """Whether the folder's windows are the authors' forecasting windows."""
+        return self is Kind.FORECASTING
+
 
 @unique
 class SplitName(StrEnum):

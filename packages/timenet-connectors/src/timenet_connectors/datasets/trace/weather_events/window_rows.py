@@ -22,7 +22,13 @@ from timenet_connectors.datasets.trace.weather_events.fields import (
     field,
     text,
 )
-from timenet_connectors.datasets.trace.weather_events.vocabulary import SKY_COVER_LABELS, Channel, EventLabel, Sampling
+from timenet_connectors.datasets.trace.weather_events.vocabulary import (
+    SKY_COVER_LABELS,
+    Channel,
+    EventLabel,
+    Sampling,
+    SourceField,
+)
 
 
 # YYYY-MM-DDTHH:MM:SS with no fractional seconds or time zone. NumPy would parse looser inputs such as
@@ -180,7 +186,7 @@ def parse_sampling(published: dict[str, Any]) -> Sampling:
     Raises:
         TimeFValidationError: If ``mode`` is not one of the three samplings.
     """
-    mode = field(published, "mode")
+    mode = field(published, SourceField.MODE)
     try:
         return Sampling(mode)
     except ValueError as exc:
@@ -201,7 +207,7 @@ class Readings(NamedTuple):
         Returns:
             The timestamps and the values of every channel.
         """
-        dates = field(published, "DATE")
+        dates = field(published, SourceField.DATE)
         timestamps = LocalTimestamps.parse(dates, sampling)
         values = {channel: _channel_values(published, channel, len(dates)) for channel in Channel}
         return cls(timestamps, values)
@@ -255,16 +261,16 @@ class WindowRow(NamedTuple):
         # Only pretrain windows publish a label, and they must. A published null is not an absent label.
         label = None
         if kind is Kind.PRETRAIN:
-            label = event_label(field(published, "event_type"), "event_type")
-        elif "event_type" in published:
+            label = event_label(field(published, SourceField.EVENT_TYPE), SourceField.EVENT_TYPE)
+        elif SourceField.EVENT_TYPE in published:
             raise TimeFValidationError(f"a {kind} window must not publish an event_type")
         return cls(
-            station_id=text(field(published, "station_id"), "station_id"),
+            station_id=text(field(published, SourceField.STATION_ID), SourceField.STATION_ID),
             coordinates=Coordinates(
-                degrees(field(published, "latitude"), "latitude", 90),
-                degrees(field(published, "longitude"), "longitude", 180),
+                degrees(field(published, SourceField.LATITUDE), SourceField.LATITUDE, 90),
+                degrees(field(published, SourceField.LONGITUDE), SourceField.LONGITUDE, 180),
             ),
-            county=County.parse(field(published, "location")),
+            county=County.parse(field(published, SourceField.LOCATION)),
             sampling=sampling,
             readings=Readings.parse(published, sampling),
             label=label,
