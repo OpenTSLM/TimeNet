@@ -1,6 +1,6 @@
 """Convert the pinned CAPTURE-24 zip into lazy Records and one classification task per window and scheme.
 
-CAPTURE-24 holds about a day of 100 Hz wrist acceleration from each of 151 participants, labelled from
+CAPTURE-24 holds about a day of 100 Hz wrist acceleration from each of 151 participants, labeled from
 body-camera images and sleep diaries. A participant becomes one Record with one Source per gap-free
 segment, each with lazy ``x``, ``y`` and ``z`` signals and one ``activity`` annotation per run of a raw
 label. Each 10 s window that the authors' benchmark code keeps becomes one task per label scheme the
@@ -128,7 +128,7 @@ _WINDOW_SAMPLES = _WINDOW_US // _SAMPLE_PERIOD_US
 _FIRST_TEST_PARTICIPANT = 101
 """The paper's test set is P101 to P151, and benchmark.py tests ``range(101, 152)``."""
 _NO_LABEL = -1
-"""The code of an unlabelled sample, which the source writes as an empty field."""
+"""The code of an unlabeled sample, which the source writes as an empty field."""
 _RECORDING_START_DESCRIPTION = (
     "The first sample's timestamp as the authors published it, with no zone. For anonymity they randomized "
     "the date and shifted the time by a small random amount, so the time of day is close to local time "
@@ -203,9 +203,11 @@ class _LabelDictionary:
     scheme_classes_of_raw: tuple[dict[_Scheme, str], ...]
     """Each raw label's class in all six schemes, as the dictionary names it."""
     class_of_raw: dict[_Scheme, np.ndarray]
-    """Each benchmarked scheme's class per raw label, as an index into the scheme's vocabulary, plus a last entry for an
-    unlabelled sample, so that indexing with ``_NO_LABEL`` finds it. A class's index breaks the authors'
-    ties: ``Series.mode`` sorts the modes it finds, and their ``make_windows`` takes the first."""
+    """For each scheme, this array maps raw labels to class indices in the vocabulary.
+
+    The final entry represents an unlabeled sample. Indexing with ``_NO_LABEL`` selects that entry.
+    A class's index breaks ties. ``Series.mode`` sorts the modes, and the authors' ``make_windows`` takes
+    the first."""
 
 
 @dataclass(frozen=True)
@@ -286,8 +288,8 @@ def _read_rows(path: Path, columns: list[str]) -> list[dict[str, str]]:
         One dict per row, keyed by column.
 
     Raises:
-        TimeFFormatError: If the file can't be read, the columns differ, a row has no value in a column, or
-            a row has more fields than the header.
+        TimeFFormatError: If the file is unreadable or its columns differ from the expected columns.
+            Also raised if a field is missing or a row has more fields than the header.
     """
     try:
         with path.open(newline="", encoding="utf-8") as handle:
@@ -314,9 +316,9 @@ def _read_labels(path: Path) -> _LabelDictionary:
         The dictionary, as the windowing and the activity annotations need it.
 
     Raises:
-        TimeFFormatError: If the file can't be read, the columns are not the raw label and the six schemes, a
-            row has no value in a column or too many fields, a raw label is listed twice, or a class is not in
-            its scheme's vocabulary.
+        TimeFFormatError: If the file is unreadable or its columns are not the raw label and the six schemes.
+            Also raised if a row has missing or extra fields, or a raw label appears twice.
+            Every class must belong to its scheme's vocabulary.
     """
     rows = _read_rows(path, [_DICTIONARY_LABEL_COLUMN, *(scheme.column for scheme in _Scheme)])
     raw_labels = [row[_DICTIONARY_LABEL_COLUMN] for row in rows]
@@ -363,9 +365,9 @@ def _read_people(root: Path) -> list[_Person]:
         One person per participant, in id order.
 
     Raises:
-        TimeFFormatError: If the file can't be read, the columns are not pid, age and sex, a row has no value
-            in a column or too many fields, an age or a sex is not one that the release writes, a pid repeats,
-            or the table and the recordings don't name the same participants.
+        TimeFFormatError: If the file is unreadable or its columns are not pid, age and sex.
+            Also raised if a row has missing or extra fields, an age band or sex is unknown, or a pid repeats.
+            The table and the recordings must name the same participants.
     """
     path = root / _METADATA_FILE
     rows = _read_rows(path, list(_METADATA_COLUMNS))
@@ -395,15 +397,16 @@ def _read_people(root: Path) -> list[_Person]:
 def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant:
     """Read a recording: its segments, its raw label runs, its kept windows, and a digest of its acceleration values.
 
-    An empty ``annotation`` field is an unlabelled sample. No other value is.
+    An empty ``annotation`` field is an unlabeled sample. No other value is.
 
     Returns:
         The participant, without the samples.
 
     Raises:
-        TimeFFormatError: If the file can't be read, the header is wrong, the file has no rows, a timestamp is
-            missing or unreadable, a step is shorter than one period, a raw label isn't in the dictionary, a
-            kept window would cross a gap, or an acceleration value is missing or not finite.
+        TimeFFormatError: If the file is unreadable, its header is wrong, or it has no rows.
+            Also raised if a timestamp is missing or unreadable, or a step is shorter than one period.
+            Raw labels must belong to the dictionary, and kept windows must not cross gaps.
+            Acceleration values must be present and finite.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the read helpers
     path = person.path
     table = _read_table(path)
@@ -444,7 +447,7 @@ def _read_table(path: Path) -> pa.Table:
         The recording's table.
 
     Raises:
-        TimeFFormatError: If the file can't be read, the header is wrong, or the file has no rows.
+        TimeFFormatError: If the file cannot be read, the header is wrong, or the file has no rows.
     """
     try:
         with gzip.open(path, "rt", newline="", encoding="utf-8") as handle:
@@ -494,7 +497,7 @@ def _make_segments(stamps: np.ndarray) -> tuple[_Segment, ...]:
 
 
 def _label_runs(raw_codes: np.ndarray, segment: _Segment) -> _LabelRuns:
-    """Find a segment's runs of one raw label. Unlabelled samples belong to no run.
+    """Find a segment's runs of one raw label. Unlabeled samples belong to no run.
 
     A run never crosses a gap, because each segment is cut on its own. Within a segment every step is
     one period, so a row's time is its index times the period after the segment's first sample.
@@ -547,7 +550,7 @@ def _raw_codes(path: Path, column: pa.DictionaryArray, labels: _LabelDictionary)
     """Return each sample's raw label as an index into the dictionary, or ``_NO_LABEL``.
 
     Raises:
-        TimeFFormatError: If the recording writes a raw label the dictionary doesn't list.
+        TimeFFormatError: If the recording writes a raw label the dictionary does not list.
     """
     written = column.dictionary.to_pylist()
     unknown = sorted(label for label in written if label not in labels.code_of_raw)
@@ -564,12 +567,12 @@ def _make_windows(
     """Return the windows the authors' ``prepare_data.make_windows`` keeps, with each one's classes.
 
     ``make_windows`` groups the samples into 10 s bins anchored at the first sample. After a gap the bins
-    stay on the first segment's grid. It keeps a bin with exactly 1000 samples and at least one labelled
+    stay on the first segment's grid. It keeps a bin with exactly 1000 samples and at least one labeled
     sample. A bin that a gap cuts usually has fewer samples, but a step between one and two periods is a gap
     too, and a bin can still hold 1000 samples across it. This function fails on such a window, so no kept
     window crosses a gap.
 
-    A window's class in a scheme is the most common class among its labelled samples. A tie goes to the
+    A window's class in a scheme is the most common class among its labeled samples. A tie goes to the
     first class in string order.
 
     ``make_windows`` also drops a window with a NaN acceleration value. This function never meets one,
@@ -598,7 +601,7 @@ def _make_windows(
     classes = {}
     for scheme, class_of_raw in labels.class_of_raw.items():
         per_sample = class_of_raw[window_codes]
-        # Count each class per window. An unlabelled sample has a class index past the last, so no count takes it.
+        # Count each class per window. An unlabeled sample has a class index past the last, so no count takes it.
         counts = np.stack(
             [(per_sample == index).sum(axis=1) for index in range(len(_VOCABULARIES[scheme].labels))], axis=1
         )
@@ -760,7 +763,7 @@ class Capture24Connector(BaseConnector[Path]):
             A dataset with the vocabulary annotations, the Records, and a stream of every task.
 
         Raises:
-            TimeFValidationError: If ``raw_refs`` isn't one directory.
+            TimeFValidationError: If ``raw_refs`` is not one directory.
             TimeFFormatError: If a table or recording is malformed.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the read helpers
         if len(raw_refs) != 1 or not raw_refs[0].is_dir():
