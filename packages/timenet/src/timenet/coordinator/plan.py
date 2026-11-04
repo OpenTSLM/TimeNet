@@ -1,7 +1,6 @@
-"""Plan and prepare the parent releases that a build needs, before any connector runs.
+"""Plan and prepare the parent releases needed to build a dataset.
 
-A plan is a list of :class:`Step` objects. Each step copies or builds one release, after the steps
-of the releases that it depends on.
+Each :class:`Step` copies or builds one release after the releases it needs.
 """
 
 from collections.abc import Callable, Mapping
@@ -32,30 +31,31 @@ from timenet.types.references import DatasetRef
 
 @dataclass(frozen=True)
 class Step:
-    """One release that the plan copies or builds before the build of the requested release.
+    """A plan step that copies or builds one release.
 
-    A copy takes the release from another registry, with each payload source in its manifest that
-    the output does not hold.
+    A copy includes the release and its missing payload sources.
     """
 
     release: DatasetRef
     action: Literal["copy", "build"]
     depends_on: tuple[DatasetRef, ...] = ()
-    """The releases of the plan that must be in place before this step runs."""
+    """The releases with steps that must finish before this step runs."""
     pinned_by: Mapping[DatasetRef, PayloadSource] = field(default_factory=dict, hash=False)
-    """For a build: each release that already reads files of this release, with its pins on them.
-    The build must publish the release only if it writes each pinned file again."""
+    """The releases that read this release's files, mapped to their expected file records.
+
+    A build must reproduce every recorded file before it publishes the release.
+    """
 
 
 @dataclass(frozen=True)
 class _Release:
-    """One node of the graph: a release that the build needs, and what the plan does with it."""
+    """A required release, its dependencies, and its planned action."""
 
     opened: bool
     """True if the build opens the release with its payload sources. False if the release is only a
     payload source of another release, and the build reads only its pinned files."""
     action: Literal["copy", "build"] | None
-    """``"copy"`` or ``"build"``, or ``None`` if the output holds the release."""
+    """The planned action, or ``None`` if the output already holds the release."""
     dependencies: tuple[DatasetRef, ...]
     """The releases that must be in place before this release. A release to build depends on the
     parents on its card. An opened release that the plan does not build depends on its payload
@@ -64,7 +64,7 @@ class _Release:
 
 @dataclass
 class _Graph:
-    """The graph of the releases that a build needs, which the walk of :meth:`visit` finds."""
+    """A graph of required releases and their dependencies."""
 
     output: WritableRegistry
     fetch_from: BaseRegistry | None
@@ -74,22 +74,17 @@ class _Graph:
     releases: dict[DatasetRef, _Release] = field(default_factory=dict)
     """The nodes, in the order in which the walk found them."""
     fetched: set[DatasetRef] = field(default_factory=set)
-    """The payload sources that the plan copies only with the release that reads them."""
+    """The payload sources that the plan copies as part of another release."""
     pins: dict[DatasetRef, dict[DatasetRef, PayloadSource]] = field(default_factory=dict)
     """For each payload source: each release that reads its files, with its pins on them."""
 
     def visit(self, reference: DatasetRef, needed_by: DatasetRef, pinned: PayloadSource | None = None) -> None:
-        """Add a release to the graph, then visit the releases that it depends on.
-
-        The walk does not look for cycles. It stops at a release that it already found as an opened
-        release, and at a payload source that it already found.
+        """Add a release and its dependencies to the graph.
 
         Args:
-            reference: The release.
+            reference: The release to add.
             needed_by: The release that needs ``reference``.
-            pinned: The pins of ``needed_by`` on the files of ``reference``, if ``reference`` is a
-                payload source of ``needed_by``. ``None`` if the build opens ``reference`` as a
-                parent.
+            pinned: The expected file records for a payload source, or ``None`` to open it as a parent.
         """
         opened = pinned is None
         if pinned is not None:
@@ -152,18 +147,18 @@ class _Graph:
             raise TimeFValidationError(f"dataset parent cycle: {path}") from error
 
     def steps(self, requested: DatasetRef) -> list[Step]:
-        """Make one step for each release that the plan copies or builds, in the order of :meth:`order`.
+        """Create copy and build steps with dependencies first.
+
+        Each step names only dependencies that also have steps.
 
         Args:
-            requested: The requested release, which gets no "build" step. If the output holds it, it
-                gets a "copy" step under the same rule as an opened parent.
+            requested: The requested release, which gets a copy step if needed but no build step.
 
         Returns:
-            The steps, each after the steps of the releases that it depends on. ``depends_on`` of a
-            step names only releases that have a step too.
+            The steps in dependency order.
 
         Raises:
-            TimeFValidationError: If the releases depend on each other in a cycle.
+            TimeFValidationError: If the releases form a dependency cycle.
         """  # ruff: ignore[docstring-extraneous-exception] - order() raises the cycle error
         chosen: dict[DatasetRef, Literal["copy", "build"]] = {}
         for reference in self.order():
@@ -198,33 +193,29 @@ def plan_parents(
     build_parents: bool = False,
     force_build: bool = False,
 ) -> list[Step]:
-    """Plan how to get each parent release that a build of ``dataset_id`` needs.
+    """Plan the parent releases needed to build a dataset.
 
-    A build needs each declared parent with its payload sources. The plan copies a release that the
-    output does not hold from ``fetch_from`` if it can, and otherwise builds it with the installed
-    connector that declares that exact version.
+    Each parent needs its payload sources as well. The plan copies missing releases from
+    ``fetch_from`` or builds them if ``build_parents`` is true.
 
     Args:
         dataset_id: The dataset to build.
-        output: The registry that the build writes to.
+        output: The destination registry.
         fetch_from: The registry to copy missing parents from, or ``None`` to copy nothing.
         build_parents: Build missing parents with their installed connectors.
-        force_build: Plan the requested release's parents even if the output already holds the release.
+        force_build: Plan a rebuild's parents even if ``output`` holds the requested release.
 
     Returns:
-        The steps to copy or build parents, each after the steps of the releases that it depends on.
+        The steps to copy or build parents, with dependencies first.
 
     Raises:
-        LookupError: If no installed connector declares a dataset card for ``dataset_id``.
-        TimeNetInvalidCardError: If an installed connector's dataset card cannot be read.
-        TimeFValidationError: If parents cycle, a connector builds the wrong version, or fetching uses non-local output.
-        TimeNetMissingParentError: If a parent or payload source is missing and ``build_parents`` is false.
+        LookupError: If no installed connector declares a card for ``dataset_id``.
+        TimeNetInvalidCardError: If reading an installed connector's card fails.
+        TimeFValidationError: If parents form a cycle, a connector version differs, or copying targets a remote output.
+        TimeNetMissingParentError: If a required release is missing and ``build_parents`` is false.
         TimeNetDatasetNotFoundError: If a parent is missing and no installed connector builds it.
-        TimeNetFileError: If a local output holds a damaged copy of a parent, and the plan cannot
-            copy the parent again.
-        TimeNetAccessError: If the output is not local and the plan visits a release whose card, or
-            a card in its lineage, does not declare ``access: open``. Also if ``fetch_from`` is not
-            local and the plan would copy such a release from it.
+        TimeNetFileError: If a local parent copy is damaged and ``fetch_from`` has no replacement.
+        TimeNetAccessError: If a release or its lineage lacks open access required by a registry.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers of the walk
     if fetch_from is not None and not isinstance(output, LocalRegistry):
         # A registry that is not local accepts a child only if it already holds the parents. A copy
@@ -271,18 +262,18 @@ def prepare_parents(  # ruff: ignore[too-many-arguments]
     build_parents: bool = False,
     force_build: bool = False,
 ) -> None:
-    """Fetch or build each parent release that a build of ``dataset_id`` needs, before the build starts.
+    """Copy or build a dataset's required parent releases.
+
+    The ``build`` callback must publish each release only if its files match the step's
+    ``pinned_by`` records.
 
     Args:
         dataset_id: The dataset to build.
-        output: The registry that the build writes to.
-        build: Builds one parent into ``output``. For a step with ``pinned_by``, it must publish the
-            release only if the new files match those pins.
-        fetch_from: The registry to fetch missing parents from. If it is ``None``, the plan fetches
-            nothing.
+        output: The destination registry.
+        build: The function that builds one parent into ``output``.
+        fetch_from: The registry to copy missing parents from, or ``None`` to copy nothing.
         build_parents: Build missing parents with their installed connectors.
-        force_build: Build the requested release again, even if the output holds it, and plan its
-            parents.
+        force_build: Prepare a rebuild's parents even if ``output`` holds the requested release.
 
     Raises:
         TimeNetDatasetNotFoundError: If ``build`` does not publish the release of its step.
@@ -329,20 +320,16 @@ def _locate(
 ) -> tuple[Manifest | None, Literal["copy"] | None]:
     # The damage is raised from a variable, the access error by require_open_access.
     # ruff: ignore[docstring-extraneous-exception]
-    """Find an intact copy of a release in the output, or else in ``fetch_from``.
+    """Find a release in ``output`` or ``fetch_from``.
 
-    In a local output, a copy with a missing file or a file of another size is damaged.
+    A local output copy is valid only if its files exist and match their recorded sizes.
 
     Returns:
-        The manifest and ``None`` if the output holds an intact copy, the manifest and ``"copy"`` if
-        ``fetch_from`` holds the release, or ``None`` and ``None`` if neither holds it.
+        ``(manifest, None)`` from ``output``, ``(manifest, "copy")`` from ``fetch_from``, or ``(None, None)`` if absent.
 
     Raises:
-        TimeNetFileError: If a local output holds a damaged copy, and ``fetch_from`` does not hold
-            the release.
-        TimeNetAccessError: If the card of the release, or a card in its lineage, does not declare
-            ``access: open``, and the output that holds the release, or the ``fetch_from`` registry
-            to copy it from, is not local.
+        TimeNetFileError: If a local copy is damaged and ``fetch_from`` has no replacement.
+        TimeNetAccessError: If a release or its lineage lacks open access required by a registry.
     """
     manifest = _manifest(output, reference)
     damage = None

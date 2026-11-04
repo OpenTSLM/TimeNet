@@ -195,21 +195,21 @@ def build_one(  # ruff: ignore[too-many-arguments]
     narrate: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Prepare a dataset's parent releases, then build the dataset.
+    """Prepare a dataset's parents, then build or reuse its release.
 
-    A missing parent that ``fetch_from`` or ``build_parents`` does not provide fails the build before any download.
-    The build reuses an existing version unless ``force`` is true.
+    The build fails before downloading if it cannot copy or build a missing parent.
+    A new release must match every file record in ``pinned_by`` before publication.
 
     Args:
-        dataset_id: The dataset id.
-        output: The output directory or a ``timenet://``, ``http(s)://``, or ``s3://`` registry URL.
+        dataset_id: The dataset ID.
+        output: A local directory or a ``timenet://``, ``http(s)://``, or ``s3://`` registry URL.
         fetch_from: The registry, or its URI, to copy missing parent releases from.
         build_parents: Build missing parent releases from their installed connectors.
         force: Rebuild an existing version.
         keep_cache: Keep the raw download cache after building.
-        isolation: Use isolation if true, this interpreter if false, or ``TIMENET_ISOLATION`` if ``None``.
+        isolation: Use a separate environment if true, this interpreter if false, or ``TIMENET_ISOLATION`` if ``None``.
         narrate: Print status and download progress when isolation is off.
-        pinned_by: Releases that read this dataset's files, with file pins the build must match.
+        pinned_by: The expected file records for this release, grouped by the releases that read them.
 
     Returns:
         The committed version directory for a local output, or the published version.
@@ -283,17 +283,15 @@ def _in_repo(builder: BuilderBackend) -> bool:
 
 
 def _build_with(builder: BuilderBackend, step: Step, target: WritableRegistry | Path) -> Path:
-    """Build a parent through the builder backend that claims it, with the pins of its step.
+    """Build a parent release with its file pins through the given backend.
 
-    The plan already prepared the parents of this parent. So the backend gets no options for
-    parents.
+    ``target`` must already hold the parents of ``step.release``.
 
     Returns:
         The committed version directory.
 
     Raises:
-        TimeFValidationError: If the output is not local. A builder backend builds into a local
-            directory.
+        TimeFValidationError: If ``target`` is not a local ``Path``.
     """
     if not isinstance(target, Path):
         raise TimeFValidationError(
