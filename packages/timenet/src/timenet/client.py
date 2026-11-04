@@ -1,9 +1,6 @@
-"""Find, inspect, download, and read datasets with :class:`TimeNet`.
+"""Find, inspect, download, and read TimeF datasets.
 
-A client reads releases through an ordered list of sources, by default :func:`default_sources`, and
-builds a release that only ``InstalledConnectors()`` provides into its store. ``download`` copies a
-release into the store, ``get_manifest``, ``get_card`` and ``plan_read`` describe one without a copy
-or a build, and ``list`` and ``search`` merge the rows of every source.
+:class:`TimeNet` checks sources in order and uses :func:`default_sources` by default.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -66,16 +63,20 @@ _OrList: TypeAlias = T | list[T] | None
 
 @runtime_checkable
 class _Catalog(Protocol):
-    """A source that lists its datasets itself, such as a registry."""
+    """A source that lists dataset metadata."""
 
     def list_datasets(self) -> _Metadatas:
-        """Return one row per dataset."""
+        """Return metadata for each dataset.
+
+        Returns:
+            One metadata row per dataset.
+        """
         ...
 
 
 @runtime_checkable
 class _Search(Protocol):
-    """A source that searches its datasets itself, such as a registry."""
+    """A source that searches dataset metadata."""
 
     def search(  # ruff: ignore[too-many-arguments]
         self,
@@ -89,7 +90,11 @@ class _Search(Protocol):
         tag: str | list[str] | None = None,
         limit: int = 100,
     ) -> _Metadatas:
-        """Return the rows that match the filters of :meth:`~timenet.registry.BaseRegistry.search`."""
+        """Return dataset metadata that matches the filters of :meth:`~timenet.registry.BaseRegistry.search`.
+
+        Returns:
+            The matching dataset metadata.
+        """
         ...
 
 
@@ -249,11 +254,10 @@ class TimeNet:
             )
 
     def list(self) -> _Metadatas:
-        """Return one row per dataset across the sources, connector cards included, at the highest version.
+        """List each dataset at its highest version across all sources, including connector cards.
 
-        A row can show a higher version than :meth:`open` reads, because a registry can list a version
-        that it does not serve. An error of a source, for example a registry that cannot be reached,
-        stops the call.
+        A listed version can be newer than the version :meth:`open` reads if a registry does not serve it.
+        Source errors stop the call.
 
         Returns:
             One :class:`~timenet.types.DatasetMetadata` per dataset, sorted by dataset ID.
@@ -337,20 +341,20 @@ class TimeNet:
         tag: _OrList[str] = None,
         limit: int = 100,
     ) -> _Metadatas:
-        """Search every source, connector cards included, and keep one row per dataset at the highest version.
+        """Search all sources, including connector cards, for the highest matching version of each dataset.
 
-        A connector card never matches ``task`` or ``time_series_spec``, because it has no schema. An
-        error of a source, for example a registry that cannot be reached, stops the call.
+        Connector cards lack schemas, so they never match ``task`` or ``time_series_spec`` filters.
+        Source errors stop the call.
 
         Args:
-            query: Free text terms for the name, description, and tags.
+            query: Match any term in the name, description, or tags, ignoring case.
             domain: Match any of these domains.
             task: Match any of these task classes in the schema.
             license: Match any of these licenses.
             time_series_spec: Match all of these ``spec_type`` values.
-            dataset_id: Match only these IDs.
+            dataset_id: Match any of these IDs.
             tag: Match all of these tags.
-            limit: The maximum number of results, after the merge.
+            limit: The maximum number of results after combining sources.
 
         Returns:
             The matching dataset metadata, sorted by dataset ID.
@@ -669,13 +673,13 @@ class TimeNet:
 
 
 def _unless_without_catalog(ask: Callable[[], _Metadatas]) -> _Metadatas:
-    """Return the rows of a registry, or no row if the registry has no catalog.
+    """Return metadata rows, or an empty list if the source does not support the operation.
 
     Args:
-        ask: The call of ``list_datasets()`` or ``search()`` of the registry.
+        ask: A function that returns metadata rows and takes no arguments.
 
     Returns:
-        The rows, or an empty list if the call raises ``NotImplementedError``, as for an S3 registry.
+        The metadata rows, or an empty list if ``ask`` raises ``NotImplementedError``.
     """
     try:
         return ask()
@@ -684,13 +688,15 @@ def _unless_without_catalog(ask: Callable[[], _Metadatas]) -> _Metadatas:
 
 
 def _merged(rows: Iterable[_Metadatas]) -> _Metadatas:
-    """Keep one row per dataset at the highest version, from the earliest source that lists it.
+    """Combine metadata rows, keeping the highest version of each dataset.
+
+    For equal versions, keep the first row.
 
     Args:
-        rows: The rows of each source, in the order of the sources.
+        rows: Lists of metadata rows, in source order.
 
     Returns:
-        The rows, sorted by dataset ID.
+        One row per dataset, sorted by dataset ID.
     """
     kept: dict[str, DatasetMetadata] = {}
     for listing in rows:

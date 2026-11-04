@@ -218,7 +218,7 @@ class TimeNetWarning(UserWarning):
 
 
 class ConnectorCardWarning(TimeNetWarning):
-    """An unreadable or invalid connector card excludes its dataset from listings."""
+    """A dataset listing skips a dataset with an unreadable connector card."""
 
 
 class SpanOutsideWindowWarning(TimeNetWarning):
