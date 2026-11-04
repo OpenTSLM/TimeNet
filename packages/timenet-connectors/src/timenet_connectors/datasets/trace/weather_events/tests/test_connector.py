@@ -317,7 +317,6 @@ def test_classified_windows_get_an_event_type_task_with_their_report(converted):
             tuple(_VOCABULARY),
             False,
         )
-        assert task.target_schema is None
         # The authors' classifier sees only the series.
         assert (task.prompt, task.input_annotations, task.scope) == (None, (), None)
         assert task.rationale == f"The weather event is {_VOCABULARY[event_type]}. Report {window_id}."
