@@ -157,21 +157,20 @@ def matches_metadata(  # ruff: ignore[too-many-arguments]
     dataset_id: str | list[str] | None,
     tag: str | list[str] | None,
 ) -> bool:
-    """Return whether a card passes the filters of :meth:`BaseRegistry.search` that read only the card.
+    """Return whether dataset metadata matches all filters.
 
-    Each filter takes one value or a list, and ``None`` or an empty list sets no filter.
+    Each filter takes one value or a list, and ``None`` or an empty list skips it.
 
     Args:
-        metadata: The card, or the metadata of a manifest.
-        query: Free-text terms, any of which must be a case-insensitive substring of the name, the
-            description, or a tag.
-        domain: The card must share any of these domains.
-        license: The card must have any of these licenses.
-        dataset_id: The dataset ID must be any of these.
-        tag: The card must declare all of these tags.
+        metadata: Dataset metadata from a connector card or manifest.
+        query: Match any term in the name, description, or tags, ignoring case.
+        domain: Match any of these domains.
+        license: Match any of these licenses.
+        dataset_id: Match any of these dataset IDs.
+        tag: Match all of these tags.
 
     Returns:
-        Whether the card passes each filter.
+        Whether the metadata matches every filter.
     """
     queries = _normalize_into_list(query)
     domains = _normalize_into_list(domain)

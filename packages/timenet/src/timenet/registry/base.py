@@ -34,7 +34,7 @@ ProgressCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
-    """A searchable source of TimeF datasets, manifests, and files.
+    """A registry of TimeF manifests, files, and searchable dataset metadata.
 
     :meth:`open_release` and :meth:`download_release` handle one release without its payload
     sources. :func:`~timenet.registry.copy_release` copies a release with its payload sources.
@@ -235,28 +235,23 @@ class BaseRegistry(ABC):
         tag: str | list[str] | None = None,
         limit: int = 100,
     ) -> list[DatasetMetadata]:
-        """Filter datasets by any combination of criteria.
+        """Find datasets that match every filter.
 
-        Each filter accepts a single value or a list of values. The method ignores filters set to
-        ``None``. It combines all other filters with AND logic. The filters ``query``, ``domain``,
-        ``task``, ``license``, and ``dataset_id`` match a dataset when any of their values match.
-        The filters ``time_series_spec`` and ``tag`` match a dataset only when all of their values
-        match. The type filters ``task`` and ``time_series_spec`` read the manifest schema of each
-        dataset.
+        Each filter accepts one value or a list, with ``None`` or an empty list meaning no restriction.
+        The ``task`` and ``time_series_spec`` filters read each dataset's manifest schema.
 
         Args:
-            query: Free-text terms. The method matches each term as a case-insensitive substring
-                in the dataset name, description, or tags.
-            domain: Keep datasets that share any of these domains.
-            task: Keep datasets whose schema includes any of these task classes.
-            license: Keep datasets that have any of these licenses.
-            time_series_spec: Keep datasets that declare all of these ``spec_type`` values.
-            dataset_id: Keep only these ids.
-            tag: Keep datasets that declare all of these tags.
-            limit: The maximum number of results. The default is 100.
+            query: Match any term in the name, description, or tags, ignoring case.
+            domain: Match any of these domains.
+            task: Match any of these task classes in the schema.
+            license: Match any of these licenses.
+            time_series_spec: Match all of these ``spec_type`` values.
+            dataset_id: Match any of these IDs.
+            tag: Match all of these tags.
+            limit: The maximum number of results, defaulting to 100.
 
         Returns:
-            The matching dataset metadata. The list has at most ``limit`` entries.
+            The matching dataset metadata, with at most ``limit`` entries.
 
         Raises:
             ValueError: If ``limit`` is negative.

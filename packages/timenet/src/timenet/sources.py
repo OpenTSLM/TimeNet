@@ -99,10 +99,10 @@ ReleaseLookup: TypeAlias = Found | NotFound | NotServed
 
 @dataclass(frozen=True)
 class InstalledConnectors:
-    """A release source backed by installed dataset connectors.
+    """A source for the datasets that installed connectors build.
 
-    Each connector provides only the version in its card.
-    All instances compare equal.
+    A connector counts as installed if a package registers it under the ``timenet.builders`` entry point group. Each
+    connector provides only the version its card declares, and all instances are equal.
     """
 
     def __str__(self) -> str:
@@ -131,10 +131,10 @@ class InstalledConnectors:
         return FoundInConnector(builder)
 
     def list_datasets(self) -> list[DatasetMetadata]:
-        """Return the card of each dataset that an installed connector builds, without a build.
+        """Return dataset cards from installed connectors without building the datasets.
 
-        If two packages claim a dataset, the first entry point wins, as for a build. The call leaves out
-        a dataset whose card cannot be read, with a :class:`~timenet.errors.ConnectorCardWarning`.
+        The first entry point that claims a dataset takes priority.
+        The method skips unreadable cards and emits a :class:`~timenet.errors.ConnectorCardWarning`.
 
         Returns:
             The cards, sorted by dataset ID.
