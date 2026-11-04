@@ -12,6 +12,8 @@
 yaml_schema_version: 1
 dataset_id: oxwearables/capture24
 dataset_version: 1.0.0
+# The SHA-256 of the one archive file, which connector.py pins as ARCHIVE_SHA256.
+source_revision: sha256:69740c22d3e000367988373336dc6486c10fe3f3f929811fd66e4d84861e40e2
 name: CAPTURE-24
 description: >-
   About a day of free-living wrist accelerometry from each of 151 participants, at 100 Hz, with
@@ -26,3 +28,7 @@ tags:
   - wrist
   - activity-recognition
 source_url: https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001
+citation: >-
+  Chan, S., Hang, Y., Tong, C., Acquah, A., Schonfeldt, A., Gershuny, J., & Doherty, A. (2024).
+  CAPTURE-24: A large dataset of wrist-worn activity tracker data collected in the wild for human
+  activity recognition. Scientific Data, 11, 1135. https://doi.org/10.1038/s41597-024-03960-3

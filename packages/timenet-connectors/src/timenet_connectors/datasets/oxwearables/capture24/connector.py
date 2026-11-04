@@ -3,9 +3,8 @@
 CAPTURE-24 holds about a day of 100 Hz wrist acceleration from each of 151 participants, labelled from
 body-camera images and sleep diaries. A participant becomes one Record with one Source per gap-free
 segment, each with lazy ``x``, ``y`` and ``z`` signals and one ``activity`` annotation per run of a raw
-label. Each 10 s window that the authors' benchmark code
-keeps becomes one task per label scheme the benchmark scores. README.md explains how this follows the
-authors.
+label. Each 10 s window that the authors' benchmark code keeps becomes one task per label scheme the
+benchmark scores. README.md explains how this follows the authors.
 
 The build has two passes. The first reads every recording, one at a time, and keeps only small results:
 the segments, each window's start and class, and a digest of the acceleration values. It fails on a
@@ -56,15 +55,28 @@ _METADATA_FILE = "metadata.csv"
 _METADATA_COLUMNS = ("pid", "age", "sex")
 _DICTIONARY_FILE = "annotation-label-dictionary.csv"
 _DICTIONARY_LABEL_COLUMN = "annotation"
+# A recording's file name, such as P001.csv.gz. The group is the participant id.
 _RECORDING_FILE = re.compile(r"(P[0-9]{3})\.csv\.gz")
-_RECORDING_COLUMNS = ["time", "x", "y", "z", "annotation"]
+_TIME_COLUMN = "time"
+_LABEL_COLUMN = "annotation"
 _AXES = ("x", "y", "z")
+_RECORDING_COLUMNS = [_TIME_COLUMN, *_AXES, _LABEL_COLUMN]
+_FIRST_DATA_LINE = 2
+"""The file line of a table's first row, after the header line."""
+_RECORD_FILE_KEY = "file"
+"""The Record metadata key that holds the recording's file name."""
 
 _DEVICE = "Axivity AX3"
 _SAMPLE_RATE_HZ = 100
 _SAMPLE_PERIOD_US = US_PER_S // _SAMPLE_RATE_HZ
 # The source writes eight significant digits. float32 keeps about seven, a step far below the sensor's
-# resolution, and halves the stored size.
+# resolution, and halves the stored size. The authors' own loader reads x, y and z as float32 too.
+_AXIS_TYPE = pa.float32()
+_COLUMN_TYPES = {
+    _TIME_COLUMN: pa.timestamp("us"),
+    **dict.fromkeys(_AXES, _AXIS_TYPE),
+    _LABEL_COLUMN: pa.dictionary(pa.int32(), pa.string()),
+}
 _SPEC = TimeSeriesSpec(
     spec_type="acceleration", name="Wrist acceleration", unit_value=ureg.standard_gravity, dtype="float32"
 )
@@ -75,12 +87,11 @@ _SCHEME_COLUMN_PREFIX = "label:"
 class _Key(StrEnum):
     """The key of an annotation that this connector writes."""
 
-    SOURCE_URL = "source_url"
-    SOURCE_SHA256 = "source_sha256"
     SUBJECT_IDS = "subject_ids"
     AGE = "age"
     SEX = "sex"
     RECORDING_START_LOCAL = "recording_start_local"
+    """The first sample's published timestamp. The authors randomized its date and shifted its time."""
     ACTIVITY = "activity"
     """A Source annotation that holds one run of a raw label."""
 
@@ -118,6 +129,11 @@ _FIRST_TEST_PARTICIPANT = 101
 """The paper's test set is P101 to P151, and benchmark.py tests ``range(101, 152)``."""
 _NO_LABEL = -1
 """The code of an unlabelled sample, which the source writes as an empty field."""
+_RECORDING_START_DESCRIPTION = (
+    "The first sample's timestamp as the authors published it, with no zone. For anonymity they randomized "
+    "the date and shifted the time by a small random amount, so the time of day is close to local time "
+    "but not exact."
+)
 
 
 @dataclass(frozen=True)
@@ -249,8 +265,8 @@ class _Participant:
     acceleration_digest: str
     """The digest of the recording's x, y and z values when it was read, which a reread must match."""
     start_local: str
-    """The first sample's published timestamp, formatted by datetime.isoformat(): no zone, a randomized
-    date, and a time of day that the authors shifted by a small random amount."""
+    """The first sample's published timestamp in ISO 8601 with microseconds and no zone. The date is
+    randomized, and the authors shifted the time of day by a small random amount."""
     segments: tuple[_Segment, ...]
     label_runs: tuple[_LabelRuns, ...]
     """Each segment's runs of a raw label, in segment order."""
@@ -260,18 +276,35 @@ class _Participant:
     """Each kept window's class per scheme, as an index into that scheme's vocabulary."""
 
 
-def _require_values(path: Path, rows: list[dict[str, str]], columns: list[str]) -> None:
-    """Check that every row has a value in each of columns.
+def _read_rows(path: Path, columns: list[str]) -> list[dict[str, str]]:
+    """Read a small CSV table whose columns must be exactly ``columns``, in any order.
 
-    A short row reads as None and a blank field as "", and neither is a value.
+    A short row reads as None and a blank field as "", and neither is a value. ``csv.DictReader`` puts the
+    fields of a long row under the key None.
+
+    Returns:
+        One dict per row, keyed by column.
 
     Raises:
-        TimeFFormatError: If a row has no value in a column.
+        TimeFFormatError: If the file can't be read, the columns differ, a row has no value in a column, or
+            a row has more fields than the header.
     """
-    for line, row in enumerate(rows, start=2):
+    try:
+        with path.open(newline="", encoding="utf-8") as handle:
+            reader = csv.DictReader(handle)
+            rows = list(reader)
+            header = reader.fieldnames or []
+    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+        raise TimeFFormatError(f"{path}: {exc}") from exc
+    if len(header) != len(columns) or set(header) != set(columns):
+        raise TimeFFormatError(f"{path}: expected the columns {columns}, got {header}")
+    for line, row in enumerate(rows, start=_FIRST_DATA_LINE):
+        if None in row:
+            raise TimeFFormatError(f"{path}:{line}: more fields than the header names")
         for column in columns:
             if not row[column]:
                 raise TimeFFormatError(f"{path}:{line}: no value for {column!r}")
+    return rows
 
 
 def _read_labels(path: Path) -> _LabelDictionary:
@@ -281,17 +314,11 @@ def _read_labels(path: Path) -> _LabelDictionary:
         The dictionary, as the windowing and the activity annotations need it.
 
     Raises:
-        TimeFFormatError: If the columns are not the raw label and the six schemes, a row has no value in a
-            column, a raw label is listed twice, or a class is not in its scheme's vocabulary.
+        TimeFFormatError: If the file can't be read, the columns are not the raw label and the six schemes, a
+            row has no value in a column or too many fields, a raw label is listed twice, or a class is not in
+            its scheme's vocabulary.
     """
-    with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        rows = list(reader)
-        header = reader.fieldnames or []
-    columns = [_DICTIONARY_LABEL_COLUMN, *(scheme.column for scheme in _Scheme)]
-    if set(header) != set(columns):
-        raise TimeFFormatError(f"{path}: expected the columns {columns}, got {header}")
-    _require_values(path, rows, columns)
+    rows = _read_rows(path, [_DICTIONARY_LABEL_COLUMN, *(scheme.column for scheme in _Scheme)])
     raw_labels = [row[_DICTIONARY_LABEL_COLUMN] for row in rows]
     if len(set(raw_labels)) != len(raw_labels):
         raise TimeFFormatError(f"{path}: a raw label is listed twice")
@@ -336,18 +363,12 @@ def _read_people(root: Path) -> list[_Person]:
         One person per participant, in id order.
 
     Raises:
-        TimeFFormatError: If a column is missing, a row has no value in a needed column, an age or a sex is
-            not one that the release writes, a pid repeats, or the table and the recordings don't name the
-            same participants.
+        TimeFFormatError: If the file can't be read, the columns are not pid, age and sex, a row has no value
+            in a column or too many fields, an age or a sex is not one that the release writes, a pid repeats,
+            or the table and the recordings don't name the same participants.
     """
     path = root / _METADATA_FILE
-    with path.open(newline="", encoding="utf-8") as handle:
-        reader = csv.DictReader(handle)
-        rows = list(reader)
-        header = reader.fieldnames or []
-    if not set(_METADATA_COLUMNS) <= set(header):
-        raise TimeFFormatError(f"{path}: expected the columns {list(_METADATA_COLUMNS)}, got {header}")
-    _require_values(path, rows, list(_METADATA_COLUMNS))
+    rows = _read_rows(path, list(_METADATA_COLUMNS))
     pids = [row["pid"] for row in rows]
     if len(set(pids)) != len(pids):
         raise TimeFFormatError(f"{path}: a pid is listed twice")
@@ -366,7 +387,7 @@ def _read_people(root: Path) -> list[_Person]:
             sex=_parse_person_value(path, line, "sex", row["sex"], _SEX_OF_LETTER.__getitem__),
             path=recordings[row["pid"]],
         )
-        for line, row in enumerate(rows, start=2)
+        for line, row in enumerate(rows, start=_FIRST_DATA_LINE)
     ]
     return sorted(people, key=lambda person: person.pid)
 
@@ -388,14 +409,14 @@ def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant
     table = _read_table(path)
     stamps = _read_stamps(path, table)
     offsets = stamps - stamps[0]
-    raw_codes = _raw_codes(path, table["annotation"].combine_chunks(), labels)
+    raw_codes = _raw_codes(path, table[_LABEL_COLUMN].combine_chunks(), labels)
     segments = _make_segments(stamps)
     windows = _make_windows(path, offsets, raw_codes, segments, labels)
     return _Participant(
         person=person,
         n_rows=len(stamps),
         acceleration_digest=_digest(_axis_values(path, table)),
-        start_local=table["time"][0].as_py().isoformat(),
+        start_local=table[_TIME_COLUMN][0].as_py().isoformat(timespec="microseconds"),
         segments=segments,
         label_runs=tuple(_label_runs(raw_codes, segment) for segment in segments),
         window_starts_us=offsets[windows.first_rows],
@@ -403,10 +424,21 @@ def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant
     )
 
 
-def _read_table(path: Path) -> pa.Table:
-    """Read every column of a recording. The ``annotation`` column is dictionary-encoded.
+def _convert_options(columns: list[str]) -> pa_csv.ConvertOptions:
+    """Return the options that read ``columns`` of a recording, so that both passes parse them alike.
 
     Only an empty field is missing, so a written ``nan`` reaches the finite check in ``_axis_values``.
+    """
+    return pa_csv.ConvertOptions(
+        include_columns=columns,
+        column_types={column: _COLUMN_TYPES[column] for column in columns},
+        strings_can_be_null=True,
+        null_values=[""],
+    )
+
+
+def _read_table(path: Path) -> pa.Table:
+    """Read every column of a recording. The ``annotation`` column is dictionary-encoded.
 
     Returns:
         The recording's table.
@@ -422,19 +454,7 @@ def _read_table(path: Path) -> pa.Table:
     if header != _RECORDING_COLUMNS:
         raise TimeFFormatError(f"{path}: expected the header {','.join(_RECORDING_COLUMNS)}, got {header}")
     try:
-        table = pa_csv.read_csv(
-            path,
-            convert_options=pa_csv.ConvertOptions(
-                include_columns=_RECORDING_COLUMNS,
-                column_types={
-                    "time": pa.timestamp("us"),
-                    **dict.fromkeys(_AXES, pa.float64()),
-                    "annotation": pa.dictionary(pa.int32(), pa.string()),
-                },
-                strings_can_be_null=True,
-                null_values=[""],
-            ),
-        )
+        table = pa_csv.read_csv(path, convert_options=_convert_options(_RECORDING_COLUMNS))
     except (OSError, pa.ArrowException) as exc:
         raise TimeFFormatError(f"{path}: {exc}") from exc
     if table.num_rows == 0:
@@ -448,7 +468,7 @@ def _read_stamps(path: Path, table: pa.Table) -> np.ndarray:
     Raises:
         TimeFFormatError: If a timestamp is missing, or a step is shorter than one period.
     """
-    times = table["time"].combine_chunks()
+    times = table[_TIME_COLUMN].combine_chunks()
     if times.null_count:
         raise TimeFFormatError(f"{path}: {times.null_count} samples have no timestamp")
     stamps = times.cast(pa.int64()).to_numpy()
@@ -496,7 +516,7 @@ def _label_runs(raw_codes: np.ndarray, segment: _Segment) -> _LabelRuns:
 
 
 def _axis_values(path: Path, table: pa.Table) -> dict[str, np.ndarray]:
-    """Return the x, y and z columns of a recording's table as float64 arrays.
+    """Return the x, y and z columns of a recording's table as float32 arrays.
 
     Returns:
         One array per acceleration column.
@@ -574,7 +594,7 @@ def _make_windows(
     )
     if crossing.any():
         row = int(first_rows[crossing][0])
-        raise TimeFFormatError(f"{path}: the window at row {row} holds 1000 samples across a gap")
+        raise TimeFFormatError(f"{path}: the window at row {row} holds {_WINDOW_SAMPLES} samples across a gap")
     classes = {}
     for scheme, class_of_raw in labels.class_of_raw.items():
         per_sample = class_of_raw[window_codes]
@@ -588,7 +608,7 @@ def _make_windows(
 
 
 def _read_acceleration(participant: _Participant) -> dict[str, np.ndarray]:
-    """Read a recording's x, y and z columns as float64, and check that the file is the one the first pass read.
+    """Read a recording's x, y and z columns as float32, and check that the file is the one the first pass read.
 
     Returns:
         One array per acceleration column.
@@ -599,12 +619,7 @@ def _read_acceleration(participant: _Participant) -> dict[str, np.ndarray]:
     """
     path = participant.person.path
     try:
-        table = pa_csv.read_csv(
-            path,
-            convert_options=pa_csv.ConvertOptions(
-                include_columns=list(_AXES), column_types=dict.fromkeys(_AXES, pa.float64()), null_values=[""]
-            ),
-        )
+        table = pa_csv.read_csv(path, convert_options=_convert_options(list(_AXES)))
     except (OSError, pa.ArrowException) as exc:
         raise TimeFFormatError(f"{path}: {exc}") from exc
     if table.num_rows != participant.n_rows:
@@ -648,13 +663,13 @@ class _OneRecording:
 def _load_segment(
     acceleration: _ReadAcceleration, participant: _Participant, segment: _Segment, column: str
 ) -> pa.Array:
-    """Return one segment's values of one acceleration column, rounded to float32.
+    """Return one segment's values of one acceleration column.
 
     Returns:
         The segment's float32 values.
     """
     values = acceleration(participant)[column]
-    return pa.array(values[segment.first_row : segment.first_row + segment.n_values].astype(np.float32))
+    return pa.array(values[segment.first_row : segment.first_row + segment.n_values], type=_AXIS_TYPE)
 
 
 def _activity_annotations(runs: _LabelRuns, labels: _LabelDictionary) -> Iterator[Annotation]:
@@ -703,13 +718,17 @@ def _record(participant: _Participant, labels: _LabelDictionary, acceleration: _
             )
         )
     person = participant.person
-    record = Record(sources=tuple(sources), metadata={"file": person.path.name})
+    record = Record(sources=tuple(sources), metadata={_RECORD_FILE_KEY: person.path.name})
     record.add_annotations(
         (
             Annotation(key=_Key.SUBJECT_IDS, value=[person.pid]),
             Annotation(key=_Key.AGE, value=person.age.value),
             Annotation(key=_Key.SEX, value=person.sex.value),
-            Annotation(key=_Key.RECORDING_START_LOCAL, value=participant.start_local),
+            Annotation(
+                key=_Key.RECORDING_START_LOCAL,
+                value=participant.start_local,
+                description=_RECORDING_START_DESCRIPTION,
+            ),
         )
     )
     return record
@@ -738,13 +757,13 @@ class Capture24Connector(BaseConnector[Path]):
             raw_refs: The one extracted ``capture24`` directory.
 
         Returns:
-            A dataset with the provenance and vocabulary annotations, the Records, and a stream of every task.
+            A dataset with the vocabulary annotations, the Records, and a stream of every task.
 
         Raises:
             TimeFValidationError: If ``raw_refs`` isn't one directory.
             TimeFFormatError: If a table or recording is malformed.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the read helpers
-        if len(raw_refs) != 1:
+        if len(raw_refs) != 1 or not raw_refs[0].is_dir():
             raise TimeFValidationError(f"CAPTURE-24 loads from one directory, got {raw_refs}")
         (root,) = raw_refs
         labels = _read_labels(root / _DICTIONARY_FILE)
@@ -754,8 +773,6 @@ class Capture24Connector(BaseConnector[Path]):
         records = [_record(participant, labels, acceleration) for participant in participants]
 
         dataset = TimeFDataset(metadata=self.metadata())
-        for key, value in ((_Key.SOURCE_URL, ARCHIVE_URL), (_Key.SOURCE_SHA256, ARCHIVE_SHA256)):
-            dataset.annotate(Annotation(key=key, value=value))
         for record in records:
             dataset.add_record(record=record)
         for vocabulary in _VOCABULARIES.values():
