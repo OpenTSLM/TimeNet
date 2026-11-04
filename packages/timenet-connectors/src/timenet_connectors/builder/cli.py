@@ -139,10 +139,6 @@ def build(
     the version, the build needs only the payload sources of the version. It prepares them the same
     way as a parent.
 
-    The connector decides the values-plane storage through its ``values_backend`` attribute. This
-    process resolves it for an in-process build; an isolated child resolves its own, because
-    importing the connector here would need the dependencies the child is about to install.
-
     Raises:
         BadParameter: If ``dataset_id`` has no known connector.
         TimeNetMissingParentError: If a parent is missing. The hint of the error names the flags.
@@ -385,7 +381,6 @@ def _build(  # ruff: ignore[too-many-arguments]
             version_dir = run_pipeline(
                 connector,
                 target,
-                values_backend=connector.values_backend,
                 progress_cb=progress_cb,
                 force=force,
                 keep_cache=keep_cache,
@@ -397,7 +392,6 @@ def _build(  # ruff: ignore[too-many-arguments]
         version = publish_pipeline(
             connector,
             target,
-            values_backend=connector.values_backend,
             progress_cb=progress_cb,
             force=force,
             keep_cache=keep_cache,

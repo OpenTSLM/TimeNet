@@ -21,7 +21,7 @@ from timenet.types import DatasetMetadata
 from timenet.types.access import require_open_access
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
-from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
+from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
@@ -33,7 +33,6 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     keep_cache: bool = False,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
-    values_backend: str | None = None,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> Path:
     """Run one connector through the full build pipeline and return the version directory.
@@ -56,9 +55,6 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
         keep_cache: Keep the cache directory instead of removing it once the dataset is stored.
             Conversion is the only stage that needs the raw sources, so removing them frees disk
             after a successful build. The sources re-download on the next run.
-        values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``). When
-            ``None``, this function uses the connector's ``values_backend``, so a connector that
-            needs Zarr declares it once on the class.
         progress_cb: Optional writer progress callback.
         force: Rebuild even if the version is already committed.
         pinned_by: The releases that already read files of this release, with their pins. The write
@@ -72,7 +68,7 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
             ``compose``, or the dataset that ``compose`` returns has another card than the one that
             the engine read. The build then stores no release.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes and _compose
-    resolved_backend = _resolve_values_backend(connector, values_backend)
+    values_backend = _check_values_backend(connector)
     # Read only the connector's dataset.yaml card, a tiny local file, not the dataset itself. This lets
     # us resolve the version directory and skip the expensive download and convert when it exists.
     metadata = connector.metadata()
@@ -95,7 +91,7 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
         store_dataset(
             dataset,
             root,
-            values_backend=resolved_backend,
+            values_backend=values_backend,
             progress_cb=progress_cb,
             replace=force,
             pinned_by=pinned_by,
@@ -115,7 +111,6 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
     keep_cache: bool = False,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
     force: bool = False,
-    values_backend: str | None = None,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
     """Run one connector and publish the result through a writable registry.
@@ -134,8 +129,6 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
         registry: The writable registry to publish into (local, remote, or S3).
         cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
         keep_cache: Keep the cache directory instead of removing it after publishing.
-        values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``). When
-            ``None``, this function uses the connector's ``values_backend``.
         progress_cb: Optional writer progress callback.
         force: Republish even if the version is already committed.
         pinned_by: The releases that already read files of this release, with their pins. The store
@@ -151,7 +144,7 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
         TimeNetAccessError: If the registry is not local, and the card, or the composed dataset with
             its lineage, is not open.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, and require_open_access
-    resolved_backend = _resolve_values_backend(connector, values_backend)
+    values_backend = _check_values_backend(connector)
     metadata = connector.metadata()
     dataset_id = metadata.dataset_id
     version = str(metadata.dataset_version)
@@ -172,7 +165,7 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
         # Pass pins only when there are any, so a registry written against the earlier store()
         # signature keeps working for every other build.
         pinned = {"pinned_by": pinned_by} if pinned_by else {}
-        registry.store(dataset, force=force, values_backend=resolved_backend, progress_cb=progress_cb, **pinned)
+        registry.store(dataset, force=force, values_backend=values_backend, progress_cb=progress_cb, **pinned)
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version
@@ -256,21 +249,21 @@ def _compose(connector: BaseConnector, metadata: DatasetMetadata, cache: Path, c
     return dataset
 
 
-def _resolve_values_backend(connector: BaseConnector, override: str | None) -> str:
-    """Resolve and validate the backend before a build changes any files.
+def _check_values_backend(connector: BaseConnector) -> ValuesBackend:
+    """Check the values backend of a connector before a build changes any files.
 
     Returns:
-        The supported backend selected by the override or connector default.
+        The values backend of the connector.
 
     Raises:
-        TimeFValidationError: If the selected backend is unknown.
+        TimeFValidationError: If the connector names an unknown backend.
     """
-    backend = connector.values_backend if override is None else override
+    backend = connector.values_backend
     if backend not in SUPPORTED_VALUES_BACKENDS:
         raise TimeFValidationError(
             f"unknown values_backend {backend!r}; supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
         )
-    return backend
+    return ValuesBackend(backend)
 
 
 def store_dataset(  # ruff: ignore[too-many-arguments]
@@ -278,7 +271,7 @@ def store_dataset(  # ruff: ignore[too-many-arguments]
     root: Path,
     *,
     progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-    values_backend: str = "parquet",
+    values_backend: ValuesBackend = ValuesBackend.PARQUET,
     replace: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> Path:

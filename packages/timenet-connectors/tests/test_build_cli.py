@@ -68,32 +68,6 @@ def test_build_runs_in_process_when_the_setting_is_off(monkeypatch, tmp_path):
     assert called["isolated"] is False
 
 
-def test_build_without_a_values_backend_uses_the_connector_default(monkeypatch, tmp_path):
-    captured = {}
-    instances = []
-
-    class _Connector:
-        values_backend = "zarr"
-
-        def __init__(self):
-            instances.append(self)
-
-    monkeypatch.setenv("TIMENET_ISOLATION", "off")
-    monkeypatch.setattr(cli_module, "resolve", lambda dataset_id: _Connector)
-
-    def _fake_pipeline(connector, root, **kwargs):
-        assert connector is instances[0]
-        captured["values_backend"] = kwargs["values_backend"]
-        return Path(root) / "timenet/hello-world/1.0.0"
-
-    monkeypatch.setattr(cli_module, "run_pipeline", _fake_pipeline)
-    result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path)])
-
-    assert result.exit_code == 0
-    assert captured["values_backend"] == "zarr"
-    assert len(instances) == 1
-
-
 def test_build_isolates_when_the_flag_overrides_the_setting(monkeypatch, tmp_path):
     called = {"isolated": False}
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
