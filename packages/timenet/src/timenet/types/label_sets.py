@@ -69,10 +69,11 @@ class LabelSet(TimeFModel):
     def __getitem__(self, name: str) -> Label:
         """Return a label from this set by name.
 
-        For example, ``STAGES["W"]`` returns the label named ``W``.
+        With the set in the class example, ``SLEEP_STAGE["awake"]`` returns
+        ``Label(name="awake", description="The subject is awake.")``.
 
         Returns:
-            The label with the requested name.
+            The Label with the requested name.
 
         Raises:
             TimeFNotFoundError: If the set has no label with this name.
