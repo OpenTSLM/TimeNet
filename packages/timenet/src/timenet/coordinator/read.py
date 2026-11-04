@@ -6,7 +6,7 @@ different registries. A release that only installed connectors provide is built 
 
 from collections.abc import Mapping, Sequence
 from dataclasses import dataclass, field, replace
-from typing import cast
+from typing import NoReturn, cast
 
 from timenet.builders import declared, find_card
 from timenet.coordinator.build import run_plan
@@ -104,6 +104,31 @@ def read_release(
     )
 
 
+def raise_not_found(dataset_id: str, version: str | None, sources: Sequence[ReleaseSource]) -> NoReturn:
+    """Raise the error for a release that no source provides.
+
+    For an exact version, an installed connector that builds another version gives a more exact error.
+
+    Args:
+        dataset_id: The dataset ID.
+        version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest.
+        sources: The sources searched for the release.
+
+    Raises:
+        TimeNetVersionUnavailableError: If the installed connector declares another version than the exact request.
+        TimeNetInvalidCardError: If the card of the connector cannot be read.
+        TimeNetDatasetNotFoundError: Otherwise, with a message that names the searched sources.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by declared
+    requested = None if is_latest(version) else DatasetRef.parse(f"{dataset_id}@{version}")
+    connectors = any(isinstance(source, InstalledConnectors) for source in sources)
+    if requested is not None and connectors and find_card(dataset_id) is not None:
+        # The installed connector builds another version.
+        declared(dataset_id, requested.version)
+    names = ", ".join(str(source) for source in sources)
+    wanted = dataset_id if requested is None else str(requested)
+    raise TimeNetDatasetNotFoundError(f"{wanted} is in none of the sources: {names}.")
+
+
 @dataclass
 class _ReadPlanner:
     """A planner that finds releases and collects the steps to read them."""
@@ -123,20 +148,13 @@ class _ReadPlanner:
 
         Raises:
             TimeNetDatasetNotFoundError: If no source provides the release.
-        """
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by raise_not_found
         version = None if is_latest(version) else version
         answer = self.lookups.resolve(self.sources, dataset_id, version)
         if isinstance(answer, NotFound):
-            requested = None if version is None else DatasetRef.parse(f"{dataset_id}@{version}")
-            if requested is not None:
-                self.check_store_copy(requested)
-                connectors = any(isinstance(source, InstalledConnectors) for source in self.sources)
-                if connectors and find_card(dataset_id) is not None:
-                    # The installed connector builds another version.
-                    declared(dataset_id, requested.version)
-            names = ", ".join(str(source) for source in self.sources)
-            wanted = dataset_id if requested is None else str(requested)
-            raise TimeNetDatasetNotFoundError(f"{wanted} is in none of the sources: {names}.")
+            if version is not None:
+                self.check_store_copy(DatasetRef.parse(f"{dataset_id}@{version}"))
+            raise_not_found(dataset_id, version, self.sources)
         release = DatasetRef(dataset_id=dataset_id, version=answer.version)
         registry = self.provide(release, answer)
         if registry is not None:

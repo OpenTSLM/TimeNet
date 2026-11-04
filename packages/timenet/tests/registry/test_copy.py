@@ -17,12 +17,13 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.errors import (
     TimeFFormatError,
+    TimeFValidationError,
     TimeNetAccessError,
     TimeNetMissingParentError,
     TimeNetVersionConflictError,
 )
 from timenet.manifest import PayloadSource
-from timenet.progress import ProgressEvent, StepFinished, StepStarted
+from timenet.progress import BytesMoved, ProgressEvent, StepFinished, StepStarted
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, RemoteRegistry, WritableRegistry, copy_release, open_local_version
 from timenet.registry.shared import complete_copy
@@ -151,6 +152,11 @@ def _remote(tmp_path: Path, name: str, *, token: str | None = None) -> tuple[Rem
     return registry, root
 
 
+def _steps(events: list[ProgressEvent]) -> list[ProgressEvent]:
+    """Return the step events, without the byte events of each copy."""
+    return [event for event in events if not isinstance(event, BytesMoved)]
+
+
 @pytest.fixture
 def source(tmp_path) -> LocalRegistry:
     root = tmp_path / "source"
@@ -266,7 +272,7 @@ def test_copy_release_reads_a_payload_source_that_only_dest_holds(source, dest):
     copy_release(child_ref, _without_parent(source), dest, progress=events.append)
     assert dest.get_manifest(*child) == source.get_manifest(*child)
     assert dest.get_manifest(*parent) == before
-    assert events == [StepStarted(child_ref, "copy"), StepFinished(child_ref, "copy")]
+    assert _steps(events) == [StepStarted(child_ref, "copy"), StepFinished(child_ref, "copy")]
 
 
 def test_copy_release_refuses_a_payload_source_that_only_dest_holds_with_other_files(source, dest):
@@ -325,22 +331,70 @@ def test_copy_release_repairs_a_damaged_local_copy(source, tmp_path):
     events: list[ProgressEvent] = []
     copy_release(child_ref, source, dest, progress=events.append)
     assert complete_copy(child_dir, manifest)
-    assert events == [StepStarted(child_ref, "copy"), StepFinished(child_ref, "copy")]
+    assert _steps(events) == [StepStarted(child_ref, "copy"), StepFinished(child_ref, "copy")]
+
+
+def test_copy_release_with_force_copies_a_complete_local_copy_again(source, tmp_path):
+    dest = LocalRegistry(tmp_path / "dest")
+    copy_release(child_ref, source, dest)
+    child_dir = dest.root / child_ref.dataset_id / str(child_ref.version)
+    parent_dir = dest.root / parent_ref.dataset_id / str(parent_ref.version)
+    for directory in (child_dir, parent_dir):
+        (directory / "stale.txt").write_text("left over")
+    events: list[ProgressEvent] = []
+    copy_release(child_ref, source, dest, force=True, progress=events.append)
+    # The requested release is copied again as a whole. Its complete payload source stays.
+    assert not (child_dir / "stale.txt").exists()
+    assert (parent_dir / "stale.txt").exists()
+    assert complete_copy(child_dir, dest.get_manifest(*child))
+    assert _steps(events) == [StepStarted(child_ref, "copy"), StepFinished(child_ref, "copy")]
+    # force=True does not replace a copy with other files.
+    other = LocalRegistry(tmp_path / "other")
+    other.put_dataset(_other_build(child_ref.dataset_id))
+    with pytest.raises(TimeNetVersionConflictError, match="new version"):
+        copy_release(child_ref, source, other, force=True)
+
+
+def test_copy_release_with_force_refuses_a_registry_that_is_not_local(source, tmp_path):
+    dest, _ = _remote(tmp_path, "dest", token="tok_rw")
+    with pytest.raises(TimeFValidationError, match=r"^force=True needs a local dest"):
+        copy_release(child_ref, source, dest, force=True)
+    assert not dest.exists(*child)
+    assert not dest.exists(*parent)
 
 
 def test_copy_release_reports_each_copied_release(source, tmp_path):
     events: list[ProgressEvent] = []
     copy_release(child_ref, source, LocalRegistry(tmp_path / "dest"), progress=events.append)
-    assert [(e.action, e.release) for e in events if isinstance(e, StepStarted)] == [
-        ("copy", parent_ref),
-        ("copy", child_ref),
-    ]
-    assert events == [
+    assert _steps(events) == [
         StepStarted(parent_ref, "copy"),
         StepFinished(parent_ref, "copy"),
         StepStarted(child_ref, "copy"),
         StepFinished(child_ref, "copy"),
     ]
+
+
+@pytest.mark.parametrize("kind", ["local", "remote"])
+def test_copy_release_reports_the_bytes_of_each_release_that_it_copies_to_a_local_registry(kind, tmp_path):
+    if kind == "local":
+        _write_parent_and_child(tmp_path / "source")
+        origin: LocalRegistry | RemoteRegistry = LocalRegistry(tmp_path / "source")
+    else:
+        origin, root = _remote(tmp_path, "source")
+        _write_parent_and_child(root)
+    events: list[ProgressEvent] = []
+    copy_release(child_ref, origin, LocalRegistry(tmp_path / "dest"), progress=events.append)
+    for release in (parent_ref, child_ref):
+        # The bytes of a release arrive between the start and the end of its step.
+        start, end = events.index(StepStarted(release, "copy")), events.index(StepFinished(release, "copy"))
+        moved = events[start + 1 : end]
+        manifest = origin.get_manifest(release.dataset_id, str(release.version))
+        total = sum(part.size for part in manifest.files.all_files())
+        done = [event.done for event in moved if isinstance(event, BytesMoved)]
+        assert done
+        assert moved == [BytesMoved(str(release), count, total) for count in done]
+        assert done == sorted(done)
+        assert done[-1] == total
 
 
 def test_copy_release_copies_the_payload_sources_of_a_payload_source(chain_source, dest):

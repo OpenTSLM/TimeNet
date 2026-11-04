@@ -509,7 +509,7 @@ def edit_version(
 
     The derived version reuses the base's payload files, so it is written into the base's registry
     as ``<root>/<id>/<dataset_version>/``, where readers find the base. To derive a version in
-    another registry, copy the base there first, for example with ``download_version``, then edit
+    another registry, copy the base there first, for example with ``copy_release()``, then edit
     the copy.
 
     The derived version keeps the base's parent cards, lineage, and import map, without the

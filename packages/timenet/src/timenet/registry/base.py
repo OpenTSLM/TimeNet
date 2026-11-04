@@ -13,12 +13,12 @@ import shutil
 from typing import BinaryIO, TypeVar
 
 from timenet._fs import staged_directory
-from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetFileError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetFileError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import FilePart, Manifest
-from timenet.registry._paths import safe_version_path, split_release_dir
-from timenet.registry.dependencies import prepare_local_copy, validate_manifest_reference
+from timenet.registry._paths import safe_version_path
+from timenet.registry.dependencies import validate_manifest_reference
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
 from timenet.sources import Found, NotFound, NotServed
@@ -29,7 +29,7 @@ from timenet.types.references import DatasetRef
 
 T = TypeVar("T")
 
-# Reports download progress: called with each file (or chunk) of bytes as it lands. A ``download_version``
+# Reports download progress: called with each file (or chunk) of bytes as it lands. A ``download_release``
 # implementation calls it so a caller can render a progress bar; ``None`` downloads silently.
 ProgressCallback = Callable[[int], None]
 
@@ -154,47 +154,6 @@ class BaseRegistry(ABC):
             return Found(held, self, manifest)
         requirements = access_requirements(manifest.metadata, manifest.lineage)
         return NotServed(held, access, requirements[0].access_url if requirements else None, requirements, manifest)
-
-    def download_version(  # ruff: ignore[too-many-arguments]
-        self,
-        dataset_id: str,
-        version: str,
-        dest_dir: str | Path,
-        *,
-        force: bool = False,
-        manifest: Manifest | None = None,
-        progress_cb: ProgressCallback | None = None,
-    ) -> None:
-        """Download complete local copies of a release and of each of its payload sources.
-
-        Only the release's own payload sources are downloaded: it lists every release whose files it
-        reads. Each is checked against the files the release pins.
-
-        Args:
-            dataset_id: The dataset ID.
-            version: The exact release version.
-            dest_dir: The local ``<registry>/<org>/<name>/<version>`` directory.
-            force: Download the requested release again.
-            manifest: An already-loaded manifest for the requested release.
-            progress_cb: Report transferred bytes.
-
-        Raises:
-            TimeFValidationError: If the destination does not identify the requested release.
-        """
-        reference = DatasetRef.parse(f"{dataset_id}@{version}")
-        root, destination_ref = split_release_dir(Path(dest_dir))
-        if destination_ref != reference:
-            raise TimeFValidationError(
-                f"download destination {dest_dir} identifies {destination_ref}, expected {reference}"
-            )
-        prepare_local_copy(
-            root,
-            reference,
-            fetch_from=self,
-            manifest=manifest,
-            force=force,
-            progress_cb=progress_cb,
-        )
 
     def download_release(
         self,

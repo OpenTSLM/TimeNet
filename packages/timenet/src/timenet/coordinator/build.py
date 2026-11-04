@@ -73,7 +73,8 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
     for step in plan.steps:
         if step.action == "copy":
             # The planner gives each copy step a registry as its entry.
-            copy_release(step.release, cast("BaseRegistry", step.entry), store, progress=options.progress)
+            registry = cast("BaseRegistry", step.entry)
+            copy_release(step.release, registry, store, force=step.force, progress=options.progress)
         elif step.action == "build":
             _build(step, store, options=options)
 

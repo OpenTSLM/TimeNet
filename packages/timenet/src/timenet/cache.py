@@ -4,6 +4,10 @@ Datasets live in the local registry (built locally) and the download storage. Ra
 download cache. All three sit under the home directory.
 """
 
+# Glue: the "download storage" of this module is the storage directory, settings().storage_dir.
+# download() copies into the store now, so the storage directory holds only the copies that remote
+# registries cache. A later change replaces this module and its view of the storage directory.
+
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -49,6 +53,7 @@ def cached_datasets() -> list[CachedDataset]:
         The cached datasets, sorted by (location, id, version).
     """
     config = settings()
+    # Glue: the storage directory, as the note at the top of this module says.
     found = _scan(config.registry_path, "registry") + _scan(config.storage_dir, "storage")
     return sorted(found, key=lambda dataset: (dataset.location, dataset.dataset_id, dataset.version))
 
@@ -78,6 +83,7 @@ def clear_cache(*, include_registry: bool) -> tuple[int, list[Path]]:
         reporting space it never freed.
     """
     config = settings()
+    # Glue: the storage directory, as the note at the top of this module says.
     targets = [config.storage_dir, config.cache_dir]
     if include_registry:
         targets.append(config.registry_path)

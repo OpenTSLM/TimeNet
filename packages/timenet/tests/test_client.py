@@ -1,3 +1,4 @@
+import re
 import shutil
 from types import SimpleNamespace
 
@@ -15,18 +16,21 @@ from timenet.errors import (
     TimeFValidationError,
     TimeNetAccessError,
     TimeNetDatasetNotFoundError,
+    TimeNetFileError,
     TimeNetMissingParentError,
     TimeNetRegistryError,
+    TimeNetVersionConflictError,
     TimeNetVersionUnavailableError,
 )
 from timenet.format.stored_values import StoredText
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
+from timenet.progress import BytesMoved, ProgressEvent, StepFinished, StepStarted
 from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import TIMENET_REGISTRY_URL, LocalRegistry, RemoteRegistry, open_local_version
 from timenet.sources import InstalledConnectors
 from timenet.testing import assert_datasets_equal, install_backends, make_dataset
-from timenet.types import Access, DatasetMetadata, Domain, License, Version
+from timenet.types import Access, Annotation, DatasetMetadata, Domain, License, Version
 from timenet.types.access import AccessRequirement
 from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias
@@ -106,7 +110,7 @@ class _Resampled(BaseConnector[str]):
         return child
 
 
-def test_resampled_child_reads_and_downloads_without_its_build_only_parent(tmp_path, monkeypatch):
+def test_resampled_child_reads_and_downloads_without_its_build_only_parent(tmp_path):
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
     metadata = _Resampled().metadata()
@@ -125,16 +129,60 @@ def test_resampled_child_reads_and_downloads_without_its_build_only_parent(tmp_p
     with pytest.raises(TimeNetDatasetNotFoundError, match=reference.dataset_id):
         open_parents(metadata, origin)
 
-    cache = tmp_path / "download"
-    monkeypatch.setenv("TIMENET_STORAGE", str(cache))
-    directory = TimeNet(sources=[origin]).download(metadata.dataset_id)
-    assert not (cache / reference.dataset_id).exists()
+    store = LocalRegistry(tmp_path / "store", store=True)
+    directory = TimeNet(sources=[store, origin]).download(metadata.dataset_id)
+    assert not (store.root / reference.dataset_id).exists()
     shutil.rmtree(origin.root)
     version = open_local_version(directory)
     assert version.manifest.parent_cards == manifest.parent_cards
     with TimeFReader(version) as reader:
         reader.verify()
         assert reader.read().records[0].signals[0].to_arrow().equals(expected)
+
+
+def test_a_damaged_release_names_no_download_without_a_store(tmp_path):
+    registry, _ = _child_of_the_demo(tmp_path / "registry")
+    (registry.root / "test/child/1.0.0/control.duckdb").write_bytes(b"cut short")
+    # download() copies into the store, so a client without one has no repair to offer.
+    with pytest.raises(TimeNetFileError) as caught:
+        TimeNet(sources=[registry.root]).open("test/child")
+    assert caught.value.hint is None
+
+
+def test_a_damaged_release_outside_the_store_names_no_download(tmp_path):
+    origin, _ = _child_of_the_demo(tmp_path / "origin")
+    mirror = LocalRegistry(tmp_path / "mirror")
+    shutil.copytree(origin.root, mirror.root)
+    (mirror.root / "test/child/1.0.0/control.duckdb").write_bytes(b"cut short")
+    store = LocalRegistry(tmp_path / "store", store=True)
+
+    # download() replaces only a copy in the store, so it cannot repair the mirror.
+    with pytest.raises(TimeNetFileError) as caught:
+        TimeNet(sources=[store, mirror, origin]).open("test/child")
+    assert (caught.value.release, caught.value.hint) == (DatasetRef.parse("test/child@1.0.0"), None)
+
+
+def test_a_damaged_build_in_the_store_names_the_build_that_replaces_it(tmp_path, monkeypatch):
+    calls = []
+    install_backends(monkeypatch, _Builder(calls))
+    store = LocalRegistry(tmp_path / "store", store=True)
+    # A registry in the list that lacks the release, as the hosted registry lacks a local build.
+    empty = RemoteRegistry(
+        "http://api.local",
+        transport=httpx.MockTransport(lambda request: httpx.Response(404)),
+        cache_dir=tmp_path / "cache",
+    )
+    client = TimeNet(sources=[store, empty, InstalledConnectors()])
+    client.load("timenet/hello-world@1.0.0")  # the build puts the release into the store
+    (store.root / "timenet/hello-world/1.0.0/control.duckdb").write_bytes(b"cut short")
+
+    # No registry other than the store provides the release, so download() cannot replace it.
+    hint = f"Build it again with `timenet-build build timenet/hello-world --out {store.root} --force`."
+    for entry_point in (client.open, client.load, client.download):
+        with pytest.raises(TimeNetFileError) as caught:
+            entry_point("timenet/hello-world@1.0.0")
+        assert caught.value.hint == hint
+    assert len(calls) == 1  # nothing builds over the damaged copy
 
 
 @pytest.fixture(autouse=True)
@@ -150,13 +198,6 @@ def registry_root(tmp_path):
     with TimeFWriter(tmp_path / "reg", dataset) as writer:
         writer.write()
     return tmp_path / "reg"
-
-
-@pytest.fixture
-def storage(tmp_path, monkeypatch):
-    """The directory that ``download()`` copies into."""
-    monkeypatch.setenv("TIMENET_STORAGE", str(tmp_path / "storage"))
-    return tmp_path / "storage"
 
 
 def _entry(source):
@@ -202,7 +243,7 @@ def test_timenet_registry_env_selects_a_local_registry(tmp_path, monkeypatch):
         "installed connectors",
     ]
     assert {m.dataset_id for m in client.list()} == {"timenet/hello-world"}
-    assert client.download("timenet/hello-world") == tmp_path / "home" / "storage" / "timenet/hello-world" / "1.0.0"
+    assert client.download("timenet/hello-world") == tmp_path / "home" / "registry" / "timenet/hello-world" / "1.0.0"
 
 
 def test_a_client_takes_an_ordered_list_of_sources(tmp_path):
@@ -306,21 +347,248 @@ def test_search(registry_root):
     assert client.search(domain=Domain.CARDIOLOGY) == []
 
 
-def test_download_copies_into_storage(registry_root, storage):
-    client = TimeNet(sources=[str(registry_root)])
-    version_dir = client.download("timenet/hello-world")
-    assert version_dir == storage / "timenet/hello-world" / "1.0.0"
-    assert (version_dir / "manifest.json").exists()
-    assert list(version_dir.glob("time_series/part-*.parquet"))
+def test_download_copies_the_release_and_its_payload_sources_into_the_store(tmp_path):
+    origin, _ = _child_of_the_demo(tmp_path / "origin")
+    store = LocalRegistry(tmp_path / "store", store=True)
+    path = TimeNet(sources=[store, origin.root]).download("test/child")
+    assert path == tmp_path / "store/test/child/1.0.0"
+    assert store.exists("timenet/hello-world", "1.0.0")
 
 
-def test_download_reports_progress(registry_root, storage):
-    client = TimeNet(sources=[str(registry_root)])
-    reported: list[int] = []
-    client.download("timenet/hello-world", progress_cb=reported.append)
-    expected = sum(part.size for part in client.get("timenet/hello-world").files.all_files())
-    assert reported  # the callback fired
-    assert sum(reported) == expected  # summed to the version's total byte size
+def test_download_without_a_store_raises(registry_root):
+    with pytest.raises(TimeFValidationError) as caught:
+        TimeNet(sources=[str(registry_root)]).download("timenet/hello-world")
+    assert str(caught.value) == (
+        "download() copies into the store; add LocalRegistry(<path>, store=True) to the sources"
+    )
+
+
+def test_download_of_a_release_that_only_a_connector_provides_builds_nothing(tmp_path, monkeypatch):
+    calls = []
+    install_backends(monkeypatch, _Builder(calls))
+    store = LocalRegistry(tmp_path / "store", store=True)
+
+    with pytest.raises(TimeNetDatasetNotFoundError) as caught:
+        TimeNet(sources=[store, InstalledConnectors()]).download("timenet/hello-world")
+
+    assert str(caught.value) == (
+        "timenet/hello-world@1.0.0 is not built yet: only an installed connector provides it. "
+        "open() or load() builds it into the store."
+    )
+    assert calls == []
+    assert not store.root.exists()
+
+
+def test_download_of_latest_fails_when_a_connector_declares_a_newer_version(registry_root, tmp_path, monkeypatch):
+    calls = []
+    monkeypatch.setattr(_Builder, "VERSION", "2.0.0")
+    install_backends(monkeypatch, _Builder(calls))
+    store = LocalRegistry(tmp_path / "store", store=True)
+    client = TimeNet(sources=[store, str(registry_root), InstalledConnectors()])
+
+    # "Latest" is the version of the connector, which no registry holds.
+    with pytest.raises(TimeNetDatasetNotFoundError, match=r"^timenet/hello-world@2\.0\.0 is not built yet: "):
+        client.download("timenet/hello-world")
+    assert calls == []
+    # The registry still provides its exact version.
+    assert client.download("timenet/hello-world@1.0.0") == store.root / "timenet/hello-world/1.0.0"
+
+
+def test_download_of_a_release_that_no_source_provides_names_each_source(tmp_path, monkeypatch):
+    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
+    sources = [LocalRegistry(tmp_path / "store", store=True), LocalRegistry(tmp_path / "empty"), InstalledConnectors()]
+
+    with pytest.raises(TimeNetDatasetNotFoundError) as caught:
+        TimeNet(sources=sources).download("x/y")
+
+    # download() never builds, so the hint names only a registry.
+    names = ", ".join(str(source) for source in sources)
+    assert str(caught.value) == f"x/y is in none of the sources: {names}. Add a registry that holds it to the sources."
+
+
+def test_download_of_a_version_that_the_connector_does_not_build_names_the_built_version(tmp_path, monkeypatch):
+    calls = []
+    install_backends(monkeypatch, _Builder(calls))
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "store", store=True), InstalledConnectors()])
+
+    with pytest.raises(TimeNetVersionUnavailableError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
+        client.download("timenet/hello-world@9.9.9")
+    assert calls == []
+
+
+def test_download_copies_each_release_from_the_first_registry_that_provides_it(tmp_path):
+    origin, reference = _child_of_the_demo(tmp_path / "origin")
+    # The first registry holds only the child, and the second only the payload source that it reads.
+    shutil.copytree(origin.root / "test/child", tmp_path / "first/test/child")
+    shutil.copytree(origin.root / reference.dataset_id, tmp_path / "second" / reference.dataset_id)
+    store = LocalRegistry(tmp_path / "store", store=True)
+
+    path = TimeNet(sources=[store, tmp_path / "first", tmp_path / "second"]).download("test/child")
+
+    assert path == store.root / "test/child/1.0.0"
+    with TimeNet(sources=[store]).open("test/child") as reader:
+        reader.verify()
+
+
+@pytest.mark.parametrize("case", ["force", "damaged"])
+def test_download_refuses_a_store_copy_with_other_files(registry_root, tmp_path, case):
+    store = LocalRegistry(tmp_path / "store", store=True)
+    other = make_dataset()
+    other.records[0].annotate(Annotation(key="build", value="another"))
+    store.put_dataset(other)
+    directory = store.root / "timenet/hello-world/1.0.0"
+    client = TimeNet(sources=[store, str(registry_root)])
+    if case == "force":
+        # A complete copy in the store returns at once, so only force=True compares its files.
+        assert client.download("timenet/hello-world") == directory
+    else:
+        (directory / "control.duckdb").write_bytes(b"cut short")
+    before = (directory / "manifest.json").read_text()
+
+    with pytest.raises(TimeNetVersionConflictError, match="new version"):
+        client.download("timenet/hello-world", force=case == "force")
+
+    assert (directory / "manifest.json").read_text() == before
+
+
+@pytest.mark.parametrize("case", ["force", "damaged"])
+def test_download_names_the_store_when_no_other_registry_provides_its_copy(tmp_path, monkeypatch, case):
+    calls = []
+    install_backends(monkeypatch, _Builder(calls))
+    store = LocalRegistry(tmp_path / "store", store=True)
+    store.put_dataset(make_dataset())
+    client = TimeNet(sources=[store, InstalledConnectors()])
+
+    # The store holds the release, so the error is about its copy, not about a build.
+    if case == "force":
+        message = r"^No registry other than the store provides timenet/hello-world@1\.0\.0, so download\(force=True\)"
+        with pytest.raises(TimeNetDatasetNotFoundError, match=message):
+            client.download("timenet/hello-world", force=True)
+    else:
+        (store.root / "timenet/hello-world/1.0.0/control.duckdb").write_bytes(b"cut short")
+        # The installed connector builds the release, so the hint names the build that replaces it.
+        hint = f"Build it again with `timenet-build build timenet/hello-world --out {store.root} --force`."
+        with pytest.raises(TimeNetFileError) as caught:
+            client.download("timenet/hello-world")
+        assert caught.value.hint == hint
+    assert calls == []
+
+
+@pytest.mark.parametrize("case", ["force", "damaged"])
+def test_download_counts_a_registry_over_the_directory_of_the_store_as_the_store(tmp_path, monkeypatch, case):
+    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
+    root = tmp_path / "reg"
+    LocalRegistry(root).put_dataset(make_dataset())
+    directory = root / "timenet/hello-world/1.0.0"
+    if case == "damaged":
+        (directory / "control.duckdb").write_bytes(b"cut short")
+    before = {path: path.read_bytes() for path in directory.rglob("*") if path.is_file()}
+    # As for `TIMENET_REGISTRY=./reg timenet download timenet/hello-world --registry ./reg`: the
+    # registry after the store reads the directory of the store, so it cannot replace its copy.
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TIMENET_REGISTRY", str(root))
+    client = TimeNet(sources=default_sources(remote_registry=root))
+
+    if case == "force":
+        with pytest.raises(TimeNetDatasetNotFoundError) as caught:
+            client.download("timenet/hello-world", force=True)
+        assert str(caught.value) == (
+            "No registry other than the store provides timenet/hello-world@1.0.0, so download(force=True) "
+            "cannot copy it again."
+        )
+    else:
+        with pytest.raises(TimeNetFileError) as caught:
+            client.download("timenet/hello-world")
+        assert caught.value.hint == "No registry other than the store provides it, so download() cannot replace it."
+    assert {path: path.read_bytes() for path in directory.rglob("*") if path.is_file()} == before
+
+
+def test_download_counts_a_case_variant_of_the_store_directory_as_the_store(tmp_path):
+    (tmp_path / "Probe").mkdir()
+    if not (tmp_path / "probe").exists():
+        pytest.skip("the temporary folder tells upper and lower case apart")
+    store = LocalRegistry(tmp_path / "store", store=True)
+    store.put_dataset(make_dataset())
+    client = TimeNet(sources=[store, LocalRegistry(tmp_path / "STORE")])
+
+    # The second registry reads the directory of the store, so it cannot copy the release again.
+    with pytest.raises(TimeNetDatasetNotFoundError, match=r"^No registry other than the store provides "):
+        client.download("timenet/hello-world", force=True)
+
+
+@pytest.mark.parametrize("case", ["missing", "damaged"])
+def test_download_completes_the_payload_sources_of_a_complete_store_copy(tmp_path, case):
+    origin, reference = _child_of_the_demo(tmp_path / "origin")
+    store = LocalRegistry(tmp_path / "store", store=True)
+    client = TimeNet(sources=[store, origin])
+    client.download("test/child")
+    source = store.root / reference.dataset_id / str(reference.version)
+    if case == "missing":
+        shutil.rmtree(source)
+    else:
+        (source / "control.duckdb").write_bytes(b"cut short")
+
+    # The child is complete in the store, but the payload source that it reads is not.
+    assert client.download("test/child") == store.root / "test/child/1.0.0"
+    with TimeFReader(store.open_release(reference)) as reader:
+        reader.verify()
+
+
+def test_download_repairs_a_damaged_store_copy(tmp_path):
+    origin, reference = _child_of_the_demo(tmp_path / "origin")
+    store = LocalRegistry(tmp_path / "store", store=True)
+    client = TimeNet(sources=[store, origin.root])
+    client.download("test/child")
+    (store.root / reference.dataset_id / str(reference.version) / "control.duckdb").write_bytes(b"cut short")
+
+    # The read stops at the damaged payload source, and names the download that repairs it.
+    hint = f"Copy an intact release into the store with download('{reference}')."
+    with pytest.raises(TimeNetFileError, match=re.escape(hint) + "$"):
+        client.open("test/child")
+    client.download(str(reference))
+
+    with client.open("test/child") as reader:
+        reader.verify()
+
+
+def test_download_returns_a_complete_store_copy_at_once(registry_root, tmp_path):
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "store", store=True), str(registry_root)])
+    first = client.download("timenet/hello-world")
+    events: list[ProgressEvent] = []
+    assert client.download("timenet/hello-world", progress=events.append) == first
+    assert events == []  # nothing is copied again
+
+
+def test_download_with_force_copies_again(registry_root, tmp_path):
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "store", store=True), str(registry_root)])
+    first = client.download("timenet/hello-world")
+    (first / "stale.txt").write_text("left over")  # a marker that a clean replace removes
+
+    again = client.download("timenet/hello-world", force=True)
+    assert again == first
+    assert (again / "manifest.json").exists()
+    assert not (again / "stale.txt").exists()  # replaced as a whole, not written in place
+    assert not list(again.parent.glob("*.tmp-*"))  # the staging directory is gone
+
+
+def test_download_reports_its_steps_and_bytes(tmp_path):
+    origin, reference = _child_of_the_demo(tmp_path / "origin")
+    child = DatasetRef.parse("test/child@1.0.0")
+    events: list[ProgressEvent] = []
+    TimeNet(sources=[LocalRegistry(tmp_path / "store", store=True), origin.root]).download(
+        "test/child", progress=events.append
+    )
+
+    assert [event for event in events if not isinstance(event, BytesMoved)] == [
+        StepStarted(reference, "copy"),
+        StepFinished(reference, "copy"),
+        StepStarted(child, "copy"),
+        StepFinished(child, "copy"),
+    ]
+    for release in (reference, child):
+        done = [event.done for event in events if isinstance(event, BytesMoved) and event.url == str(release)]
+        manifest = origin.get_manifest(release.dataset_id, str(release.version))
+        assert done[-1] == sum(part.size for part in manifest.files.all_files())
 
 
 def test_manifest_file_rejects_path_traversal():
@@ -328,30 +596,12 @@ def test_manifest_file_rejects_path_traversal():
         FilePart(path="../../escape.txt", checksum="sha256:" + "0" * 64, size=0)
 
 
-def test_download_is_idempotent(registry_root, storage):
-    client = TimeNet(sources=[str(registry_root)])
-    first = client.download("timenet/hello-world")
-    second = client.download("timenet/hello-world")
-    assert first == second
-
-
-def test_force_redownload_replaces_atomically(registry_root, storage):
-    client = TimeNet(sources=[str(registry_root)])
-    first = client.download("timenet/hello-world")
-    (first / "stale.txt").write_text("left over")  # a marker that a clean replace should remove
-
-    again = client.download("timenet/hello-world", force=True)
-    assert again == first
-    assert (again / "manifest.json").exists()
-    assert not (again / "stale.txt").exists()  # replaced wholesale, not written in place
-    assert not list(again.parent.glob("*.tmp-*"))  # staging dir cleaned up
-
-
-def test_download_leaves_sibling_staging_dirs_untouched(registry_root, storage):
-    client = TimeNet(sources=[str(registry_root)])
+def test_download_leaves_sibling_staging_dirs_untouched(registry_root, tmp_path):
+    store = LocalRegistry(tmp_path / "store", store=True)
+    client = TimeNet(sources=[store, str(registry_root)])
     # A concurrent download of the same version has a live <version>.tmp-* dir. download() must not
     # delete a sibling staging dir: sweeping siblings would corrupt that other download mid-write.
-    sibling = storage / "timenet/hello-world" / "1.0.0.tmp-deadbeef"
+    sibling = store.root / "timenet/hello-world" / "1.0.0.tmp-deadbeef"
     sibling.mkdir(parents=True)
     (sibling / "inflight.parquet").write_text("partial")
 
@@ -407,9 +657,9 @@ def test_load_round_trips_with_every_value_loaded_and_its_reader_closed(tmp_path
     assert_datasets_equal(expected, restored)
 
 
-def test_load_reads_in_place_without_downloading(registry_root, tmp_path, storage, monkeypatch):
+def test_load_reads_in_place_without_downloading(registry_root, tmp_path):
     # load() reads the release where it is, not download-then-read, so it must not write a copy into
-    # the store or into local storage the way download() does.
+    # the store the way download() does.
     calls = []
     install_backends(monkeypatch, _Builder(calls))
     store = tmp_path / "store"
@@ -417,7 +667,6 @@ def test_load_reads_in_place_without_downloading(registry_root, tmp_path, storag
     client.load("timenet/hello-world")
     assert calls == []
     assert not store.exists()  # nothing copied into the store
-    assert not (storage / "timenet/hello-world").exists()  # nothing fetched into the download cache
 
 
 def test_open_torch(registry_root, tmp_path, monkeypatch):
@@ -511,9 +760,9 @@ def test_open_torch_reads_the_version_asked_for(versioned_registry, monkeypatch)
     assert str(reader.metadata.dataset_version) == "1.0.0"
 
 
-def test_version_ref_download_pins(versioned_registry, storage):
-    client = TimeNet(sources=[str(versioned_registry)])
-    assert client.download("timenet/hello-world@1.0.0") == storage / "timenet/hello-world" / "1.0.0"
+def test_version_ref_download_pins(versioned_registry, tmp_path):
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "store", store=True), str(versioned_registry)])
+    assert client.download("timenet/hello-world@1.0.0") == tmp_path / "store/timenet/hello-world/1.0.0"
 
 
 def test_version_ref_missing_pin_raises(versioned_registry):
@@ -624,9 +873,9 @@ def _hosted(tmp_path, metadata, lineage=()):
 
 
 def test_load_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):
-    client = TimeNet(
-        sources=[_hosted(tmp_path, _card("org/gated", Access.CREDENTIALED, "https://physionet.example/dua"))]
-    )
+    hosted = _hosted(tmp_path, _card("org/gated", Access.CREDENTIALED, "https://physionet.example/dua"))
+    store = LocalRegistry(tmp_path / "store", store=True)
+    client = TimeNet(sources=[store, hosted])
     message = (
         "org/gated@1.0.0 is credentialed. Get access at https://physionet.example/dua for org/gated@1.0.0. "
         "No source serves its files. Add InstalledConnectors() to the sources, or build it locally with "
@@ -635,6 +884,7 @@ def test_load_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):
     with pytest.raises(TimeNetAccessError) as caught:
         client.load("org/gated")
     assert str(caught.value) == message
+    assert not store.root.exists()
 
 
 def test_the_access_hint_says_that_no_installed_connector_builds_the_release(tmp_path, monkeypatch):
