@@ -5,6 +5,7 @@ import sys
 import pytest
 
 from timenet.builders import BuildOptions, installed_builder
+from timenet.client import TimeNet
 from timenet.errors import (
     ConnectorCardWarning,
     TimeFValidationError,
@@ -17,6 +18,7 @@ from timenet.manifest.files import FilePart
 from timenet.progress import BytesMoved, ShardWritten
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
+from timenet.testing import make_dataset
 from timenet.types.references import DatasetRef
 from timenet.values_backends import ValuesBackend
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
@@ -214,3 +216,22 @@ def test_build_without_progress_installs_no_sink(tmp_path, monkeypatch):
         )
 
     assert seen == {"progress_cb": None, "sink": None}
+
+
+def test_a_client_build_lets_the_isolated_child_print(tmp_path, monkeypatch):
+    # The client sends no progress callback and leaves quiet unset. So the child shows its build lines
+    # and downloads on the inherited stderr.
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
+    calls = []
+
+    def child(release, store_root, *, quiet, **_):
+        calls.append((release, quiet))
+        LocalRegistry(store_root).put_dataset(make_dataset())
+
+    monkeypatch.setattr(backend_module, "run_isolated_build", child)
+
+    with TimeNet(tmp_path / "registry").open("timenet/hello-world") as reader:
+        assert reader.read().records
+
+    assert calls == [(HELLO, False)]
