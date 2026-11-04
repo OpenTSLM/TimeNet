@@ -24,13 +24,13 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class LocalRegistry(WritableRegistry):
-    """A registry that reads and writes datasets in a local directory."""
+    """Read and write dataset versions in a local directory."""
 
     def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
-        """Open a local registry rooted at a directory.
+        """Open a registry in a local directory.
 
         Args:
-            root: The directory containing ``<dataset_id>/<version>/`` layouts. This expands ``~``.
+            root: The directory containing ``<dataset_id>/<version>/`` folders, with ``~`` expanded.
             read_only: Refuse every write to this registry.
         """
         self._root = Path(root).expanduser()

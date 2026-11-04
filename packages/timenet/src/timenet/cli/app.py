@@ -61,13 +61,13 @@ def _enum_list(values: list[str], factory: Callable[[str], T], flag: str, choice
 
 
 def _client(registry: str | None) -> TimeNet:
-    """Create the client of a command, with the default list of sources.
+    """Create a client with the default sources and an optional registry.
 
     Args:
-        registry: The value of ``--registry``: the registry after the store, or ``None``.
+        registry: The registry URL or path to read after the local registry, or ``None`` for the default.
 
     Returns:
-        The client.
+        A client with the configured sources.
     """
     # TODO(adrian): Remove temporary glue which maps --registry onto default_sources() until the
     # CLI takes the flags of the defaults.
@@ -101,7 +101,7 @@ def _metadata_table(rows: list[DatasetMetadata], title: str) -> Table:
 
 @app.command("list")
 def list_datasets(registry: str | None = _registry_option) -> None:
-    """List every dataset in the registry."""
+    """Display metadata for every dataset in the selected registry."""
     rows = _client(registry).list()
     if not rows:
         typer.echo("No datasets in the registry.")
@@ -121,7 +121,10 @@ def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
     tag: list[str] = typer.Option([], "--tag", help="Tag(s)."),
     limit: int = typer.Option(100, "--limit", min=0, help="Maximum results."),
 ) -> None:
-    """Search datasets by filter. Repeat a flag to pass several values."""
+    """Find datasets that match the filters.
+
+    Repeat a filter flag to pass several values.
+    """
     results = _client(registry).search(
         query=query or None,
         domain=_enum_list(domain, Domain, "--domain", [d.value for d in Domain]),
@@ -202,7 +205,7 @@ def _download(client: TimeNet, dataset_id: str, total: int) -> Path:
     Args:
         client: The client to download through.
         dataset_id: The dataset id, optionally followed by ``@version``.
-        total: The total byte size of the version's files, for the bar's scale.
+        total: The total file size in bytes for the progress bar.
 
     Returns:
         The local version directory.
