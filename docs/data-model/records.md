@@ -121,7 +121,10 @@ Records.
 ```python
 from timenet.types import ClassificationTask, Label, LabelSet
 
-CONDITION = LabelSet(name="condition", labels=(Label(name="healthy"), Label(name="faulty")))
+CONDITION = LabelSet(
+    name="condition",
+    labels=(Label(name="healthy"), Label(name="faulty")),
+)
 
 task = ClassificationTask(
     inputs=(record,),

@@ -153,7 +153,7 @@ def _pick(built, kind, label_set=None):
 
 
 def _label_sets(built):
-    return {one.label_set.name for one in built if isinstance(one, ClassificationTask) and one.label_set is not None}
+    return {one.label_set.name for one in built if isinstance(one, ClassificationTask)}
 
 
 def test_age_is_a_scalar_with_a_unit():

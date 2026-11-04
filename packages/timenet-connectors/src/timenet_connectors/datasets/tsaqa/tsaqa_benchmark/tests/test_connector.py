@@ -109,7 +109,6 @@ def _check_task(task, row: dict[str, Any]) -> None:
     assert task.metadata["question_type"] == row["question_type"]
     assert task.metadata["source_issues"] == _EXPECTED_ISSUES.get(_row_of(task), [])
     if isinstance(task, ClassificationTask):
-        assert task.label_set is not None
         assert (task.label_set.name, task.label_set.names) == ("true_or_false", ("T", "F"))
 
 

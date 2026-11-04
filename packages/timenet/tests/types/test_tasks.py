@@ -50,7 +50,7 @@ def test_registry_contains_every_builtin_task_type():
 
 @pytest.mark.parametrize(
     "task_type",
-    # A classification target must be a label of the task's label set, so it is not in this list.
+    # ClassificationTask needs a label set, and its targets must be labels, so it is not in this list.
     (
         AnswerTask,
         ForecastingTask,

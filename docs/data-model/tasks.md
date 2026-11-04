@@ -83,10 +83,18 @@ own: one Record may serve Tasks of several splits.
 ```python
 from timenet.types import ClassificationTask, Label, LabelSet, Split
 
-ACTIVITY = LabelSet(name="activity", labels=(Label(name="walking"), Label(name="sitting")))
+ACTIVITY = LabelSet(
+    name="activity",
+    labels=(Label(name="walking"), Label(name="sitting")),
+)
 
 dataset.add_task(
-    task=ClassificationTask(inputs=(record,), targets=("walking",), label_set=ACTIVITY, split=Split.TRAIN)
+    task=ClassificationTask(
+        inputs=(record,),
+        targets=("walking",),
+        label_set=ACTIVITY,
+        split=Split.TRAIN,
+    )
 )
 ```
 

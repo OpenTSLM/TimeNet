@@ -31,9 +31,9 @@ from timenet.types import (
 )
 
 
-RHYTHM_LABELS = LabelSet(name="rhythm", labels=(Label(name="normal"), Label(name="abnormal")))
+_RHYTHM_LABELS = LabelSet(name="rhythm", labels=(Label(name="normal"), Label(name="abnormal")))
 """The label set of the fixture's rhythm classification task."""
-EVENT_LABELS = LabelSet(name="event", labels=(Label(name="onset"), Label(name="offset")))
+_EVENT_LABELS = LabelSet(name="event", labels=(Label(name="onset"), Label(name="offset")))
 """The label set of the fixture's scoped event classification task."""
 
 
@@ -145,7 +145,7 @@ def make_dataset() -> TimeFDataset:
         ]
     )
     shared.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.25)))
-    classification = ClassificationTask(inputs=(record0,), targets=("normal",), label_set=RHYTHM_LABELS)
+    classification = ClassificationTask(inputs=(record0,), targets=("normal",), label_set=_RHYTHM_LABELS)
     dataset.add_tasks(
         tasks=[
             classification,
@@ -200,7 +200,7 @@ def make_dataset() -> TimeFDataset:
         task=ClassificationTask(
             inputs=(record2,),
             targets=("onset",),
-            label_set=EVENT_LABELS,
+            label_set=_EVENT_LABELS,
             scope=TimeInterval.seconds(0.0, 0.25, time_series=(window,)),
         ),
     )

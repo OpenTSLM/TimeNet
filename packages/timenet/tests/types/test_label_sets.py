@@ -2,7 +2,7 @@ from pydantic import ValidationError
 import pytest
 
 from timenet.errors import TimeFValidationError
-from timenet.types import Label, LabelSet
+from timenet.types import ClassificationTask, Label, LabelSet
 
 
 STAGES = LabelSet(name="stage", labels=(Label(name="W", description="Awake."), Label(name="N1"), Label(name="R")))
@@ -19,6 +19,12 @@ FINDINGS = LabelSet(name="findings", labels=(Label(name="AF"), Label(name="PVC")
 def test_a_label_set_needs_at_least_one_label_and_distinct_names(labels, message):
     with pytest.raises(ValidationError, match=message):
         LabelSet(name="stage", labels=labels)
+
+
+@pytest.mark.parametrize(("label_set", "type_name"), [(None, "NoneType"), ("stage", "str")])
+def test_a_classification_task_requires_a_label_set(label_set, type_name):
+    with pytest.raises(TimeFValidationError, match=f"label_set must be a LabelSet, got {type_name}"):
+        ClassificationTask(targets=("W",), label_set=label_set)
 
 
 @pytest.mark.parametrize(
