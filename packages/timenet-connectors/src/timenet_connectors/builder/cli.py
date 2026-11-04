@@ -199,14 +199,12 @@ def _build_to(  # ruff: ignore[too-many-arguments]
 ) -> str:
     """Build a release into a local output, or build it locally and copy it to a remote output.
 
-    If nothing runs, because the local output holds the release or the remote output holds the
-    version, this function says so on the console.
+    If nothing runs because the output already holds the release, a status line says so.
 
     Args:
         dataset_id: The dataset ID.
         target: The local directory, or the registry that is not local.
-        fetch_from: The registry to copy missing parents from, or ``None``. For a remote output,
-            ``None`` copies them from the remote output.
+        fetch_from: The registry to copy missing parents from. ``None`` uses a remote output, if any.
         build_parents: Build missing parents with their installed connectors.
         force: Build the release again, even if the local registry holds it.
         pinned_by: The releases that already read files of the release, with their pins.
@@ -293,30 +291,22 @@ def build_one(  # ruff: ignore[too-many-arguments]
 ) -> str:
     """Prepare a dataset's parents, then build or reuse its release.
 
-    The ``build()`` method of :class:`~timenet_connectors.builder.backend.ConnectorBuilder` calls
-    this function. If ``fetch_from`` or ``build_parents`` does not obtain a missing parent, the
-    build fails before any download. A parent builds the same way as this dataset. A parent never
-    builds with ``force``. If another builder backend claims a parent, the ``build`` method of that
-    backend builds the parent with its pins. If ``force`` is not set and the output already holds
-    the version, the build prepares only the missing payload sources of the version. In that case,
-    the build does not run the connector of this dataset. The connector runs in an environment
-    built from its requirements. If isolation is off, the connector runs in this interpreter. A
-    local output gets a version directory. A remote output gets a published version.
+    A missing parent comes from ``fetch_from`` or ``build_parents``, or the build fails before any
+    download. If the output already holds the version and ``force`` is not set, the build only
+    prepares the missing payload sources of the version.
 
     Args:
         dataset_id: The dataset ID.
-        output: A local directory or a ``timenet://``, ``http(s)://``, or ``s3://`` registry URL.
+        output: A local directory, or a ``timenet://``, ``http(s)://`` or ``s3://`` URL.
         fetch_from: The registry, or its URI, to copy missing parent releases from.
         build_parents: Build missing parents with installed connectors.
-        force: Rebuild an existing version.
+        force: Build the release again, even if the output already holds it.
         keep_cache: Keep the raw download cache after building.
-        isolation: If true, build in an environment built from the connector's requirements.
-            If ``None``, use the ``TIMENET_ISOLATION`` setting.
-        pinned_by: The releases that already read files of this release, with their pins. The build
-            publishes the release only if it reproduces each pinned file.
+        isolation: ``True`` builds in the environment of the connector. ``None`` reads ``TIMENET_ISOLATION``.
+        pinned_by: The pins that other releases hold on this release. The build must reproduce them.
 
     Returns:
-        The committed version directory for a local output, or the published version.
+        The version directory for a local output, or the published version.
     """
     target = _resolve_target(str(output))
     registry = LocalRegistry(target) if isinstance(target, Path) else target
