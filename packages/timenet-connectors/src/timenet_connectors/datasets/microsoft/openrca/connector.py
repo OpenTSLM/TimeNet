@@ -45,7 +45,7 @@ _MISSING_PREVIEW = 3
 class OpenRcaConnector(BaseConnector[OpenRcaSource]):
     """Connector for Microsoft's OpenRCA root-cause-analysis benchmark."""
 
-    def download(self, cache_dir: Path) -> list[OpenRcaSource]:  # noqa: PLR6301 - BaseConnector override
+    def download(self, cache_dir: Path) -> list[OpenRcaSource]:  # ruff: ignore[no-self-use] - BaseConnector override
         """Fetch metadata, then only the full days referenced by benchmark tasks.
 
         Args:
@@ -291,7 +291,7 @@ def _table_source(
     )
 
 
-def _part_source(  # noqa: PLR0913, PLR0917 - all fields identify one bounded table part
+def _part_source(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] - all fields identify one bounded table part
     part_index: int,
     part: Mapping[str, Any],
     signal_configs: list[dict[str, str]],

@@ -157,7 +157,7 @@ def _read_csv_rows(root: Path, member: str, required: frozenset[str]) -> list[di
         raise TimeFFormatError(f"OpenRCA member {member!r} is not valid UTF-8 CSV") from exc
 
 
-def _tasks_by_day(  # noqa: PLR0914 - source validation keeps row and grouped-root context together
+def _tasks_by_day(  # ruff: ignore[too-many-locals] - source validation keeps row and grouped-root context together
     root: Path,
     system: SystemRelease,
     release: OpenRcaRelease,
@@ -260,7 +260,7 @@ def _incident_window(
     return expected_start, end
 
 
-def _prepare_record(  # noqa: PLR0913, PLR0917 - one record needs source, release, task, and cache context
+def _prepare_record(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] - one record needs source, release, task, and cache context
     source_root: Path,
     system: SystemRelease,
     day: str,
@@ -348,7 +348,7 @@ def _prepare_table(
     }
 
 
-def _stage_csv(  # noqa: PLR0914 - streaming state validates schema, row order, and timestamp units
+def _stage_csv(  # ruff: ignore[too-many-locals] - streaming state validates schema, row order, and timestamp units
     source_root: Path,
     member: str,
     config: TableRelease,
@@ -455,7 +455,7 @@ def _group_table(
     escaped_path = str(raw_path).replace("'", "''")
     query = (
         # Identifiers come only from the checked-in release schema.
-        f"SELECT {', '.join(selected)} FROM read_parquet('{escaped_path}') "  # noqa: S608
+        f"SELECT {', '.join(selected)} FROM read_parquet('{escaped_path}') "  # ruff: ignore[hardcoded-sql-expression]
         f"ORDER BY {', '.join(ordering)}"
     )
 
@@ -523,7 +523,7 @@ class _PreparedGroupWriter:
     ) -> None:
         self.key = key
         self._group_columns = tuple(group_columns)
-        digest = hashlib.sha1(  # noqa: S324 - deterministic path identity, not cryptography
+        digest = hashlib.sha1(  # ruff: ignore[hashlib-insecure-hash-function] - deterministic path identity, not cryptography
             json.dumps(key, ensure_ascii=False, default=str, separators=(",", ":")).encode()
         ).hexdigest()[:16]
         self._path = table_root / f"group-{digest}.parquet"
@@ -586,7 +586,7 @@ def _deployment_topology(source: OpenRcaSource, release: OpenRcaRelease) -> dict
     if not systems:
         return {}
     try:
-        import openpyxl  # noqa: PLC0415  # ty: ignore[unresolved-import] - connector dependency
+        import openpyxl  # ruff: ignore[import-outside-top-level]  # ty: ignore[unresolved-import] - connector dependency
     except ImportError as exc:
         raise TimeFFormatError(
             "OpenRCA's Telecom deployment map requires openpyxl; install the connector requirements"
