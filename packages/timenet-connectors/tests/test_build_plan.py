@@ -43,7 +43,7 @@ runner = CliRunner()
 
 
 class _CardBackend:
-    """A builder backend that serves connector cards by dataset ID."""
+    """A backend of another package, not ConnectorBuilder: it serves cards by dataset ID, and the plan never builds through it."""
 
     def __init__(self, cards):
         self.cards = cards
