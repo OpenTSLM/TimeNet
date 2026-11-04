@@ -73,6 +73,7 @@ def test_a_label_set_from_an_enum_has_one_label_per_member_in_order():
 
 @pytest.mark.parametrize("key", [_Other.FEMALE, "F"])
 def test_a_label_set_from_an_enum_rejects_a_description_for_another_value(key):
-    # Both keys equal _Sex.FEMALE as strings, so without the check they would describe it silently.
+    # Both keys compare equal to _Sex.FEMALE. Reject them so that only members of _Sex can supply
+    # descriptions.
     with pytest.raises(TimeFValidationError, match="not members of _Sex"):
         LabelSet.from_enum(_Sex, name="sex", descriptions={key: "Female."})

@@ -37,8 +37,8 @@ class LabelSet(TimeFModel):
         )
         ClassificationTask(inputs=(record,), targets=("awake",), label_set=SLEEP_STAGE)
 
-    Each name identifies one label set in a dataset. If a connector fixes the labels in its own code,
-    define them as a ``StrEnum`` and build the set with :meth:`from_enum`.
+    Each name identifies one label set in a dataset. If the connector defines fixed labels, declare
+    a ``StrEnum``. Build the label set with :meth:`from_enum`.
     """
 
     name: NonEmptyString
@@ -83,7 +83,8 @@ class LabelSet(TimeFModel):
         Args:
             labels: The enum whose members are the labels.
             name: The name of the set within a dataset.
-            descriptions: The description of some or all members. A member without one has none.
+            descriptions: Optional descriptions keyed by enum member. Members without an entry have no
+                description.
             multi_label: Whether a target holds all labels that apply instead of exactly one.
 
         Returns:

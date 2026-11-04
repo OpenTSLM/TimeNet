@@ -248,6 +248,25 @@ must contain exactly one label.
 Labels come from the targets stored directly on the task or from the text of its target
 annotations.
 
+If the connector defines fixed labels, declare a `StrEnum`. Build the label set with
+`LabelSet.from_enum`. Each member's value is a label name. Pass a member as a target. The type
+checker catches misspelled enum member names, such as `Condition.FUALTY`:
+
+```python
+from enum import StrEnum
+
+
+class Condition(StrEnum):
+    HEALTHY = "healthy"
+    FAULTY = "faulty"
+
+
+CONDITION = LabelSet.from_enum(Condition, name="condition", descriptions={Condition.FAULTY: "A bearing fault."})
+ClassificationTask(inputs=(record,), targets=(Condition.FAULTY,), label_set=CONDITION)
+```
+
+Build the set from `Label` objects when the labels come from the source data instead.
+
 Tasks can share the same label set object. Each name identifies one label set within a dataset.
 If two different sets have the same name, `add_task()`, the task stream, and the writer raise an
 error. TimeF stores each set once. The reader gives tasks that use the same set a shared object.
