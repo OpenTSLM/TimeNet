@@ -186,21 +186,21 @@ def _build_to(  # ruff: ignore[too-many-arguments]
 ) -> str:
     """Build a release locally and copy it to a remote output if needed.
 
-    The build reuses an existing release unless you set ``force``.
+    Reuse an existing release unless ``force`` is true.
 
     Args:
         dataset_id: The dataset ID.
-        target: The local output directory or remote registry.
-        fetch_from: The registry to copy missing parents from, or ``None`` to use the remote output if present.
+        target: The local directory or remote registry to write to.
+        fetch_from: The registry to copy missing parents from. ``None`` uses a remote output, if any.
         build_parents: Build missing parents with their installed connectors.
-        force: Build the release again, even if the local registry holds it.
-        options: The options of each build.
+        force: Rebuild the release even if the local registry holds it.
+        options: Settings for each build.
 
     Returns:
-        The local version directory or remote version as a string.
+        The version directory for a local output, or the version string for a remote output.
 
     Raises:
-        BadParameter: If ``force`` is set and the version exists in the remote output.
+        BadParameter: If ``force`` is set and the remote output already holds the version.
     """
     release = declared(dataset_id).release
     if isinstance(target, Path):
@@ -248,10 +248,10 @@ def build_prepared_release_command(
         None, "--pinned-by", help="A JSON file of the releases that read files of this release, with their pins."
     ),
 ) -> None:
-    """Build a release in a local registry.
+    """Build one release into a local registry.
 
-    The registry must already contain all parent releases and their payload sources.
-    Status and progress go to stderr, and nothing goes to stdout.
+    The registry must already hold the release's parents and their payload sources. The command prints status
+    and progress to stderr.
     """
     reference = DatasetRef.parse(release)
     pins = {} if pinned_by is None else _read_pins(pinned_by)

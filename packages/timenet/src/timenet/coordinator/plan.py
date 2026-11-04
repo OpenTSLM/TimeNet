@@ -1,6 +1,6 @@
-"""Plan the parent releases that a build needs, before any connector runs.
+"""Plan how to obtain the parent releases that a build needs, before any connector runs.
 
-Each :class:`Step` copies or builds one release after the releases it needs.
+Each :class:`Step` copies or builds one release after its dependencies are ready.
 """
 
 from collections.abc import Mapping

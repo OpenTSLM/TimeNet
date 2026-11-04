@@ -107,18 +107,18 @@ def run_isolated_build(  # ruff: ignore[too-many-arguments]
     quiet: bool,
     pinned_by: Mapping[DatasetRef, PayloadSource],
 ) -> None:
-    """Build a specific release into a local registry in its connector's environment.
+    """Build one release in its connector's environment.
 
-    The registry must already contain all parent releases and their payload sources.
+    The local registry must already contain the release's parents and their payload sources.
     Build errors include the last lines of stderr.
 
     Args:
         release: The exact dataset ID and version to build.
         store_root: The local registry directory to build into.
-        force: Rebuild even if the registry already contains the release.
+        force: Rebuild the release even if the registry already holds it.
         keep_cache: Keep the raw download cache after building.
-        quiet: Hide the build's status output.
-        pinned_by: Releases that depend on this release, with file pins that the build must preserve.
+        quiet: Hide build status messages.
+        pinned_by: File records the build must match, grouped by the release that pins them.
 
     Raises:
         TimeNetBuildError: If the build fails.
