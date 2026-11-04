@@ -354,7 +354,7 @@ _KINDS: tuple[ReleaseKind, ...] = ("download", "build")
 
 @local_app.command("info")
 def local_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
-    """Show the path and size of the cache, the downloads and the builds."""
+    """Show paths and sizes for the cache, downloads, and builds."""
     store, cache_dir = default_local_registry(local_registry=local_registry), settings().cache_dir
     releases = stored_releases(store)
     # Plain lines, so that a long path does not wrap.
@@ -405,7 +405,7 @@ def downloads_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
 
 @downloads_app.command("clear")
 def downloads_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
-    """Delete the downloads in the local registry. A download that a release that stays needs stays too."""
+    """Delete the downloads in the local registry, except those that a remaining release needs."""
     _clear_releases("download", yes, local_registry)
 
 
@@ -417,12 +417,12 @@ def builds_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
 
 @builds_app.command("clear")
 def builds_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
-    """Delete the builds in the local registry. A build that a release that stays needs stays too."""
+    """Delete the builds in the local registry, except those that a remaining release needs."""
     _clear_releases("build", yes, local_registry)
 
 
 def _show_releases(kind: ReleaseKind, local_registry: str | None) -> None:
-    """Print a table of the releases of one kind in the store, or a line if the store holds none."""
+    """Show releases of one kind in a table, or a message if none exist."""
     store = default_local_registry(local_registry=local_registry)
     releases = [item for item in stored_releases(store) if item.kind == kind]
     if not releases:

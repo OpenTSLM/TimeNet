@@ -63,7 +63,7 @@ class S3Registry(LazyReadRegistry):
 
     @property
     def location(self) -> str:
-        """The ``s3://bucket/prefix`` root."""
+        """The registry's root URL as ``s3://bucket/prefix``."""
         return self._display_root()
 
     @property

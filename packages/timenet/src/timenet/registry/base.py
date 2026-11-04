@@ -45,7 +45,7 @@ class BaseRegistry(ABC):
 
     @property
     def location(self) -> str:
-        """Where this registry is: a URL or a path, else the name of the registry."""
+        """The registry's URL, path, or name."""
         return str(self)
 
     @property

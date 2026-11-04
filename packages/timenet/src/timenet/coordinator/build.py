@@ -55,19 +55,18 @@ def plan_release_build(
 
 
 def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None = None) -> None:
-    """Run the copy and build steps of a plan in order.
+    """Run a plan's copy and build steps in order.
 
-    A read step runs nothing, because its release stays where it is. Each release that a copy or a
-    build puts into ``store`` gets a provenance record (see :mod:`timenet.registry.origin`).
+    Each copied or built release gets a record of its source.
 
     Args:
-        plan: The steps to run.
+        plan: The plan to run.
         store: The local registry to copy and build into.
-        options: Build settings, including the progress callback.
+        options: Build settings, such as the progress callback.
 
     Raises:
-        TimeNetVersionConflictError: If a copied release conflicts with the files in ``store``.
-        TimeFFormatError: If a build changes files pinned by other releases.
+        TimeNetVersionConflictError: If the local registry holds the same release with different files.
+        TimeFFormatError: If a build changes files that other releases pin.
         TimeNetBuildError: If a build fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the copy and the backends
     options = options or BuildOptions()
@@ -94,7 +93,7 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
 
 
 def _build(step: BuildStep, store: LocalRegistry, *, options: BuildOptions) -> None:
-    """Build an exact release with the builder of its step and check its required files.
+    """Build the requested release with the builder of its step and record the builder's package.
 
     Args:
         step: The build step, with ``force`` set to rebuild an existing release.
@@ -102,8 +101,7 @@ def _build(step: BuildStep, store: LocalRegistry, *, options: BuildOptions) -> N
         options: The build settings.
 
     Raises:
-        TimeNetDatasetNotFoundError: If the backend does not put the release or a payload source of it
-            into ``store``.
+        TimeNetDatasetNotFoundError: If the build omits the release or a payload source.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by prepare_local_copy
     if options.progress is not None:
         options.progress(StepStarted(step.release, "build"))

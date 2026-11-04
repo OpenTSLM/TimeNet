@@ -1,7 +1,7 @@
-"""The provenance record: where a release in the store comes from.
+"""The provenance record: where and when each release in the local registry was copied or built.
 
-The record is the file ``.origin.json`` in the release directory, and a copy of the release never
-carries it. It says whether the release is a copy or a build, where it comes from, and when.
+Each release stores the record in ``.origin.json``. The record stays in the local registry when the release
+is copied elsewhere.
 """
 
 from dataclasses import dataclass
@@ -24,12 +24,12 @@ ORIGIN_FILE = ".origin.json"
 
 @dataclass(frozen=True)
 class Origin:
-    """Where a release in the store comes from.
+    """The source and time of a stored release's copy or build.
 
     Attributes:
-        origin: ``"copy"`` for a copy from a registry, ``"build"`` for a build by a backend.
-        source: The location of the registry, or the backend package and its version.
-        at: When the store got the release, in UTC.
+        origin: ``"copy"`` for a registry copy or ``"build"`` for a backend build.
+        source: The registry location or backend package name and version.
+        at: The time the release reached the local registry, in UTC.
     """
 
     origin: Literal["copy", "build"]
@@ -38,7 +38,7 @@ class Origin:
 
 
 class _Record(BaseModel):
-    """The JSON form of :class:`Origin`, with exactly its three keys."""
+    """The JSON record with only the ``origin``, ``source``, and ``at`` fields."""
 
     model_config = ConfigDict(extra="forbid", frozen=True)
 
@@ -48,16 +48,16 @@ class _Record(BaseModel):
 
 
 def record_origin(store: LocalRegistry, release: DatasetRef, origin: Literal["copy", "build"], source: str) -> None:
-    """Write the provenance record of a release in the store, with the current time.
+    """Record a stored release's source and the current time.
 
-    The record replaces an earlier one. A URL in ``source`` loses its user info, query and fragment,
-    so no credential lands in the record.
+    The record replaces an earlier one. A URL in ``source`` loses its user info, query and fragment, so no
+    credential lands in the record.
 
     Args:
         store: The local registry that holds the release.
         release: The release.
         origin: ``"copy"`` or ``"build"``.
-        source: The location of the registry, or the backend package and its version.
+        source: The registry location or backend package name and version.
 
     Raises:
         TimeNetDatasetNotFoundError: If the local registry does not hold the release.
@@ -78,15 +78,17 @@ def record_origin(store: LocalRegistry, release: DatasetRef, origin: Literal["co
 def read_origin(store: LocalRegistry, release: DatasetRef) -> Origin | None:
     """Read the provenance record of a release in the local registry.
 
+    A release without a record counts as a build.
+
     Args:
         store: The local registry.
         release: The release.
 
     Returns:
-        The record, or ``None`` if the release has none: such a release counts as built.
+        The record, or ``None`` if it is missing.
 
     Raises:
-        TimeFFormatError: If the record is damaged.
+        TimeFFormatError: If the record is invalid.
     """
     path = release_dir(store.root, release) / ORIGIN_FILE
     try:
@@ -104,15 +106,15 @@ def read_origin(store: LocalRegistry, release: DatasetRef) -> Origin | None:
 
 
 def without_credentials(location: str) -> str:
-    """Remove the user info, the query and the fragment of a URL.
+    """Remove user information, the query, and the fragment from a URL.
 
-    A string that is not a URL with a host, such as a path, comes back unchanged.
+    Return strings unchanged unless they have both a URL scheme and a host.
 
     Args:
-        location: A URL, a path, or another name.
+        location: A URL, path, or name.
 
     Returns:
-        The location without credentials.
+        The URL without user information, query, or fragment, or the original non-URL string.
     """
     parts = urlsplit(location)
     if not (parts.scheme and parts.netloc):

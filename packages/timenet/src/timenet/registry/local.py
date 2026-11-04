@@ -45,7 +45,7 @@ class LocalRegistry(WritableRegistry):
 
     @property
     def location(self) -> str:
-        """The resolved root directory."""
+        """The registry's absolute root path."""
         return str(self._root.resolve())
 
     @property
