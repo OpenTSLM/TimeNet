@@ -1,11 +1,8 @@
 """The :class:`TimeNet` class is the SDK's single entry point for using TimeNet from code.
 
 This class wraps a :class:`~timenet.registry.BaseRegistry` (the catalog) and a local storage path
-(the download cache). It exposes these methods: ``list``, ``get``, ``search``, ``download``,
-``open``, ``load``, and ``open_torch``. ``open`` and ``load`` read a release where it is, through
-the read coordinator in :mod:`timenet.coordinator.read`. Against a local registry, they build a
-release that only an installed connector provides. Against a remote registry, they never run
-connector code.
+(the download cache). ``open`` and ``load`` read a release where it is, and a local client builds a
+release that only an installed connector provides.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -320,10 +317,8 @@ class TimeNet:
         """Return the sources of a read, in order, and the local registry that its builds go to.
 
         TODO(adrian): Remove temporary glue which maps ``fetch_from`` and ``auto_build`` onto a
-        list of sources for the read coordinator until the client takes the list itself. A local
-        client reads from its own registry, then from ``fetch_from``, then from the installed
-        connectors if ``auto_build`` is set. Its builds go to its own registry. A remote client
-        reads only from its own registry, and it never builds.
+        list of sources until the client takes the list itself. A remote client gets only its own
+        registry, and no local registry.
 
         Returns:
             The sources, and the local registry, or ``None`` for a remote client.
