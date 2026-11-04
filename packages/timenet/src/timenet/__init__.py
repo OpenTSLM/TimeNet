@@ -1,8 +1,4 @@
-"""TimeNet: register, query, download, convert, and explore time series datasets.
-
-This package exports ``TimeNet``, ``LocalRegistry``, ``InstalledConnectors``, ``build``, ``plan_build``, ``publish``,
-``Plan``, and ``Step``.
-"""
+"""Build, publish, and read time series datasets."""
 
 import importlib
 from typing import TYPE_CHECKING
@@ -20,28 +16,28 @@ __all__ = ["InstalledConnectors", "LocalRegistry", "Plan", "Step", "TimeNet", "b
 
 
 def __getattr__(name: str) -> object:
-    """Load an exported name from its module on first use (PEP 562).
+    """Load an exported name on first access, so ``import timenet`` stays cheap.
 
     Args:
-        name: The name of the attribute.
+        name: The attribute name.
 
     Returns:
         The exported object.
 
     Raises:
-        AttributeError: If the package exports no such name.
+        AttributeError: If the package does not export the name.
     """
-    if name == "TimeNet":
-        module = "timenet.client"
-    elif name == "LocalRegistry":
-        module = "timenet.registry"
-    elif name == "InstalledConnectors":
-        module = "timenet.sources"
-    elif name in {"Plan", "Step"}:
-        module = "timenet.coordinator.plan"
-    elif name in {"build", "plan_build", "publish"}:
-        module = "timenet.producer"
-    else:
+    module = {
+        "InstalledConnectors": "timenet.sources",
+        "LocalRegistry": "timenet.registry",
+        "Plan": "timenet.coordinator.plan",
+        "Step": "timenet.coordinator.plan",
+        "TimeNet": "timenet.client",
+        "build": "timenet.producer",
+        "plan_build": "timenet.producer",
+        "publish": "timenet.producer",
+    }.get(name)
+    if module is None:
         raise AttributeError(f"module {__name__!r} has no attribute {name!r}")
     value = getattr(importlib.import_module(module), name)
     # Later lookups find the name without this function.
@@ -50,9 +46,9 @@ def __getattr__(name: str) -> object:
 
 
 def __dir__() -> list[str]:
-    """List the attributes of the package, the exported names included before their first use (PEP 562).
+    """List package attributes, including exports that have not loaded yet.
 
     Returns:
-        The names, sorted.
+        The attribute names in sorted order.
     """
     return sorted({*globals(), *__all__})

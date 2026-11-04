@@ -245,16 +245,14 @@ def publish(
     ),
     local_registry: str | None = LOCAL_REGISTRY,
 ) -> None:
-    """Copy a release and its payload sources to another registry. Prints the release to stdout.
+    """Copy a release and its payload sources to a registry, and print the release to stdout.
 
-    Without ``--source``, the release comes from the store. A published version cannot change, so
-    the command copies nothing if the destination holds the same files, and fails if it holds other
-    files.
+    The source defaults to the local store.
+    The copy skips identical releases and rejects releases with conflicting files.
     \f
 
     Raises:
-        TimeNetDatasetNotFoundError: If the source lacks the release. Without ``--source``, the
-            message says how to put the release into the store.
+        TimeNetDatasetNotFoundError: If the source lacks the release.
     """  # ruff: ignore[escape-sequence-in-docstring] - the form feed ends the help text of the command
     store = default_store(local_registry=local_registry)
     origin = store if source is None else _source_registry(source, store)
@@ -281,13 +279,13 @@ def publish(
 
 
 def _source_registry(source: str, store: LocalRegistry) -> BaseRegistry:
-    """Open the registry that ``--source`` names.
+    """Open a source registry from a URL or local path.
 
     A remote registry reads the copies of the same releases in ``store``.
 
     Args:
-        source: The value of ``--source``.
-        store: The store of the command.
+        source: The registry URL or path.
+        store: The local store for complete release copies.
 
     Returns:
         The registry.

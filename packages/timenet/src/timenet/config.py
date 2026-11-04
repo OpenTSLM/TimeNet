@@ -132,16 +132,16 @@ def settings(**overrides: Any) -> TimeNetSettings:
 
 
 def _load(values: dict[str, Any]) -> TimeNetSettings:
-    """Validate settings with the supplied values overriding the environment.
+    """Load and validate settings with explicit values taking priority over environment variables.
 
     Args:
-        values: Setting overrides with ``None`` values already removed.
+        values: Setting overrides with no ``None`` values.
 
     Returns:
         The validated settings.
 
     Raises:
-        TimeFValidationError: If values are invalid, the cache includes the home directory, or store and cache overlap.
+        TimeFValidationError: If a value is invalid or the cache overlaps the store or contains the home folder.
         TimeNetRegistryError: If the local registry names a remote registry.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by local_registry_dir)
     try:
@@ -160,31 +160,27 @@ def _load(values: dict[str, Any]) -> TimeNetSettings:
 
 
 def check_store(store: Path) -> None:
-    """Make sure that a store that a caller passes and the cache directory do not overlap.
-
-    :func:`settings` checks only the store of ``TIMENET_LOCAL_REGISTRY``. Call this function for any
-    other store.
+    """Check that a store directory and ``TIMENET_CACHE`` do not overlap.
 
     Args:
-        store: The directory of the store.
+        store: The store directory.
 
     Raises:
-        TimeFValidationError: If ``store`` and ``TIMENET_CACHE`` are the same folder or one lies in the
-            other.
+        TimeFValidationError: If the store and cache are the same directory or one contains the other.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by _check_apart)
     _check_apart(store.expanduser(), settings().cache_dir, "The store")
 
 
 def _check_apart(store: Path, cache: Path, name: str) -> None:
-    """Raise if the store and the cache directory are the same folder or one lies in the other.
+    """Check that the store and cache directories are separate.
 
     Args:
-        store: The directory of the store.
+        store: The store directory.
         cache: The cache directory.
-        name: How the error message names the store.
+        name: The store label to show in errors.
 
     Raises:
-        TimeFValidationError: If the folders overlap.
+        TimeFValidationError: If the directories are the same or one contains the other.
     """
     if lies_in(store, cache) or lies_in(cache, store):
         raise TimeFValidationError(

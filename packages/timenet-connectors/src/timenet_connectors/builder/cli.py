@@ -207,13 +207,13 @@ def _build_to(  # ruff: ignore[too-many-arguments]
 ) -> str:
     """Build a release for a local or remote output.
 
-    Remote outputs receive a copy of a build in the local store. If the output already holds the release and
-    ``force`` is not set, nothing runs and a status line says so.
+    Remote registries receive a copy from the local store.
+    The build skips an existing release unless ``force`` is set.
 
     Args:
         dataset_id: The dataset ID.
         target: The local output directory or remote registry.
-        fetch_from: The registry to copy missing parents from, or ``None`` to use the remote output if present.
+        fetch_from: The registry for missing parents, or ``None`` to use the remote output if present.
         build_parents: Build missing parents with installed connectors.
         force: Rebuild an existing local release.
         options: Options for each build.
