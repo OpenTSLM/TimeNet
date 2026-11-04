@@ -12,6 +12,7 @@ sentence and raises the error again. The message ends with a period, and the hin
 sentence.
 """
 
+from functools import partial
 from typing import TYPE_CHECKING
 
 
@@ -44,13 +45,18 @@ class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
         hint: How the caller can obtain the release, added by the front end, or ``None``.
     """
 
-    def __init__(self, missing: "DatasetRef", needed_by: "DatasetRef", payload_source: bool, searched: str) -> None:
-        super().__init__(missing, needed_by, payload_source, searched)
+    def __init__(self, missing: "DatasetRef", needed_by: "DatasetRef", searched: str, *, payload_source: bool) -> None:
+        super().__init__(missing, needed_by, searched, payload_source)
         self.missing = missing
         self.needed_by = needed_by
         self.payload_source = payload_source
         self.searched = searched
         self.hint: str | None = None
+
+    def __reduce__(self) -> tuple[object, ...]:
+        # Pickle passes the arguments by position, so the keyword-only flag travels in a partial.
+        rebuild = partial(type(self), payload_source=self.payload_source)
+        return rebuild, (self.missing, self.needed_by, self.searched), self.__dict__
 
     def __str__(self) -> str:
         role = "payload source" if self.payload_source else "parent release"
@@ -61,7 +67,7 @@ class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
 class TimeNetVersionConflictError(TimeNetError):
     """A registry already holds a release with other files than the copy that would go there.
 
-    A published version cannot change. Other files need a new version.
+    A published version cannot change, so other files need a new version.
 
     Attributes:
         release: The release that the registry holds with other files.

@@ -42,6 +42,11 @@ class BaseRegistry(ABC):
     def local_root(self) -> Path:
         """The local registry or cache directory that holds prepared releases."""
 
+    @property
+    def requires_open_access(self) -> bool:
+        """Whether this registry holds and serves only releases with open access."""
+        return True
+
     @abstractmethod
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the metadata of every dataset, using the latest version. The result is sorted by dataset id.
@@ -143,38 +148,36 @@ class BaseRegistry(ABC):
             progress_cb=progress_cb,
         )
 
-    def _download_release(  # ruff: ignore[too-many-arguments]
+    def download_release(  # ruff: ignore[too-many-arguments]
         self,
         dataset_id: str,
         version: str,
-        dest_dir: str | Path,
+        directory: str | Path,
         *,
         force: bool = False,
         manifest: Manifest | None = None,
         progress_cb: ProgressCallback | None = None,
     ) -> None:
-        """Download a version's files into ``dest_dir``, swapping the directory in atomically.
+        """Download the files of one release into a local directory.
 
-        Fetches every file through :meth:`open_file` into a sibling ``<version>.tmp-*`` staging
-        directory, with ``manifest.json`` last as the commit marker. It then renames the staging
-        directory over ``dest_dir`` in one step. An interrupted download never leaves a half-written
-        copy in place. Subclasses can override this method with a faster path, such as concurrent
-        streaming from a remote service.
+        The download replaces ``directory`` only after every file arrived and matched its manifest
+        record, so a failed download leaves no partial copy.
 
         Args:
-            dataset_id: The dataset id.
+            dataset_id: The dataset ID.
             version: The version string.
-            dest_dir: The target ``<...>/<id>/<version>`` directory.
-            force: Re-download even if a copy already exists.
-            manifest: The parsed manifest, passed to avoid re-fetching it. Fetched if ``None``.
-            progress_cb: Called with each staged file's byte count, for a progress display.
+            directory: The directory of the release, ``<root>/<dataset_id>/<version>``.
+            force: Download again, even if ``directory`` holds a complete copy.
+            manifest: The manifest of the release, or ``None`` to read it from this registry.
+            progress_cb: Receives the size of each downloaded file, or ``None``.
 
         Raises:
-            TimeNetFileError: If a downloaded file's size or checksum differs from the manifest.
+            TimeNetFileError: If a downloaded file has another size or checksum than its manifest
+                records.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_staged_file
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
-        target = Path(dest_dir)
+        target = Path(directory)
         if complete_copy(target, manifest) and not force:
             return  # already downloaded and current
         parent = target.parent

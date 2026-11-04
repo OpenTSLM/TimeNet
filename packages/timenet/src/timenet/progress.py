@@ -1,10 +1,8 @@
 """Typed progress events for copies and builds.
 
-A function that copies or builds releases takes an optional :data:`ProgressCallback` and sends it
-these events. It never prints. A front end, such as a CLI, decides how to show them.
-
-A step is the copy or the build of one release. Each step sends :class:`StepStarted` first and
-:class:`StepFinished` when it is done. A step that fails sends no :class:`StepFinished`.
+A function that copies or builds releases sends these events to an optional
+:data:`ProgressCallback` and prints nothing. Each step, the copy or the build of one release, sends
+:class:`StepStarted` first and :class:`StepFinished` only if it succeeds.
 """
 
 from collections.abc import Callable
@@ -40,35 +38,7 @@ class StepFinished:
     action: Literal["copy", "build"]
 
 
-@dataclass(frozen=True)
-class BytesMoved:
-    """Bytes of a transfer moved.
-
-    Attributes:
-        url: Where the bytes come from or go to.
-        done: The number of bytes moved so far.
-        total: The number of bytes of the whole transfer, or ``None`` if it is not known.
-    """
-
-    url: str
-    done: int
-    total: int | None
-
-
-@dataclass(frozen=True)
-class ShardWritten:
-    """A build wrote shards of a release.
-
-    Attributes:
-        release: The release that the build writes.
-        count: The number of shards written so far.
-    """
-
-    release: DatasetRef
-    count: int
-
-
-ProgressEvent = StepStarted | StepFinished | BytesMoved | ShardWritten
+ProgressEvent = StepStarted | StepFinished
 """One progress event."""
 
 ProgressCallback = Callable[[ProgressEvent], None]

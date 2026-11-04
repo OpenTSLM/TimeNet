@@ -140,7 +140,7 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
     version = str(metadata.dataset_version)
     if not force and registry.exists(dataset_id, version):
         return version
-    if not isinstance(registry, LocalRegistry):
+    if registry.requires_open_access:
         require_open_access(metadata)
     _check_composes(connector, metadata)
 
@@ -149,7 +149,7 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
 
     with open_parents(metadata, registry) as context:
         dataset = _compose(connector, metadata, cache, context)
-        if not isinstance(registry, LocalRegistry):
+        if registry.requires_open_access:
             require_open_access(dataset.metadata, dataset.lineage.values())
         dataset.derive_schema()
         registry.put_dataset(

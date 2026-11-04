@@ -130,30 +130,30 @@ class RemoteRegistry(LazyReadRegistry):
         filesystem = RegistryFileSystem(self._base_url, files, token=self._http.token, transport=self._http.transport)
         return DatasetVersion(manifest, pafs.PyFileSystem(pafs.FSSpecHandler(filesystem)), root)
 
-    def _download_release(  # ruff: ignore[too-many-arguments]
+    def download_release(  # ruff: ignore[too-many-arguments]
         self,
         dataset_id: str,
         version: str,
-        dest_dir: str | Path,
+        directory: str | Path,
         *,
         force: bool = False,
         manifest: Manifest | None = None,
         progress_cb: ProgressCallback | None = None,
     ) -> None:
-        """Download a version's files into ``dest_dir`` (used by ``TimeNet.download`` for remotes).
+        """Download the files of one release into a local directory.
 
         Args:
-            dataset_id: The ``org/name`` id.
+            dataset_id: The dataset ID, as ``org/name``.
             version: The version string.
-            dest_dir: The target ``<...>/<id>/<version>`` directory.
-            force: Re-download even if a copy already exists.
-            manifest: The already-parsed manifest, passed to avoid re-fetching it; fetched if ``None``.
-            progress_cb: Called with each chunk's byte count as it is written, for a progress display.
+            directory: The directory of the release, ``<root>/<dataset_id>/<version>``.
+            force: Download again, even if ``directory`` holds a complete copy.
+            manifest: The manifest of the release, or ``None`` to read it from this registry.
+            progress_cb: Receives the size of each downloaded chunk, or ``None``.
         """
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
         download_version_files(
-            self._http, manifest, dataset_id, version, Path(dest_dir), force=force, progress_cb=progress_cb
+            self._http, manifest, dataset_id, version, Path(directory), force=force, progress_cb=progress_cb
         )
 
     def put_release(self, from_directory: Path) -> DatasetRef:
