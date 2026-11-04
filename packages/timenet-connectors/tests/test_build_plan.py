@@ -404,8 +404,8 @@ class _Hosted(WritableRegistry):
     def put_dataset(self, dataset, **options):
         return self._local.put_dataset(dataset, **options)
 
-    def put_release(self, from_directory, manifest):
-        self._local.put_release(from_directory, manifest)
+    def put_release(self, from_directory):
+        return self._local.put_release(from_directory)
 
 
 _GATED = {"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}

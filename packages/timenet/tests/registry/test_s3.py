@@ -17,6 +17,7 @@ from timenet.reader import TimeFReader  # ruff: ignore[module-import-not-at-top-
 from timenet.registry import LocalRegistry, S3Registry  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.testing import assert_datasets_equal, make_dataset  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.types import DatasetSchema  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.types.references import DatasetRef  # ruff: ignore[module-import-not-at-top-of-file]
 
 
 @pytest.fixture
@@ -47,8 +48,8 @@ def s3_root(monkeypatch):
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_put_dataset_and_remote_load_round_trip(s3_root, tmp_path, backend, entry_point):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
-    version = registry.put_dataset(make_dataset(), values_backend=backend)
-    assert version == str(make_dataset().metadata.dataset_version)
+    reference = registry.put_dataset(make_dataset(), values_backend=backend)
+    assert reference == DatasetRef.parse(f"{make_dataset().metadata.dataset_id}@1.0.0")
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
     if entry_point == "open":
         with client.open(make_dataset().metadata.dataset_id) as reader:

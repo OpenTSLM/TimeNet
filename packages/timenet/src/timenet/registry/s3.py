@@ -6,7 +6,7 @@ the key prefix differs from a :class:`~timenet.registry.LocalRegistry`. Credenti
 optional endpoint override come from boto3's default session (``AWS_*`` vars, ``AWS_PROFILE``,
 ``AWS_ENDPOINT_URL``). Opening a version reads its payload sources' manifests upfront and reads remote
 payloads on demand. Complete cached releases are reused. The backend has no catalog, so listing and
-search are unsupported. Use it to ``put_dataset`` and to fetch by an explicit ``org/name@version``.
+search are unsupported. Use it to publish and to fetch by an explicit ``org/name@version``.
 
 boto3 is optional. Install the ``timenet[s3]`` extra to use this backend.
 """
@@ -158,11 +158,10 @@ class S3Registry(LazyReadRegistry):
         values_backend: str = "parquet",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
         pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-    ) -> str:
+    ) -> DatasetRef:
         """Compile a dataset locally and upload it under this registry's prefix.
 
-        Compiles to a temporary directory, then publishes it with :meth:`put_release`. An
-        already-committed version is skipped unless ``force``.
+        If the version is already committed, this method skips it unless ``force`` is set.
 
         Args:
             dataset: The populated dataset to store.
@@ -173,14 +172,15 @@ class S3Registry(LazyReadRegistry):
                 writer publishes only if it reproduced each pinned file.
 
         Returns:
-            The stored version string.
+            The stored release.
         """
         if dataset.schema is None:
             dataset.derive_schema()
         dataset_id = dataset.metadata.dataset_id
         version = str(dataset.metadata.dataset_version)
+        reference = DatasetRef.parse(f"{dataset_id}@{version}")
         if not force and self.exists(dataset_id, version):
-            return version
+            return reference
         staging = Path(tempfile.mkdtemp(prefix="timenet-s3-"))
         try:
             # The writer stages locally but checks every payload source against this registry.
@@ -193,34 +193,28 @@ class S3Registry(LazyReadRegistry):
                 pinned_by=pinned_by,
             ) as writer:
                 writer.write()
-            version_dir = release_dir(staging, DatasetRef.parse(f"{dataset_id}@{version}"))
-            manifest = Manifest.model_validate_json((version_dir / MANIFEST_FILE).read_text())
-            self.put_release(version_dir, manifest)
+            return self.put_release(release_dir(staging, reference))
         finally:
             shutil.rmtree(staging, ignore_errors=True)
-        return version
 
-    def put_release(self, from_directory: Path, manifest: Manifest) -> None:
-        """Upload a complete local release directory under this registry's prefix.
+    def put_release(self, from_directory: Path) -> DatasetRef:
+        """Upload a release directory under this registry's prefix.
 
-        Before it uploads anything, this method makes sure that ``from_directory`` holds a ``manifest.json``
-        equal to ``manifest`` and every file that the manifest declares, with its recorded size. It
-        uploads only those files and ``manifest.json`` to a temporary ``<version>.tmp-<uuid>`` prefix
-        first. Then it moves each object into the final ``<version>/`` prefix with a server-side copy,
-        writing ``manifest.json`` last as the commit marker. A failed publish then never leaves a
-        partial version a reader can trust.
+        The directory must hold ``manifest.json`` and every file that it lists. The method uploads
+        only those files, and readers see the version only after ``manifest.json`` is in place.
 
         Args:
-            from_directory: The local release directory to read from, with ``manifest.json`` and
-                every declared file. This method does not change it.
-            manifest: The manifest of the release.
+            from_directory: The release directory.
+
+        Returns:
+            The published release.
 
         Raises:
-            TimeNetFileError: If ``manifest.json`` is missing from ``from_directory`` or differs from
-                ``manifest``, or a declared file is missing or has another size than recorded.
-                Nothing is uploaded then.
-        """  # ruff: ignore[docstring-extraneous-exception] - raised by the check this method calls
-        self._check_release_files(from_directory, manifest)
+            TimeFFormatError: If ``manifest.json`` is missing or cannot be read.
+            TimeNetFileError: If a listed file is missing or has another size. Nothing is uploaded
+                then.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release
+        manifest = self._read_release(from_directory)
         client = self._client()
         final_base = self._key(manifest.dataset_id, str(manifest.metadata.dataset_version))
         temp_base = f"{final_base}.tmp-{uuid.uuid4().hex}"
@@ -234,6 +228,7 @@ class S3Registry(LazyReadRegistry):
             self._move(client, f"{temp_base}/{MANIFEST_FILE}", f"{final_base}/{MANIFEST_FILE}")
         finally:
             self._delete_prefix(client, f"{temp_base}/")  # remove any objects left staged in the temp prefix
+        return DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
 
     @staticmethod
     def _s3_filesystem() -> pafs.S3FileSystem:

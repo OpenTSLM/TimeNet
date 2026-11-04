@@ -112,8 +112,9 @@ def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tm
         def exists(self, dataset_id: str, version: str) -> bool:
             return False
 
-        def put_dataset(self, dataset, *, force: bool, values_backend: str, progress_cb) -> None:
+        def put_dataset(self, dataset, *, force: bool, values_backend: str, progress_cb, pinned_by) -> DatasetRef:
             self.values_backend = values_backend
+            return DatasetRef.parse(f"{dataset.metadata.dataset_id}@{dataset.metadata.dataset_version}")
 
     class _ZarrConnector(_DemoConnector):
         values_backend = ValuesBackend.ZARR

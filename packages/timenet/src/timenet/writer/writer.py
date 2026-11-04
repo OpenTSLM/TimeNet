@@ -10,6 +10,7 @@ import uuid
 import numpy as np
 import pyarrow as pa
 
+from timenet._fs import publish_directory
 from timenet.dataset import Signal, TimeFDataset
 from timenet.dataset.time_series import _validate_enum_values
 from timenet.errors import TimeFFormatError, TimeFValidationError
@@ -540,40 +541,3 @@ class TimeFWriter:
     def _emit(self, stage: ProgressStage, completed: int, total: int | None) -> None:
         if self._progress_cb is not None:
             self._progress_cb(WriteProgressEvent(stage=stage, completed=completed, total=total))
-
-
-def publish_directory(staging: Path, final: Path) -> None:
-    """Move a complete staging directory into place with a rename, and keep an old copy until it succeeds.
-
-    An existing ``final`` directory is renamed aside to a sibling ``<name>.old-<uuid>`` first. The
-    staging directory then takes its place, and the old directory is deleted. If that rename fails
-    or is stopped, the old directory moves back. A hard kill between the two renames leaves the old
-    directory in ``<name>.old-<uuid>``, which no sweep deletes, so it can be renamed back.
-
-    Args:
-        staging: The complete new directory, a sibling of ``final``.
-        final: The directory to publish to. Its parent must exist.
-
-    Raises:
-        OSError: If publishing fails and the old directory cannot be moved back either. The error
-            names the ``<name>.old-<uuid>`` directory that holds it.
-    """
-    old = None
-    if final.exists():
-        old = final.with_name(f"{final.name}.old-{uuid.uuid4().hex}")
-        final.replace(old)
-    try:
-        staging.replace(final)
-    except BaseException as error:
-        if old is not None:
-            try:
-                old.replace(final)
-            except OSError as restore_error:
-                raise OSError(
-                    f"could not publish {final} ({error}) or move the old release back "
-                    f"({restore_error}); it is in {old}, so rename that to {final} to recover it"
-                ) from error
-        raise
-    if old is not None:
-        # The new directory is published, so failing to delete the old one must not fail the publish.
-        shutil.rmtree(old, ignore_errors=True)
