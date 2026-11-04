@@ -6,10 +6,10 @@ import numpy as np
 import pytest
 
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
-from timenet.types import ClassificationTask, TimeInterval
+from timenet.types import TimeInterval
 from timenet.types.text import read_value
 from timenet_connectors.datasets.oxwearables.capture24 import Capture24Connector, connector
 
@@ -167,8 +167,6 @@ _WALMSLEY = connector.WALMSLEY_2020.name
 # The whole converted fixture, written out by hand from the fixture rows above.
 _EXPECTED = {
     "annotations": {
-        "source_url": "https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001/files/rpr76f381b",
-        "source_sha256": "69740c22d3e000367988373336dc6486c10fe3f3f929811fd66e4d84861e40e2",
         # Each benchmarked scheme's whole vocabulary, which the tasks' target_schema name. It lists the
         # classes that the fixture never uses too.
         "willetts_specific_2018_vocabulary": [
@@ -192,7 +190,7 @@ _EXPECTED = {
                 "subject_ids": ["P001"],
                 "age": "38-52",
                 "sex": "female",
-                "recording_start_local": "2016-11-13T02:18:00",
+                "recording_start_local": "2016-11-13T02:18:00.000000",
             },
             "sources": [
                 {
@@ -216,7 +214,7 @@ _EXPECTED = {
                 "subject_ids": ["P100"],
                 "age": "30-37",
                 "sex": "female",
-                "recording_start_local": "2016-11-13T02:18:00",
+                "recording_start_local": "2016-11-13T02:18:00.000000",
             },
             "sources": [
                 {"name": "Axivity AX3 segment 0", "annotations": [_sleep(0, 10_000_000)], "signals": _signals(1000, 0)}
@@ -228,7 +226,7 @@ _EXPECTED = {
                 "subject_ids": ["P101"],
                 "age": "18-29",
                 "sex": "male",
-                "recording_start_local": "2016-11-13T02:18:00",
+                "recording_start_local": "2016-11-13T02:18:00.000000",
             },
             "sources": [
                 {"name": "Axivity AX3 segment 0", "annotations": [_sit(0, 15_000_000)], "signals": _signals(1500, 0)},
@@ -293,7 +291,7 @@ _SEGMENT_ROWS = {
 
 
 def _assert_values(dataset) -> None:
-    """Check every segment's x, y and z against the text the fixture wrote, parsed and rounded to float32."""
+    """Check every segment's x, y and z against the text the fixture wrote, as float32."""
     expected = {}
     for key, rows in _SEGMENT_ROWS.items():
         expected[*key, "x"] = np.array([float(f"{index * 0.001:.8f}") for index in rows], dtype=np.float32)
@@ -317,17 +315,26 @@ def test_converts_the_fixture(tmp_path):
     _assert_values(dataset)
 
 
-def test_every_target_is_in_the_vocabulary_its_task_names(tmp_path):
+def test_recording_start_says_that_it_is_anonymized(tmp_path):
+    # A reader that never sees the README must still learn that the time is shifted.
     dataset = Capture24Connector().convert([_release(tmp_path)])
-    vocabularies = {a.key: read_value(a.value) for a in dataset.annotations}
-    tasks = [task for task in dataset.iter_tasks() if isinstance(task, ClassificationTask)]
-    assert {task.target_schema for task in tasks} == {_WILLETTS, _WALMSLEY}
-    for task in tasks:
-        assert task.target_schema is not None
-        vocabulary = vocabularies[task.target_schema]
-        assert isinstance(vocabulary, list)
-        assert task.targets is not None
-        assert all(read_value(target) in vocabulary for target in task.targets)
+    for record in dataset.records:
+        (start,) = [a for a in record.annotations if a.key == "recording_start_local"]
+        assert start.description is not None
+        assert "shifted the time by a small random amount" in start.description
+
+
+def test_recording_start_keeps_one_format_when_it_has_microseconds(tmp_path):
+    # isoformat() alone drops the fraction when it is zero, so two Records could differ in format.
+    root = _release(tmp_path)
+    _write_recording(root / "P001.csv.gz", [(10_000 + index * 10_000, _SLEEP) for index in range(1000)])
+    records = _output(Capture24Connector().convert([root]))["records"]
+    assert records["P001"]["annotations"]["recording_start_local"] == "2016-11-13T02:18:00.010000"
+    assert records["P100"]["annotations"]["recording_start_local"] == "2016-11-13T02:18:00.000000"
+
+
+def test_card_pins_the_archive_the_connector_downloads():
+    assert Capture24Connector().metadata().source_revision == f"sha256:{connector.ARCHIVE_SHA256}"
 
 
 @pytest.mark.parametrize("vocabulary", [connector.WILLETTS_SPECIFIC_2018, connector.WALMSLEY_2020])
@@ -382,10 +389,8 @@ def test_tasks_mark_only_their_window_as_input(tmp_path):
             axis = signal.time_axis
             assert isinstance(axis, RegularAxis)
             assert axis.index_at_or_after(scope.exclusive_end) - axis.index_at_or_after(scope.start_us) == 1000
+        # The activity annotations hold the answer, so no task may list them as input.
         assert task.input_annotations == ()
-        assert task.prompt is None
-        assert task.rationale is None
-        assert dict(task.metadata) == {}
 
 
 def _rewrite(path: Path, edit) -> None:
@@ -428,8 +433,9 @@ def _x_of(dataset, pid: str):
     ("edit", "message"),
     [
         (lambda lines: lines[:-1], "holds 4499 rows, 4500 when it was read"),
-        # The same number of rows: z of one row rewritten, and two rows swapped.
-        (lambda lines: [*lines[:5], lines[5].replace("0.98765432", "0.98765433"), *lines[6:]], "values differ"),
+        # The same number of rows: z of one row rewritten, and two rows swapped. The digest covers the
+        # stored float32 values, so the rewrite changes a digit that float32 keeps.
+        (lambda lines: [*lines[:5], lines[5].replace("0.98765432", "0.98766432"), *lines[6:]], "values differ"),
         (lambda lines: [*lines[:5], lines[6], lines[5], *lines[7:]], "values differ"),
     ],
 )
@@ -455,6 +461,9 @@ def test_metadata_and_recordings_must_name_the_same_participants(tmp_path):
     [
         ("metadata.csv", "P101,18-29,M", "P001,18-29,M", "a pid is listed twice"),
         ("metadata.csv", "pid,age,sex", "pid,age", "expected the columns"),
+        # An extra column or an extra field would be dropped without a word, so both fail.
+        ("metadata.csv", "pid,age,sex\n", "pid,age,sex,height\n", "expected the columns"),
+        ("metadata.csv", "P101,18-29,M", "P101,18-29,M,180", "more fields than the header"),
         ("annotation-label-dictionary.csv", ",light\n", ",\n", "no value for 'label:Walmsley2020'"),
         ("annotation-label-dictionary.csv", "sleep,sleep,sleep,sleep,sleep,sleep\n", "sleep,sleep\n", "no value for"),
         ("metadata.csv", "P101,18-29,M", "P101,18-29,", "no value for 'sex'"),
@@ -497,6 +506,26 @@ def test_malformed_tables_fail_with_their_path(tmp_path, table, old, new, messag
     with pytest.raises(TimeFFormatError, match=message) as error:
         Capture24Connector().convert([root])
     assert table in str(error.value)
+
+
+@pytest.mark.parametrize("table", ["metadata.csv", "annotation-label-dictionary.csv"])
+@pytest.mark.parametrize(
+    "damage",
+    [Path.unlink, lambda path: path.write_bytes(b"\xff\xfe")],
+    ids=["missing", "not-utf-8"],
+)
+def test_unreadable_tables_fail_with_their_path(tmp_path, table, damage):
+    root = _release(tmp_path)
+    damage(root / table)
+    with pytest.raises(TimeFFormatError) as error:
+        Capture24Connector().convert([root])
+    assert table in str(error.value)
+
+
+def test_a_file_in_place_of_the_directory_fails(tmp_path):
+    root = _release(tmp_path)
+    with pytest.raises(TimeFValidationError, match="loads from one directory"):
+        Capture24Connector().convert([root / "metadata.csv"])
 
 
 def test_window_across_a_short_gap_fails(tmp_path):

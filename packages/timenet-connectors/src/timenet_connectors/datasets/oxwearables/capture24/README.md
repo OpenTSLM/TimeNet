@@ -5,7 +5,8 @@ free-living wrist accelerometry from each of 151 participants, labelled from bod
 and sleep diaries, for human activity recognition.
 
 The connector reads the one zip of the [Oxford Research Archive record][ora], pinned by its
-SHA-256 (`69740c22…40e2`, 6.9 GB). The data license is CC BY 4.0. The authors' benchmark code is
+SHA-256 (`69740c22…40e2`, 6.9 GB). The dataset card records the same digest as `source_revision`.
+The data license is CC BY 4.0. The authors' benchmark code is
 [OxWearables/capture24][code]; it is under a separate academic-use license, so the connector
 reimplements its windowing and copies no code.
 
@@ -27,13 +28,14 @@ The archive's `capture24/` directory holds:
 | `annotation-label-dictionary.csv` | Each of the 206 raw labels, and its class in six label schemes |
 
 - **Signal.** An Axivity AX3 on the wrist, three axes in g, at 100 Hz. Values are written with
-  eight significant digits. The connector stores them as float32, which keeps about seven. The
-  rounding is far below the sensor's resolution, and float32 halves the stored size.
+  eight significant digits. The connector reads and stores them as float32, which keeps about
+  seven, as the authors' own loader does. The rounding is far below the sensor's resolution, and
+  float32 halves the stored size.
 - **Clock.** `time` is a timestamp with no zone. For anonymity the authors randomized the dates, so
   every recording is dated 2016. They also shifted each timestamp by a small random amount, so the
-  time of day is close to the participant's local time but not exact. Every step is exactly 10 ms, except
-  for one gap of 1 to 4 hours in each of eight recordings (P008, P016, P017, P060, P077, P094,
-  P097, P142).
+  time of day is close to the participant's local time but not exact. Every step is exactly 10 ms,
+  except for one gap of 1 to 4 hours in each of eight recordings (P008, P016, P017, P060, P077,
+  P094, P097, P142).
 - **Labels.** `annotation` is a [Compendium of Physical Activity][cpa] entry, such as
   `7030 sleeping;MET 0.95`, or empty. An empty field is an unlabelled sample.
 
@@ -57,10 +59,12 @@ are kept instead:
 | Record annotation | `subject_ids` | A list that holds the participant id, such as `["P001"]` |
 | Record annotation | `age` | The age band of `metadata.csv`, such as `38-52` |
 | Record annotation | `sex` | `female` or `male`, from the `F` or `M` of `metadata.csv` |
-| Record annotation | `recording_start_local` | The first sample's published timestamp, in ISO 8601, with no zone |
+| Record annotation | `recording_start_local` | The first sample's published timestamp, in ISO 8601 with microseconds and no zone, such as `2016-11-13T02:18:00.000000` |
 
 `recording_start_local` is the anonymized timestamp that the authors published. Its date is not
 the recording's. Its time of day is the participant's local time, shifted by a small random amount.
+The annotation's `description` says this too, so a reader of the dataset alone does not take it as
+the true local time.
 
 ### Activity annotations
 
@@ -85,7 +89,6 @@ does not see them.
 
 | Key | Value |
 | --- | --- |
-| `source_url`, `source_sha256` | The pinned archive |
 | `willetts_specific_2018_vocabulary` | WillettsSpecific2018's 10 classes, in string order |
 | `walmsley_2020_vocabulary` | Walmsley2020's 4 classes, in string order |
 
@@ -106,7 +109,8 @@ dictionary gives a class that the scheme's vocabulary does not list.
 The build also fails if the label dictionary does not have exactly the raw label column and the six
 scheme columns, or if a class is blank in any scheme. A blank class in a scheme without tasks would
 otherwise go into the activity annotations unnoticed. In the same way, the build fails on an age
-band or a sex that `metadata.csv` does not use.
+band or a sex that `metadata.csv` does not use. Both tables must have exactly their columns, and
+the build fails on a row with more fields than the header, so no extra value is dropped unnoticed.
 
 The dictionary has four more schemes (`WillettsMET2018`, `DohertySpecific2018`, `Willetts2018` and
 `Doherty2018`). They have no tasks. Their classes are in the metadata of each activity annotation.
@@ -129,12 +133,12 @@ There is no prompt; the benchmark asks no question in words.
 
 `make_windows` cuts each recording into 10 s bins that start at its first sample. After a gap the
 bins stay on the first segment's grid. It keeps a bin with exactly 1000 samples and at least one
-labelled sample, so a kept window can have as few as one labelled sample. The activity
-annotations show how much of a window has a label. The connector also fails the build if a kept window holds 1000 samples across a
-gap, so no window crosses a gap. A window's class is the most common class among its
-labelled samples. A tie goes to the class first in string order, as the authors' `Series.mode`
-does. A window's scope starts at its first sample, which after a gap can be up to 10 ms into its
-bin.
+labelled sample, so a kept window can have as few as one labelled sample. The activity annotations
+show how much of a window has a label. The connector also fails the build if a kept window holds
+1000 samples across a gap, so no window crosses a gap. A window's class is the most common class
+among its labelled samples. A tie goes to the class first in string order, as the authors'
+`Series.mode` does. A window's scope starts at its first sample, which after a gap can be up to 10
+ms into its bin.
 
 **Split.** The paper's test set is P101 to P151, and the authors' `benchmark.py` tests
 `range(101, 152)`, so the tasks carry that split. The README of the authors' repository says P102
