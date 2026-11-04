@@ -10,7 +10,7 @@ task chain.
 
 from collections.abc import Callable
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import StrEnum, unique
 from pathlib import Path
 
 from jaxtyping import Float, Float64
@@ -49,17 +49,23 @@ _COSINE = TimeSeriesSpec(
 )
 
 
-# Tasks that ask the same question share one label set.
+@unique
 class _Rhythm(StrEnum):
+    """Whether the wave of a recording is regular."""
+
     NORMAL = "normal"
     ABNORMAL = "abnormal"
 
 
+@unique
 class _Event(StrEnum):
+    """A moment in a recording's wave that a scoped task asks about."""
+
     ONSET = "onset"
     OFFSET = "offset"
 
 
+# Tasks that ask the same question share one label set.
 _RHYTHM = LabelSet.from_enum(_Rhythm, name="rhythm", descriptions={_Rhythm.NORMAL: "A regular wave."})
 _EVENT = LabelSet.from_enum(_Event, name="event", descriptions={_Event.ONSET: "The moment the wave starts."})
 

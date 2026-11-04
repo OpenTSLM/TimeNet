@@ -4,7 +4,7 @@ An annotation key and a task question both reach a consumer as strings, and seve
 state the same ones. They are named here so that a rename cannot leave one site behind.
 """
 
-from enum import StrEnum
+from enum import StrEnum, unique
 
 
 class AnnotationKey(StrEnum):
@@ -35,6 +35,7 @@ class Question(StrEnum):
     LIGHTS_OFF = "lights_off"
 
 
+@unique
 class Sex(StrEnum):
     """The subject's sex after the parser decodes the sheet's numeric code."""
 

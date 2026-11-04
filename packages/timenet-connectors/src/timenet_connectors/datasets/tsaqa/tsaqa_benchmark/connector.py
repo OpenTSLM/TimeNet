@@ -461,7 +461,7 @@ def _contradicts_zero_input(
     if task is not _Task.DATA_TRANSFORMATION or any(inputs[0]):
         return False
     if question_format is _QuestionFormat.TRUE_OR_FALSE:
-        return (answer == "T") != (not any(printed[0].values))
+        return (answer == _TrueOrFalse.TRUE) != (not any(printed[0].values))
     chosen = next(item for item in printed if item.label == answer)
     return any(chosen.values)
 

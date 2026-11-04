@@ -8,7 +8,7 @@ value is seeded, so the dataset is deterministic and needs no network. The datas
 training example.
 """
 
-from enum import StrEnum
+from enum import StrEnum, unique
 from pathlib import Path
 
 import numpy as np
@@ -26,6 +26,7 @@ _NOISE_STD = 0.5
 _SEED = 20260715  # fixed base seed keeps every build's values identical
 
 
+@unique
 class _MeanSign(StrEnum):
     """Whether the mean of a signal is above or below zero."""
 

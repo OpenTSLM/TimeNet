@@ -39,7 +39,8 @@ EPOCH_MICROSECONDS = 30 * US_PER_S
 # The labels the release writes for a scored epoch. Five name a stage of sleep. `Sleep stage W`
 # is wake, `Movement time` marks a disturbed epoch, and `Sleep stage ?` marks one the
 # technician left unscored. Each classification task draws its target from one closed set, named
-# after the key whose values it holds, and each target is exactly one label.
+# after the key whose values it holds, and each target is exactly one label. The stages stay explicit
+# Label objects, not a StrEnum, so that the code adds no second name for each published label.
 SLEEP_STAGES = LabelSet(
     name=str(AnnotationKey.SLEEP_STAGE),
     labels=(
