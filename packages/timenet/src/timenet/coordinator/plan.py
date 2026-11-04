@@ -259,7 +259,7 @@ def plan_parents(
     # If the output already holds the requested release, a reader needs only its payload sources to
     # open it. Its declared parents matter only to a rebuild.
     held = None if force_build else _manifest(output, root)
-    if held is None and not isinstance(output, LocalRegistry):
+    if held is None and output.requires_open_access:
         require_open_access(card)
     searched = str(output) if fetch_from is None else f"{output} or {fetch_from}"
     graph = _Graph(output, fetch_from, build_parents=build_parents, searched=searched)
@@ -375,14 +375,14 @@ def _locate(
         except TimeNetFileError as error:
             manifest, damage = None, error
     if manifest is not None:
-        if not isinstance(output, LocalRegistry):
+        if output.requires_open_access:
             require_open_access(manifest.metadata, manifest.lineage)
         return manifest, None
     fetched = None if fetch_from is None else _manifest(fetch_from, reference)
     if fetched is not None:
-        # A registry that is not local holds only releases whose cards declare access: open. So the
-        # plan refuses another release before any download.
-        if not isinstance(fetch_from, LocalRegistry):
+        # A registry that requires open access serves only releases whose cards declare access: open.
+        # So the plan refuses another release before any download.
+        if fetch_from is not None and fetch_from.requires_open_access:
             require_open_access(fetched.metadata, fetched.lineage)
         return fetched, "fetch"
     if damage is not None:
@@ -409,9 +409,9 @@ def _card_to_build(  # ruff: ignore[too-many-arguments]
         TimeNetAccessError: If the output is not local and the card does not declare ``access: open``.
     """  # ruff: ignore[docstring-extraneous-exception] - the access error is raised by require_open_access
     if not build_parents:
-        raise TimeNetMissingParentError(reference, needed_by, pinned, searched)
+        raise TimeNetMissingParentError(reference, needed_by, searched, payload_source=pinned)
     card = _exact_card(reference)
-    if not isinstance(output, LocalRegistry):
+    if output.requires_open_access:
         require_open_access(card)
     return card
 

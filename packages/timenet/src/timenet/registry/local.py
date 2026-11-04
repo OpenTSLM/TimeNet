@@ -48,6 +48,15 @@ class LocalRegistry(WritableRegistry):
         """The directory that holds complete local releases."""
         return self._root
 
+    @property
+    def requires_open_access(self) -> bool:
+        """Whether this registry holds and serves only releases with open access.
+
+        Returns:
+            ``False``: a local registry holds releases of any access.
+        """
+        return False
+
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
 

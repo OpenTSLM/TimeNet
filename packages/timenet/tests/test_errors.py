@@ -67,12 +67,12 @@ _PAGE_C = AccessRequirement(_C, Access.RESTRICTED, "https://c.example")
     ("error", "facts", "message"),
     [
         (
-            TimeNetMissingParentError(_A, _B, True, "here"),
+            TimeNetMissingParentError(_A, _B, "here", payload_source=True),
             {"missing": _A, "needed_by": _B, "payload_source": True},
             "payload source org/a@1.0.0 of org/b@2.0.0 is not in here.",
         ),
         (
-            TimeNetMissingParentError(_A, _B, False, "here"),
+            TimeNetMissingParentError(_A, _B, "here", payload_source=False),
             {"payload_source": False},
             "parent release org/a@1.0.0 of org/b@2.0.0 is not in here.",
         ),

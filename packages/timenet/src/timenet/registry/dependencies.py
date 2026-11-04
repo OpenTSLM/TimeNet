@@ -135,7 +135,7 @@ def attach_payload_sources(
         try:
             source = open_source(pinned.release)
         except TimeNetDatasetNotFoundError as error:
-            raise TimeNetMissingParentError(pinned.release, release, True, searched) from error
+            raise TimeNetMissingParentError(pinned.release, release, searched, payload_source=True) from error
         validate_manifest_reference(source.manifest, pinned.release)
         check_pins(release, pinned, source.manifest)
         check_file_sizes(source, pinned.files, owner=f"payload source {pinned.release} of {release}")
@@ -372,7 +372,7 @@ def _download_dataset_version(  # ruff: ignore[too-many-arguments]
     validate_manifest_reference(manifest, reference)
     if before_fetch is not None:
         before_fetch(manifest)
-    registry._download_release(
+    registry.download_release(
         reference.dataset_id,
         str(reference.version),
         directory,

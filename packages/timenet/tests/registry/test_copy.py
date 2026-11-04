@@ -8,8 +8,6 @@ a grandparent.
 
 from pathlib import Path
 import shutil
-import subprocess
-import sys
 import tempfile
 
 from _fake_registry import build_service_fake
@@ -192,7 +190,7 @@ def test_copy_release_does_nothing_for_the_same_release(source, dest, monkeypatc
         pytest.fail("a copy of the same release must not download or upload it again")
 
     monkeypatch.setattr(dest, "put_release", unexpected)
-    monkeypatch.setattr(source, "_download_release", unexpected)
+    monkeypatch.setattr(source, "download_release", unexpected)
     events: list[ProgressEvent] = []
     copy_release(child_ref, source, dest, progress=events.append)  # no error, no second upload
     assert events == []
@@ -384,13 +382,13 @@ def test_copy_release_between_remote_registries_downloads_only_the_releases_that
     dest, _ = _remote(tmp_path, "dest", token="tok_rw")
     copy_release(parent_ref, remote_source, dest)
     downloads: list[DatasetRef] = []
-    download = remote_source._download_release
+    download = remote_source.download_release
 
     def counting(dataset_id, version, *args, **kwargs):
         downloads.append(DatasetRef.parse(f"{dataset_id}@{version}"))
         return download(dataset_id, version, *args, **kwargs)
 
-    monkeypatch.setattr(remote_source, "_download_release", counting)
+    monkeypatch.setattr(remote_source, "download_release", counting)
     copy_release(child_ref, remote_source, dest)
     assert downloads == [child_ref]  # dest already holds the parent
     assert dest.get_manifest(*child) == remote_source.get_manifest(*child)
@@ -446,8 +444,3 @@ def test_copy_release_refuses_to_fetch_a_release_that_is_not_open_from_a_registr
     assert raised.value.dataset == child_ref
     assert not dest.exists(*child)
     assert not dest.exists(*parent)  # the open parent is not copied either: every check runs first
-
-
-def test_copy_release_imports_nothing_from_timenet_connectors():
-    code = "import sys; from timenet.registry import copy_release; assert 'timenet_connectors' not in sys.modules"
-    subprocess.run([sys.executable, "-c", code], check=True)

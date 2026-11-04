@@ -1,10 +1,8 @@
-"""Copy a release from one registry to another, with each release whose payload files it reads.
+"""Copy a release from one registry to another, with the payload sources that it needs.
 
-A release can read payload files, such as Signal values, that another release stores. That other
-release is a payload source. A copy brings each payload source along, so that the destination can
-open the copied release. A published version cannot change. So a copy never replaces a release that
-the destination already holds with other files. It raises
-:class:`~timenet.errors.TimeNetVersionConflictError` instead, before it copies anything.
+A payload source is a release whose payload files, such as Signal values, another release reads. A
+published version cannot change, so a copy never replaces a release that the destination holds with
+other files.
 """
 
 from pathlib import Path
@@ -35,36 +33,10 @@ def copy_release(
     *,
     progress: ProgressCallback | None = None,
 ) -> None:
-    """Copy a release and its payload sources to a registry, without changing a published version.
+    """Copy a release and the payload sources that it needs to another registry.
 
-    The copy covers the release and every payload source that it needs: each payload source that its
-    manifest lists, their own payload sources, and so on. Each payload source goes before the releases
-    that read it, so that ``dest`` never holds a release without its payload sources. Each release is
-    handled once, even if several releases read it. Two copies of a release are the same if their
-    manifests record the same files: the same paths, sizes and checksums. Other manifest fields do not
-    count.
-
-    ``source`` must hold the release. A payload source can come from ``dest`` instead: if ``source``
-    does not hold it, but ``dest`` holds a complete copy, this function uses that copy and does not
-    copy it again. That copy must also match the files that each release that reads it pins. A local
-    copy is complete if each file of its manifest is present with its recorded size.
-
-    This function checks every release first, and then copies. For each release, it does one of these:
-
-    - If ``dest`` does not hold the release, it copies the release. A local ``dest`` gets the release
-      with :func:`~timenet.registry.dependencies.prepare_local_copy`. Another ``dest`` gets it with
-      :meth:`~timenet.registry.WritableRegistry.put_release`, from the release directory of a local
-      ``source``, or from a temporary download of only this release that this function removes
-      afterwards.
-    - If a local ``dest`` holds the same release, but a file is missing or has another size, this
-      function fetches the release again from ``source``, its manifest included. Another ``dest``
-      holds the release complete, because it publishes a version only as a whole.
-    - If ``dest`` holds the version with other files, it raises an error before it copies anything.
-
-    A non-local registry serves files only for releases whose card and lineage declare access
-    ``open``. So if ``dest`` is non-local, each release of the copy must be open. If ``source`` is
-    non-local, each release that this function fetches from it must be open. This function makes
-    sure that each of these releases is open before it copies anything.
+    Payload sources go first, and a complete copy in ``dest`` is reused. A damaged local copy is
+    fetched again, and if a check fails, nothing is copied.
 
     Args:
         reference: The exact release to copy.
@@ -74,18 +46,15 @@ def copy_release(
             :class:`~timenet.progress.StepFinished` for each release that is copied or repaired.
 
     Raises:
-        TimeNetVersionConflictError: If ``dest`` holds the release, or a payload source that it needs, with
-            other files. Nothing is copied then.
-        TimeNetAccessError: If ``dest`` is non-local and a release of the copy is not open, or if
-            ``source`` is non-local and a release that this function fetches from it is not open. A
-            release is open if its card and each card in its lineage declare access ``open``. Nothing
-            is copied then.
+        TimeNetVersionConflictError: If ``dest`` holds the release, or a payload source of it, with
+            other files.
+        TimeNetAccessError: If a release of the copy is not open, and ``dest`` requires open access
+            or ``source`` requires it for a release that the copy fetches.
         TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
-        TimeNetMissingParentError: If a payload source that the release needs is neither in ``source``
-            nor complete in ``dest``. Nothing is copied then.
-        TimeFFormatError: If a manifest names another release, a payload source in ``source``, or the
-            copy in ``dest`` that this function uses, differs from the files that a release that reads
-            it pins, or the payload sources form a cycle. Nothing is copied then.
+        TimeNetMissingParentError: If a payload source is neither in ``source`` nor complete in
+            ``dest``.
+        TimeFFormatError: If a manifest names another release, a payload source differs from the
+            files that a release pins, or the payload sources form a cycle.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     manifests = _manifests(reference, source, dest)
     # Check every release before anything is copied, so that a refusal leaves dest unchanged. A payload
@@ -117,6 +86,7 @@ def _copy_one(
         dest: The registry to copy to.
         staging: A temporary directory for a download from a non-local ``source``.
     """
+    # A local registry is a folder that the copy reads or writes directly.
     if isinstance(dest, LocalRegistry):
         prepare_local_copy(dest.local_root, reference, fetch_from=source, manifest=manifest)
         return
@@ -127,16 +97,17 @@ def _copy_one(
         # sources, which dest may hold already, are not downloaded. The download checks each file by size
         # and checksum.
         directory = release_dir(staging, reference)
-        source._download_release(reference.dataset_id, str(reference.version), directory, manifest=manifest)
+        source.download_release(reference.dataset_id, str(reference.version), directory, manifest=manifest)
     dest.put_release(directory)
 
 
 def _check_access(
     manifests: dict[DatasetRef, Manifest], fetched: set[DatasetRef], source: BaseRegistry, dest: WritableRegistry
 ) -> None:
-    """Refuse a release that is not open for a non-local registry that must serve it.
+    """Refuse a release that is not open for a registry that requires open access.
 
-    ``dest`` serves each release of the copy. ``source`` serves each release that the copy fetches.
+    ``dest`` must hold each release of the copy, and ``source`` must serve each release that the copy
+    fetches.
 
     Args:
         manifests: The manifest of each release of the copy, by release.
@@ -149,16 +120,17 @@ def _check_access(
             ``open``.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by require_open_access
     for reference, manifest in manifests.items():
-        if not isinstance(dest, LocalRegistry) or (reference in fetched and not isinstance(source, LocalRegistry)):
+        dest_needs_open = dest.requires_open_access
+        source_needs_open = reference in fetched and source.requires_open_access
+        if dest_needs_open or source_needs_open:
             require_open_access(manifest.metadata, manifest.lineage)
 
 
 def _manifests(reference: DatasetRef, source: BaseRegistry, dest: WritableRegistry) -> dict[DatasetRef, Manifest]:
     """Return the manifests of a release and of every payload source that it needs.
 
-    Each manifest comes from ``source``. A payload source that ``source`` does not hold comes from
-    ``dest``, if ``dest`` holds a complete copy. Each payload source must match the files that each
-    release that reads it pins.
+    A payload source that ``source`` does not hold comes from a complete copy in ``dest``. Each
+    payload source must match the pins of each release that reads it.
 
     Args:
         reference: The release.
@@ -222,7 +194,7 @@ def _payload_source_manifest(
         except TimeNetDatasetNotFoundError:
             held = None
         if held is None or not _complete(reference, held, dest):
-            raise TimeNetMissingParentError(reference, needed_by, True, str(source)) from error
+            raise TimeNetMissingParentError(reference, needed_by, str(source), payload_source=True) from error
         manifest = held
     validate_manifest_reference(manifest, reference)
     return manifest

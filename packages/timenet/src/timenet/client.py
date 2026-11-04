@@ -319,9 +319,9 @@ class TimeNet:
             version: The resolved version, or ``None`` for the latest.
 
         Raises:
-            TimeNetAccessError: If the dataset is not open and the registry is not a local one.
+            TimeNetAccessError: If the dataset is not open and the registry requires open access.
         """
-        if isinstance(self._registry, LocalRegistry):
+        if not self._registry.requires_open_access:
             return
         try:
             manifest = self._registry.get_manifest(dataset_id, version)
@@ -415,7 +415,7 @@ def _prepare(
         manifest = _obtain(registry, dataset_id, version, miss, auto_build=auto_build, fetch_from=fetch_from)
     reference = DatasetRef(dataset_id=dataset_id, version=manifest.metadata.dataset_version)
     # A registry that is not local serves only releases with access declared ``open``.
-    check = None if fetch_from is None or isinstance(fetch_from, LocalRegistry) else _require_open
+    check = _require_open if fetch_from is not None and fetch_from.requires_open_access else None
     built: set[DatasetRef] = set()
     while True:
         try:
