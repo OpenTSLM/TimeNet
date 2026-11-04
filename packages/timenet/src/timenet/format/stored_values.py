@@ -29,7 +29,7 @@ from timenet.types._model import TimeFModel
 from timenet.types.handles import ArrayHandle
 from timenet.types.object_kind import ObjectKind
 from timenet.types.reference_keys import SourceKey
-from timenet.types.text import TextHandle, TextListHandle, read_value
+from timenet.types.text import LazyText, LazyTextList, TextHandle, TextListHandle, read_value
 
 
 if TYPE_CHECKING:
@@ -38,11 +38,9 @@ if TYPE_CHECKING:
 
 
 INLINE_LIMIT = 4096
-"""Largest JSON-encoded size, in bytes, of text kept inline in the catalog.
+"""The largest JSON-encoded text size, in bytes, that the writer keeps in the catalog.
 
-Labels and short prompts stay queryable in SQL, while long text no longer inflates the catalog that
-every read loads. A lazy text handle is always packed into a payload file, see
-:meth:`PackedValueWriter.pack`.
+The writer stores larger text and lazy text handles in separate payload files to keep the catalog small.
 """
 
 _PACK_BYTES = 4 * 1024 * 1024
@@ -815,41 +813,35 @@ class PackedValueWriter:
         *,
         digest: bytes | None = None,
     ) -> CatalogValue | ExternalValue:
-        """Keep a value inline, pack it, or reuse the payload that stores it.
+        """Store a value in the catalog or a separate payload file.
 
-        A stored text or time-offsets handle keeps its payload row, so its value is neither read nor
-        copied. Its locator names the row in the release that stores it.
-
-        A text handle that is not loaded, that is, a lazy handle, is always packed into a payload
-        file. Connectors use such handles when they do not want the text in memory. A read returns
-        packed text as a handle that reads on demand. Loaded handles and native values are packed
-        only when their encoded size exceeds :data:`INLINE_LIMIT`.
+        Time offsets, :class:`LazyText`, and :class:`LazyTextList` go into payload files.
+        If other text exceeds :data:`INLINE_LIMIT`, it also goes into a payload file.
+        Stored handles reuse their existing payload rows.
 
         Args:
-            kind: The kind of the object that owns the value.
-            object_id: The object's id in this write's catalog: a task id, the id of the
-                annotation content row that holds the value, or the id of the axis row.
-            field: The object's field that holds the value.
-            value: The value, a text handle, an int64 Arrow array of time offsets, or any value that
-                stays in the catalog.
-            position: The value's position in an ordered field, such as a task's targets.
-            digest: The ``offsets_digest()`` of time offsets, when the caller has it already.
-                Without it, the time offsets are hashed here. Text takes none.
+            kind: The kind of object that owns the value.
+            object_id: The object id in the output catalog: a task id, an annotation content id,
+                or an axis id.
+            field: The field that holds the value.
+            value: The text, time offsets, or other catalog value to store.
+            position: The position in a field with several values, such as task targets.
+            digest: An optional ``offsets_digest()`` result for time offsets.
+                If omitted, this method calculates it.
 
         Returns:
-            An explicit catalog value or the locator of a packed value. Catalog writers choose
-            the storage representation; this method never returns a placeholder.
+            A catalog value or a locator that identifies the value in a payload file.
 
         Raises:
-            TimeFValidationError: If the locator is invalid for this field, or a reused payload is
-                stored by the output release or missing from the release that stores it.
+            TimeFValidationError: If the locator is invalid for this field, the output release
+                stores a reused payload, or the source release lacks a reused payload.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _add_locator and StorageSources.add
         key = ExternalObjectFieldKey(object_kind=kind, object_id=object_id, field=field, position=position)
         if isinstance(value, StoredText | StoredTextList | StoredOffsets):
             stored = value._location
             source = self.sources.add(value.store.version, stored)
             return self._add_locator(key, replace(stored, source=source))
-        keep_lazy = isinstance(value, TextHandle | TextListHandle) and not value.is_loaded
+        keep_lazy = isinstance(value, LazyText | LazyTextList)
         classified = _classify_value(value)
         if isinstance(classified, CatalogValue):
             return classified

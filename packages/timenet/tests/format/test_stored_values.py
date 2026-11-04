@@ -48,6 +48,8 @@ from timenet.types import (
     AnswerTask,
     ArrayHandle,
     DatasetSchema,
+    LazyText,
+    LazyTextList,
     ObjectKind,
     TextHandle,
     TextListHandle,
@@ -514,56 +516,14 @@ def test_large_text_is_packed(tmp_path, value, kind):
     )
 
 
-@dataclasses.dataclass(eq=False)
-class _LazyText(TextHandle):
-    """A short string that its owner keeps out of memory, like text a connector reads from a file on request."""
-
-    text: str
-
-    @property
-    def is_loaded(self):
-        return False
-
-    @property
-    def length(self):
-        return len(self.text)
-
-    def read(self):
-        return self.text
-
-    def _content_key(self):
-        return ("lazy", id(self))
-
-
-@dataclasses.dataclass(eq=False)
-class _LazyTextList(TextListHandle):
-    """A short list of strings that its owner keeps out of memory."""
-
-    texts: list[str]
-
-    @property
-    def is_loaded(self):
-        return False
-
-    @property
-    def length(self):
-        return len(self.texts)
-
-    def read(self):
-        return self.texts
-
-    def _content_key(self):
-        return ("lazy", id(self))
-
-
 @pytest.mark.parametrize(
     ("value", "kind"),
     [
-        (_LazyText("short"), PackedValueKind.TEXT),
-        (_LazyTextList(["a", "b"]), PackedValueKind.TEXT_LIST),
+        (LazyText(lambda: "short", length=5), PackedValueKind.TEXT),
+        (LazyTextList(lambda: ["a", "b"], length=2), PackedValueKind.TEXT_LIST),
     ],
 )
-def test_an_unloaded_handle_is_packed_whatever_its_size(tmp_path, value, kind):
+def test_a_lazy_handle_is_packed_whatever_its_size(tmp_path, value, kind):
     packed = PackedValueWriter(tmp_path, StorageSources()).pack(
         ObjectKind.ANNOTATION_CONTENT, 1, PackedField.VALUE, value
     )
@@ -572,9 +532,9 @@ def test_an_unloaded_handle_is_packed_whatever_its_size(tmp_path, value, kind):
     assert packed.locator.n_values == value.length
 
 
-def test_a_short_unloaded_annotation_reads_back_as_stored_text(tmp_path):
+def test_a_short_lazy_annotation_reads_back_as_stored_text(tmp_path):
     dataset = make_dataset()
-    dataset.records[0].annotate(Annotation(key="feature", value=_LazyText("[0.1 0.2 0.3]")))
+    dataset.records[0].annotate(Annotation(key="feature", value=LazyText(lambda: "[0.1 0.2 0.3]", length=13)))
     version_dir = _write_dataset(tmp_path, dataset)
 
     (content_id,) = _content_ids(version_dir, "feature")
