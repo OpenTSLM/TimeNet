@@ -1,9 +1,4 @@
-"""Producer-side shortcuts to build and load a dataset from local code.
-
-:func:`build` runs a connector through the engine into the store. :func:`load` runs build and reads
-the result back. The writer and reader stacks are heavy, so they load lazily. This keeps the import
-of :mod:`timenet_connectors` cheap.
-"""
+"""Build and load datasets with installed connectors."""
 
 from pathlib import Path
 from typing import TYPE_CHECKING
@@ -27,25 +22,25 @@ def build(  # ruff: ignore[too-many-arguments]
     # ruff: ignore[docstring-extraneous-exception] (raised by the plan and its run, not directly here)
     """Build a dataset release in a local registry.
 
-    The build reuses an existing release unless ``force`` is set. The connector runs in an environment
-    from its ``requirements.txt``, or in this interpreter if ``TIMENET_ISOLATION=off``.
+    The connector runs in an environment built from its ``requirements.txt``.
+    Set ``TIMENET_ISOLATION=off`` to use the current interpreter.
 
     Args:
-        dataset_id: The dataset ID, exactly as the card of the connector declares it (``org/name``).
-        version: The version that the card must declare. ``None`` accepts any version.
-        out: The local registry directory. Defaults to the store, which ``TimeNet()`` reads.
-        force: Build the release again, even if the registry already holds it.
-        keep_cache: Keep the raw download cache. A successful build deletes it by default.
-        fetch_from: The registry, or its URI, to copy missing parent releases from.
+        dataset_id: The ``org/name`` ID declared in the connector's card.
+        version: The required card version, or ``None`` to accept any version.
+        out: The output directory, or ``None`` to use ``TIMENET_LOCAL_REGISTRY``.
+        force: Rebuild an existing release instead of reusing it.
+        keep_cache: Keep raw downloads after a successful build.
+        fetch_from: A registry or registry URI to copy missing parent releases from.
         build_parents: Build missing parent releases from their installed connectors.
 
     Returns:
-        The version directory of the release.
+        The release's version directory.
 
     Raises:
         TimeNetDatasetNotFoundError: If no installed connector builds ``dataset_id``.
-        TimeNetVersionUnavailableError: If the card's version differs from ``version``.
-        TimeNetMissingParentError: If a required release cannot be copied or built.
+        TimeNetVersionUnavailableError: If the card version differs from ``version``.
+        TimeNetMissingParentError: If a required parent release is missing.
     """
     from timenet.builders import BuildOptions, declared  # ruff: ignore[import-outside-top-level]
     from timenet.config import settings  # ruff: ignore[import-outside-top-level]

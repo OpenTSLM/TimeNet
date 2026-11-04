@@ -24,7 +24,7 @@ def same_directory(a: Path, b: Path) -> bool:
 
 
 def path_identity(path: Path) -> tuple[int, int, tuple[str, ...]]:
-    """Identify a path by its nearest existing ancestor on disk and the names below it.
+    """Identify a path using its nearest existing ancestor.
 
     Args:
         path: An absolute path without symlinks.
