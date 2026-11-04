@@ -120,14 +120,12 @@ class ConnectorBuilder:
         pinned_by: Mapping[DatasetRef, PayloadSource],
         options: BuildOptions,
     ) -> None:
-        """Build exactly this release into the store, in an isolated environment by default.
+        """Build exactly this release into the store.
 
-        Each parent of the release, and each payload source of such a parent, must already be in
-        ``store``, because this method does not plan. By default, the hidden
-        ``timenet-build build-release`` command builds the release in an environment built from the
-        requirements of the connector. That child runs with ``TIMENET_ISOLATION=off``, so it builds
-        in its own interpreter and starts no other child. ``TIMENET_ISOLATION=off`` builds in this
-        interpreter, with the ``values_backend`` of the connector.
+        The store must already hold each parent of the release and their payload
+        sources. This method does not plan. The build runs in a separate environment
+        with the requirements of the connector, unless ``TIMENET_ISOLATION=off``,
+        which builds in this interpreter.
 
         Args:
             release: The exact dataset ID and version to build.
