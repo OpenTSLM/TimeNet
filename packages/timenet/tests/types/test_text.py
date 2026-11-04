@@ -361,6 +361,27 @@ def test_a_lazy_text_reads_through_its_function_on_every_read():
     assert len(calls) == 3
     assert not handle.is_loaded
     assert LazyText(function, length=5)._content_key() == handle._content_key()
+    with pytest.raises(AttributeError, match="immutable"):
+        handle.function = function
+
+
+def test_a_lazy_text_without_a_length_learns_it_from_one_read():
+    calls = []
+
+    def function():
+        calls.append(1)
+        return "sleep"
+
+    handle = LazyText(function)
+    assert not calls
+    assert handle.length == 5
+    assert handle
+    assert len(calls) == 1
+    assert handle == "sleep"
+    assert len(calls) == 2
+    # The key never reads, and a handle with a known length over the same function is a different content.
+    assert handle._content_key() != LazyText(function, length=5)._content_key()
+    assert len(calls) == 2
 
 
 @pytest.mark.parametrize(

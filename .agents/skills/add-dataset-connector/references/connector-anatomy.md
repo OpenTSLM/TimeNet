@@ -121,10 +121,11 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   `record.add_annotations([...])` takes an iterable and returns a tuple. There is one annotation
   class, and its `span` gives its shape. No span means the whole record.
   `span=TimePoint.seconds(...)` means a time offset. `span=TimeInterval.seconds(...)` means a region.
-- For text that the connector reads from a source file, use `LazyText(function, length=n)` as the
-  annotation value. Import it from `timenet.types`. The function returns the string, and `n` is its
-  number of characters. The writer stores this text in a separate payload file so readers can load
-  it on request. For a list of strings, use `LazyTextList` with the number of strings as `length`.
+- For text that the connector reads from a source file, use `LazyText(function)` as the
+  annotation value. Import it from `timenet.types`. The function returns the string. If you know
+  its number of characters, pass it as `length=n` and every read checks the result against it.
+  The writer stores this text in a separate payload file so readers can load it on request. For a
+  list of strings, use `LazyTextList`, with the number of strings as `length` if you know it.
 - `dataset.add_task(task=<Task>(inputs=(record,), ...))` registers one task and returns it.
   `dataset.add_tasks(tasks=[...])` takes an iterable and registers the batch all-or-nothing. The task
   names its input records itself. Set `scope` and `from_tasks` on the task too. A batch can derive

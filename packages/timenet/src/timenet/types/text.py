@@ -9,8 +9,8 @@ Tasks and annotations use these handles to refer to text in memory or in a file.
 
 from abc import ABC, abstractmethod
 from collections.abc import Callable, Hashable, Iterable
-from dataclasses import KW_ONLY, dataclass
-from typing import TYPE_CHECKING, ClassVar, TypeVar, overload
+from dataclasses import dataclass
+from typing import TYPE_CHECKING, ClassVar, Generic, TypeVar, overload
 
 from timenet.errors import TimeFValidationError
 from timenet.types.handles import ValueHandle
@@ -22,6 +22,7 @@ if TYPE_CHECKING:
 
 
 _Other = TypeVar("_Other")
+_Lazy = TypeVar("_Lazy", str, list[str])
 
 
 class _TextBehaviour(ABC):
@@ -168,107 +169,134 @@ class InlineTextList(TextListHandle):
         return tuple(self.value)
 
 
-@dataclass(frozen=True, eq=False, slots=True)
-class LazyText(TextHandle):
+class _LazyTextBehaviour(Generic[_Lazy]):
+    """Share text loading and validation between lazy string and list handles."""
+
+    __slots__ = ("_declared", "_length", "function")
+
+    function: Callable[[], _Lazy]
+    """A function that returns the text."""
+
+    _kind: ClassVar[str]
+    """The handle name in error messages."""
+    _returns: ClassVar[str]
+    """The expected result type in error messages."""
+    _unit: ClassVar[str]
+    """The length unit in error messages."""
+
+    def __init__(self, function: Callable[[], _Lazy], *, length: int | None = None) -> None:
+        """Set the function and an optional expected length.
+
+        Args:
+            function: A function that returns the text.
+            length: The character count for a string or item count for a list.
+                If omitted, the first access to ``length`` reads the text to calculate it.
+
+        Raises:
+            TimeFValidationError: If ``function`` is not callable or a supplied ``length`` is not
+                a non-negative integer.
+        """
+        if not callable(function):
+            raise TimeFValidationError(
+                f"{self._kind} takes a function that returns {self._returns}, got {type(function).__name__}"
+            )
+        _check_length(length)
+        object.__setattr__(self, "function", function)
+        object.__setattr__(self, "_declared", length)
+        object.__setattr__(self, "_length", length)
+
+    def __setattr__(self, name: str, value: object) -> None:
+        raise AttributeError(f"{type(self).__name__} is immutable")
+
+    def __repr__(self) -> str:
+        return f"{type(self).__name__}({self.function!r}, length={self._declared!r})"
+
+    @property
+    def is_loaded(self) -> bool:
+        """Always False."""
+        return False
+
+    @property
+    def length(self) -> int:
+        """The number of characters or list items.
+
+        If the caller omits ``length``, the first access reads the text to calculate it.
+        """
+        if self._length is None:
+            # ruff: ignore[unnecessary-dunder-call] - __setattr__ is blocked to keep the handle immutable
+            object.__setattr__(self, "_length", len(self.read()))
+        return self._length
+
+    def read(self) -> _Lazy:
+        """Return the text from the supplied function.
+
+        Raises:
+            TimeFValidationError: If the result has the wrong type or its length differs from
+                the known length.
+        """
+        value = self.function()
+        self._check_result(value)
+        if self._length is not None and len(value) != self._length:
+            raise TimeFValidationError(
+                f"{self._kind} function returned {len(value)} {self._unit}, "
+                f"but the handle was given length {self._length}"
+            )
+        return value
+
+    @staticmethod
+    @abstractmethod
+    def _check_result(value: object) -> None:
+        """Check that the function returned the expected text type."""
+
+    def _content_key(self) -> tuple[str, int, int | None]:
+        """Return a stable content key from the function and original length argument."""
+        return ("lazy", id(self.function), self._declared)
+
+
+class LazyText(_LazyTextBehaviour[str], TextHandle):
     """Read one string through the supplied function on each request.
 
     A connector can use this handle to load text from a source file.
     The writer stores the text in a separate payload file so readers can load it on request.
     """
 
-    function: Callable[[], str]
-    """A function that returns the string."""
-    _: KW_ONLY
-    length: int
-    """The number of characters in the string."""
+    __slots__ = ()
+    _kind = "a lazy text handle"
+    _returns = "a string"
+    _unit = "characters"
 
-    def __post_init__(self) -> None:
-        if not callable(self.function):
-            raise TimeFValidationError(
-                f"a lazy text handle takes a function that returns a string, got {type(self.function).__name__}"
-            )
-        _check_length(self.length)
-
-    @property
-    def is_loaded(self) -> bool:
-        """Always False."""
-        return False
-
-    def read(self) -> str:
-        """Return the string from a new call to the function.
-
-        Raises:
-            TimeFValidationError: If the result is not a string or its length differs from
-                the supplied length.
-        """
-        value = self.function()
+    @staticmethod
+    def _check_result(value: object) -> None:
         if not isinstance(value, str):
             raise TimeFValidationError(f"a lazy text function must return a string, got {type(value).__name__}")
-        if len(value) != self.length:
-            raise TimeFValidationError(
-                f"a lazy text function returned {len(value)} characters, but the handle was given length {self.length}"
-            )
-        return value
-
-    def _content_key(self) -> tuple[str, int, int]:
-        """Return a content key based on the supplied function and length."""
-        return ("lazy", id(self.function), self.length)
 
 
-@dataclass(frozen=True, eq=False, slots=True)
-class LazyTextList(TextListHandle):
+class LazyTextList(_LazyTextBehaviour[list[str]], TextListHandle):
     """Read a list of strings through the supplied function on each request.
 
     A connector can use this handle to load strings from a source file.
     The writer stores the list in a separate payload file so readers can load it on request.
     """
 
-    function: Callable[[], list[str]]
-    """A function that returns the list of strings."""
-    _: KW_ONLY
-    length: int
-    """The number of strings in the list."""
+    __slots__ = ()
+    _kind = "a lazy text list handle"
+    _returns = "a list of strings"
+    _unit = "strings"
 
-    def __post_init__(self) -> None:
-        if not callable(self.function):
-            raise TimeFValidationError(
-                f"a lazy text list handle takes a function that returns a list of strings, "
-                f"got {type(self.function).__name__}"
-            )
-        _check_length(self.length)
-
-    @property
-    def is_loaded(self) -> bool:
-        """Always False."""
-        return False
-
-    def read(self) -> list[str]:
-        """Return the list from a new call to the function.
-
-        Raises:
-            TimeFValidationError: If the result is not a list of strings or its length differs
-                from the supplied length.
-        """
-        value = self.function()
+    @staticmethod
+    def _check_result(value: object) -> None:
         if not isinstance(value, list) or not all(isinstance(item, str) for item in value):
             raise TimeFValidationError("a lazy text list function must return a list of strings")
-        if len(value) != self.length:
-            raise TimeFValidationError(
-                f"a lazy text list function returned {len(value)} strings, but the handle was given length {self.length}"
-            )
-        return value
-
-    def _content_key(self) -> tuple[str, int, int]:
-        """Return a content key based on the supplied function and length."""
-        return ("lazy", id(self.function), self.length)
 
 
 def _check_length(length: object) -> None:
-    """Check that the supplied length is a non-negative integer.
+    """Check an optional text length.
 
     Raises:
         TimeFValidationError: If the length is a boolean, is not an integer, or is less than zero.
     """
+    if length is None:
+        return
     if isinstance(length, bool) or not isinstance(length, int) or length < 0:
         raise TimeFValidationError(f"a lazy text handle takes a non-negative integer length, got {length!r}")
 
