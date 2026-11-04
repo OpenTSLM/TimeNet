@@ -1852,7 +1852,9 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
 
     @cached_property
     def _label_sets_by_name(self) -> dict[str, LabelSet]:
-        """Every stored label set by name, read once, so that the tasks that use a set share one object.
+        """The stored label sets by name.
+
+        The reader reads each set once. Tasks that use the same set share one object.
 
         Raises:
             TimeFFormatError: If a stored label set is not valid.

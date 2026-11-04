@@ -67,10 +67,10 @@ def _read_tasks(path):
 
 @pytest.fixture(scope="module")
 def release(tmp_path_factory) -> Path:
-    """Write one release with every kind of labelled task, once for the whole module.
+    """Write one release with every kind of labeled task for all tests in this module.
 
     Returns:
-        The path of its control database. A test that changes the release uses ``release_copy``.
+        The path of the control database. If a test changes the release, it uses ``release_copy``.
     """
     dataset, record = _dataset()
     stage = record.annotate(Annotation(key="stage", value="N1"))
@@ -94,7 +94,7 @@ def release(tmp_path_factory) -> Path:
 
 @pytest.fixture
 def release_copy(release, tmp_path) -> Path:
-    """Copy the module's release, so that a test can change it.
+    """Copy the shared release so that a test can change its own copy.
 
     Returns:
         The path of the copy's control database.

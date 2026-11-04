@@ -1,4 +1,4 @@
-"""The closed set of labels that a classification target takes."""
+"""The allowed labels for a classification target."""
 
 from collections.abc import Iterator, Sequence
 from typing import Self
@@ -11,7 +11,7 @@ from timenet.types.wire import NonEmptyString
 
 
 class Label(TimeFModel):
-    """One label of a label set, such as ``N1`` for a sleep stage."""
+    """One label in a label set, such as ``N1`` for a sleep stage."""
 
     name: NonEmptyString
     """The text that a target holds for this label."""
@@ -20,7 +20,7 @@ class Label(TimeFModel):
 
 
 class LabelSet(TimeFModel):
-    """The closed set of labels that a classification target takes, and how many it holds.
+    """The allowed labels for a classification target and the rules for their number.
 
     Tasks that ask the same kind of question share one label set::
 
@@ -30,16 +30,18 @@ class LabelSet(TimeFModel):
         )
         ClassificationTask(inputs=(record,), targets=("T",), label_set=TRUE_OR_FALSE)
 
-    Within a dataset, a name stands for one set.
+    Each name identifies one label set in a dataset.
     """
 
     name: NonEmptyString
-    """Identifies the set within a dataset, such as ``true_or_false``."""
+    """The name of the set within a dataset, such as ``true_or_false``."""
     labels: tuple[Label, ...]
-    """Every allowed label, in a stable order."""
+    """The allowed labels in a fixed order."""
     multi_label: StrictBool = False
-    """If ``False``, a target holds exactly one label of the set. If ``True``, a target holds every
-    label of the set that applies, which can be none."""
+    """If ``False``, a target holds exactly one label from the set.
+
+    If ``True``, a target holds all labels from the set that apply.
+    An empty target means that no label applies."""
 
     @model_validator(mode="after")
     def _valid_set(self) -> Self:
@@ -55,14 +57,14 @@ class LabelSet(TimeFModel):
         return tuple(label.name for label in self.labels)
 
     def check_targets(self, targets: Sequence[str]) -> None:
-        """Make sure that a classification target fits this set.
+        """Make sure that the target labels follow the rules of this set.
 
         Args:
             targets: The target labels, in the order that the task stores them.
 
         Raises:
-            TimeFValidationError: If a label is not in the set, a label repeats, or a single-label
-                target does not hold exactly one label.
+            TimeFValidationError: If a label is not in the set or a label repeats.
+                Also if a single-label target does not hold exactly one label.
         """
         names = set(self.names)
         unknown = sorted({label for label in targets if label not in names})
@@ -76,9 +78,9 @@ class LabelSet(TimeFModel):
 
 
 class LabelSetRegistry:
-    """The label sets of a dataset by name, so that one name stands for one set.
+    """The label sets of a dataset, with one set per name.
 
-    The sets keep the order in which tasks first claimed them.
+    The sets stay in the order in which tasks first added them.
     """
 
     def __init__(self) -> None:
@@ -86,7 +88,9 @@ class LabelSetRegistry:
         self._by_name: dict[str, LabelSet] = {}
 
     def claim(self, label_set: LabelSet) -> LabelSet:
-        """Store a label set under its name, or return the equal set that the name already has.
+        """Store a label set by name.
+
+        If the registry already holds an equal set with this name, return that set.
 
         Returns:
             The set that the registry holds under the name.
@@ -103,7 +107,9 @@ class LabelSetRegistry:
         return known
 
     def copy(self) -> "LabelSetRegistry":
-        """Return a registry with the same sets, which a caller can change without changing this one.
+        """Return a separate registry with the same label sets.
+
+        A caller can add sets to the copy without changing this registry.
 
         Returns:
             The copy.
@@ -113,7 +119,7 @@ class LabelSetRegistry:
         return copy
 
     def __iter__(self) -> Iterator[LabelSet]:
-        """Iterate over the sets in the order in which tasks first claimed them.
+        """Iterate over the sets in the order in which tasks first added them.
 
         Returns:
             The iterator.

@@ -143,9 +143,10 @@ _LABELLED_TARGETS = f"""
         WHERE r.field = '{TaskRelationshipField.TARGET_ANNOTATIONS}'
     )
 """  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
-"""The labelled classification tasks, and each stored label of their targets. The rules below start
-with this ``WITH`` clause. They do not compare a packed label, because the catalog holds only its
-placeholder."""
+"""The classification tasks with label sets and their stored target labels.
+
+The rules below start with this ``WITH`` clause. A packed label stores its value outside the catalog.
+The rules do not compare packed labels because the catalog holds only their placeholders."""
 
 
 class _LabelRule(NamedTuple):
@@ -154,7 +155,9 @@ class _LabelRule(NamedTuple):
     problem: str
     """What is wrong with a task that breaks the rule, for the error message."""
     query: str
-    """The query that returns the id of one task that breaks the rule, or no row."""
+    """The query returns the id of one task that breaks the rule.
+
+    If no task breaks the rule, the query returns no row."""
 
 
 _LABEL_RULES = (
@@ -322,7 +325,7 @@ checked once.
 
 
 def _audit_task_labels(connection: duckdb.DuckDBPyConnection) -> None:
-    """Make sure that the stored labels of each classification task follow its label set.
+    """Make sure that stored classification labels follow the rules of their label set.
 
     Raises:
         TimeFFormatError: If a task breaks one of the label rules.
@@ -335,7 +338,7 @@ def _audit_task_labels(connection: duckdb.DuckDBPyConnection) -> None:
 
 
 def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool = True) -> None:
-    """Scan every control table and raise on the first violated invariant.
+    """Scan every control table and raise an error at the first broken rule.
 
     Args:
         connection: An open connection to the control database.
@@ -343,9 +346,11 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
             A metadata-only database written without value placements has none.
 
     Raises:
-        TimeFFormatError: If a key is repeated, a relationship dangles, a value is outside its
-            domain, the Source tree is not a forest of per-Record trees, an axis or chunk length
-            disagrees with its Signal, or the labels of a classification task do not fit its label set.
+        TimeFFormatError: If a key repeats, a reference points to a missing object,
+            or a value is not allowed.
+            Also if Sources do not form separate trees for each Record.
+            Also if an axis or chunk length differs from its Signal.
+            Also if classification labels break a rule of their label set.
     """
     for table in CONTROL_TABLES:
         _audit_unique_keys(connection, table)

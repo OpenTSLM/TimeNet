@@ -1,12 +1,13 @@
 """The single description of the control database's tables.
 
-The DDL, the writer's Arrow batch schemas, and the audit's key and relationship checks are all
-derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
+The SQL table definitions and the writer's Arrow batch schemas come from :data:`CONTROL_TABLES`.
+The audit also uses it to examine keys and references. Define schema changes there.
 
 This is version 1 of the control schema. Every table except ``label_sets`` uses ids as keys.
 Records, Signals, and Tasks use the public ids that the caller sees. All other objects use the
-writer's storage ids. A label set is known by its name, which is unique in a dataset, so
-``label_sets`` uses the name as its key. Every foreign key stores the key that it refers to.
+writer's storage ids.
+
+Each label set has a unique name in a dataset. The ``label_sets`` table uses this name as its key. A foreign key stores the key of the row that it refers to.
 
 Fixed-shape fields are typed columns, so SQL can filter them. Only the free-form ``metadata``
 dictionaries are JSON. The database has no persisted constraints. The writer keeps
@@ -285,9 +286,11 @@ LABEL_SETS = Table(
     ),
     unique=(("name",),),
 )
-"""The table stores each label set that a classification task uses, one row per set. ``labels``
-holds one ``{name, description}`` entry per label, in label order. ``description`` is NULL where a
-label has none. Tasks refer to a set by its name in ``tasks.label_set``."""
+"""Each row stores one label set that a classification task uses.
+
+The ``labels`` column holds one ``{name, description}`` entry per label, in label order.
+If a label has no description, ``description`` is NULL. Tasks refer to a set by its name in
+``tasks.label_set``."""
 
 TASKS = Table(
     "tasks",

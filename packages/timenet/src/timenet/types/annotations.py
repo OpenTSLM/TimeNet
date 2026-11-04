@@ -240,8 +240,8 @@ def value_type_of(value: Any) -> ValueType | None:
         value: The annotation's value.
 
     Returns:
-        One of ``"bool" | "int" | "float" | "str" | "list"``, or ``None`` for a pure marker. A list
-        holds strings only, such as the subject IDs of a record.
+        One of ``"bool" | "int" | "float" | "str" | "list"``, or ``None`` for a marker with no value.
+        A list holds only strings, such as the subject IDs of a record.
 
     Raises:
         TimeFValidationError: If ``value`` is a non-null value of an unsupported type.

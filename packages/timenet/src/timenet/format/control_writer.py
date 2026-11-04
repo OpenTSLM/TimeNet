@@ -475,20 +475,20 @@ class DuckDBControlWriter:
         annotations: list[tuple[ObjectKind, int | None, Annotation]],
         tasks_source: Iterable[Task],
     ) -> tuple[dict[str, int], list[_AnnotationRef]]:
-        """Insert tasks and their relationships, one bounded batch at a time.
+        """Insert tasks and their relationships in batches of limited size.
 
         A dependency can name a task that the writer writes later. So the writer checks and stores
         dependencies after it writes every task. The method returns the annotation references,
         because occurrences get their ids only when :meth:`_write_annotations` writes them.
 
         Returns:
-            Counts keyed by concrete task type, and the annotation references.
+            The number of tasks of each type, and the annotation references.
 
         Raises:
-            TimeFValidationError: If a task refers to a Record or Signal outside the dataset, or to
-                a Record or Signal object that the dataset did not register under that id. Also if
-                two tasks share an id, or a task derives from a task that is not in the dataset or
-                from itself. Also if two tasks use different label sets with the same name.
+            TimeFValidationError: If a task refers to a Record or Signal outside the dataset.
+                Also if the dataset registered a different Record or Signal object under that id.
+                Also if two tasks share an id, or a task derives from itself or a task outside the dataset.
+                Also if two tasks use different label sets with the same name.
         """
         # Weak: if no other task names a streamed task, Python can free it after the writer writes it.
         written: WeakValueDictionary[int, Task] = WeakValueDictionary()

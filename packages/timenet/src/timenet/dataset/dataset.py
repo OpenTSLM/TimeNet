@@ -480,13 +480,14 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         declared: set[type[Task]],
         label_sets: LabelSetRegistry,
     ) -> None:
-        """Run the checks that each streamed task must pass.
+        """Make sure that each streamed task follows the dataset rules.
 
         Args:
             task: The streamed task.
-            index: Reusable dataset identity and annotation lookups.
+            index: The shared index of dataset objects and annotations.
             declared: The task types :meth:`set_task_stream` declared.
-            label_sets: The label sets of the stream so far. The method adds the set of the task.
+            label_sets: The label sets used so far in the stream.
+                This method adds the label set of this task.
 
         Raises:
             TimeFValidationError: If the task's type is not declared, or the task fails a check of
@@ -500,12 +501,14 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         self._check_task(task, index, label_sets)
 
     def _check_task(self, task: Task, index: _TaskValidationIndex, label_sets: LabelSetRegistry) -> None:
-        """Run the checks that each task must pass, alone or in a batch or a stream.
+        """Make sure that a task follows the dataset rules.
+
+        This method handles tasks added alone, in a batch, or in a stream.
 
         Args:
             task: The task to check.
-            index: Reusable dataset identity and annotation lookups.
-            label_sets: The label sets of the tasks so far. The method adds the set of the task.
+            index: The shared index of dataset objects and annotations.
+            label_sets: The label sets used so far. This method adds the label set of this task.
 
         Raises:
             TimeFValidationError: If the task's record attachment, references, answer, labels, label
@@ -570,17 +573,17 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         return task._id is not None and self._tasks_by_id.get(task._id) is task
 
     def _validate_task_batch(self, batch: tuple[Task, ...]) -> LabelSetRegistry:
-        """Run every check that the batch must pass, without attaching anything.
+        """Make sure that a batch follows the dataset rules before attaching its tasks.
 
-        This method checks the cross-task rules that only a batch makes possible, in addition to
-        the per-task checks. Each ``from_tasks`` parent must already be registered or be in the
-        batch. No task can derive from itself or close a cycle.
+        This method examines each task and the relationships between tasks.
+        Each parent in ``from_tasks`` must already be registered or be in the batch.
+        No task can derive from itself, directly or through other tasks.
 
         Args:
             batch: The tasks to register together.
 
         Returns:
-            A copy of the dataset's label sets, with the sets of the batch added.
+            A copy of the registry that includes the label sets from this batch.
 
         Raises:
             TimeFValidationError: This error occurs under the conditions documented on

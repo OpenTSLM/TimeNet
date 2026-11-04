@@ -357,10 +357,12 @@ class Task(SupportsAnnotate):
         """Validate configuration that depends on the finalized scope."""
 
     def check_targets(self) -> None:
-        """Make sure that the finished targets fit the configuration of the concrete task class."""
+        """Make sure that the final targets follow the rules of this task class."""
 
     def claim_label_set(self, label_sets: LabelSetRegistry) -> None:
-        """Add the label set of the task to the dataset's label sets. Only a classification task has one.
+        """Add the label set of the task to the dataset's label sets.
+
+        Only a classification task has a label set.
 
         Args:
             label_sets: The label sets of the dataset so far.
@@ -370,17 +372,18 @@ class Task(SupportsAnnotate):
 @final
 @dataclass(kw_only=True)
 class ClassificationTask(Task):
-    """Classify the inputs, optionally against a closed set of labels."""
+    """Classify the inputs with an optional set of allowed labels."""
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
     label_set: LabelSet | None = None
-    """Optional set of labels that the target takes, and how many of them. With ``None``, TimeNet does
-    not examine the labels."""
+    """The allowed labels and the rules for their number, if set.
+
+    If this is ``None``, TimeNet does not examine the labels."""
     target_schema: str | None = None
-    """Deprecated: the name of the label vocabulary. Use ``label_set``, which also holds the labels."""
+    """Deprecated name of the set of allowed labels. Use ``label_set``, which also holds the labels."""
 
     def __post_init__(self) -> None:
-        """Normalize the common fields and make sure that the label set has the right type.
+        """Set the common fields to their standard form and make sure that the label set has the right type.
 
         Raises:
             TimeFValidationError: If ``label_set`` is neither a LabelSet nor ``None``, or if the task
@@ -397,14 +400,16 @@ class ClassificationTask(Task):
             )
 
     def check_targets(self) -> None:
-        """Make sure that the target fits the label set.
+        """Make sure that the target labels follow the rules of the label set.
 
-        The labels are the inline targets or the values of the target annotations. Each label must
-        be text. This method does not examine a task that has no label set. A dataset calls it
-        when it adds or streams the task, after the targets are final.
+        The labels come from the targets stored directly on the task or from its target annotations.
+        Each label must be text.
+        If the task has no label set, this method does nothing.
+
+        After the targets are final, the dataset calls this method when it adds or streams the task.
 
         Raises:
-            TimeFValidationError: If a label is not text, or the labels do not fit the label set.
+            TimeFValidationError: If a label is not text or the labels break a rule of the label set.
         """
         if self.label_set is None:
             return

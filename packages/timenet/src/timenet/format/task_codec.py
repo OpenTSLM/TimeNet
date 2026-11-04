@@ -58,9 +58,10 @@ ANNOTATION_FIELDS = frozenset({TaskRelationshipField.INPUT_ANNOTATIONS, TaskRela
 
 
 PAYLOAD_COLUMNS = ("target_schema", "label_set", "unit", "target_name", "mode")
-"""The ``tasks`` columns that hold subclass-specific configuration. Unused ones are NULL. A
-classification task stores the name of its label set in ``label_set``. The set itself is a row of
-``label_sets``."""
+"""The ``tasks`` columns that hold configuration for each task type.
+
+Unused columns are NULL. A classification task stores its label set name in ``label_set``.
+The ``label_sets`` table stores the set itself."""
 
 
 def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality]:
