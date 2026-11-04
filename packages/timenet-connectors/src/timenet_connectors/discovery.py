@@ -52,16 +52,13 @@ def connector_dir(dataset_id: str) -> Path:
 
 
 def has_connector(dataset_id: str) -> bool:
-    """Report whether a connector package exists for an id, without importing it.
-
-    Ask this instead of catching :func:`connector_dir`'s ``LookupError``: a miss is an ordinary
-    answer here, not an exception.
+    """Check for a dataset's connector package and card without importing the connector.
 
     Args:
         dataset_id: The dataset ID, as ``org/name``.
 
     Returns:
-        Whether a connector package exists for the id.
+        Whether a connector package with a ``dataset.yaml`` card exists.
     """
     try:
         connector_dir(dataset_id)
@@ -71,29 +68,29 @@ def has_connector(dataset_id: str) -> bool:
 
 
 def requirements_for(dataset_id: str) -> Path | None:
-    """Return the connector's ``requirements.txt``, or ``None`` if it declares none.
+    """Find a connector's requirements file.
 
     Args:
         dataset_id: The dataset ID, as ``org/name``.
 
     Returns:
-        The path to the connector's ``requirements.txt``, or ``None``.
+        The path to ``requirements.txt``, or ``None`` if the file is absent.
 
     Raises:
-        LookupError: If no module exists for the id.
+        LookupError: If no connector with a ``dataset.yaml`` card exists for the ID.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by connector_dir, not directly here)
     path = connector_dir(dataset_id) / "requirements.txt"
     return path if path.is_file() else None
 
 
 def known_ids() -> list[str]:
-    """List the dataset IDs that the connector cards declare, without importing a connector.
+    """List dataset IDs from connector cards without importing connectors.
 
     Returns:
-        The declared dataset IDs, sorted.
+        The sorted dataset IDs, with duplicates removed.
 
     Raises:
-        TimeNetInvalidCardError: If a card cannot be read or declares no ``dataset_id``.
+        TimeNetInvalidCardError: If a card is unreadable, is not a YAML mapping, or lacks ``dataset_id``.
     """
     ids: set[str] = set()
     for root in _datasets.__path__:

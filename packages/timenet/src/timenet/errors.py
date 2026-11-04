@@ -163,14 +163,12 @@ class TimeFNullValuesError(TimeFValidationError):
 
 
 class TimeNetVersionUnavailableError(TimeNetDatasetNotFoundError, TimeFValidationError):
-    """The installed connector of a dataset builds another version than the requested one.
-
-    A connector builds only the version that its card declares.
+    """The installed connector cannot build the requested dataset version.
 
     Attributes:
         release: The requested release.
         declared: The version that the connector builds.
-        hint: What the caller can do instead, added by the front end, or ``None``.
+        hint: Suggested next steps to append to the error message, or ``None``.
     """
 
     def __init__(self, release: "DatasetRef", declared: "Version") -> None:
