@@ -125,14 +125,15 @@ def _output(dataset) -> dict:
             # RNN and HMM read it. The Record's Sources still carry the activity annotations, which
             # hold the answer, so a consumer must drop them.
             task.scope.time_series,
-            task.target_schema,
+            task.label_set.name,
             task.targets,
             task.split.value,
         )
         for task in dataset.iter_tasks()
     ]
     annotations = {a.key: read_value(a.value) for a in dataset.annotations}
-    return {"annotations": annotations, "records": records, "tasks": tasks}
+    label_sets = {task.label_set.name: list(task.label_set.names) for task in dataset.iter_tasks()}
+    return {"annotations": annotations, "label_sets": label_sets, "records": records, "tasks": tasks}
 
 
 def _signals(n_values: int, offset_us: int) -> dict:
@@ -168,8 +169,8 @@ def _walk(start_us: int, end_us: int) -> tuple:
     return ("activity", _WALK, start_us, end_us, _WALK_CLASSES)
 
 
-_WILLETTS = connector.WILLETTS_SPECIFIC_2018_VOCABULARY.name
-_WALMSLEY = connector.WALMSLEY_2020_VOCABULARY.name
+_WILLETTS = connector.WILLETTS_SPECIFIC_2018.name
+_WALMSLEY = connector.WALMSLEY_2020.name
 
 # Descriptions tell readers that age is a band and time is shifted.
 # Other connectors store an exact age under the key age.
@@ -184,10 +185,11 @@ _DESCRIPTIONS = {
 
 # The whole converted fixture, written out by hand from the fixture rows above.
 _EXPECTED = {
-    "annotations": {
-        # Each benchmarked scheme's full vocabulary, referenced by the tasks' target_schema.
-        # This includes classes that the fixture does not use.
-        "willetts_specific_2018_vocabulary": [
+    # The label sets hold the scheme's classes, so the dataset has no annotations of its own.
+    "annotations": {},
+    "label_sets": {
+        # Each benchmarked scheme's whole label set, with the classes that the fixture does not use.
+        "willetts_specific_2018": [
             "bicycling",
             "household-chores",
             "manual-work",
@@ -199,7 +201,7 @@ _EXPECTED = {
             "vehicle",
             "walking",
         ],
-        "walmsley_2020_vocabulary": ["light", "moderate-vigorous", "sedentary", "sleep"],
+        "walmsley_2020": ["light", "moderate-vigorous", "sedentary", "sleep"],
     },
     "records": {
         "P001": {
@@ -328,12 +330,10 @@ def test_card_pins_the_archive_the_connector_downloads():
     assert Capture24Connector().metadata().source_revision == f"sha256:{connector.ARCHIVE_SHA256}"
 
 
-@pytest.mark.parametrize(
-    "vocabulary", [connector.WILLETTS_SPECIFIC_2018_VOCABULARY, connector.WALMSLEY_2020_VOCABULARY]
-)
-def test_vocabularies_are_in_string_order(vocabulary):
-    # A tie between classes goes to the first in string order, which is the first in the vocabulary.
-    assert list(vocabulary.labels) == sorted(vocabulary.labels)
+@pytest.mark.parametrize("label_set", [connector.WILLETTS_SPECIFIC_2018, connector.WALMSLEY_2020])
+def test_label_sets_are_in_string_order(label_set):
+    # A tie between classes goes to the first in string order, which is the first in the label set.
+    assert list(label_set.names) == sorted(label_set.names)
 
 
 def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
@@ -480,7 +480,7 @@ def test_metadata_and_recordings_must_name_the_same_participants(tmp_path, chang
             "annotation-label-dictionary.csv",
             ",light\n",
             ",strolling\n",
-            r"classes missing from vocabulary 'walmsley_2020_vocabulary': \['strolling'\]",
+            r"classes missing from label set 'walmsley_2020': \['strolling'\]",
         ),
         (
             "annotation-label-dictionary.csv",

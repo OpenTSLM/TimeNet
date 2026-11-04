@@ -103,22 +103,22 @@ A task's `inputs` contains the whole Record, including its Source annotations.
 The task's `input_annotations` is empty. That field lists selected annotations but does not remove
 annotations from the Record.
 
-### Vocabularies
+### Label sets
 
-A label scheme groups raw labels into activity classes. Its vocabulary lists the allowed classes.
-The authors' `benchmark.py` scores two schemes, so the connector defines two vocabularies.
+A label scheme groups raw labels into activity classes. A label set lists the allowed classes of
+one scheme. The authors' `benchmark.py` scores two schemes, so the connector defines two label
+sets.
 
-Each task uses the vocabulary for its scheme. The dataset stores each vocabulary as a dataset
-annotation, and each task refers to it through `target_schema`. The dataset has no other dataset
-annotations.
+Each task carries the label set of its scheme in `label_set`. TimeF stores each set once, and the
+dataset has no dataset annotations.
 
-| Dataset annotation | Classes, sorted by their text |
+| Label set | Classes, sorted by their text |
 | --- | --- |
-| `willetts_specific_2018_vocabulary` | `bicycling`, `household-chores`, `manual-work`, `mixed-activity`, `sitting`, `sleep`, `sports`, `standing`, `vehicle`, `walking` |
-| `walmsley_2020_vocabulary` | `light`, `moderate-vigorous`, `sedentary`, `sleep` |
+| `willetts_specific_2018` | `bicycling`, `household-chores`, `manual-work`, `mixed-activity`, `sitting`, `sleep`, `sports`, `standing`, `vehicle`, `walking` |
+| `walmsley_2020` | `light`, `moderate-vigorous`, `sedentary`, `sleep` |
 
 The classes are written in `connector.py`, not read from the release. The build fails if the label
-dictionary gives a class that the scheme's vocabulary does not list.
+dictionary gives a class that the scheme's label set does not list.
 
 The label dictionary must contain exactly the raw label column and the six scheme columns.
 Each row must name a class in every scheme, including schemes without tasks.
@@ -143,7 +143,7 @@ their `benchmark.py` scores:
 | --- | --- |
 | `scope` | The window: a 10 s interval that names no signal, so the whole Record stays available |
 | `targets` | The window's class in the scheme |
-| `target_schema` | `willetts_specific_2018_vocabulary` or `walmsley_2020_vocabulary` |
+| `label_set` | `willetts_specific_2018` or `walmsley_2020` |
 | `split` | `train` for P001 to P100, `test` for P101 to P151 |
 
 There is no prompt because the benchmark asks no question in words.
