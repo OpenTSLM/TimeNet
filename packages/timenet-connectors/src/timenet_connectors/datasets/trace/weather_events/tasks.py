@@ -5,12 +5,12 @@
 - Forecasting: a ``forecasting`` window's last values must follow from the rest.
 """
 
-from collections.abc import Iterable, Iterator, Mapping
+from collections.abc import Iterator, Mapping
 
 from timenet.dataset import Record
 from timenet.types import Annotation, ClassificationTask, ForecastingTask, Task, TimeInterval, TSCorrespondenceTask
 from timenet_connectors.datasets.trace.weather_events.archive import SplitName
-from timenet_connectors.datasets.trace.weather_events.measurements import Measurement, WindowIndex
+from timenet_connectors.datasets.trace.weather_events.measurements import Window, WindowIndex
 from timenet_connectors.datasets.trace.weather_events.retrieval import RetrievalIndex
 from timenet_connectors.datasets.trace.weather_events.vocabulary import AnnotationKey, Channel, MetadataKey
 
@@ -19,23 +19,15 @@ TASK_TYPES = (ClassificationTask, TSCorrespondenceTask, ForecastingTask)
 """The task types the stream yields, in stream order."""
 
 
-def _unique_records(records: Iterable[Record]) -> tuple[Record, ...]:
-    """Return each Record once, in first-seen order. Copies of one measurement share a Record."""
-    unique: dict[int, Record] = {}
-    for record in records:
-        unique.setdefault(id(record), record)
-    return tuple(unique.values())
-
-
 class TaskStream:
     """Build every task from the indexed windows and retrieval rows, rereading the retrieval files each time."""
 
-    def __init__(self, windows: WindowIndex, retrieval: RetrievalIndex, records: Mapping[Measurement, Record]):
+    def __init__(self, windows: WindowIndex, retrieval: RetrievalIndex, records: Mapping[Window, Record]):
         self._windows = windows
         self._retrieval = retrieval
         self._records = records
         # The authors rank each test description against every test window (context_align_task.py).
-        self._test_candidates = _unique_records(records[window.measurement] for window in retrieval.test_windows())
+        self._test_candidates = tuple(records[window] for window in retrieval.test_windows())
 
     def tasks(self) -> Iterator[Task]:
         """Return every task: the event-type tasks, then the retrieval tasks, then the forecasting tasks.
@@ -57,7 +49,7 @@ class TaskStream:
             if report is None:
                 continue
             yield ClassificationTask(
-                inputs=(self._records[window.measurement],),
+                inputs=(self._records[window],),
                 targets=(report.event_type.text,),
                 split=window.file.split.timef_split,
                 target_schema=AnnotationKey.EVENT_TYPE_VOCABULARY,
@@ -81,17 +73,23 @@ class TaskStream:
             event = {} if row.report is None else {MetadataKey.EVENT_ID: row.report.event_id}
             task = TSCorrespondenceTask(
                 prompt=row.prompt,
-                targets=(self._records[window.measurement],),
-                # Test tasks rank the retrieval test windows' Records. Train tasks pass no candidates, which
-                # TimeF reads as the dataset-wide pool, test Records included: see the README.
+                targets=(self._records[window],),
+                # Test tasks rank the retrieval test windows' Records, as the authors do.
+                #
+                # KNOWN ISSUE: train tasks pass no candidates, and TimeF reads an empty tuple as the
+                # dataset-wide pool, test Records included. The authors train with in-batch negatives
+                # and rank against no fixed pool. So a trainer must not draw negatives from this pool:
+                # they would include test series. TimeF composition also refuses these tasks. An
+                # explicit train pool would store about 42,180 x 42,180 references. The fix is a TimeF
+                # state for "no fixed pool", which TimeF does not have yet.
                 candidate_records=self._test_candidates if file.split is SplitName.TEST else (),
                 split=file.split.timef_split,
                 # The event id joins the row to its event-type task, whose rationale is the row's report.
                 metadata=window.provenance() | event,
             )
             # The authors embed each channel sentence on its own (generate_channel_description) and align
-            # it with that channel's embedding. The sentences belong to this row, and copies of one
-            # measurement have their own, so they sit on the task, not on the shared Record's Signals.
+            # it with that channel's embedding. The sentences belong to this row, so they sit on the
+            # task, beside the row's other text.
             for channel, sentence in zip(Channel, row.sentences, strict=True):
                 task.annotate(
                     Annotation(
@@ -112,7 +110,7 @@ class TaskStream:
             target = window.forecast_target
             if target is not None:
                 yield ForecastingTask(
-                    inputs=(self._records[window.measurement],),
+                    inputs=(self._records[window],),
                     # Offsets count from the window's first timestamp.
                     scope=TimeInterval(start_us=0, end_us=target.start_us),
                     targets=(target,),

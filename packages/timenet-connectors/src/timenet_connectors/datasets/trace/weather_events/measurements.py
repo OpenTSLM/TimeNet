@@ -1,9 +1,10 @@
-"""Group the published windows into distinct measurements, and build one Record per measurement.
+"""Index the published windows, find the copies among them, and build one Record per window.
 
 The authors publish one window per NOAA event, so windows of different events can hold the same
-measurements. ``WindowIndex`` reads the window files once (pass one) and keeps each distinct
-measurement once, with every window that shares it. ``WindowReader`` rereads a measurement's values
-only when the dataset is written (pass two), and checks they did not change.
+measurements. ``WindowIndex`` reads the window files once (pass one) and groups the copies under one
+measurement. Each window still gets its own Record, as the authors count it, and names the window it
+copies. ``WindowReader`` rereads the values only when the dataset is written (pass two), and checks
+they did not change.
 """
 
 from dataclasses import dataclass
@@ -111,10 +112,11 @@ class WindowReader:
 
 @dataclass(eq=False)
 class Measurement:
-    """One distinct set of measurements: the values that several windows can share, and one Record.
+    """One distinct set of measurements: the values that several windows can share.
 
-    The values stay in the file of the first window seen with them. ``eq=False``: a window points to its
-    measurement, which lists its windows, so a field-by-field comparison would recurse between them.
+    The values stay in the file of the first window seen with them, and every copy's Record reads them
+    from there. ``eq=False``: a window points to its measurement, which lists its windows, so a
+    field-by-field comparison would recurse between them.
     """
 
     station_id: str
@@ -153,26 +155,28 @@ class Measurement:
         """Whether the authors give a window of this length a task."""
         return self.n_values >= MIN_TASK_VALUES
 
+    @property
+    def first_window_id(self) -> int:
+        """The lowest id of the windows that hold these measurements."""
+        return min(window.window_id for window in self.windows)
+
     def metadata(self) -> dict[str, JsonValue]:
-        """Return the Record's metadata: its station, where it stands, its sampling and every window."""
-        windows = sorted(self.windows, key=lambda window: window.window_id)
+        """Return the metadata that every copy's Record shares: the station, its place, sampling and dates."""
         return {
             MetadataKey.STATION: self.station_id,
             MetadataKey.COORDINATES: self.coordinates._asdict(),
             MetadataKey.SAMPLING: self.sampling.value,
             MetadataKey.WINDOW_START: self.first_date,
             MetadataKey.WINDOW_END: self.last_date,
-            MetadataKey.WINDOWS: [window.metadata() for window in windows],
         }
 
-    def to_record(self, reader: WindowReader) -> Record:
-        """Build the measurement's seven-channel station Record, whose values stay in the source file.
+    def source(self, reader: WindowReader) -> Source:
+        """Build a new seven-channel station Source, whose values stay in the source file.
 
-        The Record has no start time: the timestamps are local clock time in an unstated zone, so it has no
-        absolute anchor. The published first and last timestamps stay in its metadata.
+        Each call returns new Signals, because a Signal belongs to one Record.
 
         Returns:
-            A Record with lazy signals on one shared time axis.
+            A Source with lazy signals on one shared time axis.
         """
         location, axis = self.location, self.axis
         offsets_loader = partial(reader.time_offsets, location) if isinstance(axis, IrregularAxis) else None
@@ -187,21 +191,20 @@ class Measurement:
             )
             for channel in Channel
         )
-        source = Source(
+        return Source(
             name=_STATION_SOURCE,
             signals=signals,
             # TimeF does not keep signal order on read, so record the source's channel order.
             metadata={MetadataKey.CHANNEL_ORDER: [channel.value for channel in Channel]},
         )
-        return Record(sources=(source,), metadata=self.metadata())
 
 
 @dataclass(frozen=True, eq=False)
 class Window:
     """One window as the authors number it: one station and sampling, before an event or not.
 
-    Copies of one measurement share their measurement, and so their Record, but each keeps its own id,
-    label, county, split and tasks.
+    Copies of one measurement share their measurement, but each gets its own Record, as the authors
+    count it, with its own id, label, county, split and tasks.
     """
 
     file: TraceFile
@@ -246,16 +249,41 @@ class Window:
             MetadataKey.SOURCE_FILE: self.file.archive_path,
         }
 
+    @property
+    def copy_of(self) -> int | None:
+        """The lowest id of the other windows with the same measurements, or ``None`` if the window has none.
+
+        The window with the lowest id is the original, so its own value is also ``None``.
+        """
+        first = self.measurement.first_window_id
+        return None if first == self.window_id else first
+
     def metadata(self) -> dict[str, JsonValue]:
-        """Return the window as its Record's metadata lists it: its identity, county and stated label."""
-        return self.provenance() | {
-            MetadataKey.COUNTY: self.county._asdict(),
-            MetadataKey.EVENT_TYPE: None if self.label is None else self.label.value,
-        }
+        """Return the Record's metadata: the measurement's, the window's identity, county, label and original."""
+        return (
+            self.measurement.metadata()
+            | self.provenance()
+            | {
+                MetadataKey.COUNTY: self.county._asdict(),
+                MetadataKey.EVENT_TYPE: None if self.label is None else self.label.value,
+                MetadataKey.COPY_OF: self.copy_of,
+            }
+        )
+
+    def to_record(self, reader: WindowReader) -> Record:
+        """Build the window's seven-channel station Record, whose values stay in the source file.
+
+        The Record has no start time: the timestamps are local clock time in an unstated zone, so it has no
+        absolute anchor. The published first and last timestamps stay in its metadata.
+
+        Returns:
+            A Record with lazy signals on one shared time axis.
+        """
+        return Record(sources=(self.measurement.source(reader),), metadata=self.metadata())
 
 
 class WindowIndex:
-    """Pass one over the window files: every window by its key, and the measurements they share."""
+    """Pass one over the window files: every window by its key, and the measurements that copies share."""
 
     def __init__(self) -> None:
         self.windows: dict[str, Window] = {}

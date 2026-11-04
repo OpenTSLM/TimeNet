@@ -44,9 +44,10 @@ windows hold the same measurements but have their own id, label, county, descrip
 
 ## Records
 
-A Record is one distinct measurement: windows with the same station, mode, timestamps and values
-share one Record. The paper's 74,337 windows give about 63,366 Records. Each Record has one Source,
-`station`, with seven Signals on one time axis:
+A Record is one published window, as the authors count it: the paper's 74,337 windows give 74,337
+Records. Windows with the same station, mode, timestamps and values are copies. We expect about
+63,366 distinct measurements, so the copies store about 11,000 series twice. Each Record has one
+Source, `station`, with seven Signals on one time axis:
 
 | Channel | Unit | Spec |
 | --- | --- | --- |
@@ -65,9 +66,11 @@ cloud covers), 09 means that the sky is obscured, and 10 means partial obscurati
 [ncei-sky]: https://www.aos.wisc.edu/oldsco/stations/NCEI-hrly-doc_for_clds-BNA.txt
 
 The Record metadata holds the `station` id, its `coordinates`, the `sampling`, and `window_start`
-and `window_end`, the first and last timestamps as published. Its `windows` list has each published
-window with these measurements: its `window_id`, `anchor`, `source_file`, `county` and published
-`event_type`. Metadata is never model input. A Record has no annotations.
+and `window_end`, the first and last timestamps as published. It also holds the window's
+`window_id`, `anchor`, `source_file`, `county` and published `event_type`. For a copy, `copy_of` is
+the lowest id of the other windows with the same measurements. It is `null` for a window without
+copies, and for the copy with the lowest id. Metadata is never model input. A Record has no
+annotations.
 
 ## Time
 
@@ -79,7 +82,7 @@ mode's cadence. A window with gaps keeps the time offset of each value.
 ## Tasks
 
 Each window or row that qualifies is a task of its own, under the authors' split. The task uses the
-Record that holds its measurements. Its metadata holds its window id, anchor and source file.
+window's Record. Its metadata holds its window id, anchor and source file.
 
 | Task | One per | Model input | Target | Split | Expected count |
 | --- | --- | --- | --- | --- | --- |
@@ -95,10 +98,16 @@ Retrieval: this is the paper's Stage 2. The prompt is the description, as the au
 `generate_dsp` composes it. The text must find the window's Record. The task's
 `channel_description` annotations hold the seven channel sentences.
 
-Test retrieval tasks name the Records of the test windows as their candidates. Train retrieval
-tasks name no candidates, and TimeF reads that as the whole dataset, test Records included. Do not
-rank train tasks against that pool. A copy of a measurement shares its Record, so a copy counts as
-a right answer, where the authors count it as a miss.
+Test retrieval tasks name the Records of the test windows as their candidates, as the authors
+rank them. A copy of the target has its own Record, so finding the copy counts as a miss, as in the
+paper.
+
+Train retrieval tasks have a known issue. They name no candidates, and TimeF reads that as the
+whole dataset, test Records included. The authors train with in-batch negatives, so they rank
+against no fixed pool. Do not draw negatives from the pool of a train task, because it includes
+test series. TimeF composition also refuses these tasks. An explicit train pool would store about
+1.8 billion references. The fix needs a TimeF state for "no fixed pool", which TimeF does not have
+yet.
 
 A description starts with its window's dates and county. The Record keeps these only in metadata,
 so a model that sees the Record cannot match them by string.
@@ -153,12 +162,14 @@ def time_split(record) -> Split | None:
   files about seven times.
 - If a window repeats an hour at the end of daylight saving time, the first pass stops with an
   error. The archive was not checked for such windows.
-- In 4-hourly and daily windows, each value is the mean of the hourly values. So precipitation
-  there is a mean hourly amount, although its unit reads as mm.
+- The authors give precipitation in mm, and do not say how 4-hourly and daily values are made
+  from hourly ones. So a 4-hourly or daily value can be a total over its interval or a mean hourly
+  amount. To find out, compare it with the hourly window of the same anchor.
 - Some values are not physically possible, such as relative humidity above 100%. The dataset keeps
   them as published.
 - The generated descriptions have errors, such as `wind_v` called the "vertical" component.
-- Some measurements carry more than one event type, so no classifier can get every copy right.
+- Some copies carry different event types, so no classifier can get every copy right. A copy and
+  its original can also be in different splits.
 - A retrieval row joins its window by id only. The connector does not compare the row's
   `timeseries` copy with the window.
 - No release states a license. The NOAA sources list CC0-1.0 terms, but the descriptions are text

@@ -1,4 +1,4 @@
-"""Convert TRACE's weather windows into TimeF: one Record per distinct measurement, and three task types.
+"""Convert TRACE's weather windows into TimeF: one Record per published window, and three task types.
 
 The archive holds JSON window files (``pretrain`` and ``forecasting``) and parquet retrieval files, each
 under the authors' train, val and test splits. Windows with the same station, sampling, timestamps and
@@ -18,7 +18,7 @@ The modules, in reading order:
 - ``archive``: the source archive and its eight split files.
 - ``vocabulary``: what published values mean: event labels, samplings, channels and their units.
 - ``fields`` and ``window_rows``: read and check one published window.
-- ``measurements``: group windows into distinct measurements, and build their Records.
+- ``measurements``: index the windows, find the copies among them, and build one Record per window.
 - ``retrieval``: read and check the retrieval rows against the windows.
 - ``tasks``: build the three task types.
 """
@@ -44,7 +44,7 @@ from timenet_connectors.download import ensure_archive
 
 
 class TraceWeatherEventsConnector(BaseConnector[TraceFile]):
-    """Build TRACE's distinct measurement windows, with one task per published event, description and forecast."""
+    """Build TRACE's weather windows, with one task per published event, description and forecast."""
 
     # ruff: ignore[no-self-use] (BaseConnector interface)
     async def download_async(self, cache_dir: Path) -> list[TraceFile]:
@@ -65,9 +65,9 @@ class TraceWeatherEventsConnector(BaseConnector[TraceFile]):
         return files
 
     def convert(self, raw_refs: list[TraceFile]) -> TimeFDataset:
-        """Convert the archive's split files into one Record per distinct measurement, and its tasks.
+        """Convert the archive's split files into one Record per window, and its tasks.
 
-        Pass one reads the six window files, groups identical windows into one measurement each, and
+        Pass one reads the six window files, finds the windows that copy another's measurements, and
         checks every row of the two retrieval files against its window. The Records hold lazy signals
         whose values stay in the window files until written. The tasks stream, so the dataset does not
         hold them: each qualifying window keeps its own event-type, retrieval or forecasting task, under
@@ -94,7 +94,7 @@ class TraceWeatherEventsConnector(BaseConnector[TraceFile]):
                 windows.add_file(file)
         retrieval = RetrievalIndex.read([file for file in files if not file.kind.holds_windows], windows)
         reader = WindowReader()
-        records = {measurement: measurement.to_record(reader) for measurement in windows.measurements.values()}
+        records = {window: window.to_record(reader) for window in windows.windows.values()}
 
         dataset = TimeFDataset(metadata=self.metadata())
         for annotation in DATASET_ANNOTATIONS:

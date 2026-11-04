@@ -109,7 +109,7 @@ class AnnotationKey(StrEnum):
 class MetadataKey(StrEnum):
     """A key of the metadata the connector writes on a Record, a Source or a task. Metadata is never model input."""
 
-    # A Record: one distinct measurement.
+    # A Record: one window.
     STATION = "station"
     COORDINATES = "coordinates"
     SAMPLING = "sampling"
@@ -117,13 +117,14 @@ class MetadataKey(StrEnum):
     """The first timestamp, as published: station local clock time, with no time zone."""
     WINDOW_END = "window_end"
     """The last timestamp, as published."""
-    WINDOWS = "windows"
-    # A window, in its Record's ``windows`` and in its tasks.
+    # A window, in its Record and in its tasks.
     WINDOW_ID = "window_id"
     ANCHOR = "anchor"
     SOURCE_FILE = "source_file"
     COUNTY = "county"
     EVENT_TYPE = "event_type"
+    COPY_OF = "copy_of"
+    """The lowest id of the other windows with the same measurements, or ``None``. Only on a Record."""
     # A task.
     EVENT_TYPE_INDEX = "event_type_index"
     EVENT_ID = "event_id"

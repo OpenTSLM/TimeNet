@@ -175,12 +175,8 @@ def _windows_with(part: str, key: str, row) -> dict:
     return windows
 
 
-def _window_of(record) -> dict[int, dict]:
-    return {window["window_id"]: window for window in record.metadata["windows"]}
-
-
 def _record_of(dataset, window_id: int):
-    (record,) = [record for record in dataset.records if window_id in _window_of(record)]
+    (record,) = [record for record in dataset.records if record.metadata["window_id"] == window_id]
     return record
 
 
@@ -209,51 +205,72 @@ def _read_all_values(dataset) -> None:
             signal.to_numpy()
 
 
-def test_identical_windows_share_one_record_and_keep_their_own_tasks(converted):
+def test_identical_windows_get_their_own_records_and_name_their_original(converted):
     dataset = converted
 
-    record = _record_of(dataset, 12)
-    assert _record_of(dataset, 15) is record
-    assert _window_of(record) == {
-        12: {
-            "window_id": 12,
-            "anchor": 4,
-            "source_file": "dataset/pretrain/train.json",
-            "county": {"name": "FILLMORE", "state": "NEBRASKA"},
-            "event_type": 8,
-        },
-        15: {
-            "window_id": 15,
-            "anchor": 5,
-            "source_file": "dataset/pretrain/val.json",
-            "county": {"name": "FURNAS", "state": "NEBRASKA"},
-            "event_type": 6,
-        },
+    original, copy = _record_of(dataset, 12), _record_of(dataset, 15)
+    assert original is not copy
+    window_keys = ("window_id", "anchor", "source_file", "county", "event_type", "copy_of")
+    assert {key: original.metadata[key] for key in window_keys} == {
+        "window_id": 12,
+        "anchor": 4,
+        "source_file": "dataset/pretrain/train.json",
+        "county": {"name": "FILLMORE", "state": "NEBRASKA"},
+        "event_type": 8,
+        "copy_of": None,
+    }
+    assert {key: copy.metadata[key] for key in window_keys} == {
+        "window_id": 15,
+        "anchor": 5,
+        "source_file": "dataset/pretrain/val.json",
+        "county": {"name": "FURNAS", "state": "NEBRASKA"},
+        "event_type": 6,
+        "copy_of": 12,
+    }
+    # The copy holds the same series as its original, in Signals of its own.
+    for kept, copied in zip(original.signals, copy.signals, strict=True):
+        assert kept is not copied
+        np.testing.assert_array_equal(kept.to_numpy(), copied.to_numpy())
+    # No other window has a copy.
+    assert {record.metadata["window_id"] for record in dataset.records if record.metadata["copy_of"] is not None} == {
+        15
     }
     # A window without an event-type task keeps the label its file states: -100, or a label too short for a task.
-    assert _window_of(_record_of(dataset, 30))[30]["event_type"] == -100
-    assert _window_of(_record_of(dataset, 33))[33]["event_type"] == 2
+    assert _record_of(dataset, 30).metadata["event_type"] == -100
+    assert _record_of(dataset, 33).metadata["event_type"] == 2
     # A forecasting window publishes no label.
-    assert _window_of(_record_of(dataset, 60))[60]["event_type"] is None
-    # Each copy's county belongs to its event, so it stays in the window's metadata, not an annotation.
-    assert not [a for a in record.annotations if a.key in {"county", "location"}]
-    # Each window keeps its own split, though both tasks target one Record.
+    assert _record_of(dataset, 60).metadata["event_type"] is None
+    # Each window keeps its own split and targets its own Record.
     events = _tasks(dataset, ClassificationTask)
     assert (events[12].split, events[15].split) == (Split.TRAIN, Split.VALIDATION)
     retrievals = _tasks(dataset, TSCorrespondenceTask)
     assert (retrievals[12].split, retrievals[15].split) == (Split.TRAIN, Split.TEST)
+    assert (retrievals[12].targets, retrievals[15].targets) == ((original,), (copy,))
 
 
-def test_every_distinct_window_becomes_a_record_with_its_signals(converted):
+def test_every_window_becomes_a_record_with_its_signals(converted):
     dataset = converted
 
     rows = {key: row for part in _WINDOWS.values() for key, row in part.items()}
-    assert len(dataset.records) == len(rows) - 1
+    assert sorted(record.metadata["window_id"] for record in dataset.records) == sorted(map(int, rows))
     for record in dataset.records:
-        (window_id, *_) = sorted(_window_of(record))
+        window_id = record.metadata["window_id"]
+        assert isinstance(window_id, int)
         row = rows[str(window_id)]
-        # The station is TRACE's own field, beside where it stands, its sampling, its dates and its windows.
-        assert record.metadata.keys() == {"station", "coordinates", "sampling", "window_start", "window_end", "windows"}
+        # The station is TRACE's own field, beside where it stands, its sampling, its dates and the window.
+        assert record.metadata.keys() == {
+            "station",
+            "coordinates",
+            "sampling",
+            "window_start",
+            "window_end",
+            "window_id",
+            "anchor",
+            "source_file",
+            "county",
+            "event_type",
+            "copy_of",
+        }
         assert record.metadata["station"] == row["station_id"]
         assert record.metadata["coordinates"] == {"latitude": row["latitude"], "longitude": row["longitude"]}
         assert record.metadata["sampling"] == row["mode"]
@@ -322,8 +339,8 @@ def test_every_retrieval_row_becomes_a_retrieval_task(converted):
     assert retrievals[12].metadata["event_id"] == 1012
     assert "event_id" not in retrievals[30].metadata
     # Both published forms split into a name and a state, as published.
-    assert _window_of(_record_of(dataset, 60))[60]["county"] == {"name": "Doña Ana County", "state": "New Mexico"}
-    assert _window_of(_record_of(dataset, 63))[63]["county"] == {"name": "DOÑA ANA", "state": "NEW MEXICO"}
+    assert _record_of(dataset, 60).metadata["county"] == {"name": "Doña Ana County", "state": "New Mexico"}
+    assert _record_of(dataset, 63).metadata["county"] == {"name": "DOÑA ANA", "state": "NEW MEXICO"}
 
 
 def test_forecasting_windows_forecast_their_last_values(converted):
@@ -374,8 +391,7 @@ def test_storage_round_trip_keeps_values_timestamps_and_tasks(tmp_path):
         assert isinstance(start, str)
         first = datetime.fromisoformat(start)
         rebuilt = [(first + timedelta(microseconds=offset)).isoformat() for offset in _offsets(record.signals[0])]
-        for window_id in _window_of(record):
-            assert rebuilt == rows[str(window_id)]["DATE"]
+        assert rebuilt == rows[str(record.metadata["window_id"])]["DATE"]
 
     # The writer drew the task stream once already, so this pass checks that it streams again.
     task_keys = [_task_key(task) for task in original.iter_tasks()]
