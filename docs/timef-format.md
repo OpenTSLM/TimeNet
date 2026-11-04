@@ -151,11 +151,14 @@ WHERE c.name = 'subject_ids'
 
 An annotation has reusable content and one or more occurrences. `annotation_contents` stores the
 content once: its key (`name`), unit, description, metadata, and value. The dedicated `description`
-column is separate from metadata, which can contain its own `description` key. The value sits in
-one typed column selected by `value_kind`: `text_value`, `integer_value`, `float_value`,
-`boolean_value`, or `text_list_value`
-for a list of strings such as the subject IDs of a record. A marker annotation, which only places a
-span, has `NULL` in all of them. `annotation_occurrences` says where the content applies. It points at
+column is separate from metadata, which can contain its own `description` key.
+
+The value sits in one typed column selected by `value_kind`: `text_value`, `integer_value`, `float_value`,
+`boolean_value`, or `text_list_value`. The `text_list_value` column holds a list of strings, such as
+the subject IDs of a record. A marker annotation defines only a span. All its value columns are
+`NULL`.
+
+The `annotation_occurrences` table records where the content applies. It points at
 the content through `content_id`. It also carries the span as `span_type`, `start_us`, and
 `end_us`, plus provenance, confidence, and occurrence metadata.
 
@@ -174,14 +177,18 @@ its own `occurrence_id` and temporal placement.
 
 `Task` is abstract. Each concrete task gets one row in `tasks`. The `task_type` column selects the
 Python subclass. Four typed columns store the scope: `scope_type`, `scope_start`, `scope_end`, and
-`scope_signal_ids`. Subclass configuration uses one nullable column per field (`target_schema`,
-`label_set`, `unit`, `target_name`, `mode`). With these columns, SQL can filter tasks without
-parsing JSON.
+`scope_signal_ids`.
 
-Classification tasks refer to their label set by name in `tasks.label_set`. Each label set is one
-`label_sets` row with `name`, `labels` and `multi_label`. The name is unique within a release.
-`labels` holds one `{name, description}` entry per label, in label order, with a `NULL` description
-where a label has none.
+Configuration for each task type uses the columns `target_schema`,
+`label_set`, `unit`, `target_name`, and `mode`. Each of these columns can contain `NULL`.
+SQL can filter these columns without parsing JSON.
+
+If a classification task has a label set, `tasks.label_set` stores its name. Each row in
+`label_sets` stores one set with the fields `name`, `labels`, and `multi_label`. The name is unique
+within a release.
+
+The `labels` field holds one `{name, description}` entry per label, in label order. If a label has
+no description, its `description` is `NULL`.
 
 Each inline target is one row in `task_targets`. Its `target_kind` names the typed value column
 that is set. A target stores public IDs directly: `record_id` for a Record, `signal_id` for a

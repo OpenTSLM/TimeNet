@@ -221,21 +221,23 @@ ClassificationTask(inputs=(record,), targets=("healthy",), label_set=CONDITION)
 ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS)
 ```
 
-A `LabelSet` is the closed set of labels that a classification target takes. `multi_label` says how
-many of them are in a target:
+A `LabelSet` defines the allowed labels for a classification target. The `multi_label` flag controls
+how many labels a target can contain.
 
-- `multi_label=False`, the default: exactly one label.
-- `multi_label=True`: every label that applies. Omitted labels do not apply, so an empty target
-  means that no label applies. Labels are unordered.
+If `multi_label=False`, the default, a target must contain exactly one label. If `multi_label=True`,
+a target contains all labels that apply. Omitted labels do not apply. An empty target means that no
+label applies. The order of labels does not matter.
 
-`add_task()` and a task stream make sure that every target matches its label set. Every label must
-be in the set, no label can repeat, and a single-label target must hold exactly one label. The
-labels are the inline targets or the text of the target annotations. TimeNet does not examine the
-labels of a task that has no label set.
+When the dataset adds or streams a task, it makes sure that the target follows the rules of its
+label set. Each label must be in the set. No label can repeat. A target with `multi_label=False`
+must contain exactly one label.
 
-Tasks can share one label set. Label set names must be unique within a dataset: `add_task()`, a
-task stream and the writer raise an error if two different sets have the same name. TimeF stores
-each set once, and the reader gives every task that uses the set the same object.
+Labels come from the targets stored directly on the task or from the text of its target
+annotations. If a task has no label set, TimeNet does not examine its labels.
+
+Tasks can share the same label set object. Each name identifies one label set within a dataset.
+If two different sets have the same name, `add_task()`, the task stream, and the writer raise an
+error. TimeF stores each set once. The reader gives tasks that use the same set a shared object.
 
 ### Answer and rationale
 
