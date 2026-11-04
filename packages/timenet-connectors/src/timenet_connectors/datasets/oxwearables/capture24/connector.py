@@ -31,7 +31,7 @@ import pyarrow.csv as pa_csv
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.types import (
     US_PER_S,
     Annotation,
@@ -52,7 +52,17 @@ _ARCHIVE_ROOT = "capture24"
 """The archive's one top-level directory, which holds every file below."""
 
 _METADATA_FILE = "metadata.csv"
-_METADATA_COLUMNS = ("pid", "age", "sex")
+
+
+@unique
+class _MetadataColumn(StrEnum):
+    """A column of ``metadata.csv``."""
+
+    PID = "pid"
+    AGE = "age"
+    SEX = "sex"
+
+
 _DICTIONARY_FILE = "annotation-label-dictionary.csv"
 _DICTIONARY_LABEL_COLUMN = "annotation"
 # A recording's file name, such as P001.csv.gz. The group is the participant id.
@@ -88,7 +98,8 @@ class _Key(StrEnum):
     """The key of an annotation that this connector writes."""
 
     SUBJECT_IDS = "subject_ids"
-    AGE = "age"
+    AGE_BAND = "age_band"
+    """The participant's age band. Other connectors use ``age`` for an exact age in years."""
     SEX = "sex"
     RECORDING_START_LOCAL = "recording_start_local"
     """The first sample's published timestamp. The authors randomized its date and shifted its time."""
@@ -129,6 +140,7 @@ _FIRST_TEST_PARTICIPANT = 101
 """The paper's test set is P101 to P151, and benchmark.py tests ``range(101, 152)``."""
 _NO_LABEL = -1
 """The code of an unlabeled sample, which the source writes as an empty field."""
+_AGE_BAND_DESCRIPTION = "The participant's age band in years, as metadata.csv writes it. The authors give no exact age."
 _RECORDING_START_DESCRIPTION = (
     "The first sample's timestamp as the authors published it, with no zone. For anonymity they randomized "
     "the date and shifted the time by a small random amount, so the time of day is close to local time "
@@ -148,7 +160,7 @@ class _Vocabulary:
 
 # The classes of the two schemes that benchmark.py scores, as the label dictionary names them. Each
 # list is in string order, because a tie between classes goes to the first in string order.
-WILLETTS_SPECIFIC_2018 = _Vocabulary(
+WILLETTS_SPECIFIC_2018_VOCABULARY = _Vocabulary(
     name="willetts_specific_2018_vocabulary",
     labels=(
         "bicycling",
@@ -163,7 +175,7 @@ WILLETTS_SPECIFIC_2018 = _Vocabulary(
         "walking",
     ),
 )
-WALMSLEY_2020 = _Vocabulary(
+WALMSLEY_2020_VOCABULARY = _Vocabulary(
     name="walmsley_2020_vocabulary", labels=("light", "moderate-vigorous", "sedentary", "sleep")
 )
 
@@ -186,8 +198,8 @@ class _Scheme(StrEnum):
 
 
 _VOCABULARIES = {
-    _Scheme.WILLETTS_SPECIFIC_2018: WILLETTS_SPECIFIC_2018,
-    _Scheme.WALMSLEY_2020: WALMSLEY_2020,
+    _Scheme.WILLETTS_SPECIFIC_2018: WILLETTS_SPECIFIC_2018_VOCABULARY,
+    _Scheme.WALMSLEY_2020: WALMSLEY_2020_VOCABULARY,
 }
 """The vocabulary of each scheme that the authors' benchmark.py scores. Only these schemes have tasks."""
 
@@ -288,7 +300,7 @@ def _read_rows(path: Path, columns: list[str]) -> list[dict[str, str]]:
         One dict per row, keyed by column.
 
     Raises:
-        TimeFFormatError: If the file is unreadable or its columns differ from the expected columns.
+        TimeNetConnectorError: If the file is unreadable or its columns differ from the expected columns.
             Also raised if a field is missing or a row has more fields than the header.
     """
     try:
@@ -297,15 +309,15 @@ def _read_rows(path: Path, columns: list[str]) -> list[dict[str, str]]:
             rows = list(reader)
             header = reader.fieldnames or []
     except (OSError, UnicodeDecodeError, csv.Error) as exc:
-        raise TimeFFormatError(f"{path}: {exc}") from exc
+        raise TimeNetConnectorError(f"{path}: {exc}") from exc
     if len(header) != len(columns) or set(header) != set(columns):
-        raise TimeFFormatError(f"{path}: expected the columns {columns}, got {header}")
+        raise TimeNetConnectorError(f"{path}: expected the columns {columns}, got {header}")
     for line, row in enumerate(rows, start=_FIRST_DATA_LINE):
         if None in row:
-            raise TimeFFormatError(f"{path}:{line}: more fields than the header names")
+            raise TimeNetConnectorError(f"{path}:{line}: more fields than the header names")
         for column in columns:
             if not row[column]:
-                raise TimeFFormatError(f"{path}:{line}: no value for {column!r}")
+                raise TimeNetConnectorError(f"{path}:{line}: no value for {column!r}")
     return rows
 
 
@@ -316,20 +328,20 @@ def _read_labels(path: Path) -> _LabelDictionary:
         The dictionary, as the windowing and the activity annotations need it.
 
     Raises:
-        TimeFFormatError: If the file is unreadable or its columns are not the raw label and the six schemes.
+        TimeNetConnectorError: If the file is unreadable or its columns are not the raw label and the six schemes.
             Also raised if a row has missing or extra fields, or a raw label appears twice.
             Every class must belong to its scheme's vocabulary.
     """
     rows = _read_rows(path, [_DICTIONARY_LABEL_COLUMN, *(scheme.column for scheme in _Scheme)])
     raw_labels = [row[_DICTIONARY_LABEL_COLUMN] for row in rows]
     if len(set(raw_labels)) != len(raw_labels):
-        raise TimeFFormatError(f"{path}: a raw label is listed twice")
+        raise TimeNetConnectorError(f"{path}: a raw label is listed twice")
     class_of_raw = {}
     for scheme, vocabulary in _VOCABULARIES.items():
         classes = [row[scheme.column] for row in rows]
         unknown = sorted(set(classes) - set(vocabulary.labels))
         if unknown:
-            raise TimeFFormatError(f"{path}: classes missing from vocabulary {vocabulary.name!r}: {unknown}")
+            raise TimeNetConnectorError(f"{path}: classes missing from vocabulary {vocabulary.name!r}: {unknown}")
         index = {name: code for code, name in enumerate(vocabulary.labels)}
         class_of_raw[scheme] = np.array([index[name] for name in classes] + [len(index)], dtype=np.int16)
     return _LabelDictionary(
@@ -350,12 +362,12 @@ def _parse_person_value(path: Path, line: int, column: str, value: str, parse: C
         The parsed value.
 
     Raises:
-        TimeFFormatError: If the value is not one that the release writes.
+        TimeNetConnectorError: If the value is not one that the release writes.
     """
     try:
         return parse(value)
     except (KeyError, ValueError) as exc:
-        raise TimeFFormatError(f"{path}:{line}: unknown {column} {value!r}") from exc
+        raise TimeNetConnectorError(f"{path}:{line}: unknown {column} {value!r}") from exc
 
 
 def _read_people(root: Path) -> list[_Person]:
@@ -365,29 +377,34 @@ def _read_people(root: Path) -> list[_Person]:
         One person per participant, in id order.
 
     Raises:
-        TimeFFormatError: If the file is unreadable or its columns are not pid, age and sex.
-            Also raised if a row has missing or extra fields, an age band or sex is unknown, or a pid repeats.
+        TimeNetConnectorError: If the file is unreadable, its columns are not pid, age and sex, or it lists
+            no participants. Also raised if a row has missing or extra fields, an age band or sex is unknown,
+            or a pid repeats.
             The table and the recordings must name the same participants.
     """
     path = root / _METADATA_FILE
-    rows = _read_rows(path, list(_METADATA_COLUMNS))
-    pids = [row["pid"] for row in rows]
+    rows = _read_rows(path, [column.value for column in _MetadataColumn])
+    if not rows:
+        raise TimeNetConnectorError(f"{path}: lists no participants")
+    pids = [row[_MetadataColumn.PID] for row in rows]
     if len(set(pids)) != len(pids):
-        raise TimeFFormatError(f"{path}: a pid is listed twice")
+        raise TimeNetConnectorError(f"{path}: a pid is listed twice")
     recordings = {
         match[1]: file for file in root.iterdir() if (match := _RECORDING_FILE.fullmatch(file.name)) is not None
     }
     if set(recordings) != set(pids):
-        raise TimeFFormatError(
+        raise TimeNetConnectorError(
             f"{root}: recordings missing for {sorted(set(pids) - set(recordings))}, "
             f"unlisted recordings {sorted(set(recordings) - set(pids))}"
         )
     people = [
         _Person(
-            pid=row["pid"],
-            age=_parse_person_value(path, line, "age", row["age"], _AgeBand),
-            sex=_parse_person_value(path, line, "sex", row["sex"], _SEX_OF_LETTER.__getitem__),
-            path=recordings[row["pid"]],
+            pid=row[_MetadataColumn.PID],
+            age=_parse_person_value(path, line, _MetadataColumn.AGE, row[_MetadataColumn.AGE], _AgeBand),
+            sex=_parse_person_value(
+                path, line, _MetadataColumn.SEX, row[_MetadataColumn.SEX], _SEX_OF_LETTER.__getitem__
+            ),
+            path=recordings[row[_MetadataColumn.PID]],
         )
         for line, row in enumerate(rows, start=_FIRST_DATA_LINE)
     ]
@@ -403,7 +420,7 @@ def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant
         The participant, without the samples.
 
     Raises:
-        TimeFFormatError: If the file is unreadable, its header is wrong, or it has no rows.
+        TimeNetConnectorError: If the file is unreadable, its header is wrong, or it has no rows.
             Also raised if a timestamp is missing or unreadable, or a step is shorter than one period.
             Raw labels must belong to the dictionary, and kept windows must not cross gaps.
             Acceleration values must be present and finite.
@@ -447,21 +464,21 @@ def _read_table(path: Path) -> pa.Table:
         The recording's table.
 
     Raises:
-        TimeFFormatError: If the file cannot be read, the header is wrong, or the file has no rows.
+        TimeNetConnectorError: If the file cannot be read, the header is wrong, or the file has no rows.
     """
     try:
         with gzip.open(path, "rt", newline="", encoding="utf-8") as handle:
             header = next(csv.reader(handle), None)
-    except (OSError, EOFError, UnicodeDecodeError) as exc:
-        raise TimeFFormatError(f"{path}: {exc}") from exc
+    except (OSError, EOFError, UnicodeDecodeError, csv.Error) as exc:
+        raise TimeNetConnectorError(f"{path}: {exc}") from exc
     if header != _RECORDING_COLUMNS:
-        raise TimeFFormatError(f"{path}: expected the header {','.join(_RECORDING_COLUMNS)}, got {header}")
+        raise TimeNetConnectorError(f"{path}: expected the header {','.join(_RECORDING_COLUMNS)}, got {header}")
     try:
         table = pa_csv.read_csv(path, convert_options=_convert_options(_RECORDING_COLUMNS))
     except (OSError, pa.ArrowException) as exc:
-        raise TimeFFormatError(f"{path}: {exc}") from exc
+        raise TimeNetConnectorError(f"{path}: {exc}") from exc
     if table.num_rows == 0:
-        raise TimeFFormatError(f"{path}: holds no samples")
+        raise TimeNetConnectorError(f"{path}: holds no samples")
     return table
 
 
@@ -469,17 +486,19 @@ def _read_stamps(path: Path, table: pa.Table) -> np.ndarray:
     """Return each sample's time in microseconds.
 
     Raises:
-        TimeFFormatError: If a timestamp is missing, or a step is shorter than one period.
+        TimeNetConnectorError: If a timestamp is missing, or a step is shorter than one period.
     """
     times = table[_TIME_COLUMN].combine_chunks()
     if times.null_count:
-        raise TimeFFormatError(f"{path}: {times.null_count} samples have no timestamp")
+        raise TimeNetConnectorError(f"{path}: {times.null_count} samples have no timestamp")
     stamps = times.cast(pa.int64()).to_numpy()
     steps = np.diff(stamps)
     # Reject any step shorter than one period: it is neither a regular step nor a gap.
     if (steps < _SAMPLE_PERIOD_US).any():
         row = int(np.flatnonzero(steps < _SAMPLE_PERIOD_US)[0]) + 1
-        raise TimeFFormatError(f"{path}: the timestamp of row {row} doesn't follow the one before it by a full period")
+        raise TimeNetConnectorError(
+            f"{path}: the timestamp of row {row} doesn't follow the one before it by a full period"
+        )
     return stamps
 
 
@@ -525,16 +544,16 @@ def _axis_values(path: Path, table: pa.Table) -> dict[str, np.ndarray]:
         One array per acceleration column.
 
     Raises:
-        TimeFFormatError: If a value is missing or not finite.
+        TimeNetConnectorError: If a value is missing or not finite.
     """
     values = {}
     for column in _AXES:
         array = table[column].combine_chunks()
         if array.null_count:
-            raise TimeFFormatError(f"{path}: {array.null_count} samples have no {column} value")
+            raise TimeNetConnectorError(f"{path}: {array.null_count} samples have no {column} value")
         values[column] = array.to_numpy()
         if not np.isfinite(values[column]).all():
-            raise TimeFFormatError(f"{path}: a {column} value is not finite")
+            raise TimeNetConnectorError(f"{path}: a {column} value is not finite")
     return values
 
 
@@ -550,12 +569,12 @@ def _raw_codes(path: Path, column: pa.DictionaryArray, labels: _LabelDictionary)
     """Return each sample's raw label as an index into the dictionary, or ``_NO_LABEL``.
 
     Raises:
-        TimeFFormatError: If the recording writes a raw label the dictionary does not list.
+        TimeNetConnectorError: If the recording writes a raw label the dictionary does not list.
     """
     written = column.dictionary.to_pylist()
     unknown = sorted(label for label in written if label not in labels.code_of_raw)
     if unknown:
-        raise TimeFFormatError(f"{path}: raw labels missing from the label dictionary: {unknown}")
+        raise TimeNetConnectorError(f"{path}: raw labels missing from the label dictionary: {unknown}")
     # One extra slot maps a null's filled index to _NO_LABEL.
     codes = np.array([labels.code_of_raw[label] for label in written] + [_NO_LABEL], dtype=np.int16)
     return codes[column.indices.fill_null(len(written)).to_numpy()]
@@ -582,22 +601,26 @@ def _make_windows(
         The kept windows.
 
     Raises:
-        TimeFFormatError: If a kept window holds 1000 samples across a gap.
+        TimeNetConnectorError: If a kept window holds 1000 samples across a gap.
     """
+    # Each sample's 10 s bin on the first sample's grid, and the first row of each bin that has samples.
     bins = offsets_us // _WINDOW_US
     bin_starts = np.flatnonzero(np.diff(bins, prepend=bins[0] - 1))
+    # Keep the bins that hold exactly 1000 samples: the rows up to the next bin's first row.
     full = bin_starts[np.diff(bin_starts, append=len(bins)) == _WINDOW_SAMPLES]
+    # One row of 1000 raw label codes per full bin. Keep the bins with at least one labeled sample.
     window_codes = raw_codes[full[:, None] + np.arange(_WINDOW_SAMPLES)]
     labelled = (window_codes != _NO_LABEL).any(axis=1)
     first_rows, window_codes = full[labelled], window_codes[labelled]
-    first_row_of_segment = np.array([segment.first_row for segment in segments])
-    last_rows = first_rows + _WINDOW_SAMPLES - 1
-    crossing = np.searchsorted(first_row_of_segment, first_rows, side="right") != np.searchsorted(
-        first_row_of_segment, last_rows, side="right"
-    )
+    # A window crosses a gap if its first and last rows are in different segments. searchsorted finds
+    # each row's segment from the segments' first rows, with no array as long as the recording.
+    segment_first_rows = np.array([segment.first_row for segment in segments])
+    first_segment = np.searchsorted(segment_first_rows, first_rows, side="right")
+    last_segment = np.searchsorted(segment_first_rows, first_rows + _WINDOW_SAMPLES - 1, side="right")
+    crossing = first_segment != last_segment
     if crossing.any():
         row = int(first_rows[crossing][0])
-        raise TimeFFormatError(f"{path}: the window at row {row} holds {_WINDOW_SAMPLES} samples across a gap")
+        raise TimeNetConnectorError(f"{path}: the window at row {row} holds {_WINDOW_SAMPLES} samples across a gap")
     classes = {}
     for scheme, class_of_raw in labels.class_of_raw.items():
         per_sample = class_of_raw[window_codes]
@@ -617,21 +640,21 @@ def _read_acceleration(participant: _Participant) -> dict[str, np.ndarray]:
         One array per acceleration column.
 
     Raises:
-        TimeFFormatError: If a value is missing, unreadable or not finite, or the row count or the values
+        TimeNetConnectorError: If a value is missing, unreadable or not finite, or the row count or the values
             changed.
     """
     path = participant.person.path
     try:
         table = pa_csv.read_csv(path, convert_options=_convert_options(list(_AXES)))
     except (OSError, pa.ArrowException) as exc:
-        raise TimeFFormatError(f"{path}: {exc}") from exc
+        raise TimeNetConnectorError(f"{path}: {exc}") from exc
     if table.num_rows != participant.n_rows:
-        raise TimeFFormatError(
+        raise TimeNetConnectorError(
             f"{path}: holds {table.num_rows} rows, {participant.n_rows} when it was read; the file changed"
         )
     values = _axis_values(path, table)
     if _digest(values) != participant.acceleration_digest:
-        raise TimeFFormatError(f"{path}: the acceleration values differ from when it was read; the file changed")
+        raise TimeNetConnectorError(f"{path}: the acceleration values differ from when it was read; the file changed")
     return values
 
 
@@ -725,7 +748,7 @@ def _record(participant: _Participant, labels: _LabelDictionary, acceleration: _
     record.add_annotations(
         (
             Annotation(key=_Key.SUBJECT_IDS, value=[person.pid]),
-            Annotation(key=_Key.AGE, value=person.age.value),
+            Annotation(key=_Key.AGE_BAND, value=person.age.value, description=_AGE_BAND_DESCRIPTION),
             Annotation(key=_Key.SEX, value=person.sex.value),
             Annotation(
                 key=_Key.RECORDING_START_LOCAL,
@@ -735,6 +758,25 @@ def _record(participant: _Participant, labels: _LabelDictionary, acceleration: _
         )
     )
     return record
+
+
+def _scheme_tasks(scheme: _Scheme, participant: _Participant, record: Record) -> Iterator[ClassificationTask]:
+    """Yield one participant's tasks in one scheme: one per kept window, in time order.
+
+    Yields:
+        A task whose scope is the window and whose target is the window's class in the scheme.
+    """
+    vocabulary = _VOCABULARIES[scheme]
+    starts_us = participant.window_starts_us.tolist()
+    classes = participant.window_classes[scheme].tolist()
+    for start_us, class_index in zip(starts_us, classes, strict=True):
+        yield ClassificationTask(
+            inputs=(record,),
+            scope=TimeInterval.micros(start_us, start_us + _WINDOW_US),
+            targets=(vocabulary.labels[class_index],),
+            target_schema=vocabulary.name,
+            split=participant.person.split,
+        )
 
 
 class Capture24Connector(BaseConnector[Path]):
@@ -764,7 +806,7 @@ class Capture24Connector(BaseConnector[Path]):
 
         Raises:
             TimeFValidationError: If ``raw_refs`` is not one directory.
-            TimeFFormatError: If a table or recording is malformed.
+            TimeNetConnectorError: If a table or recording is malformed.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the read helpers
         if len(raw_refs) != 1 or not raw_refs[0].is_dir():
             raise TimeFValidationError(f"CAPTURE-24 loads from one directory, got {raw_refs}")
@@ -782,16 +824,10 @@ class Capture24Connector(BaseConnector[Path]):
             dataset.annotate(Annotation(key=vocabulary.name, value=list(vocabulary.labels)))
 
         def tasks() -> Iterator[ClassificationTask]:
-            for participant, record in zip(participants, records, strict=True):
-                for window, start_us in enumerate(participant.window_starts_us.tolist()):
-                    for scheme, vocabulary in _VOCABULARIES.items():
-                        yield ClassificationTask(
-                            inputs=(record,),
-                            scope=TimeInterval.micros(start_us, start_us + _WINDOW_US),
-                            targets=(vocabulary.labels[participant.window_classes[scheme][window]],),
-                            target_schema=vocabulary.name,
-                            split=participant.person.split,
-                        )
+            # As the authors' benchmark.py: one benchmark per scheme, over every participant's windows.
+            for scheme in _VOCABULARIES:
+                for participant, record in zip(participants, records, strict=True):
+                    yield from _scheme_tasks(scheme, participant, record)
 
         dataset.set_task_stream((ClassificationTask,), tasks)
         return dataset
