@@ -41,6 +41,8 @@ from timenet.types import (
     US_PER_S,
     Annotation,
     ClassificationTask,
+    Label,
+    LabelSet,
     Split,
     TimeInterval,
     TimeSeriesSpec,
@@ -166,35 +168,30 @@ _RECORDING_START_DESCRIPTION = (
 )
 
 
-@dataclass(frozen=True)
-class _Vocabulary:
-    """The allowed classes for a benchmarked scheme and the dataset annotation that stores them."""
-
-    name: str
-    """The key of the dataset annotation that holds the classes. Each task refers to this key through target_schema."""
-    labels: tuple[str, ...]
-    """The scheme's classes, in string order."""
-
-
-# The classes of the two schemes that benchmark.py scores, as the label dictionary names them. Each
-# list is in string order, because a tie between classes goes to the first in string order.
-WILLETTS_SPECIFIC_2018_VOCABULARY = _Vocabulary(
-    name="willetts_specific_2018_vocabulary",
-    labels=(
-        "bicycling",
-        "household-chores",
-        "manual-work",
-        "mixed-activity",
-        "sitting",
-        "sleep",
-        "sports",
-        "standing",
-        "vehicle",
-        "walking",
+# The label sets of the two schemes that benchmark.py scores, with the classes as the label dictionary
+# names them. Each set is in string order, because a tie between classes goes to the first in string
+# order.
+WILLETTS_SPECIFIC_2018 = LabelSet(
+    name="willetts_specific_2018",
+    labels=tuple(
+        Label(name=name)
+        for name in (
+            "bicycling",
+            "household-chores",
+            "manual-work",
+            "mixed-activity",
+            "sitting",
+            "sleep",
+            "sports",
+            "standing",
+            "vehicle",
+            "walking",
+        )
     ),
 )
-WALMSLEY_2020_VOCABULARY = _Vocabulary(
-    name="walmsley_2020_vocabulary", labels=("light", "moderate-vigorous", "sedentary", "sleep")
+WALMSLEY_2020 = LabelSet(
+    name="walmsley_2020",
+    labels=tuple(Label(name=name) for name in ("light", "moderate-vigorous", "sedentary", "sleep")),
 )
 
 
@@ -215,11 +212,11 @@ class _Scheme(StrEnum):
         return f"{_SCHEME_COLUMN_PREFIX}{self.value}"
 
 
-_VOCABULARIES = {
-    _Scheme.WILLETTS_SPECIFIC_2018: WILLETTS_SPECIFIC_2018_VOCABULARY,
-    _Scheme.WALMSLEY_2020: WALMSLEY_2020_VOCABULARY,
+_LABEL_SETS = {
+    _Scheme.WILLETTS_SPECIFIC_2018: WILLETTS_SPECIFIC_2018,
+    _Scheme.WALMSLEY_2020: WALMSLEY_2020,
 }
-"""The vocabulary of each scheme that the authors' benchmark.py scores. Only these schemes have tasks."""
+"""The label set of each scheme that the authors' benchmark.py scores. Only these schemes have tasks."""
 
 
 @dataclass(frozen=True)
@@ -233,7 +230,7 @@ class _LabelDictionary:
     scheme_classes_of_raw: tuple[dict[_Scheme, str], ...]
     """Each raw label's class in all six schemes, as the dictionary names it."""
     class_of_raw: dict[_Scheme, np.ndarray]
-    """For each benchmarked scheme, this array maps raw labels to class indices in its vocabulary.
+    """For each benchmarked scheme, this array maps raw labels to class indices in its label set.
 
     The final entry represents an unlabeled sample. Indexing with ``_NO_LABEL`` selects that entry.
     A class's index breaks ties. ``Series.mode`` sorts the modes, and the authors' ``make_windows`` takes
@@ -284,7 +281,7 @@ class _Windows:
     first_rows: np.ndarray
     """Each kept window's first row."""
     classes: dict[_Scheme, np.ndarray]
-    """Each kept window's class per benchmarked scheme, as an index into that scheme's vocabulary."""
+    """Each kept window's class per benchmarked scheme, as an index into that scheme's label set."""
 
 
 @dataclass(frozen=True)
@@ -309,7 +306,7 @@ class _Participant:
     window_starts_us: np.ndarray
     """The time between the recording's first sample and each kept window's first sample."""
     window_classes: dict[_Scheme, np.ndarray]
-    """Each kept window's class per benchmarked scheme, as an index into that scheme's vocabulary."""
+    """Each kept window's class per benchmarked scheme, as an index into that scheme's label set."""
 
 
 def _read_rows(path: Path, columns: list[str]) -> list[dict[str, str]]:
@@ -352,15 +349,15 @@ def _read_labels(path: Path) -> _LabelDictionary:
     Raises:
         TimeNetConnectorError: If the file is unreadable or its columns are not the raw label and the six schemes.
             Also raised if a row has missing or extra fields, or a raw label appears twice.
-            Also raised if a class of a benchmarked scheme is not in that scheme's vocabulary.
+            Also raised if a class of a benchmarked scheme is not in that scheme's label set.
     """
     rows = _read_rows(path, [_DICTIONARY_LABEL_COLUMN, *(scheme.column for scheme in _Scheme)])
     raw_labels = [row[_DICTIONARY_LABEL_COLUMN] for row in rows]
     if len(set(raw_labels)) != len(raw_labels):
         raise TimeNetConnectorError(f"{path}: a raw label is listed twice")
     class_of_raw = {
-        scheme: _class_codes(path, [row[scheme.column] for row in rows], vocabulary)
-        for scheme, vocabulary in _VOCABULARIES.items()
+        scheme: _class_codes(path, [row[scheme.column] for row in rows], label_set)
+        for scheme, label_set in _LABEL_SETS.items()
     }
     return _LabelDictionary(
         raw_labels=tuple(raw_labels),
@@ -370,23 +367,23 @@ def _read_labels(path: Path) -> _LabelDictionary:
     )
 
 
-def _class_codes(path: Path, classes: list[str], vocabulary: _Vocabulary) -> np.ndarray:
-    """Map each raw label's class in one scheme to its index in the scheme's vocabulary.
+def _class_codes(path: Path, classes: list[str], label_set: LabelSet) -> np.ndarray:
+    """Map each raw label's class in one scheme to its index in the scheme's label set.
 
     Returns:
         One class index per raw label, in file order, followed by an entry for unlabeled samples.
-        The final entry uses an index beyond the vocabulary's classes, so class counts exclude it.
+        The final entry uses an index beyond the label set's classes, so class counts exclude it.
         Indexing with ``_NO_LABEL`` selects this entry.
 
     Raises:
-        TimeNetConnectorError: If a class is not in the vocabulary.
+        TimeNetConnectorError: If a class is not in the label set.
     """
-    unknown = sorted(set(classes) - set(vocabulary.labels))
+    unknown = sorted(set(classes) - set(label_set.names))
     if unknown:
-        raise TimeNetConnectorError(f"{path}: classes missing from vocabulary {vocabulary.name!r}: {unknown}")
-    index_of_class = {name: index for index, name in enumerate(vocabulary.labels)}
+        raise TimeNetConnectorError(f"{path}: classes missing from label set {label_set.name!r}: {unknown}")
+    index_of_class = {name: index for index, name in enumerate(label_set.names)}
     codes = [index_of_class[name] for name in classes]
-    unlabeled = len(vocabulary.labels)
+    unlabeled = len(label_set.labels)
     return np.array([*codes, unlabeled], dtype=np.int16)
 
 
@@ -707,7 +704,7 @@ def _make_windows(
         per_sample = class_of_raw[window_codes]
         # Count each class per window. Unlabeled samples use an index beyond the classes, so the counts exclude them.
         counts = np.stack(
-            [(per_sample == index).sum(axis=1) for index in range(len(_VOCABULARIES[scheme].labels))], axis=1
+            [(per_sample == index).sum(axis=1) for index in range(len(_LABEL_SETS[scheme].labels))], axis=1
         )
         # argmax takes the first of equal counts: the class first in string order.
         classes[scheme] = counts.argmax(axis=1).astype(np.int16)
@@ -853,15 +850,15 @@ def _scheme_tasks(scheme: _Scheme, participant: _Participant, record: Record) ->
     Yields:
         A task whose scope is the window and whose target is the window's class in the scheme.
     """
-    vocabulary = _VOCABULARIES[scheme]
+    label_set = _LABEL_SETS[scheme]
     starts_us = participant.window_starts_us.tolist()
     classes = participant.window_classes[scheme].tolist()
     for start_us, class_index in zip(starts_us, classes, strict=True):
         yield ClassificationTask(
             inputs=(record,),
             scope=TimeInterval.micros(start_us, start_us + _WINDOW_US),
-            targets=(vocabulary.labels[class_index],),
-            target_schema=vocabulary.name,
+            targets=(label_set.names[class_index],),
+            label_set=label_set,
             split=participant.person.split,
         )
 
@@ -895,7 +892,8 @@ class Capture24Connector(BaseConnector[Path]):
             raw_refs: The one extracted ``capture24`` directory.
 
         Returns:
-            A dataset with the vocabulary annotations, the Records, and a stream of every task.
+            A dataset with the Records and a stream of every task. Each task carries its scheme's label
+            set.
 
         Raises:
             TimeFValidationError: If ``raw_refs`` is not one directory.
@@ -913,12 +911,10 @@ class Capture24Connector(BaseConnector[Path]):
         dataset = TimeFDataset(metadata=self.metadata())
         for record in records:
             dataset.add_record(record=record)
-        for vocabulary in _VOCABULARIES.values():
-            dataset.annotate(Annotation(key=vocabulary.name, value=list(vocabulary.labels)))
 
         def tasks() -> Iterator[ClassificationTask]:
             # As the authors' benchmark.py: one benchmark per scheme, over every participant's windows.
-            for scheme in _VOCABULARIES:
+            for scheme in _LABEL_SETS:
                 for participant, record in zip(participants, records, strict=True):
                     yield from _scheme_tasks(scheme, participant, record)
 
