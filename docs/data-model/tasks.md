@@ -248,12 +248,8 @@ must contain exactly one label.
 Labels come from the targets stored directly on the task or from the text of its target
 annotations.
 
-A target can also be a `Label` from the set. `CONDITION["faulty"]` returns the label named `faulty`.
-If the name is not in the set, the lookup raises `TimeFNotFoundError` before the task is created.
-TimeNet stores the label's name.
-
-The `task.labels` property returns `Label` objects from the task's label set, in target order.
-Each label includes its description from the set:
+Use a `Label` from the set as a target. TimeNet stores its name. Read `task.labels` to get the
+labels and their descriptions, in target order.
 
 ```python
 task = ClassificationTask(inputs=(record,), targets=(CONDITION["faulty"],), label_set=CONDITION)
