@@ -50,7 +50,7 @@ SLEEP_STAGES = LabelSet(
         Label(name="Sleep stage 4"),
         Label(name="Sleep stage R", description="Rapid eye movement (REM) sleep."),
         Label(name="Movement time", description="An epoch that body movement obscures, so it has no stage."),
-        Label(name="Sleep stage ?", description="An epoch that was unscored during data collection."),
+        Label(name="Sleep stage ?", description="An epoch with no sleep-stage score from data collection."),
     ),
 )
 STAGE_LABELS = SLEEP_STAGES.names
