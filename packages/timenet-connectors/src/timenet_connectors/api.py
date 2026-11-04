@@ -27,23 +27,14 @@ def build(  # ruff: ignore[too-many-arguments]
     # ruff: ignore[docstring-extraneous-exception] (raised by build_release, not directly here)
     """Build a dataset release into a local registry by its dataset ID.
 
-    This is the producer-side one-liner over the build coordinator,
-    :func:`timenet.coordinator.build.build_release`. The build reuses a release that the registry
-    already holds, unless the caller sets ``force``. The default output is the shared local registry
-    (:func:`timenet.registry.default_registry_path`). The SDK reads from that directory, so a build
-    here loads at once with ``TimeNet().load(dataset_id)``.
-
-    Like ``timenet-build build``, this runs the connector in an environment built from its
-    ``requirements.txt``. Set ``TIMENET_ISOLATION=off`` to run it in this interpreter instead, which
-    is what you want while writing a connector. Missing parent releases fail the build before any
-    download, unless ``fetch_from`` or ``build_parents`` obtains them.
+    The build reuses a release that the registry already holds, unless you set ``force``. The
+    connector runs in an environment built from its ``requirements.txt``, or in this interpreter if
+    ``TIMENET_ISOLATION=off``.
 
     Args:
         dataset_id: The dataset ID, exactly as the card of the connector declares it (``org/name``).
-        version: The expected dataset version. A connector builds only the version that its card
-            declares, so this value is a guard. If it is another version, the build stops before
-            anything runs. ``None`` builds the version that the card declares.
-        out: Output registry directory. Defaults to the shared local registry.
+        version: The version that the card must declare. ``None`` accepts any version.
+        out: The local registry directory. Defaults to the shared one that ``TimeNet`` reads.
         force: Build the release again, even if the registry already holds it.
         keep_cache: Keep the raw download cache. A successful build deletes it by default.
         fetch_from: The registry, or its URI, to copy missing parent releases from.
@@ -54,10 +45,8 @@ def build(  # ruff: ignore[too-many-arguments]
 
     Raises:
         TimeNetDatasetNotFoundError: If no installed connector builds ``dataset_id``.
-        TimeNetVersionUnavailableError: If the caller sets ``version`` and the card declares another
-            version. The error is also a :class:`~timenet.errors.TimeFValidationError`.
-        TimeNetMissingParentError: If a parent release is missing, with a hint that names the
-            keywords.
+        TimeNetVersionUnavailableError: If ``version`` is set and the card declares another version.
+        TimeNetMissingParentError: If a parent release is missing. Its hint names the two keywords.
     """
     from timenet.builders import BuildOptions, declared  # ruff: ignore[import-outside-top-level]
     from timenet.coordinator.build import build_release  # ruff: ignore[import-outside-top-level]
@@ -95,15 +84,12 @@ def load(
 ) -> "TimeFDataset":
     """Build a dataset if needed, then load it into memory.
 
-    This is the one-call sugar over :func:`build` plus :meth:`timenet.client.TimeNet.load`. For a
-    clear producer and consumer split, call :func:`build` and ``TimeNet().load`` yourself.
+    This runs :func:`build`, then :meth:`timenet.client.TimeNet.load`.
 
     Args:
-        dataset_id: The dataset id (``org/name``).
-        version: The version string, or ``None`` for the latest. :func:`build` checks this value
-            against the version that the card of the connector declares, and rejects another one.
-        fetch_from: The registry, or its URI, that the build and the read copy missing parent
-            releases and payload sources from.
+        dataset_id: The dataset ID (``org/name``).
+        version: The version to load, which the card must declare, or ``None`` for the latest.
+        fetch_from: The registry, or its URI, to copy missing parents and payload sources from.
         build_parents: Build missing parent releases from their installed connectors.
 
     Returns:
