@@ -39,7 +39,7 @@ from timenet.errors import (
     TimeNetRegistryError,
 )
 from timenet.manifest import PayloadSource
-from timenet.progress import BytesMoved, ProgressEvent, ShardWritten, StepFinished, StepStarted
+from timenet.progress import BytesMoved, ProgressEvent, ShardWritten
 from timenet.registry import (
     BaseRegistry,
     LocalRegistry,
@@ -189,7 +189,7 @@ def build(
 
 
 @app.command("build-prepared-release", hidden=True)
-def build_release_command(
+def build_prepared_release_command(
     release: str,
     store: Path = typer.Option(..., "--store", help="The local registry to build into."),
     force: bool = typer.Option(False, "--force", help="Build the release again, even if the local registry holds it."),
@@ -208,12 +208,8 @@ def build_release_command(
     reference = DatasetRef.parse(release)
     pins = {} if pinned_by is None else _read_pins(pinned_by)
     with _renderer() as progress:
-        if progress is not None:
-            progress(StepStarted(reference, "build"))
         options = BuildOptions(keep_cache=keep_cache, progress=progress, quiet=console.quiet)
         ConnectorBuilder().build_prepared(reference, LocalRegistry(store), force=force, pinned_by=pins, options=options)
-        if progress is not None:
-            progress(StepFinished(reference, "build"))
 
 
 def build_one(  # ruff: ignore[too-many-arguments]
@@ -498,10 +494,6 @@ def _render(report_download: ProgressCallback, event: ProgressEvent) -> None:
         report_download(DownloadProgress(event.url, event.done, event.total))
     elif isinstance(event, ShardWritten):
         console.status("💾", f"wrote shard {event.count}")
-    elif isinstance(event, StepStarted) and event.action == "build":
-        console.status("🔧", f"Building '{event.release.dataset_id}'…")
-    elif isinstance(event, StepFinished) and event.action == "build":
-        console.success(f"Built '{event.release.dataset_id}' → {event.release.version}")
 
 
 def _download_bars() -> Progress:
