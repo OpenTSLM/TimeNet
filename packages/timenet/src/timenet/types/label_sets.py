@@ -73,8 +73,10 @@ class LabelSet(TimeFModel):
     ) -> Self:
         """Build a label set from a ``StrEnum``. Preserve the enum's definition order.
 
-        Each member's value becomes a label name. Connectors can pass enum members as targets::
+        Each member's value becomes a label name. Connectors can pass enum members as targets.
+        Mark the enum ``@unique``, so that a duplicated value fails when the module loads::
 
+            @unique
             class Sex(StrEnum):
                 FEMALE = "F"
                 MALE = "M"

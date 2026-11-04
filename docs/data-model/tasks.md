@@ -248,14 +248,15 @@ must contain exactly one label.
 Labels come from the targets stored directly on the task or from the text of its target
 annotations.
 
-If the connector defines fixed labels, declare a `StrEnum`. Build the label set with
-`LabelSet.from_enum`. Each member's value is a label name. Pass a member as a target. The type
+If the connector defines fixed labels, declare a `StrEnum` marked `@unique`. Build the label set
+with `LabelSet.from_enum`. Each member's value is a label name. Pass a member as a target. The type
 checker catches misspelled enum member names, such as `Condition.FUALTY`:
 
 ```python
-from enum import StrEnum
+from enum import StrEnum, unique
 
 
+@unique
 class Condition(StrEnum):
     HEALTHY = "healthy"
     FAULTY = "faulty"

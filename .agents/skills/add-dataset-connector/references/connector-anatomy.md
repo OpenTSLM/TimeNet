@@ -148,7 +148,7 @@ So the type only says what *kind* of answer it is.
 
 | Task | Answer | Extra payload |
 | --- | --- | --- |
-| `ClassificationTask` | `target: str` (a label name, or a `StrEnum` member) | Required `label_set`: a `LabelSet` that defines the allowed labels, their descriptions, and how many labels a target can contain. If the connector defines fixed labels, declare a `StrEnum`. Build the label set with `LabelSet.from_enum`. |
+| `ClassificationTask` | `target: str` (a label name, or a `StrEnum` member) | Required `label_set`: a `LabelSet` that defines the allowed labels, their descriptions, and how many labels a target can contain. If the connector defines fixed labels, declare a `StrEnum` marked `@unique`. Build the label set with `LabelSet.from_enum`. |
 | `AnswerTask` | `targets: tuple[str, ...]` (free text, which is a caption when there is no `prompt`) | — |
 | `ScalarPredictionTask` | `target: float` | optional `unit`, `target_name` |
 | `TemporalLocalizationTask` | `target: tuple[Span, ...]` | `mode` (`SPARSE` / `EXHAUSTIVE`) |
