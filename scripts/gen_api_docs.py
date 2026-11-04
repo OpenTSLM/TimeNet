@@ -63,8 +63,7 @@ class ApiModule:
 
     Attributes:
         dotted: Importable dotted path, e.g. ``timenet.registry``.
-        slug: Output filename stem under ``docs/api/``: the last path component, or the
-            dotted path if a module of the other package has the same last component.
+        slug: The page name under ``docs/api/``: the last component, or the dotted path on a clash.
         summary: Cleaned first line of the module docstring, or ``""``.
         show_submodules: Render submodules recursively (packages without ``__all__``).
     """
