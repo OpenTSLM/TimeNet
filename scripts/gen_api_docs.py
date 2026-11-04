@@ -59,13 +59,13 @@ _RST_ROLE = re.compile(r":[a-z:]+:`~?([^`]+)`")
 
 @dataclass(frozen=True)
 class ApiModule:
-    """One module to document.
+    """A module's API page settings.
 
     Attributes:
-        dotted: Importable dotted path, e.g. ``timenet.registry``.
-        slug: The page name under ``docs/api/``: the last component, or the dotted path on a clash.
-        summary: Cleaned first line of the module docstring, or ``""``.
-        show_submodules: Render submodules recursively (packages without ``__all__``).
+        dotted: The import path, such as ``timenet.registry``.
+        slug: The page name under ``docs/api/``: the last part of the import path, or the full path on a clash.
+        summary: The cleaned first line of the module docstring, or ``""``.
+        show_submodules: Whether to include submodules recursively. True for a package without ``__all__``.
     """
 
     dotted: str
@@ -258,10 +258,12 @@ def _rewrite_nav(nav_line: str) -> None:
 
 
 def main() -> None:
-    """Generate the API pages and landing page, and rewrite the nav region.
+    """Generate the API reference pages and landing page, and rewrite the nav region of ``zensical.toml``.
+
+    It also deletes each page in ``docs/api/`` that no current module maps to.
 
     Raises:
-        SystemExit: On a slug collision or a missing nav marker region.
+        SystemExit: If page names clash or the nav markers are missing or duplicated.
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     by_package = {pkg: _discover(pkg, root) for pkg, root in PACKAGE_ROOTS.items()}

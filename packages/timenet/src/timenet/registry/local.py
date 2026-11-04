@@ -24,7 +24,7 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class LocalRegistry(WritableRegistry):
-    """Read and publish datasets in a local directory."""
+    """A registry that reads and writes datasets in a local directory."""
 
     def __init__(self, root: Path) -> None:
         """Open a local registry rooted at a directory.
@@ -125,20 +125,19 @@ class LocalRegistry(WritableRegistry):
         return manifest
 
     def resolve(self, dataset_id: str, version: str | None) -> Found | NotFound | NotServed:
-        """Say whether this registry holds a release, and at which version.
+        """Check whether the local registry holds a dataset release.
 
-        A local registry serves every release that it holds, whatever its access, so it never
-        answers ``NotServed``.
+        Local releases are available at any access level.
 
         Args:
             dataset_id: The dataset ID.
-            version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
+            version: An exact version, or ``None``, ``""``, or ``"latest"`` for the latest version.
 
         Returns:
-            ``Found`` if the registry holds a committed release, else ``NotFound()``.
+            ``Found`` with the committed version, or ``NotFound`` if the release is absent.
 
         Raises:
-            TimeFValidationError: If ``dataset_id`` or ``version`` is not valid.
+            TimeFValidationError: If ``dataset_id`` or ``version`` is invalid.
         """
         try:
             validate_dataset_id(dataset_id)

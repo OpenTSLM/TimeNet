@@ -35,7 +35,7 @@ ProgressCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
-    """A registry of dataset manifests, files, and searchable metadata."""
+    """A registry that provides TimeF dataset metadata, manifests, and files."""
 
     def __str__(self) -> str:
         return type(self).__name__
@@ -130,17 +130,16 @@ class BaseRegistry(ABC):
         """
 
     def resolve(self, dataset_id: str, version: str | None) -> Found | NotFound | NotServed:
-        """Say whether this registry serves a release, and at which version.
+        """Check whether the registry serves a dataset release.
 
-        A remote registry serves the files of a release only if its effective access is open: the
-        strictest access of its card and of the cards in its lineage.
+        A remote registry serves a release only if its card and each card in its lineage declare open access.
 
         Args:
             dataset_id: The dataset ID.
-            version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
+            version: An exact version, or ``None``, ``""``, or ``"latest"`` for the latest version.
 
         Returns:
-            ``Found`` if it serves the release, ``NotServed`` if it only lists it, else ``NotFound``.
+            ``Found`` if served, ``NotServed`` if access is restricted, or ``NotFound`` if absent.
         """
         try:
             manifest = self.get_manifest(dataset_id, version)

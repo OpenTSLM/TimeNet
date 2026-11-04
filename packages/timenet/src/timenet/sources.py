@@ -1,9 +1,4 @@
-"""Sources of releases, and the rules that pick the source of a release.
-
-A source says whether it can provide a release, and at which version: a registry serves the
-releases that it holds, and :class:`InstalledConnectors` builds them. :func:`resolve_release` asks
-an ordered list of sources for a release.
-"""
+"""Find dataset releases across registries and installed connectors."""
 
 from collections.abc import Sequence
 from dataclasses import dataclass, field
@@ -21,38 +16,38 @@ if TYPE_CHECKING:
 
 
 Answer: TypeAlias = "Found | NotFound | NotServed"
-"""The answer of a source for one release."""
+"""The result of looking up a release in a source."""
 
 
 @runtime_checkable
 class ReleaseSource(Protocol):
-    """Something that can provide releases: a registry or :class:`InstalledConnectors`.
+    """A source that can serve or build a dataset release.
 
-    A :class:`~pathlib.Path` also passes an ``isinstance`` check, because it has a ``resolve``
-    method, so check for ``str`` and ``os.PathLike`` first.
+    A :class:`~pathlib.Path` also passes runtime ``isinstance`` checks because it has a ``resolve`` method.
+    Check for ``str`` and ``os.PathLike`` first.
     """
 
     def resolve(self, dataset_id: str, version: str | None) -> Answer:
-        """Say whether this source can provide a release.
+        """Check whether this source can provide a dataset release.
 
         Args:
             dataset_id: The dataset ID.
-            version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
+            version: An exact version, or ``None``, ``""``, or ``"latest"`` for the latest version.
 
         Returns:
-            :class:`Found`, :class:`NotFound` or :class:`NotServed`.
+            A :class:`Found`, :class:`NotFound`, or :class:`NotServed` result.
         """
         ...
 
 
 @dataclass(frozen=True)
 class Found:
-    """The source can provide the release.
+    """A result that identifies an available release and its source.
 
     Attributes:
         version: The exact version.
         entry: The source that answered for the release.
-        manifest: The manifest that the source read for this answer, or ``None``.
+        manifest: The release manifest, or ``None``.
     """
 
     version: Version
@@ -62,19 +57,19 @@ class Found:
 
 @dataclass(frozen=True)
 class NotFound:
-    """The source does not know the release."""
+    """A result for a release that the source cannot find."""
 
 
 @dataclass(frozen=True)
 class NotServed:
-    """The source lists the release, but does not serve its files, for example a credentialed one.
+    """A result for a listed release whose files the source cannot serve.
 
     Attributes:
         version: The exact version that the source lists.
-        access: The effective access: the strictest access of the card and the cards in its lineage.
-        access_url: The page of the first card that is not open, where users get access, or ``None``.
-        requirements: Each card that is not open, with its access and its page.
-        manifest: The manifest that the source read for this answer, or ``None``.
+        access: The strictest access level of the release's card and the cards in its lineage.
+        access_url: The access page of the first card that is not open access, or ``None``.
+        requirements: Each card that is not open access, with its access level and access page.
+        manifest: The release manifest, or ``None``.
     """
 
     version: Version
@@ -84,13 +79,13 @@ class NotServed:
     manifest: "Manifest | None" = field(default=None, compare=False, repr=False)
 
     def access_error(self, dataset_id: str) -> TimeNetAccessError:
-        """Return the error that tells the caller where to get access to the release.
+        """Create an error with the release's access requirements.
 
         Args:
-            dataset_id: The dataset ID of the release.
+            dataset_id: The dataset ID.
 
         Returns:
-            The error, which names the release, its effective access and each access page.
+            An error with the release, its access level, and its access pages.
         """
         release = DatasetRef(dataset_id=dataset_id, version=self.version)
         requirements = self.requirements
@@ -101,10 +96,10 @@ class NotServed:
 
 @dataclass(frozen=True)
 class InstalledConnectors:
-    """Every builder backend that an installed package registers under the ``timenet.builders`` group.
+    """A release source backed by installed dataset connectors.
 
-    A connector builds only the version that its card declares, so this source finds only that
-    version. All instances are equal.
+    Each connector provides only the version in its card.
+    All instances compare equal.
     """
 
     def __str__(self) -> str:
@@ -113,20 +108,20 @@ class InstalledConnectors:
         return "installed connectors"
 
     def resolve(self, dataset_id: str, version: str | None) -> Answer:
-        """Say whether an installed connector builds the release.
+        """Check whether an installed connector can build a release.
 
-        If two packages claim the dataset, the first entry point wins.
+        The lookup uses the first entry point that claims the dataset.
 
         Args:
             dataset_id: The dataset ID.
-            version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
+            version: An exact version, or ``None``, ``""``, or ``"latest"`` for the latest version.
 
         Returns:
-            ``Found`` with the declared version if it matches ``version``, else ``NotFound()``.
+            ``Found`` if a connector provides the requested version, or ``NotFound``.
 
         Raises:
-            TimeNetInvalidCardError: If the card of the connector cannot be read.
-            TimeFValidationError: If a connector claims the dataset and ``version`` is not valid.
+            TimeNetInvalidCardError: If the connector's card cannot be read.
+            TimeFValidationError: If a connector claims the dataset and ``version`` is invalid.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend and by Version.parse
         card = builders.find_card(dataset_id)
         wanted = None if is_latest(version) else version
@@ -136,18 +131,18 @@ class InstalledConnectors:
 
 
 def resolve_release(sources: Sequence[ReleaseSource], dataset_id: str, version: str | None) -> Answer:
-    """Find the source that provides a release.
+    """Find a source that provides the requested dataset release.
 
-    An exact version comes from the first source that provides it, and "latest" is the highest
-    version that any source provides. An error of a source stops the search.
+    Exact requests use the first matching source, and latest requests use the highest available version.
+    Source order breaks ties, and source errors stop the search.
 
     Args:
         sources: The sources, in order.
         dataset_id: The dataset ID.
-        version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
+        version: An exact version, or ``None``, ``""``, or ``"latest"`` for the latest version.
 
     Returns:
-        The ``Found`` answer, else the first ``NotServed`` answer, else ``NotFound()``.
+        ``Found`` if available, otherwise the first ``NotServed`` result or ``NotFound``.
     """
     version = None if is_latest(version) else version
     if version is not None:  # rule 1
