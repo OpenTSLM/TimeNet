@@ -1,15 +1,20 @@
-"""Convert the pinned CAPTURE-24 zip into lazy Records and one classification task per window and scheme.
+"""Convert the pinned CAPTURE-24 archive into Records and classification tasks.
 
-CAPTURE-24 holds about a day of 100 Hz wrist acceleration from each of 151 participants, labeled from
-body-camera images and sleep diaries. A participant becomes one Record with one Source per gap-free
-segment, each with lazy ``x``, ``y`` and ``z`` signals and one ``activity`` annotation per run of a raw
-label. Each 10 s window that the authors' benchmark code keeps becomes one task per label scheme the
-benchmark scores. README.md explains how this follows the authors.
+CAPTURE-24 contains about one day of wrist acceleration at 100 Hz from each of 151 participants.
+Activity labels come from body-camera images and sleep diaries. Each participant becomes one Record.
+Each segment between gaps becomes one Source with ``x``, ``y``, and ``z`` signals that load when needed.
+Each run of consecutive samples with the same raw label becomes one ``activity`` annotation.
 
-The build has two passes. The first reads every recording, one at a time, and keeps only small results:
-the segments, each window's start and class, and a digest of the acceleration values. It fails on a
-missing or non-finite value. The second builds the Records and streams the tasks. The acceleration values
-stay in the files until they are written, and then match the digest or fail the build.
+A label scheme groups raw labels into activity classes. Each 10 s window kept by the authors' benchmark
+becomes one task per scheme that the benchmark scores. README.md describes the benchmark rules.
+
+The build reads the data in two passes. The first reads one recording at a time and retains its
+segments, each window's start and class, and a digest of the acceleration values.
+A digest is a value used to detect changes. Missing or non-finite acceleration values fail the build.
+Non-finite values are NaN, positive infinity, or negative infinity.
+
+The second pass builds the Records and streams the tasks. Acceleration values load from the files
+when the writer needs them. If their digest differs from the first pass, the build fails.
 """
 
 from collections.abc import Callable, Iterator
@@ -45,7 +50,7 @@ from timenet_connectors.download import ensure_archive, find_dir_containing
 
 
 ARCHIVE_URL = "https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001/files/rpr76f381b"
-"""The one zip of the Oxford Research Archive record, 6.9 GB."""
+"""The 6.9 GB zip file attached to the Oxford Research Archive record."""
 _ARCHIVE_FILENAME = "capture24.zip"
 ARCHIVE_SHA256 = "69740c22d3e000367988373336dc6486c10fe3f3f929811fd66e4d84861e40e2"
 _ARCHIVE_ROOT = "capture24"
@@ -83,7 +88,7 @@ _AXES = _Acceleration._fields
 """The acceleration columns of a recording, which are also its signal names."""
 _RECORDING_COLUMNS = [_TIME_COLUMN, *_AXES, _LABEL_COLUMN]
 _FIRST_DATA_LINE = 2
-"""The file line of a table's first row, after the header line."""
+"""The line number of the first data row, after the header."""
 _RECORD_FILE_KEY = "file"
 """The Record metadata key that holds the recording's file name."""
 
@@ -117,15 +122,15 @@ class _Key(StrEnum):
     RECORDING_START_LOCAL = "recording_start_local"
     """The first sample's published timestamp. The authors randomized its date and shifted its time."""
     ACTIVITY = "activity"
-    """A Source annotation that holds one run of a raw label."""
+    """A Source annotation for consecutive samples with the same raw label."""
 
 
 @unique
 class _Sex(StrEnum):
     """A participant's sex, as the connector stores it.
 
-    The values match ``Sex`` in ``timenet_connectors.demographics``, which PR #624 adds. Once it is on
-    the base, the connector uses that enum instead.
+    The values match ``Sex`` in ``timenet_connectors.demographics``, which PR #624 adds.
+    After that enum reaches the base branch, replace this enum with it.
     """
 
     FEMALE = "female"
@@ -133,7 +138,7 @@ class _Sex(StrEnum):
 
 
 _SEX_OF_LETTER = {"F": _Sex.FEMALE, "M": _Sex.MALE}
-"""The letter that ``metadata.csv`` writes for each sex."""
+"""The stored sex value for each letter in ``metadata.csv``."""
 
 
 @unique
@@ -163,12 +168,12 @@ _RECORDING_START_DESCRIPTION = (
 
 @dataclass(frozen=True)
 class _Vocabulary:
-    """The closed list of a benchmarked scheme's classes, and the dataset annotation that stores it."""
+    """The allowed classes for a benchmarked scheme and the dataset annotation that stores them."""
 
     name: str
-    """The key of the dataset annotation that holds the classes, which each task's target_schema names."""
+    """The key of the dataset annotation that holds the classes. Each task refers to this key through target_schema."""
     labels: tuple[str, ...]
-    """The scheme's classes, in string order."""
+    """The scheme's classes, sorted by their text."""
 
 
 # The classes of the two schemes that benchmark.py scores, as the label dictionary names them. Each
@@ -219,7 +224,7 @@ _VOCABULARIES = {
 
 @dataclass(frozen=True)
 class _LabelDictionary:
-    """The label dictionary, as the windowing and the activity annotations need it."""
+    """The raw labels and class mappings used to build windows and activity annotations."""
 
     raw_labels: tuple[str, ...]
     """Each raw label, in file order."""
@@ -242,7 +247,7 @@ class _Segment:
     first_row: int
     n_values: int
     offset_us: int
-    """The first sample's time from the recording's first sample."""
+    """The time between the recording's first sample and this segment's first sample."""
 
 
 @dataclass(frozen=True)
@@ -250,9 +255,9 @@ class _LabelRuns:
     """A segment's runs of one raw label: consecutive samples with the same non-empty label."""
 
     starts_us: np.ndarray
-    """Each run's first sample's time from the recording's first sample."""
+    """The time between the recording's first sample and each run's first sample."""
     ends_us: np.ndarray
-    """The time one period after each run's last sample, so that a run is ``[start, end)``."""
+    """The end of each run, one sample period after its last sample. Each run covers ``[start, end)``."""
     codes: np.ndarray
     """Each run's raw label, as an index into the dictionary."""
 
@@ -274,7 +279,7 @@ class _Person:
 
 @dataclass(frozen=True)
 class _Windows:
-    """The windows a recording keeps."""
+    """The windows selected from a recording."""
 
     first_rows: np.ndarray
     """Each kept window's first row."""
@@ -284,13 +289,16 @@ class _Windows:
 
 @dataclass(frozen=True)
 class _Participant:
-    """One participant after the first pass: what the Record and the tasks need, not the samples."""
+    """The recording summary used to build one participant's Record and tasks.
+
+    The first pass keeps this summary and discards the samples.
+    """
 
     person: _Person
     n_rows: int
-    """The rows the recording held when it was read, which a reread must match."""
+    """The row count from the first pass. Later reads must return the same count."""
     acceleration_digest: str
-    """The digest of the recording's x, y and z values when it was read, which a reread must match."""
+    """The digest of the x, y and z values from the first pass. Later reads must produce the same digest."""
     start_local: str
     """The first sample's published timestamp in ISO 8601 with microseconds and no zone. The date is
     randomized, and the authors shifted the time of day by a small random amount."""
@@ -298,7 +306,7 @@ class _Participant:
     label_runs: tuple[_LabelRuns, ...]
     """Each segment's runs of a raw label, in segment order."""
     window_starts_us: np.ndarray
-    """Each kept window's first sample's time from the recording's first sample."""
+    """The time between the recording's first sample and each selected window's first sample."""
     window_classes: dict[_Scheme, np.ndarray]
     """Each kept window's class per benchmarked scheme, as an index into that scheme's vocabulary."""
 
@@ -306,8 +314,8 @@ class _Participant:
 def _read_rows(path: Path, columns: list[str]) -> list[dict[str, str]]:
     """Read a small CSV table whose columns must be exactly ``columns``, in any order.
 
-    A short row reads as None and a blank field as "", and neither is a value. ``csv.DictReader`` puts the
-    fields of a long row under the key None.
+    For a row with too few fields, ``csv.DictReader`` supplies None for each missing field.
+    A blank field is "". Both fail validation. Extra fields appear under the key None and also fail validation.
 
     Returns:
         One dict per row, keyed by column.
@@ -338,7 +346,7 @@ def _read_labels(path: Path) -> _LabelDictionary:
     """Read the label dictionary: each raw label and its class in each scheme.
 
     Returns:
-        The dictionary, as the windowing and the activity annotations need it.
+        The raw labels and class mappings used to build windows and activity annotations.
 
     Raises:
         TimeNetConnectorError: If the file is unreadable or its columns are not the raw label and the six schemes.
@@ -365,9 +373,9 @@ def _class_codes(path: Path, classes: list[str], vocabulary: _Vocabulary) -> np.
     """Map each raw label's class in one scheme to its index in the scheme's vocabulary.
 
     Returns:
-        One index per raw label, in file order, then one more entry for an unlabeled sample. That
-        entry is one past the vocabulary's last class, so that indexing with ``_NO_LABEL`` finds it
-        and no class count takes it.
+        One class index per raw label, in file order, followed by an entry for unlabeled samples.
+        The final entry uses an index beyond the vocabulary's classes, so class counts exclude it.
+        Indexing with ``_NO_LABEL`` selects this entry.
 
     Raises:
         TimeNetConnectorError: If a class is not in the vocabulary.
@@ -396,7 +404,7 @@ def _parse_person_value(path: Path, line: int, column: str, value: str, parse: C
         The parsed value.
 
     Raises:
-        TimeNetConnectorError: If the value is not one that the release writes.
+        TimeNetConnectorError: If the value is not one of the allowed values in the release.
     """
     try:
         return parse(value)
@@ -412,8 +420,8 @@ def _read_people(root: Path) -> list[_Person]:
 
     Raises:
         TimeNetConnectorError: If the file is unreadable, its columns are not pid, age and sex, or it lists
-            no participants. Also raised if a row has missing or extra fields, an age band or sex is unknown,
-            or a pid repeats.
+            no participants. Also raised if a row has missing or extra fields.
+            Also raised if an age band or sex is unknown, or a pid repeats.
             The table and the recordings must name the same participants.
     """
     path = root / _METADATA_FILE
@@ -434,13 +442,13 @@ def _read_people(root: Path) -> list[_Person]:
 
 
 def _person_of_row(path: Path, line: int, row: dict[str, str], recordings: dict[str, Path]) -> _Person:
-    """Build the person of one ``metadata.csv`` row, with the recording that holds the samples.
+    """Build a participant from one ``metadata.csv`` row and its recording path.
 
     Returns:
         The person.
 
     Raises:
-        TimeNetConnectorError: If the age band or the sex is not one that the release writes.
+        TimeNetConnectorError: If the age band or sex is not one of the allowed values in the release.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _parse_person_value
     pid = row[_MetadataColumn.PID]
     age_band = _parse_person_value(path, line, _MetadataColumn.AGE, row[_MetadataColumn.AGE], _AgeBand)
@@ -464,7 +472,7 @@ def _recordings_by_pid(root: Path) -> dict[str, Path]:
 
 
 def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant:
-    """Read a recording: its segments, its raw label runs, its kept windows, and a digest of its acceleration values.
+    """Summarize a recording's segments, raw label runs, selected windows, and acceleration digest.
 
     An empty ``annotation`` field is an unlabeled sample. No other value is.
 
@@ -497,9 +505,9 @@ def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant
 
 
 def _convert_options(columns: list[str]) -> pa_csv.ConvertOptions:
-    """Return the options that read ``columns`` of a recording, so that both passes parse them alike.
+    """Return the same parsing configuration for both reads of a recording's ``columns``.
 
-    Only an empty field is missing, so a written ``nan`` reaches the finite check in ``_axis_values``.
+    Only an empty field counts as missing. A written ``nan`` remains a value, which ``_axis_values`` rejects as non-finite.
     """
     return pa_csv.ConvertOptions(
         include_columns=columns,
@@ -510,7 +518,9 @@ def _convert_options(columns: list[str]) -> pa_csv.ConvertOptions:
 
 
 def _read_table(path: Path) -> pa.Table:
-    """Read every column of a recording. The ``annotation`` column is dictionary-encoded.
+    """Read every column of a recording.
+
+    The ``annotation`` column stores repeated labels through a shared dictionary.
 
     Returns:
         The recording's table.
@@ -555,7 +565,7 @@ def _read_stamps(path: Path, table: pa.Table) -> np.ndarray:
 
 
 def _make_segments(stamps: np.ndarray) -> tuple[_Segment, ...]:
-    """Split the samples at each gap, which is any step but one period.
+    """Split the samples wherever consecutive timestamps differ by more or less than one sample period.
 
     Returns:
         The segments, in time order.
@@ -570,8 +580,9 @@ def _make_segments(stamps: np.ndarray) -> tuple[_Segment, ...]:
 def _label_runs(raw_codes: np.ndarray, segment: _Segment) -> _LabelRuns:
     """Find a segment's runs of one raw label. Unlabeled samples belong to no run.
 
-    A run never crosses a gap, because each segment is cut on its own. Within a segment every step is
-    one period, so a row's time is its index times the period after the segment's first sample.
+    The function processes each segment separately, so a run never crosses a gap.
+    Within a segment, samples are one period apart.
+    A row's time relative to the segment's first sample equals its index within the segment times the period.
 
     Returns:
         The segment's runs, in time order.
@@ -620,7 +631,10 @@ def _finite_column(path: Path, table: pa.Table, column: str) -> np.ndarray:
 
 
 def _digest(values: _Acceleration) -> str:
-    """Return a digest of the x, y and z values, in that order, to spot a file that changed."""
+    """Return a digest of the x, y and z values, in that order.
+
+    The digest detects changes between reads.
+    """
     digest = hashlib.blake2b()
     for axis in values:
         digest.update(axis)
@@ -637,7 +651,7 @@ def _raw_codes(path: Path, column: pa.DictionaryArray, labels: _LabelDictionary)
     unknown = sorted(label for label in written if label not in labels.code_of_raw)
     if unknown:
         raise TimeNetConnectorError(f"{path}: raw labels missing from the label dictionary: {unknown}")
-    # One extra slot maps a null's filled index to _NO_LABEL.
+    # Replace each null index with the index of an extra entry whose value is _NO_LABEL.
     codes = np.array([labels.code_of_raw[label] for label in written] + [_NO_LABEL], dtype=np.int16)
     return codes[column.indices.fill_null(len(written)).to_numpy()]
 
@@ -649,15 +663,17 @@ def _make_windows(
 
     ``make_windows`` groups the samples into 10 s bins anchored at the first sample. After a gap the bins
     stay on the first segment's grid. It keeps a bin with exactly 1000 samples and at least one labeled
-    sample. A bin that a gap cuts usually has fewer samples, but a step between one and two periods is a gap
-    too, and a bin can still hold 1000 samples across it. This function fails on such a window, so no kept
-    window crosses a gap.
+    sample.
+
+    A bin that crosses a gap usually has fewer samples. A step between one and two sample periods is
+    also a gap, but its bin can still contain 1000 samples. This function rejects such windows, so no
+    selected window crosses a gap.
 
     A window's class in a scheme is the most common class among its labeled samples. A tie goes to the
     first class in string order.
 
-    ``make_windows`` also drops a window with a NaN acceleration value. This function never meets one,
-    because the first pass fails on any value that is not finite.
+    The authors' ``make_windows`` also drops windows with NaN acceleration values.
+    This connector rejects a recording if any acceleration value is missing or non-finite.
 
     Returns:
         The kept windows.
@@ -686,7 +702,7 @@ def _make_windows(
     classes = {}
     for scheme, class_of_raw in labels.class_of_raw.items():
         per_sample = class_of_raw[window_codes]
-        # Count each class per window. An unlabeled sample has a class index past the last, so no count takes it.
+        # Count each class per window. Unlabeled samples use an index beyond the classes, so the counts exclude them.
         counts = np.stack(
             [(per_sample == index).sum(axis=1) for index in range(len(_VOCABULARIES[scheme].labels))], axis=1
         )
@@ -696,7 +712,9 @@ def _make_windows(
 
 
 def _read_acceleration(participant: _Participant) -> _Acceleration:
-    """Read a recording's x, y and z columns as float32, and check that the file is the one the first pass read.
+    """Read a recording's x, y and z columns as float32.
+
+    Make sure that the row count and acceleration values match the first pass.
 
     Returns:
         The float32 values of each axis.
@@ -724,10 +742,10 @@ _ReadAcceleration = Callable[[_Participant], _Acceleration]
 
 
 class _OneRecording:
-    """Read a recording's acceleration once for all its signals, and hold only the latest recording.
+    """Read a recording's acceleration once for all its signals and keep only the latest recording.
 
-    A Record's signals load one after another, so one recording suffices. lru_cache(maxsize=1) would
-    read the next recording before it dropped the last, holding two at once.
+    A Record's signals load one after another, so the cache needs only one recording.
+    lru_cache(maxsize=1) reads the next recording before releasing the previous one, which briefly keeps both in memory.
     """
 
     def __init__(self) -> None:
@@ -735,7 +753,9 @@ class _OneRecording:
         self._values: _Acceleration | None = None
 
     def __call__(self, participant: _Participant) -> _Acceleration:
-        """Return the recording's x, y and z, reading it unless it was the last one read.
+        """Return the recording's x, y and z values.
+
+        If the recording is already cached, reuse its values. Otherwise, release the cache and read the recording.
 
         Returns:
             The float32 values of each axis.
@@ -762,8 +782,8 @@ def _activity_annotations(runs: _LabelRuns, labels: _LabelDictionary) -> Iterato
     """Turn a segment's raw label runs into one annotation per run.
 
     Yields:
-        An annotation whose value is the raw label, whose span is the run, and whose metadata gives the
-        raw label's class in each of the six schemes, keyed by scheme name.
+        An annotation with the raw label as its value and the run as its span.
+        Its metadata maps each of the six scheme names to the raw label's class in that scheme.
     """
     for start_us, end_us, code in zip(runs.starts_us.tolist(), runs.ends_us.tolist(), runs.codes.tolist(), strict=True):
         yield Annotation(
@@ -775,7 +795,9 @@ def _activity_annotations(runs: _LabelRuns, labels: _LabelDictionary) -> Iterato
 
 
 def _record(participant: _Participant, labels: _LabelDictionary, acceleration: _ReadAcceleration) -> Record:
-    """Build a participant's Record: one Source of lazy x, y and z signals per segment.
+    """Build a participant's Record with one Source per segment.
+
+    Each Source has x, y and z signals that load when needed.
 
     Each Source also carries the segment's raw label runs as ``activity`` annotations.
 
@@ -795,8 +817,8 @@ def _record(participant: _Participant, labels: _LabelDictionary, acceleration: _
             )
             for axis, column in enumerate(_AXES)
         )
-        # Pass all runs to the Source constructor at once. Adding them one at a time would copy the
-        # tuple of annotations once per run.
+        # Pass all runs to the Source constructor at once. Adding one run at a time copies the
+        # annotation tuple for every run.
         sources.append(
             Source(
                 name=f"{_DEVICE} segment {index}",
@@ -844,20 +866,22 @@ class Capture24Connector(BaseConnector[Path]):
     """Build CAPTURE-24 from the pinned zip of its Oxford Research Archive record."""
 
     async def download_async(self, cache_dir: Path) -> list[Path]:  # ruff: ignore[no-self-use] - the connector interface
-        """Fetch the pinned archive, check its digest, and extract it once.
+        """Fetch the pinned archive and make sure that its digest matches before extracting it.
+
+        Extract the archive only once.
 
         Returns:
-            The extracted ``capture24`` directory.
+            A list containing the extracted ``capture24`` directory.
         """
         root = await ensure_archive(ARCHIVE_URL, cache_dir, filename=_ARCHIVE_FILENAME, sha256=ARCHIVE_SHA256)
         return [find_dir_containing(root, f"{_ARCHIVE_ROOT}/{_METADATA_FILE}")]
 
     def convert(self, raw_refs: list[Path]) -> TimeFDataset:
-        """Convert each recording into one lazy Record, and stream one task per window and scheme.
+        """Build one Record per recording and stream one task per window and benchmarked scheme.
 
-        Every recording is read once up front to check it and keep its segments, windows and a digest of
-        its acceleration values. The values stay in the files until written, so the files must stay
-        available and unchanged until then.
+        The first pass reads each recording to validate it and retain its segments, windows, and acceleration digest.
+        The writer loads acceleration values from the files when needed.
+        Keep the files available and unchanged until the writer finishes.
 
         Args:
             raw_refs: The one extracted ``capture24`` directory.

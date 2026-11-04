@@ -1,14 +1,13 @@
 # yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
-# Dataset Card for the oxwearables/capture24 connector: the single source for this dataset's
-# metadata.
-# The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
-# derived from the data into manifest.json.
+# Dataset metadata for the oxwearables/capture24 connector.
+# The connector loads this card with DatasetMetadata.from_yaml(). The builder combines it with
+# the schema derived from the data to create manifest.json.
 #
-# Training convention: the tasks are the authors' benchmark. Each 10 s window that
-# prepare_data.make_windows keeps has one ClassificationTask per scheme the authors' benchmark.py
-# scores (WillettsSpecific2018, Walmsley2020), split as that script runs it: P001-P100 train,
-# P101-P151 test. Signals are the published values: each recording at 100 Hz, in g, with one Source
-# per run between its gaps. The authors resampled and calibrated them before release.
+# Tasks follow the authors' benchmark. Each 10 s window kept by prepare_data.make_windows has one
+# ClassificationTask per scheme scored by benchmark.py: WillettsSpecific2018 and Walmsley2020.
+# P001-P100 are training participants. P101-P151 are test participants.
+# Signals use the published values at 100 Hz, in g, with one Source per segment between gaps.
+# The authors resampled and calibrated the recordings before release.
 yaml_schema_version: 1
 dataset_id: oxwearables/capture24
 dataset_version: 1.0.0
