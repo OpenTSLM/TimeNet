@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from timenet.dataset.time_series import Signal
 
     TargetItem: TypeAlias = TextHandle | int | float | bool | Record | Signal | Span
-    TargetInput: TypeAlias = str | Label | TargetItem
+    TargetInput: TypeAlias = str | TargetItem
     # A target as read_value returns it: text handles read to strings.
     TargetValue: TypeAlias = str | int | float | bool | Record | Signal | Span
 else:
@@ -120,10 +120,9 @@ class LocalizationMode(StrEnum):
 
 
 def _target_values(values: Iterable[TargetInput] | None) -> tuple[TargetItem, ...] | None:
-    """Convert strings and Label names to text handles.
+    """Convert string targets to text handles. Other scalar and object targets stay unchanged.
 
-    A text handle provides access to a text value. Other scalar and object targets stay unchanged.
-    A string alone is not a valid sequence of targets because iteration splits it into characters.
+    A string alone is not a valid sequence of targets, because iteration splits it into characters.
 
     Returns:
         The converted targets in their original order. If ``values`` is ``None``, return ``None``
@@ -136,20 +135,39 @@ def _target_values(values: Iterable[TargetInput] | None) -> tuple[TargetItem, ..
         return None
     if isinstance(values, str):
         raise TimeFValidationError("targets take a sequence of items; wrap a single string as (value,)")
-    return tuple(_target_item(value) for value in values)
+    return tuple(InlineText(value) if isinstance(value, str) else value for value in values)
 
 
-def _target_item(value: TargetInput) -> TargetItem:
-    """Wrap a string or a Label's name in InlineText.
+def _classification_targets(values: Iterable[Label | TextHandle] | None) -> tuple[TextHandle, ...] | None:
+    """Convert the labels of a classification target to text handles of their names.
+
+    A classification target holds Label objects from the task's label set, such as ``STAGES["W"]``.
+    A text handle is also accepted, because the reader and copies of a task pass the stored names.
 
     Returns:
-        The wrapped text, or the value unchanged if it is neither a string nor a Label.
+        The label names as text handles, in their original order. If ``values`` is ``None``, return
+        ``None`` for an answer supplied by target annotations.
+
+    Raises:
+        TimeFValidationError: If ``values`` is not a sequence, or an item is neither a Label nor a
+            text handle. A plain string is not accepted.
     """
-    if isinstance(value, str):
-        return InlineText(value)
-    if isinstance(value, Label):
-        return InlineText(value.name)
-    return value
+    if values is None:
+        return None
+    if isinstance(values, (str, Label)):
+        raise TimeFValidationError("targets take a sequence of labels; wrap a single label as (label,)")
+    items: list[TextHandle] = []
+    for value in values:
+        if isinstance(value, Label):
+            items.append(InlineText(value.name))
+        elif isinstance(value, TextHandle):
+            items.append(value)
+        else:
+            raise TimeFValidationError(
+                f"a classification target must be a Label from the task's label set, such as "
+                f"LABELS[{value!r}], not {type(value).__name__}"
+            )
+    return tuple(items)
 
 
 @dataclass(kw_only=True)
@@ -392,6 +410,12 @@ class ClassificationTask(Task):
     """Classify the inputs using a required set of allowed labels."""
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
+    # A classification task narrows the targets that Task accepts to labels on purpose, so the
+    # override does not accept every write that Task.targets accepts.
+    targets: ValueField[Iterable[Label | TextHandle] | None, tuple[TextHandle, ...] | None] = field(  # ty: ignore[invalid-mutable-override]
+        default=ValueField(_classification_targets, None), compare=False
+    )
+    """Labels of the label set that form the expected output, or ``None`` for target annotations."""
     label_set: LabelSet
     """The allowed labels and whether a target can contain more than one label."""
 
