@@ -431,10 +431,12 @@ def _download_dataset_version(  # ruff: ignore[too-many-arguments]
     progress_cb: Callable[[int], None] | None,
     before_fetch: Callable[[Manifest], object] | None = None,
 ) -> Manifest:
-    """Fetch one complete release, checking its identity before downloading its files.
+    """Check a release's identity and download its files.
+
+    Run ``before_fetch`` after checking the manifest and before downloading files.
 
     Returns:
-        The manifest after the registry has verified and stored the downloaded files.
+        The manifest of the downloaded and verified release.
     """
     if manifest is None:
         manifest = registry.get_manifest(reference.dataset_id, str(reference.version))

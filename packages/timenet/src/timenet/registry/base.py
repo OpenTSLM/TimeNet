@@ -32,7 +32,7 @@ ProgressCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
-    """A source of TimeF datasets: their manifests, files, and searchable metadata."""
+    """A registry of dataset manifests, files, and searchable metadata."""
 
     def __str__(self) -> str:
         return type(self).__name__
@@ -44,7 +44,7 @@ class BaseRegistry(ABC):
 
     @property
     def requires_open_access(self) -> bool:
-        """Whether this registry holds and serves only releases with open access."""
+        """Whether stored or served releases must declare open access."""
         return True
 
     @abstractmethod
@@ -158,22 +158,21 @@ class BaseRegistry(ABC):
         manifest: Manifest | None = None,
         progress_cb: ProgressCallback | None = None,
     ) -> None:
-        """Download the files of one release into a local directory.
+        """Download one release's files to a local directory.
 
-        The download replaces ``directory`` only after every file arrived and matched its manifest
-        record, so a failed download leaves no partial copy.
+        Reuse a complete copy unless ``force`` is set.
+        Replace ``directory`` only after every downloaded file matches its manifest record.
 
         Args:
             dataset_id: The dataset ID.
-            version: The version string.
-            directory: The directory of the release, ``<root>/<dataset_id>/<version>``.
-            force: Download again, even if ``directory`` holds a complete copy.
-            manifest: The manifest of the release, or ``None`` to read it from this registry.
-            progress_cb: Receives the size of each downloaded file, or ``None``.
+            version: The exact version string.
+            directory: The local release directory, ``<root>/<dataset_id>/<version>``.
+            force: Download again even if a complete copy exists.
+            manifest: The release's manifest, or ``None`` to fetch it from this registry.
+            progress_cb: Callback that receives each downloaded file's byte count, or ``None``.
 
         Raises:
-            TimeNetFileError: If a downloaded file has another size or checksum than its manifest
-                records.
+            TimeNetFileError: If a downloaded file's size or checksum differs from its manifest record.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_staged_file
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)

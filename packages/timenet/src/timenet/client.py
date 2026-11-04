@@ -308,18 +308,14 @@ class TimeNet:
             return reader.read(load=LoadPlan.ALL_EAGER)
 
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
-        """Raise for a non-open dataset read from a registry that does not host its data.
-
-        Credentialed and restricted datasets cannot be redistributed, so TimeNet never serves their
-        bytes. Such a dataset is build-your-own: a local registry holds only what the user built, so a
-        local read is fine, but a hosted registry can only point the user at where to obtain access.
+        """Check dataset access against the registry's requirements.
 
         Args:
-            dataset_id: The bare dataset id.
-            version: The resolved version, or ``None`` for the latest.
+            dataset_id: The dataset ID without a version suffix.
+            version: The version string, or ``None`` for the latest.
 
         Raises:
-            TimeNetAccessError: If the dataset is not open and the registry requires open access.
+            TimeNetAccessError: If the dataset or its lineage lacks open access and the registry requires it.
         """
         if not self._registry.requires_open_access:
             return
@@ -394,20 +390,17 @@ def _missing_hint(*, auto_build: bool, fetch_from: BaseRegistry | None) -> str |
 def _prepare(
     registry: LocalRegistry, dataset_id: str, version: str | None, *, auto_build: bool, fetch_from: BaseRegistry | None
 ) -> DatasetVersion:
-    """Prepare a local version and its payload sources in the order that :meth:`TimeNet.open` names.
+    """Prepare a local release and its payload sources.
 
-    If a payload source is still missing after the copy from ``fetch_from``, this function builds it
-    with its own connector. That connector is the backend whose card declares the exact version of
-    the source. The version reads files of the source, so the build gets the pins of the version.
-    The build publishes the source only if it reproduces the pinned files.
+    Try local copies, then ``fetch_from``, then a build if ``auto_build`` is true.
+    A built payload source must match the files that the release pins.
 
     Returns:
-        The version with each payload source attached.
+        The release with each payload source attached.
 
     Raises:
-        TimeNetMissingParentError: If a payload source is absent and this function cannot copy or
-            build it.
-        TimeNetInvalidCardError: If the card of a connector cannot be read.
+        TimeNetMissingParentError: If a payload source is missing and cannot be copied or built.
+        TimeNetInvalidCardError: If a connector's dataset card cannot be read.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _obtain and exact_builder
     try:
         manifest = registry.get_manifest(dataset_id, version)
