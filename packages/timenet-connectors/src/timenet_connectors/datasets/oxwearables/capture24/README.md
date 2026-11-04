@@ -1,8 +1,9 @@
 # CAPTURE-24
 
-`oxwearables/capture24` holds CAPTURE-24 ([Chan et al., Sci Data 2024][paper]): about a day of
-free-living wrist accelerometry from each of 151 participants, labelled from body-camera images
-and sleep diaries, for human activity recognition.
+`oxwearables/capture24` holds CAPTURE-24 ([Chan et al., Sci Data 2024][paper]).
+The dataset contains wrist acceleration recordings from 151 participants during daily life.
+Each recording covers about one day. Activity labels come from body-camera images and sleep
+diaries. The dataset supports human activity recognition.
 
 The connector reads the one zip of the [Oxford Research Archive record][ora], pinned by its
 SHA-256 (`69740c22…40e2`, 6.9 GB). The dataset card records the same digest as `source_revision`.
@@ -37,7 +38,7 @@ The archive's `capture24/` directory holds:
   except for one gap of 1 to 4 hours in each of eight recordings (P008, P016, P017, P060, P077,
   P094, P097, P142).
 - **Labels.** `annotation` is a [Compendium of Physical Activity][cpa] entry, such as
-  `7030 sleeping;MET 0.95`, or empty. An empty field is an unlabelled sample.
+  `7030 sleeping;MET 0.95`, or empty. An empty field is an unlabeled sample.
 
 [cpa]: https://sites.google.com/site/compendiumofphysicalactivities/home
 
@@ -45,10 +46,14 @@ The archive's `capture24/` directory holds:
 
 ### Records
 
-One Record per participant, with one Source per segment: a run of samples exactly 10 ms apart.
-A gap starts a new segment, and nothing fills it. Each segment's `x`, `y` and `z` are lazy float32
-signals in `standard_gravity`, on a 100 Hz axis whose `offset_us` is the segment's first sample's
-time from the recording's first sample. 143 Records have one Source, and 8 have two.
+The connector creates one Record per participant and one Source per segment.
+A segment is a run of samples exactly 10 ms apart. A gap starts a new segment, and nothing fills it.
+Each segment has three float32 signals: `x`, `y`, and `z`.
+The signals load when needed and use `standard_gravity` units.
+
+The `offset_us` value gives the time from the recording's first sample to the segment's first
+sample.
+There are 143 Records with one Source and 8 with two.
 
 The timestamps carry no zone and their dates are randomized, so `start_time` is unset. These facts
 are kept instead:
@@ -78,7 +83,7 @@ raw label becomes one annotation on the Source:
 | `span` | The run, from its first sample to one period after its last |
 | `metadata` | The raw label's class in each of the six schemes of the label dictionary, keyed by scheme name, such as `{"Walmsley2020": "sleep", ...}` |
 
-Unlabelled samples belong to no run, so the annotations also show which samples have a label. A
+Unlabeled samples belong to no run, so the annotations also show which samples have a label. A
 run never crosses a gap. The signals carry no annotations.
 
 The activity annotations hold the answer to every task. A model input must leave them out. A task
@@ -129,14 +134,14 @@ their `benchmark.py` scores:
 | `target_schema` | `willetts_specific_2018_vocabulary` or `walmsley_2020_vocabulary` |
 | `split` | `train` for P001 to P100, `test` for P101 to P151 |
 
-There is no prompt; the benchmark asks no question in words.
+There is no prompt because the benchmark asks no question in words.
 
 `make_windows` cuts each recording into 10 s bins that start at its first sample. After a gap the
 bins stay on the first segment's grid. It keeps a bin with exactly 1000 samples and at least one
-labelled sample, so a kept window can have as few as one labelled sample. The activity annotations
+labeled sample, so a kept window can have as few as one labeled sample. The activity annotations
 show how much of a window has a label. The connector also fails the build if a kept window holds
 1000 samples across a gap, so no window crosses a gap. A window's class is the most common class
-among its labelled samples. A tie goes to the class first in string order, as the authors'
+among its labeled samples. A tie goes to the class first in string order, as the authors'
 `Series.mode` does. A window's scope starts at its first sample, which after a gap can be up to 10
 ms into its bin.
 
@@ -152,7 +157,7 @@ same names, so pick the segment by its time span, not the signal by name. The au
 models read more: their RNN reads 8 consecutive windows and their HMM a participant's whole
 sequence. For those, take a participant's tasks in `scope.start_us` order.
 
-A model that reads samples outside its window can guess the class from its neighbours. Two adjacent
+A model that reads samples outside its window can guess the class from its neighbors. Two adjacent
 windows have the same class in more than 99.9% of pairs, because the labels come from photos taken
 every 20 to 40 seconds and from sleep diaries.
 
@@ -164,7 +169,7 @@ the same rules in several modules, gave:
 - 151 Records and 159 Sources: 143 Records with one Source and 8 with two.
 - 1,869,524 classification tasks, which is 934,762 windows with two schemes each.
 
-The connector in this file has not been run on the full archive yet. Its tests check the rules on
+We have not run this version of the connector on the full archive yet. Its tests check the rules on
 a small fake release.
 
 ## Known issues upstream

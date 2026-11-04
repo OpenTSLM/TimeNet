@@ -47,8 +47,8 @@ def _p001() -> list[tuple[int, str]]:
         + [_SIT] * 500
         + [_WALK] * 500  # bin 1: a tie, which goes to the class first in string order
         + [""] * 999
-        + [_WALK]  # bin 2: one labelled sample, whose class the window takes
-        + [""] * 1000  # bin 3: unlabelled, so dropped
+        + [_WALK]  # bin 2: one labeled sample, whose class the window takes
+        + [""] * 1000  # bin 3: unlabeled, so dropped
         + [_SLEEP] * 500  # bin 4: 500 samples, so dropped
     )
     return [(index * 10_000, label) for index, label in enumerate(labels)]
@@ -195,8 +195,8 @@ _EXPECTED = {
             "sources": [
                 {
                     "name": "Axivity AX3 segment 0",
-                    # One run per change of raw label. The unlabelled rows 2000 to 2998 and 3000 to 3999
-                    # belong to no run, and the one labelled row 2999 is a run of its own.
+                    # One run per change of raw label. The unlabeled rows 2000 to 2998 and 3000 to 3999
+                    # belong to no run, and the one labeled row 2999 is a run of its own.
                     "annotations": [
                         _sleep(0, 10_000_000),
                         _sit(10_000_000, 15_000_000),
