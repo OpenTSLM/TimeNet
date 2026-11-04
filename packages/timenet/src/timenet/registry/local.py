@@ -24,14 +24,14 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class LocalRegistry(WritableRegistry):
-    """A registry that reads and writes datasets in a local directory."""
+    """Read and write dataset versions in a local directory."""
 
     def __init__(self, root: str | Path, *, store: bool = False) -> None:
-        """Open a local registry rooted at a directory.
+        """Open a registry in a local directory.
 
         Args:
-            root: The directory containing ``<dataset_id>/<version>/`` layouts. This expands ``~``.
-            store: Make this the store of a :class:`~timenet.client.TimeNet`, where its builds land.
+            root: The directory containing ``<dataset_id>/<version>/`` folders, with ``~`` expanded.
+            store: Mark this registry as the destination for local builds.
         """
         self._root = Path(root).expanduser()
         self._is_store = store
@@ -44,7 +44,7 @@ class LocalRegistry(WritableRegistry):
 
     @property
     def is_store(self) -> bool:
-        """Whether this registry is the store of a client, set with ``store=True``."""
+        """Whether ``store=True`` marks this registry as the place where downloads and builds land."""
         return self._is_store
 
     @property

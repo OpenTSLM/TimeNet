@@ -58,18 +58,17 @@ def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None, label
 
 
 def local_registry_path(uri: str | Path, *, label: str = "registry") -> Path:
-    """Resolve a registry URI to the local directory it names, for build to write into.
+    """Convert a local registry URL or path to a directory path.
 
     Args:
         uri: A ``file://`` URI or local path.
         label: The name of the value in an error message, such as ``sources[0]``.
 
     Returns:
-        The local directory the URI names, with ``~`` expanded.
+        The local directory path with ``~`` expanded.
 
     Raises:
-        TimeNetRegistryError: If the value is blank, names a remote backend, or is not a valid local
-            registry URI.
+        TimeNetRegistryError: If ``uri`` is blank, names a remote registry, or is not a valid local URL.
     """
     text = str(uri)
     if not text.strip():

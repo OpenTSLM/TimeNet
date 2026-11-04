@@ -1,9 +1,4 @@
-"""The :class:`TimeNet` class is the SDK's single entry point for using TimeNet from code.
-
-A client reads releases through an ordered list of sources, and builds a release that only
-``InstalledConnectors()`` provides into its store. :func:`default_sources` makes the list of
-``TimeNet()``.
-"""
+"""Browse and load datasets with the :class:`TimeNet` client."""
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
 # ``list[str]`` resolved to the builtin type, not to the method.
@@ -47,17 +42,17 @@ _OrList: TypeAlias = T | list[T] | None
 
 
 def default_sources(*, remote_registry: str | Path | None = None) -> list[ReleaseSource]:
-    """Return the default sources: the store, a registry, and the installed connectors.
+    """Return the local registry, an optional remote registry, and the installed connectors in that order.
 
-    The store is ``$TIMENET_REGISTRY`` if it names a local path, else ``<TIMENET_HOME>/registry``.
-    The registry is ``remote_registry``, else ``$TIMENET_REGISTRY`` if it is not local, else
-    ``timenet://``, and a local ``$TIMENET_REGISTRY`` without ``remote_registry`` leaves it out.
+    The local registry uses a local ``$TIMENET_REGISTRY`` or ``<TIMENET_HOME>/registry``.
+    The optional registry uses ``remote_registry``, a remote ``$TIMENET_REGISTRY``, or ``timenet://``
+    if the variable is unset.
 
     Args:
-        remote_registry: The registry after the store, as a URL, a ``file://`` URI or a local path.
+        remote_registry: A registry URL or path, or ``None`` to use the environment settings.
 
     Returns:
-        A new list, made from the environment at the time of the call.
+        A new source list based on the current environment.
     """
     # TODO(adrian): Remove temporary glue which maps TIMENET_REGISTRY and TIMENET_HOME onto the
     # list until the variables of the defaults (TIMENET_LOCAL_REGISTRY, TIMENET_REMOTE_REGISTRY,
@@ -99,10 +94,10 @@ def _open_sources(sources: Sequence[ReleaseSource | str | Path] | None) -> tuple
     """Validate sources and open registry URLs and paths.
 
     Args:
-        sources: The value of ``sources``, other than ``None``.
+        sources: A nonempty sequence of sources, registry URLs, or paths.
 
     Returns:
-        The sources, in order.
+        A tuple of sources in the given order.
 
     Raises:
         TimeFValidationError: If sources are not a nonempty sequence of valid sources, registry URLs, or paths.
@@ -133,17 +128,17 @@ class TimeNet:
     """Browse, download, and read TimeNet datasets."""
 
     def __init__(self, sources: Sequence[ReleaseSource | str | Path] | None = None) -> None:
-        """Create a client that reads releases through an ordered list of sources.
+        """Create a client with an ordered list of dataset sources.
 
-        A source is a registry, a registry URL or path, or ``InstalledConnectors()`` (see
-        :mod:`timenet.sources`). The store is the one :class:`~timenet.registry.LocalRegistry` with
-        ``store=True``, where builds land, and a list with ``InstalledConnectors()`` needs one.
+        Sources accept registries, registry URLs or paths, and ``InstalledConnectors()``.
+        At most one ``LocalRegistry`` can set ``store=True``, and ``InstalledConnectors()`` requires
+        that registry for builds.
 
         Args:
-            sources: The sources, in order. ``None`` means :func:`default_sources`.
+            sources: Sources in read order, or ``None`` to use :func:`default_sources`.
 
         Raises:
-            TimeFValidationError: If ``sources`` is not a valid list, or has a wrong number of stores.
+            TimeFValidationError: If sources are invalid, mark more than one local registry with ``store=True``, or lack one for connectors.
         """
         self._sources = tuple(default_sources()) if sources is None else _open_sources(sources)
         stores = [source for source in self._sources if isinstance(source, LocalRegistry) and source.is_store]
@@ -160,9 +155,9 @@ class TimeNet:
             )
 
     def list(self) -> _Metadatas:
-        """Return the metadata of every dataset in one registry of the sources.
+        """Return metadata for every dataset in the selected registry.
 
-        The registry is the first registry of the sources that is not the store, else the store.
+        The client uses the first registry other than the local registry, or the local registry if it is the only one.
 
         Returns:
             One :class:`~timenet.types.DatasetMetadata` per dataset.
@@ -170,7 +165,9 @@ class TimeNet:
         return self._catalog().list_datasets()
 
     def get(self, dataset_id: str, version: str | None = None) -> Manifest:
-        """Return a dataset's manifest from the registry that :meth:`list` asks.
+        """Return a dataset version's manifest from the selected registry.
+
+        The client uses the first registry other than the local registry, or the local registry if it is the only one.
 
         Args:
             dataset_id: The dataset ID.
@@ -194,18 +191,18 @@ class TimeNet:
         tag: _OrList[str] = None,
         limit: int = 100,
     ) -> _Metadatas:
-        """Search the registry that :meth:`list` asks.
+        """Search the selected registry for datasets that match the filters.
 
-        This method mirrors :meth:`~timenet.registry.BaseRegistry.search`.
+        The client uses the first registry other than the local registry, or the local registry if it is the only one.
 
         Args:
             query: Free text terms for the name, description, and tags.
-            domain: Keep datasets that share any of these domains.
-            task: Keep datasets whose schema includes any of these task classes.
-            license: Keep datasets with any of these licenses.
-            time_series_spec: Keep datasets that declare all of these ``spec_type`` values.
-            dataset_id: Keep only these ids.
-            tag: Keep datasets that declare all of these tags.
+            domain: Match any of these domains.
+            task: Match any of these task classes in the schema.
+            license: Match any of these licenses.
+            time_series_spec: Match all of these ``spec_type`` values.
+            dataset_id: Match only these IDs.
+            tag: Match all of these tags.
             limit: The maximum number of results.
 
         Returns:
@@ -230,16 +227,16 @@ class TimeNet:
         force: bool = False,
         progress_cb: ProgressCallback | None = None,
     ) -> Path:
-        """Fetch a version and each of its payload sources from the registry that :meth:`list` asks.
+        """Download a dataset version and the data needed to read it.
 
-        The copy lands in ``$TIMENET_STORAGE``, else in ``<TIMENET_HOME>/storage``. Parents that
-        only the build needs are not downloaded.
+        The client uses the first registry other than the local registry, or the local registry if it is the only one.
+        Files go to ``$TIMENET_STORAGE`` or ``<TIMENET_HOME>/storage``.
 
         Args:
             dataset_id: The dataset ID.
             version: The version string, or ``None`` for the latest.
             force: Download again, even if an up-to-date copy already exists.
-            progress_cb: Called with each file's byte count as it lands, for a progress display.
+            progress_cb: A callback that receives each file's byte count after download.
 
         Returns:
             The local ``<storage>/<dataset_id>/<version>/`` directory.
@@ -355,13 +352,13 @@ class TimeNet:
             return reader.read(load=LoadPlan.ALL_EAGER)
 
     def _catalog(self) -> BaseRegistry:
-        """Return the registry that :meth:`list`, :meth:`get`, :meth:`search`, and :meth:`download` ask.
+        """Select a registry from the configured sources.
 
         Returns:
-            The first registry of the sources that is not the store, else the store.
+            The first registry other than the local registry, or the local registry if it is the only one.
 
         Raises:
-            TimeFValidationError: If the sources hold no registry.
+            TimeFValidationError: If the sources contain no registry.
         """
         # TODO(adrian): Remove temporary glue which maps these methods onto one registry until
         # list() and search() ask every source. This registry gives the results of the client of
@@ -375,7 +372,7 @@ class TimeNet:
     # TODO(adrian): Remove temporary glue which checks access only for the interim download()
     # until a later change replaces download().
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
-        """Enforce the registry's open access requirement.
+        """Reject datasets without open access when the registry requires it.
 
         Args:
             dataset_id: The dataset ID without a version suffix.
@@ -420,13 +417,13 @@ class TimeNet:
 
 
 def _not_provided_hint(sources: Sequence[ReleaseSource]) -> str:
-    """Tell the caller which source can provide a release that no source provides.
+    """Suggest sources for a missing dataset release.
 
     Args:
-        sources: The sources of the client.
+        sources: The configured sources.
 
     Returns:
-        The hint as a full sentence. It names ``InstalledConnectors()`` only if the sources lack it.
+        Instructions to add a registry or installed connectors.
     """
     if any(isinstance(source, InstalledConnectors) for source in sources):
         return "Add a registry that holds it to the sources."
@@ -434,14 +431,14 @@ def _not_provided_hint(sources: Sequence[ReleaseSource]) -> str:
 
 
 def _access_hint(dataset_id: str, sources: Sequence[ReleaseSource]) -> str:
-    """Tell the caller how to get a release that a registry lists but does not serve.
+    """Suggest how to obtain a release whose files are unavailable.
 
     Args:
-        dataset_id: The bare dataset id.
-        sources: The sources of the client.
+        dataset_id: The dataset ID without a version suffix.
+        sources: The configured sources.
 
     Returns:
-        The hint as full sentences. It asks for ``InstalledConnectors()`` only if the sources lack it.
+        A hint with options to add a source or build the release locally.
     """
     build = f"`timenet-build build {dataset_id}`"
     if any(isinstance(source, InstalledConnectors) for source in sources):
@@ -455,9 +452,9 @@ def _access_hint(dataset_id: str, sources: Sequence[ReleaseSource]) -> str:
 # TODO(adrian): Remove temporary glue which gives a hint only for the interim download() until a
 # later change replaces download().
 def _unhosted_hint(dataset_id: str) -> str:
-    """Tell the caller how to get a dataset whose files the download registry does not serve.
+    """Suggest a local build for a dataset whose registry does not serve its files.
 
     Returns:
-        A sentence with the dataset's build command.
+        A hint with the build command.
     """
     return f"TimeNet does not host its data, so build it locally with `timenet-build build {dataset_id}`."
