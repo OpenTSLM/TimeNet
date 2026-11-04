@@ -1,8 +1,7 @@
-"""Build releases into a local registry, and publish them to other registries.
+"""Build dataset releases in a local registry and publish them to other registries.
 
-Each argument of :func:`build`, :func:`plan_build` and :func:`publish` that you leave out comes from
-the environment at the time of the call, as in the default list of sources of ``TimeNet()``. So a
-default build lands where a default client reads.
+The default local and remote registries come from ``TIMENET_LOCAL_REGISTRY`` and ``TIMENET_REMOTE_REGISTRY``.
+``TIMENET_AUTO_BUILD`` controls whether installed connectors supply missing parents by default.
 """
 
 from collections.abc import Sequence
@@ -37,39 +36,31 @@ def build(  # ruff: ignore[too-many-arguments]
     keep_cache: bool = False,
     progress: ProgressCallback | None = None,
 ) -> Plan:
-    """Build a release into a local registry with the installed connector that claims it.
+    """Build a dataset release into a local registry with its installed connector.
 
-    Each parent and payload source that the local registry lacks comes from the first source in
-    ``parents_from`` that provides it. The build runs in an environment made from the requirements of
-    the connector, unless ``TIMENET_ISOLATION`` is ``off``.
+    Missing parents and payload sources come from the first matching source in ``parents_from``.
+    The build uses a separate environment with the connector's dependencies unless ``TIMENET_ISOLATION`` is ``off``.
 
     Args:
-        dataset_id: The dataset ID, as ``org/name``, or one exact release, as ``org/name@1.2.0``.
-        local_registry: The local registry: a :class:`~timenet.registry.LocalRegistry`, a local path, or a
-            ``file://`` URI. ``None`` means ``TIMENET_LOCAL_REGISTRY``.
-        parents_from: Where missing parents and payload sources come from, in order after the local registry:
-            registries, their URLs or paths, and ``InstalledConnectors()``. ``None`` means
-            ``TIMENET_REMOTE_REGISTRY``, then ``InstalledConnectors()`` unless ``TIMENET_AUTO_BUILD``
-            is false.
+        dataset_id: The dataset ID (``org/name``) or exact release (``org/name@1.2.0``).
+        local_registry: A ``LocalRegistry``, local path, or ``file://`` URI, or ``None`` for ``TIMENET_LOCAL_REGISTRY``.
+        parents_from: Sources, URLs, or paths after the local registry, or ``None`` for
+            :func:`~timenet.client.default_sources`.
         force: Build the release again, even if the local registry holds it.
-        open_access_only: Refuse a plan that needs a release without open access, before any step runs.
+        open_access_only: Require open access for every release before running the plan.
         keep_cache: Keep the raw downloads in ``TIMENET_CACHE`` after the build.
-        progress: Receives the progress events of each copy and each build.
+        progress: A callback for copy and build progress events.
 
     Returns:
-        The plan that ran: its steps in the order in which they ran.
+        The completed plan with steps in execution order.
 
     Raises:
-        TimeFValidationError: If ``local_registry`` is not local or overlaps ``TIMENET_CACHE``, or ``parents_from``
-            is not a list.
-        TimeNetRegistryError: If ``local_registry`` is a URL of a remote registry, or an item of ``parents_from``
-            cannot be opened as a registry.
+        TimeFValidationError: If ``local_registry`` is not local, overlaps the cache, or ``parents_from`` is invalid.
+        TimeNetRegistryError: If ``local_registry`` is remote or a parent registry fails to open.
         TimeNetDatasetNotFoundError: If no installed connector builds the dataset.
-        TimeNetVersionUnavailableError: If the requested version differs from the connector's version. Nothing
-            runs then.
-        TimeNetMissingParentError: If no source provides a required parent or payload source. Nothing runs then.
-        TimeNetAccessError: If a source denies access to a parent and no later source provides it, or
-            ``open_access_only`` is set and the plan needs a release without open access. Nothing runs then.
+        TimeNetVersionUnavailableError: If the requested version differs from the connector's version.
+        TimeNetMissingParentError: If no source provides a required parent or payload source.
+        TimeNetAccessError: If no source grants access to a parent or a release violates ``open_access_only``.
         TimeNetVersionConflictError: If a release to copy has other files than the same version in the local registry.
         TimeNetFileError: If a stored release is damaged and no registry in ``parents_from`` provides it.
         TimeNetBuildError: If a build fails.
@@ -90,9 +81,9 @@ def plan_build(
     force: bool = False,
     open_access_only: bool = False,
 ) -> Plan:
-    """Return the plan that :func:`build` runs with the same arguments, and run nothing.
+    """Plan a dataset build without running it.
 
-    The call reads cards and manifests.
+    Planning reads dataset cards and manifests.
 
     Args:
         dataset_id: The dataset ID (``org/name``) or exact release (``org/name@1.2.0``).
@@ -102,13 +93,11 @@ def plan_build(
         open_access_only: Refuse a plan that needs a release without open access.
 
     Returns:
-        The plan: its steps in the order in which they run.
+        The build plan with steps in execution order.
 
     Raises:
-        TimeFValidationError: If ``local_registry`` is not local or overlaps ``TIMENET_CACHE``, or ``parents_from``
-            is not a list.
-        TimeNetRegistryError: If ``local_registry`` is a URL of a remote registry, or an item of ``parents_from``
-            cannot be opened as a registry.
+        TimeFValidationError: If ``local_registry`` is not local, overlaps the cache, or ``parents_from`` is invalid.
+        TimeNetRegistryError: If ``local_registry`` is remote or a parent registry fails to open.
         TimeNetDatasetNotFoundError: If no installed connector builds the dataset.
         TimeNetVersionUnavailableError: If the requested version differs from the connector's version.
         TimeNetMissingParentError: If no source provides a required parent or payload source.
@@ -127,32 +116,26 @@ def publish(
     source: str | Path | BaseRegistry | None = None,
     progress: ProgressCallback | None = None,
 ) -> DatasetRef:
-    """Copy a complete release and the payload sources that it needs to another registry.
+    """Copy a release and its required payload sources to another registry.
 
-    A published version cannot change, so the call copies nothing if ``dest`` holds the same files,
-    and raises an error if it holds other files. A local ``dest`` with a missing or damaged file gets
-    the release again.
+    The copy skips identical releases and rejects conflicting files before writing to ``dest``.
+    It replaces missing or damaged files at a local destination.
 
     Args:
-        dataset_id: The dataset ID, as ``org/name`` for the latest version in ``source``, or one exact
-            release, as ``org/name@1.2.0``.
+        dataset_id: ``org/name`` for the latest version in ``source``, or ``org/name@1.2.0`` for an exact release.
         dest: The registry to copy to, or its URL or path.
-        source: The registry to copy from, or its URL or path. ``None`` means the local registry,
-            ``TIMENET_LOCAL_REGISTRY``.
-        progress: Receives the progress events of the copy.
+        source: The source registry, URL, or path, or ``None`` for ``TIMENET_LOCAL_REGISTRY``.
+        progress: A callback for copy progress events.
 
     Returns:
-        The release that ``dest`` now holds.
+        The ID and version of the release in ``dest``.
 
     Raises:
-        TimeNetRegistryError: If ``dest`` or ``source`` cannot be opened as a registry.
-        TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
-        TimeNetAccessError: If ``source`` lists the release but does not serve its files. Also if a
-            release of the copy is not open, and ``dest`` or ``source`` requires open access.
-        TimeNetVersionConflictError: If ``dest`` holds the release, or a payload source that it
-            needs, with other files. Nothing is copied then.
-        TimeNetMissingParentError: If a payload source is neither in ``source`` nor complete in
-            ``dest``.
+        TimeNetRegistryError: If ``dest`` or ``source`` fails to open as a registry.
+        TimeNetDatasetNotFoundError: If ``source`` lacks the release.
+        TimeNetAccessError: If a registry withholds files or requires open access that a copied release lacks.
+        TimeNetVersionConflictError: If ``dest`` holds different files for the release or a required payload source.
+        TimeNetMissingParentError: If a required payload source is missing from ``source`` and incomplete in ``dest``.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by open_registry and copy_release
     target = open_registry(dest, label="dest") if isinstance(dest, (str, Path)) else dest
     if source is None:
@@ -174,20 +157,18 @@ def publish(
 def _build_inputs(
     store: str | Path | LocalRegistry | None, parents_from: Sequence[ReleaseSource | str | Path] | None
 ) -> tuple[LocalRegistry, list[ReleaseSource]]:
-    """Pick the local registry and the sources of the parents of a build, from the arguments or the environment.
+    """Resolve the local registry and parent sources from arguments or environment settings.
 
     Args:
-        store: The value of ``local_registry``.
-        parents_from: The value of ``parents_from``.
+        store: A local registry, path, or ``file://`` URI, or ``None`` for the configured one.
+        parents_from: Sources, URLs, or paths for missing releases, or ``None`` for the configured defaults.
 
     Returns:
-        The local registry, and the sources of the releases that it lacks, in order.
+        The local registry and sources for missing releases in search order.
 
     Raises:
-        TimeFValidationError: If ``store`` is not local or overlaps ``TIMENET_CACHE``, or ``parents_from``
-            is not a list.
-        TimeNetRegistryError: If ``store`` is a URL of a remote registry, or an item of ``parents_from``
-            cannot be opened as a registry.
+        TimeFValidationError: If ``store`` is not local, overlaps the cache, or ``parents_from`` is invalid.
+        TimeNetRegistryError: If ``store`` is remote or a parent registry fails to open.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by local_registry_path and open_registry
     if store is None:
         target = default_local_registry()

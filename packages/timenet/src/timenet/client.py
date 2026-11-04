@@ -126,10 +126,9 @@ def _resolve_ref(dataset_id: str, version: str | None) -> tuple[str, str | None]
 def as_release_sources(
     items: Sequence[ReleaseSource | str | Path], *, keyword: str, store: str | Path | None = None
 ) -> list[ReleaseSource]:
-    """Check a list of sources, and open each string or path in it as a registry.
+    """Convert registry URLs and paths to release sources.
 
-    A string or a :class:`~pathlib.Path` is a registry: a URL, a ``file://`` URI, or a local path. A
-    source stays as it is.
+    Existing source objects keep their identity and position.
 
     Args:
         items: A sequence of sources, registry URLs, or local paths.
@@ -137,7 +136,7 @@ def as_release_sources(
         store: The local registry directory whose copies of the same releases a registry URL reads, or ``None``.
 
     Returns:
-        The sources, in order. An empty list stays empty.
+        The sources in their original order, or an empty list for empty input.
 
     Raises:
         TimeFValidationError: If ``items`` is not a valid list, or ``store`` overlaps ``TIMENET_CACHE``.
@@ -166,14 +165,13 @@ def as_release_sources(
 
 
 def _store_root(items: object) -> Path | None:
-    """Return the root of the store among the sources of a list that are not strings or paths.
+    """Find the first local registry with ``store=True`` in a source sequence.
 
     Args:
-        items: The value of ``sources``, other than ``None``.
+        items: A source sequence to search.
 
     Returns:
-        The root of the first :class:`~timenet.registry.LocalRegistry` with ``store=True``, or ``None``
-        if the list holds none or is not a list.
+        The first ``LocalRegistry`` root with ``store=True``, or ``None`` for none or invalid input.
     """
     if isinstance(items, (str, os.PathLike)) or not isinstance(items, Sequence):
         return None
@@ -184,17 +182,18 @@ class TimeNet:
     """Browse, download, and read TimeNet datasets."""
 
     def __init__(self, sources: Sequence[ReleaseSource | str | Path] | None = None) -> None:
-        """Create a client with an ordered list of dataset sources.
+        """Create a client that searches dataset sources in order.
 
         ``InstalledConnectors()`` requires one ``LocalRegistry`` with ``store=True`` to hold builds.
         A registry URL reads the copies of the same releases in that local registry, if there is one.
 
         Args:
-            sources: Ordered registries, URLs, paths or connectors, or ``None`` for :func:`default_sources`.
+            sources: Ordered sources, registry URLs or paths, or ``None`` for :func:`default_sources`.
 
         Raises:
-            TimeFValidationError: If ``sources`` is not a valid list, has a wrong number of stores,
-                or has a store that overlaps ``TIMENET_CACHE``.
+            TimeFValidationError: If ``sources`` is not a non-empty list of valid sources, has more than one local
+                registry with ``store=True``, has installed connectors but none, or has one that overlaps
+                ``TIMENET_CACHE``.
         """
         if sources is None:
             self._sources = tuple(default_sources())
