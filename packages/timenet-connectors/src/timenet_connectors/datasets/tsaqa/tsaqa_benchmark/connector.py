@@ -30,7 +30,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.json import JsonValue
-from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, Split, Task, TimeSeriesSpec
+from timenet.types import Annotation, AnswerTask, ClassificationTask, LabelSet, Split, Task, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.sources.parquet import iter_parquet_rows
 
@@ -74,9 +74,18 @@ class _Role(StrEnum):
     """The series a true-or-false question prints, which has no letter."""
 
 
-_TRUE_OR_FALSE_LABEL_SET = LabelSet(
+@unique
+class _TrueOrFalse(StrEnum):
+    """The answer of a true-or-false question, as the release writes it."""
+
+    TRUE = "T"
+    FALSE = "F"
+
+
+_TRUE_OR_FALSE_LABEL_SET = LabelSet.from_enum(
+    _TrueOrFalse,
     name="true_or_false",
-    labels=(Label(name="T", description="True."), Label(name="F", description="False.")),
+    descriptions={_TrueOrFalse.TRUE: "True.", _TrueOrFalse.FALSE: "False."},
 )
 """The label set that every true-or-false task shares."""
 _CONTEXT_KEYS = ("meta_info", "domain", "dataset")

@@ -29,7 +29,7 @@ from timenet.types import (
     TimeInterval,
 )
 from timenet.types.text import read_value
-from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey, Condition, Question
+from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey, Condition, Question, Sex
 
 
 # The epoch the release scores in, from the 1968 Rechtschaffen and Kales manual.
@@ -60,15 +60,12 @@ ASLEEP_LABELS = frozenset(STAGE_LABELS[1:6])
 
 # The sexes, after each sheet is decoded. The two sheets code the column with opposite
 # meanings, so a raw code never reaches a task.
-SEXES = LabelSet(
-    name=str(AnnotationKey.SEX),
-    labels=(Label(name="F", description="Female."), Label(name="M", description="Male.")),
-)
+SEXES = LabelSet.from_enum(Sex, name=str(AnnotationKey.SEX), descriptions={Sex.FEMALE: "Female.", Sex.MALE: "Male."})
 SEX_LABELS = SEXES.names
 
 # The two nights of the telemetry study.
 CONDITION_LABELS = tuple(Condition)
-CONDITIONS = LabelSet(name=str(AnnotationKey.CONDITION), labels=tuple(Label(name=str(one)) for one in Condition))
+CONDITIONS = LabelSet.from_enum(Condition, name=str(AnnotationKey.CONDITION))
 
 
 def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation]) -> Iterator[ClassificationTask]:

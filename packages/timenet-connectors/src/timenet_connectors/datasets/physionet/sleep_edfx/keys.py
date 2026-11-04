@@ -35,6 +35,13 @@ class Question(StrEnum):
     LIGHTS_OFF = "lights_off"
 
 
+class Sex(StrEnum):
+    """The sex of a subject, after each sheet's code is decoded."""
+
+    FEMALE = "F"
+    MALE = "M"
+
+
 class Condition(StrEnum):
     """The two nights of the telemetry study.
 

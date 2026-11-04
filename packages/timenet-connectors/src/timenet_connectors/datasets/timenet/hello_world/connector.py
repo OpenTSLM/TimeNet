@@ -10,6 +10,7 @@ task chain.
 
 from collections.abc import Callable
 from dataclasses import dataclass
+from enum import StrEnum
 from pathlib import Path
 
 from jaxtyping import Float, Float64
@@ -23,7 +24,6 @@ from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
-    Label,
     LabelSet,
     LocalizationMode,
     ScalarPredictionTask,
@@ -47,16 +47,22 @@ _COSINE = TimeSeriesSpec(
     name="Cosine",
     unit_value=ureg.dimensionless,
 )
+
+
 # Each classification task draws its target from a label set that every task with the same question
 # shares.
-_RHYTHM = LabelSet(
-    name="rhythm",
-    labels=(Label(name="normal", description="A regular wave."), Label(name="abnormal")),
-)
-_EVENT = LabelSet(
-    name="event",
-    labels=(Label(name="onset", description="The moment the wave starts."), Label(name="offset")),
-)
+class _Rhythm(StrEnum):
+    NORMAL = "normal"
+    ABNORMAL = "abnormal"
+
+
+class _Event(StrEnum):
+    ONSET = "onset"
+    OFFSET = "offset"
+
+
+_RHYTHM = LabelSet.from_enum(_Rhythm, name="rhythm", descriptions={_Rhythm.NORMAL: "A regular wave."})
+_EVENT = LabelSet.from_enum(_Event, name="event", descriptions={_Event.ONSET: "The moment the wave starts."})
 
 
 @dataclass(frozen=True)
@@ -176,7 +182,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         artifact = shared.annotate(artifact)
         classification = ClassificationTask(
             inputs=(record0,),
-            targets=("normal",),
+            targets=(_Rhythm.NORMAL,),
             label_set=_RHYTHM,
         )
         dataset.add_tasks(
@@ -270,7 +276,7 @@ class HelloWorldConnector(BaseConnector[HelloWorldRecording]):
         dataset.add_task(
             task=ClassificationTask(
                 inputs=(record2,),
-                targets=("onset",),
+                targets=(_Event.ONSET,),
                 label_set=_EVENT,
                 scope=TimeInterval.seconds(0.5, 0.75, time_series=(window,)),
             ),

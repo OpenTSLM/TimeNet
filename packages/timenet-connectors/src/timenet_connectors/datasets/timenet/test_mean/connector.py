@@ -8,6 +8,7 @@ value is seeded, so the dataset is deterministic and needs no network. The datas
 training example.
 """
 
+from enum import StrEnum
 from pathlib import Path
 
 import numpy as np
@@ -15,7 +16,7 @@ import numpy as np
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.types import ClassificationTask, Label, LabelSet, TimeSeriesSpec, ureg
+from timenet.types import ClassificationTask, LabelSet, TimeSeriesSpec, ureg
 
 
 _N_RECORDS = 1000
@@ -23,12 +24,22 @@ _LENGTH = 64
 _SAMPLING_RATE_HZ = 16.0
 _NOISE_STD = 0.5
 _SEED = 20260715  # fixed base seed keeps every build's values identical
-_MEAN_SIGN = LabelSet(
+
+
+class _MeanSign(StrEnum):
+    """Whether the mean of a signal is above or below zero."""
+
+    ABOVE_ZERO = "above_zero"
+    BELOW_ZERO = "below_zero"
+
+
+_MEAN_SIGN = LabelSet.from_enum(
+    _MeanSign,
     name="mean_sign",
-    labels=(
-        Label(name="above_zero", description="The mean of the signal is above zero."),
-        Label(name="below_zero", description="The mean of the signal is below zero."),
-    ),
+    descriptions={
+        _MeanSign.ABOVE_ZERO: "The mean of the signal is above zero.",
+        _MeanSign.BELOW_ZERO: "The mean of the signal is below zero.",
+    },
 )
 
 _SIGNAL = TimeSeriesSpec(
@@ -79,7 +90,7 @@ class TestMeanConnector(BaseConnector[None]):
             )
             record = Record(sources=(Source(name="Synthetic generator", signals=(series,)),))
             dataset.add_record(record=record)
-            label = "above_zero" if offset > 0 else "below_zero"
+            label = _MeanSign.ABOVE_ZERO if offset > 0 else _MeanSign.BELOW_ZERO
             dataset.add_task(
                 task=ClassificationTask(
                     inputs=(record,),
