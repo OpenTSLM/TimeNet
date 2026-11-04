@@ -175,7 +175,7 @@ def _tasks(records: Sequence[Record], files: Sequence[ChatTSFile]) -> Iterator[A
 class ChatTSConnector(BaseConnector[ChatTSFile]):
     """Connector for the five configs of the ChatTS training release."""
 
-    def download(self, cache_dir: Path) -> list[ChatTSFile]:  # noqa: PLR6301 - BaseConnector override
+    def download(self, cache_dir: Path) -> list[ChatTSFile]:  # ruff: ignore[no-self-use] - BaseConnector override
         """Fetch the five original JSONL files at the pinned source revision.
 
         Args:

@@ -4,8 +4,9 @@ from pathlib import Path
 
 import pytest
 
-from timenet.dataset import OrdinalAxis, TimeFDataset
+from timenet.dataset import OrdinalAxis
 from timenet.errors import TimeFFormatError
+from timenet.reader import TimeFReader
 from timenet.types import InputModality, read_value, read_values
 from timenet_connectors.datasets.chattsrepo.chatts_training_dataset.connector import (
     CONFIGS,
@@ -59,18 +60,19 @@ def test_convert_keeps_ordered_values_source_text_and_validation_split():
 def test_fixture_round_trips_records_values_and_task_splits(tmp_path):
     dataset = ChatTSConnector().convert(_files())
     version_dir = dataset.write(path=tmp_path)
-    loaded = TimeFDataset.open(path=version_dir)
+    with TimeFReader.open(version_dir) as reader:
+        loaded = reader.read()
 
-    assert len(loaded.records) == 6
-    assert [signal.to_arrow().to_pylist() for signal in loaded.records[0].signals] == [
-        [1.234567890123, 2.5, 3.75],
-        [0.9, 0.8, 0.7],
-    ]
-    assert len(loaded.get_train()) == 5
-    assert len(loaded.get_validation()) == 1
-    assert read_value(loaded.get_validation()[0].prompt) == (
-        "There is a time series of length 3: <ts><ts/>. Return a JSON summary."
-    )
+        assert len(loaded.records) == 6
+        assert [signal.to_arrow().to_pylist() for signal in loaded.records[0].signals] == [
+            [1.234567890123, 2.5, 3.75],
+            [0.9, 0.8, 0.7],
+        ]
+        assert len(loaded.get_train()) == 5
+        assert len(loaded.get_validation()) == 1
+        assert read_value(loaded.get_validation()[0].prompt) == (
+            "There is a time series of length 3: <ts><ts/>. Return a JSON summary."
+        )
 
 
 def test_marker_mismatch_names_the_source_row(tmp_path):
