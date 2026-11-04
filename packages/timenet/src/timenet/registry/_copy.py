@@ -32,8 +32,8 @@ def copy_release(
     *,
     force: bool = False,
     progress: ProgressCallback | None = None,
-) -> None:
-    """Copy a release and its required payload sources to a registry.
+) -> tuple[DatasetRef, ...]:
+    """Copy a release and the payload sources that it needs to another registry.
 
     Payload sources go first, a complete copy in ``dest`` is reused, and a damaged local copy is fetched again.
     All checks run before the first copy, so a failed check copies nothing.
@@ -44,6 +44,9 @@ def copy_release(
         dest: The registry to copy to.
         force: Fetch ``reference`` again, even if ``dest`` has a complete local copy.
         progress: Receives step events for each copied release and byte counts when ``dest`` is local.
+
+    Returns:
+        The releases that this function copied or repaired, in the order of the copy.
 
     Raises:
         TimeFValidationError: If ``force`` is set and ``dest`` is not local.
@@ -66,7 +69,7 @@ def copy_release(
     ]
     _check_access(manifests, set(pending), source, dest)
     if not pending:
-        return
+        return ()
     # Only a copy from a non-local source to a non-local dest downloads into this directory, each
     # pending release on its own.
     with tempfile.TemporaryDirectory(prefix="timenet-copy-", ignore_cleanup_errors=True) as staging:
@@ -77,6 +80,7 @@ def copy_release(
             _copy_one(ref, manifests[ref], source, dest, Path(staging), force=again, progress=progress)
             if progress is not None:
                 progress(StepFinished(ref, "copy"))
+    return tuple(pending)
 
 
 def _copy_one(  # ruff: ignore[too-many-arguments]

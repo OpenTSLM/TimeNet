@@ -7,11 +7,16 @@ from timenet.coordinator import build as build_module
 from timenet.coordinator.build import plan_release_build, run_plan
 from timenet.coordinator.plan import Step
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetAccessError, TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
+from timenet.errors import (
+    TimeNetAccessError,
+    TimeNetDatasetNotFoundError,
+    TimeNetVersionUnavailableError,
+)
 from timenet.progress import BytesMoved, StepFinished, StepStarted
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.registry._paths import release_dir
+from timenet.registry.origin import read_origin
 from timenet.registry.shared import complete_copy
 from timenet.sources import InstalledConnectors
 from timenet.testing import install_backends, make_dataset
@@ -247,6 +252,30 @@ def test_a_build_builds_a_payload_source_of_a_release_that_it_copies(
     assert fake_child.calls == []
     assert fake_grandchild.calls == [(GRANDCHILD_REF, False, {})]
     assert store.get_manifest(CHILD_REF.dataset_id) == origin.get_manifest(CHILD_REF.dataset_id)
+
+
+def test_run_plan_records_each_copy_and_each_build(tmp_path, store, backends):
+    # The registry to copy from holds the child and its payload source, the parent.
+    origin = LocalRegistry(tmp_path / "origin")
+    _store_child_without_parent(origin)
+    origin.put_dataset(make_dataset())
+    backends.extend([_Backend(_child_card()), _Backend(_grandchild_card())])
+    plan = plan_release_build(GRANDCHILD_REF.dataset_id, store=store, parents_from=[origin])
+    assert [(step.action, step.release) for step in plan.steps] == [("copy", CHILD_REF), ("build", GRANDCHILD_REF)]
+
+    run_plan(plan, store)
+
+    records = {}
+    for release in (PARENT_REF, CHILD_REF, GRANDCHILD_REF):
+        record = read_origin(store, release)
+        records[release] = None if record is None else (record.origin, record.source)
+    # The copy of the child brings its payload source along, and both name the registry. No
+    # installed distribution declares the fake backend, so its class names it.
+    assert records == {
+        PARENT_REF: ("copy", str(origin.root.resolve())),
+        CHILD_REF: ("copy", str(origin.root.resolve())),
+        GRANDCHILD_REF: ("build", f"{_Backend.__module__}._Backend"),
+    }
 
 
 def test_a_forced_build_forces_only_the_requested_release(store, fake_parent, fake_child):
