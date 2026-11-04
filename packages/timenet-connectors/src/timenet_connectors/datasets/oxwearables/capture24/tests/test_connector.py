@@ -90,6 +90,7 @@ def _output(dataset) -> dict:
         records[_pid(record)] = {
             "metadata": dict(record.metadata),
             "annotations": {a.key: read_value(a.value) for a in record.annotations},
+            "descriptions": {a.key: a.description for a in record.annotations if a.description is not None},
             "sources": [
                 {
                     "name": source.name,
@@ -164,6 +165,17 @@ def _walk(start_us: int, end_us: int) -> tuple:
 _WILLETTS = connector.WILLETTS_SPECIFIC_2018_VOCABULARY.name
 _WALMSLEY = connector.WALMSLEY_2020_VOCABULARY.name
 
+# A reader of the dataset alone must learn that the age is a band and that the time is shifted, so
+# both annotations carry a description. Other connectors store an exact age under the key age.
+_DESCRIPTIONS = {
+    "age_band": "The participant's age band in years, as metadata.csv writes it. The authors give no exact age.",
+    "recording_start_local": (
+        "The first sample's timestamp as the authors published it, with no zone. For anonymity they "
+        "randomized the date and shifted the time by a small random amount. The time of day is as "
+        "published, not an exact local time."
+    ),
+}
+
 # The whole converted fixture, written out by hand from the fixture rows above.
 _EXPECTED = {
     "annotations": {
@@ -186,6 +198,7 @@ _EXPECTED = {
     "records": {
         "P001": {
             "metadata": {"file": "P001.csv.gz"},
+            "descriptions": _DESCRIPTIONS,
             "annotations": {
                 "subject_ids": ["P001"],
                 "age_band": "38-52",
@@ -210,6 +223,7 @@ _EXPECTED = {
         },
         "P100": {
             "metadata": {"file": "P100.csv.gz"},
+            "descriptions": _DESCRIPTIONS,
             "annotations": {
                 "subject_ids": ["P100"],
                 "age_band": "30-37",
@@ -222,6 +236,7 @@ _EXPECTED = {
         },
         "P101": {
             "metadata": {"file": "P101.csv.gz"},
+            "descriptions": _DESCRIPTIONS,
             "annotations": {
                 "subject_ids": ["P101"],
                 "age_band": "18-29",
@@ -239,7 +254,6 @@ _EXPECTED = {
             ],
         },
     },
-    # One task per window and scheme: WillettsSpecific2018, then Walmsley2020.
     # One benchmark per scheme, as benchmark.py runs them: every participant's windows in time order.
     "tasks": [
         ("P001", 0, 10_000_000, _WILLETTS, ("sleep",), "train"),
@@ -295,25 +309,6 @@ def test_converts_the_fixture(tmp_path):
     _assert_values(dataset)
 
 
-def test_recording_start_says_that_it_is_anonymized(tmp_path):
-    # A reader that never sees the README must still learn that the time is shifted.
-    dataset = Capture24Connector().convert([_release(tmp_path)])
-    for record in dataset.records:
-        (start,) = [a for a in record.annotations if a.key == "recording_start_local"]
-        assert start.description is not None
-        assert "shifted the time by a small random amount" in start.description
-
-
-def test_age_band_says_that_it_is_a_band(tmp_path):
-    # Other connectors store an exact age under "age", so the band needs its own key and a description.
-    dataset = Capture24Connector().convert([_release(tmp_path)])
-    for record in dataset.records:
-        (band,) = [a for a in record.annotations if a.key == "age_band"]
-        assert band.description is not None
-        assert "no exact age" in band.description
-        assert not any(a.key == "age" for a in record.annotations)
-
-
 def test_recording_start_keeps_one_format_when_it_has_microseconds(tmp_path):
     # isoformat() alone drops the fraction when it is zero, so two Records could differ in format.
     root = _release(tmp_path)
@@ -362,7 +357,8 @@ def test_storing_reads_each_recording_once(tmp_path, monkeypatch):
 def test_tasks_mark_only_their_window_as_input(tmp_path):
     # The scope is the window and names no signal, so the whole Record stays available, as the authors'
     # RNN and HMM use it. The window's samples are 1000 of the x, y and z of the one segment that holds
-    # it, as make_windows cuts X. No other field gives a model anything.
+    # it, as make_windows cuts X. The Record's Sources still carry the activity annotations, which hold
+    # the answer, so a consumer must drop them. The task lists none of them as input.
     dataset = Capture24Connector().convert([_release(tmp_path)])
     for task in dataset.iter_tasks():
         scope = task.scope

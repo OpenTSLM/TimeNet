@@ -22,7 +22,7 @@ import hashlib
 from itertools import pairwise
 from pathlib import Path
 import re
-from typing import TypeVar
+from typing import NamedTuple, TypeVar
 
 import numpy as np
 import pyarrow as pa
@@ -69,7 +69,18 @@ _DICTIONARY_LABEL_COLUMN = "annotation"
 _RECORDING_FILE = re.compile(r"(P[0-9]{3})\.csv\.gz")
 _TIME_COLUMN = "time"
 _LABEL_COLUMN = "annotation"
-_AXES = ("x", "y", "z")
+
+
+class _Acceleration(NamedTuple):
+    """A recording's x, y and z values: one float32 array each, with one value per row."""
+
+    x: np.ndarray
+    y: np.ndarray
+    z: np.ndarray
+
+
+_AXES = _Acceleration._fields
+"""The acceleration columns of a recording, which are also its signal names."""
 _RECORDING_COLUMNS = [_TIME_COLUMN, *_AXES, _LABEL_COLUMN]
 _FIRST_DATA_LINE = 2
 """The file line of a table's first row, after the header line."""
@@ -251,7 +262,7 @@ class _Person:
     """A participant listed in ``metadata.csv``, with the recording that holds the samples."""
 
     pid: str
-    age: _AgeBand
+    age_band: _AgeBand
     sex: _Sex
     path: Path
 
@@ -338,20 +349,41 @@ def _read_labels(path: Path) -> _LabelDictionary:
     raw_labels = [row[_DICTIONARY_LABEL_COLUMN] for row in rows]
     if len(set(raw_labels)) != len(raw_labels):
         raise TimeNetConnectorError(f"{path}: a raw label is listed twice")
-    class_of_raw = {}
-    for scheme, vocabulary in _VOCABULARIES.items():
-        classes = [row[scheme.column] for row in rows]
-        unknown = sorted(set(classes) - set(vocabulary.labels))
-        if unknown:
-            raise TimeNetConnectorError(f"{path}: classes missing from vocabulary {vocabulary.name!r}: {unknown}")
-        index = {name: code for code, name in enumerate(vocabulary.labels)}
-        class_of_raw[scheme] = np.array([index[name] for name in classes] + [len(index)], dtype=np.int16)
+    class_of_raw = {
+        scheme: _class_codes(path, [row[scheme.column] for row in rows], vocabulary)
+        for scheme, vocabulary in _VOCABULARIES.items()
+    }
     return _LabelDictionary(
         raw_labels=tuple(raw_labels),
         code_of_raw={label: code for code, label in enumerate(raw_labels)},
-        scheme_classes_of_raw=tuple({scheme: row[scheme.column] for scheme in _Scheme} for row in rows),
+        scheme_classes_of_raw=tuple(_scheme_classes(row) for row in rows),
         class_of_raw=class_of_raw,
     )
+
+
+def _class_codes(path: Path, classes: list[str], vocabulary: _Vocabulary) -> np.ndarray:
+    """Map each raw label's class in one scheme to its index in the scheme's vocabulary.
+
+    Returns:
+        One index per raw label, in file order, then one more entry for an unlabeled sample. That
+        entry is one past the vocabulary's last class, so that indexing with ``_NO_LABEL`` finds it
+        and no class count takes it.
+
+    Raises:
+        TimeNetConnectorError: If a class is not in the vocabulary.
+    """
+    unknown = sorted(set(classes) - set(vocabulary.labels))
+    if unknown:
+        raise TimeNetConnectorError(f"{path}: classes missing from vocabulary {vocabulary.name!r}: {unknown}")
+    index_of_class = {name: index for index, name in enumerate(vocabulary.labels)}
+    codes = [index_of_class[name] for name in classes]
+    unlabeled = len(vocabulary.labels)
+    return np.array([*codes, unlabeled], dtype=np.int16)
+
+
+def _scheme_classes(row: dict[str, str]) -> dict[_Scheme, str]:
+    """Return a dictionary row's class in each of the six schemes."""
+    return {scheme: row[scheme.column] for scheme in _Scheme}
 
 
 _Parsed = TypeVar("_Parsed")
@@ -391,9 +423,7 @@ def _read_people(root: Path) -> list[_Person]:
     pids = [row[_MetadataColumn.PID] for row in rows]
     if len(set(pids)) != len(pids):
         raise TimeNetConnectorError(f"{path}: a pid is listed twice")
-    recordings = {
-        match[1]: file for file in root.iterdir() if (match := _RECORDING_FILE.fullmatch(file.name)) is not None
-    }
+    recordings = _recordings_by_pid(root)
     if set(recordings) != set(pids):
         raise TimeNetConnectorError(
             f"{root}: recordings missing for {sorted(set(pids) - set(recordings))}, "
@@ -402,7 +432,7 @@ def _read_people(root: Path) -> list[_Person]:
     people = [
         _Person(
             pid=row[_MetadataColumn.PID],
-            age=_parse_person_value(path, line, _MetadataColumn.AGE, row[_MetadataColumn.AGE], _AgeBand),
+            age_band=_parse_person_value(path, line, _MetadataColumn.AGE, row[_MetadataColumn.AGE], _AgeBand),
             sex=_parse_person_value(
                 path, line, _MetadataColumn.SEX, row[_MetadataColumn.SEX], _SEX_OF_LETTER.__getitem__
             ),
@@ -411,6 +441,20 @@ def _read_people(root: Path) -> list[_Person]:
         for line, row in enumerate(rows, start=_FIRST_DATA_LINE)
     ]
     return sorted(people, key=lambda person: person.pid)
+
+
+def _recordings_by_pid(root: Path) -> dict[str, Path]:
+    """Find the recording files in the release directory.
+
+    Returns:
+        Each recording's path, keyed by the participant id in its file name.
+    """
+    recordings = {}
+    for file in root.iterdir():
+        match = _RECORDING_FILE.fullmatch(file.name)
+        if match is not None:
+            recordings[match[1]] = file
+    return recordings
 
 
 def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant:
@@ -530,8 +574,8 @@ def _label_runs(raw_codes: np.ndarray, segment: _Segment) -> _LabelRuns:
     changes = np.flatnonzero(np.diff(codes)) + 1
     starts = np.concatenate(([0], changes))
     ends = np.concatenate((changes, [len(codes)]))
-    labelled = codes[starts] != _NO_LABEL
-    starts, ends = starts[labelled], ends[labelled]
+    labeled = codes[starts] != _NO_LABEL
+    starts, ends = starts[labeled], ends[labeled]
     return _LabelRuns(
         starts_us=segment.offset_us + starts * _SAMPLE_PERIOD_US,
         ends_us=segment.offset_us + ends * _SAMPLE_PERIOD_US,
@@ -539,31 +583,41 @@ def _label_runs(raw_codes: np.ndarray, segment: _Segment) -> _LabelRuns:
     )
 
 
-def _axis_values(path: Path, table: pa.Table) -> dict[str, np.ndarray]:
-    """Return the x, y and z columns of a recording's table as float32 arrays.
+def _axis_values(path: Path, table: pa.Table) -> _Acceleration:
+    """Return the x, y and z columns of a recording's table.
 
     Returns:
-        One array per acceleration column.
+        The float32 values of each axis.
+
+    Raises:
+        TimeNetConnectorError: If a value is missing or not finite.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _finite_column
+    return _Acceleration._make(_finite_column(path, table, column) for column in _AXES)
+
+
+def _finite_column(path: Path, table: pa.Table, column: str) -> np.ndarray:
+    """Return one acceleration column of a recording's table.
+
+    Returns:
+        The column's float32 values.
 
     Raises:
         TimeNetConnectorError: If a value is missing or not finite.
     """
-    values = {}
-    for column in _AXES:
-        array = table[column].combine_chunks()
-        if array.null_count:
-            raise TimeNetConnectorError(f"{path}: {array.null_count} samples have no {column} value")
-        values[column] = array.to_numpy()
-        if not np.isfinite(values[column]).all():
-            raise TimeNetConnectorError(f"{path}: a {column} value is not finite")
+    array = table[column].combine_chunks()
+    if array.null_count:
+        raise TimeNetConnectorError(f"{path}: {array.null_count} samples have no {column} value")
+    values = array.to_numpy()
+    if not np.isfinite(values).all():
+        raise TimeNetConnectorError(f"{path}: a {column} value is not finite")
     return values
 
 
-def _digest(values: dict[str, np.ndarray]) -> str:
+def _digest(values: _Acceleration) -> str:
     """Return a digest of the x, y and z values, in that order, to spot a file that changed."""
     digest = hashlib.blake2b()
-    for column in _AXES:
-        digest.update(values[column])
+    for axis in values:
+        digest.update(axis)
     return digest.hexdigest()
 
 
@@ -612,8 +666,8 @@ def _make_windows(
     full = bin_starts[np.diff(bin_starts, append=len(bins)) == _WINDOW_SAMPLES]
     # One row of 1000 raw label codes per full bin. Keep the bins with at least one labeled sample.
     window_codes = raw_codes[full[:, None] + np.arange(_WINDOW_SAMPLES)]
-    labelled = (window_codes != _NO_LABEL).any(axis=1)
-    first_rows, window_codes = full[labelled], window_codes[labelled]
+    labeled = (window_codes != _NO_LABEL).any(axis=1)
+    first_rows, window_codes = full[labeled], window_codes[labeled]
     # A window crosses a gap if its first and last rows are in different segments. searchsorted finds
     # each row's segment from the segments' first rows, with no array as long as the recording.
     segment_first_rows = np.array([segment.first_row for segment in segments])
@@ -635,11 +689,11 @@ def _make_windows(
     return _Windows(first_rows=first_rows, classes=classes)
 
 
-def _read_acceleration(participant: _Participant) -> dict[str, np.ndarray]:
+def _read_acceleration(participant: _Participant) -> _Acceleration:
     """Read a recording's x, y and z columns as float32, and check that the file is the one the first pass read.
 
     Returns:
-        One array per acceleration column.
+        The float32 values of each axis.
 
     Raises:
         TimeNetConnectorError: If a value is missing, unreadable or not finite, or the row count or the values
@@ -660,7 +714,7 @@ def _read_acceleration(participant: _Participant) -> dict[str, np.ndarray]:
     return values
 
 
-_ReadAcceleration = Callable[[_Participant], dict[str, np.ndarray]]
+_ReadAcceleration = Callable[[_Participant], _Acceleration]
 
 
 class _OneRecording:
@@ -672,17 +726,17 @@ class _OneRecording:
 
     def __init__(self) -> None:
         self._path: Path | None = None
-        self._values: dict[str, np.ndarray] = {}
+        self._values: _Acceleration | None = None
 
-    def __call__(self, participant: _Participant) -> dict[str, np.ndarray]:
+    def __call__(self, participant: _Participant) -> _Acceleration:
         """Return the recording's x, y and z, reading it unless it was the last one read.
 
         Returns:
-            One array per acceleration column.
+            The float32 values of each axis.
         """
-        if self._path != participant.person.path:
+        if self._values is None or self._path != participant.person.path:
             # Release the previous recording before reading the next.
-            self._path, self._values = None, {}
+            self._path, self._values = None, None
             self._values = _read_acceleration(participant)
             self._path = participant.person.path
         return self._values
@@ -696,7 +750,7 @@ def _load_segment(
     Returns:
         The segment's float32 values.
     """
-    values = acceleration(participant)[column]
+    values = getattr(acceleration(participant), column)
     return pa.array(values[segment.first_row : segment.first_row + segment.n_values], type=_AXIS_TYPE)
 
 
@@ -750,7 +804,7 @@ def _record(participant: _Participant, labels: _LabelDictionary, acceleration: _
     record.add_annotations(
         (
             Annotation(key=_Key.SUBJECT_IDS, value=[person.pid]),
-            Annotation(key=_Key.AGE_BAND, value=person.age.value, description=_AGE_BAND_DESCRIPTION),
+            Annotation(key=_Key.AGE_BAND, value=person.age_band.value, description=_AGE_BAND_DESCRIPTION),
             Annotation(key=_Key.SEX, value=person.sex.value),
             Annotation(
                 key=_Key.RECORDING_START_LOCAL,

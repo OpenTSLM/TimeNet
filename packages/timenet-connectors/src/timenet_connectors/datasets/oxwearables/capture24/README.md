@@ -94,8 +94,8 @@ run never crosses a gap. The signals carry no annotations.
 The activity annotations hold the answer to every task, so a model input must leave them out.
 A task's `inputs` is the whole Record, and its Sources still carry these annotations. A task lists
 no annotation in `input_annotations`, but that field only names the annotations a task selects. It
-does not remove anything from the Record. A consumer that builds model input from a task must use
-the signal values in its scope and drop the Source annotations.
+does not remove anything from the Record. A consumer that builds model input from a task must build
+it from the signals and drop the Source annotations.
 
 ### Vocabularies
 
