@@ -118,13 +118,18 @@ class RemoteRegistry(LazyReadRegistry):
         buffer.seek(0)
         return buffer
 
-    def _open_remote_version(self, reference: DatasetRef) -> DatasetVersion:
+    def _open_remote_version(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
         """Bind one remote manifest to a range-capable filesystem.
 
+        Args:
+            reference: The exact release.
+            manifest: The manifest of the release, if the caller already fetched it from this registry.
+
         Returns:
-            A handle without its payload sources, which ``open_version`` attaches.
+            A handle without its payload sources.
         """
-        manifest = self.get_manifest(reference.dataset_id, str(reference.version))
+        if manifest is None:
+            manifest = self.get_manifest(reference.dataset_id, str(reference.version))
         root = f"{reference.dataset_id}/{reference.version}"
         files = {f"{root}/{part.path}": part.size for part in manifest.files.all_files()}
         filesystem = RegistryFileSystem(self._base_url, files, token=self._http.token, transport=self._http.transport)

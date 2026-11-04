@@ -1,16 +1,8 @@
 from pathlib import Path
-import sys
 
 import pytest
 
-from timenet.dataset import Record, Source
-
-
-# Make sibling test helpers (e.g. ``_fake_registry``) importable by name under
-# pytest's importlib import mode, which does not add test dirs to ``sys.path``.
-sys.path.insert(0, str(Path(__file__).parent))
-
-from timenet.dataset import Signal, TimeFDataset
+from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.testing import make_dataset, sine_loader
 from timenet.types import (

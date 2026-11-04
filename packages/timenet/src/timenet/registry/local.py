@@ -13,7 +13,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatase
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
-from timenet.registry.dependencies import check_file_sizes, open_local_release
+from timenet.registry.dependencies import check_file_sizes, validate_manifest_reference
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.sources import Found, NotFound, NotServed
@@ -268,25 +268,30 @@ class LocalRegistry(WritableRegistry):
             return error
         return None
 
-    def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
-        """Open a committed version as a local, random-access handle.
+    def open_release(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
+        """Open one committed release as a local handle, without its payload sources.
 
-        Reuses the manifest :meth:`get_manifest` already parsed and validated, so a missing version or a
-        misplaced artifact surfaces there. Roots the handle at the version's directory over a
-        :class:`pyarrow.fs.LocalFileSystem`, which is zero network and already seekable. Opening reads
-        only metadata, as :func:`~timenet.registry.open_local_version` does, and finds payload sources
-        in this registry.
+        Opening reads only metadata. It checks that each file of the release is present with its
+        recorded size.
 
         Args:
-            dataset_id: The dataset id.
-            version: The version string, or ``None`` for the latest.
+            reference: The exact release.
+            manifest: The manifest of the release, if the caller already read it from this registry.
 
         Returns:
-            A handle to the committed version's manifest and files.
-        """
-        manifest = self.get_manifest(dataset_id, version)
-        reference = DatasetRef(dataset_id=dataset_id, version=manifest.metadata.dataset_version)
-        return open_local_release(release_dir(self._root, reference), manifest, sources_root=self._root)
+            A handle rooted at the directory of the release over a :class:`pyarrow.fs.LocalFileSystem`.
+
+        Raises:
+            TimeNetDatasetNotFoundError: If this registry has no committed manifest of the release.
+            TimeFFormatError: If the manifest declares another release.
+            TimeNetFileError: If a file of the release is missing or has another size than recorded.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by get_manifest and the checks
+        if manifest is None:
+            manifest = self.get_manifest(reference.dataset_id, str(reference.version))
+        validate_manifest_reference(manifest, reference)
+        version = DatasetVersion(manifest, pafs.LocalFileSystem(), str(release_dir(self._root, reference)))
+        check_file_sizes(version, manifest.files.all_files(), owner=str(reference))
+        return version
 
     def _dataset_dir(self, dataset_id: str) -> Path:
         """Return the directory holding a dataset's versions.

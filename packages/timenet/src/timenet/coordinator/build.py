@@ -61,6 +61,8 @@ def plan_release_build(  # ruff: ignore[too-many-arguments]
 def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None = None) -> None:
     """Run a plan's copy and build steps in order.
 
+    A read step runs nothing, because its release stays where it is.
+
     Args:
         plan: The steps to run in dependency order.
         store: The local registry to copy and build into.
@@ -76,7 +78,7 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
         if step.action == "copy":
             # The planner gives each copy step a registry as its entry.
             copy_release(step.release, cast("BaseRegistry", step.entry), store, progress=options.progress)
-        else:
+        elif step.action == "build":
             _build(step, store, options=options)
 
 

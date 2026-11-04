@@ -4,13 +4,12 @@ import re
 from pydantic import ValidationError
 import pytest
 
-from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.errors import TimeFFormatError, TimeNetFileError, TimeNetRegistryError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import (
     TIMENET_REGISTRY_URL,
     BaseRegistry,
-    DatasetVersion,
     LocalRegistry,
     RemoteRegistry,
     S3Registry,
@@ -182,36 +181,10 @@ def test_latest_version_ignores_staging_dirs(registry_root):
     assert manifest.metadata.dataset_version.major == 2
 
 
-# ---- open_version -----------------------------------------------------------------------------
-
-
-def test_open_version_returns_handle(registry_root):
-    version = LocalRegistry(registry_root).open_version("demo/ecg")
-    assert isinstance(version, DatasetVersion)
-    assert version.manifest.metadata.dataset_id == "demo/ecg"
-    assert version.root == str(registry_root / "demo/ecg" / "2.0.0")
-
-
-def test_open_version_resolves_latest_to_a_concrete_directory(registry_root):
-    # ``None`` means latest, but the handle roots at that resolved version, never the string "latest"
-    version = LocalRegistry(registry_root).open_version("demo/ecg", version=None)
-    assert version.root.endswith("/2.0.0")
-
-
-def test_open_version_filesystem_reads_a_file(registry_root):
-    version = LocalRegistry(registry_root).open_version("demo/ecg")
-    with version.filesystem.open_input_file(version.resolve_file_path("manifest.json")) as handle:
-        assert b"demo/ecg" in handle.read()
-
-
-def test_open_version_unknown_raises(registry_root):
-    with pytest.raises(TimeNetDatasetNotFoundError):
-        LocalRegistry(registry_root).open_version("does/not-exist")
-
-
-def test_open_version_unknown_version_raises(registry_root):
-    with pytest.raises(TimeNetDatasetNotFoundError):
-        LocalRegistry(registry_root).open_version("demo/ecg", version="9.9.9")
+def test_open_release_checks_the_size_of_each_file(registry_root):
+    (registry_root / "demo/ecg/2.0.0/control.duckdb").write_bytes(b"cut short")
+    with pytest.raises(TimeNetFileError, match=r"^demo/ecg@2\.0\.0: file 'control\.duckdb' has 9 bytes"):
+        LocalRegistry(registry_root).open_release(DatasetRef.parse("demo/ecg@2.0.0"))
 
 
 # ---- search -----------------------------------------------------------------------------------

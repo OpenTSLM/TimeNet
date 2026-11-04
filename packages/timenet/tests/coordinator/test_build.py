@@ -10,7 +10,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetAccessError, TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
 from timenet.progress import StepFinished, StepStarted
 from timenet.reader import TimeFReader
-from timenet.registry import LocalRegistry
+from timenet.registry import LocalRegistry, open_local_version
 from timenet.registry._paths import release_dir
 from timenet.registry.shared import complete_copy
 from timenet.sources import InstalledConnectors
@@ -108,7 +108,7 @@ def _store_child_without_parent(registry):
     parent = make_dataset()
     registry.put_dataset(parent)
     child = TimeFDataset(metadata=_child_card())
-    with TimeFReader(registry.open_version(PARENT_REF.dataset_id, str(PARENT_REF.version))) as reader:
+    with TimeFReader(open_local_version(release_dir(registry.root, PARENT_REF))) as reader:
         child.import_from(reader, alias=ParentAlias("parent"), records=[parent.records[0].id])
     registry.put_dataset(child)
     shutil.rmtree(registry.root / PARENT_REF.dataset_id)
@@ -327,8 +327,8 @@ def test_plan_release_build_with_open_access_only_refuses_a_held_release_with_a_
     store.put_dataset(_demo(_card(REF_AB)))
     dataset = TimeFDataset(metadata=child_card)
     with (
-        TimeFReader(store.open_version(PARENT_REF.dataset_id, str(PARENT_REF.version))) as gated_reader,
-        TimeFReader(store.open_version(REF_AB.dataset_id, str(REF_AB.version))) as open_reader,
+        TimeFReader(open_local_version(release_dir(store.root, PARENT_REF))) as gated_reader,
+        TimeFReader(open_local_version(release_dir(store.root, REF_AB))) as open_reader,
     ):
         dataset.import_from(gated_reader, alias=ParentAlias("parent"))
         dataset.import_from(open_reader, alias=ParentAlias("open"), records=[make_dataset().records[0].id])

@@ -1,7 +1,7 @@
 """Plan release copies and builds with dependencies first, before any connector runs."""
 
 from collections import deque
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass, field, replace
 from graphlib import CycleError, TopologicalSorter
 from typing import Literal, cast
@@ -31,16 +31,18 @@ from timenet.types.references import DatasetRef, is_latest
 
 @dataclass(frozen=True)
 class Step:
-    """A step that copies or builds one release.
+    """One release of a plan, and what the plan does with it.
 
-    A copy requires a registry in ``entry`` and includes the release's payload sources.
-    A build requires ``InstalledConnectors`` in ``entry``.
+    A read opens the release where it is, in the registry ``entry``. A copy takes the release from the
+    registry ``entry`` into the output, with every payload source that it needs, and a build builds it
+    with ``entry``, an :class:`~timenet.sources.InstalledConnectors`.
     """
 
     release: DatasetRef
-    action: Literal["copy", "build"]
+    action: Literal["read", "copy", "build"]
     entry: ReleaseSource
-    """The registry for a copy or ``InstalledConnectors`` for a build."""
+    """For a read: the registry to read from. For a copy: the registry to copy from. For a build: the
+    installed connectors."""
     depends_on: tuple[DatasetRef, ...] = ()
     """The releases with steps that must finish before this step runs."""
     pinned_by: Mapping[DatasetRef, PayloadSource] = field(default_factory=dict, hash=False)
@@ -54,7 +56,7 @@ class Step:
 
 @dataclass(frozen=True)
 class Plan:
-    """The copy and build steps for a dataset, in execution order."""
+    """The steps of a build or a read, in the order in which they run."""
 
     steps: tuple[Step, ...]
 
@@ -79,6 +81,79 @@ class _Release:
 
 
 @dataclass
+class Lookups:
+    """Cached source answers and release manifests, shared by the graphs of one plan.
+
+    A plan can walk several graphs, for example a read that builds two payload sources. The graphs
+    share one instance, because no step runs before the plan is complete.
+    """
+
+    answers: dict[tuple[int, DatasetRef], Answer] = field(default_factory=dict)
+    """Each answer that the plan got, by source and release. The keys use ``id()``, because a source
+    need not be hashable. Each such source stays alive while the plan runs, because it is in a list
+    of sources."""
+    manifests: dict[tuple[int, DatasetRef], Manifest | None] = field(default_factory=dict)
+    """Each manifest that the plan used, by registry and release, or ``None`` for a release that the
+    registry does not hold. A manifest comes from the answer of the registry. The plan reads it only
+    from the output, and from a local registry, which answers from its files without a manifest."""
+
+    def resolve(self, sources: Sequence[ReleaseSource], dataset_id: str, version: str | None) -> Answer:
+        """Ask the sources for a release, by the rules of :mod:`timenet.sources`.
+
+        Args:
+            sources: The sources, in order.
+            dataset_id: The dataset ID.
+            version: An exact version, or ``None`` for the latest version.
+
+        Returns:
+            The answer of the first source that provides the release, or else the first
+            ``NotServed``, or else ``NotFound()``. A ``Found`` is kept under its entry and its
+            exact version, so that the manifest of a "latest" release comes from the answer too.
+        """
+        answer = resolve_release([_Remembered(source, self) for source in sources], dataset_id, version)
+        if isinstance(answer, Found):
+            self.answers.setdefault(
+                (id(answer.entry), DatasetRef(dataset_id=dataset_id, version=answer.version)), answer
+            )
+        return answer
+
+    def ask(self, source: ReleaseSource, reference: DatasetRef) -> Answer:
+        """Ask one source for the exact version of a release, once in this plan.
+
+        Args:
+            source: The source.
+            reference: The release.
+
+        Returns:
+            The answer of the source.
+        """
+        key = (id(source), reference)
+        if key not in self.answers:
+            self.answers[key] = source.resolve(reference.dataset_id, str(reference.version))
+        return self.answers[key]
+
+    def manifest(self, registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
+        """Return the manifest of a release in a registry, once in this plan.
+
+        The manifest comes from the answer of the registry, if the plan asked it and the answer
+        carries one. Else the plan reads it: from the output, and from a local registry, which
+        answers from its files.
+
+        Returns:
+            The manifest, or ``None`` if the registry does not hold the release.
+        """
+        key = (id(registry), reference)
+        if key not in self.manifests:
+            answer = self.answers.get(key)
+            if isinstance(answer, Found) and answer.manifest is not None:
+                validate_manifest_reference(answer.manifest, reference)
+                self.manifests[key] = answer.manifest
+            else:
+                self.manifests[key] = registry.find_manifest(reference)
+        return self.manifests[key]
+
+
+@dataclass
 class _Graph:
     """A graph of required releases and their copy or build steps."""
 
@@ -91,10 +166,8 @@ class _Graph:
     """The nodes, in the order in which the walk found them."""
     pins: dict[DatasetRef, dict[DatasetRef, PayloadSource]] = field(default_factory=dict)
     """For each payload source: each release that reads its files, with its pins on them."""
-    answers: dict[tuple[int, DatasetRef], Answer] = field(default_factory=dict)
-    """Cached source answers by source identity and release."""
-    manifests: dict[tuple[int, DatasetRef], Manifest | None] = field(default_factory=dict)
-    """Cached manifests keyed by registry identity and release, with ``None`` for missing releases."""
+    lookups: Lookups = field(default_factory=Lookups)
+    """The cache of source answers and release manifests."""
     damage: dict[DatasetRef, TimeNetFileError | None] = field(default_factory=dict)
     """The first file error per checked local release, or ``None`` if all file sizes match."""
 
@@ -133,7 +206,7 @@ class _Graph:
             for source in sources:
                 self.visit(source.release, reference, source)
             return
-        answer = self.resolve(reference)
+        answer = self.lookups.resolve(self.sources, reference.dataset_id, str(reference.version))
         entry = answer.entry if isinstance(answer, Found) else None
         if isinstance(entry, BaseRegistry) and not _is_same_registry(entry, self.output):
             self.copy(reference, role, entry)
@@ -145,9 +218,8 @@ class _Graph:
         elif isinstance(answer, NotServed):
             raise answer.access_error(reference.dataset_id)
         elif entry is None or _is_same_registry(entry, self.output):
-            raise TimeNetMissingParentError(
-                reference, needed_by, self.describe_searched_sources(reference), payload_source=role == "payload-source"
-            )
+            searched = describe_searched_sources((self.output, *self.sources), reference)
+            raise TimeNetMissingParentError(reference, needed_by, searched, payload_source=role == "payload-source")
         else:
             raise TimeFValidationError(
                 f"{entry} provides {reference}, but a build copies only from a registry and builds only "
@@ -165,7 +237,7 @@ class _Graph:
         Raises:
             TimeNetDatasetNotFoundError: If the registry no longer holds the release.
         """
-        manifest = self.manifest(registry, reference)
+        manifest = self.lookups.manifest(registry, reference)
         if manifest is None:
             raise TimeNetDatasetNotFoundError(f"{registry} no longer holds {reference}")
         if self.open_only:
@@ -238,59 +310,14 @@ class _Graph:
         for parent in parents:
             self.visit(parent, reference)
 
-    def resolve(self, reference: DatasetRef) -> Answer:
-        """Find an exact release across the sources in preference order.
-
-        Args:
-            reference: The exact release to find.
-
-        Returns:
-            The first ``Found`` answer, otherwise the first ``NotServed`` answer or ``NotFound()``.
-        """
-        sources = [_Remembered(source, self) for source in self.sources]
-        return resolve_release(sources, reference.dataset_id, str(reference.version))
-
-    def ask(self, source: ReleaseSource, reference: DatasetRef) -> Answer:
-        """Get and cache a source's answer for an exact release.
-
-        Args:
-            source: The source to query.
-            reference: The exact release to find.
-
-        Returns:
-            The cached or newly fetched answer.
-        """
-        key = (id(source), reference)
-        if key not in self.answers:
-            self.answers[key] = source.resolve(reference.dataset_id, str(reference.version))
-        return self.answers[key]
-
     def served(self, registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
         """Get a release's manifest if the registry serves it.
 
         Returns:
             The manifest, or ``None`` if the registry does not serve the release.
         """
-        answer = self.ask(registry, reference)
-        return self.manifest(registry, reference) if isinstance(answer, Found) else None
-
-    def manifest(self, registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
-        """Read and cache a release's manifest.
-
-        A manifest in a cached source answer takes precedence over a registry read.
-
-        Returns:
-            The manifest, or ``None`` if the registry does not hold the release.
-        """
-        key = (id(registry), reference)
-        if key not in self.manifests:
-            answer = self.answers.get(key)
-            if isinstance(answer, Found) and answer.manifest is not None:
-                validate_manifest_reference(answer.manifest, reference)
-                self.manifests[key] = answer.manifest
-            else:
-                self.manifests[key] = registry.find_manifest(reference)
-        return self.manifests[key]
+        answer = self.lookups.ask(registry, reference)
+        return self.lookups.manifest(registry, reference) if isinstance(answer, Found) else None
 
     def in_output(self, reference: DatasetRef) -> tuple[Manifest | None, TimeNetFileError | None]:
         """Check a release in the output for missing files or incorrect file sizes.
@@ -298,33 +325,13 @@ class _Graph:
         Returns:
             ``(manifest, None)`` if intact, ``(None, error)`` if damaged, else ``(None, None)``.
         """
-        manifest = self.manifest(self.output, reference)
+        manifest = self.lookups.manifest(self.output, reference)
         if manifest is None:
             return manifest, None
         if reference not in self.damage:
             self.damage[reference] = self.output.damage(reference, manifest)
         damage = self.damage[reference]
         return (manifest, None) if damage is None else (None, damage)
-
-    def describe_searched_sources(self, reference: DatasetRef) -> str:
-        """Describe the output and sources searched for a missing release.
-
-        Connector descriptions include their declared version when it differs from the requested version.
-
-        Args:
-            reference: The missing release.
-
-        Returns:
-            The source descriptions joined with ``" or "``.
-        """
-        names = [str(self.output)]
-        for source in self.sources:
-            card = find_card(reference.dataset_id) if isinstance(source, InstalledConnectors) else None
-            if card is not None and card.dataset_version != reference.version:
-                names.append(f"{source} ({reference.dataset_id} builds {card.dataset_version})")
-            else:
-                names.append(str(source))
-        return " or ".join(names)
 
     def check_copied_pins(self) -> None:
         """Check copied payload sources against all required file pins.
@@ -338,7 +345,7 @@ class _Graph:
             manifest = (
                 None
                 if step is None or step.action != "copy"
-                else self.manifest(cast("BaseRegistry", step.entry), reference)
+                else self.lookups.manifest(cast("BaseRegistry", step.entry), reference)
             )
             if manifest is None:
                 continue
@@ -395,11 +402,11 @@ class _Graph:
 
 
 class _Remembered:
-    """A release source with cached answers for exact versions."""
+    """A source that answers through :meth:`Lookups.ask`, so the plan asks it once per release."""
 
-    def __init__(self, source: ReleaseSource, graph: _Graph) -> None:
+    def __init__(self, source: ReleaseSource, lookups: Lookups) -> None:
         self._source = source
-        self._graph = graph
+        self._lookups = lookups
 
     def resolve(self, dataset_id: str, version: str | None) -> Answer:
         """Resolve a release and cache answers for exact versions.
@@ -414,7 +421,7 @@ class _Remembered:
         # The plan asks only for exact versions, so it keeps only those answers.
         if is_latest(version):
             return self._source.resolve(dataset_id, version)
-        return self._graph.ask(self._source, DatasetRef.parse(f"{dataset_id}@{version}"))
+        return self._lookups.ask(self._source, DatasetRef.parse(f"{dataset_id}@{version}"))
 
 
 def plan_steps(  # ruff: ignore[too-many-arguments]
@@ -425,6 +432,7 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
     force_build: bool,
     open_access_only: bool,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
+    lookups: Lookups | None = None,
 ) -> tuple[DatasetRef, list[Step]]:
     """Plan a dataset build and its dependencies.
 
@@ -432,11 +440,13 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
 
     Args:
         dataset_id: The dataset to build.
-        output: The local registry that the build writes to.
-        parents_from: Sources for missing dependencies, in preference order.
-        force_build: Plan a rebuild even if the requested release exists.
-        open_access_only: Require ``access: open`` for every needed release.
-        pinned_by: File pins grouped by dependent release that the requested build must preserve.
+        output: The registry that the build writes to.
+        parents_from: The sources of the releases that the output lacks, in order.
+        force_build: Build the requested release again, even if the output holds it.
+        open_access_only: Require ``access: open`` of each release.
+        pinned_by: The releases that already read files of the requested release, with their pins.
+        lookups: The answers and the manifests that the plan got so far, if this build is part of a
+            larger plan, such as a read.
 
     Returns:
         The requested release and ordered steps, with its own build last if needed.
@@ -451,7 +461,7 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
     if open_only:
         require_open_access(card)
     root = DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)
-    graph = _Graph(output, parents_from, open_only=open_only)
+    graph = _Graph(output, parents_from, open_only=open_only, lookups=lookups or Lookups())
     if pinned_by:
         graph.pins[root] = dict(pinned_by)
     # If the output already holds the requested release, a reader needs only its payload sources to
@@ -491,3 +501,24 @@ def _is_same_registry(source: ReleaseSource, output: LocalRegistry) -> bool:
     if source is output:
         return True
     return isinstance(source, LocalRegistry) and source.root.resolve() == output.root.resolve()
+
+
+def describe_searched_sources(sources: Iterable[ReleaseSource], reference: DatasetRef) -> str:
+    """Describe the sources searched for a missing release.
+
+    Args:
+        sources: The sources, in order.
+        reference: The missing release.
+
+    Returns:
+        The names, joined with " or ". For the installed connectors, the name also gives the version
+        that the connector of the dataset builds, if it builds another version.
+    """
+    names = []
+    for source in sources:
+        card = find_card(reference.dataset_id) if isinstance(source, InstalledConnectors) else None
+        if card is not None and card.dataset_version != reference.version:
+            names.append(f"{source} ({reference.dataset_id} builds {card.dataset_version})")
+        else:
+            names.append(str(source))
+    return " or ".join(names)

@@ -9,6 +9,7 @@ this file only asserts the shared read/write contract.
 from typing import NamedTuple
 import uuid
 
+from _demo_child import _child_of_the_demo
 from _fake_registry import build_service_fake
 import pytest
 
@@ -16,6 +17,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetFileError
 from timenet.registry import LocalRegistry, RemoteRegistry, S3Registry, WritableRegistry
+from timenet.registry._paths import release_dir
 from timenet.sources import Found, NotFound
 from timenet.testing import make_dataset, sine_loader
 from timenet.types import (
@@ -184,13 +186,35 @@ def test_open_file_rejects_traversal(backend):
         backend.registry.open_file("timenet/hello-world", "1.0.0", "../../escape")
 
 
-# ---- open_version -----------------------------------------------------------------------------
+# ---- open_release -----------------------------------------------------------------------------
 
 
-def test_open_version_manifest_matches(backend):
-    version = backend.registry.open_version("timenet/hello-world")  # no pin -> latest
-    assert version.manifest.metadata.dataset_id == "timenet/hello-world"
-    assert str(version.manifest.metadata.dataset_version) == "1.1.0"
+def test_open_release_opens_one_release_without_its_payload_sources(backend, tmp_path):
+    source, _ = _child_of_the_demo(tmp_path / "source")
+    child = DatasetRef.parse("test/child@1.0.0")
+    manifest = source.get_manifest(child.dataset_id)
+    backend.registry.put_release(release_dir(source.root, child))
+    version = backend.registry.open_release(child)
+    # The child reads files of the demo release, but the handle opens none of them.
+    assert manifest.payload_sources
+    assert version.payload_sources == {}
+    assert version.manifest == backend.registry.get_manifest(child.dataset_id, str(child.version))
+
+
+def test_open_release_uses_the_manifest_that_the_caller_passes(backend, tmp_path, monkeypatch):
+    source, _ = _child_of_the_demo(tmp_path / "source")
+    child = DatasetRef.parse("test/child@1.0.0")
+    manifest = source.get_manifest(child.dataset_id)
+    backend.registry.put_release(release_dir(source.root, child))
+
+    def no_read(*args, **kwargs):
+        raise AssertionError("the registry reads the manifest that the caller passed")
+
+    monkeypatch.setattr(backend.registry, "get_manifest", no_read)
+    # No cache holds a copy of the child, so S3 and the remote registry open their remote files.
+    version = backend.registry.open_release(child, manifest=manifest)
+    assert version.manifest == manifest
+    assert version.payload_sources == {}
 
 
 # ---- exists -----------------------------------------------------------------------------------
