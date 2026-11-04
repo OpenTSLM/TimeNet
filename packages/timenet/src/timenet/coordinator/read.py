@@ -1,9 +1,7 @@
-"""Read a release through an ordered list of sources.
+"""Plan and read releases from ordered sources.
 
-A read opens a release where it is, and each payload source resolves on its own through the same
-list, so a release and its payload sources can come from different registries. If only
-:class:`~timenet.sources.InstalledConnectors` provides a release, the read builds it into the local
-store first.
+A read opens each release in the registry that provides it, so a release and its payload sources can come from
+different registries. A release that only installed connectors provide is built into the local store first.
 """
 
 from collections.abc import Mapping, Sequence
@@ -39,30 +37,29 @@ from timenet.types.references import DatasetRef, is_latest
 def plan_read(
     dataset_id: str, version: str | None, *, sources: Sequence[ReleaseSource], store: LocalRegistry | None
 ) -> Plan:
-    """Plan a read of a release, and check the plan, without running it.
+    """Plan and validate the steps needed to read a release.
 
-    A registry that provides a release gives a ``"read"`` step, and a release that only the
-    installed connectors provide gets the steps of its build into ``store``. Before any step runs,
-    the plan checks the files of each release that the read opens locally, and the pins on each
-    payload source.
+    A release that a registry provides gets a ``"read"`` step, and a release that only installed connectors
+    provide gets the steps of its build into ``store``. This checks local files and payload source pins before
+    any step runs.
 
     Args:
         dataset_id: The dataset ID.
         version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
-        sources: The sources, in order: registries and ``InstalledConnectors()``.
+        sources: Registries and ``InstalledConnectors()`` to search, in order.
         store: The local registry for copies and builds, or ``None`` to copy and build nothing.
 
     Returns:
-        The plan. If the requested release has a step, that step comes last.
+        The ordered plan, ending with the requested release's step if it has one.
 
     Raises:
         TimeNetDatasetNotFoundError: If no source provides the release.
-        TimeNetVersionUnavailableError: If the connector of the dataset builds another version.
-        TimeNetAccessError: If a source only lists a needed release, and no later source provides it.
-        TimeNetMissingParentError: If no source provides a payload source or a parent of a build.
-        TimeNetFileError: If a release that the read opens locally, or from ``store``, is damaged.
-        TimeFFormatError: If a payload source differs from its pins, or two readers disagree on a pin.
-        TimeFValidationError: If a build has no ``store``, two steps conflict, or an entry is unknown.
+        TimeNetVersionUnavailableError: If the installed connector builds a different version.
+        TimeNetAccessError: If a source lists a needed release but no source serves it.
+        TimeNetMissingParentError: If a required payload source or build parent is unavailable.
+        TimeNetFileError: If a required local copy has missing files or incorrect file sizes.
+        TimeFFormatError: If a payload source conflicts with a pin or two pins conflict.
+        TimeFValidationError: If a build lacks a store, steps conflict, or a source type is unsupported.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the planner and the checks
     planner = _ReadPlanner(sources, store)
     planner.plan(dataset_id, version)
@@ -76,10 +73,10 @@ def read_release(
     sources: Sequence[ReleaseSource],
     store: LocalRegistry | None,
 ) -> DatasetVersion:
-    """Open a release with its payload sources, after the copies and the builds that the read needs.
+    """Open a release with its payload sources after completing required copies and builds.
 
-    The plan comes from :func:`plan_read`, whose errors this function raises too. A plan that only
-    reads runs nothing, so a read without a store works.
+    This can raise any error listed by :func:`plan_read`.
+    A local store is required only for copies and builds.
 
     Args:
         dataset_id: The dataset ID.
@@ -88,13 +85,13 @@ def read_release(
         store: The local registry for copies and builds, or ``None`` to copy and build nothing.
 
     Returns:
-        The release, with each of its payload sources attached and checked against its pins.
+        The release with attached payload sources that match its file pins.
 
     Raises:
         TimeNetDatasetNotFoundError: If no source provides the release.
-        TimeNetVersionConflictError: If a copy finds that ``store`` holds a release with other files.
-        TimeFFormatError: If a build does not reproduce the files that other releases pin.
-        TimeNetBuildError: If a build runs but fails.
+        TimeNetVersionConflictError: If a copied release conflicts with the files in ``store``.
+        TimeFFormatError: If a build changes files pinned by other releases.
+        TimeNetBuildError: If a build fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the plan, the run and the open
     planner = _ReadPlanner(sources, store)
     release = planner.plan(dataset_id, version)
@@ -109,20 +106,20 @@ def read_release(
 
 @dataclass
 class _ReadPlanner:
-    """Plan one read: find the source of each release that the read needs, and collect the steps."""
+    """A planner that finds releases and collects the steps to read them."""
 
     sources: Sequence[ReleaseSource]
     store: LocalRegistry | None
     lookups: Lookups = field(default_factory=Lookups)
-    """The source answers and manifests that the plan got."""
+    """Cached source answers and release manifests."""
     steps: dict[DatasetRef, Step] = field(default_factory=dict)
-    """One step for each release, in run order."""
+    """Steps keyed by release, in execution order."""
 
     def plan(self, dataset_id: str, version: str | None) -> DatasetRef:
-        """Add the steps of the requested release, then check the plan.
+        """Plan the requested release and check its dependencies and local files.
 
         Returns:
-            The exact release.
+            The requested release with an exact version.
 
         Raises:
             TimeNetDatasetNotFoundError: If no source provides the release.
@@ -153,7 +150,7 @@ class _ReadPlanner:
         return release
 
     def add_payload_source(self, pinned: PayloadSource, reader: DatasetRef) -> None:
-        """Add the steps of one payload source, which resolves through the sources on its own.
+        """Resolve a payload source and add the steps needed to read it.
 
         Raises:
             TimeNetMissingParentError: If no source provides the payload source.
@@ -173,20 +170,20 @@ class _ReadPlanner:
     def provide(
         self, release: DatasetRef, answer: Answer, pinned_by: Mapping[DatasetRef, PayloadSource] | None = None
     ) -> BaseRegistry | None:
-        """Pick how the read gets a release that a source provides or lists.
+        """Select a registry or plan a local build for a release.
 
         Args:
             release: The exact release.
-            answer: The answer of the sources, ``Found`` or ``NotServed``.
-            pinned_by: The releases that read files of ``release``, with their pins.
+            answer: The ``Found`` or ``NotServed`` result of a source lookup.
+            pinned_by: The releases that pin files of ``release``, with their file requirements.
 
         Returns:
-            The registry that serves the release, or ``None`` if the read opens it from the store.
+            The registry that serves the release, or ``None`` when the plan uses the local store.
 
         Raises:
-            TimeFValidationError: If a build has no store, or an entry is of an unknown kind.
-            TimeNetVersionUnavailableError: If the connectors give a version that the card does not declare.
-            TimeFFormatError: If the store holds the release with other files than a reader pins.
+            TimeFValidationError: If a build lacks a store or the source type is unsupported.
+            TimeNetVersionUnavailableError: If the source's version differs from the installed connector's card.
+            TimeFFormatError: If the stored release conflicts with a file pin.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by check_pins
         entry = answer.entry if isinstance(answer, Found) else None
         if isinstance(entry, BaseRegistry):
@@ -224,14 +221,14 @@ class _ReadPlanner:
         return None
 
     def add(self, step: Step) -> None:
-        """Add a step to the end of the plan, unless the plan has one for its release.
+        """Add a step or merge it with an existing step for the same release.
 
-        A copy or a build of a release replaces a read of it and moves to the end. Two builds of a
-        release with the same dependencies merge into the first one, which must match all their pins.
+        A copy or build replaces a read and moves to the end of the plan.
+        Matching builds keep their position and combine their file pins.
 
         Raises:
-            TimeFFormatError: If the readers of the two builds pin one file as different files.
-            TimeFValidationError: If the plan has another step for the release that cannot merge.
+            TimeFFormatError: If two builds have conflicting pins for the same file.
+            TimeFValidationError: If the steps cannot be combined.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _merge_pins
         held = self.steps.get(step.release)
         if held is None:
@@ -257,10 +254,10 @@ class _ReadPlanner:
             )
 
     def check(self) -> None:
-        """Check each file of each release that the read opens in a local registry, by size.
+        """Check that local read steps have all files with the recorded sizes.
 
         Raises:
-            TimeNetFileError: If a file of such a release is missing or has another size.
+            TimeNetFileError: If a local file is missing or has an incorrect size.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by open_release
         for step in self.steps.values():
             if step.action == "read" and isinstance(step.entry, LocalRegistry):
@@ -268,7 +265,7 @@ class _ReadPlanner:
                 step.entry.open_release(step.release, manifest=self.manifest(step.entry, step.release))
 
     def check_store_copy(self, release: DatasetRef) -> None:
-        """Check the copy of a release in the store, if the store holds one.
+        """Check the files of a stored release if a local copy exists.
 
         Raises:
             TimeNetFileError: If a stored file is missing or has an incorrect size.
@@ -281,10 +278,13 @@ class _ReadPlanner:
             raise damage
 
     def manifest(self, registry: BaseRegistry, release: DatasetRef) -> Manifest:
-        """Return the manifest of a release that a registry provides, once in this plan.
+        """Read a release manifest and cache it for later lookups.
+
+        Returns:
+            The manifest of the requested release.
 
         Raises:
-            TimeNetDatasetNotFoundError: If the registry no longer holds the release.
+            TimeNetDatasetNotFoundError: If the release is absent from the registry.
         """
         manifest = self.lookups.manifest(registry, release)
         if manifest is None:
@@ -292,13 +292,15 @@ class _ReadPlanner:
         return manifest
 
     def open(self, release: DatasetRef) -> DatasetVersion:
-        """Open one release of the plan without its payload sources, after the plan ran.
+        """Open a planned release without attaching its payload sources.
+
+        Run all copy and build steps before opening the release.
 
         Returns:
-            The release from the registry of its ``"read"`` step, else from the store.
+            A handle from the registry of the release's read step, else from the local store.
 
         Raises:
-            TimeNetDatasetNotFoundError: If the release has no ``"read"`` step and the read has no store.
+            TimeNetDatasetNotFoundError: If the release has no read step and no local store is set.
         """
         step = self.steps.get(release)
         if step is not None and step.action == "read":
@@ -313,18 +315,18 @@ class _ReadPlanner:
 def _merge_pins(
     release: DatasetRef, first: Mapping[DatasetRef, PayloadSource], second: Mapping[DatasetRef, PayloadSource]
 ) -> dict[DatasetRef, PayloadSource]:
-    """Merge the pins of the readers of two builds of one release, which one build must match.
+    """Merge file pins for two builds of the same release and check for conflicts.
 
     Args:
-        release: The release that the readers pin.
-        first: The readers of the first build, with their pins.
-        second: The readers of the second build, with their pins.
+        release: The release whose files are pinned.
+        first: The releases that pin files of the first build, with their file requirements.
+        second: The releases that pin files of the second build, with their file requirements.
 
     Returns:
-        Each reader of both builds, with its pins. A reader of both keeps its pins from ``second``.
+        The combined pins, with ``second`` taking precedence for releases present in both mappings.
 
     Raises:
-        TimeFFormatError: If two pins name one file of the release as different files.
+        TimeFFormatError: If two pins disagree on the same file.
     """
     pinned: dict[str, tuple[DatasetRef, FilePart]] = {}
     for pins in (first, second):

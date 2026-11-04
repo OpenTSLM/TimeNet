@@ -269,22 +269,21 @@ class LocalRegistry(WritableRegistry):
         return None
 
     def open_release(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
-        """Open one committed release as a local handle, without its payload sources.
+        """Open a local release without attaching its payload sources.
 
-        Opening reads only metadata. It checks that each file of the release is present with its
-        recorded size.
+        This checks that every file exists with its recorded size.
 
         Args:
-            reference: The exact release.
-            manifest: The manifest of the release, if the caller already read it from this registry.
+            reference: The dataset ID and exact version to open.
+            manifest: A manifest already read from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle rooted at the directory of the release over a :class:`pyarrow.fs.LocalFileSystem`.
+            A handle to the release's directory on the local filesystem.
 
         Raises:
-            TimeNetDatasetNotFoundError: If this registry has no committed manifest of the release.
-            TimeFFormatError: If the manifest declares another release.
-            TimeNetFileError: If a file of the release is missing or has another size than recorded.
+            TimeNetDatasetNotFoundError: If the registry lacks a committed manifest for the release.
+            TimeFFormatError: If the manifest declares a different release.
+            TimeNetFileError: If a file is missing or has an incorrect size.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by get_manifest and the checks
         if manifest is None:
             manifest = self.get_manifest(reference.dataset_id, str(reference.version))

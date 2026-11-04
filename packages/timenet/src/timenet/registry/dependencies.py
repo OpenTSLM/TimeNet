@@ -261,18 +261,20 @@ def prepare_local_copy(  # ruff: ignore[too-many-arguments]
 def open_cached_or_remote_release(
     root: Path, reference: DatasetRef, open_remote_version: Callable[[DatasetRef], DatasetVersion]
 ) -> DatasetVersion:
-    """Open one release without its payload sources, from a complete cached copy or remotely.
+    """Open a complete cached release or fall back to remote storage.
+
+    Payload sources remain unattached.
 
     Args:
-        root: The cache directory to check for a complete copy first.
+        root: The cache directory to check before opening remote files.
         reference: The exact dataset ID and version to open.
         open_remote_version: Open one remote release without its payload sources.
 
     Returns:
-        A local handle over the complete cached copy, else the remote handle.
+        A handle to the complete cached copy, or a remote handle if the cache is incomplete.
 
     Raises:
-        TimeFFormatError: If the manifest declares another release.
+        TimeFFormatError: If the manifest declares a different release.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by validate_manifest_reference
     directory = release_dir(root, reference)
     cached = _load_complete_local_manifest(directory, reference)

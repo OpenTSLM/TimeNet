@@ -114,23 +114,22 @@ class BaseRegistry(ABC):
 
     @abstractmethod
     def open_release(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
-        """Open one exact release without its payload sources.
+        """Open an exact release without attaching its payload sources.
 
-        Opening reads only metadata. The handle has no payload sources,
-        so a caller can open each of them from another source and attach it with
+        Opening reads metadata only. Attach payload sources with
         :func:`~timenet.registry.dependencies.attach_payload_sources`.
 
         Args:
-            reference: The exact release.
-            manifest: The manifest of the release from this registry, if you already read it.
+            reference: The dataset ID and exact version to open.
+            manifest: A manifest already read from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle to the manifest and files of the release, without its payload sources.
+            A handle to the release's manifest and files.
 
         Raises:
-            TimeNetDatasetNotFoundError: If the release is unknown.
-            TimeFFormatError: If the manifest declares another release.
-            TimeNetFileError: If a file of a local copy is missing or has another size than recorded.
+            TimeNetDatasetNotFoundError: If the registry lacks the release.
+            TimeFFormatError: If the manifest declares a different release.
+            TimeNetFileError: If a local file is missing or has an incorrect size.
         """
 
     def resolve(self, dataset_id: str, version: str | None) -> Found | NotFound | NotServed:
