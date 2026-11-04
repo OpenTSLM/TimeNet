@@ -1,8 +1,4 @@
-"""Configure pytest with isolated TimeNet state.
-
-Each test gets its own empty store, remote registry and cache, and no other ``TIMENET_*`` variable
-of the shell or of a ``.env`` file.
-"""
+"""Give each test an empty TimeNet store, registry and cache."""
 
 import os
 
@@ -13,9 +9,9 @@ from timenet.config import TimeNetSettings
 
 @pytest.fixture(autouse=True)
 def _timenet_state(tmp_path_factory, monkeypatch):
-    """Give each test an empty store, remote registry and cache, and delete every other ``TIMENET_*`` variable.
+    """Set up an empty store, registry and cache for each test.
 
-    Ignore settings from ``.env`` files.
+    Clear existing ``TIMENET_*`` variables and ignore the ``.env`` file.
     """
     for name in [name for name in os.environ if name.startswith("TIMENET_")]:
         monkeypatch.delenv(name)

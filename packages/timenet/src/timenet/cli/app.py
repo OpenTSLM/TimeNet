@@ -290,7 +290,7 @@ def _cache_line(cache_dir: Path) -> str:
 
 
 def _warn_unmarked(folders: list[Path]) -> None:
-    """Warn about each folder of the cache that a clear kept, because TimeNet did not create it."""
+    """Warn about cache folders kept because they lack TimeNet's marker."""
     for folder in folders:
         ui.warn(
             f"Kept {folder}: it has no CACHEDIR.TAG from TimeNet, so TimeNet did not create it. Delete it "

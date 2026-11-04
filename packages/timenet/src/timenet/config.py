@@ -1,17 +1,6 @@
-"""Runtime configuration from the ``TIMENET_*`` environment variables.
+"""Load TimeNet settings from arguments and ``TIMENET_*`` environment variables.
 
-An explicit argument, for example a CLI flag, wins over its variable, and the variable wins over
-its default. Each variable sets one thing:
-
-- ``TIMENET_LOCAL_REGISTRY`` (default ``~/.timenet/registry``): the store, where downloads and
-  builds land.
-- ``TIMENET_REMOTE_REGISTRY`` (default ``timenet://``): the registry after the store in the default
-  list of sources.
-- ``TIMENET_AUTO_BUILD`` (default ``true``): whether that list ends with the installed connectors.
-- ``TIMENET_CACHE`` (default ``~/.cache/timenet``): files that a build or a read can make again,
-  the raw downloads in ``downloads/`` and the control databases in ``control/``.
-- ``TIMENET_TOKEN``: the bearer token for a remote registry.
-- ``TIMENET_ISOLATION`` (default ``on``): whether a build runs in an environment of its own.
+Explicit values override environment variables, which override defaults.
 """
 
 import os
@@ -34,29 +23,29 @@ from timenet.errors import TimeFValidationError
 # TIMENET_CACHE that points at the wrong folder, such as your home or another tool's cache, is
 # never wiped. Backup tools also skip TimeNet's caches as a side effect.
 CACHE_TAG = "CACHEDIR.TAG"
-"""The name of the marker file in each folder of the cache that TimeNet created."""
+"""The marker filename for cache folders created by TimeNet."""
 
 _CACHE_TAG_LINES = (
     "Signature: 8a477f597d28d172789f06886806bc55",
     "# This file is a cache directory tag created by TimeNet.",
     "# For information about cache directory tags, see https://bford.info/cachedir/",
 )
-"""The text of the marker file. The first line is the signature of the standard."""
+"""The cache marker text, starting with the standard cache tag signature."""
 
 
 class TimeNetSettings(BaseSettings):
-    """TimeNet's settings. Reads ``TIMENET_*`` environment variables (and an optional ``.env``)."""
+    """TimeNet settings from arguments, ``TIMENET_*`` variables and an optional ``.env`` file."""
 
     model_config = SettingsConfigDict(env_prefix="TIMENET_", env_file=".env", extra="ignore")
 
     local_registry: str = "~/.timenet/registry"
-    """The store: a local path or a ``file://`` URI (``TIMENET_LOCAL_REGISTRY``)."""
+    """The local registry path or ``file://`` URI (``TIMENET_LOCAL_REGISTRY``)."""
     remote_registry: str = "timenet://"
-    """The registry after the store in the default list of sources (``TIMENET_REMOTE_REGISTRY``)."""
+    """The registry after the local registry in the default sources (``TIMENET_REMOTE_REGISTRY``)."""
     auto_build: bool = True
-    """Whether the default list of sources ends with ``InstalledConnectors()`` (``TIMENET_AUTO_BUILD``)."""
+    """Whether default sources include installed connectors (``TIMENET_AUTO_BUILD``)."""
     cache: str = "~/.cache/timenet"
-    """The directory of raw downloads and control databases (``TIMENET_CACHE``)."""
+    """The cache directory for raw downloads and control databases (``TIMENET_CACHE``)."""
     token: str | None = None
     """Bearer token for a remote registry (``TIMENET_TOKEN``); ``None`` is anonymous."""
     isolation: Literal["on", "off"] = "on"
@@ -69,17 +58,17 @@ class TimeNetSettings(BaseSettings):
     @field_validator("local_registry", "remote_registry", "cache", mode="before")
     @classmethod
     def _not_empty(cls, value: Any, info: ValidationInfo) -> Any:
-        """Turn a path into a string, and reject an empty or blank value, which names no directory.
+        """Convert paths to strings and reject blank settings.
 
         Args:
-            value: The value from an argument, the environment or the ``.env`` file.
-            info: Names the field.
+            value: The value to validate.
+            info: Validation metadata that includes the field name.
 
         Returns:
-            The value, with a path turned into a string.
+            The value with any path converted to a string.
 
         Raises:
-            TimeFValidationError: If the value is empty or holds only whitespace.
+            TimeFValidationError: If the value is empty or contains only whitespace.
         """
         if isinstance(value, os.PathLike):
             value = os.fspath(value)
@@ -93,21 +82,21 @@ class TimeNetSettings(BaseSettings):
 
     @property
     def local_registry_dir(self) -> Path:
-        """The directory of the store, with ``~`` expanded.
+        """The local registry directory with ``~`` expanded.
 
         Raises:
-            TimeNetRegistryError: If ``local_registry`` names a remote registry.
+            TimeNetRegistryError: If the local registry path is blank, remote or uses an invalid URI.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by local_registry_path)
         return local_registry_path(self.local_registry)
 
     @property
     def cache_dir(self) -> Path:
-        """The cache directory, with ``~`` expanded."""
+        """The cache directory path with ``~`` expanded."""
         return Path(self.cache).expanduser()
 
     @property
     def downloads_dir(self) -> Path:
-        """Where a build downloads raw sources, one directory per dataset ID."""
+        """The raw download cache directory, with a subdirectory for each dataset ID."""
         return self.cache_dir / "downloads"
 
     @property
@@ -117,15 +106,15 @@ class TimeNetSettings(BaseSettings):
 
 
 def settings(**overrides: Any) -> TimeNetSettings:
-    """Return the settings, with each override that is not ``None`` over its variable and its default.
+    """Load and validate the TimeNet settings.
 
     Overrides other than ``None`` take precedence over environment variables and defaults.
 
     Args:
-        **overrides: Values by field name, for example ``local_registry=...`` or ``auto_build=...``.
+        **overrides: Values by field name, with ``None`` values ignored.
 
     Returns:
-        The settings.
+        The validated settings.
 
     Raises:
         TimeFValidationError: If a value is invalid.
@@ -138,13 +127,13 @@ def settings(**overrides: Any) -> TimeNetSettings:
 
 
 def _sentence(item: ErrorDetails) -> str:
-    """Describe one invalid value of the settings, by the name of its variable.
+    """Describe a setting error using its environment variable name.
 
     Args:
-        item: One error of a pydantic ``ValidationError``.
+        item: One error from a pydantic ``ValidationError``.
 
     Returns:
-        A full sentence.
+        A sentence describing the invalid setting.
     """
     cause = item.get("ctx", {}).get("error")
     if isinstance(cause, TimeFValidationError):
@@ -154,13 +143,12 @@ def _sentence(item: ErrorDetails) -> str:
 
 
 def make_cache_folder(folder: Path) -> None:
-    """Create a folder of the cache, and mark it as TimeNet's if this call creates it.
+    """Create a cache folder with TimeNet's ``CACHEDIR.TAG`` marker.
 
-    The mark is a ``CACHEDIR.TAG`` file (see https://bford.info/cachedir/), and ``timenet local cache clear``
-    deletes only a folder with it. A folder that exists already stays as it is.
+    Existing folders stay unchanged.
 
     Args:
-        folder: The folder, for example ``settings().downloads_dir``. Its parents are created too.
+        folder: The cache folder to create along with any missing parents.
     """
     try:
         folder.mkdir(parents=True)
@@ -170,15 +158,15 @@ def make_cache_folder(folder: Path) -> None:
 
 
 def is_cache_folder(folder: Path) -> bool:
-    """Tell whether TimeNet created ``folder``: it holds the ``CACHEDIR.TAG`` file that TimeNet writes.
+    """Check a folder for TimeNet's ``CACHEDIR.TAG`` marker.
 
-    A tag of another tool does not count. The check follows a symlink to its target.
+    The check follows symlinks.
 
     Args:
-        folder: The folder.
+        folder: The folder to check.
 
     Returns:
-        ``True`` if the first two lines of ``<folder>/CACHEDIR.TAG`` are those that TimeNet writes.
+        ``True`` if the marker's first two lines match TimeNet's cache tag.
     """
     try:
         with (folder / CACHE_TAG).open(encoding="utf-8", errors="replace") as tag:

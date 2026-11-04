@@ -1,7 +1,4 @@
-"""Parse the value that names a registry: a URL, a ``file://`` URI or a local path.
-
-This module imports only TimeNet's errors, so that the settings can parse the store path.
-"""
+"""Parse registry URLs and local directory paths."""
 
 from dataclasses import dataclass
 from pathlib import Path
@@ -13,7 +10,7 @@ from timenet.errors import TimeNetRegistryError
 
 
 TIMENET_REGISTRY_URL = "https://registry.timenet.ai"
-"""The hosted TimeNet registry that the ``timenet://`` scheme is an alias for."""
+"""The hosted registry URL represented by ``timenet://``."""
 
 _REMOTE_SCHEMES = ("timenet://", "http://", "https://", "s3://")
 
@@ -41,8 +38,7 @@ def registry_location(uri: str | Path, *, label: str = "registry") -> RemoteLoca
         A remote location with ``timenet://`` resolved, or a local path with ``~`` expanded.
 
     Raises:
-        TimeNetRegistryError: If the value is blank, has a scheme that no backend handles, is a
-            ``timenet://`` URI with a path, or is a ``file://`` URI with a host.
+        TimeNetRegistryError: If the value is blank or uses an unsupported scheme or invalid registry URI.
     """
     text = str(uri)
     if text.startswith("timenet://"):
@@ -60,7 +56,7 @@ def registry_location(uri: str | Path, *, label: str = "registry") -> RemoteLoca
 
 
 def local_registry_path(uri: str | Path, *, label: str = "registry") -> Path:
-    """Resolve a registry URI to the local directory it names, for example the directory of the store.
+    """Resolve a local registry address to a directory path.
 
     Args:
         uri: A ``file://`` URI or local path.
@@ -70,8 +66,7 @@ def local_registry_path(uri: str | Path, *, label: str = "registry") -> Path:
         The local directory path with ``~`` expanded.
 
     Raises:
-        TimeNetRegistryError: If the value is blank, names a remote backend, or is not a valid local
-            registry URI.
+        TimeNetRegistryError: If the value is blank, remote or an invalid local registry URI.
     """
     text = str(uri)
     if not text.strip():
