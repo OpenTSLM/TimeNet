@@ -128,6 +128,8 @@ def test_each_label_set_is_stored_once_and_read_as_one_object(release):
     assert findings.targets is not None
     assert [target.read() for target in findings.targets] == ["PVC", "AF"]
     assert none_apply.targets == ()
+    assert stage_w.labels == (STAGE_LABELS["W"],)
+    assert stage_n1.labels == (STAGE_LABELS["N1"],)
 
 
 def test_the_task_table_shows_the_label_set_name(release):
@@ -209,7 +211,10 @@ def test_the_writer_rejects_a_label_set_changed_after_add_task(tmp_path, changed
             ClassificationTask(targets=("X",), label_set=STAGE_LABELS),
             "^ClassificationTask 1: labels not in label set 'stage': \\['X'\\]",
         ),
-        (ClassificationTask(targets=(1,), label_set=STAGE_LABELS), "each label must be text, not int"),
+        (
+            ClassificationTask(targets=(1,), label_set=STAGE_LABELS),
+            "^ClassificationTask 1 has label set 'stage', so each label must be text, not int",
+        ),
     ],
 )
 def test_add_task_rejects_targets_that_do_not_fit_the_label_set(task, message):

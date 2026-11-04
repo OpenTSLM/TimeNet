@@ -1,8 +1,8 @@
 from pydantic import ValidationError
 import pytest
 
-from timenet.errors import TimeFValidationError
-from timenet.types import ClassificationTask, Label, LabelSet
+from timenet.errors import TimeFNotFoundError, TimeFValidationError
+from timenet.types import ClassificationTask, Label, LabelSet, TextHandle
 
 
 STAGES = LabelSet(name="stage", labels=(Label(name="W", description="Awake."), Label(name="N1"), Label(name="R")))
@@ -48,3 +48,30 @@ def test_a_multi_label_target_accepts_any_distinct_listed_labels(targets):
 def test_a_multi_label_target_rejects_a_repeated_label():
     with pytest.raises(TimeFValidationError, match="repeated labels of label set 'findings': \\['AF'\\]"):
         FINDINGS.check_targets(("AF", "PVC", "AF"))
+
+
+def test_a_label_set_looks_up_a_label_by_name():
+    assert STAGES["W"] == Label(name="W", description="Awake.")
+    with pytest.raises(TimeFNotFoundError, match="label set 'stage' has no label 'X'"):
+        STAGES["X"]
+
+
+def test_a_label_target_is_stored_as_its_name():
+    task = ClassificationTask(targets=(STAGES["W"],), label_set=STAGES)
+
+    assert task.targets is not None
+    (target,) = task.targets
+    assert isinstance(target, TextHandle)
+    assert target.read() == "W"
+
+
+def test_task_labels_are_the_set_labels_in_target_order():
+    task = ClassificationTask(targets=("LBBB", "AF"), label_set=FINDINGS)
+
+    assert task.labels == (FINDINGS["LBBB"], FINDINGS["AF"])
+
+
+def test_task_labels_reject_a_target_that_the_set_does_not_list():
+    task = ClassificationTask(targets=("X",), label_set=STAGES)
+    with pytest.raises(TimeFNotFoundError, match="has no label 'X'"):
+        task.labels  # ruff: ignore[useless-expression]

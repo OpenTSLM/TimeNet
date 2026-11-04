@@ -5,7 +5,7 @@ from typing import Self
 
 from pydantic import StrictBool, model_validator
 
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFNotFoundError, TimeFValidationError
 from timenet.types._model import TimeFModel
 from timenet.types.wire import NonEmptyString
 
@@ -61,6 +61,22 @@ class LabelSet(TimeFModel):
     def names(self) -> tuple[str, ...]:
         """The name of each label, in label order."""
         return tuple(label.name for label in self.labels)
+
+    def __getitem__(self, name: str) -> Label:
+        """Return a label from this set by name.
+
+        For example, ``STAGES["W"]`` returns the label named ``W``.
+
+        Returns:
+            The label with the requested name.
+
+        Raises:
+            TimeFNotFoundError: If the set has no label with this name.
+        """
+        for label in self.labels:
+            if label.name == name:
+                return label
+        raise TimeFNotFoundError(f"label set {self.name!r} has no label {name!r}")
 
     def check_targets(self, targets: Sequence[str]) -> None:
         """Make sure that the target labels follow the rules of this set.

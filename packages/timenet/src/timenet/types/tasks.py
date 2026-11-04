@@ -13,7 +13,7 @@ from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._fields import ValueField
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import EntityId, assigned_id
-from timenet.types.label_sets import LabelSet, LabelSetRegistry
+from timenet.types.label_sets import Label, LabelSet, LabelSetRegistry
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
@@ -27,7 +27,7 @@ if TYPE_CHECKING:
     from timenet.dataset.time_series import Signal
 
     TargetItem: TypeAlias = TextHandle | int | float | bool | Record | Signal | Span
-    TargetInput: TypeAlias = str | TargetItem
+    TargetInput: TypeAlias = str | Label | TargetItem
     # A target as read_value returns it: text handles read to strings.
     TargetValue: TypeAlias = str | int | float | bool | Record | Signal | Span
 else:
@@ -120,19 +120,36 @@ class LocalizationMode(StrEnum):
 
 
 def _target_values(values: Iterable[TargetInput] | None) -> tuple[TargetItem, ...] | None:
-    """Wrap string targets while preserving native scalar and object targets.
+    """Convert strings and Label names to text handles.
+
+    A text handle provides access to a text value. Other scalar and object targets stay unchanged.
+    A string alone is not a valid sequence of targets because iteration splits it into characters.
 
     Returns:
-        Ordered targets with text handles, or ``None`` for annotation-based answers.
+        The converted targets in their original order. If ``values`` is ``None``, return ``None``
+        for an answer supplied by target annotations.
 
     Raises:
-        TimeFValidationError: If ``values`` is a bare string, which would split into characters.
+        TimeFValidationError: If ``values`` is a string instead of a sequence of targets.
     """
     if values is None:
         return None
     if isinstance(values, str):
         raise TimeFValidationError("targets take a sequence of items; wrap a single string as (value,)")
-    return tuple(InlineText(value) if isinstance(value, str) else value for value in values)
+    return tuple(_target_item(value) for value in values)
+
+
+def _target_item(value: TargetInput) -> TargetItem:
+    """Wrap a string or a Label's name in InlineText.
+
+    Returns:
+        The wrapped text, or the value unchanged if it is neither a string nor a Label.
+    """
+    if isinstance(value, str):
+        return InlineText(value)
+    if isinstance(value, Label):
+        return InlineText(value.name)
+    return value
 
 
 @dataclass(kw_only=True)
@@ -401,20 +418,46 @@ class ClassificationTask(Task):
         Raises:
             TimeFValidationError: If a label is not text or the labels break a rule of the label set.
         """
-        name = f"ClassificationTask {self.id!r}"
+        names = self._target_label_names(self.label_set)
+        try:
+            self.label_set.check_targets(names)
+        except TimeFValidationError as exc:
+            raise TimeFValidationError(f"ClassificationTask {self.id!r}: {exc}") from exc
+
+    @property
+    def labels(self) -> tuple[Label, ...]:
+        """The task's targets as Label objects, in target order.
+
+        Names come from the task's targets or target annotations.
+        Each name selects a Label from this task's label set, including its
+        description. This property does not check label counts or duplicates.
+
+        Raises:
+            TimeFValidationError: If a target is not text.
+            TimeFNotFoundError: If a target name is not in the label set.
+        """  # ruff: ignore[docstring-extraneous-exception] - LabelSet.__getitem__ raises TimeFNotFoundError
+        label_set = self.label_set
+        return tuple(label_set[name] for name in self._target_label_names(label_set))
+
+    def _target_label_names(self, label_set: LabelSet) -> list[str]:
+        """Read label names from the task's targets or target annotations.
+
+        Returns:
+            The label names, in target order.
+
+        Raises:
+            TimeFValidationError: If a target is not text.
+        """
         values = self.targets if self.targets is not None else [one.value for one in self.target_annotations]
-        labels: list[str] = []
+        names: list[str] = []
         for value in values:
             if not isinstance(value, TextHandle):
                 raise TimeFValidationError(
-                    f"{name} has label set {self.label_set.name!r}, so each label must be text, "
-                    f"not {type(value).__name__}"
+                    f"ClassificationTask {self._id!r} has label set {label_set.name!r}, so each label must be "
+                    f"text, not {type(value).__name__}"
                 )
-            labels.append(value.read())
-        try:
-            self.label_set.check_targets(labels)
-        except TimeFValidationError as exc:
-            raise TimeFValidationError(f"{name}: {exc}") from exc
+            names.append(value.read())
+        return names
 
     def register_label_set(self, label_sets: LabelSetRegistry) -> None:
         """Add the label set of the task to the dataset's label sets.
