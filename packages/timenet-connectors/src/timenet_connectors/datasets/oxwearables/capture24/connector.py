@@ -228,7 +228,7 @@ class _LabelDictionary:
     scheme_classes_of_raw: tuple[dict[_Scheme, str], ...]
     """Each raw label's class in all six schemes, as the dictionary names it."""
     class_of_raw: dict[_Scheme, np.ndarray]
-    """For each scheme, this array maps raw labels to class indices in the vocabulary.
+    """For each benchmarked scheme, this array maps raw labels to class indices in its vocabulary.
 
     The final entry represents an unlabeled sample. Indexing with ``_NO_LABEL`` selects that entry.
     A class's index breaks ties. ``Series.mode`` sorts the modes, and the authors' ``make_windows`` takes
@@ -300,7 +300,7 @@ class _Participant:
     window_starts_us: np.ndarray
     """Each kept window's first sample's time from the recording's first sample."""
     window_classes: dict[_Scheme, np.ndarray]
-    """Each kept window's class per scheme, as an index into that scheme's vocabulary."""
+    """Each kept window's class per benchmarked scheme, as an index into that scheme's vocabulary."""
 
 
 def _read_rows(path: Path, columns: list[str]) -> list[dict[str, str]]:
@@ -343,7 +343,7 @@ def _read_labels(path: Path) -> _LabelDictionary:
     Raises:
         TimeNetConnectorError: If the file is unreadable or its columns are not the raw label and the six schemes.
             Also raised if a row has missing or extra fields, or a raw label appears twice.
-            Every class must belong to its scheme's vocabulary.
+            Every class of a benchmarked scheme must be in that scheme's vocabulary.
     """
     rows = _read_rows(path, [_DICTIONARY_LABEL_COLUMN, *(scheme.column for scheme in _Scheme)])
     raw_labels = [row[_DICTIONARY_LABEL_COLUMN] for row in rows]
@@ -429,18 +429,24 @@ def _read_people(root: Path) -> list[_Person]:
             f"{root}: recordings missing for {sorted(set(pids) - set(recordings))}, "
             f"unlisted recordings {sorted(set(recordings) - set(pids))}"
         )
-    people = [
-        _Person(
-            pid=row[_MetadataColumn.PID],
-            age_band=_parse_person_value(path, line, _MetadataColumn.AGE, row[_MetadataColumn.AGE], _AgeBand),
-            sex=_parse_person_value(
-                path, line, _MetadataColumn.SEX, row[_MetadataColumn.SEX], _SEX_OF_LETTER.__getitem__
-            ),
-            path=recordings[row[_MetadataColumn.PID]],
-        )
-        for line, row in enumerate(rows, start=_FIRST_DATA_LINE)
-    ]
+    people = [_person_of_row(path, line, row, recordings) for line, row in enumerate(rows, start=_FIRST_DATA_LINE)]
     return sorted(people, key=lambda person: person.pid)
+
+
+def _person_of_row(path: Path, line: int, row: dict[str, str], recordings: dict[str, Path]) -> _Person:
+    """Build the person of one ``metadata.csv`` row, with the recording that holds the samples.
+
+    Returns:
+        The person.
+
+    Raises:
+        TimeNetConnectorError: If the age band or the sex is not one that the release writes.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _parse_person_value
+    pid = row[_MetadataColumn.PID]
+    age_band = _parse_person_value(path, line, _MetadataColumn.AGE, row[_MetadataColumn.AGE], _AgeBand)
+    sex_letter = row[_MetadataColumn.SEX]
+    sex = _parse_person_value(path, line, _MetadataColumn.SEX, sex_letter, _SEX_OF_LETTER.__getitem__)
+    return _Person(pid=pid, age_band=age_band, sex=sex, path=recordings[pid])
 
 
 def _recordings_by_pid(root: Path) -> dict[str, Path]:
@@ -609,7 +615,7 @@ def _finite_column(path: Path, table: pa.Table, column: str) -> np.ndarray:
         raise TimeNetConnectorError(f"{path}: {array.null_count} samples have no {column} value")
     values = array.to_numpy()
     if not np.isfinite(values).all():
-        raise TimeNetConnectorError(f"{path}: a {column} value is not finite")
+        raise TimeNetConnectorError(f"{path}: a value of {column} is not finite")
     return values
 
 
@@ -742,15 +748,13 @@ class _OneRecording:
         return self._values
 
 
-def _load_segment(
-    acceleration: _ReadAcceleration, participant: _Participant, segment: _Segment, column: str
-) -> pa.Array:
-    """Return one segment's values of one acceleration column.
+def _load_segment(acceleration: _ReadAcceleration, participant: _Participant, segment: _Segment, axis: int) -> pa.Array:
+    """Return one segment's values of one axis, given by its position in ``_Acceleration``.
 
     Returns:
         The segment's float32 values.
     """
-    values = getattr(acceleration(participant), column)
+    values = acceleration(participant)[axis]
     return pa.array(values[segment.first_row : segment.first_row + segment.n_values], type=_AXIS_TYPE)
 
 
@@ -787,11 +791,12 @@ def _record(participant: _Participant, labels: _LabelDictionary, acceleration: _
                 spec=_SPEC,
                 time_axis=time_axis,
                 n_values=segment.n_values,
-                loader=partial(_load_segment, acceleration, participant, segment, column),
+                loader=partial(_load_segment, acceleration, participant, segment, axis),
             )
-            for column in _AXES
+            for axis, column in enumerate(_AXES)
         )
-        # One constructor call checks every span, with no copy of the annotations per run.
+        # Pass all runs to the Source constructor at once. Adding them one at a time would copy the
+        # tuple of annotations once per run.
         sources.append(
             Source(
                 name=f"{_DEVICE} segment {index}",
