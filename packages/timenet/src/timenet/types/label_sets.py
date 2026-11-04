@@ -1,24 +1,13 @@
 """The closed set of labels that a classification target takes."""
 
 from collections.abc import Iterator, Sequence
-from enum import StrEnum, unique
 from typing import Any, Self
 
-from pydantic import field_validator, model_validator
+from pydantic import StrictBool, field_validator, model_validator
 
 from timenet.errors import TimeFValidationError
 from timenet.types._model import TimeFModel
 from timenet.types.wire import NonEmptyString
-
-
-@unique
-class LabelMode(StrEnum):
-    """How many labels of its label set a classification target holds."""
-
-    SINGLE = "single"
-    """Exactly one label."""
-    MULTI = "multi"
-    """Every label that applies, and only those. A label left out does not apply."""
 
 
 class Label(TimeFModel):
@@ -49,8 +38,9 @@ class LabelSet(TimeFModel):
     """Identifies the set within a dataset, such as ``true_or_false``."""
     labels: tuple[Label, ...]
     """Every allowed label, in a stable order."""
-    mode: LabelMode = LabelMode.SINGLE
-    """Whether a target holds one label of the set or every label that applies."""
+    multi_label: StrictBool = False
+    """If ``False``, a target holds exactly one label of the set. If ``True``, a target holds every
+    label of the set that applies, which can be none."""
 
     @field_validator("labels", mode="before")
     @classmethod
@@ -74,7 +64,7 @@ class LabelSet(TimeFModel):
         return tuple(label.name for label in self.labels)
 
     def check_targets(self, targets: Sequence[str]) -> None:
-        """Make sure that a classification target fits this set and its mode.
+        """Make sure that a classification target fits this set.
 
         Args:
             targets: The target labels, in the order that the task stores them.
@@ -87,7 +77,7 @@ class LabelSet(TimeFModel):
         unknown = sorted({label for label in targets if label not in names})
         if unknown:
             raise TimeFValidationError(f"labels not in label set {self.name!r}: {unknown}")
-        if self.mode is LabelMode.SINGLE and len(targets) != 1:
+        if not self.multi_label and len(targets) != 1:
             raise TimeFValidationError(f"{len(targets)} labels, but label set {self.name!r} takes exactly one")
         repeated = sorted({label for label in targets if targets.count(label) > 1})
         if repeated:

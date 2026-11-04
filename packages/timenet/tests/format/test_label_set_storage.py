@@ -19,7 +19,6 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     Label,
-    LabelMode,
     LabelSet,
     License,
     TimeSeriesSpec,
@@ -30,7 +29,7 @@ from timenet.types import (
 
 SPEC = TimeSeriesSpec(spec_type="voltage", name="Voltage", unit_value=ureg.millivolt)
 STAGES = LabelSet(name="stage", labels=("W", "N1", Label(name="R", description="REM sleep.")))
-FINDINGS = LabelSet(name="findings", labels=("AF", "PVC"), mode=LabelMode.MULTI)
+FINDINGS = LabelSet(name="findings", labels=("AF", "PVC"), multi_label=True)
 
 
 def _record() -> Record:
@@ -107,8 +106,8 @@ def release_copy(release, tmp_path) -> Path:
 def test_each_label_set_is_stored_once_and_read_as_one_object(release):
     with connect_control(release, read_only=True) as connection:
         audit_control_database(connection, require_chunks=False)
-        assert connection.execute("SELECT name, labels, mode FROM label_sets ORDER BY name").fetchall() == [
-            ("findings", [{"name": "AF", "description": None}, {"name": "PVC", "description": None}], "multi"),
+        assert connection.execute("SELECT name, labels, multi_label FROM label_sets ORDER BY name").fetchall() == [
+            ("findings", [{"name": "AF", "description": None}, {"name": "PVC", "description": None}], True),
             (
                 "stage",
                 [
@@ -116,7 +115,7 @@ def test_each_label_set_is_stored_once_and_read_as_one_object(release):
                     {"name": "N1", "description": None},
                     {"name": "R", "description": "REM sleep."},
                 ],
-                "single",
+                False,
             ),
         ]
 
@@ -248,7 +247,6 @@ def test_a_stream_rejects_targets_that_do_not_fit_the_label_set():
 @pytest.mark.parametrize(
     ("corruption", "field"),
     [
-        ("UPDATE label_sets SET mode = 'several'", "label_sets.mode"),
         ("UPDATE label_sets SET labels = [] WHERE name = 'stage'", "label_sets.labels"),
         ("UPDATE label_sets SET labels = [{'name': 'W'}, {'name': 'W'}] WHERE name = 'stage'", "label_sets.labels"),
         ("UPDATE label_sets SET labels = [{'name': 'W'}, {'name': ''}] WHERE name = 'stage'", "label_sets.labels"),
@@ -258,7 +256,7 @@ def test_a_stream_rejects_targets_that_do_not_fit_the_label_set():
         ("UPDATE task_targets SET text_value = 'BOGUS' WHERE task_id = 1", "task 1 has a label that is not"),
         (
             "INSERT INTO task_targets (task_id, position, target_kind, text_value) VALUES (1, 1, 'text', 'R')",
-            "task 1 does not have exactly one label",
+            "task 1 does not have exactly one label, but its label set is not multi-label",
         ),
         (
             "UPDATE task_targets SET target_kind = 'integer', text_value = NULL, integer_value = 3 WHERE task_id = 1",

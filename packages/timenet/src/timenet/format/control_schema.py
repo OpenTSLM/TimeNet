@@ -281,7 +281,7 @@ LABEL_SETS = Table(
     (
         _required("name"),
         _required("labels", ColumnType.LABEL_LIST),
-        _required("mode"),
+        _required("multi_label", ColumnType.BOOLEAN),
     ),
     unique=(("name",),),
 )

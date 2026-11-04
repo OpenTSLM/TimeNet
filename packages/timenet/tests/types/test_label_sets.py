@@ -2,11 +2,11 @@ from pydantic import ValidationError
 import pytest
 
 from timenet.errors import TimeFValidationError
-from timenet.types import ClassificationTask, Label, LabelMode, LabelSet
+from timenet.types import ClassificationTask, Label, LabelSet
 
 
 STAGES = LabelSet(name="stage", labels=(Label(name="W", description="Awake."), "N1", "R"))
-FINDINGS = LabelSet(name="findings", labels=("AF", "PVC", "LBBB"), mode=LabelMode.MULTI)
+FINDINGS = LabelSet(name="findings", labels=("AF", "PVC", "LBBB"), multi_label=True)
 
 
 def test_a_plain_string_is_a_label_without_a_description():

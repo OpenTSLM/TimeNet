@@ -24,7 +24,6 @@ from timenet.types import (
     EntityId,
     InputModality,
     Label,
-    LabelMode,
     LabelSet,
     LocalizationMode,
     ObjectKind,
@@ -223,7 +222,7 @@ class LabelSetRow(NamedTuple):
     name: str
     labels: list[LabelRow]
     """One entry per label, in label order."""
-    mode: str
+    multi_label: bool
 
 
 def encode_label_set(label_set: LabelSet) -> LabelSetRow:
@@ -235,7 +234,7 @@ def encode_label_set(label_set: LabelSet) -> LabelSetRow:
     return LabelSetRow(
         name=label_set.name,
         labels=[LabelRow(name=label.name, description=label.description) for label in label_set.labels],
-        mode=str(label_set.mode),
+        multi_label=label_set.multi_label,
     )
 
 
@@ -252,7 +251,7 @@ def decode_label_set(row: LabelSetRow) -> LabelSet:
         return LabelSet(
             name=row.name,
             labels=tuple(Label.model_validate(label) for label in row.labels),
-            mode=LabelMode(row.mode),
+            multi_label=row.multi_label,
         )
     except ValueError as exc:
         raise TimeFFormatError(f"the stored label set {row.name!r} is not valid: {exc}") from exc

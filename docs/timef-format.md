@@ -179,9 +179,9 @@ Python subclass. Four typed columns store the scope: `scope_type`, `scope_start`
 parsing JSON.
 
 Classification tasks refer to their label set by name in `tasks.label_set`. Each label set is one
-`label_sets` row with `name`, `labels` and `mode`. The name is unique within a release. `labels`
-holds one `{name, description}` entry per label, in label order, with a `NULL` description where a
-label has none.
+`label_sets` row with `name`, `labels` and `multi_label`. The name is unique within a release.
+`labels` holds one `{name, description}` entry per label, in label order, with a `NULL` description
+where a label has none.
 
 Each inline target is one row in `task_targets`. Its `target_kind` names the typed value column
 that is set. A target stores public IDs directly: `record_id` for a Record, `signal_id` for a

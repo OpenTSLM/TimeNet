@@ -205,7 +205,7 @@ dataset.add_task(task=age_question(record, 64))
 ### Classification
 
 ```python
-from timenet.types import Label, LabelMode, LabelSet
+from timenet.types import Label, LabelSet
 
 CONDITION = LabelSet(
     name="condition",
@@ -214,19 +214,19 @@ CONDITION = LabelSet(
 FINDINGS = LabelSet(
     name="findings",
     labels=("AF", "PVC", "LBBB"),
-    mode=LabelMode.MULTI,
+    multi_label=True,
 )
 
 ClassificationTask(inputs=(record,), targets=("healthy",), label_set=CONDITION)
 ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS)
 ```
 
-A `LabelSet` is the closed set of labels that a classification target takes. Its `mode` says how
+A `LabelSet` is the closed set of labels that a classification target takes. `multi_label` says how
 many of them are in a target:
 
-- `LabelMode.SINGLE`, the default: exactly one label.
-- `LabelMode.MULTI`: every label that applies. Omitted labels do not apply, so an empty target means
-  that no label applies. Labels are unordered.
+- `multi_label=False`, the default: exactly one label.
+- `multi_label=True`: every label that applies. Omitted labels do not apply, so an empty target
+  means that no label applies. Labels are unordered.
 
 `add_task()` and a task stream make sure that every target matches its label set. Every label must
 be in the set, no label can repeat, and a single-label target must hold exactly one label. The

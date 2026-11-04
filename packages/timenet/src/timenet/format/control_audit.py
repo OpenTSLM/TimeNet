@@ -25,7 +25,7 @@ from timenet.format.duckdb import check_control_schema
 from timenet.format.stored_values import PackedField, PackedValueKind
 from timenet.format.task_codec import ANNOTATION_FIELDS, RECORD_FIELDS, TaskRelationshipField
 from timenet.format.task_target_kind import SPAN_KINDS, TaskTargetKind
-from timenet.types import LabelMode, ObjectKind, TaskType
+from timenet.types import ObjectKind, TaskType
 
 
 def _sql_in(values: Iterable[str]) -> str:
@@ -36,7 +36,6 @@ _TARGET_KINDS = _sql_in(TaskTargetKind)
 _ANNOTATION_VALUE_KINDS = _sql_in(AnnotationValueKind)
 _TIME_TARGET_KINDS = _sql_in((TaskTargetKind.TIME_POINT, TaskTargetKind.TIME_INTERVAL))
 _SPAN_KINDS = _sql_in(SPAN_KINDS)
-_LABEL_MODES = _sql_in(LabelMode)
 _RECORD_FIELDS = _sql_in(RECORD_FIELDS)
 _ANNOTATION_FIELDS = _sql_in(ANNOTATION_FIELDS)
 _OBJECT_TYPES_SQL = _sql_in(ANNOTATED_OBJECT_TYPES)
@@ -107,9 +106,6 @@ _DOMAIN_CHECKS = f"""
     SELECT 'tasks.scope_type' FROM tasks
     WHERE scope_type NOT IN ({_SPAN_KINDS})
     UNION ALL
-    SELECT 'label_sets.mode' FROM label_sets
-    WHERE mode NOT IN ({_LABEL_MODES})
-    UNION ALL
     SELECT 'label_sets.labels' FROM label_sets
     WHERE len(labels) = 0
        OR len(list_distinct([label.name FOR label IN labels])) <> len(labels)
@@ -126,7 +122,7 @@ _DOMAIN_CHECKS = f"""
 
 _LABELLED_TARGETS = f"""
     WITH labelled AS (
-        SELECT t.task_id, [label.name FOR label IN s.labels] AS labels, s.mode
+        SELECT t.task_id, [label.name FOR label IN s.labels] AS labels, s.multi_label
         FROM tasks t JOIN label_sets s ON s.name = t.label_set
     ),
     targets AS (
@@ -170,12 +166,12 @@ _LABEL_RULES = (
         LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
     ),
     _LabelRule(
-        "does not have exactly one label, but its label set is single-label",
+        "does not have exactly one label, but its label set is not multi-label",
         f"""{_LABELLED_TARGETS}
         SELECT l.task_id FROM labelled l LEFT JOIN targets x USING (task_id)
-        WHERE l.mode = '{LabelMode.SINGLE}'
+        WHERE NOT l.multi_label
         GROUP BY l.task_id HAVING count(x.task_id) <> 1
-        LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
+        LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
     ),
     _LabelRule(
         "repeats a label",
