@@ -59,7 +59,7 @@ class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
 
 
 class TimeNetVersionConflictError(TimeNetError):
-    """A registry holds a release with other files than the copy that would go there.
+    """A registry already holds a release with other files than the copy that would go there.
 
     A published version cannot change. Other files need a new version.
 
