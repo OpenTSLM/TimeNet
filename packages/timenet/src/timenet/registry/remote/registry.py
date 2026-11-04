@@ -18,7 +18,7 @@ from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, parse_manifest
 from timenet.registry.lazy_read import LazyReadRegistry
 from timenet.registry.remote._download import ProgressCallback, download_version_files
-from timenet.registry.remote._http import RegistryHttpClient
+from timenet.registry.remote._http import RegistryHttpClient, _reaching
 from timenet.registry.remote.filesystem import RegistryFileSystem
 from timenet.registry.remote.models import (
     DatasetDetailModel,
@@ -151,9 +151,10 @@ class RemoteRegistry(LazyReadRegistry):
         dataset_id, version = reference.dataset_id, str(reference.version)
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
-        download_version_files(
-            self._http, manifest, dataset_id, version, Path(directory), force=force, progress_cb=progress_cb
-        )
+        with _reaching(self._base_url):
+            download_version_files(
+                self._http, manifest, dataset_id, version, Path(directory), force=force, progress_cb=progress_cb
+            )
 
     def put_release(self, from_directory: Path) -> DatasetRef:
         """Publish a release directory to the remote registry.

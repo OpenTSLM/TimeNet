@@ -9,7 +9,7 @@ from timenet.types.references import split_ref
     [
         ("timenet/hello-world", ("timenet/hello-world", None)),
         ("org/name", ("org/name", None)),
-        ("org/name@latest", ("org/name", None)),
+        ("org/name@latest", ("org/name", "latest")),
         ("org/name@1.2.3", ("org/name", "1.2.3")),
         ("timenet/hello-world@0.0.1", ("timenet/hello-world", "0.0.1")),
     ],

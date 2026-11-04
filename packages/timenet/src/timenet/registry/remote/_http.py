@@ -2,12 +2,13 @@
 
 Owns how the SDK talks to the hosted registry. It prefixes ``/api/v1`` and attaches the bearer token
 and a ``timenet/<version>`` User-Agent to API calls. It resolves presigned download URLs without
-leaking the token to object storage. It maps HTTP status codes onto TimeNet errors. A sync
-:class:`httpx.Client` serves the control plane. :meth:`new_async_client` hands out an
+leaking the token to object storage. It maps HTTP status codes and network failures onto TimeNet
+errors. A sync :class:`httpx.Client` serves the control plane. :meth:`new_async_client` hands out an
 :class:`httpx.AsyncClient` sharing the same configuration for the parallel downloader.
 """
 
-from collections.abc import Callable, Mapping
+from collections.abc import Callable, Generator, Mapping
+from contextlib import contextmanager
 import importlib.metadata
 import time
 from typing import Any, BinaryIO, cast
@@ -69,6 +70,22 @@ def _send_with_retry(send: Callable[[], httpx.Response]) -> httpx.Response:
         time.sleep(delay)
         waited += delay
     return send()
+
+
+@contextmanager
+def _reaching(where: str) -> Generator[None]:
+    """Name ``where`` in the error of a request that fails on the network.
+
+    Args:
+        where: The registry, or its storage, that the block sends requests to.
+
+    Raises:
+        TimeNetRegistryError: If a request in the block cannot reach ``where``.
+    """
+    try:
+        yield
+    except httpx.TransportError as error:
+        raise TimeNetRegistryError(f"cannot reach {where}: {error}") from error
 
 
 def timenet_user_agent() -> str:
@@ -208,7 +225,8 @@ class RegistryHttpClient:
         Returns:
             The response text.
         """
-        response = _send_with_retry(lambda: self._client.get(f"{API_PREFIX}{path}", headers=self.api_headers()))
+        with _reaching(self._base_url):
+            response = _send_with_retry(lambda: self._client.get(f"{API_PREFIX}{path}", headers=self.api_headers()))
         _raise_for_status(response)
         return response.text
 
@@ -223,9 +241,10 @@ class RegistryHttpClient:
         Returns:
             The raw response (already status-checked).
         """
-        response = _send_with_retry(
-            lambda: self._client.post(f"{API_PREFIX}{path}", content=content, json=json, headers=self.api_headers())
-        )
+        with _reaching(self._base_url):
+            response = _send_with_retry(
+                lambda: self._client.post(f"{API_PREFIX}{path}", content=content, json=json, headers=self.api_headers())
+            )
         _raise_for_status(response)
         return response
 
@@ -244,7 +263,10 @@ class RegistryHttpClient:
             TimeNetRegistryError: If the download endpoint does not redirect.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _redirect_target
         path = _download_path(dataset_id, version, relpath)
-        response = _send_with_retry(lambda: self._client.get(path, headers=self.api_headers(), follow_redirects=False))
+        with _reaching(self._base_url):
+            response = _send_with_retry(
+                lambda: self._client.get(path, headers=self.api_headers(), follow_redirects=False)
+            )
         return _redirect_target(response, path)
 
     def stream_to(self, url: str, sink: BinaryIO) -> None:
@@ -254,7 +276,7 @@ class RegistryHttpClient:
             url: The presigned URL.
             sink: A writable binary file object.
         """
-        with self._client.stream("GET", url) as response:
+        with _reaching(f"the storage of {self._base_url}"), self._client.stream("GET", url) as response:
             if response.is_error:
                 response.read()  # a streaming response has no body until read; _raise_for_status needs it
                 _raise_for_status(response)
@@ -269,7 +291,8 @@ class RegistryHttpClient:
             content: The request body.
             headers: Headers the presign requires (e.g. the checksum binding).
         """
-        response = self._client.put(url, content=content, headers=dict(headers))
+        with _reaching(f"the storage of {self._base_url}"):
+            response = self._client.put(url, content=content, headers=dict(headers))
         _raise_for_status(response)
 
     def new_async_client(self) -> httpx.AsyncClient:
