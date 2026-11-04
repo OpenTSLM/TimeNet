@@ -44,15 +44,16 @@ def test_build_runs_in_an_isolated_environment_by_default(monkeypatch, tmp_path,
     monkeypatch.setattr(backend_module, "resolve", _unexpected_resolve)
     calls = []
 
-    def fake_isolated(release, store_root, *, force=False, keep_cache=False, **_):
-        calls.append((release, store_root, force, keep_cache))
+    def fake_isolated(release, store_root, *, force=False, keep_cache=False, quiet=False, **_):
+        calls.append((release, store_root, force, keep_cache, quiet))
         LocalRegistry(store_root).put_dataset(make_dataset())
 
     monkeypatch.setattr(backend_module, "run_isolated_build", fake_isolated)
 
     version_dir = timenet_connectors.build("timenet/hello-world", version=version, out=str(tmp_path), force=True)
 
-    assert calls == [(DatasetRef.parse("timenet/hello-world@1.0.0"), tmp_path, True, False)]
+    # The child is not quiet: it shows its downloads and shards.
+    assert calls == [(DatasetRef.parse("timenet/hello-world@1.0.0"), tmp_path, True, False, False)]
     assert version_dir == tmp_path / "timenet" / "hello-world" / "1.0.0"
 
 
