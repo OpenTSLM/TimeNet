@@ -8,10 +8,11 @@ package plug in the same way the first-party one does.
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from importlib.metadata import entry_points
+from importlib.metadata import EntryPoint, entry_points
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
+from timenet.errors import TimeFValidationError
 from timenet.progress import ProgressCallback
 from timenet.types import DatasetMetadata
 from timenet.types.references import DatasetRef
@@ -178,12 +179,35 @@ def find_builder(dataset_id: str) -> BuilderBackend | None:
         The backend, or ``None`` when no installed package claims the id.
 
     Raises:
+        TimeFValidationError: If a registered backend does not implement ``dataset_ids()``.
         TimeNetInvalidCardError: If the card of a connector cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _claim and the backend
+    claim = _claim(dataset_id)
+    return None if claim is None else claim[1]
+
+
+def _claim(dataset_id: str) -> tuple[EntryPoint, BuilderBackend] | None:
+    """Return the first registered entry point whose backend claims a dataset ID, with that backend.
+
+    Args:
+        dataset_id: The dataset ID.
+
+    Returns:
+        The entry point and its backend, or ``None`` if no backend claims the dataset.
+
+    Raises:
+        TimeFValidationError: If a registered backend does not implement ``dataset_ids()``.
+        TimeNetInvalidCardError: If the card of a connector cannot be read.
+    """  # ruff: ignore[docstring-extraneous-exception] - the card error is raised by the backend
     for entry in entry_points(group=ENTRY_POINT_GROUP):
         backend = entry.load()()
-        if dataset_id in backend.dataset_ids():
-            return backend
+        dataset_ids = getattr(backend, "dataset_ids", None)
+        if not callable(dataset_ids):
+            raise TimeFValidationError(
+                f"the builder backend of entry point {entry.name!r} ({entry.value}) must implement dataset_ids()"
+            )
+        if dataset_id in dataset_ids():
+            return entry, backend
     return None
 
 
@@ -197,10 +221,11 @@ def find_card(dataset_id: str) -> DatasetMetadata | None:
         The card, or ``None`` when no installed package claims the dataset.
 
     Raises:
+        TimeFValidationError: If a registered backend does not implement ``dataset_ids()``.
         TimeNetInvalidCardError: If the card of the connector cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
-    builder = find_builder(dataset_id)
-    return None if builder is None else builder.card(dataset_id)
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _claim and the backend
+    claim = _claim(dataset_id)
+    return None if claim is None else claim[1].card(dataset_id)
 
 
 def exact_builder(reference: DatasetRef) -> BuilderBackend | None:
@@ -217,8 +242,11 @@ def exact_builder(reference: DatasetRef) -> BuilderBackend | None:
         another version.
 
     Raises:
+        TimeFValidationError: If a registered backend does not implement ``dataset_ids()``.
         TimeNetInvalidCardError: If the card of the connector cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
-    builder = find_builder(reference.dataset_id)
-    card = None if builder is None else builder.card(reference.dataset_id)
-    return builder if card is not None and card.dataset_version == reference.version else None
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _claim and the backend
+    claim = _claim(reference.dataset_id)
+    if claim is None:
+        return None
+    card = claim[1].card(reference.dataset_id)
+    return claim[1] if card is not None and card.dataset_version == reference.version else None

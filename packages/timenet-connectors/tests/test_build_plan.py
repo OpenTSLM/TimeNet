@@ -249,7 +249,7 @@ def test_the_plan_reads_each_card_from_the_backend_that_claims_the_dataset(tmp_p
 def test_a_parent_whose_card_cannot_be_read_fails_the_plan_with_the_card_error(tmp_path, monkeypatch):
     (tmp_path / "dataset.yaml").write_text("dataset_id: [unclosed\n")
     # The in-repo backend claims PARENT, whose card cannot be read. The second backend serves CHILD.
-    monkeypatch.setattr(backend_module, "_known_ids", lambda: [PARENT.dataset_id])
+    monkeypatch.setattr(backend_module, "known_ids", lambda: [PARENT.dataset_id])
     monkeypatch.setattr(backend_module, "connector_dir", lambda dataset_id: tmp_path)
     install_backends(monkeypatch, ConnectorBuilder(), _CardBackend(_cards(child={"parent": PARENT})))
 
@@ -465,7 +465,7 @@ def _isolated_builds(calls: list) -> object:
 
 def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch):
     cards = _install_cards(monkeypatch, child={"parent": PARENT, "grand": GRAND}, parent={})
-    monkeypatch.setattr(backend_module, "_known_ids", lambda: list(cards))
+    monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
@@ -623,7 +623,7 @@ def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, mo
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(env_module, "requirements_for", lambda dataset_id: None)
     monkeypatch.setattr(env_module, "_run_build", child)
-    monkeypatch.setattr(backend_module, "_known_ids", lambda: list(cards))
+    monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
     monkeypatch.setattr(cli_module, "resolve", lambda dataset_id: _Grand)
     monkeypatch.setattr(cli_module, "run_pipeline", run_pipeline)
 
@@ -754,7 +754,7 @@ def test_a_proxy_backend_builds_a_parent_through_the_build_of_its_instance(tmp_p
 @pytest.mark.parametrize("case", ["missing", "damaged", "not-open"])
 def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    monkeypatch.setattr(backend_module, "_known_ids", lambda: list(cards))
+    monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
     out = LocalRegistry(tmp_path / "out")
     if case == "damaged":
         out.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))

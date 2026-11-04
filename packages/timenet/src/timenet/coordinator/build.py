@@ -5,11 +5,10 @@ the backend that builds exactly that release.
 """
 
 from collections.abc import Mapping
-from typing import cast
 
 from timenet.builders import BuildOptions, exact_builder, find_card
 from timenet.coordinator.plan import Plan, Step, plan_parents
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
 from timenet.manifest import Manifest, PayloadSource
 from timenet.progress import ProgressCallback, StepFinished, StepStarted
 from timenet.registry import copy_release
@@ -55,20 +54,13 @@ def build_release(  # ruff: ignore[too-many-arguments]
 
     Raises:
         TimeNetDatasetNotFoundError: If no installed backend builds the dataset or a missing parent.
-        TimeNetVersionUnavailableError: If ``dataset`` names another version than the card of the
-            connector declares. Nothing runs then.
-        TimeNetVersionConflictError: If ``store`` holds a release that a copy step copies, or a
-            payload source of it, with other files. That step copies nothing then.
-        TimeFValidationError: If ``dataset`` is not a valid dataset reference, if the parents form a
-            cycle, or if a backend declares another version than a parent pins.
-        TimeNetMissingParentError: If a parent or a payload source is missing and ``build_parents``
-            is not set.
-        TimeNetAccessError: If ``open_access_only`` is set and a release of the plan does not
-            declare ``access: open``, or if ``fetch_from`` is not local and the plan copies such a
-            release from it.
+        TimeNetVersionUnavailableError: If ``dataset`` names another version than the card declares.
+        TimeNetVersionConflictError: If ``store`` holds a copied release with other files.
+        TimeFValidationError: If ``dataset`` is not a valid reference, or the parents form a cycle.
+        TimeNetMissingParentError: If a parent is missing and ``build_parents`` is not set.
+        TimeNetAccessError: If a release of the plan is not open where open access is required.
         TimeNetInvalidCardError: If the card of an installed connector cannot be read.
-        TimeNetFileError: If ``store`` holds a damaged copy of a parent that the plan cannot copy
-            again.
+        TimeNetFileError: If ``store`` holds a damaged parent that the plan cannot copy again.
         TimeFFormatError: If a build does not write again the files that other releases pin.
         TimeNetBuildError: If a build runs but fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the plan, the copy and the backends
@@ -78,11 +70,10 @@ def build_release(  # ruff: ignore[too-many-arguments]
     if card is None:
         raise TimeNetDatasetNotFoundError(f"no installed connector builds {dataset_id!r}")
     if version is not None:
-        wanted = DatasetRef.parse(dataset)
+        wanted = DatasetRef(dataset_id=dataset_id, version=version)
         if wanted.version != card.dataset_version:
             raise TimeNetVersionUnavailableError(wanted, card.dataset_version)
     requested = DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)
-    # Passes fetch_from and build_parents to the planner unchanged: they choose how it gets a missing parent.
     steps = plan_parents(
         dataset_id,
         store,
@@ -95,12 +86,13 @@ def build_release(  # ruff: ignore[too-many-arguments]
         planned = {step.release for step in steps}
         depends_on = tuple(parent for parent in card.parents.values() if parent in planned)
         steps.append(Step(requested, "build", depends_on=depends_on, pinned_by=pinned_by or {}))
+    if fetch_from is None and any(step.action == "copy" for step in steps):
+        raise TimeFValidationError(f"the plan of {requested} copies a release, but has no registry to copy from")
     for step in steps:
-        if step.action == "copy":
-            # The plan copies only from fetch_from.
-            _copy(step.release, cast("BaseRegistry", fetch_from), store, progress=options.progress)
-        else:
+        if step.action == "build":
             _build(step, store, force=force and step.release == requested, options=options)
+        elif fetch_from is not None:
+            _copy(step.release, fetch_from, store, progress=options.progress)
     return Plan(tuple(steps))
 
 

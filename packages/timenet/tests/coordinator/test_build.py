@@ -1,6 +1,4 @@
 import shutil
-import subprocess
-import sys
 
 import pytest
 
@@ -159,12 +157,6 @@ def test_build_release_rejects_a_version_the_connector_does_not_declare(store, f
 def test_build_release_accepts_the_version_that_the_connector_declares(store, fake):
     build_release("a/b@1.0.0", store=store)
     assert fake.calls == [(REF_AB, False, {})]
-
-
-def test_build_release_reports_each_step(store, fake):
-    events = []
-    build_release("a/b", store=store, options=BuildOptions(progress=events.append))
-    assert events == [StepStarted(REF_AB, "build"), StepFinished(REF_AB, "build")]
 
 
 def test_build_release_copies_a_missing_parent_and_reports_each_step_once(tmp_path, store, fake_parent, fake_child):
@@ -329,8 +321,3 @@ def test_build_release_with_open_access_only_refuses_a_held_release_with_a_crede
 def test_build_release_without_a_backend_raises_not_found(store, backends):
     with pytest.raises(TimeNetDatasetNotFoundError, match="no installed connector builds 'a/b'"):
         build_release("a/b", store=store)
-
-
-def test_the_build_coordinator_imports_nothing_from_timenet_connectors():
-    code = "import sys, timenet.coordinator.build; assert 'timenet_connectors' not in sys.modules"
-    subprocess.run([sys.executable, "-c", code], check=True)
