@@ -188,7 +188,7 @@ def build(
     typer.echo(result)
 
 
-@app.command("build-release", hidden=True)
+@app.command("build-prepared-release", hidden=True)
 def build_release_command(
     release: str,
     store: Path = typer.Option(..., "--store", help="The local registry to build into."),

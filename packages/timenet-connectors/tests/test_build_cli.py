@@ -228,7 +228,7 @@ class _Child(_Parent):
         return self.convert(raw_refs)
 
 
-def test_the_build_release_command_does_not_plan(monkeypatch, tmp_path):
+def test_the_build_prepared_release_command_does_not_plan(monkeypatch, tmp_path):
     # The installed connectors build test/child and its parent test/parent, in this process.
     connectors = {"test/child": _Child, _PARENT.dataset_id: _Parent}
     monkeypatch.setattr(ConnectorBuilder, "dataset_ids", lambda self: list(connectors))
@@ -240,7 +240,7 @@ def test_the_build_release_command_does_not_plan(monkeypatch, tmp_path):
 
     # The store lacks the parent. A planner would build it first. The command must fail on the
     # missing parent instead.
-    result = runner.invoke(app, ["build-release", "test/child@1.0.0", "--store", str(tmp_path / "store")])
+    result = runner.invoke(app, ["build-prepared-release", "test/child@1.0.0", "--store", str(tmp_path / "store")])
 
     assert result.exit_code == 1
     assert isinstance(result.exception, TimeNetDatasetNotFoundError), result.exception
@@ -248,12 +248,14 @@ def test_the_build_release_command_does_not_plan(monkeypatch, tmp_path):
     assert not (tmp_path / "store" / _PARENT.dataset_id).exists()
 
 
-def test_the_build_release_command_builds_a_release_without_parents(monkeypatch, tmp_path):
+def test_the_build_prepared_release_command_builds_a_release_without_parents(monkeypatch, tmp_path):
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(cli_module.console, "quiet", False)
 
-    result = runner.invoke(app, ["build-release", "timenet/hello-world@1.0.0", "--store", str(tmp_path / "store")])
+    result = runner.invoke(
+        app, ["build-prepared-release", "timenet/hello-world@1.0.0", "--store", str(tmp_path / "store")]
+    )
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / "store/timenet/hello-world/1.0.0/manifest.json").is_file()
@@ -263,7 +265,7 @@ def test_the_build_release_command_builds_a_release_without_parents(monkeypatch,
 
 
 @pytest.mark.parametrize("quiet", [False, True])
-def test_the_build_release_command_passes_the_pins_and_the_options(monkeypatch, tmp_path, quiet):
+def test_the_build_prepared_release_command_passes_the_pins_and_the_options(monkeypatch, tmp_path, quiet):
     release = DatasetRef.parse("timenet/hello-world@1.0.0")
     pinned = PayloadSource(release=release, files=(FilePart(path="a.bin", checksum="sha256:" + "0" * 64, size=1),))
     pins_file = tmp_path / "pins.json"
@@ -277,7 +279,7 @@ def test_the_build_release_command_passes_the_pins_and_the_options(monkeypatch, 
     monkeypatch.setattr(cli_module.console, "quiet", False)
     options = ["--store", str(tmp_path), "--force", "--keep-cache", "--pinned-by", str(pins_file)]
 
-    result = runner.invoke(app, [*(["--quiet"] if quiet else []), "build-release", str(release), *options])
+    result = runner.invoke(app, [*(["--quiet"] if quiet else []), "build-prepared-release", str(release), *options])
 
     assert result.exit_code == 0, result.output
     ((built, store, kwargs),) = calls
