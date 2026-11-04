@@ -27,25 +27,25 @@ def build(  # ruff: ignore[too-many-arguments]
     # ruff: ignore[docstring-extraneous-exception] (raised by the plan and its run, not directly here)
     """Build a dataset release in a local registry.
 
-    The build reuses an existing release unless you set ``force``. The connector runs in an environment
-    with its required packages, or in this interpreter if ``TIMENET_ISOLATION=off``.
+    The build reuses an existing release unless ``force`` is set. The connector runs in an environment
+    from its ``requirements.txt``, or in this interpreter if ``TIMENET_ISOLATION=off``.
 
     Args:
-        dataset_id: The connector's dataset ID (``org/name``).
-        version: The version to build, or ``None`` for the connector's declared version.
-        out: The output directory, or ``None`` to use the default local registry.
-        force: Rebuild the release even if it exists in the registry.
-        keep_cache: Keep downloaded source files after a successful build.
-        fetch_from: The registry, or its URI, to copy missing parent releases from.
-        build_parents: Build missing parent releases from their installed connectors.
+        dataset_id: The ``org/name`` ID declared in the connector's card.
+        version: The required card version, or ``None`` to accept any version.
+        out: The local registry directory, or ``None`` to use the default local registry.
+        force: Rebuild an existing release.
+        keep_cache: Keep the raw download cache after a successful build.
+        fetch_from: The registry or URI to copy missing parents from before trying builds.
+        build_parents: Build missing parents with installed connectors.
 
     Returns:
-        The release's version directory.
+        The version directory of the release.
 
     Raises:
         TimeNetDatasetNotFoundError: If no installed connector builds ``dataset_id``.
-        TimeNetVersionUnavailableError: If ``version`` differs from the connector's declared version.
-        TimeNetMissingParentError: If a required parent release is still missing.
+        TimeNetVersionUnavailableError: If the card's version differs from ``version``.
+        TimeNetMissingParentError: If a required release cannot be copied or built.
     """
     from timenet.builders import BuildOptions, declared  # ruff: ignore[import-outside-top-level]
     from timenet.coordinator.build import plan_release_build, run_plan  # ruff: ignore[import-outside-top-level]
@@ -82,14 +82,14 @@ def build(  # ruff: ignore[too-many-arguments]
 
 
 def _missing_hint(*, fetch_from: "str | BaseRegistry | None", build_parents: bool) -> str | None:
-    """Name the keywords of :func:`build` that can get a missing release and that the call did not use.
+    """Suggest options to obtain a missing release.
 
     Args:
-        fetch_from: The value of ``fetch_from``, or ``None``.
-        build_parents: The value of ``build_parents``.
+        fetch_from: The selected registry or URI, or ``None``.
+        build_parents: Whether parent builds are enabled.
 
     Returns:
-        The hint as a full sentence, or ``None`` if the call used both keywords.
+        A sentence naming unused options, or ``None`` if both are enabled.
     """
     if fetch_from is None and not build_parents:
         return "Copy it with fetch_from=<registry> or build it with build_parents=True."

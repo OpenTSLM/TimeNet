@@ -27,24 +27,24 @@ def copy_release(
     with_payload_sources: bool = True,
     progress: ProgressCallback | None = None,
 ) -> None:
-    """Copy a release and its payload sources to another registry.
+    """Copy a release and its required payload sources to another registry.
 
-    Copy payload sources first, reuse complete releases in ``dest``, and fetch damaged local copies again.
-    All checks run before the first copy, so a failed check leaves ``dest`` unchanged.
+    The copy reuses complete releases in ``dest`` and fetches damaged local copies again.
+    It checks access, file records and pins before copying payload sources and then the requested release.
 
     Args:
         reference: The exact release to copy.
         source: The registry to copy from.
         dest: The registry to copy to.
         with_payload_sources: Also copy the payload sources that the manifest of the release lists.
-        progress: Receives a ``StepStarted`` and a ``StepFinished`` event for each copied release.
+        progress: Callback for ``StepStarted`` and ``StepFinished`` events for each copied release.
 
     Raises:
-        TimeNetVersionConflictError: If ``dest`` holds a release of the copy with other files or another card.
-        TimeNetAccessError: If a release is not open, and ``dest`` or ``source`` requires open access.
+        TimeNetVersionConflictError: If ``dest`` holds other files or another card for a release being copied.
+        TimeNetAccessError: If a release fails an open access requirement of ``dest`` or ``source``.
         TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
-        TimeNetMissingParentError: If neither registry holds a complete payload source.
-        TimeFFormatError: If a manifest names another release or a pin fails.
+        TimeNetMissingParentError: If ``source`` lacks a payload source and ``dest`` holds no complete copy of it.
+        TimeFFormatError: If a manifest names a different release or a pin fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     manifests = _manifests(reference, source, dest, with_payload_sources=with_payload_sources)
     # Check every release before anything is copied, so that a refusal leaves dest unchanged. A payload
