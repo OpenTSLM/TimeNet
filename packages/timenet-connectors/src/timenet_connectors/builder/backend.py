@@ -122,28 +122,26 @@ class ConnectorBuilder:
     ) -> None:
         """Build exactly this release into the store.
 
-        The store must already hold each parent of the release and their payload
-        sources. This method does not plan. The build runs in a separate environment
-        with the requirements of the connector, unless ``TIMENET_ISOLATION=off``,
-        which builds in this interpreter.
+        The store must already hold each parent of the release with its payload sources. The build
+        runs in an environment built from the requirements of the connector, or in this interpreter
+        if ``TIMENET_ISOLATION=off``.
 
         Args:
             release: The exact dataset ID and version to build.
             store: The local registry to build into.
             force: Build the release again, even if ``store`` already holds it.
             pinned_by: The releases that already read files of this release, with their pins. The
-                build publishes the release only if it reproduces each pinned file.
-            options: The options of the build. An in-process build sends a
-                :class:`~timenet.progress.BytesMoved` event for the downloads and a
-                :class:`~timenet.progress.ShardWritten` event for each finished shard to
-                ``options.progress``. An isolated child prints its own progress, unless
-                ``options.quiet`` is set.
+                build publishes the release only if it writes each pinned file again.
+            options: The options of the build. A build in this interpreter sends
+                :class:`~timenet.progress.BytesMoved` and :class:`~timenet.progress.ShardWritten`
+                events to ``options.progress``. An isolated build prints its own progress instead,
+                unless ``options.quiet`` is set.
 
         Raises:
             TimeNetDatasetNotFoundError: If no connector exists for the dataset.
             TimeNetVersionUnavailableError: If the card of the connector declares another version
-                than ``release``. Nothing runs then. It is also a ``TimeFValidationError``.
-            TimeNetBuildError: If the isolated child fails.
+                than ``release``. Nothing runs then.
+            TimeNetBuildError: If the isolated build fails.
         """  # ruff: ignore[docstring-extraneous-exception] - TimeNetBuildError is raised by run_isolated_build
         card = self.card(release.dataset_id)
         if card is None:
@@ -172,7 +170,7 @@ def _build_in_process(
     pinned_by: Mapping[DatasetRef, PayloadSource],
     options: BuildOptions,
 ) -> None:
-    """Build the release in this interpreter, with the ``values_backend`` of its connector.
+    """Build the release in this interpreter.
 
     Args:
         release: The release to build. Its version is the version that the card declares.

@@ -164,23 +164,20 @@ def run_isolated_build(  # ruff: ignore[too-many-arguments]
 ) -> None:
     """Build one release into a local store, in the environment of its connector.
 
-    The child runs the hidden ``timenet-build build-prepared-release`` command. It builds only this release
-    and does not plan: each parent and payload source of the release must already be in the store.
-    The child's stderr is streamed live and also captured, so a failed build's message carries the
-    child's own error.
+    The store must already hold each parent of the release with its payload sources. The error of a
+    failed build includes the last lines that the build wrote to stderr.
 
     Args:
         release: The exact dataset ID and version to build.
         store_root: The directory of the local registry to build into.
         force: Build the release again, even if the store already holds it.
         keep_cache: Keep the raw download cache after building.
-        quiet: Suppress the child's status output.
-        pinned_by: The releases that already read files of this release, with their pins. The child
-            receives them in a file, and publishes the release only if it reproduces each pinned
-            file.
+        quiet: Print no status output from the build.
+        pinned_by: The releases that already read files of this release, with their pins. The build
+            publishes the release only if it writes each pinned file again.
 
     Raises:
-        TimeNetBuildError: If the child failed.
+        TimeNetBuildError: If the build fails.
         LookupError: If no connector exists for the dataset ID.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by env_spec, not directly here)
     # --quiet belongs to timenet-build, not to build-prepared-release, so it goes before the subcommand.
