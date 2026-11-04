@@ -328,11 +328,10 @@ class LocalRegistry(WritableRegistry):
 
 
 def is_same_registry(source: ReleaseSource, registry: BaseRegistry) -> bool:
-    """Return whether a source is a given registry, or another local registry over the same directory.
+    """Return whether a source is a registry, or a local registry over the same directory.
 
-    Two local registries over one directory hold the same releases. So a copy from one of them to the
-    other copies the directory onto itself. A build counts such a source as its output, and
-    :meth:`~timenet.client.TimeNet.download` counts it as the store.
+    Two local registries over one directory hold the same releases, so a copy between them would
+    copy the directory onto itself.
 
     Args:
         source: The source.

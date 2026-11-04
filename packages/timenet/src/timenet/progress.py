@@ -42,8 +42,7 @@ class BytesMoved:
     """The byte count of a transfer in progress.
 
     Attributes:
-        url: Where the bytes come from or go to. For the copy of a release, the release that moves,
-            such as ``"org/name@1.0.0"``.
+        url: The source or target of the bytes, or the release of a copy (``"org/name@1.0.0"``).
         done: The number of bytes moved so far.
         total: The transfer size in bytes, or ``None`` if unknown.
     """

@@ -43,18 +43,12 @@ def copy_release(
         source: The registry to copy from.
         dest: The registry to copy to.
         force: Fetch ``reference`` again, even if a local ``dest`` holds a complete copy of it.
-        progress: Receives :class:`~timenet.progress.StepStarted` and
-            :class:`~timenet.progress.StepFinished` for each release that is copied or repaired. For
-            each release that a local ``dest`` gets, it also receives
-            :class:`~timenet.progress.BytesMoved` events between the two, as the files arrive. Their
-            ``url`` is the release, and their ``total`` is the sum of the file sizes in its manifest.
+        progress: Receives the step events of each copied release, and its bytes for a local ``dest``.
 
     Raises:
         TimeFValidationError: If ``force`` is set and ``dest`` is not local.
-        TimeNetVersionConflictError: If ``dest`` holds the release, or a payload source of it, with
-            other files or another card.
-        TimeNetAccessError: If a release of the copy is not open, and ``dest`` requires open access
-            or ``source`` requires it for a release that the copy fetches.
+        TimeNetVersionConflictError: If ``dest`` holds a release of the copy with other files or another card.
+        TimeNetAccessError: If a release is not open, and ``dest`` or ``source`` requires open access.
         TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
         TimeNetMissingParentError: If ``source`` lacks a payload source and ``dest`` holds no complete copy of it.
         TimeFFormatError: If a manifest names a different release, a pin fails or payload sources form a cycle.
@@ -125,7 +119,7 @@ def _copy_one(  # ruff: ignore[too-many-arguments]
 
 
 def _bytes_of(reference: DatasetRef, manifest: Manifest, progress: ProgressCallback) -> Callable[[int], None]:
-    """Turn the byte counts of the download of one release into :class:`~timenet.progress.BytesMoved` events.
+    """Turn the byte counts of a release download into :class:`~timenet.progress.BytesMoved` events.
 
     Args:
         reference: The release.
