@@ -120,8 +120,8 @@ _DOMAIN_CHECKS = f"""
     LIMIT 1
 """  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values and fixed table names
 
-_LABELLED_TARGETS = f"""
-    WITH labelled AS (
+_LABELED_TARGETS = f"""
+    WITH labeled AS (
         SELECT t.task_id, [label.name FOR label IN s.labels] AS labels, s.multi_label
         FROM tasks t JOIN label_sets s ON s.name = t.label_set
     ),
@@ -130,14 +130,14 @@ _LABELLED_TARGETS = f"""
                EXISTS (SELECT 1 FROM external_values e
                        WHERE e.object_kind = '{ObjectKind.TASK}' AND e.object_id = x.task_id
                          AND e.field = '{PackedField.TARGETS}' AND e.position = x.position) AS packed
-        FROM task_targets x JOIN labelled USING (task_id)
+        FROM task_targets x JOIN labeled USING (task_id)
         UNION ALL
         SELECT r.task_id, c.value_kind = '{AnnotationValueKind.TEXT}', c.text_value,
                EXISTS (SELECT 1 FROM external_values e
                        WHERE e.object_kind = '{ObjectKind.ANNOTATION_CONTENT}' AND e.object_id = c.content_id
                          AND e.field = '{PackedField.VALUE}')
         FROM task_annotation_refs r
-        JOIN labelled USING (task_id)
+        JOIN labeled USING (task_id)
         JOIN annotation_occurrences o USING (occurrence_id)
         JOIN annotation_contents c USING (content_id)
         WHERE r.field = '{TaskRelationshipField.TARGET_ANNOTATIONS}'
@@ -163,22 +163,22 @@ class _LabelRule(NamedTuple):
 _LABEL_RULES = (
     _LabelRule(
         "has a label that is not text or not in its label set",
-        f"""{_LABELLED_TARGETS}
-        SELECT x.task_id FROM targets x JOIN labelled l USING (task_id)
+        f"""{_LABELED_TARGETS}
+        SELECT x.task_id FROM targets x JOIN labeled l USING (task_id)
         WHERE x.is_text IS NOT TRUE OR (NOT x.packed AND NOT list_contains(l.labels, x.label))
         LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
     ),
     _LabelRule(
         "does not have exactly one label, but its label set is not multi-label",
-        f"""{_LABELLED_TARGETS}
-        SELECT l.task_id FROM labelled l LEFT JOIN targets x USING (task_id)
+        f"""{_LABELED_TARGETS}
+        SELECT l.task_id FROM labeled l LEFT JOIN targets x USING (task_id)
         WHERE NOT l.multi_label
         GROUP BY l.task_id HAVING count(x.task_id) <> 1
         LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
     ),
     _LabelRule(
         "repeats a label",
-        f"""{_LABELLED_TARGETS}
+        f"""{_LABELED_TARGETS}
         SELECT task_id FROM targets WHERE NOT packed
         GROUP BY task_id, label HAVING count(*) > 1
         LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments

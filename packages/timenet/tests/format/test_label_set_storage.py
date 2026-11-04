@@ -119,7 +119,7 @@ def test_each_label_set_is_stored_once_and_read_as_one_object(release):
             ),
         ]
 
-    stage_w, _, findings, stage_n1, stage_r, none_apply, unlabelled = _read_tasks(release)
+    stage_w, _, findings, stage_n1, stage_r, none_apply, unlabeled = _read_tasks(release)
     assert stage_w.label_set == STAGES
     assert stage_w.label_set is stage_n1.label_set is stage_r.label_set
     assert findings.label_set == FINDINGS
@@ -127,7 +127,7 @@ def test_each_label_set_is_stored_once_and_read_as_one_object(release):
     assert findings.targets is not None
     assert [target.read() for target in findings.targets] == ["PVC", "AF"]
     assert none_apply.targets == ()
-    assert unlabelled.label_set is None
+    assert unlabeled.label_set is None
 
 
 def test_the_task_table_shows_the_label_set_name(release):
