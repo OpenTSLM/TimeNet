@@ -22,11 +22,7 @@ class ReleaseFile:
 
     @property
     def max_qa_pairs(self) -> int:
-        """Return the number of QA pairs requested for each source row.
-
-        Returns:
-            Ten pairs for v1 and five pairs for v2.
-        """
+        """The number of QA pairs requested for each source row: ten for v1 and five for v2."""
         return 10 if self.version == "v1" else 5
 
 

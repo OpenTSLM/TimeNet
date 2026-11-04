@@ -5,8 +5,9 @@ from pathlib import Path
 
 import pytest
 
-from timenet.dataset import RegularAxis, TimeFDataset
+from timenet.dataset import RegularAxis
 from timenet.errors import TimeFFormatError
+from timenet.reader import TimeFReader
 from timenet.types import InputModality, Split, read_value, read_values
 from timenet_connectors.datasets.bash_lab.opensqa import connector as connector_module
 from timenet_connectors.datasets.bash_lab.opensqa.connector import OpenSqaConnector
@@ -146,14 +147,15 @@ def test_fixture_round_trips_shared_record_values_and_tasks(tmp_path):
     source_dir.mkdir()
     dataset = OpenSqaConnector().convert([_source(source_dir)])
     version_dir = dataset.write(path=tmp_path / "timef")
-    loaded = TimeFDataset.open(path=version_dir)
+    with TimeFReader.open(version_dir) as reader:
+        loaded = reader.read()
 
-    assert len(loaded.records) == 1
-    assert len(loaded.get_train()) == 6
-    assert loaded.records[0].signals[2].to_arrow().to_pylist() == [4.0] * 60
-    assert read_values(loaded.get_train()[3].targets) == (
-        "Features: synthetic fixture features\nNarration: synthetic fixture caption",
-    )
+        assert len(loaded.records) == 1
+        assert len(loaded.get_train()) == 6
+        assert loaded.records[0].signals[2].to_arrow().to_pylist() == [4.0] * 60
+        assert read_values(loaded.get_train()[3].targets) == (
+            "Features: synthetic fixture features\nNarration: synthetic fixture caption",
+        )
 
 
 def test_convert_rejects_disagreeing_v1_v2_sensor_windows(tmp_path):

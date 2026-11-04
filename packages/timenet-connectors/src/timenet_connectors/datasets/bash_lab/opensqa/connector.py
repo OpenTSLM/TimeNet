@@ -50,7 +50,7 @@ _AXES = ("x", "y", "z")
 class OpenSqaConnector(BaseConnector[OpenSqaSource]):
     """Connector for the pinned BASH Lab OpenSQA release."""
 
-    def download(self, cache_dir: Path) -> list[OpenSqaSource]:  # noqa: PLR6301 - BaseConnector override
+    def download(self, cache_dir: Path) -> list[OpenSqaSource]:  # ruff: ignore[no-self-use] - BaseConnector override
         """Fetch the nine training JSONL files at the pinned revision.
 
         Args:
