@@ -87,9 +87,9 @@ def read_release(
 
 
 def raise_not_found(dataset_id: str, version: str | None, sources: Sequence[ReleaseSource]) -> NoReturn:
-    """Raise the error for a release that no source provides.
+    """Raise an error for an unavailable release.
 
-    For an exact version, an installed connector that builds another version gives a more exact error.
+    For an exact version, check the installed connector if the sources include it.
 
     Args:
         dataset_id: The dataset ID.
@@ -97,9 +97,9 @@ def raise_not_found(dataset_id: str, version: str | None, sources: Sequence[Rele
         sources: The sources searched for the release.
 
     Raises:
-        TimeNetVersionUnavailableError: If the installed connector declares a different version.
-        TimeNetInvalidCardError: If the card of the connector cannot be read.
-        TimeNetDatasetNotFoundError: Otherwise, with a message that names the searched sources.
+        TimeNetVersionUnavailableError: If the installed connector declares a different version from the exact request.
+        TimeNetInvalidCardError: If the connector's card is unreadable or invalid.
+        TimeNetDatasetNotFoundError: Otherwise, with a message listing the sources searched.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by declared
     requested = None if is_latest(version) else DatasetRef.parse(f"{dataset_id}@{version}")
     connectors = any(isinstance(source, InstalledConnectors) for source in sources)

@@ -158,10 +158,9 @@ def info(
     remote_registry: str | None = REMOTE_REGISTRY,
     auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """Print a dataset's manifest summary: metadata, schema, and counts.
+    """Print a dataset's metadata, schema, and counts.
 
-    For a release that only an installed connector provides, it prints the card and the build command,
-    because the schema and the counts appear only after a build.
+    For an unbuilt release, show its metadata card and build command instead.
     """
     client = _client(local_registry, remote_registry, auto_build)
     try:
@@ -198,11 +197,11 @@ def info(
 
 
 def _card_table(card: DatasetMetadata, lineage: Sequence[ParentDatasetCard] | None) -> Table:
-    """Build the table of a card: version, name, license, access, citation, and domains.
+    """Create a table of dataset metadata and access requirements.
 
     Args:
-        card: The card, or the metadata of a manifest.
-        lineage: The card of each ancestor release from the manifest, or None for a release that is not built.
+        card: The dataset card or manifest metadata.
+        lineage: Ancestor cards, or None for an unbuilt release.
 
     Returns:
         A table without a header.

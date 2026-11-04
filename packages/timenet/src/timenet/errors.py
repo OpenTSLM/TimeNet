@@ -36,13 +36,13 @@ class TimeNetDatasetNotFoundError(TimeNetError):
 
 
 class TimeNetNotBuiltError(TimeNetDatasetNotFoundError):
-    """A release has no manifest yet, because only an installed connector provides it.
+    """Only an installed connector provides a release, so it has no manifest yet.
 
-    A release gets its manifest when it is built. Until then, the card of the connector describes it.
+    Build the release to create its manifest, or read the connector's card for metadata.
 
     Attributes:
-        release: The release.
-        card: The card of the connector that provides the release.
+        release: The unbuilt release.
+        card: The connector's card of the release.
     """
 
     def __init__(self, release: "DatasetRef", card: "DatasetMetadata") -> None:
