@@ -151,8 +151,7 @@ class ConnectorBuilder:
         if card.dataset_version != release.version:
             raise TimeNetVersionUnavailableError(release, card.dataset_version)
         if settings().isolation == "on":
-            # Do not call resolve() here. It imports the connector, which needs the dependencies that
-            # only the environment of the child has.
+            # The parent reads only the card: the connector and its dependencies exist only in the child.
             run_isolated_build(
                 release,
                 store.root,
