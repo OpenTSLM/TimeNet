@@ -165,9 +165,7 @@ class TimeFNullValuesError(TimeFValidationError):
 class TimeNetVersionUnavailableError(TimeNetDatasetNotFoundError, TimeFValidationError):
     """The installed connector of a dataset builds another version than the requested one.
 
-    A connector builds only the version that its card declares. So the requested version does not
-    exist for the caller that wants to read it, and it is invalid input for the caller that wants to
-    build it.
+    A connector builds only the version that its card declares.
 
     Attributes:
         release: The requested release.
