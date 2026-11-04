@@ -514,6 +514,83 @@ def test_large_text_is_packed(tmp_path, value, kind):
     )
 
 
+@dataclasses.dataclass(eq=False)
+class _LazyText(TextHandle):
+    """A short string that its owner keeps out of memory, like text a connector reads from a file on request."""
+
+    text: str
+
+    @property
+    def is_loaded(self):
+        return False
+
+    @property
+    def length(self):
+        return len(self.text)
+
+    def read(self):
+        return self.text
+
+    def _content_key(self):
+        return ("lazy", id(self))
+
+
+@dataclasses.dataclass(eq=False)
+class _LazyTextList(TextListHandle):
+    """A short list of strings that its owner keeps out of memory."""
+
+    texts: list[str]
+
+    @property
+    def is_loaded(self):
+        return False
+
+    @property
+    def length(self):
+        return len(self.texts)
+
+    def read(self):
+        return self.texts
+
+    def _content_key(self):
+        return ("lazy", id(self))
+
+
+@pytest.mark.parametrize(
+    ("value", "kind"),
+    [
+        (_LazyText("short"), PackedValueKind.TEXT),
+        (_LazyTextList(["a", "b"]), PackedValueKind.TEXT_LIST),
+    ],
+)
+def test_an_unloaded_handle_is_packed_whatever_its_size(tmp_path, value, kind):
+    packed = PackedValueWriter(tmp_path, StorageSources()).pack(
+        ObjectKind.ANNOTATION_CONTENT, 1, PackedField.VALUE, value
+    )
+    assert isinstance(packed, ExternalValue)
+    assert packed.locator.value_kind is kind
+    assert packed.locator.n_values == value.length
+
+
+def test_a_short_unloaded_annotation_reads_back_as_stored_text(tmp_path):
+    dataset = make_dataset()
+    dataset.records[0].annotate(Annotation(key="feature", value=_LazyText("[0.1 0.2 0.3]")))
+    version_dir = _write_dataset(tmp_path, dataset)
+
+    (content_id,) = _content_ids(version_dir, "feature")
+    assert (ObjectKind.ANNOTATION_CONTENT.value, content_id, PackedField.VALUE.value, 0) in _external_rows(version_dir)
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        (feature,) = [
+            annotation.value
+            for record in reader.read(load=LoadPlan.ALL_LAZY).records
+            for annotation in record.annotations
+            if annotation.key == "feature"
+        ]
+    assert isinstance(feature, StoredText)
+    assert not feature.is_loaded
+    assert feature.read() == "[0.1 0.2 0.3]"
+
+
 def test_locators_name_their_owner_by_kind_and_int_id(tmp_path):
     dataset, answer = _packed_dataset()
     version_dir = _write_dataset(tmp_path, dataset)

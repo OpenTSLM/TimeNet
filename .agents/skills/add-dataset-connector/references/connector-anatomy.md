@@ -121,6 +121,11 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   `record.add_annotations([...])` takes an iterable and returns a tuple. There is one annotation
   class, and its `span` gives its shape. No span means the whole record.
   `span=TimePoint.seconds(...)` means a time offset. `span=TimeInterval.seconds(...)` means a region.
+- An annotation value can be a `TextHandle` (`from timenet.types import TextHandle`) instead of a
+  string. Subclass it with `is_loaded` returning false when you do not want the text in memory, for
+  example a handle that re-reads its source row on request, like a signal loader. The writer packs
+  such text into a payload regardless of size, and a reader gets it back as a stored handle that
+  reads on request.
 - `dataset.add_task(task=<Task>(inputs=(record,), ...))` registers one task and returns it.
   `dataset.add_tasks(tasks=[...])` takes an iterable and registers the batch all-or-nothing. The task
   names its input records itself. Set `scope` and `from_tasks` on the task too. A batch can derive

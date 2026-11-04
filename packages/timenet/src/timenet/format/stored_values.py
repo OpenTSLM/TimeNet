@@ -41,7 +41,8 @@ INLINE_LIMIT = 4096
 """Largest JSON-encoded size, in bytes, of text kept inline in the catalog.
 
 Labels and short prompts stay queryable in SQL, while long text no longer inflates the catalog that
-every read loads.
+every read loads. A lazy text handle is always packed into a payload file, see
+:meth:`PackedValueWriter.pack`.
 """
 
 _PACK_BYTES = 4 * 1024 * 1024
@@ -819,6 +820,11 @@ class PackedValueWriter:
         A stored text or time-offsets handle keeps its payload row, so its value is neither read nor
         copied. Its locator names the row in the release that stores it.
 
+        A text handle that is not loaded, that is, a lazy handle, is always packed into a payload
+        file. Connectors use such handles when they do not want the text in memory. A read returns
+        packed text as a handle that reads on demand. Loaded handles and native values are packed
+        only when their encoded size exceeds :data:`INLINE_LIMIT`.
+
         Args:
             kind: The kind of the object that owns the value.
             object_id: The object's id in this write's catalog: a task id, the id of the
@@ -843,13 +849,14 @@ class PackedValueWriter:
             stored = value._location
             source = self.sources.add(value.store.version, stored)
             return self._add_locator(key, replace(stored, source=source))
+        keep_lazy = isinstance(value, TextHandle | TextListHandle) and not value.is_loaded
         classified = _classify_value(value)
         if isinstance(classified, CatalogValue):
             return classified
         value = classified.value
         value_kind = classified.kind
         size = value.nbytes if isinstance(value, pa.Array) else len(json.dumps(value, ensure_ascii=False).encode())
-        if value_kind != PackedValueKind.TIME_OFFSETS and size <= INLINE_LIMIT:
+        if value_kind != PackedValueKind.TIME_OFFSETS and size <= INLINE_LIMIT and not keep_lazy:
             return CatalogValue(value)
         if isinstance(value, pa.Array) and digest is None:
             digest = offsets_digest(value)
