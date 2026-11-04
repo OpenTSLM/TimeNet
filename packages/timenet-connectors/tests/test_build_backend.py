@@ -15,7 +15,7 @@ from timenet.values_backends import ValuesBackend
 from timenet_connectors import datasets as datasets_module
 from timenet_connectors.builder import backend as backend_module, cli as cli_module
 from timenet_connectors.builder.backend import ConnectorBuilder
-from timenet_connectors.discovery import known_ids
+from timenet_connectors.discovery import _known_ids
 
 
 def _unexpected_isolation(*args, **kwargs):
@@ -73,7 +73,7 @@ def test_a_card_that_cannot_be_read_fails_each_lookup_with_the_card_error(tmp_pa
     expected = re.escape(message.format(tmp_path / "test" / "broken" / "dataset.yaml"))
 
     with pytest.raises(TimeNetInvalidCardError, match=expected):
-        known_ids()
+        _known_ids()
     # The installed entry point loads the builder backend of this package, which lists its dataset IDs.
     with pytest.raises(TimeNetInvalidCardError, match=expected):
         find_card("test/good")
