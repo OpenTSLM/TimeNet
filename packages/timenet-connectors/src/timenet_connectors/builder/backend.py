@@ -1,7 +1,6 @@
 """The built-in build backend: it lists dataset IDs, reads cards and builds releases.
 
-It imports nothing of the ``timenet-build`` CLI and its libraries, because listing dataset IDs and
-reading cards does not need them.
+It does not import the ``timenet-build`` CLI, so it stays cheap to import.
 """
 
 from collections.abc import Mapping
