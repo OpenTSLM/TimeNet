@@ -16,7 +16,7 @@ from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from timenet.builders import installed_builder
 from timenet.config import settings
-from timenet.coordinator.build import build_release
+from timenet.coordinator.build import plan_release_build, run_plan
 from timenet.dataset import TimeFDataset
 from timenet.errors import (
     TimeFValidationError,
@@ -32,6 +32,7 @@ from timenet.registry._paths import release_dir
 from timenet.registry.base import ProgressCallback
 from timenet.registry.dependencies import prepare_local_copy
 from timenet.registry.version import DatasetVersion
+from timenet.sources import InstalledConnectors
 from timenet.types import DatasetMetadata, Domain, License, Task
 from timenet.types.access import require_open_access
 from timenet.types.references import DatasetRef, is_latest, split_ref
@@ -405,7 +406,7 @@ def _prepare(
     Raises:
         TimeNetMissingParentError: If copying and building cannot provide a missing payload source.
         TimeNetInvalidCardError: If reading a connector's card fails.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _obtain, claim and build_release
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _obtain, claim and the build
     try:
         manifest = registry.get_manifest(dataset_id, version)
     except TimeNetDatasetNotFoundError as miss:
@@ -425,11 +426,15 @@ def _prepare(
             if found is None or found.release != source:
                 raise
             pins = next(pinned for pinned in manifest.payload_sources.values() if pinned.release == source)
-            # TODO(adrian): Remove temporary glue which maps fetch_from and auto_build onto the
-            # coordinator until the client takes a list of sources.
-            build_release(
-                str(source), store=registry, fetch_from=fetch_from, build_parents=True, pinned_by={reference: pins}
+            # TODO(adrian): Remove temporary glue which maps fetch_from and auto_build onto a list
+            # of sources until the client takes the list itself.
+            plan = plan_release_build(
+                str(source),
+                store=registry,
+                parents_from=[*([fetch_from] if fetch_from is not None else []), InstalledConnectors()],
+                pinned_by={reference: pins},
             )
+            run_plan(plan, registry)
             built.add(source)
 
 
@@ -453,7 +458,7 @@ def _obtain(  # ruff: ignore[too-many-arguments]
         TimeNetDatasetNotFoundError: If neither ``fetch_from`` nor a connector provides the version.
         TimeNetVersionUnavailableError: If the connector declares a different version.
         TimeNetInvalidCardError: If reading the connector's card fails.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by build_release
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the build
     if fetch_from is not None:
         try:
             return fetch_from.get_manifest(dataset_id, version)
@@ -464,14 +469,14 @@ def _obtain(  # ruff: ignore[too-many-arguments]
         if hint is None:
             raise miss
         raise TimeNetDatasetNotFoundError(f"{miss}. {hint}") from miss
-    # TODO(adrian): Remove temporary glue which maps fetch_from and auto_build onto the coordinator
-    # until the client takes a list of sources. The build prepares the declared parents of the
-    # version in the same order: reuse, copy, then build. Sentinels such as "latest" are not pins,
-    # so a fresh build satisfies them.
-    build_release(
+    # TODO(adrian): Remove temporary glue which maps fetch_from and auto_build onto a list of
+    # sources until the client takes the list itself. The build prepares the declared parents of
+    # the version in the same order: reuse, copy, then build. Sentinels such as "latest" are not
+    # pins, so a fresh build satisfies them.
+    plan = plan_release_build(
         dataset_id if is_latest(version) else f"{dataset_id}@{version}",
         store=registry,
-        fetch_from=fetch_from,
-        build_parents=True,
+        parents_from=[*([fetch_from] if fetch_from is not None else []), InstalledConnectors()],
     )
+    run_plan(plan, registry)
     return registry.get_manifest(dataset_id, version)

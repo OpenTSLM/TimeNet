@@ -25,6 +25,7 @@ from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import TIMENET_REGISTRY_URL, LocalRegistry, RemoteRegistry, open_local_version
+from timenet.sources import InstalledConnectors
 from timenet.testing import assert_datasets_equal, install_backends, make_dataset
 from timenet.types import Access, DatasetMetadata, Domain, License, Version
 from timenet.types.access import AccessRequirement
@@ -83,19 +84,19 @@ class _Builder:
 
 
 def _record_build_requests(monkeypatch):
-    """Record the dataset, ``fetch_from`` and ``build_parents`` of each build that the client asks for.
+    """Record the dataset and the ``parents_from`` list of each build that the client asks for.
 
     Returns:
-        The list that receives one ``(dataset, fetch_from, build_parents)`` entry for each request.
+        The list that receives one ``(dataset, parents_from)`` entry for each request.
     """
     requests = []
-    build_release = client_module.build_release
+    plan_release_build = client_module.plan_release_build
 
-    def record(dataset, **options):
-        requests.append((dataset, options.get("fetch_from"), options.get("build_parents")))
-        return build_release(dataset, **options)
+    def record(dataset_id, **options):
+        requests.append((dataset_id, options.get("parents_from")))
+        return plan_release_build(dataset_id, **options)
 
-    monkeypatch.setattr(client_module, "build_release", record)
+    monkeypatch.setattr(client_module, "plan_release_build", record)
     return requests
 
 
@@ -136,7 +137,7 @@ def test_a_missing_version_is_copied_from_fetch_from_before_it_is_built(tmp_path
         assert (tmp_path / "local/test/child/1.0.0/manifest.json").is_file()
         return
     # The build gets the same registry to copy its own missing parents from.
-    assert requests == [("test/child", origin, True)]
+    assert requests == [("test/child", [origin, InstalledConnectors()])]
     assert calls == [(DatasetRef.parse("test/child@1.0.0"), False, {})]
 
 
@@ -229,7 +230,9 @@ def test_a_missing_payload_source_builds_with_its_own_connector_against_the_pins
             assert signal.to_arrow().equals(make_dataset().records[0].signals[0].to_arrow())
     # The source builds with its own connector, which prepares its parents in the same order, against
     # the pins of the child that reads it.
-    assert requests == [(str(reference), fetch_from, True)]
+    assert requests == [
+        (str(reference), [InstalledConnectors()] if fetch_from is None else [fetch_from, InstalledConnectors()])
+    ]
     assert calls == [(reference, False, {DatasetRef.parse("test/child@1.0.0"): pins})]
 
 

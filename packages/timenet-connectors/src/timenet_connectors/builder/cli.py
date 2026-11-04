@@ -15,7 +15,7 @@ from timenet.builders import BuildOptions, declared
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console, progress_renderer
 from timenet.config import settings
-from timenet.coordinator.build import build_release
+from timenet.coordinator.build import plan_release_build, run_plan
 from timenet.errors import (
     TimeNetAccessError,
     TimeNetFileError,
@@ -33,6 +33,7 @@ from timenet.registry import (
     open_writable_registry,
 )
 from timenet.registry._paths import release_dir  # ruff: ignore[import-private-name]
+from timenet.sources import InstalledConnectors
 from timenet.types.references import DatasetRef, is_latest, split_ref
 from timenet_connectors.builder.backend import ConnectorBuilder
 from timenet_connectors.discovery import known_ids
@@ -160,7 +161,7 @@ def build(
                 ),
             )
     except TimeNetMissingParentError as error:
-        error.hint = "Fetch it with --fetch-from <registry> or build it with --build-parents."
+        error.hint = _missing_hint(fetch_from=fetch_from, build_parents=build_parents)
         raise
     except TimeNetFileError as error:
         error.hint = (
@@ -173,6 +174,27 @@ def build(
         error.hint = "A remote --out holds open releases only. Build it into a local --out instead."
         raise
     typer.echo(result)
+
+
+def _missing_hint(*, fetch_from: str | None, build_parents: bool) -> str | None:
+    """Name the options of ``build`` that can get a missing release and that the command did not use.
+
+    Args:
+        fetch_from: The value of ``--fetch-from``, or ``None``.
+        build_parents: Whether ``--build-parents`` is set.
+
+    Returns:
+        The hint as a full sentence, or ``None`` if the command used both options.
+    """
+    ways = []
+    if fetch_from is None:
+        ways.append("fetch it with --fetch-from <registry>")
+    if not build_parents:
+        ways.append("build it with --build-parents")
+    if not ways:
+        return None
+    hint = " or ".join(ways)
+    return f"{hint[0].upper()}{hint[1:]}."
 
 
 def _build_to(  # ruff: ignore[too-many-arguments]
@@ -221,15 +243,18 @@ def _build_to(  # ruff: ignore[too-many-arguments]
         fetch_from = fetch_from if fetch_from is not None else remote
     # A remote registry holds only open releases. So for a remote output, the build refuses another
     # release before any download, as a build into that registry would.
-    plan = build_release(
+    plan = plan_release_build(
         dataset_id,
         store=store,
-        fetch_from=fetch_from,
-        build_parents=build_parents,
+        # Maps --fetch-from and --build-parents onto a list of sources for the coordinator.
+        parents_from=[
+            *([fetch_from] if fetch_from is not None else []),
+            *([InstalledConnectors()] if build_parents else []),
+        ],
         force=force,
         open_access_only=remote is not None,
-        options=options,
     )
+    run_plan(plan, store, options=options)
     if remote is not None:
         copy_release(release, store, remote, progress=options.progress)
         return str(release.version)

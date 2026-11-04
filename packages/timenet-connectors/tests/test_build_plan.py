@@ -8,22 +8,21 @@ from typer.testing import CliRunner
 
 from timenet import builders
 from timenet.connectors import BaseConnector
-from timenet.coordinator.build import build_release
-from timenet.coordinator.plan import Step, plan_parents
+from timenet.coordinator.build import plan_release_build, run_plan
+from timenet.coordinator.plan import BuildStep, CopyStep, Step
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.engine import open_parents, run_pipeline
 from timenet.errors import (
     TimeFFormatError,
     TimeFValidationError,
     TimeNetAccessError,
-    TimeNetDatasetNotFoundError,
     TimeNetFileError,
-    TimeNetInvalidCardError,
     TimeNetMissingParentError,
 )
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, WritableRegistry
 from timenet.registry._paths import release_dir
+from timenet.sources import InstalledConnectors
 from timenet.testing import install_backends, make_dataset
 from timenet.types import Access, TimeSeriesSpec, ureg
 from timenet.types.access import AccessRequirement
@@ -42,6 +41,17 @@ GRAND = DatasetRef(dataset_id=make_dataset().metadata.dataset_id, version=make_d
 PARENT = DatasetRef.parse("test/parent@1.0.0")
 CHILD = DatasetRef.parse("test/child@1.0.0")
 runner = CliRunner()
+
+
+def _parent_steps(dataset_id: str, store: LocalRegistry, **options) -> list[Step]:
+    """Plan the build of ``dataset_id`` and return each step but its own build."""
+    steps = plan_release_build(dataset_id, store=store, **options).steps
+    return [step for step in steps if not (step.action == "build" and step.release.dataset_id == dataset_id)]
+
+
+def _build(release: DatasetRef, **fields) -> BuildStep:
+    """Return the build step of ``release``, with the builder that is installed for it."""
+    return BuildStep(release, builders.declared(release.dataset_id), **fields)
 
 
 class _CardBackend:
@@ -98,20 +108,34 @@ def _install_cards(monkeypatch, **parents: dict[str, DatasetRef]) -> dict:
 @pytest.mark.parametrize(
     ("grand_in", "expected"),
     [
-        ("output", [Step(PARENT, "build")]),
-        ("origin", [Step(GRAND, "copy"), Step(PARENT, "build", depends_on=(GRAND,))]),
-        ("nowhere", [Step(GRAND, "build"), Step(PARENT, "build", depends_on=(GRAND,))]),
+        ("output", lambda origin: [_build(PARENT)]),
+        (
+            "origin",
+            lambda origin: [
+                CopyStep(GRAND, origin),
+                _build(PARENT, depends_on=(GRAND,)),
+            ],
+        ),
+        (
+            "nowhere",
+            lambda origin: [
+                _build(GRAND),
+                _build(PARENT, depends_on=(GRAND,)),
+            ],
+        ),
     ],
 )
-def test_plan_uses_fetches_or_builds_each_parent_once_before_its_children(tmp_path, monkeypatch, grand_in, expected):
+def test_plan_copies_or_builds_each_parent_once_before_its_children(tmp_path, monkeypatch, grand_in, expected):
     _install_cards(monkeypatch, child={"parent": PARENT, "grand": GRAND}, parent={"grand": GRAND})
     registries = {name: LocalRegistry(tmp_path / name) for name in ("output", "origin")}
     if grand_in in registries:
         registries[grand_in].put_dataset(make_dataset())
 
-    steps = plan_parents(CHILD.dataset_id, registries["output"], fetch_from=registries["origin"], build_parents=True)
+    steps = _parent_steps(
+        CHILD.dataset_id, registries["output"], parents_from=[registries["origin"], InstalledConnectors()]
+    )
 
-    assert steps == expected
+    assert steps == expected(registries["origin"])
 
 
 @pytest.mark.parametrize(
@@ -124,19 +148,13 @@ def test_plan_uses_fetches_or_builds_each_parent_once_before_its_children(tmp_pa
             r"^parent release test/parent@1\.0\.0 of test/child@1\.0\.0 is not in local registry",
         ),
         (
-            {"child": {"parent": DatasetRef.parse("test/parent@2.0.0")}, "parent": {}},
-            {"build_parents": True},
-            TimeFValidationError,
-            "not that exact version",
-        ),
-        (
             {"child": {"parent": PARENT}, "parent": {"child": CHILD}},
-            {"build_parents": True},
+            {"parents_from": [InstalledConnectors()]},
             TimeFValidationError,
             "cycle: test/child@1.0.0 -> test/parent@1.0.0 -> test/child@1.0.0",
         ),
     ],
-    ids=["missing", "other-version", "cycle"],
+    ids=["missing", "cycle"],
 )
 # ruff: ignore[too-many-arguments, too-many-positional-arguments]
 def test_plan_rejects_unobtainable_parents_before_anything_runs(tmp_path, monkeypatch, cards, options, error, match):
@@ -144,7 +162,7 @@ def test_plan_rejects_unobtainable_parents_before_anything_runs(tmp_path, monkey
     output = LocalRegistry(tmp_path / "output")
 
     with pytest.raises(error, match=match):
-        plan_parents(CHILD.dataset_id, output, **options)
+        _parent_steps(CHILD.dataset_id, output, **options)
 
 
 _SPEC = TimeSeriesSpec(spec_type="sine", name="Sine", unit_value=ureg.dimensionless)
@@ -191,22 +209,15 @@ def test_a_declared_parent_needs_only_its_direct_payload_sources(tmp_path, monke
         release_dir(origin.root, SOURCE).parent.mkdir(parents=True)
         shutil.move(release_dir(output.root, SOURCE), release_dir(origin.root, SOURCE))
 
-    steps = plan_parents(CHILD.dataset_id, output, fetch_from=origin)
-
-    # DECLARED opens with SOURCE, its direct payload source, which a copy of DECLARED brings. So the
-    # plan does not name GRAND, SOURCE's own source.
-    assert steps == ([] if where == "output" else [Step(DECLARED, "copy")])
-    if where != "output":
-        # But a copy takes a release with each payload source that it needs, at every depth, so that
-        # the store never holds a release without its payload sources. That includes GRAND. The
-        # registry to copy from lacks GRAND, so the copy fails before it copies anything.
-        with pytest.raises(
-            TimeNetMissingParentError, match=r"^payload source timenet/hello-world@1\.0\.0 of test/source"
-        ):
-            build_release(CHILD.dataset_id, store=output, fetch_from=origin)
-        assert child_builds == []
-        return
-    build_release(CHILD.dataset_id, store=output, fetch_from=origin)
+    # DECLARED opens with SOURCE, its direct payload source. So the plan needs neither GRAND, which
+    # SOURCE reads and no registry holds, nor a step for SOURCE where the output holds it.
+    steps = {
+        "output": [],
+        "origin": [CopyStep(DECLARED, origin)],
+        "source-in-origin": [CopyStep(SOURCE, origin, with_payload_sources=False)],
+    }
+    assert _parent_steps(CHILD.dataset_id, output, parents_from=[origin]) == steps[where]
+    run_plan(plan_release_build(CHILD.dataset_id, store=output, parents_from=[origin]), output)
     for reference in (DECLARED, SOURCE):
         assert output.exists(reference.dataset_id, str(reference.version))
     assert not output.exists(GRAND.dataset_id, str(GRAND.version))
@@ -222,9 +233,9 @@ def test_a_payload_source_that_is_later_a_declared_parent_brings_its_own_payload
     _declared_without_its_sources_source(output)
     pins = output.get_manifest(SOURCE.dataset_id).payload_sources[SourceKey(str(GRAND))]
 
-    steps = plan_parents(CHILD.dataset_id, output, build_parents=True)
+    steps = _parent_steps(CHILD.dataset_id, output, parents_from=[InstalledConnectors()])
 
-    assert steps == [Step(GRAND, "build", pinned_by={SOURCE: pins})]
+    assert steps == [_build(GRAND, pinned_by={SOURCE: pins})]
 
 
 def test_the_plan_reads_each_card_from_the_backend_that_claims_the_dataset(tmp_path, monkeypatch):
@@ -234,26 +245,19 @@ def test_the_plan_reads_each_card_from_the_backend_that_claims_the_dataset(tmp_p
     # which only the second backend knows.
     install_backends(monkeypatch, ConnectorBuilder(), _CardBackend(cards))
 
-    steps = plan_parents(CHILD.dataset_id, LocalRegistry(tmp_path), build_parents=True)
+    steps = _parent_steps(CHILD.dataset_id, LocalRegistry(tmp_path), parents_from=[InstalledConnectors()])
 
-    assert steps == [Step(GRAND, "build"), Step(PARENT, "build", depends_on=(GRAND,))]
+    assert steps == [
+        _build(GRAND),
+        _build(PARENT, depends_on=(GRAND,)),
+    ]
     cards[PARENT.dataset_id] = cards[PARENT.dataset_id].model_copy(update={"dataset_version": "2.0.0"})
-    with pytest.raises(TimeFValidationError, match=r"test/parent@1\.0\.0 is missing .* builds version 2\.0\.0"):
-        plan_parents(CHILD.dataset_id, LocalRegistry(tmp_path), build_parents=True)
-
-
-def test_a_parent_whose_card_cannot_be_read_fails_the_plan_with_the_card_error(tmp_path, monkeypatch):
-    (tmp_path / "dataset.yaml").write_text("dataset_id: [unclosed\n")
-    # The in-repo backend claims PARENT, whose card cannot be read. The second backend serves CHILD.
-    monkeypatch.setattr(backend_module, "known_ids", lambda: [PARENT.dataset_id])
-    monkeypatch.setattr(backend_module, "connector_dir", lambda dataset_id: tmp_path)
-    install_backends(monkeypatch, ConnectorBuilder(), _CardBackend(_cards(child={"parent": PARENT})))
-
-    with pytest.raises(TimeNetInvalidCardError, match="could not read dataset card") as caught:
-        plan_parents(CHILD.dataset_id, LocalRegistry(tmp_path / "output"), build_parents=True)
-
-    # The plan does not report a card that cannot be read as a missing connector.
-    assert not isinstance(caught.value, (LookupError, TimeNetDatasetNotFoundError))
+    with pytest.raises(
+        TimeNetMissingParentError,
+        match=r"^parent release test/parent@1\.0\.0 of test/child@1\.0\.0 is not in local registry .* or "
+        r"installed connectors \(test/parent builds 2\.0\.0\)\.$",
+    ):
+        _parent_steps(CHILD.dataset_id, LocalRegistry(tmp_path), parents_from=[InstalledConnectors()])
 
 
 class _Grand(BaseConnector[str]):
@@ -276,18 +280,6 @@ def _parent_without_its_source(output: LocalRegistry) -> None:
     shutil.rmtree(release_dir(output.root, GRAND))
 
 
-def test_a_missing_payload_source_names_the_release_that_reads_it(tmp_path, monkeypatch):
-    _install_cards(monkeypatch, child={"parent": PARENT}, parent={"parent": GRAND})
-    output = LocalRegistry(tmp_path / "output")
-    _parent_without_its_source(output)
-
-    with pytest.raises(TimeNetMissingParentError) as caught:
-        plan_parents(CHILD.dataset_id, output)
-
-    assert (caught.value.missing, caught.value.needed_by, caught.value.payload_source) == (GRAND, PARENT, True)
-    assert str(caught.value).startswith("payload source timenet/hello-world@1.0.0 of test/parent@1.0.0 is not in")
-
-
 @pytest.mark.parametrize("backend", [ValuesBackend.PARQUET, ValuesBackend.ZARR])
 def test_a_pinned_source_is_rebuilt_in_staging_and_published_only_if_it_matches(tmp_path, monkeypatch, backend):
     _install_cards(monkeypatch, child={"parent": PARENT}, parent={"parent": GRAND})
@@ -296,9 +288,9 @@ def test_a_pinned_source_is_rebuilt_in_staging_and_published_only_if_it_matches(
     _parent_without_its_source(output)
     pins = output.get_manifest(PARENT.dataset_id).payload_sources[SourceKey(str(GRAND))]
 
-    steps = plan_parents(CHILD.dataset_id, output, build_parents=True)
+    steps = _parent_steps(CHILD.dataset_id, output, parents_from=[InstalledConnectors()])
 
-    assert steps == [Step(GRAND, "build", pinned_by={PARENT: pins})]
+    assert steps == [_build(GRAND, pinned_by={PARENT: pins})]
     built = []
 
     def child(release, store_root, *, pinned_by, **_):
@@ -312,13 +304,13 @@ def test_a_pinned_source_is_rebuilt_in_staging_and_published_only_if_it_matches(
     monkeypatch.setattr(backend_module, "run_isolated_build", child)
 
     if backend == ValuesBackend.PARQUET:
-        build_release(CHILD.dataset_id, store=output, build_parents=True)
+        run_plan(plan_release_build(CHILD.dataset_id, store=output, parents_from=[InstalledConnectors()]), output)
         assert output.exists(GRAND.dataset_id, str(GRAND.version))
         assert built == [GRAND, CHILD]
         return
     # A Zarr rebuild writes other files than the Parquet files PARENT reads, so nothing is published.
     with pytest.raises(TimeFFormatError, match=r"Nothing was published\. Fetch the exact release .* or rebuild"):
-        build_release(CHILD.dataset_id, store=output, build_parents=True)
+        run_plan(plan_release_build(CHILD.dataset_id, store=output, parents_from=[InstalledConnectors()]), output)
     assert built == [GRAND]
     assert not output.exists(GRAND.dataset_id, str(GRAND.version))
     assert not list(release_dir(output.root, GRAND).parent.glob("*"))
@@ -338,9 +330,46 @@ def test_a_payload_source_that_two_releases_read_is_built_against_the_pins_of_bo
         for reader in (PARENT, sibling)
     }
 
-    steps = plan_parents(CHILD.dataset_id, output, build_parents=True)
+    steps = _parent_steps(CHILD.dataset_id, output, parents_from=[InstalledConnectors()])
 
-    assert steps == [Step(GRAND, "build", pinned_by=pins)]
+    assert steps == [_build(GRAND, pinned_by=pins)]
+
+
+def _repin(registry: LocalRegistry, reader: DatasetRef) -> None:
+    """Give the first file that ``reader`` pins of GRAND another checksum, as if another build of GRAND wrote it."""
+    path = release_dir(registry.root, reader) / "manifest.json"
+    manifest = registry.get_manifest(reader.dataset_id)
+    pinned = manifest.payload_sources[SourceKey(str(GRAND))]
+    first, *rest = pinned.files
+    files = (first.model_copy(update={"checksum": "sha256:" + "0" * 64}), *rest)
+    sources = {**manifest.payload_sources, SourceKey(str(GRAND)): pinned.model_copy(update={"files": files})}
+    path.write_text(manifest.model_copy(update={"payload_sources": sources}).to_json())
+
+
+def test_two_readers_that_pin_one_file_differently_fail_the_plan_of_its_build(tmp_path, monkeypatch):
+    sibling = DatasetRef.parse("test/sibling@1.0.0")
+    _install_cards(monkeypatch, child={"parent": PARENT, "sibling": sibling})
+    output = LocalRegistry(tmp_path / "output")
+    output.put_dataset(make_dataset())
+    for reader in (PARENT, sibling):
+        _child_of(output, reader, GRAND, make_dataset().records[0].id)
+    _repin(output, sibling)
+    shutil.rmtree(release_dir(output.root, GRAND))
+
+    # No build of GRAND can match both readers, so the plan fails before any step runs.
+    with pytest.raises(TimeFFormatError, match=f"pin .* of {GRAND} as different files, so no build"):
+        plan_release_build(CHILD.dataset_id, store=output, parents_from=[InstalledConnectors()])
+
+
+def test_a_held_payload_source_that_breaks_a_pin_fails_the_plan(tmp_path, monkeypatch):
+    _install_cards(monkeypatch, child={"parent": PARENT})
+    output = LocalRegistry(tmp_path / "output")
+    output.put_dataset(make_dataset())
+    _child_of(output, PARENT, GRAND, make_dataset().records[0].id)
+    _repin(output, PARENT)
+
+    with pytest.raises(TimeFFormatError, match=f"payload source {GRAND} differs from the release {PARENT}"):
+        plan_release_build(CHILD.dataset_id, store=output)
 
 
 def test_a_built_release_needs_only_its_payload_sources(tmp_path, monkeypatch):
@@ -350,20 +379,23 @@ def test_a_built_release_needs_only_its_payload_sources(tmp_path, monkeypatch):
     pins = output.get_manifest(PARENT.dataset_id).payload_sources[SourceKey(str(GRAND))]
 
     with pytest.raises(TimeNetMissingParentError, match=r"^payload source timenet/hello-world@1\.0\.0 of test/parent"):
-        plan_parents(PARENT.dataset_id, output)
+        _parent_steps(PARENT.dataset_id, output)
+    connectors = [InstalledConnectors()]
     # The source that PARENT reads builds against its pins.
-    assert plan_parents(PARENT.dataset_id, output, build_parents=True) == [
-        Step(GRAND, "build", pinned_by={PARENT: pins})
+    assert _parent_steps(PARENT.dataset_id, output, parents_from=connectors) == [
+        _build(GRAND, pinned_by={PARENT: pins})
     ]
     # A rebuild of PARENT needs its declared parents instead, and pins the new files.
-    assert plan_parents(PARENT.dataset_id, output, build_parents=True, force_build=True) == [Step(GRAND, "build")]
+    assert _parent_steps(PARENT.dataset_id, output, parents_from=connectors, force=True) == [_build(GRAND)]
     # A registry that holds the source fills the gap: the local PARENT is reused and GRAND is copied.
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
-    assert plan_parents(PARENT.dataset_id, output, fetch_from=origin) == [Step(PARENT, "copy")]
+    assert _parent_steps(PARENT.dataset_id, output, parents_from=[origin]) == [
+        CopyStep(GRAND, origin, with_payload_sources=False)
+    ]
 
 
-def test_a_damaged_parent_is_fetched_again_but_never_built_over(tmp_path, monkeypatch, child_builds):
+def test_a_damaged_parent_is_copied_again_but_never_built_over(tmp_path, monkeypatch, child_builds):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
     output, origin = LocalRegistry(tmp_path / "output"), LocalRegistry(tmp_path / "origin")
     parent = make_dataset()
@@ -373,12 +405,14 @@ def test_a_damaged_parent_is_fetched_again_but_never_built_over(tmp_path, monkey
     (release_dir(output.root, PARENT) / "control.duckdb").write_bytes(b"cut short")
 
     with pytest.raises(TimeNetFileError, match=r"'control\.duckdb' has 9 bytes, expected [\d,]+ bytes\.$") as caught:
-        plan_parents(CHILD.dataset_id, output, build_parents=True)
+        _parent_steps(CHILD.dataset_id, output, parents_from=[InstalledConnectors()])
     assert caught.value.release == PARENT
 
-    assert plan_parents(CHILD.dataset_id, output, fetch_from=origin) == [Step(PARENT, "copy")]
-    build_release(CHILD.dataset_id, store=output, fetch_from=origin)
-    assert plan_parents(CHILD.dataset_id, output) == []
+    assert _parent_steps(CHILD.dataset_id, output, parents_from=[origin, InstalledConnectors()]) == [
+        CopyStep(PARENT, origin)
+    ]
+    run_plan(plan_release_build(CHILD.dataset_id, store=output, parents_from=[origin]), output)
+    assert _parent_steps(CHILD.dataset_id, output) == []
     assert child_builds == [(CHILD.dataset_id, False)]
 
 
@@ -414,21 +448,17 @@ class _Hosted(WritableRegistry):
 _GATED = {"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
 
 
-@pytest.mark.parametrize("gated", ["child-card", "held-parent", "parent-card"])
-def test_open_access_only_refuses_a_plan_that_visits_a_release_that_is_not_open(tmp_path, monkeypatch, gated):
+def test_open_access_only_refuses_a_parent_to_build_whose_card_is_not_open(tmp_path, monkeypatch):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    gated_ref = CHILD if gated == "child-card" else PARENT
-    cards[gated_ref.dataset_id] = cards[gated_ref.dataset_id].model_copy(update=_GATED)
+    cards[PARENT.dataset_id] = cards[PARENT.dataset_id].model_copy(update=_GATED)
     store = LocalRegistry(tmp_path / "store")
-    if gated == "held-parent":
-        store.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))
 
     with pytest.raises(TimeNetAccessError) as caught:
-        plan_parents(CHILD.dataset_id, store, build_parents=True, open_access_only=True)
+        _parent_steps(CHILD.dataset_id, store, parents_from=[InstalledConnectors()], open_access_only=True)
 
     error = caught.value
-    requirement = AccessRequirement(gated_ref, Access.CREDENTIALED, _GATED["access_url"])
-    assert (error.dataset, error.access, error.requirements) == (gated_ref, Access.CREDENTIALED, (requirement,))
+    requirement = AccessRequirement(PARENT, Access.CREDENTIALED, _GATED["access_url"])
+    assert (error.dataset, error.access, error.requirements) == (PARENT, Access.CREDENTIALED, (requirement,))
 
 
 def test_open_access_only_names_the_access_page_of_a_held_parent_from_its_lineage(tmp_path, monkeypatch):
@@ -441,7 +471,7 @@ def test_open_access_only_names_the_access_page_of_a_held_parent_from_its_lineag
     store.put_dataset(held)
 
     with pytest.raises(TimeNetAccessError) as caught:
-        plan_parents(CHILD.dataset_id, store, build_parents=True, open_access_only=True)
+        _parent_steps(CHILD.dataset_id, store, parents_from=[InstalledConnectors()], open_access_only=True)
 
     assert (caught.value.dataset, caught.value.access) == (PARENT, Access.CREDENTIALED)
     assert caught.value.requirements == (AccessRequirement(GRAND, Access.CREDENTIALED, _GATED["access_url"]),)
@@ -553,39 +583,6 @@ def test_load_copies_a_missing_payload_source_through_fetch_from(tmp_path, monke
 
     assert out.exists(GRAND.dataset_id, str(GRAND.version))
     assert len(dataset.records) == 2
-
-
-class _NoDownloads(_Hosted):
-    """A registry that is not local and fails the test if a file is read from it."""
-
-    def open_file(self, dataset_id, version, relpath):
-        pytest.fail(f"downloaded {dataset_id}@{version}/{relpath}")
-
-
-@pytest.mark.parametrize("page", ["own", "ancestor"])
-def test_a_fetch_of_a_release_that_is_not_open_fails_before_any_download(tmp_path, monkeypatch, page):
-    cards = _install_cards(monkeypatch, child={"grand": GRAND, "parent": PARENT}, parent={})
-    origin = _NoDownloads(tmp_path / "origin")
-    # GRAND is open and would be fetched first.
-    origin.put_dataset(make_dataset())
-    ancestor = DatasetRef.parse("test/ancestor@1.0.0")
-    if page == "own":
-        parent, requirement = TimeFDataset(metadata=cards[PARENT.dataset_id].model_copy(update=_GATED)), PARENT
-    else:
-        # The card of PARENT stays open. Its lineage holds an ancestor, which is credentialed.
-        parent = TimeFDataset(metadata=cards[PARENT.dataset_id])
-        card = make_dataset().metadata.model_copy(update={"dataset_id": ancestor.dataset_id, **_GATED})
-        parent._import_state.lineage[str(ancestor)] = ParentDatasetCard(metadata=card)
-        requirement = ancestor
-    origin.put_dataset(parent)
-    output = LocalRegistry(tmp_path / "out")
-
-    with pytest.raises(TimeNetAccessError) as caught:
-        build_release(CHILD.dataset_id, store=output, fetch_from=origin)
-
-    assert caught.value.dataset == PARENT
-    assert caught.value.requirements == (AccessRequirement(requirement, Access.CREDENTIALED, _GATED["access_url"]),)
-    assert not output.exists(GRAND.dataset_id, str(GRAND.version))
 
 
 def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, monkeypatch):
@@ -763,3 +760,129 @@ def test_force_is_a_usage_error_if_the_remote_out_holds_the_version(tmp_path, mo
     assert "a published version never changes" in " ".join(output.replace("│", " ").split())
     assert calls == [(CHILD.dataset_id, False)]
     assert _files(local.root) == held
+
+
+def test_the_plan_drops_the_store_from_parents_from(tmp_path, monkeypatch):
+    _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
+    store = LocalRegistry(tmp_path / "store")
+
+    # The list holds the store itself and another registry over its directory. The plan drops both,
+    # so the error names the store once.
+    with pytest.raises(TimeNetMissingParentError) as missing:
+        _parent_steps(CHILD.dataset_id, store, parents_from=[store, LocalRegistry(store.root)])
+
+    assert missing.value.searched == str(store)
+
+
+def test_a_parent_that_a_registry_lists_without_serving_is_built_by_the_connectors(tmp_path, monkeypatch):
+    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
+    hosted = _Hosted(tmp_path / "hosted")
+    hosted.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id].model_copy(update=_GATED)))
+    output = LocalRegistry(tmp_path / "out")
+
+    steps = _parent_steps(CHILD.dataset_id, output, parents_from=[hosted, InstalledConnectors()])
+
+    assert steps == [_build(PARENT)]
+    # Without the connectors, the plan names the access page of the release.
+    with pytest.raises(TimeNetAccessError) as caught:
+        _parent_steps(CHILD.dataset_id, output, parents_from=[hosted])
+    assert caught.value.requirements == (AccessRequirement(PARENT, Access.CREDENTIALED, _GATED["access_url"]),)
+
+
+@pytest.mark.parametrize("answer", ["not-found", "not-served"])
+def test_a_damaged_copy_in_the_output_stops_the_plan_if_no_registry_serves_the_release(tmp_path, monkeypatch, answer):
+    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
+    output, hosted = LocalRegistry(tmp_path / "output"), _Hosted(tmp_path / "hosted")
+    parent = make_dataset()
+    parent._metadata = cards[PARENT.dataset_id]
+    output.put_dataset(parent)
+    (release_dir(output.root, PARENT) / "control.duckdb").write_bytes(b"cut short")
+    if answer == "not-served":
+        hosted.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id].model_copy(update=_GATED)))
+
+    # The damage, not the missing release or its access page, is what the caller must fix.
+    with pytest.raises(TimeNetFileError) as caught:
+        _parent_steps(CHILD.dataset_id, output, parents_from=[hosted])
+
+    assert caught.value.release == PARENT
+
+
+def test_the_requested_build_waits_for_a_payload_source_of_a_held_parent(tmp_path, monkeypatch):
+    _install_cards(monkeypatch, child={"declared": DECLARED})
+    output, origin = LocalRegistry(tmp_path / "output"), LocalRegistry(tmp_path / "origin")
+    origin.put_dataset(make_dataset())
+    _child_of(origin, SOURCE, GRAND, make_dataset().records[0].id)
+    _child_of(origin, DECLARED, SOURCE, 2)
+    # The output holds DECLARED, but not SOURCE, whose files DECLARED reads.
+    shutil.copytree(release_dir(origin.root, DECLARED), release_dir(output.root, DECLARED))
+
+    plan = plan_release_build(CHILD.dataset_id, store=output, parents_from=[origin])
+
+    # DECLARED has no step, so the build of CHILD waits for the step of SOURCE behind it.
+    assert plan.steps == (
+        CopyStep(SOURCE, origin, with_payload_sources=False),
+        _build(CHILD, depends_on=(SOURCE,)),
+    )
+
+
+@pytest.mark.parametrize(
+    ("entry", "hint"), [("cli", "Build it with --build-parents."), ("api", "Copy it with fetch_from=<registry>.")]
+)
+def test_the_hint_names_only_the_option_that_the_build_did_not_use(tmp_path, monkeypatch, entry, hint):
+    # No registry holds the parent, and no installed connector builds it. The CLI build uses
+    # --fetch-from, and the API build uses build_parents=True.
+    cards = _install_cards(monkeypatch, child={"parent": PARENT})
+    monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    out = tmp_path / "out"
+
+    if entry == "cli":
+        options = ["--fetch-from", str(tmp_path / "origin")]
+        error = runner.invoke(app, ["build", CHILD.dataset_id, "--out", str(out), *options]).exception
+    else:
+        with pytest.raises(TimeNetMissingParentError) as caught:
+            timenet_connectors.build(CHILD.dataset_id, out=out, build_parents=True)
+        error = caught.value
+
+    assert isinstance(error, TimeNetMissingParentError)
+    assert error.hint == hint
+
+
+def _count_reads(monkeypatch, registry) -> dict[str, int]:
+    """Count each manifest that is read from a registry, by release."""
+    reads, get_manifest = {}, registry.get_manifest
+
+    def counted(dataset_id, version=None):
+        reads[f"{dataset_id}@{version}"] = reads.get(f"{dataset_id}@{version}", 0) + 1
+        return get_manifest(dataset_id, version)
+
+    monkeypatch.setattr(registry, "get_manifest", counted)
+    return reads
+
+
+def test_a_plan_reads_each_manifest_once_from_each_registry(tmp_path, monkeypatch, child_builds):
+    # SOURCE is a declared parent and a payload source of DECLARED, so the walk meets it twice. The
+    # registry answers for SOURCE first as the payload source.
+    parents = {"declared": DECLARED, "source": SOURCE}
+    _install_cards(monkeypatch, child=parents)
+    layout = LocalRegistry(tmp_path / "hosted")
+    layout.put_dataset(make_dataset())
+    _child_of(layout, SOURCE, GRAND, make_dataset().records[0].id)
+    _child_of(layout, DECLARED, SOURCE, 2)
+    hosted, output = _Hosted(layout.root), LocalRegistry(tmp_path / "output")
+    hosted_reads, output_reads = _count_reads(monkeypatch, hosted), _count_reads(monkeypatch, output)
+
+    plan = plan_release_build(CHILD.dataset_id, store=output, parents_from=[hosted])
+
+    assert plan.steps[:-1] == tuple(CopyStep(reference, hosted) for reference in parents.values())
+    # The registry that is not local answers through its manifest, and the plan reads that manifest
+    # only once.
+    assert hosted_reads == {str(reference): 1 for reference in (DECLARED, SOURCE, GRAND)}
+    # The output is read for the requested release too, which it does not hold.
+    assert output_reads == {str(reference): 1 for reference in (CHILD, DECLARED, SOURCE)}
+    hosted_reads.clear()
+    run_plan(plan, output)
+    # Each copy reads the manifests of its release and of the payload sources that it brings once
+    # more, from the registry as it is when the copy runs. SOURCE is in both copies.
+    assert hosted_reads == {str(DECLARED): 1, str(SOURCE): 2, str(GRAND): 1}
+    assert child_builds == [(CHILD.dataset_id, False)]
