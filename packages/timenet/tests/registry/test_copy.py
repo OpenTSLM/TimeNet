@@ -26,8 +26,7 @@ from timenet.errors import (
 from timenet.manifest import PayloadSource
 from timenet.progress import ProgressEvent, StepFinished, StepStarted
 from timenet.reader import TimeFReader
-from timenet.registry import LocalRegistry, RemoteRegistry, WritableRegistry, open_local_version
-from timenet.registry.copy import copy_release
+from timenet.registry import LocalRegistry, RemoteRegistry, WritableRegistry, copy_release, open_local_version
 from timenet.registry.shared import complete_copy
 from timenet.testing import make_dataset
 from timenet.types import Access, Annotation, DatasetMetadata, DatasetSchema, License, TimeSeriesSpec, Version, ureg
@@ -450,5 +449,5 @@ def test_copy_release_refuses_to_fetch_a_release_that_is_not_open_from_a_registr
 
 
 def test_copy_release_imports_nothing_from_timenet_connectors():
-    code = "import sys, timenet.registry.copy; assert 'timenet_connectors' not in sys.modules"
+    code = "import sys; from timenet.registry import copy_release; assert 'timenet_connectors' not in sys.modules"
     subprocess.run([sys.executable, "-c", code], check=True)

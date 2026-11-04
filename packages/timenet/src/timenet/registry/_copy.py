@@ -1,8 +1,10 @@
-"""Copy a release and every payload source that it needs from one registry to another.
+"""Copy a release from one registry to another, with each release whose payload files it reads.
 
-A registry holds the payload sources of every release that it holds. A published version cannot
-change. So a copy never replaces a release that the destination already holds with other files. It
-raises :class:`~timenet.errors.TimeNetVersionConflictError` instead, before it copies anything.
+A release can read payload files, such as Signal values, that another release stores. That other
+release is a payload source. A copy brings each payload source along, so that the destination can
+open the copied release. A published version cannot change. So a copy never replaces a release that
+the destination already holds with other files. It raises
+:class:`~timenet.errors.TimeNetVersionConflictError` instead, before it copies anything.
 """
 
 from pathlib import Path
@@ -59,10 +61,10 @@ def copy_release(
       holds the release complete, because it publishes a version only as a whole.
     - If ``dest`` holds the version with other files, it raises an error before it copies anything.
 
-    A registry that is not local serves files only for releases whose card and lineage declare
-    access ``open``. So if ``dest`` is not local, each release of the copy must be open. If
-    ``source`` is not local, each release that this function fetches from it must be open. This
-    function checks the access with the other checks, before it copies anything.
+    A non-local registry serves files only for releases whose card and lineage declare access
+    ``open``. So if ``dest`` is non-local, each release of the copy must be open. If ``source`` is
+    non-local, each release that this function fetches from it must be open. This function makes
+    sure that each of these releases is open before it copies anything.
 
     Args:
         reference: The exact release to copy.
@@ -74,8 +76,8 @@ def copy_release(
     Raises:
         TimeNetVersionConflictError: If ``dest`` holds the release, or a payload source that it needs, with
             other files. Nothing is copied then.
-        TimeNetAccessError: If ``dest`` is not local and a release of the copy is not open, or if
-            ``source`` is not local and a release that this function fetches from it is not open. A
+        TimeNetAccessError: If ``dest`` is non-local and a release of the copy is not open, or if
+            ``source`` is non-local and a release that this function fetches from it is not open. A
             release is open if its card and each card in its lineage declare access ``open``. Nothing
             is copied then.
         TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
@@ -92,8 +94,8 @@ def copy_release(
     _check_access(manifests, set(pending), source, dest)
     if not pending:
         return
-    # Only a copy from a source that is not local to a dest that is not local downloads into this
-    # directory, each pending release on its own.
+    # Only a copy from a non-local source to a non-local dest downloads into this directory, each
+    # pending release on its own.
     with tempfile.TemporaryDirectory(prefix="timenet-copy-", ignore_cleanup_errors=True) as staging:
         for ref in pending:
             if progress is not None:
@@ -113,7 +115,7 @@ def _copy_one(
         manifest: The manifest of the release in ``source``.
         source: The registry to copy from.
         dest: The registry to copy to.
-        staging: A temporary directory for a download from a ``source`` that is not local.
+        staging: A temporary directory for a download from a non-local ``source``.
     """
     if isinstance(dest, LocalRegistry):
         prepare_local_copy(dest.local_root, reference, fetch_from=source, manifest=manifest)
@@ -132,7 +134,7 @@ def _copy_one(
 def _check_access(
     manifests: dict[DatasetRef, Manifest], fetched: set[DatasetRef], source: BaseRegistry, dest: WritableRegistry
 ) -> None:
-    """Refuse a release that is not open for a registry that is not local and must serve it.
+    """Refuse a release that is not open for a non-local registry that must serve it.
 
     ``dest`` serves each release of the copy. ``source`` serves each release that the copy fetches.
 
@@ -261,8 +263,8 @@ def _needs_copy(
 def _complete(reference: DatasetRef, manifest: Manifest, dest: WritableRegistry) -> bool:
     """Return whether ``dest`` holds a release complete, if it holds the release.
 
-    A registry that is not local publishes a version only as a whole, so it holds each release
-    complete. A local copy is complete if each file of the manifest is present with its recorded size.
+    A non-local registry publishes a version only as a whole, so it holds each release complete. A
+    local copy is complete if each file of the manifest is present with its recorded size.
 
     Args:
         reference: The release.
