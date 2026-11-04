@@ -6,7 +6,7 @@ import httpx
 from pydantic import ValidationError
 import pytest
 
-from timenet import builders as builders_module, client as client_module
+from timenet import client as client_module
 from timenet.client import TimeNet
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
@@ -24,7 +24,7 @@ from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import TIMENET_REGISTRY_URL, LocalRegistry, RemoteRegistry, open_local_version
-from timenet.testing import assert_datasets_equal, make_dataset
+from timenet.testing import assert_datasets_equal, install_backends, make_dataset
 from timenet.types import Access, DatasetMetadata, Domain, License, Version
 from timenet.types.access import AccessRequirement
 from timenet.types.parent_dataset_card import ParentDatasetCard
@@ -66,6 +66,9 @@ class _Builder:
 
     def __init__(self, calls):
         self.calls = calls
+
+    def dataset_ids(self):
+        return ("test/child", "timenet/hello-world")
 
     def knows(self, dataset_id):
         return True
@@ -187,7 +190,7 @@ def test_a_missing_payload_source_builds_with_its_own_connector_against_the_pins
     calls = []
     monkeypatch.setattr(_Builder, "VERSION", "2.0.0" if case == "other-version" else "1.0.0")
     monkeypatch.setattr(_Builder, "BACKEND", "zarr" if case == "differs" else "parquet")
-    monkeypatch.setattr(builders_module, "find_builder", lambda dataset_id: _Builder(calls))
+    install_backends(monkeypatch, _Builder(calls))
 
     with pytest.raises(TimeNetMissingParentError, match=r"auto_build=True\.$"):
         TimeNet(registry).open("test/child", auto_build=False)
@@ -226,7 +229,7 @@ def test_a_damaged_release_is_repaired_from_fetch_from_and_never_built_over(tmp_
     size = control.stat().st_size
     control.write_bytes(b"cut short")
     calls = []
-    monkeypatch.setattr(builders_module, "find_builder", lambda dataset_id: _Builder(calls))
+    install_backends(monkeypatch, _Builder(calls))
     monkeypatch.setattr(client_module, "find_builder", lambda dataset_id: _Builder(calls))
 
     with pytest.raises(TimeNetFileError) as caught:
