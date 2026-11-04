@@ -1,20 +1,7 @@
 """Plan and prepare the parent releases that a build needs, before any connector runs.
 
-Each connector card lists its exact parent releases under ``parents``. The planner works in two
-phases. First, it walks from the requested release through the cards and the manifests. The walk
-finds a graph with one node for each release that the build needs. Each node records what the plan
-does with the release, and the releases that it depends on. Then
-:class:`graphlib.TopologicalSorter` puts each release after the releases that it depends on, and
-finds cycles. A cycle, or a parent that the plan cannot get, fails here, before any download. If
-the steps of the plan run in this order, each release that the build opens is in place before the
-build starts. The build then only opens these releases. Each step is a :class:`Step`. Its action is
-``"copy"`` or ``"build"``, and it names the releases of the plan that it depends on.
-
-A payload source is a release whose stored files another release reads. The release that reads
-them records each file by path, size, and checksum. These records are the pins. If the plan builds
-a missing payload source, the build must write the same files. The plan gives the pins to the
-build. The build publishes the release only if the files match. Otherwise, it deletes the new files
-and raises an error.
+A plan is a list of :class:`Step` objects. Each step copies or builds one release, after the steps
+of the releases that it depends on.
 """
 
 from collections.abc import Callable, Mapping
@@ -47,9 +34,8 @@ from timenet.types.references import DatasetRef
 class Step:
     """One release that the plan copies or builds before the build of the requested release.
 
-    The output does not hold the release, or it does not hold all payload sources of the release. A
-    copy takes the release, and each payload source in its manifest that the output does not hold,
-    from another registry.
+    A copy takes the release from another registry, with each payload source in its manifest that
+    the output does not hold.
     """
 
     release: DatasetRef
@@ -57,7 +43,8 @@ class Step:
     depends_on: tuple[DatasetRef, ...] = ()
     """The releases of the plan that must be in place before this step runs."""
     pinned_by: Mapping[DatasetRef, PayloadSource] = field(default_factory=dict, hash=False)
-    """For a build: each release that already reads files of this release, with its pins on them."""
+    """For a build: each release that already reads files of this release, with its pins on them.
+    The build must publish the release only if it writes each pinned file again."""
 
 
 @dataclass(frozen=True)
@@ -94,7 +81,7 @@ class _Graph:
     releases: dict[DatasetRef, _Release] = field(default_factory=dict)
     """The nodes, in the order in which the walk found them."""
     fetched: set[DatasetRef] = field(default_factory=set)
-    """The payload sources that the plan fetches only as part of a copy of the release that reads them."""
+    """The payload sources that the plan copies only with the release that reads them."""
     pins: dict[DatasetRef, dict[DatasetRef, PayloadSource]] = field(default_factory=dict)
     """For each payload source: each release that reads its files, with its pins on them."""
 
@@ -175,12 +162,12 @@ class _Graph:
         """Make one step for each release that the plan copies or builds, in the order of :meth:`order`.
 
         Args:
-            requested: The requested release. The caller builds it, so it gets no "build" step. If
-                the output holds it, it gets a "copy" step under the same rule as an opened parent.
+            requested: The requested release, which gets no "build" step. If the output holds it, it
+                gets a "copy" step under the same rule as an opened parent.
 
         Returns:
             The steps, each after the steps of the releases that it depends on. ``depends_on`` of a
-            step holds only the dependencies that have a step in the plan.
+            step names only releases that have a step too.
 
         Raises:
             TimeFValidationError: If the releases depend on each other in a cycle.
@@ -220,19 +207,19 @@ def plan_parents(
 ) -> list[Step]:
     """Plan how to get each parent release that a build of ``dataset_id`` needs.
 
-    Prefer complete copies, then ``fetch_from``, then builds if ``build_parents`` is true.
-    An existing release needs only its payload sources unless ``force_build`` is set.
+    A build needs each declared parent with its payload sources. The plan copies a release that the
+    output does not hold from ``fetch_from`` if it can, and otherwise builds it with the installed
+    connector that declares that exact version.
 
     Args:
         dataset_id: The dataset to build.
-        output: The registry to build into.
-        fetch_from: The registry to fetch missing or damaged parents from, or ``None``.
+        output: The registry that the build writes to.
+        fetch_from: The registry to copy missing parents from, or ``None`` to copy nothing.
         build_parents: Build missing parents with their installed connectors.
         force_build: Plan the requested release's parents even if the output already holds the release.
 
     Returns:
-        The steps to copy or build parents. Each step comes after the steps of the releases that it
-        depends on.
+        The steps to copy or build parents, each after the steps of the releases that it depends on.
 
     Raises:
         LookupError: If no installed connector declares a dataset card for ``dataset_id``.
@@ -240,8 +227,11 @@ def plan_parents(
         TimeFValidationError: If parents cycle, a connector builds the wrong version, or fetching uses non-local output.
         TimeNetMissingParentError: If a parent or payload source is missing and ``build_parents`` is false.
         TimeNetDatasetNotFoundError: If a parent is missing and no installed connector builds it.
-        TimeNetFileError: If a local parent copy has a missing or resized file and cannot be fetched again.
-        TimeNetAccessError: If a release or its lineage lacks open access where a registry requires it.
+        TimeNetFileError: If a local output holds a damaged copy of a parent, and the plan cannot
+            copy the parent again.
+        TimeNetAccessError: If the output is not local and the plan visits a release whose card, or
+            a card in its lineage, does not declare ``access: open``. Also if ``fetch_from`` is not
+            local and the plan would copy such a release from it.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers of the walk
     if fetch_from is not None and not isinstance(output, LocalRegistry):
         # A registry that is not local accepts a child only if it already holds the parents. Also, a
@@ -344,17 +334,20 @@ def _locate(
 ) -> tuple[Manifest | None, Literal["copy"] | None]:
     # The damage is raised from a variable, the access error by require_open_access.
     # ruff: ignore[docstring-extraneous-exception]
-    """Find a release in ``output`` or ``fetch_from``.
+    """Find an intact copy of a release in the output, or else in ``fetch_from``.
 
-    A local copy is intact when every file has its recorded size.
+    In a local output, a copy with a missing file or a file of another size is damaged.
 
     Returns:
-        The manifest and ``None`` if the output holds an intact copy. The manifest and ``"copy"`` if
-        the plan fetches the release. ``None`` and ``None`` if the plan builds it.
+        The manifest and ``None`` if the output holds an intact copy, the manifest and ``"copy"`` if
+        ``fetch_from`` holds the release, or ``None`` and ``None`` if neither holds it.
 
     Raises:
-        TimeNetFileError: If the local copy has a missing or resized file and ``fetch_from`` lacks the release.
-        TimeNetAccessError: If the release or its lineage lacks open access where its registry requires it.
+        TimeNetFileError: If a local output holds a damaged copy, and ``fetch_from`` does not hold
+            the release.
+        TimeNetAccessError: If the card of the release, or a card in its lineage, does not declare
+            ``access: open``, and the output that holds the release, or the ``fetch_from`` registry
+            to copy it from, is not local.
     """
     manifest = _manifest(output, reference)
     damage = None
