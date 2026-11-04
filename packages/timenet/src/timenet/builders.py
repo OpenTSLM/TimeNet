@@ -34,7 +34,7 @@ class BuildOptions:
         keep_cache: Keep the raw download cache after the build.
         progress: The callback for build progress events, or ``None``.
         quiet: Suppress output from the backend and its child processes.
-        isolation: Build in an environment of its own (``"on"``) or here (``"off"``); ``None`` keeps ``TIMENET_ISOLATION``.
+        isolation: Use a separate environment (``"on"``), this process (``"off"``), or ``TIMENET_ISOLATION`` (``None``).
     """
 
     keep_cache: bool = False
