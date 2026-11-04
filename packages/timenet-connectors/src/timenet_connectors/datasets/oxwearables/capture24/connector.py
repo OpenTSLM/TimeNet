@@ -2,7 +2,8 @@
 
 CAPTURE-24 holds about a day of 100 Hz wrist acceleration from each of 151 participants, labelled from
 body-camera images and sleep diaries. A participant becomes one Record with one Source per gap-free
-segment, each with lazy ``x``, ``y`` and ``z`` signals. Each 10 s window that the authors' benchmark code
+segment, each with lazy ``x``, ``y`` and ``z`` signals and one ``activity`` annotation per run of a raw
+label. Each 10 s window that the authors' benchmark code
 keeps becomes one task per label scheme the benchmark scores. README.md explains how this follows the
 authors.
 
@@ -15,13 +16,14 @@ stay in the files until they are written, and then match the digest or fail the 
 from collections.abc import Callable, Iterator
 import csv
 from dataclasses import dataclass
-from enum import StrEnum
+from enum import StrEnum, unique
 from functools import partial
 import gzip
 import hashlib
 from itertools import pairwise
 from pathlib import Path
 import re
+from typing import TypeVar
 
 import numpy as np
 import pyarrow as pa
@@ -31,7 +33,15 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
-from timenet.types import US_PER_S, Annotation, ClassificationTask, Split, TimeInterval, TimeSeriesSpec, ureg
+from timenet.types import (
+    US_PER_S,
+    Annotation,
+    ClassificationTask,
+    Split,
+    TimeInterval,
+    TimeSeriesSpec,
+    ureg,
+)
 from timenet_connectors.download import ensure_archive, find_dir_containing
 
 
@@ -53,10 +63,53 @@ _AXES = ("x", "y", "z")
 _DEVICE = "Axivity AX3"
 _SAMPLE_RATE_HZ = 100
 _SAMPLE_PERIOD_US = US_PER_S // _SAMPLE_RATE_HZ
-# The source writes eight significant digits, more than float32 keeps.
+# The source writes eight significant digits. float32 keeps about seven, a step far below the sensor's
+# resolution, and halves the stored size.
 _SPEC = TimeSeriesSpec(
-    spec_type="acceleration", name="Wrist acceleration", unit_value=ureg.standard_gravity, dtype="float64"
+    spec_type="acceleration", name="Wrist acceleration", unit_value=ureg.standard_gravity, dtype="float32"
 )
+_SCHEME_COLUMN_PREFIX = "label:"
+
+
+@unique
+class _Key(StrEnum):
+    """The key of an annotation that this connector writes."""
+
+    SOURCE_URL = "source_url"
+    SOURCE_SHA256 = "source_sha256"
+    SUBJECT_IDS = "subject_ids"
+    AGE = "age"
+    SEX = "sex"
+    RECORDING_START_LOCAL = "recording_start_local"
+    ACTIVITY = "activity"
+    """A Source annotation that holds one run of a raw label."""
+
+
+@unique
+class _Sex(StrEnum):
+    """A participant's sex, as the connector stores it.
+
+    The values match ``Sex`` in ``timenet_connectors.demographics``, which PR #624 adds. Once it is on
+    the base, the connector uses that enum instead.
+    """
+
+    FEMALE = "female"
+    MALE = "male"
+
+
+_SEX_OF_LETTER = {"F": _Sex.FEMALE, "M": _Sex.MALE}
+"""The letter that ``metadata.csv`` writes for each sex."""
+
+
+@unique
+class _AgeBand(StrEnum):
+    """A participant's age band, as ``metadata.csv`` writes it. The authors give no exact age."""
+
+    AGE_18_29 = "18-29"
+    AGE_30_37 = "30-37"
+    AGE_38_52 = "38-52"
+    AGE_53_PLUS = "53+"
+
 
 # What the authors' prepare_data.py (``--winsec 10``) and benchmark.py fix.
 _WINDOW_US = 10 * US_PER_S
@@ -67,41 +120,76 @@ _NO_LABEL = -1
 """The code of an unlabelled sample, which the source writes as an empty field."""
 
 
+@dataclass(frozen=True)
+class _Vocabulary:
+    """The closed list of a benchmarked scheme's classes, and the dataset annotation that stores it."""
+
+    name: str
+    """The key of the dataset annotation that holds the classes, which each task's target_schema names."""
+    labels: tuple[str, ...]
+    """The scheme's classes, in string order."""
+
+
+# The classes of the two schemes that benchmark.py scores, as the label dictionary names them. Each
+# list is in string order, because a tie between classes goes to the first in string order.
+WILLETTS_SPECIFIC_2018 = _Vocabulary(
+    name="willetts_specific_2018_vocabulary",
+    labels=(
+        "bicycling",
+        "household-chores",
+        "manual-work",
+        "mixed-activity",
+        "sitting",
+        "sleep",
+        "sports",
+        "standing",
+        "vehicle",
+        "walking",
+    ),
+)
+WALMSLEY_2020 = _Vocabulary(
+    name="walmsley_2020_vocabulary", labels=("light", "moderate-vigorous", "sedentary", "sleep")
+)
+
+
+@unique
 class _Scheme(StrEnum):
-    """A label scheme the authors' benchmark.py scores. The dictionary has four more, which have no tasks."""
+    """A label scheme of the label dictionary, in the file's column order."""
 
     WILLETTS_SPECIFIC_2018 = "WillettsSpecific2018"
+    WILLETTS_MET_2018 = "WillettsMET2018"
+    DOHERTY_SPECIFIC_2018 = "DohertySpecific2018"
+    WILLETTS_2018 = "Willetts2018"
+    DOHERTY_2018 = "Doherty2018"
     WALMSLEY_2020 = "Walmsley2020"
 
     @property
     def column(self) -> str:
-        """Return the dictionary column that holds each raw label's class in this scheme."""
-        return f"label:{self.value}"
-
-    @property
-    def annotation_key(self) -> str:
-        """Return the dataset annotation that holds this scheme's classes, named by each task's target_schema."""
-        return _ANNOTATION_KEYS[self]
+        """The dictionary column that holds each raw label's class in this scheme."""
+        return f"{_SCHEME_COLUMN_PREFIX}{self.value}"
 
 
-_ANNOTATION_KEYS = {
-    _Scheme.WILLETTS_SPECIFIC_2018: "willetts_specific_2018_vocabulary",
-    _Scheme.WALMSLEY_2020: "walmsley_2020_vocabulary",
+_VOCABULARIES = {
+    _Scheme.WILLETTS_SPECIFIC_2018: WILLETTS_SPECIFIC_2018,
+    _Scheme.WALMSLEY_2020: WALMSLEY_2020,
 }
+"""The vocabulary of each scheme that the authors' benchmark.py scores. Only these schemes have tasks."""
 
 
 @dataclass(frozen=True)
 class _LabelDictionary:
-    """The label dictionary, as the windowing needs it."""
+    """The label dictionary, as the windowing and the activity annotations need it."""
 
+    raw_labels: tuple[str, ...]
+    """Each raw label, in file order."""
     code_of_raw: dict[str, int]
     """Each raw label's index, in file order."""
-    vocabularies: dict[_Scheme, tuple[str, ...]]
-    """Each scheme's distinct classes, sorted. A class's index breaks the authors' ties: ``Series.mode``
-    sorts the modes it finds, and their ``make_windows`` takes the first."""
+    scheme_classes_of_raw: tuple[dict[_Scheme, str], ...]
+    """Each raw label's class in all six schemes, as the dictionary names it."""
     class_of_raw: dict[_Scheme, np.ndarray]
-    """Each scheme's class index per raw label, plus a last entry for an unlabelled sample, so that
-    indexing with ``_NO_LABEL`` finds it."""
+    """Each benchmarked scheme's class per raw label, as an index into the scheme's vocabulary, plus a last entry for an
+    unlabelled sample, so that indexing with ``_NO_LABEL`` finds it. A class's index breaks the authors'
+    ties: ``Series.mode`` sorts the modes it finds, and their ``make_windows`` takes the first."""
 
 
 @dataclass(frozen=True)
@@ -115,17 +203,29 @@ class _Segment:
 
 
 @dataclass(frozen=True)
+class _LabelRuns:
+    """A segment's runs of one raw label: consecutive samples with the same non-empty label."""
+
+    starts_us: np.ndarray
+    """Each run's first sample's time from the recording's first sample."""
+    ends_us: np.ndarray
+    """The time one period after each run's last sample, so that a run is ``[start, end)``."""
+    codes: np.ndarray
+    """Each run's raw label, as an index into the dictionary."""
+
+
+@dataclass(frozen=True)
 class _Person:
     """A participant listed in ``metadata.csv``, with the recording that holds the samples."""
 
     pid: str
-    age: str
-    sex: str
+    age: _AgeBand
+    sex: _Sex
     path: Path
 
     @property
     def split(self) -> Split:
-        """Return the participant's split in the authors' benchmark.py."""
+        """The participant's split in the authors' benchmark.py."""
         return Split.TEST if int(self.pid.removeprefix("P")) >= _FIRST_TEST_PARTICIPANT else Split.TRAIN
 
 
@@ -136,7 +236,7 @@ class _Windows:
     first_rows: np.ndarray
     """Each kept window's first row."""
     classes: dict[_Scheme, np.ndarray]
-    """Each kept window's class per scheme, as an index into that scheme's vocabulary."""
+    """Each kept window's class per benchmarked scheme, as an index into that scheme's vocabulary."""
 
 
 @dataclass(frozen=True)
@@ -149,8 +249,11 @@ class _Participant:
     acceleration_digest: str
     """The digest of the recording's x, y and z values when it was read, which a reread must match."""
     start_local: str
-    """The first sample's timestamp, formatted by datetime.isoformat(): no zone, and a randomized date."""
+    """The first sample's published timestamp, formatted by datetime.isoformat(): no zone, a randomized
+    date, and a time of day that the authors shifted by a small random amount."""
     segments: tuple[_Segment, ...]
+    label_runs: tuple[_LabelRuns, ...]
+    """Each segment's runs of a raw label, in segment order."""
     window_starts_us: np.ndarray
     """Each kept window's first sample's time from the recording's first sample."""
     window_classes: dict[_Scheme, np.ndarray]
@@ -175,35 +278,55 @@ def _read_labels(path: Path) -> _LabelDictionary:
     """Read the label dictionary: each raw label and its class in each scheme.
 
     Returns:
-        The dictionary, as the windowing needs it.
+        The dictionary, as the windowing and the activity annotations need it.
 
     Raises:
-        TimeFFormatError: If a column is missing, a row has no value in a needed column, or a raw label is
-            listed twice.
+        TimeFFormatError: If the columns are not the raw label and the six schemes, a row has no value in a
+            column, a raw label is listed twice, or a class is not in its scheme's vocabulary.
     """
     with path.open(newline="", encoding="utf-8") as handle:
         reader = csv.DictReader(handle)
         rows = list(reader)
         header = reader.fieldnames or []
     columns = [_DICTIONARY_LABEL_COLUMN, *(scheme.column for scheme in _Scheme)]
-    if not set(columns) <= set(header):
+    if set(header) != set(columns):
         raise TimeFFormatError(f"{path}: expected the columns {columns}, got {header}")
     _require_values(path, rows, columns)
     raw_labels = [row[_DICTIONARY_LABEL_COLUMN] for row in rows]
     if len(set(raw_labels)) != len(raw_labels):
         raise TimeFFormatError(f"{path}: a raw label is listed twice")
-    vocabularies = {}
     class_of_raw = {}
-    for scheme in _Scheme:
+    for scheme, vocabulary in _VOCABULARIES.items():
         classes = [row[scheme.column] for row in rows]
-        vocabularies[scheme] = tuple(sorted(set(classes)))
-        index = {name: code for code, name in enumerate(vocabularies[scheme])}
+        unknown = sorted(set(classes) - set(vocabulary.labels))
+        if unknown:
+            raise TimeFFormatError(f"{path}: classes missing from vocabulary {vocabulary.name!r}: {unknown}")
+        index = {name: code for code, name in enumerate(vocabulary.labels)}
         class_of_raw[scheme] = np.array([index[name] for name in classes] + [len(index)], dtype=np.int16)
     return _LabelDictionary(
+        raw_labels=tuple(raw_labels),
         code_of_raw={label: code for code, label in enumerate(raw_labels)},
-        vocabularies=vocabularies,
+        scheme_classes_of_raw=tuple({scheme: row[scheme.column] for scheme in _Scheme} for row in rows),
         class_of_raw=class_of_raw,
     )
+
+
+_Parsed = TypeVar("_Parsed")
+
+
+def _parse_person_value(path: Path, line: int, column: str, value: str, parse: Callable[[str], _Parsed]) -> _Parsed:
+    """Parse one cell of ``metadata.csv``.
+
+    Returns:
+        The parsed value.
+
+    Raises:
+        TimeFFormatError: If the value is not one that the release writes.
+    """
+    try:
+        return parse(value)
+    except (KeyError, ValueError) as exc:
+        raise TimeFFormatError(f"{path}:{line}: unknown {column} {value!r}") from exc
 
 
 def _read_people(root: Path) -> list[_Person]:
@@ -213,8 +336,9 @@ def _read_people(root: Path) -> list[_Person]:
         One person per participant, in id order.
 
     Raises:
-        TimeFFormatError: If a column is missing, a row has no value in a needed column, a pid repeats, or
-            the table and the recordings don't name the same participants.
+        TimeFFormatError: If a column is missing, a row has no value in a needed column, an age or a sex is
+            not one that the release writes, a pid repeats, or the table and the recordings don't name the
+            same participants.
     """
     path = root / _METADATA_FILE
     with path.open(newline="", encoding="utf-8") as handle:
@@ -235,14 +359,20 @@ def _read_people(root: Path) -> list[_Person]:
             f"{root}: recordings missing for {sorted(set(pids) - set(recordings))}, "
             f"unlisted recordings {sorted(set(recordings) - set(pids))}"
         )
-    return [
-        _Person(pid=row["pid"], age=row["age"], sex=row["sex"], path=recordings[row["pid"]])
-        for row in sorted(rows, key=lambda r: r["pid"])
+    people = [
+        _Person(
+            pid=row["pid"],
+            age=_parse_person_value(path, line, "age", row["age"], _AgeBand),
+            sex=_parse_person_value(path, line, "sex", row["sex"], _SEX_OF_LETTER.__getitem__),
+            path=recordings[row["pid"]],
+        )
+        for line, row in enumerate(rows, start=2)
     ]
+    return sorted(people, key=lambda person: person.pid)
 
 
 def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant:
-    """Read a recording: its segments, its kept windows, and a digest of its acceleration values.
+    """Read a recording: its segments, its raw label runs, its kept windows, and a digest of its acceleration values.
 
     An empty ``annotation`` field is an unlabelled sample. No other value is.
 
@@ -253,7 +383,7 @@ def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant
         TimeFFormatError: If the file can't be read, the header is wrong, the file has no rows, a timestamp is
             missing or unreadable, a step is shorter than one period, a raw label isn't in the dictionary, a
             kept window would cross a gap, or an acceleration value is missing or not finite.
-    """  # noqa: DOC502 - raised by the read helpers
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the read helpers
     path = person.path
     table = _read_table(path)
     stamps = _read_stamps(path, table)
@@ -267,6 +397,7 @@ def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant
         acceleration_digest=_digest(_axis_values(path, table)),
         start_local=table["time"][0].as_py().isoformat(),
         segments=segments,
+        label_runs=tuple(_label_runs(raw_codes, segment) for segment in segments),
         window_starts_us=offsets[windows.first_rows],
         window_classes=windows.classes,
     )
@@ -339,6 +470,28 @@ def _make_segments(stamps: np.ndarray) -> tuple[_Segment, ...]:
     return tuple(
         _Segment(first_row=start, n_values=end - start, offset_us=int(stamps[start] - stamps[0]))
         for start, end in pairwise(bounds)
+    )
+
+
+def _label_runs(raw_codes: np.ndarray, segment: _Segment) -> _LabelRuns:
+    """Find a segment's runs of one raw label. Unlabelled samples belong to no run.
+
+    A run never crosses a gap, because each segment is cut on its own. Within a segment every step is
+    one period, so a row's time is its index times the period after the segment's first sample.
+
+    Returns:
+        The segment's runs, in time order.
+    """
+    codes = raw_codes[segment.first_row : segment.first_row + segment.n_values]
+    changes = np.flatnonzero(np.diff(codes)) + 1
+    starts = np.concatenate(([0], changes))
+    ends = np.concatenate((changes, [len(codes)]))
+    labelled = codes[starts] != _NO_LABEL
+    starts, ends = starts[labelled], ends[labelled]
+    return _LabelRuns(
+        starts_us=segment.offset_us + starts * _SAMPLE_PERIOD_US,
+        ends_us=segment.offset_us + ends * _SAMPLE_PERIOD_US,
+        codes=codes[starts],
     )
 
 
@@ -423,10 +576,12 @@ def _make_windows(
         row = int(first_rows[crossing][0])
         raise TimeFFormatError(f"{path}: the window at row {row} holds 1000 samples across a gap")
     classes = {}
-    for scheme, vocabulary in labels.vocabularies.items():
-        per_sample = labels.class_of_raw[scheme][window_codes]
+    for scheme, class_of_raw in labels.class_of_raw.items():
+        per_sample = class_of_raw[window_codes]
         # Count each class per window. An unlabelled sample has a class index past the last, so no count takes it.
-        counts = np.stack([(per_sample == index).sum(axis=1) for index in range(len(vocabulary))], axis=1)
+        counts = np.stack(
+            [(per_sample == index).sum(axis=1) for index in range(len(_VOCABULARIES[scheme].labels))], axis=1
+        )
         # argmax takes the first of equal counts: the class first in string order.
         classes[scheme] = counts.argmax(axis=1).astype(np.int16)
     return _Windows(first_rows=first_rows, classes=classes)
@@ -493,23 +648,41 @@ class _OneRecording:
 def _load_segment(
     acceleration: _ReadAcceleration, participant: _Participant, segment: _Segment, column: str
 ) -> pa.Array:
-    """Return one segment's values of one acceleration column.
+    """Return one segment's values of one acceleration column, rounded to float32.
 
     Returns:
-        The segment's float64 values.
+        The segment's float32 values.
     """
     values = acceleration(participant)[column]
-    return pa.array(values[segment.first_row : segment.first_row + segment.n_values], type=pa.float64())
+    return pa.array(values[segment.first_row : segment.first_row + segment.n_values].astype(np.float32))
 
 
-def _record(participant: _Participant, acceleration: _ReadAcceleration) -> Record:
+def _activity_annotations(runs: _LabelRuns, labels: _LabelDictionary) -> Iterator[Annotation]:
+    """Turn a segment's raw label runs into one annotation per run.
+
+    Yields:
+        An annotation whose value is the raw label, whose span is the run, and whose metadata gives the
+        raw label's class in each of the six schemes, keyed by scheme name.
+    """
+    for start_us, end_us, code in zip(runs.starts_us.tolist(), runs.ends_us.tolist(), runs.codes.tolist(), strict=True):
+        yield Annotation(
+            key=_Key.ACTIVITY,
+            value=labels.raw_labels[code],
+            span=TimeInterval.micros(start_us, end_us),
+            metadata={scheme.value: name for scheme, name in labels.scheme_classes_of_raw[code].items()},
+        )
+
+
+def _record(participant: _Participant, labels: _LabelDictionary, acceleration: _ReadAcceleration) -> Record:
     """Build a participant's Record: one Source of lazy x, y and z signals per segment.
+
+    Each Source also carries the segment's raw label runs as ``activity`` annotations.
 
     Returns:
         The Record, whose values stay in the recording until read.
     """
     sources = []
-    for index, segment in enumerate(participant.segments):
+    for index, (segment, runs) in enumerate(zip(participant.segments, participant.label_runs, strict=True)):
         time_axis = RegularAxis.from_rate_hz(_SAMPLE_RATE_HZ, offset_us=segment.offset_us)
         signals = tuple(
             Signal.from_loader(
@@ -521,14 +694,22 @@ def _record(participant: _Participant, acceleration: _ReadAcceleration) -> Recor
             )
             for column in _AXES
         )
-        sources.append(Source(name=f"{_DEVICE} segment {index}", signals=signals))
+        # One constructor call checks every span, with no copy of the annotations per run.
+        sources.append(
+            Source(
+                name=f"{_DEVICE} segment {index}",
+                signals=signals,
+                annotations=tuple(_activity_annotations(runs, labels)),
+            )
+        )
     person = participant.person
-    record = Record(sources=tuple(sources), metadata={"subject_id": person.pid, "file": person.path.name})
+    record = Record(sources=tuple(sources), metadata={"file": person.path.name})
     record.add_annotations(
         (
-            Annotation(key="age", value=person.age),
-            Annotation(key="sex", value=person.sex),
-            Annotation(key="recording_start_local", value=participant.start_local),
+            Annotation(key=_Key.SUBJECT_IDS, value=[person.pid]),
+            Annotation(key=_Key.AGE, value=person.age.value),
+            Annotation(key=_Key.SEX, value=person.sex.value),
+            Annotation(key=_Key.RECORDING_START_LOCAL, value=participant.start_local),
         )
     )
     return record
@@ -537,7 +718,7 @@ def _record(participant: _Participant, acceleration: _ReadAcceleration) -> Recor
 class Capture24Connector(BaseConnector[Path]):
     """Build CAPTURE-24 from the pinned zip of its Oxford Research Archive record."""
 
-    async def download_async(self, cache_dir: Path) -> list[Path]:  # noqa: PLR6301 - the connector interface
+    async def download_async(self, cache_dir: Path) -> list[Path]:  # ruff: ignore[no-self-use] - the connector interface
         """Fetch the pinned archive, check its digest, and extract it once.
 
         Returns:
@@ -562,7 +743,7 @@ class Capture24Connector(BaseConnector[Path]):
         Raises:
             TimeFValidationError: If ``raw_refs`` isn't one directory.
             TimeFFormatError: If a table or recording is malformed.
-        """  # noqa: DOC502 - raised by the read helpers
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the read helpers
         if len(raw_refs) != 1:
             raise TimeFValidationError(f"CAPTURE-24 loads from one directory, got {raw_refs}")
         (root,) = raw_refs
@@ -570,25 +751,25 @@ class Capture24Connector(BaseConnector[Path]):
         # One participant's samples are held at a time: the first pass keeps only small results.
         participants = [_read_participant(person, labels) for person in _read_people(root)]
         acceleration = _OneRecording()
-        records = [_record(participant, acceleration) for participant in participants]
+        records = [_record(participant, labels, acceleration) for participant in participants]
 
         dataset = TimeFDataset(metadata=self.metadata())
-        for key, value in (("source_url", ARCHIVE_URL), ("source_sha256", ARCHIVE_SHA256)):
+        for key, value in ((_Key.SOURCE_URL, ARCHIVE_URL), (_Key.SOURCE_SHA256, ARCHIVE_SHA256)):
             dataset.annotate(Annotation(key=key, value=value))
         for record in records:
             dataset.add_record(record=record)
-        for scheme in _Scheme:
-            dataset.annotate(Annotation(key=scheme.annotation_key, value=list(labels.vocabularies[scheme])))
+        for vocabulary in _VOCABULARIES.values():
+            dataset.annotate(Annotation(key=vocabulary.name, value=list(vocabulary.labels)))
 
         def tasks() -> Iterator[ClassificationTask]:
             for participant, record in zip(participants, records, strict=True):
                 for window, start_us in enumerate(participant.window_starts_us.tolist()):
-                    for scheme in _Scheme:
+                    for scheme, vocabulary in _VOCABULARIES.items():
                         yield ClassificationTask(
                             inputs=(record,),
                             scope=TimeInterval.micros(start_us, start_us + _WINDOW_US),
-                            targets=(labels.vocabularies[scheme][participant.window_classes[scheme][window]],),
-                            target_schema=scheme.annotation_key,
+                            targets=(vocabulary.labels[participant.window_classes[scheme][window]],),
+                            target_schema=vocabulary.name,
                             split=participant.person.split,
                         )
 

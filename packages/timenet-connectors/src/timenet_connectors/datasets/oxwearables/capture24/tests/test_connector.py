@@ -9,7 +9,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeFFormatError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
-from timenet.types import TimeInterval
+from timenet.types import ClassificationTask, TimeInterval
 from timenet.types.text import read_value
 from timenet_connectors.datasets.oxwearables.capture24 import Capture24Connector, connector
 
@@ -77,16 +77,26 @@ def _release(tmp_path: Path) -> Path:
     return root
 
 
+def _pid(record) -> str:
+    """The participant id that a Record's ``subject_ids`` annotation holds."""
+    (pid,) = next(read_value(a.value) for a in record.annotations if a.key == "subject_ids")
+    return pid
+
+
 def _output(dataset) -> dict:
     """Everything the dataset holds, as plain values, with records keyed by participant."""
     records = {}
     for record in dataset.records:
-        records[record.metadata["subject_id"]] = {
-            "file": record.metadata["file"],
+        records[_pid(record)] = {
+            "metadata": dict(record.metadata),
             "annotations": {a.key: read_value(a.value) for a in record.annotations},
             "sources": [
                 {
                     "name": source.name,
+                    "annotations": [
+                        (a.key, read_value(a.value), a.span.start_us, a.span.exclusive_end, dict(a.metadata))
+                        for a in source.annotations
+                    ],
                     "signals": {
                         s.name: (
                             s.n_values,
@@ -105,7 +115,7 @@ def _output(dataset) -> dict:
         }
     tasks = [
         (
-            task.inputs[0].metadata["subject_id"],
+            _pid(task.inputs[0]),
             task.scope.start_us,
             task.scope.exclusive_end,
             task.target_schema,
@@ -119,37 +129,113 @@ def _output(dataset) -> dict:
 
 
 def _signals(n_values: int, offset_us: int) -> dict:
-    # No signal carries an annotation: the raw labels stay out of the dataset.
+    # No signal carries an annotation: the raw labels are on the Source.
     return dict.fromkeys(("x", "y", "z"), (n_values, offset_us, "standard_gravity", []))
 
+
+# Each fixture raw label's class in every scheme of the fixture dictionary.
+_SLEEP_CLASSES = dict.fromkeys(
+    ("WillettsSpecific2018", "WillettsMET2018", "DohertySpecific2018", "Willetts2018", "Doherty2018", "Walmsley2020"),
+    "sleep",
+)
+_SIT_CLASSES = {
+    "WillettsSpecific2018": "sitting",
+    "WillettsMET2018": "sitting",
+    "DohertySpecific2018": "sedentary-screen",
+    "Willetts2018": "sit-stand",
+    "Doherty2018": "sedentary",
+    "Walmsley2020": "sedentary",
+}
+_WALK_CLASSES = {**dict.fromkeys(_SLEEP_CLASSES, "walking"), "Walmsley2020": "light"}
+
+
+def _sleep(start_us: int, end_us: int) -> tuple:
+    return ("activity", _SLEEP, start_us, end_us, _SLEEP_CLASSES)
+
+
+def _sit(start_us: int, end_us: int) -> tuple:
+    return ("activity", _SIT, start_us, end_us, _SIT_CLASSES)
+
+
+def _walk(start_us: int, end_us: int) -> tuple:
+    return ("activity", _WALK, start_us, end_us, _WALK_CLASSES)
+
+
+_WILLETTS = connector.WILLETTS_SPECIFIC_2018.name
+_WALMSLEY = connector.WALMSLEY_2020.name
 
 # The whole converted fixture, written out by hand from the fixture rows above.
 _EXPECTED = {
     "annotations": {
         "source_url": "https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001/files/rpr76f381b",
         "source_sha256": "69740c22d3e000367988373336dc6486c10fe3f3f929811fd66e4d84861e40e2",
-        # Only the classes of the two benchmarked schemes, which the tasks' target_schema name.
-        "willetts_specific_2018_vocabulary": ["sitting", "sleep", "walking"],
-        "walmsley_2020_vocabulary": ["light", "sedentary", "sleep"],
+        # Each benchmarked scheme's whole vocabulary, which the tasks' target_schema name. It lists the
+        # classes that the fixture never uses too.
+        "willetts_specific_2018_vocabulary": [
+            "bicycling",
+            "household-chores",
+            "manual-work",
+            "mixed-activity",
+            "sitting",
+            "sleep",
+            "sports",
+            "standing",
+            "vehicle",
+            "walking",
+        ],
+        "walmsley_2020_vocabulary": ["light", "moderate-vigorous", "sedentary", "sleep"],
     },
     "records": {
         "P001": {
-            "file": "P001.csv.gz",
-            "annotations": {"age": "38-52", "sex": "F", "recording_start_local": "2016-11-13T02:18:00"},
-            "sources": [{"name": "Axivity AX3 segment 0", "signals": _signals(4500, 0)}],
+            "metadata": {"file": "P001.csv.gz"},
+            "annotations": {
+                "subject_ids": ["P001"],
+                "age": "38-52",
+                "sex": "female",
+                "recording_start_local": "2016-11-13T02:18:00",
+            },
+            "sources": [
+                {
+                    "name": "Axivity AX3 segment 0",
+                    # One run per change of raw label. The unlabelled rows 2000 to 2998 and 3000 to 3999
+                    # belong to no run, and the one labelled row 2999 is a run of its own.
+                    "annotations": [
+                        _sleep(0, 10_000_000),
+                        _sit(10_000_000, 15_000_000),
+                        _walk(15_000_000, 20_000_000),
+                        _walk(29_990_000, 30_000_000),
+                        _sleep(40_000_000, 45_000_000),
+                    ],
+                    "signals": _signals(4500, 0),
+                }
+            ],
         },
         "P100": {
-            "file": "P100.csv.gz",
-            "annotations": {"age": "30-37", "sex": "F", "recording_start_local": "2016-11-13T02:18:00"},
-            "sources": [{"name": "Axivity AX3 segment 0", "signals": _signals(1000, 0)}],
+            "metadata": {"file": "P100.csv.gz"},
+            "annotations": {
+                "subject_ids": ["P100"],
+                "age": "30-37",
+                "sex": "female",
+                "recording_start_local": "2016-11-13T02:18:00",
+            },
+            "sources": [
+                {"name": "Axivity AX3 segment 0", "annotations": [_sleep(0, 10_000_000)], "signals": _signals(1000, 0)}
+            ],
         },
         "P101": {
-            "file": "P101.csv.gz",
-            "annotations": {"age": "18-29", "sex": "M", "recording_start_local": "2016-11-13T02:18:00"},
+            "metadata": {"file": "P101.csv.gz"},
+            "annotations": {
+                "subject_ids": ["P101"],
+                "age": "18-29",
+                "sex": "male",
+                "recording_start_local": "2016-11-13T02:18:00",
+            },
             "sources": [
-                {"name": "Axivity AX3 segment 0", "signals": _signals(1500, 0)},
+                {"name": "Axivity AX3 segment 0", "annotations": [_sit(0, 15_000_000)], "signals": _signals(1500, 0)},
                 {
                     "name": "Axivity AX3 segment 1",
+                    # The run stops at the gap: each segment's runs are its own.
+                    "annotations": [_walk(_SECOND_SEGMENT_US, _SECOND_SEGMENT_US + 14_320_000)],
                     "signals": _signals(1432, _SECOND_SEGMENT_US),
                 },
             ],
@@ -157,42 +243,42 @@ _EXPECTED = {
     },
     # One task per window and scheme: WillettsSpecific2018, then Walmsley2020.
     "tasks": [
-        ("P001", 0, 10_000_000, "willetts_specific_2018_vocabulary", ("sleep",), "train"),
-        ("P001", 0, 10_000_000, "walmsley_2020_vocabulary", ("sleep",), "train"),
+        ("P001", 0, 10_000_000, _WILLETTS, ("sleep",), "train"),
+        ("P001", 0, 10_000_000, _WALMSLEY, ("sleep",), "train"),
         (
             "P001",
             10_000_000,
             20_000_000,
-            "willetts_specific_2018_vocabulary",
+            _WILLETTS,
             ("sitting",),
             "train",
         ),
-        ("P001", 10_000_000, 20_000_000, "walmsley_2020_vocabulary", ("light",), "train"),
+        ("P001", 10_000_000, 20_000_000, _WALMSLEY, ("light",), "train"),
         (
             "P001",
             20_000_000,
             30_000_000,
-            "willetts_specific_2018_vocabulary",
+            _WILLETTS,
             ("walking",),
             "train",
         ),
-        ("P001", 20_000_000, 30_000_000, "walmsley_2020_vocabulary", ("light",), "train"),
+        ("P001", 20_000_000, 30_000_000, _WALMSLEY, ("light",), "train"),
         # P100 is the last train participant and P101 the first test one.
-        ("P100", 0, 10_000_000, "willetts_specific_2018_vocabulary", ("sleep",), "train"),
-        ("P100", 0, 10_000_000, "walmsley_2020_vocabulary", ("sleep",), "train"),
-        ("P101", 0, 10_000_000, "willetts_specific_2018_vocabulary", ("sitting",), "test"),
-        ("P101", 0, 10_000_000, "walmsley_2020_vocabulary", ("sedentary",), "test"),
+        ("P100", 0, 10_000_000, _WILLETTS, ("sleep",), "train"),
+        ("P100", 0, 10_000_000, _WALMSLEY, ("sleep",), "train"),
+        ("P101", 0, 10_000_000, _WILLETTS, ("sitting",), "test"),
+        ("P101", 0, 10_000_000, _WALMSLEY, ("sedentary",), "test"),
         # The bin [3620 s, 3630 s) of the first segment's grid. Its samples start 5 ms into it, so the
         # scope does too, and ends where the segment does.
         (
             "P101",
             3_620_005_000,
             3_630_005_000,
-            "willetts_specific_2018_vocabulary",
+            _WILLETTS,
             ("walking",),
             "test",
         ),
-        ("P101", 3_620_005_000, 3_630_005_000, "walmsley_2020_vocabulary", ("light",), "test"),
+        ("P101", 3_620_005_000, 3_630_005_000, _WALMSLEY, ("light",), "test"),
     ],
 }
 
@@ -207,21 +293,21 @@ _SEGMENT_ROWS = {
 
 
 def _assert_values(dataset) -> None:
-    """Check every segment's x, y and z against the text the fixture wrote, parsed."""
+    """Check every segment's x, y and z against the text the fixture wrote, parsed and rounded to float32."""
     expected = {}
     for key, rows in _SEGMENT_ROWS.items():
-        expected[*key, "x"] = [float(f"{index * 0.001:.8f}") for index in rows]
-        expected[*key, "y"] = [float(f"{-index * 0.001:.8f}") for index in rows]
-        expected[*key, "z"] = [0.98765432] * len(rows)
+        expected[*key, "x"] = np.array([float(f"{index * 0.001:.8f}") for index in rows], dtype=np.float32)
+        expected[*key, "y"] = np.array([float(f"{-index * 0.001:.8f}") for index in rows], dtype=np.float32)
+        expected[*key, "z"] = np.full(len(rows), 0.98765432, dtype=np.float32)
     actual = {
-        (record.metadata["subject_id"], source.name, signal.name): signal.to_numpy()
+        (_pid(record), source.name, signal.name): signal.to_numpy()
         for record in dataset.records
         for source in record.sources
         for signal in source.signals
     }
     assert actual.keys() == expected.keys()
     for key, values in actual.items():
-        assert values.dtype == np.float64
+        assert values.dtype == np.float32
         np.testing.assert_array_equal(values, expected[key], err_msg=str(key))
 
 
@@ -229,6 +315,25 @@ def test_converts_the_fixture(tmp_path):
     dataset = Capture24Connector().convert([_release(tmp_path)])
     assert _output(dataset) == _EXPECTED
     _assert_values(dataset)
+
+
+def test_every_target_is_in_the_vocabulary_its_task_names(tmp_path):
+    dataset = Capture24Connector().convert([_release(tmp_path)])
+    vocabularies = {a.key: read_value(a.value) for a in dataset.annotations}
+    tasks = [task for task in dataset.iter_tasks() if isinstance(task, ClassificationTask)]
+    assert {task.target_schema for task in tasks} == {_WILLETTS, _WALMSLEY}
+    for task in tasks:
+        assert task.target_schema is not None
+        vocabulary = vocabularies[task.target_schema]
+        assert isinstance(vocabulary, list)
+        assert task.targets is not None
+        assert all(read_value(target) in vocabulary for target in task.targets)
+
+
+@pytest.mark.parametrize("vocabulary", [connector.WILLETTS_SPECIFIC_2018, connector.WALMSLEY_2020])
+def test_vocabularies_are_in_string_order(vocabulary):
+    # A tie between classes goes to the first in string order, which is the first in the vocabulary.
+    assert list(vocabulary.labels) == sorted(vocabulary.labels)
 
 
 def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
@@ -315,7 +420,7 @@ def test_malformed_recording_fails_with_its_path(tmp_path, edit, message):
 
 
 def _x_of(dataset, pid: str):
-    record = next(record for record in dataset.records if record.metadata["subject_id"] == pid)
+    record = next(record for record in dataset.records if _pid(record) == pid)
     return next(signal for signal in record.signals if signal.name == "x")
 
 
@@ -355,6 +460,28 @@ def test_metadata_and_recordings_must_name_the_same_participants(tmp_path):
         ("metadata.csv", "P101,18-29,M", "P101,18-29,", "no value for 'sex'"),
         ("metadata.csv", "P101,18-29,M", "P101,18-29", "no value for 'sex'"),
         ("annotation-label-dictionary.csv", "label:Walmsley2020", "label:Other", "expected the columns"),
+        # A scheme the connector does not know fails too, so no column is read without a check.
+        (
+            "annotation-label-dictionary.csv",
+            "label:Walmsley2020\n",
+            "label:Walmsley2020,label:Extra\n",
+            "expected the columns",
+        ),
+        # A blank class fails in a scheme that has no tasks too, because the activity annotations keep it.
+        (
+            "annotation-label-dictionary.csv",
+            "0.95,sleep,sleep,",
+            "0.95,sleep,,",
+            "no value for 'label:WillettsMET2018'",
+        ),
+        ("metadata.csv", "P101,18-29,M", "P101,18-29,X", "unknown sex 'X'"),
+        ("metadata.csv", "P101,18-29,M", "P101,52+,M", r"unknown age '52\+'"),
+        (
+            "annotation-label-dictionary.csv",
+            ",light\n",
+            ",strolling\n",
+            r"classes missing from vocabulary 'walmsley_2020_vocabulary': \['strolling'\]",
+        ),
         (
             "annotation-label-dictionary.csv",
             '"walking;17190',
