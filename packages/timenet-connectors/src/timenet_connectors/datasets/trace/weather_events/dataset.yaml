@@ -1,0 +1,42 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: trace/weather-events
+dataset_version: 1.0.0
+name: TRACE Weather Events
+description: >-
+  NOAA GHCN-h weather station windows with seven channels (temperature,
+  precipitation, relative humidity, visibility, wind components, sky cover)
+  at hourly, 4-hourly, and daily cadence, from the TRACE paper. The authors
+  publish 74,337 windows, one sample per NOAA Storm Events report, so
+  windows of different events can hold the same measurements; the dataset
+  keeps each distinct measurement window once, as 63,366 Records, and every
+  published window as its own tasks under the authors' splits. 14,446
+  pre-event windows carry a nine-class event-type classification task whose
+  rationale is the event's NOAA narrative report. 44,186 windows carry a
+  retrieval task, as in the paper's Stage 2: the authors' ChatGPT-generated
+  description, with its seven per-channel sentences, must find the window's
+  series. 9,474 windows carry a forecasting task whose target is their last
+  24 values. The authors' splits put copies of the same measurements, and
+  windows that overlap in time, in more than one split; the README
+  describes a split by time that avoids this.
+# The original NOAA sources, GHCN-hourly observations ("Use Constraints") and the Storm Events
+# Database ("Access & Use"), both list CC0-1.0 terms, but the descriptions are the TRACE authors'
+# ChatGPT-generated text. Neither the TRACE archive, its Hugging Face mirror, nor the code
+# repository states a license of its own, and the paper's CC BY-NC-ND 4.0 covers the paper only.
+# We contacted the authors to clarify whether the release can be used under CC BY 4.0.
+license: NONE
+source_url: https://drive.google.com/file/d/1hX4D91QbXa0UQlgf6Jnf-1ii96gfp1aY/view
+citation: >-
+  Chen et al. TRACE: Grounding Time Series in Context for Multimodal Embedding
+  and Retrieval. NeurIPS 2025. https://arxiv.org/abs/2506.09114
+domains:
+  - environment
+tags:
+  - classification
+  - retrieval
+  - forecasting
+  - generated-supervision
+  - weather
+  - event-prediction
+  - noaa
+  - multivariate
