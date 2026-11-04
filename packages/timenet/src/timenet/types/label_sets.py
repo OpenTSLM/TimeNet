@@ -34,7 +34,7 @@ class LabelSet(TimeFModel):
                 Label(name="rem_sleep"),
             ),
         )
-        ClassificationTask(inputs=(record,), targets=("awake",), label_set=SLEEP_STAGE)
+        ClassificationTask(inputs=(record,), targets=(SLEEP_STAGE["awake"],), label_set=SLEEP_STAGE)
 
     Each name identifies one label set in a dataset.
     """
