@@ -33,16 +33,15 @@ from timenet.types.references import DatasetRef, is_latest
 class Step:
     """One release of a plan, and what the plan does with it.
 
-    A read opens the release where it is, in the registry ``entry``. A copy takes the release from the
-    registry ``entry`` into the output, with every payload source that it needs, and a build builds it
-    with ``entry``, an :class:`~timenet.sources.InstalledConnectors`.
+    A read opens the release where it is, in the registry ``entry``. A copy takes the release from
+    the registry ``entry`` with every payload source that it needs, and a build builds it with
+    ``entry``, an :class:`~timenet.sources.InstalledConnectors`.
     """
 
     release: DatasetRef
     action: Literal["read", "copy", "build"]
     entry: ReleaseSource
-    """For a read: the registry to read from. For a copy: the registry to copy from. For a build: the
-    installed connectors."""
+    """The registry to read or copy from, or the installed connectors for a build."""
     depends_on: tuple[DatasetRef, ...] = ()
     """The releases with steps that must finish before this step runs."""
     pinned_by: Mapping[DatasetRef, PayloadSource] = field(default_factory=dict, hash=False)
@@ -89,16 +88,17 @@ class Lookups:
     """
 
     answers: dict[tuple[int, DatasetRef], Answer] = field(default_factory=dict)
-    """Each answer that the plan got, by source and release. The keys use ``id()``, because a source
-    need not be hashable. Each such source stays alive while the plan runs, because it is in a list
-    of sources."""
+    """Each answer that the plan got, by ``id()`` of the source and release. A source need not be
+    hashable, and each keyed source stays alive while the plan runs."""
     manifests: dict[tuple[int, DatasetRef], Manifest | None] = field(default_factory=dict)
-    """Each manifest that the plan used, by registry and release, or ``None`` for a release that the
-    registry does not hold. A manifest comes from the answer of the registry. The plan reads it only
-    from the output, and from a local registry, which answers from its files without a manifest."""
+    """Each manifest that the plan used, by registry and release, or ``None`` if the registry lacks
+    the release. A manifest comes from the answer of the registry, or from a read of the output or a
+    local registry."""
 
     def resolve(self, sources: Sequence[ReleaseSource], dataset_id: str, version: str | None) -> Answer:
         """Ask the sources for a release, by the rules of :mod:`timenet.sources`.
+
+        A ``Found`` is also kept under its exact version, so a "latest" release reuses its manifest.
 
         Args:
             sources: The sources, in order.
@@ -106,9 +106,7 @@ class Lookups:
             version: An exact version, or ``None`` for the latest version.
 
         Returns:
-            The answer of the first source that provides the release, or else the first
-            ``NotServed``, or else ``NotFound()``. A ``Found`` is kept under its entry and its
-            exact version, so that the manifest of a "latest" release comes from the answer too.
+            The ``Found`` answer, else the first ``NotServed``, else ``NotFound()``.
         """
         answer = resolve_release([_Remembered(source, self) for source in sources], dataset_id, version)
         if isinstance(answer, Found):
@@ -135,9 +133,7 @@ class Lookups:
     def manifest(self, registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
         """Return the manifest of a release in a registry, once in this plan.
 
-        The manifest comes from the answer of the registry, if the plan asked it and the answer
-        carries one. Else the plan reads it: from the output, and from a local registry, which
-        answers from its files.
+        The manifest comes from the answer of the registry if that carries one, else from a read.
 
         Returns:
             The manifest, or ``None`` if the registry does not hold the release.
@@ -445,8 +441,7 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
         force_build: Build the requested release again, even if the output holds it.
         open_access_only: Require ``access: open`` of each release.
         pinned_by: The releases that already read files of the requested release, with their pins.
-        lookups: The answers and the manifests that the plan got so far, if this build is part of a
-            larger plan, such as a read.
+        lookups: The answers and manifests of a larger plan, such as a read, to share.
 
     Returns:
         The requested release and ordered steps, with its own build last if needed.
@@ -511,8 +506,7 @@ def describe_searched_sources(sources: Iterable[ReleaseSource], reference: Datas
         reference: The missing release.
 
     Returns:
-        The names, joined with " or ". For the installed connectors, the name also gives the version
-        that the connector of the dataset builds, if it builds another version.
+        The names, joined with " or ", with the version that a connector builds if it is another.
     """
     names = []
     for source in sources:

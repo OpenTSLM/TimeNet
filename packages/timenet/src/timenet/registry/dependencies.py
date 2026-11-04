@@ -264,13 +264,12 @@ def open_cached_or_remote_release(
     """Open one release without its payload sources, from a complete cached copy or remotely.
 
     Args:
-        root: The cache directory, checked for a complete copy of the release before using remote files.
+        root: The cache directory to check for a complete copy first.
         reference: The exact dataset ID and version to open.
         open_remote_version: Open one remote release without its payload sources.
 
     Returns:
-        A local handle over the complete cached copy, else the remote handle. No catalogs or payload
-        files are opened here.
+        A local handle over the complete cached copy, else the remote handle.
 
     Raises:
         TimeFFormatError: If the manifest declares another release.

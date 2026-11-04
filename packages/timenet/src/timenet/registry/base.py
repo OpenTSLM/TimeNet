@@ -122,8 +122,7 @@ class BaseRegistry(ABC):
 
         Args:
             reference: The exact release.
-            manifest: The manifest of the release, if the caller already read it from this registry.
-                The registry may use it instead of reading the manifest again.
+            manifest: The manifest of the release from this registry, if you already read it.
 
         Returns:
             A handle to the manifest and files of the release, without its payload sources.

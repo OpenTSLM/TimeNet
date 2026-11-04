@@ -1,15 +1,9 @@
 """Read a release through an ordered list of sources.
 
-A read opens a release where it is. The release comes from the sources by the rules of
-:mod:`timenet.sources`: an exact version comes from the first source that provides it, and "latest"
-is the highest version that any source provides. Each payload source of the release resolves on its
-own, at its exact version, through the same list. So a release and its payload sources can come
-from different registries. If only :class:`~timenet.sources.InstalledConnectors` provides a
-release, the read builds it into the local store first, with each release that its build needs.
-
-:func:`plan_read` plans a read and checks the plan before anything runs. :func:`read_release` runs
-the copies and the builds of the plan with :func:`~timenet.coordinator.build.run_plan`, and then
-opens the release with its payload sources.
+A read opens a release where it is, and each payload source resolves on its own through the same
+list, so a release and its payload sources can come from different registries. If only
+:class:`~timenet.sources.InstalledConnectors` provides a release, the read builds it into the local
+store first.
 """
 
 from collections.abc import Mapping, Sequence
@@ -47,53 +41,28 @@ def plan_read(
 ) -> Plan:
     """Plan a read of a release, and check the plan, without running it.
 
-    The plan has one step for each release that the read needs, in run order. A registry that
-    provides the release gives a ``"read"`` step: the read opens the release there, in place. If only
-    the installed connectors provide it, the plan builds it into ``store``, as
-    :func:`~timenet.coordinator.build.plan_release_build` does with ``sources`` as the sources of its
-    parents. Each payload source of a release that the read opens in a registry resolves on its own,
-    in the same way, and it must match the pins of the release. A release that a step copies or
-    builds appears once, and the read opens it from ``store``. If two builds in the plan need one
-    release, the plan builds it once, and that build must match the pins of each release that reads
-    it. A payload source without a step, which ``store`` already holds, opens from ``store`` too.
-
-    Before any step runs, the plan checks the size of each file of each release that the read opens
-    in a local registry, and the pins on each payload source that ``store`` holds. A damaged copy in
-    ``store`` fails the read too, unless a registry provides the release, so nothing builds over it.
-    The plan and the builds that it plans share each answer and each manifest that they get, so the
-    plan asks a source for a release once.
+    A registry that provides a release gives a ``"read"`` step, and a release that only the
+    installed connectors provide gets the steps of its build into ``store``. Before any step runs,
+    the plan checks the files of each release that the read opens locally, and the pins on each
+    payload source.
 
     Args:
         dataset_id: The dataset ID.
-        version: An exact version, such as ``"1.2.0"``, or ``None``, ``""`` or ``"latest"`` for the
-            latest version.
+        version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
         sources: The sources, in order: registries and ``InstalledConnectors()``.
-        store: The local registry that copies and builds go to, or ``None`` if the read must not
-            copy or build anything.
+        store: The local registry for copies and builds, or ``None`` to copy and build nothing.
 
     Returns:
         The plan. If the requested release has a step, that step comes last.
 
     Raises:
-        TimeNetDatasetNotFoundError: If no source provides the release. The message names each
-            source.
-        TimeNetVersionUnavailableError: If no source provides the exact version, and the installed
-            connector of the dataset builds another version. Also if a source answers that the
-            installed connectors build a version that the card of the dataset does not declare.
-        TimeNetAccessError: If the first source that lists the release, or a payload source, does
-            not serve its files, and no later source provides it.
-        TimeNetMissingParentError: If no source provides a payload source, or a release that a build
-            needs. For the installed connectors, the message names the version that the connector
-            builds, if it builds another one.
-        TimeNetFileError: If a release that the read opens in a local registry, or a copy in
-            ``store`` that no registry replaces, has a missing file or a file of another size.
-        TimeFFormatError: If a payload source differs from the files that its reader pins, or if two
-            releases that read one release that the plan builds pin one of its files as different
-            files.
-        TimeFValidationError: If the read needs a build and ``store`` is ``None``, if the plan needs
-            two different steps for one release that are not two builds with the same dependencies,
-            or if a source answers with an entry that is neither a registry nor the installed
-            connectors.
+        TimeNetDatasetNotFoundError: If no source provides the release.
+        TimeNetVersionUnavailableError: If the connector of the dataset builds another version.
+        TimeNetAccessError: If a source only lists a needed release, and no later source provides it.
+        TimeNetMissingParentError: If no source provides a payload source or a parent of a build.
+        TimeNetFileError: If a release that the read opens locally, or from ``store``, is damaged.
+        TimeFFormatError: If a payload source differs from its pins, or two readers disagree on a pin.
+        TimeFValidationError: If a build has no ``store``, two steps conflict, or an entry is unknown.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the planner and the checks
     planner = _ReadPlanner(sources, store)
     planner.plan(dataset_id, version)
@@ -109,10 +78,8 @@ def read_release(
 ) -> DatasetVersion:
     """Open a release with its payload sources, after the copies and the builds that the read needs.
 
-    This function plans with :func:`plan_read`, and runs a plan that copies or builds with
-    :func:`~timenet.coordinator.build.run_plan`. A plan that only reads runs nothing, so a read
-    without a store works. Then it opens each release from the registry of its ``"read"`` step, with
-    the manifest that the plan got, else from ``store``.
+    The plan comes from :func:`plan_read`, whose errors this function raises too. A plan that only
+    reads runs nothing, so a read without a store works.
 
     Args:
         dataset_id: The dataset ID.
@@ -124,8 +91,7 @@ def read_release(
         The release, with each of its payload sources attached and checked against its pins.
 
     Raises:
-        TimeNetDatasetNotFoundError: If no source provides the release. :func:`plan_read` names this
-            error and the other errors of the plan.
+        TimeNetDatasetNotFoundError: If no source provides the release.
         TimeNetVersionConflictError: If a copy finds that ``store`` holds a release with other files.
         TimeFFormatError: If a build does not reproduce the files that other releases pin.
         TimeNetBuildError: If a build runs but fails.
@@ -215,14 +181,11 @@ class _ReadPlanner:
             pinned_by: The releases that read files of ``release``, with their pins.
 
         Returns:
-            The registry that serves the release. ``None`` if the read opens the release from the
-            store: the plan builds it there, and its steps are in the plan, or the store holds it.
+            The registry that serves the release, or ``None`` if the read opens it from the store.
 
         Raises:
-            TimeFValidationError: If the release needs a build and the read has no store, or if a
-                source answers with an entry that is neither a registry nor the installed connectors.
-            TimeNetVersionUnavailableError: If the installed connectors answer with a version that
-                the card of the dataset does not declare.
+            TimeFValidationError: If a build has no store, or an entry is of an unknown kind.
+            TimeNetVersionUnavailableError: If the connectors give a version that the card does not declare.
             TimeFFormatError: If the store holds the release with other files than a reader pins.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by check_pins
         entry = answer.entry if isinstance(answer, Found) else None
@@ -263,17 +226,12 @@ class _ReadPlanner:
     def add(self, step: Step) -> None:
         """Add a step to the end of the plan, unless the plan has one for its release.
 
-        A copy or a build of a release replaces a read of it, and the read then opens the release
-        from the store. The copy or the build moves to the end, after the steps that it depends on.
-        Two builds of a release with the same dependencies become one build, which stays where the
-        first one is, before each step that needs it. That build must match the pins of each
-        reader of both builds.
+        A copy or a build of a release replaces a read of it and moves to the end. Two builds of a
+        release with the same dependencies merge into the first one, which must match all their pins.
 
         Raises:
-            TimeFFormatError: If the two builds have readers that pin one file of the release as
-                different files.
-            TimeFValidationError: If the plan has another step for the release, which is not a read
-                that ``step`` replaces, and not a build with the same dependencies.
+            TimeFFormatError: If the readers of the two builds pin one file as different files.
+            TimeFValidationError: If the plan has another step for the release that cannot merge.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _merge_pins
         held = self.steps.get(step.release)
         if held is None:
@@ -363,12 +321,10 @@ def _merge_pins(
         second: The readers of the second build, with their pins.
 
     Returns:
-        Each reader of both builds, with its pins. A reader of both builds keeps its pins from
-        ``second``, which agree with its pins from ``first`` on each file that both pin.
+        Each reader of both builds, with its pins. A reader of both keeps its pins from ``second``.
 
     Raises:
-        TimeFFormatError: If two readers, or one reader in both builds, pin one file of the release
-            as different files. No build can then match both.
+        TimeFFormatError: If two pins name one file of the release as different files.
     """
     pinned: dict[str, tuple[DatasetRef, FilePart]] = {}
     for pins in (first, second):
