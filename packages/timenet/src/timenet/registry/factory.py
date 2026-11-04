@@ -62,16 +62,16 @@ def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None) -> Ba
 
 
 def open_writable_registry(uri: str | Path) -> WritableRegistry:
-    """Open a registry that you can publish datasets and releases to.
+    """Open a writable registry from a URI or local path.
 
     Args:
         uri: A URL, ``timenet://`` / ``s3://`` / ``file://`` URI, or local path.
 
     Returns:
-        The matching writable registry backend.
+        The writable registry for the URI or path.
 
     Raises:
-        ValueError: If the resolved backend does not support writing.
+        ValueError: If the registry does not support writing.
     """
     registry = open_registry(uri)
     if not isinstance(registry, WritableRegistry):

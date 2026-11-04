@@ -1,4 +1,4 @@
-"""Publish a complete directory in place of another with renames."""
+"""Replace a directory with a complete staging directory."""
 
 from pathlib import Path
 import shutil
@@ -6,18 +6,17 @@ import uuid
 
 
 def publish_directory(staging: Path, final: Path) -> None:
-    """Move a complete staging directory to ``final``, and replace a directory that is there.
+    """Rename ``staging`` to ``final``, replacing any existing directory.
 
-    An existing ``final`` stays in a sibling ``<name>.old-<uuid>`` directory until the new one is in
-    place, and moves back if the rename fails or stops. After a hard kill between the two renames,
-    rename ``<name>.old-<uuid>`` back to ``final`` to recover it.
+    If publishing fails, this function tries to restore the old directory. After a hard kill during
+    replacement, rename the sibling ``<name>.old-<uuid>`` directory back to ``final`` to recover it.
 
     Args:
-        staging: The complete new directory, in the same parent directory as ``final``.
-        final: The directory to publish to. Its parent must exist.
+        staging: The completed directory, with the same parent as ``final``.
+        final: The destination directory, whose parent must exist.
 
     Raises:
-        OSError: If the rename fails and the old directory cannot move back. The error names it.
+        OSError: If a rename fails, with the backup path if the old directory cannot be restored.
     """
     old = None
     if final.exists():
