@@ -250,7 +250,7 @@ def test_run_isolated_build_runs_build_release_with_the_store_and_the_pins(monke
     run_isolated_build(release, tmp_path / "store", force=True, keep_cache=True, quiet=True, pinned_by=pins)
 
     argv = captured["argv"]
-    assert argv[:4] == ["timenet-build", "--quiet", "build-release", "timenet/hello-world@1.0.0"]
+    assert argv[:4] == ["timenet-build", "--quiet", "build-prepared-release", "timenet/hello-world@1.0.0"]
     assert argv[argv.index("--store") + 1] == str(tmp_path / "store")
     assert {"--force", "--keep-cache"} <= set(argv)
     assert captured["pins"] == {"test/reader@1.0.0": pinned.model_dump(mode="json")}

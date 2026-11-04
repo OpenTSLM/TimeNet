@@ -164,7 +164,7 @@ def run_isolated_build(  # ruff: ignore[too-many-arguments]
 ) -> None:
     """Build one release into a local store, in the environment of its connector.
 
-    The child runs the hidden ``timenet-build build-release`` command. It builds only this release
+    The child runs the hidden ``timenet-build build-prepared-release`` command. It builds only this release
     and does not plan: each parent and payload source of the release must already be in the store.
     The child's stderr is streamed live and also captured, so a failed build's message carries the
     child's own error.
@@ -183,8 +183,8 @@ def run_isolated_build(  # ruff: ignore[too-many-arguments]
         TimeNetBuildError: If the child failed.
         LookupError: If no connector exists for the dataset ID.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by env_spec, not directly here)
-    # --quiet belongs to timenet-build, not to build-release, so it goes before the subcommand.
-    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build-release", str(release)]
+    # --quiet belongs to timenet-build, not to build-prepared-release, so it goes before the subcommand.
+    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build-prepared-release", str(release)]
     argv += ["--store", str(store_root), *(["--force"] if force else []), *(["--keep-cache"] if keep_cache else [])]
     spec = env_spec(release.dataset_id)
     # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
