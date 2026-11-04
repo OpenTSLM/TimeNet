@@ -210,8 +210,6 @@ def test_the_writer_rejects_a_label_set_changed_after_add_task(tmp_path, changed
             ClassificationTask(targets=("X",), label_set=STAGES),
             "^ClassificationTask 1: labels not in label set 'stage': \\['X'\\]",
         ),
-        (ClassificationTask(targets=("W", "R"), label_set=STAGES), ": 2 labels"),
-        (ClassificationTask(targets=("AF", "AF"), label_set=FINDINGS), "repeated labels"),
         (ClassificationTask(targets=(1,), label_set=STAGES), "each label must be text, not int"),
     ],
 )

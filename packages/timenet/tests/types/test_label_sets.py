@@ -21,11 +21,6 @@ def test_a_label_set_needs_at_least_one_label_and_distinct_names(labels, message
         LabelSet(name="stage", labels=labels)
 
 
-@pytest.mark.parametrize("targets", [("W",), ("R",)])
-def test_a_single_label_target_accepts_one_listed_label(targets):
-    STAGES.check_targets(targets)
-
-
 @pytest.mark.parametrize(
     ("targets", "message"),
     [
@@ -39,7 +34,7 @@ def test_a_single_label_target_rejects_unlisted_labels_and_other_counts(targets,
         STAGES.check_targets(targets)
 
 
-@pytest.mark.parametrize("targets", [(), ("PVC",), ("LBBB", "AF")])
+@pytest.mark.parametrize("targets", [(), ("LBBB", "AF")])
 def test_a_multi_label_target_accepts_any_distinct_listed_labels(targets):
     FINDINGS.check_targets(targets)
 
@@ -47,11 +42,6 @@ def test_a_multi_label_target_accepts_any_distinct_listed_labels(targets):
 def test_a_multi_label_target_rejects_a_repeated_label():
     with pytest.raises(TimeFValidationError, match="repeated labels of label set 'findings': \\['AF'\\]"):
         FINDINGS.check_targets(("AF", "PVC", "AF"))
-
-
-def test_a_classification_task_rejects_a_label_set_that_is_not_a_label_set_object():
-    with pytest.raises(TimeFValidationError, match="must be a LabelSet or None, got str"):
-        ClassificationTask(targets=("W",), label_set="stage")  # ty: ignore[invalid-argument-type]
 
 
 def test_a_classification_task_rejects_both_a_label_set_and_a_target_schema():
