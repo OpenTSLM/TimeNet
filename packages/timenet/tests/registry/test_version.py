@@ -10,7 +10,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatase
 from timenet.format.checksums import file_checksum
 from timenet.manifest import PayloadSource
 from timenet.registry import LocalRegistry, open_local_version
-from timenet.registry.dependencies import open_cached_or_remote, prepare_local_copy
+from timenet.registry.dependencies import prepare_local_copy
 from timenet.registry.shared import complete_copy
 from timenet.types.reference_keys import SourceKey
 from timenet.types.references import DatasetRef
@@ -153,14 +153,6 @@ def test_preparation_needs_only_the_direct_payload_sources(registry_root, tmp_pa
     with pytest.raises(TimeNetDatasetNotFoundError, match=rf"payload source {parent_ref} of {reference} is not in"):
         prepare_local_copy(cache, reference)
 
-    def missing_remote(ref):
-        raise TimeNetDatasetNotFoundError(f"no remote release {ref}")
-
-    with pytest.raises(
-        TimeNetDatasetNotFoundError, match=rf"payload source {parent_ref} .* is not in remote or its cache"
-    ):
-        open_cached_or_remote(cache, reference, missing_remote, searched="remote")
-
     prepare_local_copy(cache, reference, fetch_from=LocalRegistry(registry_root))
     cached_parent = cache / "timenet/hello-world/1.0.0"
     assert (cached_parent / "control.duckdb").is_file()
@@ -175,7 +167,6 @@ def test_preparation_needs_only_the_direct_payload_sources(registry_root, tmp_pa
     prepared = prepare_local_copy(cache, reference)
     assert set(prepared.payload_sources) == {SourceKey(str(parent_ref))}
     assert prepared.resolve_payload_source(SourceKey(str(parent_ref))).payload_sources == {}
-    assert open_cached_or_remote(cache, reference, missing_remote, searched="remote").payload_sources
 
 
 @pytest.mark.parametrize("suffix", ["different/ecg/2.0.0", "demo/ecg/3.0.0", "demo/ecg/latest"])

@@ -4,7 +4,7 @@ from collections.abc import Mapping, Sequence
 from typing import assert_never
 
 from timenet.builders import BuildOptions, declared
-from timenet.coordinator.plan import BuildStep, CopyStep, Plan, plan_steps
+from timenet.coordinator.plan import BuildStep, CopyStep, Plan, ReadStep, plan_steps
 from timenet.manifest import PayloadSource
 from timenet.progress import StepFinished, StepStarted
 from timenet.registry import copy_release
@@ -60,6 +60,8 @@ def plan_release_build(  # ruff: ignore[too-many-arguments]
 def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None = None) -> None:
     """Run a plan's copy and build steps in order.
 
+    A read step runs nothing, because its release stays where it is.
+
     Args:
         plan: The steps to run in dependency order.
         store: The local registry to copy and build into.
@@ -73,6 +75,9 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
     options = options or BuildOptions()
     for step in plan.steps:
         match step:
+            case ReadStep():
+                # A read opens the release where it is, so it has nothing to run.
+                pass
             case CopyStep():
                 copy_release(
                     step.release,

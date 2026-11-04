@@ -387,8 +387,6 @@ def test_opening_a_child_detects_a_forced_replace_of_its_source(tmp_path):
     message = rf"payload source test/p@1\.0\.0 differs from the release test/c@1\.0\.0 was written against: test/c@1\.0\.0 pins '{first}' as \d+ bytes"
     with pytest.raises(TimeFFormatError, match=message):
         open_local_version(child_dir)
-    with pytest.raises(TimeFFormatError, match=message):
-        LocalRegistry(tmp_path).open_version("test/c", "1.0.0")
 
 
 def test_storing_a_child_detects_a_forced_replace_of_its_source(tmp_path):
@@ -413,7 +411,7 @@ def test_a_child_is_refused_by_a_registry_that_holds_another_release_of_its_sour
     ours, foreign = LocalRegistry(tmp_path / "ours"), LocalRegistry(tmp_path / "foreign")
     ours.put_dataset(_release("test/p", [_record_in_memory("p", "Ours. " * 300, [0, 1_000])]))
     foreign.put_dataset(_release("test/p", [_record_in_memory("p", "Foreign. " * 300, [0, 3_000])]))
-    with TimeFReader(ours.open_version("test/p", "1.0.0")) as reader:
+    with TimeFReader(open_local_version(ours.root / "test/p/1.0.0")) as reader:
         loaded = reader.read()
         with pytest.raises(
             TimeFFormatError,

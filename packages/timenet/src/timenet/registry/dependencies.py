@@ -327,36 +327,30 @@ def prepare_local_copy(  # ruff: ignore[too-many-arguments]
     return attach_payload_sources(version, lambda ref: open_complete(ref, requested=False), searched=str(root))
 
 
-def open_cached_or_remote(
-    root: Path,
-    reference: DatasetRef,
-    open_remote_version: Callable[[DatasetRef], DatasetVersion],
-    *,
-    searched: str,
+def open_cached_or_remote_release(
+    root: Path, reference: DatasetRef, open_remote_version: Callable[[DatasetRef], DatasetVersion]
 ) -> DatasetVersion:
-    """Open a release and its payload sources from complete cached copies or remotely.
+    """Open one release without its payload sources, from a complete cached copy or remotely.
 
     Args:
-        root: The cache directory, checked for complete releases before using remote files.
+        root: The cache directory, checked for a complete copy of the release before using remote files.
         reference: The exact dataset ID and version to open.
         open_remote_version: Open one remote release without its payload sources.
-        searched: The remote registry, for the error that names a missing source.
 
     Returns:
-        A local or remote handle with each payload source attached and checked against its pins.
-        No catalogs or payload files are opened here.
-    """
+        A local handle over the complete cached copy, else the remote handle. No catalogs or payload
+        files are opened here.
 
-    def open_one(ref: DatasetRef) -> DatasetVersion:
-        directory = release_dir(root, ref)
-        cached = _load_complete_local_manifest(directory, ref)
-        if cached is not None:
-            return DatasetVersion(cached, pafs.LocalFileSystem(), str(directory))
-        return open_remote_version(ref)
-
-    version = open_one(reference)
+    Raises:
+        TimeFFormatError: If the manifest declares another release.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by validate_manifest_reference
+    directory = release_dir(root, reference)
+    cached = _load_complete_local_manifest(directory, reference)
+    if cached is not None:
+        return DatasetVersion(cached, pafs.LocalFileSystem(), str(directory))
+    version = open_remote_version(reference)
     validate_manifest_reference(version.manifest, reference)
-    return attach_payload_sources(version, open_one, searched=f"{searched} or its cache {root}")
+    return version
 
 
 def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-arguments]
