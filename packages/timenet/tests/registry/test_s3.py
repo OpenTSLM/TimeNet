@@ -15,7 +15,7 @@ from timenet.errors import (  # ruff: ignore[module-import-not-at-top-of-file]
     TimeNetRegistryError,
 )
 from timenet.reader import TimeFReader  # ruff: ignore[module-import-not-at-top-of-file]
-from timenet.registry import LocalRegistry, S3Registry  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.registry import LocalRegistry, S3Registry, open_local_version  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.testing import assert_datasets_equal, make_dataset  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.types import DatasetSchema, Version  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.types.references import DatasetRef  # ruff: ignore[module-import-not-at-top-of-file]
@@ -59,7 +59,9 @@ def test_put_dataset_and_remote_load_round_trip(s3_root, tmp_path, backend, entr
             assert_datasets_equal(make_dataset(), reader.read())
     else:
         assert_datasets_equal(make_dataset(), client.load(make_dataset().metadata.dataset_id))
-    assert isinstance(registry.open_version(make_dataset().metadata.dataset_id).filesystem, pafs.S3FileSystem)
+    assert isinstance(
+        registry.open_release(DatasetRef.parse("timenet/hello-world@1.0.0")).filesystem, pafs.S3FileSystem
+    )
     assert not (tmp_path / "cache" / make_dataset().metadata.dataset_id).exists()
 
 
@@ -68,7 +70,7 @@ def test_put_dataset_checks_payload_sources_against_the_bucket(s3_root, tmp_path
     local.put_dataset(make_dataset())
     # moto keeps one bucket state per process, so this test uses a prefix no other test writes.
     registry = S3Registry("s3://tn-test/payload-sources", cache_dir=tmp_path / "cache")
-    with TimeFReader(local.open_version(make_dataset().metadata.dataset_id)) as reader:
+    with TimeFReader(open_local_version(local.root / "timenet/hello-world/1.0.0")) as reader:
         parent = reader.read()
         child = TimeFDataset.from_parts(
             metadata=parent.metadata.model_copy(update={"dataset_id": "test/child"}),
@@ -104,7 +106,7 @@ def test_download_then_load_serves_from_cache(s3_root, tmp_path):
     client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
     path = client.download(dataset_id)  # boto3 GetObject per file, into the cache
     assert (path / "manifest.json").exists()
-    handle = registry.open_version(dataset_id)
+    handle = registry.open_release(DatasetRef.parse(f"{dataset_id}@1.0.0"))
     assert isinstance(handle.filesystem, pafs.LocalFileSystem)  # cache-first: no S3 reads
     assert_datasets_equal(make_dataset(), client.load(dataset_id))
 

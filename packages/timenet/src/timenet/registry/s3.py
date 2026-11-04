@@ -4,9 +4,9 @@ An ``s3://<bucket>/<prefix>`` root holds datasets under ``datasets/<dataset_id>/
 matches the hosted registry's bucket layout. The manifest's relative file paths do not change. Only
 the key prefix differs from a :class:`~timenet.registry.LocalRegistry`. Credentials, region, and an
 optional endpoint override come from boto3's default session (``AWS_*`` vars, ``AWS_PROFILE``,
-``AWS_ENDPOINT_URL``). Opening a version reads its payload sources' manifests upfront and reads remote
-payloads on demand. Complete cached releases are reused. The backend has no catalog, so listing and
-search are unsupported. Use it to publish and to fetch by an explicit ``org/name@version``.
+``AWS_ENDPOINT_URL``). Opening a version reads remote payloads on demand. Complete cached releases
+are reused. The backend has no catalog, so listing and search are unsupported. Use it to publish and
+to fetch by an explicit ``org/name@version``.
 
 boto3 is optional. Install the ``timenet[s3]`` extra to use this backend.
 """
@@ -140,13 +140,18 @@ class S3Registry(LazyReadRegistry):
             raise TimeNetDatasetNotFoundError(f"no object {relpath!r} for {dataset_id!r} version {version!r}") from exc
         return response["Body"]
 
-    def _open_remote_version(self, reference: DatasetRef) -> DatasetVersion:
+    def _open_remote_version(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
         """Bind one remote manifest to Arrow's native S3 filesystem.
 
+        Args:
+            reference: The exact release.
+            manifest: The manifest of the release, if the caller already fetched it from this registry.
+
         Returns:
-            A handle without its payload sources, which ``open_version`` attaches.
+            A handle without its payload sources.
         """
-        manifest = self.get_manifest(reference.dataset_id, str(reference.version))
+        if manifest is None:
+            manifest = self.get_manifest(reference.dataset_id, str(reference.version))
         root = f"{self._bucket}/{self._key(reference.dataset_id, str(reference.version))}"
         return DatasetVersion(manifest, self._s3_filesystem(), root)
 

@@ -104,11 +104,11 @@ def open_local_release(directory: Path, manifest: Manifest, *, sources_root: Pat
             raise TimeNetDatasetNotFoundError(f"no manifest at {source_manifest}")
         return DatasetVersion(read_manifest(source_manifest), version.filesystem, str(source_dir))
 
-    return attach_payload_sources(version, open_source, searched=str(root))
+    return attach_payload_sources(version, open_source, searched=lambda: str(root))
 
 
 def attach_payload_sources(
-    version: DatasetVersion, open_source: Callable[[DatasetRef], DatasetVersion], *, searched: str
+    version: DatasetVersion, open_source: Callable[[DatasetRef], DatasetVersion], *, searched: Callable[[], str]
 ) -> DatasetVersion:
     """Open a release's payload sources and check each against the files the release pins.
 
@@ -119,7 +119,7 @@ def attach_payload_sources(
         version: The opened release, without its payload sources.
         open_source: Open one exact release, without its payload sources. It raises
             :class:`~timenet.errors.TimeNetDatasetNotFoundError` when the release is absent.
-        searched: Where ``open_source`` looks, for the error that names a missing source.
+        searched: Describe where ``open_source`` looks, only for the error that names a missing source.
 
     Returns:
         The release with each payload source attached.
@@ -136,7 +136,7 @@ def attach_payload_sources(
         try:
             source = open_source(pinned.release)
         except TimeNetDatasetNotFoundError as error:
-            raise TimeNetMissingParentError(pinned.release, release, searched, payload_source=True) from error
+            raise TimeNetMissingParentError(pinned.release, release, searched(), payload_source=True) from error
         validate_manifest_reference(source.manifest, pinned.release)
         check_pins(release, pinned, source.manifest)
         check_file_sizes(source, pinned.files, owner=f"payload source {pinned.release} of {release}")
@@ -324,39 +324,33 @@ def prepare_local_copy(  # ruff: ignore[too-many-arguments]
         return DatasetVersion(release, pafs.LocalFileSystem(), str(directory))
 
     version = open_complete(reference, requested=True)
-    return attach_payload_sources(version, lambda ref: open_complete(ref, requested=False), searched=str(root))
+    return attach_payload_sources(version, lambda ref: open_complete(ref, requested=False), searched=lambda: str(root))
 
 
-def open_cached_or_remote(
-    root: Path,
-    reference: DatasetRef,
-    open_remote_version: Callable[[DatasetRef], DatasetVersion],
-    *,
-    searched: str,
+def open_cached_or_remote_release(
+    root: Path, reference: DatasetRef, open_remote_version: Callable[[DatasetRef], DatasetVersion]
 ) -> DatasetVersion:
-    """Open a release and its payload sources from complete cached copies or remotely.
+    """Open one release without its payload sources, from a complete cached copy or remotely.
 
     Args:
-        root: The cache directory, checked for complete releases before using remote files.
+        root: The cache directory, checked for a complete copy of the release before using remote files.
         reference: The exact dataset ID and version to open.
         open_remote_version: Open one remote release without its payload sources.
-        searched: The remote registry, for the error that names a missing source.
 
     Returns:
-        A local or remote handle with each payload source attached and checked against its pins.
-        No catalogs or payload files are opened here.
-    """
+        A local handle over the complete cached copy, else the remote handle. No catalogs or payload
+        files are opened here.
 
-    def open_one(ref: DatasetRef) -> DatasetVersion:
-        directory = release_dir(root, ref)
-        cached = _load_complete_local_manifest(directory, ref)
-        if cached is not None:
-            return DatasetVersion(cached, pafs.LocalFileSystem(), str(directory))
-        return open_remote_version(ref)
-
-    version = open_one(reference)
+    Raises:
+        TimeFFormatError: If the manifest declares another release.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by validate_manifest_reference
+    directory = release_dir(root, reference)
+    cached = _load_complete_local_manifest(directory, reference)
+    if cached is not None:
+        return DatasetVersion(cached, pafs.LocalFileSystem(), str(directory))
+    version = open_remote_version(reference)
     validate_manifest_reference(version.manifest, reference)
-    return attach_payload_sources(version, open_one, searched=f"{searched} or its cache {root}")
+    return version
 
 
 def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-arguments]
