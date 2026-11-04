@@ -559,15 +559,15 @@ def _copy_source(sources: Sequence[ReleaseSource], store: LocalRegistry, release
 
 
 def _repair_hint(release: DatasetRef, entry: ReleaseSource | None, store: LocalRegistry) -> str:
-    """Suggest how to replace a damaged release in the store.
+    """Suggest how to replace a damaged local release.
 
     Args:
         release: The damaged release.
-        entry: The available source, or ``None`` if none exists.
-        store: The store.
+        entry: A source for the release, or ``None``.
+        store: The local registry that holds the damaged release.
 
     Returns:
-        A message with a download or build command, or the reason replacement is unavailable.
+        A download or rebuild hint, or an explanation that no replacement is available.
     """
     if isinstance(entry, BaseRegistry) and not is_same_registry(entry, store):
         # A registry other than the store provides the release.
