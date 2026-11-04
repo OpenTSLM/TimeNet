@@ -35,7 +35,7 @@ ProgressCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
-    """A registry of dataset manifests, files, and searchable metadata."""
+    """A registry that provides TimeF dataset metadata, manifests, and files."""
 
     def __str__(self) -> str:
         return type(self).__name__

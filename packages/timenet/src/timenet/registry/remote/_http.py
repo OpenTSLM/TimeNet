@@ -130,10 +130,10 @@ def _reaching(where: str) -> Generator[None]:
     """Name ``where`` in the error of a request that fails on the network.
 
     Args:
-        where: The registry, or its storage, that the block sends requests to.
+        where: The registry or storage location to name in the error.
 
     Raises:
-        TimeNetRegistryError: If a request in the block cannot reach ``where``.
+        TimeNetRegistryError: If a request fails to reach ``where``.
     """
     try:
         yield
@@ -209,7 +209,7 @@ def _redirect_target(response: httpx.Response, path: str) -> str:
 
 
 class RegistryHttpClient:
-    """A thin httpx wrapper for the registry API and its presigned object URLs."""
+    """An HTTP client for the registry API and signed file URLs."""
 
     @property
     def token(self) -> str | None:
@@ -270,7 +270,7 @@ class RegistryHttpClient:
         return headers
 
     def get_text(self, path: str) -> str:
-        """GET an API path and return the raw text body (used for ``manifest.json``).
+        """Fetch the text body from a registry API path.
 
         Args:
             path: A path under ``/api/v1``.
@@ -288,7 +288,7 @@ class RegistryHttpClient:
 
         Args:
             path: A path under ``/api/v1``.
-            content: Raw request body bytes (e.g. the manifest), mutually exclusive with ``json``.
+            content: The request bytes, mutually exclusive with ``json``.
             json: A JSON-serializable body.
 
         Returns:
@@ -302,7 +302,7 @@ class RegistryHttpClient:
         return response
 
     def resolve_presigned(self, dataset_id: str, version: str, relpath: str) -> str:
-        """Resolve a file's presigned URL via the download redirect, without following it.
+        """Get a signed download URL for a dataset file.
 
         Args:
             dataset_id: The ``org/name`` id.

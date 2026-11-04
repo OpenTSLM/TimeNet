@@ -24,7 +24,7 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class LocalRegistry(WritableRegistry):
-    """Read and publish datasets in a local directory."""
+    """A registry that reads and writes datasets in a local directory."""
 
     def __init__(self, root: Path) -> None:
         """Open a local registry rooted at a directory.
