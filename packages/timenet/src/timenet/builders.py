@@ -32,10 +32,13 @@ class BuildOptions:
     Attributes:
         keep_cache: Keep the raw download cache after the build.
         progress: Receives the progress events of the build, or ``None``.
+        quiet: Ask the backend to print nothing of its own. An isolated child otherwise prints its
+            build lines and downloads to the inherited stderr.
     """
 
     keep_cache: bool = False
     progress: ProgressCallback | None = None
+    quiet: bool = False
 
 
 class BuilderBackend(Protocol):
@@ -162,11 +165,14 @@ class BuilderBackend(Protocol):
             store: The local registry to build into.
             force: Build the release again, even if ``store`` already holds it.
             pinned_by: The releases that already read files of this release, with their pins.
-            options: The options of the build that do not change its files.
+            options: The options of the build that do not change its files. The backend sends the
+                progress events of the build to ``options.progress``. If ``options.quiet`` is set,
+                the backend prints nothing of its own, also not in an isolated child.
 
         Raises:
             TimeNetDatasetNotFoundError: If this backend does not know the dataset ID of ``release``.
-            TimeFValidationError: If the connector declares another version than ``release``.
+            TimeNetVersionUnavailableError: If the connector declares another version than
+                ``release``. It is also a ``TimeFValidationError``.
             TimeFFormatError: If the build does not reproduce a pinned file. Nothing is published
                 then.
             TimeNetBuildError: If the build runs but fails.

@@ -149,7 +149,10 @@ def test_build_release_rejects_a_version_the_connector_does_not_declare(store, f
     with pytest.raises(TimeNetVersionUnavailableError) as caught:
         build_release("a/b@2.0.0", store=store)
     assert (caught.value.release, caught.value.declared) == (DatasetRef.parse("a/b@2.0.0"), REF_AB.version)
-    assert str(caught.value) == "connector for 'a/b' builds version 1.0.0, not the requested 2.0.0."
+    assert str(caught.value) == (
+        "connector for 'a/b' builds version 1.0.0, not the requested 2.0.0. "
+        "Ask for version 1.0.0, or leave out the version."
+    )
     assert fake.calls == []
 
 
