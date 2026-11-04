@@ -33,28 +33,28 @@ def copy_release(
     force: bool = False,
     progress: ProgressCallback | None = None,
 ) -> tuple[DatasetRef, ...]:
-    """Copy a release and the payload sources that it needs to another registry.
+    """Copy a release and its payload sources to another registry.
 
-    Payload sources go first, a complete copy in ``dest`` is reused, and a damaged local copy is fetched again.
-    All checks run before the first copy, so a failed check copies nothing.
+    Copy payload sources first, reuse complete copies, and repair damaged local copies.
+    Check all releases before copying any files.
 
     Args:
         reference: The exact release to copy.
         source: The registry to copy from.
         dest: The registry to copy to.
-        force: Fetch ``reference`` again, even if ``dest`` has a complete local copy.
-        progress: Receives step events for each copied release and byte counts when ``dest`` is local.
+        force: Fetch ``reference`` again even if the local destination has a complete copy.
+        progress: Receives step events for each copy and byte counts for local destinations.
 
     Returns:
-        The releases that this function copied or repaired, in the order of the copy.
+        The copied or repaired releases, in copy order.
 
     Raises:
         TimeFValidationError: If ``force`` is set and ``dest`` is not local.
-        TimeNetVersionConflictError: If ``dest`` holds a release of the copy with other files or another card.
-        TimeNetAccessError: If a release is not open and ``dest`` or ``source`` requires open access.
+        TimeNetVersionConflictError: If ``dest`` holds the same release with other files or another card.
+        TimeNetAccessError: If a release lacks open access and either registry requires it.
         TimeNetDatasetNotFoundError: If ``source`` lacks the release.
         TimeNetMissingParentError: If neither registry holds a complete payload source.
-        TimeFFormatError: If a manifest names the wrong release, a pin fails, or the payload sources form a cycle.
+        TimeFFormatError: If a manifest names the wrong release, a pin fails, or payload sources form a cycle.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     if force and not isinstance(dest, LocalRegistry):
         raise TimeFValidationError(f"force=True needs a local dest: {dest} never writes a published version again")

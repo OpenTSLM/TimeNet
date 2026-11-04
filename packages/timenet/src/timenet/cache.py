@@ -27,21 +27,21 @@ ReleaseKind = Literal["download", "build"]
 
 @dataclass(frozen=True)
 class StoredRelease:
-    """One release in the store, with its size on disk and its provenance record."""
+    """A stored release with its path, provenance record, and size on disk."""
 
     release: DatasetRef
     path: Path
     origin: Origin | None
-    """The provenance record, or ``None`` if the release has none."""
+    """The record of how the release reached the store, or ``None`` if it has no record."""
 
     @cached_property
     def size_bytes(self) -> int:
-        """The size on disk in bytes, measured when first read."""
+        """The release's size in bytes, measured once on first access."""
         return _dir_size(self.path)
 
     @property
     def kind(self) -> ReleaseKind:
-        """``"download"`` if the record says ``copy``, else ``"build"``, also for a release without a record."""
+        """The release kind: ``"download"`` for a recorded copy, or ``"build"`` otherwise."""
         return "download" if self.origin is not None and self.origin.origin == "copy" else "build"
 
 
@@ -104,18 +104,19 @@ def human_bytes(n: int) -> str:
 
 
 def stored_releases(store: LocalRegistry) -> list[StoredRelease]:
-    """List every release in the store, with its size and its provenance record.
+    """List stored releases with their provenance records and sizes.
 
-    Releases have a ``<dataset_id>/<version>/manifest.json`` file outside hidden or temporary directories.
+    Each entry has a ``manifest.json`` in a valid ``<dataset_id>/<version>`` directory.
+    Hidden directories and unfinished writes are excluded.
 
     Args:
-        store: The local registry to inspect.
+        store: The store.
 
     Returns:
         The releases, sorted by dataset ID and version.
 
     Raises:
-        TimeFFormatError: If a provenance record is damaged.
+        TimeFFormatError: If a provenance record is invalid.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by read_origin)
     root = store.root
     found: list[StoredRelease] = []
@@ -151,7 +152,7 @@ def releases_to_clear(store: LocalRegistry, *, kinds: Collection[ReleaseKind]) -
     Raises:
         TimeFValidationError: If a dataset or release folder in the store is a symlink and a kind stays.
         TimeFFormatError: If a provenance record or the manifest of a release that stays is damaged.
-        OSError: If a folder of the store cannot be read.
+        OSError: If a store folder cannot be read.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by _refuse_symlinks and stored_releases)
     if not set(get_args(ReleaseKind)) <= set(kinds) and store.root.is_dir():
         _refuse_symlinks(store.root)
@@ -235,7 +236,7 @@ def clear_cache(cache_dir: Path, *, store: LocalRegistry) -> ClearedCache:
 
 
 def clear_releases(store: LocalRegistry, *, kinds: Collection[ReleaseKind]) -> ClearedReleases:
-    """Delete the releases of the given kinds in the store, except those that a release that stays needs.
+    """Delete selected releases unless remaining releases need them.
 
     Each dataset folder that this leaves empty goes too, and other files in the store stay. A release whose
     provenance record changes during the call stays.
@@ -248,10 +249,8 @@ def clear_releases(store: LocalRegistry, *, kinds: Collection[ReleaseKind]) -> C
         The bytes freed, the release folders removed, and the releases kept with a release that needs each.
 
     Raises:
-        TimeFValidationError: If a dataset or release folder in the store is a symlink and a kind stays.
-            Nothing is deleted then.
-        TimeFFormatError: If a provenance record or the manifest of a release that stays is damaged.
-            Nothing is deleted then.
+        TimeFValidationError: Before any deletion, if a dataset or release folder is a symlink and a kind stays.
+        TimeFFormatError: Before any deletion, if a provenance record or a kept release's manifest is damaged.
         OSError: If a folder cannot be read or removed completely.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by releases_to_clear and _delete_and_measure)
     releases, kept = releases_to_clear(store, kinds=kinds)
@@ -268,9 +267,10 @@ def clear_releases(store: LocalRegistry, *, kinds: Collection[ReleaseKind]) -> C
 
 
 def _record_unchanged(store: LocalRegistry, item: StoredRelease) -> bool:
-    """Return whether the record of a release still equals the one that the check read.
+    """Check whether a release's provenance record still equals the one read before the clear.
 
-    A record that cannot be read any more counts as changed.
+    Returns:
+        ``True`` if the record is unchanged, or ``False`` if it changed or is invalid.
     """
     try:
         return read_origin(store, item.release) == item.origin
@@ -289,12 +289,12 @@ def _cache_folders(cache_dir: Path) -> list[Path]:
 
 
 def _refuse_symlinks(root: Path) -> None:
-    """Raise if a dataset or release folder in the store is a symlink, because the listing skips it.
+    """Reject symlinks in the store's dataset and release folders.
 
-    An unreadable folder raises its ``OSError``.
+    Unreadable folders raise ``OSError``.
 
     Args:
-        root: The root of the store.
+        root: The store's root directory.
 
     Raises:
         TimeFValidationError: If a dataset or release folder is a symlink.
