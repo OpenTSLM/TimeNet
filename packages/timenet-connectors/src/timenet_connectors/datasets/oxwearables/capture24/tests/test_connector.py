@@ -29,7 +29,9 @@ _SECOND_SEGMENT_US = 3_615_685_000
 
 
 def _write_recording(path: Path, rows: list[tuple[int, str]]) -> None:
-    """Write ``time,x,y,z,annotation`` rows, one per ``(offset_us, label)``, with x, y, z from the row index."""
+    """Write one ``time,x,y,z,annotation`` row per ``(offset_us, label)``.
+
+    The row index determines x and y. Every row uses the same z value."""
     with gzip.open(path, "wt", newline="", encoding="utf-8") as handle:
         handle.write("time,x,y,z,annotation\n")
         for index, (offset_us, label) in enumerate(rows):
@@ -39,7 +41,7 @@ def _write_recording(path: Path, rows: list[tuple[int, str]]) -> None:
 
 
 def _p001() -> list[tuple[int, str]]:
-    """Four bins and a half, sampled every 10 ms with no gap."""
+    """Four full bins and one half bin, sampled every 10 ms with no gap."""
     labels = (
         [_SLEEP] * 1000  # bin 0: sleep in every scheme
         + [_SIT] * 500
@@ -53,7 +55,9 @@ def _p001() -> list[tuple[int, str]]:
 
 
 def _p101() -> list[tuple[int, str]]:
-    """Two segments: 1500 samples, then 1432 after a gap, the last 1000 of them one full bin."""
+    """Two segments separated by a gap: 1500 samples, then 1432.
+
+    The last 1000 samples form one full bin."""
     first = [(index * 10_000, _SIT) for index in range(1500)]
     second = [(_SECOND_SEGMENT_US + index * 10_000, _WALK) for index in range(1432)]
     return first + second
@@ -82,7 +86,7 @@ def _pid(record) -> str:
 
 
 def _output(dataset) -> dict:
-    """Everything the dataset holds, as plain values, with records keyed by participant."""
+    """Summarize the dataset structure, annotations, and tasks as plain values, with records keyed by participant."""
     records = {}
     for record in dataset.records:
         records[_pid(record)] = {
@@ -167,8 +171,8 @@ def _walk(start_us: int, end_us: int) -> tuple:
 _WILLETTS = connector.WILLETTS_SPECIFIC_2018_VOCABULARY.name
 _WALMSLEY = connector.WALMSLEY_2020_VOCABULARY.name
 
-# A reader of the dataset alone must learn that the age is a band and that the time is shifted, so
-# both annotations carry a description. Other connectors store an exact age under the key age.
+# Descriptions tell readers that age is a band and time is shifted.
+# Other connectors store an exact age under the key age.
 _DESCRIPTIONS = {
     "age_band": "The participant's age band in years, as metadata.csv writes it. The authors give no exact age.",
     "recording_start_local": (
@@ -181,8 +185,8 @@ _DESCRIPTIONS = {
 # The whole converted fixture, written out by hand from the fixture rows above.
 _EXPECTED = {
     "annotations": {
-        # Each benchmarked scheme's whole vocabulary, which the tasks' target_schema name. It lists the
-        # classes that the fixture never uses too.
+        # Each benchmarked scheme's full vocabulary, referenced by the tasks' target_schema.
+        # This includes classes that the fixture does not use.
         "willetts_specific_2018_vocabulary": [
             "bicycling",
             "household-chores",
@@ -312,7 +316,7 @@ def test_converts_the_fixture(tmp_path):
 
 
 def test_recording_start_keeps_one_format_when_it_has_microseconds(tmp_path):
-    # isoformat() alone drops the fraction when it is zero, so two Records could differ in format.
+    # isoformat() alone drops a zero fraction, which can give Records different timestamp formats.
     root = _release(tmp_path)
     _write_recording(root / "P001.csv.gz", [(10_000 + index * 10_000, _SLEEP) for index in range(1000)])
     records = _output(Capture24Connector().convert([root]))["records"]
@@ -428,7 +432,7 @@ def test_a_release_with_no_participants_fails(tmp_path):
     ("change", "message"),
     [
         (lambda root: (root / "P101.csv.gz").unlink(), r"recordings missing for \['P101'\]"),
-        # A recording that metadata.csv does not list would otherwise be left out without a word.
+        # Reject recordings missing from metadata.csv instead of silently omitting them.
         (
             lambda root: (root / "P152.csv.gz").write_bytes((root / "P100.csv.gz").read_bytes()),
             r"unlisted recordings \['P152'\]",
@@ -448,7 +452,7 @@ def test_metadata_and_recordings_must_name_the_same_participants(tmp_path, chang
     [
         ("metadata.csv", "P101,18-29,M", "P001,18-29,M", "a pid is listed twice"),
         ("metadata.csv", "pid,age,sex", "pid,age", "expected the columns"),
-        # An extra column or an extra field would be dropped without a word, so both fail.
+        # Reject extra columns and fields instead of silently dropping them.
         ("metadata.csv", "pid,age,sex\n", "pid,age,sex,height\n", "expected the columns"),
         ("metadata.csv", "P101,18-29,M", "P101,18-29,M,180", "more fields than the header"),
         ("annotation-label-dictionary.csv", ",light\n", ",\n", "no value for 'label:Walmsley2020'"),
@@ -456,7 +460,7 @@ def test_metadata_and_recordings_must_name_the_same_participants(tmp_path, chang
         ("metadata.csv", "P101,18-29,M", "P101,18-29,", "no value for 'sex'"),
         ("metadata.csv", "P101,18-29,M", "P101,18-29", "no value for 'sex'"),
         ("annotation-label-dictionary.csv", "label:Walmsley2020", "label:Other", "expected the columns"),
-        # A scheme the connector does not know fails too, so no column is read without a check.
+        # Reject unknown schemes so that every column follows a known schema.
         (
             "annotation-label-dictionary.csv",
             "label:Walmsley2020\n",
