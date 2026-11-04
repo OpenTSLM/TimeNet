@@ -1,11 +1,13 @@
 """The single description of the control database's tables.
 
-The DDL, the writer's Arrow batch schemas, and the audit's key and relationship checks are all
-derived from :data:`CONTROL_TABLES`, so a schema change is made in one place.
+The SQL table definitions and the writer's Arrow batch schemas come from :data:`CONTROL_TABLES`.
+The audit also uses it to examine keys and references. Define schema changes there.
 
-This is version 1 of the control schema. Every table uses ids as keys. Records, Signals, and Tasks
-use the public ids that the caller sees. All other objects use the writer's storage ids. Every
-foreign key stores the id that it refers to.
+This is version 1 of the control schema. Every table except ``label_sets`` uses ids as keys.
+Records, Signals, and Tasks use the public ids that the caller sees. All other objects use the
+writer's storage ids.
+
+Each label set has a unique name in a dataset. The ``label_sets`` table uses this name as its key. A foreign key stores the key of the row that it refers to.
 
 Fixed-shape fields are typed columns, so SQL can filter them. Only the free-form ``metadata``
 dictionaries are JSON. The database has no persisted constraints. The writer keeps
@@ -35,6 +37,10 @@ class ColumnType(Enum):
     JSON = ("JSON", pa.string())
     VARCHAR_LIST = ("VARCHAR[]", pa.list_(pa.string()))
     BIGINT_LIST = ("BIGINT[]", pa.list_(pa.int64()))
+    LABEL_LIST = (
+        "STRUCT(name VARCHAR, description VARCHAR)[]",
+        pa.list_(pa.struct([("name", pa.string()), ("description", pa.string())])),
+    )
 
     def __init__(self, sql: str, arrow: pa.DataType) -> None:
         self.sql = sql
@@ -271,6 +277,21 @@ ANNOTATION_OCCURRENCES = Table(
 or Task, or the storage id of a Source. Ids are unique only within one kind, so the type is part of
 the reference. ``object_id`` is NULL exactly when the owner is the Dataset."""
 
+LABEL_SETS = Table(
+    "label_sets",
+    (
+        _required("name"),
+        _required("labels", ColumnType.LABEL_LIST),
+        _required("multi_label", ColumnType.BOOLEAN),
+    ),
+    unique=(("name",),),
+)
+"""Each row stores one label set that a classification task uses.
+
+The ``labels`` column holds one ``{name, description}`` entry per label, in label order.
+If a label has no description, ``description`` is NULL. Tasks refer to a set by its name in
+``tasks.label_set``."""
+
 TASKS = Table(
     "tasks",
     (
@@ -285,6 +306,7 @@ TASKS = Table(
         Column("scope_signal_ids", ColumnType.BIGINT_LIST),
         _required("has_inline_targets", ColumnType.BOOLEAN),
         Column("target_schema", ColumnType.VARCHAR),
+        Column("label_set", ColumnType.VARCHAR),
         Column("unit", ColumnType.VARCHAR),
         Column("target_name", ColumnType.VARCHAR),
         Column("mode", ColumnType.VARCHAR),
@@ -292,7 +314,10 @@ TASKS = Table(
         _required("metadata", ColumnType.JSON),
     ),
     unique=(("task_id",),),
-    foreign_keys=(ForeignKey("scope_signal_ids", "signals", "signal_id", many=True),),
+    foreign_keys=(
+        ForeignKey("scope_signal_ids", "signals", "signal_id", many=True),
+        ForeignKey("label_set", "label_sets", "name"),
+    ),
 )
 
 TASK_TARGETS = Table(
@@ -414,6 +439,7 @@ CONTROL_TABLES: tuple[Table, ...] = (
     SIGNAL_CHUNKS,
     ANNOTATION_CONTENTS,
     ANNOTATION_OCCURRENCES,
+    LABEL_SETS,
     TASKS,
     TASK_TARGETS,
     TASK_RECORD_REFS,

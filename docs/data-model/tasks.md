@@ -12,12 +12,14 @@ A Task describes one modeling problem. It holds ordered input Records and one re
 expected output.
 
 ```python
-from timenet.types import ClassificationTask
+from timenet.types import ClassificationTask, Label, LabelSet
+
+CONDITION = LabelSet(name="condition", labels=(Label(name="healthy"), Label(name="faulty")))
 
 task = ClassificationTask(
     inputs=(record,),
     targets=("faulty",),
-    target_schema="condition",
+    label_set=CONDITION,
 )
 dataset.add_task(task=task)
 ```
@@ -203,14 +205,39 @@ dataset.add_task(task=age_question(record, 64))
 ### Classification
 
 ```python
-ClassificationTask(
-    inputs=(record,),
-    targets=("healthy",),
-    target_schema="condition",
+from timenet.types import Label, LabelSet
+
+CONDITION = LabelSet(
+    name="condition",
+    labels=(Label(name="healthy"), Label(name="faulty", description="A bearing fault.")),
 )
+FINDINGS = LabelSet(
+    name="findings",
+    labels=(Label(name="AF"), Label(name="PVC"), Label(name="LBBB")),
+    multi_label=True,
+)
+
+ClassificationTask(inputs=(record,), targets=("healthy",), label_set=CONDITION)
+ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS)
 ```
 
-`target_schema` can name a dataset-level Annotation that holds the label vocabulary.
+A `LabelSet` defines the allowed labels for a classification target. The `multi_label` flag controls
+how many labels a target can contain.
+
+If `multi_label=False`, the default, a target must contain exactly one label. If `multi_label=True`,
+a target contains all labels that apply. Omitted labels do not apply. An empty target means that no
+label applies. The order of labels does not matter.
+
+When the dataset adds or streams a task, it makes sure that the target follows the rules of its
+label set. Each label must be in the set. No label can repeat. A target with `multi_label=False`
+must contain exactly one label.
+
+Labels come from the targets stored directly on the task or from the text of its target
+annotations. If a task has no label set, TimeNet does not examine its labels.
+
+Tasks can share the same label set object. Each name identifies one label set within a dataset.
+If two different sets have the same name, `add_task()`, the task stream, and the writer raise an
+error. TimeF stores each set once. The reader gives tasks that use the same set a shared object.
 
 ### Answer and rationale
 

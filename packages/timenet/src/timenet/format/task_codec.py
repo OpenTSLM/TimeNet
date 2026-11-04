@@ -57,8 +57,11 @@ ANNOTATION_FIELDS = frozenset({TaskRelationshipField.INPUT_ANNOTATIONS, TaskRela
 """The fields stored in ``task_annotation_refs``."""
 
 
-PAYLOAD_COLUMNS = ("target_schema", "unit", "target_name", "mode")
-"""The ``tasks`` columns that hold subclass-specific configuration. Unused ones are NULL."""
+PAYLOAD_COLUMNS = ("target_schema", "label_set", "unit", "target_name", "mode")
+"""The ``tasks`` columns that hold configuration for each task type.
+
+Unused columns are NULL. A classification task stores its label set name in ``label_set``.
+The ``label_sets`` table stores the set itself."""
 
 
 def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality]:
@@ -181,6 +184,7 @@ def encode_task_payload(task: Task) -> dict[str, str | None]:
     columns: dict[str, str | None] = dict.fromkeys(PAYLOAD_COLUMNS)
     if isinstance(task, ClassificationTask):
         columns["target_schema"] = task.target_schema
+        columns["label_set"] = None if task.label_set is None else task.label_set.name
     elif isinstance(task, ScalarPredictionTask):
         columns["unit"] = None if task.unit is None else str(task.unit)
         columns["target_name"] = task.target_name

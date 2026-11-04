@@ -13,6 +13,7 @@ from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._fields import ValueField
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import EntityId, assigned_id
+from timenet.types.label_sets import LabelSet, LabelSetRegistry
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
@@ -355,15 +356,93 @@ class Task(SupportsAnnotate):
     def check_against_scope(self) -> None:
         """Validate configuration that depends on the finalized scope."""
 
+    def check_targets(self) -> None:
+        """Make sure that the final targets follow the rules of this task class."""
+
+    def register_label_set(self, label_sets: LabelSetRegistry) -> None:
+        """Add the label set of the task to the dataset's label sets.
+
+        Only a classification task has a label set.
+
+        Args:
+            label_sets: The label sets of the dataset so far.
+        """
+
 
 @final
 @dataclass(kw_only=True)
 class ClassificationTask(Task):
-    """Classify the inputs, optionally using a named label vocabulary."""
+    """Classify the inputs with an optional set of allowed labels."""
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
+    label_set: LabelSet | None = None
+    """The allowed labels and whether a target can contain more than one label.
+
+    If this is ``None``, TimeNet does not examine the labels."""
     target_schema: str | None = None
-    """Optional name of the label vocabulary."""
+    """Deprecated name of the set of allowed labels. Use ``label_set``, which also holds the labels."""
+
+    def __post_init__(self) -> None:
+        """Set the common fields to their standard form and make sure that the label set has the right type.
+
+        Raises:
+            TimeFValidationError: If ``label_set`` is neither a LabelSet nor ``None``, or if the task
+                sets both ``label_set`` and the deprecated ``target_schema``.
+        """
+        super().__post_init__()
+        if self.label_set is not None and not isinstance(self.label_set, LabelSet):
+            raise TimeFValidationError(
+                f"ClassificationTask label_set must be a LabelSet or None, got {type(self.label_set).__name__}"
+            )
+        if self.label_set is not None and self.target_schema is not None:
+            raise TimeFValidationError(
+                "ClassificationTask sets both label_set and the deprecated target_schema. Set only label_set"
+            )
+
+    def check_targets(self) -> None:
+        """Make sure that the target labels follow the rules of the label set.
+
+        The labels come from the targets stored directly on the task or from its target annotations.
+        Each label must be text.
+        If the task has no label set, this method does nothing.
+
+        After the targets are final, the dataset calls this method when it adds or streams the task.
+
+        Raises:
+            TimeFValidationError: If a label is not text or the labels break a rule of the label set.
+        """
+        if self.label_set is None:
+            return
+        name = f"ClassificationTask {self.id!r}"
+        values = self.targets if self.targets is not None else [one.value for one in self.target_annotations]
+        labels: list[str] = []
+        for value in values:
+            if not isinstance(value, TextHandle):
+                raise TimeFValidationError(
+                    f"{name} has label set {self.label_set.name!r}, so each label must be text, "
+                    f"not {type(value).__name__}"
+                )
+            labels.append(value.read())
+        try:
+            self.label_set.check_targets(labels)
+        except TimeFValidationError as exc:
+            raise TimeFValidationError(f"{name}: {exc}") from exc
+
+    def register_label_set(self, label_sets: LabelSetRegistry) -> None:
+        """Add the label set of the task to the dataset's label sets.
+
+        Args:
+            label_sets: The label sets of the dataset so far.
+
+        Raises:
+            TimeFValidationError: If a different set already has the same name.
+        """
+        if self.label_set is None:
+            return
+        try:
+            label_sets.register_or_reuse_matching_label_set(self.label_set)
+        except TimeFValidationError as exc:
+            raise TimeFValidationError(f"ClassificationTask {self.id!r}: {exc}") from exc
 
 
 @final

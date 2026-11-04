@@ -39,6 +39,7 @@ from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
     ArrayHandle,
+    LabelSetRegistry,
     ObjectKind,
     Task,
     TSCorrespondenceTask,
@@ -474,26 +475,27 @@ class DuckDBControlWriter:
         annotations: list[tuple[ObjectKind, int | None, Annotation]],
         tasks_source: Iterable[Task],
     ) -> tuple[dict[str, int], list[_AnnotationRef]]:
-        """Insert tasks and their relationships, one bounded batch at a time.
+        """Insert tasks and their relationships in batches of limited size.
 
         A dependency can name a task that the writer writes later. So the writer checks and stores
         dependencies after it writes every task. The method returns the annotation references,
         because occurrences get their ids only when :meth:`_write_annotations` writes them.
 
         Returns:
-            Counts keyed by concrete task type, and the annotation references.
+            The number of tasks of each type, and the annotation references.
 
         Raises:
-            TimeFValidationError: If a task refers to a Record or Signal outside the dataset, or to
-                a Record or Signal object that the dataset did not register under that id. Also if
-                two tasks share an id, or a task derives from a task that is not in the dataset or
-                from itself.
+            TimeFValidationError: If a task refers to a Record or Signal outside the dataset.
+                Also if the dataset registered a different Record or Signal object under that id.
+                Also if two tasks share an id, or a task derives from itself or a task outside the dataset.
+                Also if two tasks use different label sets with the same name.
         """
         # Weak: if no other task names a streamed task, Python can free it after the writer writes it.
         written: WeakValueDictionary[int, Task] = WeakValueDictionary()
         dependencies: list[tuple[int, int, Task]] = []
         annotation_refs: list[_AnnotationRef] = []
         task_counts: dict[str, int] = {}
+        label_sets = LabelSetRegistry()
         index = _TaskValidationIndex(dataset)
         for batch in _task_batches(tasks_source):
             task_rows: list[dict[str, object]] = []
@@ -502,6 +504,9 @@ class DuckDBControlWriter:
             for task in batch:
                 TimeFDataset._check_record_refs(task, index)
                 TimeFDataset._check_signal_refs(task, index)
+                # A task can change after add_task, so check its labels and its label set again.
+                task.check_targets()
+                task.register_label_set(label_sets)
                 task_id = task.id
                 written[task_id] = task
                 task_type = str(task.task_type)
@@ -551,6 +556,8 @@ class DuckDBControlWriter:
             insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
             # Store this batch's locators now, so a streamed task source never holds them all.
             self.external.write_locators(connection)
+        # Tasks refer to a label set by its name, so the sets can follow the tasks that use them.
+        insert_rows(connection, TABLES["label_sets"], [label_set.model_dump() for label_set in label_sets])
         duplicate = connection.execute(
             "SELECT task_id FROM tasks GROUP BY task_id HAVING count(*) > 1 LIMIT 1"
         ).fetchone()

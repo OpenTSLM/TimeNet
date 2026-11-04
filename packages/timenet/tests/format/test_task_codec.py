@@ -28,7 +28,13 @@ from timenet.types import (
 def test_task_payload_keeps_targets_out_of_configuration_columns():
     task = AnswerTask(prompt="Alive?", targets=("Yes", 1))
 
-    assert encode_task_payload(task) == {"target_schema": None, "unit": None, "target_name": None, "mode": None}
+    assert encode_task_payload(task) == {
+        "target_schema": None,
+        "label_set": None,
+        "unit": None,
+        "target_name": None,
+        "mode": None,
+    }
 
 
 def _signals():

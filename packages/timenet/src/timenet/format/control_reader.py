@@ -6,7 +6,7 @@ The objects hold their stored values behind value handles, unloaded.
 from collections import ChainMap, Counter, defaultdict
 from collections.abc import Callable, Collection, Container, Iterable, Iterator, Mapping, MutableMapping
 from fractions import Fraction
-from functools import partial
+from functools import cached_property, partial
 from graphlib import CycleError, TopologicalSorter
 import json
 import os
@@ -17,12 +17,13 @@ import weakref
 
 import duckdb
 import pyarrow as pa
+from pydantic import ValidationError
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeAxis, TimeFDataset
 from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
-from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
+from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX, TABLES
 from timenet.format.duckdb import CATALOG_ERRORS, check_control_schema, connect_control
 from timenet.format.stored_array import ChunkLocation
 from timenet.format.stored_values import (
@@ -49,6 +50,7 @@ from timenet.types import (
     Annotation,
     ArrayHandle,
     InputModality,
+    LabelSet,
     Task,
     TaskType,
     TimeInterval,
@@ -246,6 +248,7 @@ class _TaskRow(NamedTuple):
     scope_signal_ids: list[int] | None
     has_inline_targets: bool
     target_schema: str | None
+    label_set: str | None
     unit: str | None
     target_name: str | None
     mode: str | None
@@ -785,6 +788,8 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         self._disconnect()
         self._clock_cache.clear()
         self._task_facts = None
+        # Drop the cached label sets, so that a reopened reader reads them again.
+        self.__dict__.pop("_label_sets_by_name", None)
         self._known_record_ids.clear()
         self._chunk_strings.clear()
 
@@ -1621,7 +1626,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 )
                 SELECT t.task_id, t.task_type, t.prompt, t.rationale,
                        t.scope_type, t.scope_start, t.scope_end, t.scope_signal_ids,
-                       t.target_schema, t.unit, t.target_name, t.mode, t.has_inline_targets,
+                       t.target_schema, t.label_set, t.unit, t.target_name, t.mode, t.has_inline_targets,
                        t.input_modalities, t.split,
                        coalesce(inputs.input_record_ids, []) AS input_record_ids,
                        coalesce(parents.from_task_ids, []) AS from_task_ids,
@@ -1844,6 +1849,43 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             parameters,
             _TaskRow._make,
         )
+
+    @cached_property
+    def _label_sets_by_name(self) -> dict[str, LabelSet]:
+        """The stored label sets by name.
+
+        The reader reads each set once. Tasks that use the same set share one object.
+
+        Raises:
+            TimeFFormatError: If a stored label set is not valid.
+        """
+        columns = ", ".join(TABLES["label_sets"].column_names)
+        # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+        rows = self._query_table(f"SELECT {columns} FROM label_sets").to_pylist()
+        label_sets: dict[str, LabelSet] = {}
+        for row in rows:
+            try:
+                label_set = LabelSet.model_validate(row)
+            except ValidationError as exc:
+                raise TimeFFormatError(f"the stored label set {row['name']!r} is not valid: {exc}") from exc
+            label_sets[label_set.name] = label_set
+        return label_sets
+
+    def _label_set(self, name: str | None) -> LabelSet | None:
+        """Return the stored label set with this name.
+
+        Returns:
+            The shared label set, or ``None`` if ``name`` is ``None``.
+
+        Raises:
+            TimeFFormatError: If no label set has this name, or a stored label set is not valid.
+        """
+        if name is None:
+            return None
+        label_set = self._label_sets_by_name.get(name)
+        if label_set is None:
+            raise TimeFFormatError(f"tasks refer to a missing label set {name!r}")
+        return label_set
 
     def _target_rows(self, task_ids: list[int] | None) -> list[_TargetRow]:
         """Read the target rows for one batch of tasks, or every task, in task and position order.
@@ -2486,6 +2528,12 @@ class _TaskBuilder:
                 "metadata": _decode_json(row.metadata, default={}),
                 **decode_task_payload(task_type, row.payload_columns),
             }
+            if task_type is TaskType.CLASSIFICATION:
+                kwargs["label_set"] = reader._label_set(row.label_set)
+            elif row.label_set is not None:
+                raise TimeFFormatError(
+                    f"{task_type} task {row.task_id!r} has a label set, but only a classification task can have one"
+                )
             if TaskRelationshipField.CANDIDATE_RECORDS in cls.__dataclass_fields__:
                 kwargs["candidate_records"] = reader._resolve(
                     row.task_id, TaskRelationshipField.CANDIDATE_RECORDS, refs, self.records_by_id, "record"

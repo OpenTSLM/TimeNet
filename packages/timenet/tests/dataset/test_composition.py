@@ -25,6 +25,8 @@ from timenet.types import (
     DatasetMetadata,
     ForecastingTask,
     InputModality,
+    Label,
+    LabelSet,
     License,
     LocalizationMode,
     ObjectKind,
@@ -58,6 +60,7 @@ from timenet.writer import TimeFWriter
 
 _ALIAS = ParentAlias("base")
 _SPEC = TimeSeriesSpec(spec_type="sine", name="Sine", unit_value=ureg.dimensionless)
+SCP = LabelSet(name="scp", labels=(Label(name="normal", description="No finding."), Label(name="abnormal")))
 
 
 def store(root, dataset):
@@ -1398,7 +1401,7 @@ def _tasks_tree():
     label = ClassificationTask(
         inputs=(rec,),
         targets=("normal",),
-        target_schema="scp",
+        label_set=SCP,
         split=Split.TRAIN,
         input_annotations=(_annotation(rec, "age"),),
         metadata={"rater": "a"},
@@ -1507,8 +1510,8 @@ def test_a_task_import_brings_the_tasks_it_derives_from_transitively(tmp_path):
     assert named is _signal_named(record, "sig-b")
     # Every field comes, including those of a task class's own.
     assert locate.mode is LocalizationMode.EXHAUSTIVE
-    assert (label.target_schema, label.split, label.metadata, label.targets) == (
-        "scp",
+    assert (label.label_set, label.split, label.metadata, label.targets) == (
+        SCP,
         Split.TRAIN,
         {"rater": "a"},
         ("normal",),
@@ -2135,7 +2138,7 @@ def _every_task_class():
     classify = ClassificationTask(
         inputs=(rec,),
         targets=("normal",),
-        target_schema="scp",
+        label_set=SCP,
         split=Split.TRAIN,
         input_annotations=(_annotation(rec, "age"), _annotation(sources["aux"], "aux-note"), note),
         rationale="because",
