@@ -126,27 +126,16 @@ def run_isolated(  # ruff: ignore[too-many-arguments]
     Raises:
         TimeNetBuildError: If the build fails or prints no result.
         LookupError: If no connector exists for the id.
-    """  # ruff: ignore[docstring-extraneous-exception] (raised by env_spec, not directly here)
-    # --quiet belongs to timenet-build, not to build, so it goes before the subcommand.
-    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build", dataset_id, "--out", str(out)]
-    if force:
-        argv.append("--force")
-    if keep_cache:
-        argv.append("--keep-cache")
-    spec = env_spec(dataset_id)
-    # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
-    child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
-    with _pins_file(pinned_by) as pins:
-        if pins is not None:
-            argv += ["--pinned-by", str(pins)]
-        command = uv_command(spec, argv)
-        stdout, stderr, returncode = _run_build(command, child_env)
-    if returncode != 0:
-        tail = "\n".join(stderr.splitlines()[-15:]).strip()
-        detail = f"\n{tail}" if tail else " The child produced no error output."
-        raise TimeNetBuildError(
-            f"building {dataset_id!r} failed with exit code {returncode}. Command: {shlex.join(command)}.{detail}"
-        )
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _run_in_env, not directly here)
+    stdout = _run_in_env(
+        dataset_id,
+        ["build", dataset_id, "--out", str(out)],
+        force=force,
+        keep_cache=keep_cache,
+        quiet=quiet,
+        pinned_by=pinned_by,
+        subject=repr(dataset_id),
+    )
     lines = [line.strip() for line in stdout.splitlines() if line.strip()]
     if not lines:
         raise TimeNetBuildError(f"building {dataset_id!r} printed no version")
@@ -157,10 +146,10 @@ def run_isolated_build(  # ruff: ignore[too-many-arguments]
     release: DatasetRef,
     store_root: Path,
     *,
-    force: bool = False,
-    keep_cache: bool = False,
-    quiet: bool = False,
-    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
+    force: bool,
+    keep_cache: bool,
+    quiet: bool,
+    pinned_by: Mapping[DatasetRef, PayloadSource],
 ) -> None:
     """Build one release into a local store, in the environment of its connector.
 
@@ -179,24 +168,64 @@ def run_isolated_build(  # ruff: ignore[too-many-arguments]
     Raises:
         TimeNetBuildError: If the build fails.
         LookupError: If no connector exists for the dataset ID.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _run_in_env, not directly here)
+    _run_in_env(
+        release.dataset_id,
+        ["build-prepared-release", str(release), "--store", str(store_root)],
+        force=force,
+        keep_cache=keep_cache,
+        quiet=quiet,
+        pinned_by=pinned_by,
+        subject=str(release),
+    )
+
+
+def _run_in_env(  # ruff: ignore[too-many-arguments]
+    dataset_id: str,
+    subcommand: Sequence[str],
+    *,
+    force: bool,
+    keep_cache: bool,
+    quiet: bool,
+    pinned_by: Mapping[DatasetRef, PayloadSource] | None,
+    subject: str,
+) -> str:
+    """Run a ``timenet-build`` subcommand in the environment of a connector.
+
+    Args:
+        dataset_id: The dataset ID whose connector gives the environment.
+        subcommand: The subcommand with its arguments. The flags of the build go after it.
+        force: Add ``--force``.
+        keep_cache: Add ``--keep-cache``.
+        quiet: Add ``--quiet``.
+        pinned_by: The pins to give the child in a file, or ``None``.
+        subject: What the error of a failed build names.
+
+    Returns:
+        What the child printed on stdout.
+
+    Raises:
+        TimeNetBuildError: If the child fails.
+        LookupError: If no connector exists for the dataset ID.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by env_spec, not directly here)
-    # --quiet belongs to timenet-build, not to build-prepared-release, so it goes before the subcommand.
-    argv = ["timenet-build", *(["--quiet"] if quiet else []), "build-prepared-release", str(release)]
-    argv += ["--store", str(store_root), *(["--force"] if force else []), *(["--keep-cache"] if keep_cache else [])]
-    spec = env_spec(release.dataset_id)
+    # --quiet belongs to timenet-build, not to the subcommand, so it goes first.
+    argv = ["timenet-build", *(["--quiet"] if quiet else []), *subcommand]
+    argv += [*(["--force"] if force else []), *(["--keep-cache"] if keep_cache else [])]
+    spec = env_spec(dataset_id)
     # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
     child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
     with _pins_file(pinned_by) as pins:
         if pins is not None:
             argv += ["--pinned-by", str(pins)]
         command = uv_command(spec, argv)
-        _, stderr, returncode = _run_build(command, child_env)
+        stdout, stderr, returncode = _run_build(command, child_env)
     if returncode != 0:
         tail = "\n".join(stderr.splitlines()[-15:]).strip()
         detail = f"\n{tail}" if tail else " The child produced no error output."
         raise TimeNetBuildError(
-            f"building {release} failed with exit code {returncode}. Command: {shlex.join(command)}.{detail}"
+            f"building {subject} failed with exit code {returncode}. Command: {shlex.join(command)}.{detail}"
         )
+    return stdout
 
 
 @contextmanager

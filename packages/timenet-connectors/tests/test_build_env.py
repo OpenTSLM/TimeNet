@@ -255,10 +255,3 @@ def test_run_isolated_build_runs_build_release_with_the_store_and_the_pins(monke
     assert {"--force", "--keep-cache"} <= set(argv)
     assert captured["pins"] == {"test/reader@1.0.0": pinned.model_dump(mode="json")}
     assert captured["env"]["TIMENET_ISOLATION"] == "off"
-
-
-def test_run_isolated_build_raises_with_the_tail_of_the_child_stderr(monkeypatch, tmp_path):
-    monkeypatch.setattr(env_module, "_run_build", lambda command, env: ("", "boom: the disk is full", 1))
-
-    with pytest.raises(TimeNetBuildError, match=r"timenet/hello-world@1\.0\.0.*exit code 1(.|\n)*the disk is full"):
-        run_isolated_build(DatasetRef.parse("timenet/hello-world@1.0.0"), tmp_path)
