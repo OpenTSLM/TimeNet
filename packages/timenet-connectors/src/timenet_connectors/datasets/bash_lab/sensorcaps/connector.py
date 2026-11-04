@@ -2,7 +2,7 @@
 
 The connector downloads the original JSONL files at a pinned commit through the HuggingFace base,
 indexes rows by byte offset, and keeps just one decoded sensor row cached across the six channel
-loaders. Each task's prompt is the row's system message, and its input annotations are the activity
+loaders. The prompt of each task is the row's system message. Its input annotations are the activity
 summary and, when present, the sensor location. The 12 derived features are Record annotations only,
 so the Records keep their text in memory. The connector reads the files again for the tasks.
 """
@@ -114,7 +114,7 @@ class _ParsedRow:
     summary: str
     location: str | None
     features: Mapping[str, str]
-    """Each derived feature's original text, keyed by its heading in :data:`FEATURE_HEADINGS`."""
+    """The original text of each derived feature, keyed by its heading in :data:`FEATURE_HEADINGS`."""
     values: tuple[list[list[float]], list[list[float]]]
     """The accelerometer's and then the gyroscope's readings."""
 
