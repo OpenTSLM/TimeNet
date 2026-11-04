@@ -1,7 +1,4 @@
-"""The built-in build backend: it lists dataset IDs, reads cards and builds releases.
-
-It does not import the ``timenet-build`` CLI, so it stays cheap to import.
-"""
+"""Read connector cards and build dataset releases."""
 
 from collections.abc import Mapping
 from dataclasses import dataclass
@@ -23,7 +20,7 @@ from timenet_connectors.download import DownloadProgress, progress_sink
 
 
 class ConnectorBuilder:
-    """Build a dataset with its connector, in an environment built from the connector's requirements."""
+    """Build dataset releases with their connectors."""
 
     def dataset_ids(self) -> list[str]:  # ruff: ignore[no-self-use] (BuilderBackend protocol method)
         """List this package's dataset IDs without importing connectors.
@@ -34,16 +31,16 @@ class ConnectorBuilder:
         return known_ids()
 
     def card(self, dataset_id: str) -> DatasetMetadata | None:  # ruff: ignore[no-self-use] (protocol)
-        """Read the connector's ``dataset.yaml`` card, without importing or building the connector.
+        """Read a connector's dataset card without importing the connector.
 
         Args:
-            dataset_id: The dataset ID, exactly as the card declares it.
+            dataset_id: The exact dataset ID declared in the card.
 
         Returns:
-            The validated card, or ``None`` if no card declares ``dataset_id``.
+            The validated card, or ``None`` if no connector card declares this ID.
 
         Raises:
-            TimeNetInvalidCardError: If the card cannot be read or is not a mapping.
+            TimeNetInvalidCardError: If reading the card fails or the card is not a mapping.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by DatasetMetadata.from_yaml
         try:
             directory = connector_dir(dataset_id)

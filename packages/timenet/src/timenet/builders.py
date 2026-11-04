@@ -43,7 +43,7 @@ class BuildOptions:
 
 
 class BuilderBackend(Protocol):
-    """An interface for building dataset releases from connectors."""
+    """Define the interface for reading connector cards and building dataset releases."""
 
     def dataset_ids(self) -> Iterable[str]:
         """List the datasets this backend can build.

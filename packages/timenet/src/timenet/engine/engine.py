@@ -101,14 +101,14 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
 
 
 def open_parents(metadata: DatasetMetadata, registry: LocalRegistry) -> BuildContext:
-    """Open each declared parent of a card from the local registry that a build writes to.
+    """Open readers for the dataset's declared parents in a local registry.
 
     The registry must hold every parent complete, with its payload sources. The engine never fetches
     or builds a parent here.
 
     Args:
         metadata: The child dataset card with exact parent references.
-        registry: The local registry that the child is written to.
+        registry: The local registry containing the parents.
 
     Returns:
         The opened readers, keyed by parent alias. Close the context after the write.
