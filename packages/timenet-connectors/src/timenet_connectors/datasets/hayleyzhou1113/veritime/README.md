@@ -88,12 +88,12 @@ the series by `part` and `row` (its position in the file, from 0).
 
 Each row has one task, and its type follows the answer:
 
-| Rows | Task | Target | `target_schema` |
+| Rows | Task | Target | `label_set` |
 | --- | --- | --- | --- |
-| Anomaly detection | `ClassificationTask` | `Yes` or `No` | `anomaly_detection_vocabulary` |
+| Anomaly detection | `ClassificationTask` | `Yes` or `No` | `anomaly_detection` |
 | Scenario attribution | `AnswerTask` | The label as published | None: each question offers its own options |
 | Inferential calculation | `ScalarPredictionTask` | The label as a number: an `int` count, or one `float` | None |
-| CTU, ECG, EMG, RCW | `ClassificationTask` | The class name | `ctu_vocabulary`, `ecg_vocabulary`, `emg_vocabulary` or `rcw_vocabulary` |
+| CTU, ECG, EMG, RCW | `ClassificationTask` | The class name | `ctu`, `ecg`, `emg` or `rcw`. Knowledge tasks list their labels in the order of the options in their questions (a), b), and so on). Anomaly detection is `Yes`, `No`, as the authors' `extract_label.py` takes it |
 
 Every task also has these fields:
 
@@ -117,7 +117,6 @@ train row 1125 asks for a count of days and an amplitude, and its label `10641.0
 | --- | --- |
 | `source_repository` | `HayleyZhou1113/VeriTime` |
 | `source_revision` | The pinned commit |
-| `anomaly_detection_vocabulary`, `ctu_vocabulary`, `ecg_vocabulary`, `emg_vocabulary`, `rcw_vocabulary` | The task's classes. Knowledge tasks follow the order of the options in their questions (a), b), and so on). Anomaly detection is `Yes`, `No`, as the authors' `extract_label.py` takes it |
 
 ## What the connector checks
 

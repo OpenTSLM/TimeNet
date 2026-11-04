@@ -30,6 +30,8 @@ from timenet.types import (
     Annotation,
     AnswerTask,
     ClassificationTask,
+    Label,
+    LabelSet,
     ScalarPredictionTask,
     Split,
     Task,
@@ -68,12 +70,12 @@ class _Part(StrEnum):
 
     @property
     def family(self) -> _Family:
-        """Return the family whose rows the file holds."""
+        """The family whose rows the file holds."""
         return _Family(self.value.split("_")[0])
 
     @property
     def timenet_split(self) -> Split:
-        """Return the TimeNet split of the file's rows: the authors' split."""
+        """The TimeNet split of the file's rows: the authors' split."""
         return Split(self.value.split("_")[1])
 
 
@@ -89,7 +91,7 @@ class _SeriesKind(StrEnum):
 
     @property
     def family(self) -> _Family:
-        """Return the family whose rows publish series of the kind."""
+        """The family whose rows publish series of the kind."""
         return _Family.SCENARIO if self is _SeriesKind.SCENARIO else _Family.KNOWLEDGE
 
 
@@ -107,19 +109,16 @@ class _SourceTask(StrEnum):
 
     @property
     def kind(self) -> _SeriesKind:
-        """Return the kind of series the task's rows publish."""
+        """The kind of series the task's rows publish."""
         scenario = (_SourceTask.ANOMALY_DETECTION, _SourceTask.SCENARIO_ATTRIBUTION)
         if self in scenario or self is _SourceTask.INFERENTIAL_CALCULATION:
             return _SeriesKind.SCENARIO
         return _SeriesKind(self.name.lower())
 
     @property
-    def vocabulary_key(self) -> str:
-        """Return the key of the dataset annotation that holds the task's classes, such as ``ecg_vocabulary``.
-
-        A classification task states it as its ``target_schema``.
-        """
-        return f"{self.value.lower().replace(' ', '_')}_vocabulary"
+    def label_set_name(self) -> str:
+        """The name of the task's label set, such as ``ecg``."""
+        return self.value.lower().replace(" ", "_")
 
 
 _CLASSES = {
@@ -133,6 +132,11 @@ _CLASSES = {
 }
 """The classes of each classification task, as the release spells them. Scenario attribution offers its own
 options in each question and inferential calculation answers a count, so neither has one."""
+_LABEL_SETS = {
+    task: LabelSet(name=task.label_set_name, labels=tuple(Label(name=name) for name in classes))
+    for task, classes in _CLASSES.items()
+}
+"""The label set that every classification task of one source task shares, built from its classes."""
 
 _STEP_LABELS = {
     "step1_label": "The process label of step 1, the task intent, as published.",
@@ -274,7 +278,7 @@ def _parse_series(published: Any, family: _Family) -> list[float]:
     Raises:
         ValueError: If the value is not a nonempty series of finite numbers in the family's format.
         OverflowError: If an integer is too large for float64.
-    """  # noqa: DOC502 - raised by float()
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by float()
     if family is _Family.SCENARIO:
         if not (isinstance(published, list) and len(published) == 1 and isinstance(published[0], list)):
             raise ValueError("a scenario timeseries2 must be a list holding one list of numbers")
@@ -346,7 +350,7 @@ def _parse_annotations(value: dict[str, Any], family: _Family) -> tuple[_Label, 
 
     Raises:
         ValueError: If a label or the answer is not nonblank text.
-    """  # noqa: DOC502 - raised by _text
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _text
     labels = [
         _Label(name, _text(value[name], name))
         for name in _STEP_LABELS
@@ -368,7 +372,7 @@ def _parse_row(value: Any, location: _Location) -> _Row:
             question lacks its series marker, the label is not one the task allows, or the series is
             malformed.
         OverflowError: If a series integer is too large for float64.
-    """  # noqa: DOC502 - raised by float()
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by float()
     if not isinstance(value, dict):
         raise ValueError("expected a row object")
     family = location.part.family
@@ -469,7 +473,7 @@ def _task(row: _Row, record: Record) -> Task:
     )
     task: Task
     if row.task in _CLASSES:
-        task = ClassificationTask(targets=(row.label,), target_schema=row.task.vocabulary_key, **fields)
+        task = ClassificationTask(targets=(row.label,), label_set=_LABEL_SETS[row.task], **fields)
     elif row.task is _SourceTask.INFERENTIAL_CALCULATION:
         # A count, except one row whose two-part question also asks an amplitude: its label is a float.
         quantity = int(row.label) if row.label.isdecimal() else float(row.label)
@@ -524,11 +528,11 @@ class VeriTimeConnector(BaseHuggingFaceConnector):
             raw_refs: The downloaded files, one per part.
 
         Returns:
-            A dataset with the provenance and vocabulary annotations, the Records, and a stream of every task.
+            A dataset with the provenance annotations, the Records, and a stream of every task.
 
         Raises:
             TimeFValidationError: If a reference names no VeriTime part.
-        """  # noqa: DOC502 - a file's rows are checked by _read_rows
+        """  # ruff: ignore[docstring-extraneous-exception] - a file's rows are checked by _read_rows
         rows = [row for ref in raw_refs for row in _read_rows(ref.path, _to_part(ref.part))]
         by_series: dict[_SeriesKey, list[_Row]] = {}
         for row in rows:
@@ -540,10 +544,6 @@ class VeriTimeConnector(BaseHuggingFaceConnector):
             dataset.annotate(Annotation(key=key, value=value))
         for record in records.values():
             dataset.add_record(record=record)
-        present = {row.task for row in rows}
-        for task, classes in _CLASSES.items():
-            if task in present:
-                dataset.annotate(Annotation(key=task.vocabulary_key, value=list(classes)))
 
         def tasks() -> Iterator[Task]:
             for row in rows:

@@ -64,14 +64,13 @@ _STEP_DESCRIPTIONS = {
 _SOURCE_ANSWER_DESCRIPTION = "The ChatTS answer the authors extracted the label from, as published."
 
 # The whole converted fixture, written out by hand from the fixture files, not from connector constants.
-# The fixtures hold no CTU or RCW row, so the dataset holds no vocabulary for them.
 _EXPECTED_DATASET_ANNOTATIONS: dict[str, Any] = {
     "source_repository": "HayleyZhou1113/VeriTime",
     "source_revision": _EXPECTED_REVISION,
-    "anomaly_detection_vocabulary": ["Yes", "No"],
-    "ecg_vocabulary": ["normal sinus rhythm", "atrial fibrillation", "other cardiac rhythms", "noise"],
-    "emg_vocabulary": ["Healthy", "Myopathy", "Neuropathy"],
 }
+_ANOMALY = ("anomaly_detection", ("Yes", "No"))
+_ECG = ("ecg", ("normal sinus rhythm", "atrial fibrillation", "other cardiac rhythms", "noise"))
+_EMG = ("emg", ("Healthy", "Myopathy", "Neuropathy"))
 # Each Record by the rows that publish its series: kind, signal name, values source, axis, spec and unit.
 _EXPECTED_RECORDS: dict[tuple[tuple[str, int], ...], dict[str, Any]] = {
     (("scenario_train", 0), ("scenario_train", 1), ("scenario_test", 0)): {
@@ -107,22 +106,22 @@ _EXPECTED_RECORDS: dict[tuple[tuple[str, int], ...], dict[str, Any]] = {
         ),
     },
 }
-# Each task's type, target and its type, and target schema; the other fields follow the row.
-_EXPECTED_TASKS: dict[tuple[str, int], tuple[type, Any, str | None]] = {
-    ("scenario_train", 0): (ClassificationTask, "Yes", "anomaly_detection_vocabulary"),
+# Each task's type, target and its type, and label set as (name, labels); the other fields follow the row.
+_EXPECTED_TASKS: dict[tuple[str, int], tuple[type, Any, tuple[str, tuple[str, ...]] | None]] = {
+    ("scenario_train", 0): (ClassificationTask, "Yes", _ANOMALY),
     ("scenario_train", 1): (AnswerTask, "Consistent market conditions", None),
     ("scenario_train", 2): (ScalarPredictionTask, 2, None),
-    ("scenario_test", 0): (ClassificationTask, "No", "anomaly_detection_vocabulary"),
+    ("scenario_test", 0): (ClassificationTask, "No", _ANOMALY),
     # A two-part question's amplitude is a decimal label, as in the release's one such row. It stays a float.
     ("scenario_test", 1): (ScalarPredictionTask, 10641.02, None),
-    ("knowledge_train", 0): (ClassificationTask, "other cardiac rhythms", "ecg_vocabulary"),
-    ("knowledge_test", 0): (ClassificationTask, "Neuropathy", "emg_vocabulary"),
+    ("knowledge_train", 0): (ClassificationTask, "other cardiac rhythms", _ECG),
+    ("knowledge_test", 0): (ClassificationTask, "Neuropathy", _EMG),
 }
 
 
 def _expected_task(part: str, index: int) -> dict[str, Any]:
     row = _fixture_rows(part)[index]
-    task_type, target, schema = _EXPECTED_TASKS[part, index]
+    task_type, target, label_set = _EXPECTED_TASKS[part, index]
     # A process label published as null has no annotation.
     annotations = {
         key: (row[key], description) for key, description in _STEP_DESCRIPTIONS.items() if row[key] is not None
@@ -135,12 +134,19 @@ def _expected_task(part: str, index: int) -> dict[str, Any]:
         "prompt": row["question"],
         "input_annotations": {},
         "targets": (_typed(target),),
-        "target_schema": schema,
+        "label_set": label_set,
         "rationale": row["cot"],
         "metadata": {"source_task": row["task"], "part": part, "row": index},
         "annotations": annotations,
         "split": part.split("_")[1],
     }
+
+
+def _label_set(task) -> tuple[str, tuple[str, ...]] | None:
+    """A classification task's label set as its name and labels, or None for another task type."""
+    if not isinstance(task, ClassificationTask):
+        return None
+    return task.label_set.name, task.label_set.names
 
 
 def _output(dataset) -> dict:
@@ -172,7 +178,7 @@ def _output(dataset) -> dict:
             "prompt": task.prompt,
             "input_annotations": {a.key: a.value for a in task.input_annotations},
             "targets": tuple(_typed(target) for target in task.targets),
-            "target_schema": getattr(task, "target_schema", None),
+            "label_set": _label_set(task),
             "rationale": task.rationale,
             "metadata": dict(task.metadata),
             "annotations": {a.key: (a.value, a.description) for a in task.annotations},
@@ -217,9 +223,10 @@ def test_ctu_and_rcw_keep_their_cadence_and_classes(tmp_path):
         "ctu": ("consumption", (RegularAxis, Fraction(120_000_000))),
         "rcw": ("audio", (RegularAxis, Fraction(4000))),
     }
-    assert output["annotations"]["ctu_vocabulary"] == ["Desktop", "Laptop"]
-    assert output["annotations"]["rcw_vocabulary"] == ["Right Whale Present", "No Right Whale"]
-    assert [task["target_schema"] for task in output["tasks"].values()] == ["ctu_vocabulary", "rcw_vocabulary"]
+    assert [task["label_set"] for task in output["tasks"].values()] == [
+        ("ctu", ("Desktop", "Laptop")),
+        ("rcw", ("Right Whale Present", "No Right Whale")),
+    ]
 
 
 def test_declares_pinned_source_files():
