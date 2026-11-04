@@ -10,7 +10,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.errors import TimeFValidationError
-from timenet.types import US_PER_S, Annotation, TimeSeriesSpec, ureg
+from timenet.types import US_PER_S, Label, LabelSet, TimeSeriesSpec, ureg
 from timenet_connectors.datasets.trace.weather_events.fields import exact_int, exact_numbers
 
 
@@ -30,7 +30,7 @@ class EventLabel(IntEnum):
     """A window's published event label, numbered as EVENT_MAP in the authors' ``src/common.py``.
 
     The nine NOAA event types are 0-8. EVENT_MAP maps 'None' to ``NO_EVENT``, which marks a window
-    without a following event; the authors' loss and metrics ignore it, so it is not in the vocabulary.
+    without a following event; the authors' loss and metrics ignore it, so it is not in ``EVENT_TYPES``.
     """
 
     NO_EVENT = -100
@@ -71,8 +71,11 @@ class EventLabel(IntEnum):
         return self.name.replace("_", " ").title()
 
 
-_VOCABULARY = [label.text for label in EventLabel if label.is_event]
-"""The nine event types' names in label order: the targets of the event-type task."""
+EVENT_TYPES = LabelSet(
+    name="event_type",
+    labels=tuple(Label(name=label.text) for label in EventLabel if label.is_event),
+)
+"""The nine event types, in label order: the labels of the event-type task. The files do not list them."""
 
 
 @unique
@@ -101,7 +104,6 @@ class SourceField(StrEnum):
 class AnnotationKey(StrEnum):
     """The key of an annotation the connector builds."""
 
-    EVENT_TYPE_VOCABULARY = "event_type_vocabulary"
     CHANNEL_DESCRIPTION = "channel_description"
 
 
@@ -133,10 +135,6 @@ class MetadataKey(StrEnum):
     CHANNEL_ORDER = "channel_order"
     # A channel_description annotation: the channel it describes.
     CHANNEL = "channel"
-
-
-DATASET_ANNOTATIONS = (Annotation(key=AnnotationKey.EVENT_TYPE_VOCABULARY, value=_VOCABULARY),)
-"""The event types that the event-type task's targets come from. The files do not list them."""
 
 
 @unique

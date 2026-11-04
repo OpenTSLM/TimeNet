@@ -296,8 +296,8 @@ def test_every_window_becomes_a_record_with_its_signals(converted):
             np.testing.assert_array_equal(signal.to_numpy(), expected)
             assert _offsets(signal) == want_offsets
 
-    annotations = {annotation.key: annotation.value for annotation in dataset.annotations}
-    assert annotations == {"event_type_vocabulary": _VOCABULARY}
+    # The event types are the event-type tasks' label set, so the dataset needs no annotation for them.
+    assert not dataset.annotations
 
 
 def test_classified_windows_get_an_event_type_task_with_their_report(converted):
@@ -311,7 +311,13 @@ def test_classified_windows_get_an_event_type_task_with_their_report(converted):
         assert report is not None
         event_id, event_type = report
         assert task.targets == (_VOCABULARY[event_type],)
-        assert task.target_schema == "event_type_vocabulary"
+        assert task.label_set is not None
+        assert (task.label_set.name, task.label_set.names, task.label_set.multi_label) == (
+            "event_type",
+            tuple(_VOCABULARY),
+            False,
+        )
+        assert task.target_schema is None
         # The authors' classifier sees only the series.
         assert (task.prompt, task.input_annotations, task.scope) == (None, (), None)
         assert task.rationale == f"The weather event is {_VOCABULARY[event_type]}. Report {window_id}."
@@ -397,6 +403,9 @@ def test_storage_round_trip_keeps_values_timestamps_and_tasks(tmp_path):
     task_keys = [_task_key(task) for task in original.iter_tasks()]
     assert len(task_keys) == len(set(task_keys)) == 5 + 7 + 3
     assert sorted(map(_task_key, restored.tasks)) == sorted(task_keys)
+    # The reader gives every event-type task the one stored label set.
+    label_sets = {id(task.label_set) for task in restored.tasks if isinstance(task, ClassificationTask)}
+    assert len(label_sets) == 1
 
 
 def test_a_window_file_that_changed_after_conversion_fails_on_read(tmp_path):

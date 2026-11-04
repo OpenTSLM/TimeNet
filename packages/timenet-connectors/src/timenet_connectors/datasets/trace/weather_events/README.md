@@ -117,7 +117,8 @@ Forecasting: the target is the last 24 values of all seven channels. The input i
 them, as the authors' `ForecastingDataset` splits it. The horizon is 24 values, the default of the
 authors' `forecast_finetune.py`.
 
-The dataset annotation `event_type_vocabulary` lists the nine event types in label order.
+Every event-type task shares one label set, `event_type`. It lists the nine event types in label
+order, and each target holds exactly one of them.
 
 ## Checks
 

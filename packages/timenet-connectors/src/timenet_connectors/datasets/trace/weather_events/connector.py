@@ -39,7 +39,6 @@ from timenet_connectors.datasets.trace.weather_events.archive import (
 from timenet_connectors.datasets.trace.weather_events.measurements import WindowIndex, WindowReader
 from timenet_connectors.datasets.trace.weather_events.retrieval import RetrievalIndex
 from timenet_connectors.datasets.trace.weather_events.tasks import TASK_TYPES, TaskStream
-from timenet_connectors.datasets.trace.weather_events.vocabulary import DATASET_ANNOTATIONS
 from timenet_connectors.download import ensure_archive
 
 
@@ -77,7 +76,7 @@ class TraceWeatherEventsConnector(BaseConnector[TraceFile]):
             raw_refs: The archive's eight split files, each once.
 
         Returns:
-            A dataset with the event-type vocabulary, the Records, and a stream of every task.
+            A dataset with the Records and a stream of every task.
 
         Raises:
             TimeFValidationError: If the file set, a window or a retrieval row is invalid.
@@ -97,8 +96,6 @@ class TraceWeatherEventsConnector(BaseConnector[TraceFile]):
         records = {window: window.to_record(reader) for window in windows.windows.values()}
 
         dataset = TimeFDataset(metadata=self.metadata())
-        for annotation in DATASET_ANNOTATIONS:
-            dataset.annotate(annotation)
         for record in records.values():
             dataset.add_record(record=record)
         dataset.set_task_stream(TASK_TYPES, TaskStream(windows, retrieval, records).tasks)

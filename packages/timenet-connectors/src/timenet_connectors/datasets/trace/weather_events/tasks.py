@@ -12,7 +12,7 @@ from timenet.types import Annotation, ClassificationTask, ForecastingTask, Task,
 from timenet_connectors.datasets.trace.weather_events.archive import SplitName
 from timenet_connectors.datasets.trace.weather_events.measurements import Window, WindowIndex
 from timenet_connectors.datasets.trace.weather_events.retrieval import RetrievalIndex
-from timenet_connectors.datasets.trace.weather_events.vocabulary import AnnotationKey, Channel, MetadataKey
+from timenet_connectors.datasets.trace.weather_events.vocabulary import EVENT_TYPES, AnnotationKey, Channel, MetadataKey
 
 
 TASK_TYPES = (ClassificationTask, TSCorrespondenceTask, ForecastingTask)
@@ -52,7 +52,7 @@ class TaskStream:
                 inputs=(self._records[window],),
                 targets=(report.event_type.text,),
                 split=window.file.split.timef_split,
-                target_schema=AnnotationKey.EVENT_TYPE_VOCABULARY,
+                label_set=EVENT_TYPES,
                 # The report names the target and describes the event after the window, so it is
                 # supervision only, never an input.
                 rationale=report.text,
