@@ -1,4 +1,4 @@
-"""Compare directories, and replace a directory with a complete staging directory."""
+"""Compare directory paths and replace directories from staging."""
 
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -10,15 +10,15 @@ import uuid
 def same_directory(a: Path, b: Path) -> bool:
     """Check whether two paths name the same directory.
 
-    Two existing directories compare by their identity on disk, so a symlink or a case variant on a volume that
-    ignores case matches. Other paths compare by their resolved names, with case ignored.
+    Existing paths match when they identify the same directory on disk.
+    If either path is missing, compare resolved paths while ignoring letter case.
 
     Args:
         a: The first path, whether or not it exists.
         b: The second path, whether or not it exists.
 
     Returns:
-        ``True`` if both paths name the same directory.
+        ``True`` if the paths match.
     """
     if a.exists() and b.exists():
         return a.samefile(b)

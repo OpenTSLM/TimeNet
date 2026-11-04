@@ -266,7 +266,10 @@ def cache_clear(
     ),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
 ) -> None:
-    """Delete cached data: the storage directory and the raw cache. ``--all`` also removes the default store."""
+    """Delete the storage directory and raw cache.
+
+    Use ``--all`` to also remove the default store.
+    """
     if not yes:
         what = "the storage directory and the raw cache"
         if all_:

@@ -149,7 +149,7 @@ class Lookups:
 
 @dataclass
 class _Graph:
-    """A graph of required releases and their build or copy steps."""
+    """A graph of releases needed for a build."""
 
     output: LocalRegistry
     sources: Sequence[ReleaseSource]
@@ -157,7 +157,7 @@ class _Graph:
     open_only: bool
     """True if each release that the walk visits must declare ``access: open``."""
     builds: bool = True
-    """True if the plan may build a release that only installed connectors provide."""
+    """Whether the plan allows builds from installed connectors."""
     releases: dict[DatasetRef, _Release] = field(default_factory=dict)
     """The nodes, in the order in which the walk found them."""
     pins: dict[DatasetRef, dict[DatasetRef, PayloadSource]] = field(default_factory=dict)
@@ -173,17 +173,16 @@ class _Graph:
         Existing nodes are reused unless a payload source is also needed as a parent.
 
         Args:
-            reference: The exact release to add.
-            needed_by: The release that needs ``reference``.
-            pinned: File requirements from ``needed_by``, or ``None`` for a parent dataset.
+            reference: The release to add.
+            needed_by: The release that requires ``reference``.
+            pinned: The file records that ``needed_by`` requires, or ``None`` for a parent dataset.
 
         Raises:
             TimeNetFileError: If the output holds a damaged copy that no other registry provides.
             TimeNetAccessError: If sources list the release but do not provide it.
             TimeNetMissingParentError: If no source provides the release.
-            TimeNetDatasetNotFoundError: If the plan builds nothing and only installed connectors provide
-                the release.
-            TimeFValidationError: If a source is neither a registry nor ``InstalledConnectors``.
+            TimeNetDatasetNotFoundError: If only connectors provide the release and ``builds`` is false.
+            TimeFValidationError: If the source is neither a registry nor ``InstalledConnectors``.
         """  # ruff: ignore[docstring-extraneous-exception] - the file and access errors are raised as values
         role: Role = "dataset" if pinned is None else "payload-source"
         if pinned is not None:
@@ -234,10 +233,10 @@ class _Graph:
             reference: The exact release to copy.
             role: Whether the release is a dataset or a payload source.
             registry: The registry to copy from.
-            force: Copy the release again, also if the output holds a complete copy.
+            force: Copy the release again, even if the output holds a complete copy.
 
         Raises:
-            TimeNetDatasetNotFoundError: If the release is absent from the registry.
+            TimeNetDatasetNotFoundError: If the registry lacks the release.
         """
         manifest = self.lookups.manifest(registry, reference)
         if manifest is None:
@@ -439,21 +438,21 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
     lookups: Lookups | None = None,
 ) -> tuple[DatasetRef, list[Step]]:
-    """Plan a dataset build and all required releases.
+    """Plan the steps to build a dataset and its dependencies.
 
     A damaged copy of the requested release in the output gets a forced build.
 
     Args:
         dataset_id: The dataset to build.
-        output: The registry to write built releases to.
+        output: The destination registry.
         parents_from: The sources to search for missing releases, in order.
-        force_build: Rebuild the requested release even if the output holds it.
+        force_build: Rebuild the requested release, even if the output holds it.
         open_access_only: Require open access for every release.
-        pinned_by: The releases that pin files of the requested release, with their file requirements.
-        lookups: An optional cache of source answers and release manifests.
+        pinned_by: The required file records for this release, keyed by the releases that need them.
+        lookups: Cached source answers and manifests to reuse.
 
     Returns:
-        The requested release and ordered steps, ending with its build if needed.
+        The requested release and its steps, with its own build last if needed.
 
     Raises:
         TimeNetDatasetNotFoundError: If no installed connector builds the dataset.
@@ -507,8 +506,8 @@ def plan_download(
 
     Args:
         release: The exact release.
-        store: The store to copy into.
-        sources: The sources, in order. The store, and each registry over its directory, do not count.
+        store: The destination store.
+        sources: The sources to search in order, excluding registries at the store's directory.
         force: Copy the release again, even if the store holds a complete copy.
         lookups: The answers and manifests that resolved ``release``, or ``None`` to ask the sources.
 
@@ -516,8 +515,7 @@ def plan_download(
         The copy steps, in the order in which they run.
 
     Raises:
-        TimeNetDatasetNotFoundError: If only installed connectors provide a release that the store
-            lacks, or if ``force`` is set and only the store holds the release.
+        TimeNetDatasetNotFoundError: If a needed release requires a build or no registry can supply a forced copy.
         TimeNetFileError: If the store holds a damaged copy that no other registry provides.
         TimeNetAccessError: If a source lists a release that the store lacks but no source serves it.
         TimeNetMissingParentError: If no registry provides a payload source that the store lacks.
@@ -541,7 +539,7 @@ def plan_download(
 def _add_release_copy(
     graph: _Graph, release: DatasetRef, *, held: bool, damage: TimeNetFileError | None, force: bool
 ) -> None:
-    """Add the copy of a release that the store lacks, holds damaged, or must copy again.
+    """Add a release copy to a download plan.
 
     Args:
         graph: The graph of the download, whose sources do not hold the store.

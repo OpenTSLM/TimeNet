@@ -328,14 +328,11 @@ class LocalRegistry(WritableRegistry):
 
 
 def is_same_registry(source: ReleaseSource, registry: BaseRegistry) -> bool:
-    """Return whether a source is a registry, or a local registry over the same directory.
-
-    Two local registries over one directory hold the same releases, so a copy between them would
-    copy the directory onto itself.
+    """Check whether a source matches a registry.
 
     Args:
-        source: The source.
-        registry: The registry, for example the output of a build or the store of a client.
+        source: The source to compare.
+        registry: The registry to compare against.
 
     Returns:
         ``True`` for the same object or local registries over the same directory.
