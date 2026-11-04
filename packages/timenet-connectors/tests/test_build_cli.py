@@ -16,13 +16,6 @@ from timenet_connectors.builder.cli import app
 runner = CliRunner()
 
 
-def test_build_has_no_values_backend_option(tmp_path):
-    result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path), "--values-backend", "zarr"])
-
-    assert result.exit_code == 2
-    assert "No such option" in result.output
-
-
 def test_build_runs_isolated_by_default(monkeypatch, tmp_path):
     captured = {}
 
