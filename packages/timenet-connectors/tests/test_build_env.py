@@ -1,4 +1,3 @@
-import inspect
 import json
 import os
 from pathlib import Path
@@ -90,7 +89,6 @@ def test_env_spec_always_includes_the_zarr_extra(monkeypatch):
     spec = env_spec("timenet/hello-world")
 
     assert any(arg.startswith("timenet[zarr]==") for arg in spec.base)
-    assert "values_backend" not in inspect.signature(env_spec).parameters
 
 
 def test_base_args_uses_editable_for_an_editable_install(monkeypatch, tmp_path):

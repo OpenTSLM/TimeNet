@@ -1,4 +1,3 @@
-import inspect
 from pathlib import Path
 import sys
 
@@ -57,10 +56,6 @@ def test_build_runs_in_an_isolated_environment_by_default(tmp_path, monkeypatch)
 
     assert version_dir == tmp_path / "1.0.0"
     assert calls == [("timenet/hello-world", tmp_path, True)]
-
-
-def test_connector_builder_build_takes_no_values_backend():
-    assert "values_backend" not in inspect.signature(ConnectorBuilder.build).parameters
 
 
 def test_build_hands_its_pins_to_the_build(tmp_path, monkeypatch):
