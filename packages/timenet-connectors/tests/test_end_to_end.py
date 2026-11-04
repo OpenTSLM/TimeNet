@@ -6,12 +6,11 @@ from typer.testing import CliRunner
 
 from timenet.client import TimeNet
 from timenet.config import settings
-from timenet.errors import TimeNetRegistryError
 from timenet.provenance import build_env
-from timenet.registry import LocalRegistry, RemoteRegistry
+from timenet.registry import LocalRegistry
 from timenet.sources import InstalledConnectors
 from timenet.testing import assert_datasets_equal
-from timenet_connectors.builder.cli import _resolve_target, app as build_app
+from timenet_connectors.builder.cli import app as build_app
 from timenet_connectors.datasets.timenet.hello_world import HelloWorldConnector
 from timenet_connectors.discovery import available, resolve
 
@@ -47,7 +46,9 @@ def test_build_then_load_round_trips(converted, tmp_path):
     registry = tmp_path / "registry"
 
     # PRODUCE: build the demo dataset into a local registry directory.
-    result = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(registry), "--no-isolation"])
+    result = runner.invoke(
+        build_app, ["build", "timenet/hello-world", "--local-registry", str(registry), "--no-isolation"]
+    )
     assert result.exit_code == 0, result.output
     assert (registry / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
 
@@ -58,7 +59,7 @@ def test_build_then_load_round_trips(converted, tmp_path):
 
 
 def test_build_unknown_id_fails(tmp_path):
-    result = runner.invoke(build_app, ["build", "acme/not_a_dataset", "--out", str(tmp_path / "registry")])
+    result = runner.invoke(build_app, ["build", "acme/not_a_dataset", "--local-registry", str(tmp_path / "registry")])
     assert result.exit_code != 0
 
 
@@ -76,38 +77,30 @@ def test_build_honors_timenet_local_registry(monkeypatch, tmp_path):
     assert TimeNet().load("timenet/hello-world@1.0.0").metadata.dataset_id == "timenet/hello-world"
 
 
-def test_build_out_overrides_timenet_local_registry(monkeypatch, tmp_path):
+def test_local_registry_flag_overrides_timenet_local_registry(monkeypatch, tmp_path):
     monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "elsewhere"))
-    out = tmp_path / "out"
+    store = tmp_path / "store"
 
-    result = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(out), "--no-isolation"])
+    result = runner.invoke(
+        build_app, ["build", "timenet/hello-world", "--local-registry", str(store), "--no-isolation"]
+    )
     assert result.exit_code == 0
-    assert (out / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
+    assert (store / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
     assert not (tmp_path / "elsewhere").exists()
-
-
-def test_resolve_target_routes_remote_url_to_registry(tmp_path):
-    # A remote --out publishes through a writable registry (constructed offline, no network).
-    assert isinstance(_resolve_target("timenet://"), RemoteRegistry)
-    assert isinstance(_resolve_target("https://registry.timenet.ai"), RemoteRegistry)
-    # A local --out writes a directory.
-    assert _resolve_target(str(tmp_path / "reg")) == tmp_path / "reg"
-
-
-def test_resolve_target_rejects_an_empty_out_instead_of_the_current_directory():
-    with pytest.raises(TimeNetRegistryError, match=r"^--out is blank"):
-        _resolve_target("")
 
 
 def test_build_cleans_cache_but_keep_flag_retains(tmp_path):
     cache = settings().downloads_dir / "timenet" / "hello-world"
 
-    built = runner.invoke(build_app, ["build", "timenet/hello-world", "--out", str(tmp_path / "r1"), "--no-isolation"])
+    built = runner.invoke(
+        build_app, ["build", "timenet/hello-world", "--local-registry", str(tmp_path / "r1"), "--no-isolation"]
+    )
     assert built.exit_code == 0
     assert not cache.exists()  # cleaned by default after a successful build
 
     keep = runner.invoke(
-        build_app, ["build", "timenet/hello-world", "--out", str(tmp_path / "r2"), "--keep-cache", "--no-isolation"]
+        build_app,
+        ["build", "timenet/hello-world", "--local-registry", str(tmp_path / "r2"), "--keep-cache", "--no-isolation"],
     )
     assert keep.exit_code == 0
     assert cache.exists()  # retained with --keep-cache

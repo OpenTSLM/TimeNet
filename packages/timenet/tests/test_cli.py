@@ -303,7 +303,7 @@ def test_publish_of_a_release_that_the_store_lacks_names_the_fix(tmp_path):
     assert type(result.exception) is TimeNetDatasetNotFoundError
     assert str(result.exception) == (
         f"timenet/hello-world is not in local registry {store}. "
-        f"Build it into the local registry with `timenet-build build timenet/hello-world --out {store}`, "
+        f"Build it into the local registry with `timenet-build build timenet/hello-world --local-registry {store}`, "
         f"or copy it there with `timenet download timenet/hello-world --local-registry {store}`."
     )
     # The hint keeps the version, and names no store without --local-registry.
