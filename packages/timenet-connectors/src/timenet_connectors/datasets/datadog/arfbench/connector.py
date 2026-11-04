@@ -57,7 +57,7 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
 
     values_backend = "zarr"  # the chart tensors need it
 
-    def download(self, cache_dir: Path) -> list[ARFBenchSource]:  # noqa: PLR6301 - BaseConnector override
+    def download(self, cache_dir: Path) -> list[ARFBenchSource]:  # ruff: ignore[no-self-use] - BaseConnector override
         """Fetch the QA table, every series file, and every chart of the pinned release.
 
         Args:
@@ -176,7 +176,7 @@ def _metric_record(metric: str, files: Mapping[int, Path]) -> Record:
     return record
 
 
-def _signal(  # noqa: PLR0913 - the group's arrays, and what names the signal
+def _signal(  # ruff: ignore[too-many-arguments] - the group's arrays, and what names the signal
     epochs: np.ndarray,
     values: np.ndarray,
     missing: np.ndarray,
