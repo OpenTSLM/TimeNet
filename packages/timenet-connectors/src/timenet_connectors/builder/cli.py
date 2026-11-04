@@ -8,32 +8,26 @@ time. To add one, drop a ``datasets/<org>/<name>/`` package with a ``connector.p
 
 import json
 from pathlib import Path
+import shlex
 
 import typer
 
-from timenet import plan_build
+from timenet import BuildStep, Plan, Step, plan_build, publish
 from timenet.builders import BuildOptions, declared
+from timenet.cli.options import AUTO_BUILD, LOCAL_REGISTRY, REMOTE_REGISTRY
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console, progress_renderer
-from timenet.config import settings
+from timenet.client import default_local_registry, default_sources
 from timenet.coordinator.build import run_plan
 from timenet.errors import (
     TimeNetAccessError,
     TimeNetFileError,
     TimeNetMissingParentError,
-    TimeNetRegistryError,
 )
 from timenet.manifest import PayloadSource
-from timenet.registry import (
-    BaseRegistry,
-    LocalRegistry,
-    WritableRegistry,
-    copy_release,
-    local_registry_path,
-    open_registry,
-)
+from timenet.registry import LocalRegistry, WritableRegistry, open_registry
 from timenet.registry._paths import release_dir  # ruff: ignore[import-private-name]
-from timenet.sources import InstalledConnectors
+from timenet.sources import InstalledConnectors, ReleaseSource
 from timenet.types.references import DatasetRef, is_latest, split_ref
 from timenet_connectors.builder.backend import ConnectorBuilder
 from timenet_connectors.discovery import known_ids
@@ -48,48 +42,12 @@ def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress stat
     console.quiet = quiet
 
 
-def _resolve_target(out: str | None) -> WritableRegistry | Path:
-    """Resolve a build output to a local directory or writable remote registry.
-
-    Args:
-        out: The output URL or path, or ``None`` to use ``TIMENET_LOCAL_REGISTRY``.
-
-    Returns:
-        A local directory ``Path`` or a remote ``WritableRegistry``.
-
-    Raises:
-        TimeNetRegistryError: If ``out`` is blank or cannot be opened as a registry.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by open_registry
-    # TODO(adrian): Remove temporary glue which maps a missing --out onto the local registry of the
-    # default list until the build CLI takes the flags of the defaults.
-    if out is None:
-        return settings().local_registry_dir
-    try:
-        return local_registry_path(out, label="--out")
-    except TimeNetRegistryError:
-        return open_registry(out, label="--out")
-
-
 @app.command()
 # ruff: ignore[too-many-arguments, too-many-positional-arguments] (a typer command: one parameter per option)
 def build(
     release: str = typer.Argument(..., metavar="DATASET_ID[@VERSION]"),
-    out: str | None = typer.Option(
-        None,
-        "--out",
-        help="Output registry: a local directory or a timenet:// / http(s):// / s3:// URL "
-        "(default: the local registry, $TIMENET_LOCAL_REGISTRY).",
-    ),
     force: bool = typer.Option(
         False, "--force", "-f", help="Build the release again, even if the local registry holds it."
-    ),
-    fetch_from: str | None = typer.Option(
-        None,
-        "--fetch-from",
-        help="Copy missing parent releases from this registry URI (default for a remote --out: that registry).",
-    ),
-    build_parents: bool = typer.Option(
-        False, "--build-parents", help="Build missing parent releases from their installed connectors."
     ),
     keep_cache: bool = typer.Option(
         False, "--keep-cache", help="Keep the raw download cache after building (default: remove it)."
@@ -99,43 +57,50 @@ def build(
         "--isolation/--no-isolation",
         help="Run the build in an environment built from the connector's requirements.",
     ),
+    publish_to: str | None = typer.Option(
+        None,
+        "--publish-to",
+        metavar="URL",
+        help="After the build, publish the release and its payload sources to this registry: a URL or a local path.",
+    ),
+    dry_run: bool = typer.Option(False, "--dry-run", help="Print the plan and stop."),
+    local_registry: str | None = LOCAL_REGISTRY,
+    remote_registry: str | None = REMOTE_REGISTRY,
+    auto_build: bool | None = AUTO_BUILD,
 ) -> None:
     """Run a connector through the engine and write or publish its dataset.
 
-    A local ``--out`` writes a dataset-layout directory and prints its path to stdout. A remote
-    ``--out`` (``timenet://`` / ``http(s)://`` / ``s3://``) gets the release in two steps. First, the
-    release builds into the default local registry. Then a copy publishes it with its payload
-    sources, and the command prints the version. If the remote registry already holds the version
-    and ``--force`` is not set, nothing builds and nothing is copied. Either way an emoji summary goes
-    to stderr, so scripts can capture stdout. A built version is reused unless you give ``--force``.
-    A published version never changes. So ``--force`` with a remote ``--out`` that holds the version
-    is a usage error, and nothing runs.
+    The build writes the release into the local registry, a dataset-layout directory, and prints its path to
+    stdout. With ``--publish-to``, the release gets to that registry in two steps. First, the release
+    builds into the local registry. Then a copy publishes it with its payload sources, and the command prints
+    the version. If that registry already holds the version and ``--force`` is not set, nothing builds
+    and nothing is copied. ``--dry-run`` prints the plan to stdout and runs nothing. Either way an
+    emoji summary goes to stderr, so scripts can capture stdout. A built version is reused unless you
+    give ``--force``.
 
     The build runs in an environment built from the connector's ``requirements.txt``. Pass
     ``--no-isolation`` (or set ``TIMENET_ISOLATION=off``) to run it in the current interpreter
     instead, which is what you want while writing a connector.
 
-    A dataset whose card declares ``parents`` needs those exact parent releases in the local
-    registry. ``--fetch-from`` names a registry to copy a missing parent from. For a remote
-    ``--out``, that registry is the default, because it holds the parents of its releases.
-    ``--build-parents`` builds a missing parent from its own connector. If neither option obtains a
-    missing parent, the build fails before any download. The build prepares every parent before the
-    dataset itself. It never builds a parent over a release that the local registry already holds.
-    If the local registry already holds the version, the build needs only the payload sources of
-    the version. It prepares them the same way as a parent.
+    A dataset whose card declares ``parents`` needs those exact parent releases in the local registry. A
+    parent that the local registry lacks comes from the default list of sources, which ``--local-registry``,
+    ``--remote-registry`` and ``--auto-build`` set. If no source provides a missing parent, the build
+    fails before any download. The build prepares every parent before the dataset itself. It never
+    builds a parent over a release that the local registry already holds. If the local registry already holds the
+    version, the build needs only the payload sources of the version. It prepares them the same way
+    as a parent.
 
     Raises:
-        BadParameter: If ``dataset_id`` has no known connector. Also if ``--force`` is set and the
-            remote ``--out`` holds the version. Nothing runs then.
+        BadParameter: If ``dataset_id`` has no known connector.
         TimeNetVersionUnavailableError: If the connector cannot build the requested version.
         TimeNetMissingParentError: If a parent is missing. The hint of the error names the flags.
         TimeNetFileError: If a copy of a parent in the local registry is damaged, or a copied file
             does not match its manifest record. The hint of the error names the flags.
-        TimeNetAccessError: If the output is remote and gets a release without access declared
+        TimeNetAccessError: If ``--publish-to`` is remote and gets a release without access declared
             ``open``.
-        TimeNetVersionConflictError: If the copy to the remote ``--out`` finds other files of the
+        TimeNetVersionConflictError: If the copy to ``--publish-to`` finds other files of the
             version, or of a payload source of it, in that registry. Nothing is copied then.
-    """  # ruff: ignore[docstring-extraneous-exception] - the copy raises TimeNetVersionConflictError
+    """  # ruff: ignore[docstring-extraneous-exception] - the publish raises TimeNetVersionConflictError
     # known_ids() imports no connector. So an unknown id fails before any environment exists.
     dataset_id, version = split_ref(release)
     known = known_ids()
@@ -143,14 +108,21 @@ def build(
         raise typer.BadParameter(f"no connector for {dataset_id!r}; known: {', '.join(known) or '(none)'}")
     if not is_latest(version):
         declared(dataset_id, version)
+    store = default_local_registry(local_registry=local_registry)
+    # The first entry of the default list is the local registry, and the build has it already.
+    parents_from = default_sources(
+        local_registry=local_registry, remote_registry=remote_registry, auto_build=auto_build
+    )[1:]
+    dest = None if publish_to is None else open_registry(publish_to, label="--publish-to")
+    has_connectors = any(isinstance(source, InstalledConnectors) for source in parents_from)
     try:
         # The parent shows each copy and build step. An isolated child shows its own downloads and shards.
         with progress_renderer() as progress:
-            result = _build_to(
+            result = _build_and_publish(
                 dataset_id,
-                _resolve_target(out),
-                fetch_from=None if fetch_from is None else open_registry(fetch_from),
-                build_parents=build_parents,
+                store=store,
+                parents_from=parents_from,
+                publish_to=dest,
                 force=force,
                 options=BuildOptions(
                     keep_cache=keep_cache,
@@ -158,112 +130,180 @@ def build(
                     quiet=console.quiet,
                     isolation=None if isolation is None else ("on" if isolation else "off"),
                 ),
+                dry_run=dry_run,
             )
     except TimeNetMissingParentError as error:
-        error.hint = _missing_hint(fetch_from=fetch_from, build_parents=build_parents)
+        error.hint = _missing_hint(has_connectors=has_connectors)
         raise
     except TimeNetFileError as error:
+        flags = _registry_flags(local_registry=local_registry, remote_registry=remote_registry)
         error.hint = (
-            f"Fetch an intact copy with --fetch-from <registry>, or rebuild it with `timenet-build build "
-            f"{error.release.dataset_id} --force`. A rebuild changes its files, and the releases that "
-            "pin the old files then fail to open."
+            f"Copy an intact release into the local registry with `timenet download {error.release}{flags}`, or rebuild "
+            f"it with `timenet-build build {error.release.dataset_id} --force{flags}`. A rebuild changes its "
+            "files, and the releases that pin the old files then fail to open."
         )
         raise
     except TimeNetAccessError as error:
-        error.hint = "A remote --out holds open releases only. Build it into a local --out instead."
+        error.hint = _access_hint(dest, has_connectors=has_connectors)
         raise
-    typer.echo(result)
+    if result is not None:
+        typer.echo(result)
 
 
-def _missing_hint(*, fetch_from: str | None, build_parents: bool) -> str | None:
-    """Suggest flags to obtain a missing release.
+def _missing_hint(*, has_connectors: bool) -> str:
+    """Say how a build gets a parent that no source of its list provides.
 
     Args:
-        fetch_from: The value of ``--fetch-from``, or ``None``.
-        build_parents: Whether ``--build-parents`` is set.
+        has_connectors: Whether the list of sources holds the installed connectors.
 
     Returns:
-        A sentence naming unused flags, or ``None`` if both are set.
+        The hint, a full sentence that names ``--auto-build`` too if the list has no connectors.
     """
-    ways = []
-    if fetch_from is None:
-        ways.append("fetch it with --fetch-from <registry>")
-    if not build_parents:
-        ways.append("build it with --build-parents")
-    if not ways:
-        return None
-    hint = " or ".join(ways)
-    return f"{hint[0].upper()}{hint[1:]}."
+    ways = (
+        "copy it from a registry that holds it with --remote-registry <url>, or publish it to such a registry "
+        "first with `timenet publish`."
+    )
+    if not has_connectors:
+        return f"Build it from its installed connector with --auto-build, {ways}"
+    return f"{ways[0].upper()}{ways[1:]}"
 
 
-def _build_to(  # ruff: ignore[too-many-arguments]
+def _access_hint(dest: WritableRegistry | None, *, has_connectors: bool) -> str | None:
+    """Say how a build gets a release that is not open.
+
+    Args:
+        dest: The registry that ``--publish-to`` names, or ``None``.
+        has_connectors: Whether the list of sources holds the installed connectors.
+
+    Returns:
+        The hint as a full sentence, or ``None`` if no flag of the command helps.
+    """
+    if dest is not None and dest.requires_open_access:
+        return (
+            f"{dest} serves open releases only, so --publish-to takes open releases only. Build it into the "
+            "local registry without --publish-to instead."
+        )
+    if not has_connectors:
+        return "Build it from its installed connector with --auto-build."
+    return None
+
+
+def _registry_flags(*, local_registry: str | None, remote_registry: str | None) -> str:
+    """Repeat the registry flags that the command got, for a command in a hint.
+
+    Args:
+        local_registry: The value of ``--local-registry``, or ``None``.
+        remote_registry: The value of ``--remote-registry``, or ``None``.
+
+    Returns:
+        Each given flag with its quoted value and a space before it, or an empty string.
+    """
+    flags = (("--local-registry", local_registry), ("--remote-registry", remote_registry))
+    return "".join(f" {flag} {shlex.quote(value)}" for flag, value in flags if value is not None)
+
+
+def _build_and_publish(  # ruff: ignore[too-many-arguments]
     dataset_id: str,
-    target: WritableRegistry | Path,
     *,
-    fetch_from: BaseRegistry | None,
-    build_parents: bool,
+    store: LocalRegistry,
+    parents_from: list[ReleaseSource],
+    publish_to: WritableRegistry | None,
     force: bool,
     options: BuildOptions,
-) -> str:
-    """Build a release for a local or remote output.
+    dry_run: bool,
+) -> str | None:
+    """Build a release into the store, and then publish it if a destination is given.
 
-    Remote registries receive a copy from the local registry.
-    The build skips an existing release unless ``force`` is set.
+    The function shows the plan on the console before the first step, or says on the console that
+    nothing runs.
 
     Args:
         dataset_id: The dataset ID.
-        target: The local output directory or remote registry.
-        fetch_from: The registry for missing parents, or ``None`` to use the remote output if present.
-        build_parents: Build missing parents with installed connectors.
-        force: Rebuild an existing local release.
-        options: Options for each build.
+        store: The local registry to build into.
+        parents_from: The sources of the parents and payload sources that the local registry lacks.
+        publish_to: The registry to publish the release to after the build, or ``None``.
+        force: Build the release again, even if the store holds it.
+        options: The options of each build.
+        dry_run: Return the lines of the plan instead of running it.
 
     Returns:
-        The local version directory or remote version string.
-
-    Raises:
-        BadParameter: If ``force`` is set and the remote output already holds the version.
+        The text for stdout: the release directory, the version with ``publish_to``, the plan for a dry
+        run, or ``None``.
     """
     release = declared(dataset_id).release
-    if isinstance(target, Path):
-        store, remote = LocalRegistry(target), None
-    elif target.exists(release.dataset_id, str(release.version)):
-        if force:
-            raise typer.BadParameter(
-                f"the remote --out holds {release}, and a published version never changes. --force builds "
-                "a release again only for a local --out, or for a version that the remote --out does not hold.",
-                param_hint="--force",
-            )
-        console.success(f"Nothing to do: '{release.dataset_id}' {release.version} is already in the remote --out")
-        return str(release.version)
-    else:
-        # TODO(adrian): Remove temporary glue which maps a remote --out onto a build into the
-        # local registry of the default list until --publish-to replaces a remote --out.
-        store, remote = LocalRegistry(settings().local_registry_dir), target
-        # A build into the remote registry found the parents there. So without --fetch-from, the build
-        # copies a missing parent from the remote registry into the local one.
-        fetch_from = fetch_from if fetch_from is not None else remote
-    # A remote registry holds only open releases. So for a remote output, the build refuses another
-    # release before any download, as a build into that registry would.
+    if publish_to is not None and not force and publish_to.exists(release.dataset_id, str(release.version)):
+        console.success(f"Nothing to do: '{release.dataset_id}' {release.version} is already in {publish_to}")
+        return None if dry_run else str(release.version)
+    # A destination that requires open access holds open releases only. So for such a destination, the
+    # plan refuses another release before any download.
     plan = plan_build(
         dataset_id,
         local_registry=store,
-        # TODO(adrian): Remove temporary glue which maps --fetch-from and --build-parents onto a
-        # list of sources until the flags of the defaults replace them.
-        parents_from=[
-            *([fetch_from] if fetch_from is not None else []),
-            *([InstalledConnectors()] if build_parents else []),
-        ],
+        parents_from=parents_from,
         force=force,
-        open_access_only=remote is not None,
+        open_access_only=publish_to is not None and publish_to.requires_open_access,
     )
+    if dry_run:
+        lines = _plan_lines(plan)
+        if publish_to is not None:
+            lines.append(f"then publish {release} to {publish_to}")
+        elif not plan.steps:
+            console.success(f"Nothing to do: '{release.dataset_id}' {release.version} is already in {store}")
+        return "\n".join(lines) or None
+    if plan.steps:
+        console.status("📋", f"Plan for '{release.dataset_id}' {release.version}:")
+        for line in _plan_lines(plan):
+            # Three columns, the width of the emoji and its space, put the tree under the text above it.
+            console.detail(f"   {line}")
     run_plan(plan, store, options=options)
-    if remote is not None:
-        copy_release(release, store, remote, progress=options.progress)
+    if publish_to is not None:
+        publish(str(release), dest=publish_to, source=store, progress=options.progress)
         return str(release.version)
     if not plan.steps:
         console.success(f"Nothing to do: '{release.dataset_id}' {release.version} is already in {store}")
     return str(release_dir(store.root, release))
+
+
+_ACTIONS = {"read": "read from", "copy": "copy from", "build": "build with"}
+"""The words of each action of a step in a line of a plan."""
+
+_BRANCHES = {"├── ": "│   ", "└── ": "    "}
+"""For each branch of a tree line: what the lines below it show in its column."""
+
+
+def _plan_lines(plan: Plan) -> list[str]:
+    """Draw a plan as a tree, with the requested release at the top.
+
+    Below each release come the releases that it needs. Each line names the release, the action and
+    the source, for example ``<release>: copy from <registry>``, or ``<release>: see above`` the second
+    time.
+
+    Args:
+        plan: The plan.
+
+    Returns:
+        One line for each node of the tree, without line ends.
+    """
+    steps = {step.release: step for step in plan.steps}
+    needed = {release for step in plan.steps for release in step.depends_on}
+    lines: list[str] = []
+    drawn: set[DatasetRef] = set()
+
+    def draw(step: Step, indent: str, branch: str) -> None:
+        if step.release in drawn:
+            lines.append(f"{indent}{branch}{step.release}: see above")
+            return
+        drawn.add(step.release)
+        source = InstalledConnectors() if isinstance(step, BuildStep) else step.registry
+        lines.append(f"{indent}{branch}{step.release}: {_ACTIONS[step.action]} {source}")
+        below = [steps[release] for release in step.depends_on if release in steps]
+        for number, child in enumerate(below, start=1):
+            draw(child, indent + _BRANCHES.get(branch, ""), "└── " if number == len(below) else "├── ")
+
+    for step in reversed(plan.steps):
+        if step.release not in needed:
+            draw(step, "", "")
+    return lines
 
 
 @app.command("build-prepared-release", hidden=True)

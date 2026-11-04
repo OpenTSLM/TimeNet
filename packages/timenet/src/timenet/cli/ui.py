@@ -44,6 +44,14 @@ class _Console:
         """Prints a success line. Quiet mode suppresses this line."""
         self._emit("✅", message, style="green")
 
+    def detail(self, message: str) -> None:
+        """Prints a line without an emoji. Quiet mode suppresses this line.
+
+        The console does not wrap the line, so a long line stays whole.
+        """
+        if not self.quiet:
+            self.rich.print(message, markup=False, highlight=False, soft_wrap=True)
+
     def warn(self, message: str) -> None:
         """Prints a warning line. Quiet mode does not suppress this line."""
         self._emit("⚠️", message, style="yellow", force=True)

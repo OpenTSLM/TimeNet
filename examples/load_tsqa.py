@@ -2,7 +2,7 @@
 
 Build the dataset into a local registry, then run this script::
 
-    uv run timenet-build build "chengsenwang/tsqa" --out .timenet-registry
+    uv run timenet-build build "chengsenwang/tsqa" --local-registry .timenet-registry
     uv run python examples/load_tsqa.py
 
 Pass a dataset ID and a registry path as arguments to load another dataset.
