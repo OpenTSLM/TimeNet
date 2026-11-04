@@ -45,8 +45,7 @@ def plan_release_build(  # ruff: ignore[too-many-arguments]
 
     Raises:
         TimeNetDatasetNotFoundError: If no installed backend builds the dataset.
-        TimeNetVersionUnavailableError: If ``dataset`` names another version than the card of the
-            connector declares.
+        TimeNetVersionUnavailableError: If ``dataset`` names another version than the card declares.
         TimeNetMissingParentError: If no source provides a parent or a payload source.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by declared and the plan
     dataset_id, version = split_ref(dataset_id)
@@ -71,8 +70,7 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
         options: Build settings, including the progress callback for copies and builds.
 
     Raises:
-        TimeNetVersionConflictError: If a copy step finds that ``store`` holds a release that it
-            copies, or a payload source of it, with other files.
+        TimeNetVersionConflictError: If ``store`` holds a copied release with other files.
         TimeFFormatError: If a build does not reproduce the files that other releases pin.
         TimeNetBuildError: If a build runs but fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the copy and the backends
