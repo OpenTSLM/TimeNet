@@ -24,8 +24,8 @@ class Record(SupportsAnnotate):
     You create a record with :meth:`~timenet.dataset.TimeFDataset.add_record`. The record is mutable,
     so you can add ``annotations`` after construction.
 
-    A record has no metadata field. Record-level facts, such as a subject's age or the recording
-    device, are :class:`~timenet.types.Annotation` objects with no ``span``. Such an annotation can
+    Use ``metadata`` for untyped JSON details. Record-level facts, such as a subject's age or the
+    recording device, are :class:`~timenet.types.Annotation` objects with no ``span``. Such an annotation can
     also state a ``unit``, and it travels with every window drawn later from the record.
     """
 

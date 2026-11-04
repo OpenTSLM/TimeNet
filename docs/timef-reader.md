@@ -109,6 +109,11 @@ Tasks have four useful read paths:
   [Reading objects by ID](#reading-objects-by-id) describes.
 - `read_task_table()`, `read_target_table()`, and `read_annotation_table()` return Arrow tables
   without creating Python task objects. Their ID columns are `int64`.
+  The Record, Signal, and Task columns hold the ids that the dataset assigned, for example
+  `task_id`, `input_record_ids`, `from_task_ids`, and `span_signal_ids`. `occurrence_id` and
+  `content_id` are storage row numbers of this version. The next write numbers them again. In
+  `read_annotation_table()`, `object_id` is a Record, Signal, or Task id, a storage row number for
+  a Source, or `NULL` for the dataset.
 
 One call returns one consistent set of objects. A Record that two tasks use is one object, and the
 Signals on one irregular axis share one handle to its time offsets. `read_tasks(inputs=records)`
@@ -283,9 +288,9 @@ and decoded Zarr chunks until it closes.
 | `iter_tasks(inputs=..., split=..., load=..., batch_size=...)` | Yield the matching tasks in bounded batches. |
 | `get(kind, id, parent=..., load=...)` | Read one Record, Signal, or task by ID. |
 | `get_many(kind, ids, parent=..., load=...)` | Read objects of one kind by ID, in order, in one batch. |
-| `read_task_table()` | Return the task table with public IDs. |
-| `read_target_table()` | Return ordered task targets with public IDs. |
-| `read_annotation_table()` | Return annotation occurrences with public IDs. |
+| `read_task_table()` | Return one row per task. |
+| `read_target_table()` | Return the ordered task targets. |
+| `read_annotation_table()` | Return one row per annotation occurrence. |
 | `verify()` | Hash every file the release reads, its own and its pinned payload source files. |
 | `metadata` | Return the dataset metadata. |
 | `schema` | Return the dataset schema. |
@@ -386,8 +391,10 @@ order that the caller gives.
 ## Round-trip guarantee
 
 For valid writer input, the reader restores Records, Sources, Signals, annotations, and tasks. It
-also restores task relationships and Signal values with their original dtype and shape. Public IDs
-are the durable references. Entity IDs are ints. The dataset ID is its `org/name` string. The
-reader does not keep the Python object identity from the writer process.
+also restores task relationships and Signal values with their original dtype and shape.
+Relationships return as object references: task inputs are Records, spans hold Signals, and
+`from_tasks` holds Tasks. Records, Signals, and Tasks keep the `id` that the dataset assigned.
+Sources, axes, and annotations have no id. The reader does not keep the Python object identity
+from the writer process.
 
 See the [API reference for `timenet.reader`](api/reader.md) for all members.
