@@ -248,9 +248,10 @@ must contain exactly one label.
 Labels come from the targets stored directly on the task or from the text of its target
 annotations.
 
-Each target is a `Label` from the task's label set, such as `CONDITION["faulty"]`. A plain string
-is not a classification target, so a misspelled label fails where you write it. TimeNet stores the
-label's name. Read `task.labels` to get the labels and their descriptions, in target order.
+Each target is a `Label` from the task's label set. A plain string is not a classification target.
+Look up each target in its label set, for example `CONDITION["faulty"]`. An unknown name raises
+`TimeFNotFoundError` during lookup. TimeNet stores the label's name. Read `task.labels` to get the
+labels and their descriptions, in target order.
 
 ```python
 task = ClassificationTask(inputs=(record,), targets=(CONDITION["faulty"],), label_set=CONDITION)

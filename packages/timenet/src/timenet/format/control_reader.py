@@ -385,10 +385,11 @@ def _required(value: _T | None, what: str) -> _T:
 def _stored_labels(task_id: int, label_set: LabelSet, targets: tuple[object, ...]) -> tuple[Label | TextHandle, ...]:
     """Map the stored target names of a classification task to the labels of its label set.
 
-    A packed name stays a text handle, because the catalog holds only its placeholder.
+    Names stored outside the catalog remain text handles, because the catalog holds only their
+    placeholder.
 
     Returns:
-        The labels, in target order.
+        Label objects and text handles, in target order.
 
     Raises:
         TimeFFormatError: If a stored target is not text, or its name is not in the label set.

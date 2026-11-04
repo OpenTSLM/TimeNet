@@ -142,7 +142,7 @@ def _classification_targets(values: Iterable[Label | TextHandle] | None) -> tupl
     """Convert the labels of a classification target to text handles of their names.
 
     A classification target holds Label objects from the task's label set, such as ``STAGES["W"]``.
-    A text handle is also accepted, because the reader and copies of a task pass the stored names.
+    This converter also accepts text handles for stored names and task copies.
 
     Returns:
         The label names as text handles, in their original order. If ``values`` is ``None``, return
@@ -150,7 +150,7 @@ def _classification_targets(values: Iterable[Label | TextHandle] | None) -> tupl
 
     Raises:
         TimeFValidationError: If ``values`` is not a sequence, or an item is neither a Label nor a
-            text handle. A plain string is not accepted.
+            text handle. This converter rejects plain strings.
     """
     if values is None:
         return None
@@ -410,8 +410,8 @@ class ClassificationTask(Task):
     """Classify the inputs using a required set of allowed labels."""
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
-    # A classification task narrows the targets that Task accepts to labels on purpose, so the
-    # override does not accept every write that Task.targets accepts.
+    # ClassificationTask accepts fewer target types than Task. This intentional restriction requires
+    # the mutable-override suppression.
     targets: ValueField[Iterable[Label | TextHandle] | None, tuple[TextHandle, ...] | None] = field(  # ty: ignore[invalid-mutable-override]
         default=ValueField(_classification_targets, None), compare=False
     )
