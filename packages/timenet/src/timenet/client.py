@@ -134,7 +134,7 @@ def as_release_sources(items: Sequence[ReleaseSource | str | Path], *, keyword: 
         keyword: The argument name to show in errors.
 
     Returns:
-        The sources, in order. An empty list stays empty.
+        The sources in their original order, or an empty list for empty input.
 
     Raises:
         TimeFValidationError: If ``items`` is not a valid list.
@@ -160,18 +160,18 @@ class TimeNet:
     """Browse, download, and read TimeNet datasets."""
 
     def __init__(self, sources: Sequence[ReleaseSource | str | Path] | None = None) -> None:
-        """Create a client with an ordered list of dataset sources.
+        """Create a client that searches dataset sources in order.
 
         Sources accept registries, registry URLs or paths, and ``InstalledConnectors()``.
         A path opens a writable ``LocalRegistry``. Builds land in the first ``LocalRegistry`` without
         ``read_only=True``, which ``InstalledConnectors()`` requires.
 
         Args:
-            sources: Ordered registries, URLs, paths or connectors, or ``None`` for :func:`default_sources`.
+            sources: Ordered sources, registry URLs or paths, or ``None`` for :func:`default_sources`.
 
         Raises:
-            TimeFValidationError: If ``sources`` is not a valid list, or has connectors but no writable
-                local registry.
+            TimeFValidationError: If ``sources`` is not a non-empty list of valid sources, or has installed
+                connectors but no writable local registry.
         """
         if sources is None:
             self._sources = tuple(default_sources())
