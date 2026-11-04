@@ -66,6 +66,7 @@ select = [
     "D",      # pydocstyle — docstring presence and formatting
     "DOC",    # pydoclint — args/returns match signatures
     "PL",     # Pylint — error/warning/convention rules (opinionated metrics dropped in `ignore`)
+    "banned-api",  # flake8-tidy-imports (TID251) — the imports banned below
 ]
 ignore = [
     "line-too-long",  # Handled by the formatter
@@ -108,9 +109,15 @@ ignore = [
 ]
 # timenet.testing is a test-support subpackage; assert-based comparison helpers are its purpose.
 "**/src/timenet/testing/*.py" = ["assert"]
+# The ban on importing timenet_connectors applies only to the code of the timenet package.
+"!packages/timenet/src/**" = ["banned-api"]
 
 [tool.ruff.lint.pydocstyle]
 convention = "google"
+
+[tool.ruff.lint.flake8-tidy-imports.banned-api]
+# timenet-connectors depends on timenet, so timenet never imports it and works without it.
+"timenet_connectors".msg = "timenet must work without timenet-connectors"
 
 [tool.ruff.lint.flake8-bugbear]
 # Typer expects Option/Argument descriptors as parameter defaults.
