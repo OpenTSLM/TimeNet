@@ -48,7 +48,7 @@ def connector_dir(dataset_id: str) -> Path:
         path = Path(next(iter(spec.submodule_search_locations)))
         if (path / "dataset.yaml").is_file():
             return path
-    raise LookupError(f"no connector for {dataset_id!r}; known: {', '.join(_known_ids()) or '(none)'}")
+    raise LookupError(f"no connector for {dataset_id!r}; known: {', '.join(known_ids()) or '(none)'}")
 
 
 def has_connector(dataset_id: str) -> bool:
@@ -86,16 +86,14 @@ def requirements_for(dataset_id: str) -> Path | None:
     return path if path.is_file() else None
 
 
-def _known_ids() -> list[str]:
-    """List the dataset ids declared by the connector cards on disk, importing nothing.
-
-    A dataset id matches exactly as its card declares it.
+def known_ids() -> list[str]:
+    """List the dataset IDs that the connector cards declare, without importing a connector.
 
     Returns:
-        The declared dataset ids, sorted.
+        The declared dataset IDs, sorted.
 
     Raises:
-        TimeNetInvalidCardError: If a card cannot be read or is not a mapping.
+        TimeNetInvalidCardError: If a card cannot be read or declares no ``dataset_id``.
     """
     ids: set[str] = set()
     for root in _datasets.__path__:
@@ -109,8 +107,9 @@ def _known_ids() -> list[str]:
             if not isinstance(raw, dict):
                 raise TimeNetInvalidCardError(f"dataset card {card} must be a YAML mapping, got {type(raw).__name__}")
             declared = raw.get("dataset_id")
-            if declared:
-                ids.add(declared)
+            if not declared:
+                raise TimeNetInvalidCardError(f"dataset card {card} must declare a dataset_id")
+            ids.add(declared)
     return sorted(ids)
 
 
