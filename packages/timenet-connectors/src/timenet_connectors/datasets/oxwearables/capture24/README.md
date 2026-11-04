@@ -27,9 +27,11 @@ The archive's `capture24/` directory holds:
 | `annotation-label-dictionary.csv` | Each of the 206 raw labels, and its class in six label schemes |
 
 - **Signal.** An Axivity AX3 on the wrist, three axes in g, at 100 Hz. Values are written with
-  eight significant digits, so the connector keeps them as float64; float32 would round them.
+  eight significant digits. The connector stores them as float32, which keeps about seven. The
+  rounding is far below the sensor's resolution, and float32 halves the stored size.
 - **Clock.** `time` is a timestamp with no zone. For anonymity the authors randomized the dates, so
-  every recording is dated 2016. The time of day still holds. Every step is exactly 10 ms, except
+  every recording is dated 2016. They also shifted each timestamp by a small random amount, so the
+  time of day is close to the participant's local time but not exact. Every step is exactly 10 ms, except
   for one gap of 1 to 4 hours in each of eight recordings (P008, P016, P017, P060, P077, P094,
   P097, P142).
 - **Labels.** `annotation` is a [Compendium of Physical Activity][cpa] entry, such as
@@ -42,7 +44,7 @@ The archive's `capture24/` directory holds:
 ### Records
 
 One Record per participant, with one Source per segment: a run of samples exactly 10 ms apart.
-A gap starts a new segment, and nothing fills it. Each segment's `x`, `y` and `z` are lazy float64
+A gap starts a new segment, and nothing fills it. Each segment's `x`, `y` and `z` are lazy float32
 signals in `standard_gravity`, on a 100 Hz axis whose `offset_us` is the segment's first sample's
 time from the recording's first sample. 143 Records have one Source, and 8 have two.
 
@@ -51,27 +53,64 @@ are kept instead:
 
 | Where | Key | Value |
 | --- | --- | --- |
-| Record metadata | `subject_id`, `file` | The participant id, such as `P001`, and the recording's file name |
-| Record annotation | `age`, `sex` | The values of `metadata.csv` |
-| Record annotation | `recording_start_local` | The first sample's timestamp, in ISO 8601, with no zone |
+| Record metadata | `file` | The recording's file name |
+| Record annotation | `subject_ids` | A list that holds the participant id, such as `["P001"]` |
+| Record annotation | `age` | The age band of `metadata.csv`, such as `38-52` |
+| Record annotation | `sex` | `female` or `male`, from the `F` or `M` of `metadata.csv` |
+| Record annotation | `recording_start_local` | The first sample's published timestamp, in ISO 8601, with no zone |
 
-The time of day of `recording_start_local` is the participant's local time. Its date is not the
-recording's.
+`recording_start_local` is the anonymized timestamp that the authors published. Its date is not
+the recording's. Its time of day is the participant's local time, shifted by a small random amount.
 
-The signals carry no annotations. The raw labels are read to compute each window's class, and are
-not stored.
+### Activity annotations
+
+Each Source carries the raw labels of its segment. A run of consecutive samples with the same
+raw label becomes one annotation on the Source:
+
+| Field | Value |
+| --- | --- |
+| `key` | `activity` |
+| `value` | The raw label, such as `7030 sleeping;MET 0.95` |
+| `span` | The run, from its first sample to one period after its last |
+| `metadata` | The raw label's class in each of the six schemes of the label dictionary, keyed by scheme name, such as `{"Walmsley2020": "sleep", ...}` |
+
+Unlabelled samples belong to no run, so the annotations also show which samples have a label. A
+run never crosses a gap. The signals carry no annotations.
+
+The activity annotations hold the answer to every task. A model input must leave them out. A task
+names no annotation in `input_annotations`, so a model that reads only a task's inputs and scope
+does not see them.
 
 ### Dataset annotations
 
 | Key | Value |
 | --- | --- |
 | `source_url`, `source_sha256` | The pinned archive |
-| `willetts_specific_2018_vocabulary` | WillettsSpecific2018's 10 classes, sorted |
-| `walmsley_2020_vocabulary` | Walmsley2020's 4 classes, sorted |
+| `willetts_specific_2018_vocabulary` | WillettsSpecific2018's 10 classes, in string order |
+| `walmsley_2020_vocabulary` | Walmsley2020's 4 classes, in string order |
+
+### Vocabularies
+
+Each task draws its target from one of two vocabularies, one for each scheme that the authors'
+`benchmark.py` scores. A vocabulary is the closed list of a scheme's classes. Each task names its
+vocabulary in `target_schema`.
+
+| Vocabulary | Classes, in string order |
+| --- | --- |
+| `willetts_specific_2018_vocabulary` | `bicycling`, `household-chores`, `manual-work`, `mixed-activity`, `sitting`, `sleep`, `sports`, `standing`, `vehicle`, `walking` |
+| `walmsley_2020_vocabulary` | `light`, `moderate-vigorous`, `sedentary`, `sleep` |
+
+The classes are written in `connector.py`, not read from the release. The build fails if the label
+dictionary gives a class that the scheme's vocabulary does not list.
+
+The build also fails if the label dictionary does not have exactly the raw label column and the six
+scheme columns, or if a class is blank in any scheme. A blank class in a scheme without tasks would
+otherwise go into the activity annotations unnoticed. In the same way, the build fails on an age
+band or a sex that `metadata.csv` does not use.
 
 The dictionary has four more schemes (`WillettsMET2018`, `DohertySpecific2018`, `Willetts2018` and
-`Doherty2018`). They have no tasks and are not stored. A task on the raw labels or on another
-scheme needs a change to the connector.
+`Doherty2018`). They have no tasks. Their classes are in the metadata of each activity annotation.
+A task on the raw labels or on another scheme needs a change to the connector.
 
 ### Tasks
 
@@ -90,7 +129,8 @@ There is no prompt; the benchmark asks no question in words.
 
 `make_windows` cuts each recording into 10 s bins that start at its first sample. After a gap the
 bins stay on the first segment's grid. It keeps a bin with exactly 1000 samples and at least one
-labelled sample. The connector also fails the build if a kept window holds 1000 samples across a
+labelled sample, so a kept window can have as few as one labelled sample. The activity
+annotations show how much of a window has a label. The connector also fails the build if a kept window holds 1000 samples across a
 gap, so no window crosses a gap. A window's class is the most common class among its
 labelled samples. A tie goes to the class first in string order, as the authors' `Series.mode`
 does. A window's scope starts at its first sample, which after a gap can be up to 10 ms into its
@@ -110,7 +150,7 @@ sequence. For those, take a participant's tasks in `scope.start_us` order.
 
 A model that reads samples outside its window can guess the class from its neighbours. Two adjacent
 windows have the same class in more than 99.9% of pairs, because the labels come from photos taken
-every 20 to 40 seconds and from sleep diaries. 
+every 20 to 40 seconds and from sleep diaries.
 
 ## What a real build gave
 
