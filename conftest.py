@@ -1,8 +1,4 @@
-"""Shared pytest configuration for every test suite of the repository.
-
-Each test gets its own empty TimeNet home and no other ``TIMENET_*`` variable of the shell or of a
-``.env`` file.
-"""
+"""Give each test an empty TimeNet home and no other ``TIMENET_*`` setting."""
 
 import os
 
@@ -13,9 +9,9 @@ from timenet.config import TimeNetSettings
 
 @pytest.fixture(autouse=True)
 def _timenet_state(tmp_path_factory, monkeypatch):
-    """Give each test an empty ``TIMENET_HOME`` and delete every other ``TIMENET_*`` variable.
+    """Set an empty temporary TimeNet home and clear other ``TIMENET_*`` variables.
 
-    The settings also ignore a ``.env`` file, so no test depends on the shell or the folder it runs in.
+    Ignore settings from ``.env`` files.
     """
     for name in [name for name in os.environ if name.startswith("TIMENET_")]:
         monkeypatch.delenv(name)
