@@ -8,15 +8,13 @@ Each run of consecutive samples with the same raw label becomes one ``activity``
 A label scheme groups raw labels into activity classes. Each 10 s window kept by the authors' benchmark
 becomes one task per scheme that the benchmark scores. README.md describes the benchmark rules.
 
-The build reads the data in two passes. The first reads one recording at a time.
-It keeps the segments, raw label runs, and each window's start and class.
-It also keeps a digest of the acceleration values. A digest is a value used to detect changes.
-
-Missing or non-finite acceleration values fail the build.
-Non-finite values are NaN, positive infinity, or negative infinity.
+The build reads the data in two passes. The first reads one recording at a time. It keeps the
+segments, the raw label runs, each kept window's start and class, and a digest of the acceleration
+values. A digest is a value used to detect changes.
 
 The second pass builds the Records and streams the tasks. Acceleration values load from the files
-when the writer needs them. If their digest differs from the first pass, the build fails.
+when the writer needs them. If their digest differs from the first pass, the build fails. Both
+passes fail the build on a missing or non-finite acceleration value (NaN or an infinity).
 """
 
 from collections.abc import Callable, Iterator
@@ -175,7 +173,7 @@ class _Vocabulary:
     name: str
     """The key of the dataset annotation that holds the classes. Each task refers to this key through target_schema."""
     labels: tuple[str, ...]
-    """The scheme's classes, sorted by their text."""
+    """The scheme's classes, in string order."""
 
 
 # The classes of the two schemes that benchmark.py scores, as the label dictionary names them. Each
@@ -281,7 +279,7 @@ class _Person:
 
 @dataclass(frozen=True)
 class _Windows:
-    """The windows selected from a recording."""
+    """The windows kept from a recording."""
 
     first_rows: np.ndarray
     """Each kept window's first row."""
@@ -298,9 +296,10 @@ class _Participant:
 
     person: _Person
     n_rows: int
-    """The row count from the first pass. Later reads must return the same count."""
+    """The row count from the first pass. A later read with another count fails the build."""
     acceleration_digest: str
-    """The digest of the x, y and z values from the first pass. Later reads must produce the same digest."""
+    """The digest of the x, y and z values from the first pass. A later read with another digest
+    fails the build."""
     start_local: str
     """The first sample's published timestamp in ISO 8601 with microseconds and no zone. The date is
     randomized, and the authors shifted the time of day by a small random amount."""
@@ -308,7 +307,7 @@ class _Participant:
     label_runs: tuple[_LabelRuns, ...]
     """Each segment's runs of a raw label, in segment order."""
     window_starts_us: np.ndarray
-    """The time between the recording's first sample and each selected window's first sample."""
+    """The time between the recording's first sample and each kept window's first sample."""
     window_classes: dict[_Scheme, np.ndarray]
     """Each kept window's class per benchmarked scheme, as an index into that scheme's vocabulary."""
 
@@ -353,7 +352,7 @@ def _read_labels(path: Path) -> _LabelDictionary:
     Raises:
         TimeNetConnectorError: If the file is unreadable or its columns are not the raw label and the six schemes.
             Also raised if a row has missing or extra fields, or a raw label appears twice.
-            Every class of a benchmarked scheme must be in that scheme's vocabulary.
+            Also raised if a class of a benchmarked scheme is not in that scheme's vocabulary.
     """
     rows = _read_rows(path, [_DICTIONARY_LABEL_COLUMN, *(scheme.column for scheme in _Scheme)])
     raw_labels = [row[_DICTIONARY_LABEL_COLUMN] for row in rows]
@@ -424,7 +423,7 @@ def _read_people(root: Path) -> list[_Person]:
         TimeNetConnectorError: If the file is unreadable, its columns are not pid, age and sex, or it lists
             no participants. Also raised if a row has missing or extra fields.
             Also raised if an age band or sex is unknown, or a pid repeats.
-            The table and the recordings must name the same participants.
+            Also raised if the table and the recording files name different participants.
     """
     path = root / _METADATA_FILE
     rows = _read_rows(path, [column.value for column in _MetadataColumn])
@@ -444,10 +443,10 @@ def _read_people(root: Path) -> list[_Person]:
 
 
 def _person_of_row(path: Path, line: int, row: dict[str, str], recordings: dict[str, Path]) -> _Person:
-    """Build a _Person from one ``metadata.csv`` row and the path to that person's recording.
+    """Build the ``_Person`` of one ``metadata.csv`` row, and find their file in ``recordings``.
 
     Returns:
-        The _Person with the participant's ID, age band, sex, and recording path.
+        The ``_Person`` with the participant's id, age band, sex, and recording path.
 
     Raises:
         TimeNetConnectorError: If the connector does not recognize the age band or sex.
@@ -474,7 +473,7 @@ def _recordings_by_pid(root: Path) -> dict[str, Path]:
 
 
 def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant:
-    """Summarize a recording's segments, raw label runs, selected windows, and acceleration digest.
+    """Summarize a recording's segments, raw label runs, kept windows, and acceleration digest.
 
     Only an empty ``annotation`` field marks an unlabeled sample. Any other text must be a raw label
     from the label dictionary.
@@ -485,8 +484,8 @@ def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant
     Raises:
         TimeNetConnectorError: If the file is unreadable, its header is wrong, or it has no rows.
             Also raised if a timestamp is missing or unreadable, or a step is shorter than one period.
-            Raw labels must belong to the dictionary, and kept windows must not cross gaps.
-            Acceleration values must be present and finite.
+            Also raised if a raw label is not in the dictionary, or if a bin with 1000 samples and a
+            labeled sample crosses a gap. Also raised if an acceleration value is missing or not finite.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the read helpers
     path = person.path
     table = _read_table(path)
@@ -510,8 +509,8 @@ def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant
 def _convert_options(columns: list[str]) -> pa_csv.ConvertOptions:
     """Return the same parsing configuration for both reads of a recording's ``columns``.
 
-    Only an empty field counts as missing. A written ``nan`` remains a value.
-    The build fails when ``_axis_values`` reads it because it is not finite.
+    Only an empty field counts as missing. A written ``nan`` stays a value. In x, y or z it reads as
+    NaN, and ``_axis_values`` then fails the build because the value is not finite.
     """
     return pa_csv.ConvertOptions(
         include_columns=columns,
@@ -669,9 +668,9 @@ def _make_windows(
     stay on the first segment's grid. It keeps a bin with exactly 1000 samples and at least one labeled
     sample.
 
-    A bin that crosses a gap usually has fewer samples. A step between one and two sample periods is
-    also a gap, but its bin can still contain 1000 samples.
-    If a selected window crosses a gap, this function fails the build. No kept window crosses a gap.
+    A bin that crosses a gap usually has fewer samples, so it is dropped. A step between one and two
+    sample periods is also a gap, but the bin around it can still hold 1000 samples. If such a bin
+    also has a labeled sample, this function fails the build, so no kept window crosses a gap.
 
     A window's class in a scheme is the most common class among its labeled samples. A tie goes to the
     first class in string order.
@@ -683,7 +682,7 @@ def _make_windows(
         The kept windows.
 
     Raises:
-        TimeNetConnectorError: If a kept window holds 1000 samples across a gap.
+        TimeNetConnectorError: If a bin with 1000 samples and a labeled sample crosses a gap.
     """
     # Each sample's 10 s bin on the first sample's grid, and the first row of each bin that has samples.
     bins = offsets_us // _WINDOW_US
@@ -748,11 +747,9 @@ _ReadAcceleration = Callable[[_Participant], _Acceleration]
 class _OneRecording:
     """Read a recording's acceleration once for all its signals and keep only the latest recording.
 
-    A Record's signals load one after another, so the cache needs only one recording.
-    This class uses its own cache instead of lru_cache(maxsize=1).
-    A cache built with lru_cache(maxsize=1) loads the next recording before releasing the previous one.
-    Both recordings briefly remain in memory.
-    This class releases the previous recording first.
+    A Record's signals load one after another, so the cache needs only one recording. The class does
+    not use ``lru_cache(maxsize=1)``, because that cache reads the next recording before it releases
+    the previous one, so both are in memory for a moment. This class releases the previous one first.
     """
 
     def __init__(self) -> None:
@@ -805,9 +802,8 @@ def _activity_annotations(runs: _LabelRuns, labels: _LabelDictionary) -> Iterato
 def _record(participant: _Participant, labels: _LabelDictionary, acceleration: _ReadAcceleration) -> Record:
     """Build a participant's Record with one Source per segment.
 
-    Each Source has x, y and z signals that load when needed.
-
-    Each Source also carries the segment's raw label runs as ``activity`` annotations.
+    Each Source has x, y and z signals that load when needed, and carries the segment's raw label runs
+    as ``activity`` annotations.
 
     Returns:
         The Record, whose values stay in the recording until read.
@@ -876,7 +872,8 @@ class Capture24Connector(BaseConnector[Path]):
     async def download_async(self, cache_dir: Path) -> list[Path]:  # ruff: ignore[no-self-use] - the connector interface
         """Fetch and extract the pinned archive.
 
-        The downloaded archive must match the expected SHA-256 digest.
+        The download fails, before anything is extracted, if the archive's SHA-256 digest differs from
+        ``ARCHIVE_SHA256``.
         Later calls reuse the extracted directory without downloading the archive again.
 
         Returns:
@@ -888,10 +885,11 @@ class Capture24Connector(BaseConnector[Path]):
     def convert(self, raw_refs: list[Path]) -> TimeFDataset:
         """Build one Record per recording and stream one task per window and benchmarked scheme.
 
-        The first pass reads each recording and makes sure that its data follows the connector's rules.
-        It keeps the segments, raw label runs, windows, and acceleration digest.
-        The writer loads acceleration values from the files when it needs them.
-        The files must remain available and unchanged until the writer finishes.
+        The first pass reads and checks each recording. It fails the build on a bad header, timestamp,
+        raw label or acceleration value, and keeps the segments, raw label runs, kept windows and
+        acceleration digest. The writer reads the acceleration values from the files later, when it
+        needs them. If a file is missing or has changed by then, the write fails with
+        ``TimeNetConnectorError``.
 
         Args:
             raw_refs: The one extracted ``capture24`` directory.
