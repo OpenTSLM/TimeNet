@@ -12,16 +12,16 @@ from timenet_connectors.discovery import connector_dir, has_connector, known_ids
 
 
 class ConnectorBuilder:
-    """Builds a dataset by running its connector in an environment built from its requirements."""
+    """Build a dataset with its connector, in an environment built from the connector's requirements."""
 
     def dataset_ids(self) -> list[str]:  # ruff: ignore[no-self-use] (BuilderBackend protocol method)
-        """List the dataset IDs of the connector cards in this package, without importing a connector.
+        """List this package's dataset IDs without importing connectors.
 
         Returns:
-            The dataset IDs, sorted.
+            The sorted dataset IDs.
 
         Raises:
-            TimeNetInvalidCardError: If a card cannot be read or declares no ``dataset_id``.
+            TimeNetInvalidCardError: If a card is unreadable, is not a YAML mapping, or lacks ``dataset_id``.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by known_ids
         return known_ids()
 

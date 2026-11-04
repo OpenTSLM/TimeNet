@@ -1,5 +1,5 @@
-"""Plan and run builds and reads.
+"""Plan and run dataset builds and reads.
 
-This package is internal to TimeNet and has no stable interface. To build a dataset, use the
-``timenet-build`` command. To read one, use ``TimeNet``.
+This internal package has no stable interface.
+Use ``timenet-build`` to build datasets and ``TimeNet`` to read them.
 """
