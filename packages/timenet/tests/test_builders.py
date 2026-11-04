@@ -1,5 +1,5 @@
 from timenet import builders
-from timenet.builders import exact_builder, find_builder, find_card
+from timenet.builders import BuildOptions, exact_builder, find_builder, find_card
 from timenet.testing import install_backends, make_dataset
 from timenet.types.references import DatasetRef
 
@@ -61,3 +61,9 @@ def test_exact_builder_returns_the_backend_only_for_the_version_of_its_card(monk
     assert exact_builder(DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)) is backend
     assert exact_builder(DatasetRef.parse(f"{card.dataset_id}@2.0.0")) is None
     assert exact_builder(DatasetRef.parse("x/y@1.0.0")) is None
+
+
+def test_build_options_let_the_backend_print_by_default():
+    # The CLI sets quiet for --quiet. The SDK leaves it unset, so an isolated child prints its lines.
+    assert BuildOptions().quiet is False
+    assert BuildOptions(quiet=True).quiet is True
