@@ -480,8 +480,8 @@ def test_download_counts_a_registry_over_the_directory_of_the_store_as_the_store
     if case == "damaged":
         (directory / "control.duckdb").write_bytes(b"cut short")
     before = {path: path.read_bytes() for path in directory.rglob("*") if path.is_file()}
-    # As for `TIMENET_LOCAL_REGISTRY=./reg timenet download timenet/hello-world --registry ./reg`: the
-    # registry after the store reads the directory of the store, so it cannot replace its copy.
+    # As for `timenet download timenet/hello-world --local-registry ./reg --remote-registry ./reg`:
+    # the registry after the store reads the directory of the store, so it cannot replace its copy.
     monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(root))
     client = TimeNet(sources=default_sources(remote_registry=root))
 
