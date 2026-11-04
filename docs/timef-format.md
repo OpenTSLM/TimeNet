@@ -112,13 +112,16 @@ reference the same `axis_id`, so the time offsets are stored once for that timel
 
 ## External values
 
-The writer keeps text and string lists inline when their encoded size is at most 4,096 bytes.
-Larger values and the time offsets of every irregular axis go into Zstandard-compressed Parquet
-files under `payloads/`. This storage is independent of the Signal values backend. Each file
-targets about 4 MiB of encoded input, but one large value can exceed that target. Each row of a
-payload file fills exactly one of its three columns, `text` (string), `texts` (list of non-null
-strings), or `time_offsets` (list of non-null int64), and readers reject a file with any other
-schema.
+The writer stores small text values in the catalog and larger values in separate payload files.
+The size limit is 4,096 bytes of encoded text, for both strings and lists of strings.
+`LazyText` and `LazyTextList` always use payload files, so readers can load their text on request.
+Connectors use these handles to supply text through a function, such as a function that reads a
+source file. Every irregular axis also stores its time offsets in a payload file.
+
+Payload files use Zstandard-compressed Parquet under `payloads/`, independent of the Signal values
+backend. Each file targets about 4 MiB of encoded input. One large value can exceed that target.
+Each row fills exactly one column: `text` (string), `texts` (list of non-null strings), or
+`time_offsets` (list of non-null int64). Readers reject files with any other schema.
 
 The `external_values` table identifies the owner, field, ordered position, file, and row for each
 value, and records its value kind and length. Like an annotation occurrence, it names its owner by

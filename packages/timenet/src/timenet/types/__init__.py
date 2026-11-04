@@ -43,7 +43,7 @@ from timenet.types.tasks import (
     TSEditingTask,
     TSGenerationTask,
 )
-from timenet.types.text import TextHandle, TextListHandle, read_value, read_values
+from timenet.types.text import LazyText, LazyTextList, TextHandle, TextListHandle, read_value, read_values
 from timenet.types.units import normalize_unit, ureg, use_as_application_registry
 from timenet.types.version import Version
 
@@ -64,6 +64,8 @@ __all__ = [
     "EntityId",
     "ForecastingTask",
     "InputModality",
+    "LazyText",
+    "LazyTextList",
     "License",
     "LocalizationMode",
     "ObjectKind",
