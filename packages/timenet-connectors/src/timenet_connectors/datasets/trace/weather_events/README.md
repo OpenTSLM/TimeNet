@@ -160,8 +160,8 @@ def time_split(record) -> Split | None:
 ## Limitations
 
 - The writer rereads each window once per channel, so a write parses the window files about seven
-  times. On one laptop, the conversion took 21 s and the write took 105 s. The written dataset is
-  167 MiB.
+  times. On one laptop, the conversion took 21 s and the write took 110 s. The written dataset is
+  166 MiB.
 - The authors give precipitation in mm, and do not say how 4-hourly and daily values are made from
   hourly ones. A 4-hourly or daily value is not the total of the hourly values of the same anchor.
   None of about 9,800 compared values with rain matched a total. Most do not match a mean either.
