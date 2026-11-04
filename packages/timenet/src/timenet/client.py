@@ -1,13 +1,8 @@
 """The :class:`TimeNet` class is the SDK's single entry point for using TimeNet from code.
 
-A client reads releases through an ordered list of sources: registries and
-``InstalledConnectors()`` (see :mod:`timenet.sources`). Its methods ``open``, ``load``, and
-``open_torch`` read a release where it is, through the read coordinator in
-:mod:`timenet.coordinator.read`. If only ``InstalledConnectors()`` provides a release, they build it
-into the store first: the one :class:`~timenet.registry.LocalRegistry` of the list with
-``store=True``. The method ``download`` copies a release into the store, from the first registry of
-the list that provides it. The methods ``list``, ``get``, and ``search`` ask one registry of the
-list. :func:`default_sources` makes the list of ``TimeNet()``.
+A client reads releases through an ordered list of sources, and builds a release that only
+``InstalledConnectors()`` provides into its store. ``download`` copies a release into the store,
+and :func:`default_sources` makes the list of ``TimeNet()``.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -252,7 +247,7 @@ class TimeNet:
         force: bool = False,
         progress: ProgressCallback | None = None,
     ) -> Path:
-        """Copy a release and its payload sources into the store, from the first source that provides it.
+        """Copy a release and its payload sources into the local registry.
 
         The release resolves as in :meth:`open`, without a build. The release and each payload source that the
         local registry lacks or holds damaged come from the first registry other than the local registry that
@@ -262,8 +257,7 @@ class TimeNet:
             dataset_id: The dataset ID.
             version: An exact version, ``"latest"``, or ``None``, as in :meth:`open`.
             force: Copy the release again, even if the local registry holds a complete copy.
-            progress: Receives the progress events of the copy: a step for each release that it copies
-                or repairs, and the bytes of each such release as they arrive.
+            progress: Receives a step event for each copied release, and its bytes as they arrive.
 
         Returns:
             The release directory in the local registry.
@@ -433,15 +427,11 @@ class TimeNet:
     def _file_hint(self, error: TimeNetFileError) -> str | None:
         """Tell the caller how to replace the damaged copy that an error names, if the store holds it.
 
-        :meth:`download` replaces only a copy in the store. So a damaged copy in another local
-        registry gets no hint.
-
         Args:
             error: The error that names the damaged release.
 
         Returns:
-            The hint as a full sentence, or ``None`` if the store does not hold a damaged copy of the
-            release.
+            The hint as a full sentence, or ``None`` if the store holds no damaged copy of it.
         """
         store = self._store
         if store is None:
@@ -517,9 +507,7 @@ def _access_hint(dataset_id: str, sources: Sequence[ReleaseSource]) -> str:
 
 
 def _copy_source(sources: Sequence[ReleaseSource], store: LocalRegistry, release: DatasetRef) -> Found | None:
-    """Return the answer for a release of the first source other than the store that provides it.
-
-    :meth:`TimeNet.download` copies the release only if a registry other than the store gave this answer.
+    """Return the answer for a release, among the sources other than the store.
 
     Args:
         sources: The sources of the client.
@@ -527,8 +515,7 @@ def _copy_source(sources: Sequence[ReleaseSource], store: LocalRegistry, release
         release: The exact release.
 
     Returns:
-        The answer of the source that serves or builds the release, or ``None`` if no source other
-        than the store provides it.
+        The answer of the source that serves or builds it, or ``None``.
     """
     others = [source for source in sources if not is_same_registry(source, store)]
     answer = resolve_release(others, release.dataset_id, str(release.version))
@@ -544,9 +531,7 @@ def _repair_hint(release: DatasetRef, found: Found | None, store: LocalRegistry)
         store: The local registry.
 
     Returns:
-        The hint as a full sentence. It names :meth:`TimeNet.download` if a registry other than the
-        store provides the release, else the build that replaces the copy, if an installed connector
-        builds the release.
+        The hint as a full sentence: a download from a registry, else a new build.
     """
     if isinstance(found, FoundInRegistry) and not is_same_registry(found.registry, store):
         # A registry other than the local registry provides the release.
