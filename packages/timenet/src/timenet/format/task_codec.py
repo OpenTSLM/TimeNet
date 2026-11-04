@@ -10,7 +10,7 @@ Signals up by id.
 from collections.abc import Iterable, Mapping
 from enum import StrEnum, unique
 from functools import lru_cache
-from typing import Any, NamedTuple, TypeVar, cast
+from typing import Any, NamedTuple, TypedDict, TypeVar, cast
 
 from pydantic import ValidationError
 
@@ -210,12 +210,19 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
     return {}
 
 
+class LabelRow(TypedDict):
+    """One entry of ``label_sets.labels``."""
+
+    name: str
+    description: str | None
+
+
 class LabelSetRow(NamedTuple):
     """One ``label_sets`` row, with the fields in the order of the table's columns."""
 
     name: str
-    labels: list[dict[str, str | None]]
-    """One ``{"name": ..., "description": ...}`` entry per label, in label order."""
+    labels: list[LabelRow]
+    """One entry per label, in label order."""
     mode: str
 
 
@@ -227,7 +234,7 @@ def encode_label_set(label_set: LabelSet) -> LabelSetRow:
     """
     return LabelSetRow(
         name=label_set.name,
-        labels=[{"name": label.name, "description": label.description} for label in label_set.labels],
+        labels=[LabelRow(name=label.name, description=label.description) for label in label_set.labels],
         mode=str(label_set.mode),
     )
 

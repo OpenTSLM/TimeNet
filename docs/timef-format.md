@@ -154,8 +154,8 @@ content once: its key (`name`), unit, description, metadata, and value. The dedi
 column is separate from metadata, which can contain its own `description` key. The value sits in
 one typed column selected by `value_kind`: `text_value`, `integer_value`, `float_value`,
 `boolean_value`, or `text_list_value`
-for a list of strings such as the subject IDs of a record. A marker annotation, which only places a span,
-has `NULL` in all of them. `annotation_occurrences` says where the content applies. It points at
+for a list of strings such as the subject IDs of a record. A marker annotation, which only places a
+span, has `NULL` in all of them. `annotation_occurrences` says where the content applies. It points at
 the content through `content_id`. It also carries the span as `span_type`, `start_us`, and
 `end_us`, plus provenance, confidence, and occurrence metadata.
 

@@ -187,13 +187,20 @@ def test_a_stream_rejects_a_different_set_with_a_used_name():
         list(dataset.iter_streamed_tasks_validated())
 
 
-def test_the_writer_rejects_a_label_set_changed_after_add_task(tmp_path):
+@pytest.mark.parametrize(
+    ("changed", "message"),
+    [
+        (OTHER_STAGES, SAME_NAME),
+        (LabelSet(name="other", labels=("X",)), "ClassificationTask 2: labels not in label set 'other'"),
+    ],
+)
+def test_the_writer_rejects_a_label_set_changed_after_add_task(tmp_path, changed, message):
     dataset, record = _dataset()
     second = ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES)
     dataset.add_tasks(tasks=[ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES), second])
-    second.label_set = OTHER_STAGES
+    second.label_set = changed
 
-    with pytest.raises(TimeFValidationError, match=SAME_NAME):
+    with pytest.raises(TimeFValidationError, match=message):
         _write(dataset, tmp_path / "control.duckdb")
 
 
@@ -248,16 +255,19 @@ def test_a_stream_rejects_targets_that_do_not_fit_the_label_set():
         ("UPDATE label_sets SET labels = [{'name': 'W', 'description': ''}] WHERE name = 'stage'", "label_sets.labels"),
         ("UPDATE tasks SET label_set = 'stage' WHERE task_type = 'answer'", "tasks.label_set"),
         ("UPDATE tasks SET label_set = 'missing' WHERE task_id = 1", "label_sets.name"),
-        ("UPDATE task_targets SET text_value = 'BOGUS' WHERE task_id = 1", "task 1 has labels that do not fit"),
-        ("INSERT INTO task_targets (task_id, position, target_kind, text_value) VALUES (1, 1, 'text', 'R')", "task 1"),
+        ("UPDATE task_targets SET text_value = 'BOGUS' WHERE task_id = 1", "task 1 has a label that is not"),
+        (
+            "INSERT INTO task_targets (task_id, position, target_kind, text_value) VALUES (1, 1, 'text', 'R')",
+            "task 1 does not have exactly one label",
+        ),
         (
             "UPDATE task_targets SET target_kind = 'integer', text_value = NULL, integer_value = 3 WHERE task_id = 1",
-            "task 1",
+            "task 1 has a label that is not text",
         ),
-        ("UPDATE task_targets SET text_value = 'PVC' WHERE task_id = 3", "task 3 has labels that do not fit"),
+        ("UPDATE task_targets SET text_value = 'PVC' WHERE task_id = 3", "task 3 repeats a label"),
         (
             "UPDATE annotation_contents SET text_value = 'BOGUS' WHERE text_value = 'N1'",
-            "task 4 has labels that do not fit",
+            "task 4 has a label that is not",
         ),
     ],
 )

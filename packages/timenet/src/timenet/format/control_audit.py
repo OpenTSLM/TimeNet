@@ -8,6 +8,7 @@ after each round trip, and tooling can run it on a published version.
 """
 
 from collections.abc import Iterable
+from typing import NamedTuple
 
 import duckdb
 
@@ -129,13 +130,13 @@ _LABELLED_TARGETS = f"""
         FROM tasks t JOIN label_sets s ON s.name = t.label_set
     ),
     targets AS (
-        SELECT x.task_id, x.target_kind AS kind, x.text_value AS label,
+        SELECT x.task_id, x.target_kind = '{TaskTargetKind.TEXT}' AS is_text, x.text_value AS label,
                EXISTS (SELECT 1 FROM external_values e
                        WHERE e.object_kind = '{ObjectKind.TASK}' AND e.object_id = x.task_id
                          AND e.field = '{PackedField.TARGETS}' AND e.position = x.position) AS packed
         FROM task_targets x JOIN labelled USING (task_id)
         UNION ALL
-        SELECT r.task_id, c.value_kind, c.text_value,
+        SELECT r.task_id, c.value_kind = '{AnnotationValueKind.TEXT}', c.text_value,
                EXISTS (SELECT 1 FROM external_values e
                        WHERE e.object_kind = '{ObjectKind.ANNOTATION_CONTENT}' AND e.object_id = c.content_id
                          AND e.field = '{PackedField.VALUE}')
@@ -145,17 +146,45 @@ _LABELLED_TARGETS = f"""
         JOIN annotation_contents c USING (content_id)
         WHERE r.field = '{TaskRelationshipField.TARGET_ANNOTATIONS}'
     )
-    SELECT l.task_id FROM labelled l
-    WHERE EXISTS (SELECT 1 FROM targets x
-                  WHERE x.task_id = l.task_id
-                    AND (x.kind IS DISTINCT FROM 'text' OR (NOT x.packed AND NOT list_contains(l.labels, x.label))))
-       OR (l.mode = '{LabelMode.SINGLE}' AND (SELECT count(*) FROM targets x WHERE x.task_id = l.task_id) <> 1)
-       OR EXISTS (SELECT 1 FROM targets x WHERE x.task_id = l.task_id AND NOT x.packed
-                  GROUP BY x.label HAVING count(*) > 1)
-    LIMIT 1
 """  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
-"""The query finds the classification tasks whose stored labels do not fit their label set. The audit
-does not compare a packed label, because the catalog holds only its placeholder."""
+"""The labelled classification tasks, and each stored label of their targets. The rules below start
+with this ``WITH`` clause. They do not compare a packed label, because the catalog holds only its
+placeholder."""
+
+
+class _LabelRule(NamedTuple):
+    """One rule that the stored labels of a classification task must follow."""
+
+    problem: str
+    """What is wrong with a task that breaks the rule, for the error message."""
+    query: str
+    """The query that returns the id of one task that breaks the rule, or no row."""
+
+
+_LABEL_RULES = (
+    _LabelRule(
+        "has a label that is not text or not in its label set",
+        f"""{_LABELLED_TARGETS}
+        SELECT x.task_id FROM targets x JOIN labelled l USING (task_id)
+        WHERE x.is_text IS NOT TRUE OR (NOT x.packed AND NOT list_contains(l.labels, x.label))
+        LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
+    ),
+    _LabelRule(
+        "does not have exactly one label, but its label set is single-label",
+        f"""{_LABELLED_TARGETS}
+        SELECT l.task_id FROM labelled l LEFT JOIN targets x USING (task_id)
+        WHERE l.mode = '{LabelMode.SINGLE}'
+        GROUP BY l.task_id HAVING count(x.task_id) <> 1
+        LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
+    ),
+    _LabelRule(
+        "repeats a label",
+        f"""{_LABELLED_TARGETS}
+        SELECT task_id FROM targets WHERE NOT packed
+        GROUP BY task_id, label HAVING count(*) > 1
+        LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
+    ),
+)
 
 _OWNERLESS = {
     object_type: (
@@ -296,6 +325,19 @@ checked once.
 """
 
 
+def _audit_task_labels(connection: duckdb.DuckDBPyConnection) -> None:
+    """Make sure that the stored labels of each classification task follow its label set.
+
+    Raises:
+        TimeFFormatError: If a task breaks one of the label rules.
+    """
+    for rule in _LABEL_RULES:
+        broken = connection.execute(rule.query).fetchone()
+        if broken is not None:
+            (task_id,) = broken
+            raise TimeFFormatError(f"classification task {task_id!r} {rule.problem}")
+
+
 def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool = True) -> None:
     """Scan every control table and raise on the first violated invariant.
 
@@ -351,9 +393,7 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
     _audit_external_values(connection)
     _audit_imported_objects(connection)
 
-    misfit = connection.execute(_LABELLED_TARGETS).fetchone()
-    if misfit is not None:
-        raise TimeFFormatError(f"classification task {misfit[0]!r} has labels that do not fit its label set")
+    _audit_task_labels(connection)
 
     invalid_clock_scope = connection.execute(_TASK_RECORD_SCOPE).fetchone()
     if invalid_clock_scope is not None:

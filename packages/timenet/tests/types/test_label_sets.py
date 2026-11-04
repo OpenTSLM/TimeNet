@@ -12,9 +12,6 @@ FINDINGS = LabelSet(name="findings", labels=("AF", "PVC", "LBBB"), mode=LabelMod
 def test_a_plain_string_is_a_label_without_a_description():
     assert STAGES.labels == (Label(name="W", description="Awake."), Label(name="N1"), Label(name="R"))
     assert STAGES.names == ("W", "N1", "R")
-    assert (STAGES.description("W"), STAGES.description("R")) == ("Awake.", None)
-    with pytest.raises(KeyError, match="does not list 'X'"):
-        STAGES.description("X")
 
 
 @pytest.mark.parametrize(

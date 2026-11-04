@@ -73,20 +73,6 @@ class LabelSet(TimeFModel):
         """The name of each label, in label order."""
         return tuple(label.name for label in self.labels)
 
-    def description(self, name: str) -> str | None:
-        """Return the meaning of one label.
-
-        Returns:
-            The description, or ``None`` if the label has none.
-
-        Raises:
-            KeyError: If the set does not list the label.
-        """
-        for label in self.labels:
-            if label.name == name:
-                return label.description
-        raise KeyError(f"label set {self.name!r} does not list {name!r}")
-
     def check_targets(self, targets: Sequence[str]) -> None:
         """Make sure that a classification target fits this set and its mode.
 
@@ -152,7 +138,3 @@ class LabelSetRegistry:
             The iterator.
         """
         return iter(self._by_name.values())
-
-    def __len__(self) -> int:
-        """Return the number of sets."""
-        return len(self._by_name)
