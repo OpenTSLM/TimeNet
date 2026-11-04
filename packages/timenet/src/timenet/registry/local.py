@@ -1,11 +1,15 @@
 """A registry backed by a local ``<root>/<dataset_id>/<version>/`` directory tree."""
 
 from collections.abc import Callable, Mapping
+from datetime import UTC, datetime
+import os
 from pathlib import Path
 import shutil
 from typing import BinaryIO
+import uuid
 
 import pyarrow.fs as pafs
+from pydantic import ValidationError
 
 from timenet._fs import delete_and_measure, same_directory, staged_directory
 from timenet.dataset import TimeFDataset
@@ -15,13 +19,19 @@ from timenet.manifest import Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
 from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import check_file_sizes, validate_manifest_reference
+from timenet.registry.origin import Origin, OriginKind, without_credentials
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.sources import FoundInRegistry, NotFound, ReleaseLookup, ReleaseSource
 from timenet.types import DatasetMetadata, Version
+from timenet.types._model import _first_problem
 from timenet.types.metadata_fields import validate_dataset_id
 from timenet.types.references import DatasetRef, is_latest
 from timenet.writer import TimeFWriter, WriteProgressEvent
+
+
+_ORIGIN_FILE = ".origin.json"
+"""The provenance record of a release, in the folder of the release."""
 
 
 class LocalRegistry(WritableRegistry):
@@ -42,6 +52,11 @@ class LocalRegistry(WritableRegistry):
 
     def __str__(self) -> str:
         return f"local registry {self._root}"
+
+    @property
+    def location(self) -> str:
+        """The resolved root directory."""
+        return str(self._root.resolve())
 
     @property
     def root(self) -> Path:
@@ -70,26 +85,72 @@ class LocalRegistry(WritableRegistry):
         return [self.get_manifest(dataset_id, str(version)).metadata for dataset_id, version in latest.items()]
 
     def releases(self) -> list[DatasetRef]:
-        """List the committed releases at any depth below the root.
+        """List the committed releases below the root.
 
-        A release is a ``<dataset_id>/<version>/manifest.json`` outside hidden folders and unfinished writes.
+        A release is a ``<org>/<name>/<version>/manifest.json`` outside hidden folders and unfinished writes.
 
         Returns:
             The releases, sorted by dataset ID and version.
-        """
-        if not self._root.is_dir():
-            return []
+
+        Raises:
+            OSError: If a folder cannot be read.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _walk)
+        return self._walk()[0]
+
+    def check_no_linked_folders(self) -> None:
+        """Check that no dataset or release folder is a symlink, which :meth:`releases` would skip.
+
+        Raises:
+            TimeFValidationError: If a dataset or release folder is a symlink.
+            OSError: If a folder cannot be read.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _walk)
+        linked = self._walk()[1]
+        if linked:
+            raise TimeFValidationError(
+                f"{linked[0]} is a symlink, so the clear cannot see the releases behind it or the "
+                "releases that they need. Replace the link with its folder, then clear again."
+            )
+
+    def _walk(self) -> tuple[list[DatasetRef], list[Path]]:
+        """Walk the dataset and release folders once, without following a symlink.
+
+        Returns:
+            The releases, sorted by dataset ID and version, and the linked dataset or release folders in walk order.
+
+        Raises:
+            OSError: If a folder cannot be read.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by os.walk)
         found: list[DatasetRef] = []
-        for manifest_path in self._root.rglob(MANIFEST_FILE):
-            parts = manifest_path.parent.relative_to(self._root).parts
-            # A release needs a dataset ID before its version, so a manifest at the root or one level below is none.
-            if not parts[:-1] or any(part.startswith(".") or ".tmp-" in part for part in parts):
+        linked: list[Path] = []
+        if not self._root.is_dir():
+            return found, linked
+        release_depth = 3  # <org>/<name>/<version>
+
+        def fail(error: OSError) -> None:
+            raise error  # os.walk otherwise skips a folder that it cannot read
+
+        for parent, dirs, files in os.walk(self._root, onerror=fail):
+            folder = Path(parent)
+            parts = folder.relative_to(self._root).parts
+            if len(parts) == release_depth:
+                dirs.clear()  # the walk stops at the releases
+                release = self._release_at_parts(parts) if MANIFEST_FILE in files else None
+                if release is not None:
+                    found.append(release)
                 continue
-            try:
-                found.append(DatasetRef.parse(f"{'/'.join(parts[:-1])}@{parts[-1]}"))
-            except TimeFValidationError:
-                continue  # for example a directory whose name is not a version
-        return sorted(found, key=lambda release: (release.dataset_id, release.version))
+            dirs[:] = sorted(name for name in dirs if not _is_hidden_or_staging(name))
+            linked.extend(folder / name for name in dirs if (folder / name).is_symlink())
+        return sorted(found, key=lambda release: (release.dataset_id, release.version)), linked
+
+    def _release_at_parts(self, parts: tuple[str, ...]) -> DatasetRef | None:
+        """Return the release of a ``<org>/<name>/<version>`` folder, or ``None`` if the names are not one."""
+        try:
+            release = DatasetRef.parse(f"{parts[0]}/{parts[1]}@{parts[2]}")
+        except TimeFValidationError:
+            return None  # for example a directory whose name is not a version
+        if release_dir(self._root, release) != self._root.joinpath(*parts):
+            return None  # for example 01.0.0, which parses as 1.0.0
+        return release
 
     def remove_release(self, release: DatasetRef) -> int:
         """Delete a release and the dataset folders that this leaves empty.
@@ -112,6 +173,54 @@ class LocalRegistry(WritableRegistry):
             parent.rmdir()
             parent = parent.parent
         return freed
+
+    def record_origin(self, release: DatasetRef, kind: OriginKind, source: str) -> None:
+        """Record how a stored release reached this registry, with the current time.
+
+        The record replaces an earlier one. A URL in ``source`` loses its user info, query and fragment, so no
+        credential lands in the record.
+
+        Args:
+            release: The release.
+            kind: How the release reached this registry.
+            source: The registry location, or the name and version of the backend package.
+
+        Raises:
+            TimeNetDatasetNotFoundError: If this registry does not hold the release.
+        """
+        if not self.exists(release.dataset_id, str(release.version)):
+            raise TimeNetDatasetNotFoundError(f"the local registry holds no {release}, so it gets no provenance record")
+        origin = Origin(kind=kind, source=without_credentials(source), at=datetime.now(UTC).replace(microsecond=0))
+        directory = release_dir(self._root, release)
+        # Write next to the record, then rename, so a reader never sees half a record.
+        staging = directory / f"{_ORIGIN_FILE}.tmp-{uuid.uuid4().hex}"
+        try:
+            staging.write_text(origin.model_dump_json() + "\n")
+            staging.replace(directory / _ORIGIN_FILE)
+        finally:
+            staging.unlink(missing_ok=True)
+
+    def read_origin(self, release: DatasetRef) -> Origin | None:
+        """Read the provenance record of a stored release.
+
+        Args:
+            release: The release.
+
+        Returns:
+            The record, or ``None`` if the release has none.
+
+        Raises:
+            TimeFFormatError: If the record is invalid.
+        """
+        path = release_dir(self._root, release) / _ORIGIN_FILE
+        try:
+            text = path.read_text()
+        except FileNotFoundError:
+            return None
+        try:
+            return Origin.model_validate_json(text)
+        except ValidationError as error:
+            raise TimeFFormatError(f"{path} is not a valid provenance record: {_first_problem(error)}.") from error
 
     def get_manifest(self, dataset_id: str, version: str | None = None) -> Manifest:
         """Return a dataset's manifest (latest version if unspecified).
@@ -366,6 +475,18 @@ def is_same_registry(source: ReleaseSource, registry: BaseRegistry) -> bool:
         and isinstance(registry, LocalRegistry)
         and same_directory(source.root, registry.root)
     )
+
+
+def _is_hidden_or_staging(name: str) -> bool:
+    """Check whether a folder name is hidden or names an unfinished write.
+
+    Args:
+        name: The folder name.
+
+    Returns:
+        ``True`` if the name starts with ``.`` or holds ``.tmp-``.
+    """
+    return name.startswith(".") or ".tmp-" in name
 
 
 def _is_version(name: str) -> bool:

@@ -1,9 +1,9 @@
-"""Inspect and clear the cache and the stored releases.
+"""Inspect and clear the cache and the downloads and builds in the local registry.
 
 Cache removal requires TimeNet's ``CACHEDIR.TAG`` marker.
 """
 
-from collections.abc import Iterable
+from collections.abc import Collection, Iterable
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -12,16 +12,51 @@ from timenet.config import TimeNetSettings, is_cache_folder
 from timenet.errors import TimeFValidationError
 from timenet.registry import LocalRegistry
 from timenet.registry._paths import release_dir
+from timenet.registry.origin import Origin, OriginKind
 from timenet.types.references import DatasetRef
 
 
 @dataclass(frozen=True)
 class StoredRelease:
-    """A stored release with its path and size in bytes."""
+    """One release in the store, with its size on disk and its provenance record."""
 
     release: DatasetRef
     path: Path
-    size_bytes: int
+    origin: Origin | None
+    """The provenance record, or ``None`` if the release has none."""
+
+    def size(self) -> int:
+        """Measure the size on disk.
+
+        Returns:
+            The size in bytes, measured on each call.
+        """
+        return _dir_size(self.path)
+
+    @property
+    def kind(self) -> OriginKind:
+        """The kind of the record, or :attr:`~OriginKind.BUILD` for a release without a record."""
+        return OriginKind.BUILD if self.origin is None else self.origin.kind
+
+
+@dataclass(frozen=True)
+class KeptRelease:
+    """A release that a clear keeps, because a release that stays needs it."""
+
+    release: DatasetRef
+    """The release that stays."""
+    needed_by: DatasetRef
+    """A release that stays and needs it, as a payload source or as the parent of a build."""
+
+
+@dataclass(frozen=True)
+class ReleasesToClear:
+    """The releases that a clear deletes, and the releases of the same kinds that it keeps."""
+
+    releases: list[StoredRelease]
+    """The releases to delete, sorted by dataset ID and version."""
+    kept: list[KeptRelease]
+    """The releases of the cleared kinds that stay, sorted by dataset ID and version."""
 
 
 @dataclass(frozen=True)
@@ -38,12 +73,14 @@ class ClearedCache:
 
 @dataclass(frozen=True)
 class ClearedReleases:
-    """The bytes freed and release folders removed by a release clear."""
+    """The bytes freed, release folders removed and releases kept by a release clear."""
 
     freed: int
     """The number of bytes freed."""
     removed: list[Path]
     """The release folders successfully removed."""
+    kept: list[KeptRelease]
+    """The releases of the cleared kinds that stay, because a release that stays needs them."""
 
 
 def human_bytes(n: int) -> str:
@@ -65,19 +102,79 @@ def human_bytes(n: int) -> str:
 
 
 def stored_releases(store: LocalRegistry) -> list[StoredRelease]:
-    """List the releases of a local registry and their sizes in bytes.
+    """List every release in the store, with its size and its provenance record.
 
     Args:
         store: The local registry to inspect.
 
     Returns:
         The releases, sorted by dataset ID and version.
-    """
-    found: list[StoredRelease] = []
-    for release in store.releases():
-        path = release_dir(store.root, release)
-        found.append(StoredRelease(release, path, _dir_size(path)))
-    return found
+
+    Raises:
+        TimeFFormatError: If a provenance record is damaged.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by read_origin)
+    return [
+        StoredRelease(release, release_dir(store.root, release), store.read_origin(release))
+        for release in store.releases()
+    ]
+
+
+def stored_releases_by_kind(store: LocalRegistry) -> dict[OriginKind, list[StoredRelease]]:
+    """List stored releases with their provenance records and sizes, by kind.
+
+    Args:
+        store: The local registry.
+
+    Returns:
+        The releases of each kind, sorted by dataset ID and version, and an empty list for a kind without releases.
+
+    Raises:
+        TimeFFormatError: If a provenance record is invalid.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by read_origin)
+    by_kind: dict[OriginKind, list[StoredRelease]] = {kind: [] for kind in OriginKind}
+    for item in stored_releases(store):
+        by_kind[item.kind].append(item)
+    return by_kind
+
+
+def releases_to_clear(store: LocalRegistry, *, kinds: Collection[OriginKind]) -> ReleasesToClear:
+    """Find the releases of the given kinds that no release that stays needs.
+
+    A release that stays keeps its payload sources, and a build that stays also keeps its parents. This holds
+    for each release that stays, also for one that stays only because another one needs it.
+
+    Args:
+        store: The local registry.
+        kinds: The kinds of release to delete.
+
+    Returns:
+        The releases to delete, and the releases of those kinds that stay with a release that needs each.
+
+    Raises:
+        TimeFValidationError: If ``kinds`` is empty, or a dataset or release folder in the local registry is a symlink.
+        TimeFFormatError: If a provenance record or the manifest of a release that stays is damaged.
+        OSError: If a folder of the store cannot be read.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by check_no_linked_folders and stored_releases)
+    _check_kinds(kinds)
+    store.check_no_linked_folders()
+    releases = stored_releases(store)
+    held = {item.release: item for item in releases}
+    # Walk from each release that stays to the releases that it needs. If every kind goes, nothing stays.
+    staying = [item.release for item in releases if item.kind not in kinds]
+    seen = set(staying)
+    needed_by: dict[DatasetRef, DatasetRef] = {}
+    while staying:
+        release = staying.pop()
+        manifest = store.get_manifest(release.dataset_id, str(release.version))
+        for need in manifest.required_releases(with_parents=held[release].kind is OriginKind.BUILD):
+            if need in held and need not in seen:
+                seen.add(need)
+                needed_by[need] = release
+                staying.append(need)
+    return ReleasesToClear(
+        [item for item in releases if item.kind in kinds and item.release not in needed_by],
+        [KeptRelease(item.release, needed_by[item.release]) for item in releases if item.release in needed_by],
+    )
 
 
 def cache_size(cache_dir: Path) -> int:
@@ -135,27 +232,45 @@ def clear_cache(cache_dir: Path, *, local_registry: LocalRegistry) -> ClearedCac
     return ClearedCache(freed, removed, [folder for folder in folders if folder not in marked])
 
 
-def clear_releases(store: LocalRegistry) -> ClearedReleases:
-    """Delete stored releases and the dataset directories left empty.
+def clear_releases(store: LocalRegistry, *, kinds: Collection[OriginKind]) -> ClearedReleases:
+    """Delete selected releases unless remaining releases need them.
 
-    Other files in the local registry stay.
+    Each dataset folder that this leaves empty goes too, and other files in the local registry stay.
 
     Args:
         store: The local registry.
+        kinds: The kinds of release to delete.
 
     Returns:
-        The bytes freed and the release folders removed.
+        The bytes freed, the release folders removed, and the releases kept with a release that needs each.
 
     Raises:
-        TimeNetRegistryError: If the local registry is read-only.
-        OSError: If a folder cannot be removed completely.
-    """  # ruff: ignore[docstring-extraneous-exception] (raised by remove_release)
+        TimeNetRegistryError: If the local registry is read-only. Nothing is deleted then.
+        TimeFValidationError: If ``kinds`` is empty, or a dataset or release folder in the local registry is a symlink.
+            Nothing is deleted then.
+        TimeFFormatError: If a provenance record or the manifest of a release that stays is damaged.
+            Nothing is deleted then.
+        OSError: If a folder cannot be read or removed completely.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by releases_to_clear and remove_release)
+    _check_kinds(kinds)
+    store.check_writable("a clear of its releases")
+    found = releases_to_clear(store, kinds=kinds)
     freed = 0
     removed: list[Path] = []
-    for release in store.releases():
-        freed += store.remove_release(release)
-        removed.append(release_dir(store.root, release))
-    return ClearedReleases(freed, removed)
+    for item in found.releases:
+        freed += store.remove_release(item.release)
+        removed.append(item.path)
+    return ClearedReleases(freed, removed, found.kept)
+
+
+def _check_kinds(kinds: Collection[OriginKind]) -> None:
+    """Refuse a clear that names no kind of release.
+
+    Raises:
+        TimeFValidationError: If ``kinds`` is empty.
+    """
+    if not kinds:
+        raise TimeFValidationError("kinds names no kind of release")
 
 
 def _check_cache_deletion(cache_dir: Path, folders: Iterable[Path], *, local_registry: Path) -> None:

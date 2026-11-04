@@ -1,22 +1,37 @@
 from pathlib import Path
 
+from _demo_child import _child_of_the_demo
+from _origin_record import origin_file
 import pytest
 
 from timenet.cache import (
     ClearedCache,
+    KeptRelease,
     StoredRelease,
     cache_size,
     clear_cache,
     clear_releases,
     human_bytes,
+    releases_to_clear,
     stored_releases,
 )
+from timenet.client import TimeNet
 from timenet.config import CACHE_TAG, is_cache_folder, make_cache_folder
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetRegistryError
 from timenet.registry import LocalRegistry
+from timenet.registry._paths import release_dir
+from timenet.registry.origin import OriginKind
 from timenet.testing import make_dataset
 from timenet.types import Version
+from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
+
+
+PARENT = DatasetRef.parse("test/child@1.0.0")
+GRAND = DatasetRef.parse("timenet/hello-world@1.0.0")
+BUILT = DatasetRef.parse("test/built@1.0.0")
+OTHER = DatasetRef.parse("demo/other@1.0.0")
+HAND = DatasetRef.parse("demo/hand@1.0.0")
 
 
 def _store_with_two_releases(root):
@@ -29,10 +44,40 @@ def _store_with_two_releases(root):
     return store
 
 
-def _other_dataset():
-    dataset = make_dataset()
-    dataset._metadata = dataset.metadata.model_copy(update={"dataset_id": "demo/other"})
-    return dataset
+def test_clear_releases_refuses_a_read_only_local_registry(tmp_path):
+    store = LocalRegistry(_store_with_two_releases(tmp_path / "store").root, read_only=True)
+    before = stored_releases(store)
+    with pytest.raises(TimeNetRegistryError, match=r"read_only=True, so it refuses a clear of its releases\."):
+        clear_releases(store, kinds=[OriginKind.DOWNLOAD, OriginKind.BUILD])
+    assert stored_releases(store) == before
+
+
+def _layout(store):
+    """Store the five releases of the layout.
+
+    PARENT reads GRAND as a payload source, BUILT declares PARENT as a parent, and OTHER and HAND
+    stand alone.
+    """
+    _child_of_the_demo(store.root)
+    store.put_dataset(make_dataset(dataset_id=BUILT.dataset_id, parents={ParentAlias("parent"): PARENT}))
+    store.put_dataset(make_dataset(dataset_id=OTHER.dataset_id))
+    store.put_dataset(make_dataset(dataset_id=HAND.dataset_id))
+
+
+def _record(store):
+    """Record PARENT, GRAND and OTHER as copies and BUILT as a build. HAND gets no record."""
+    for release in (PARENT, GRAND, OTHER):
+        store.record_origin(release, OriginKind.DOWNLOAD, "https://registry.example.org")
+    store.record_origin(BUILT, OriginKind.BUILD, "timenet-connectors 0.9.0")
+
+
+def _held(store):
+    """Return the releases of the layout that the store holds."""
+    return {
+        release
+        for release in (BUILT, PARENT, GRAND, OTHER, HAND)
+        if store.exists(release.dataset_id, str(release.version))
+    }
 
 
 def _size(directory):
@@ -91,32 +136,64 @@ def test_human_bytes(n, expected):
 def test_stored_releases_lists_each_release_with_its_size(tmp_path):
     store = _store_with_two_releases(tmp_path / "store")
     first, second = (tmp_path / "store/timenet/hello-world" / version for version in ("1.0.0", "1.1.0"))
-    assert stored_releases(store) == [
-        StoredRelease(DatasetRef.parse("timenet/hello-world@1.0.0"), first, _size(first)),
-        StoredRelease(DatasetRef.parse("timenet/hello-world@1.1.0"), second, _size(second)),
+    releases = stored_releases(store)
+    assert releases == [
+        StoredRelease(DatasetRef.parse("timenet/hello-world@1.0.0"), first, None),
+        StoredRelease(DatasetRef.parse("timenet/hello-world@1.1.0"), second, None),
     ]
+    assert [item.size() for item in releases] == [_size(first), _size(second)]
     assert _size(first) > 0
+
+
+def test_stored_releases_carry_their_origin(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    _layout(store)
+    _record(store)
+    releases = stored_releases(store)
+    assert {item.release: item.origin for item in releases} == {
+        release: store.read_origin(release) for release in (BUILT, PARENT, GRAND, OTHER, HAND)
+    }
+    # A release without a record counts as a build.
+    assert {item.release: item.kind for item in releases} == {
+        BUILT: OriginKind.BUILD,
+        HAND: OriginKind.BUILD,
+        PARENT: OriginKind.DOWNLOAD,
+        GRAND: OriginKind.DOWNLOAD,
+        OTHER: OriginKind.DOWNLOAD,
+    }
 
 
 def test_stored_releases_skips_what_is_not_a_release(tmp_path):
     store = _store_with_two_releases(tmp_path / "store")
     manifest = (tmp_path / "store/timenet/hello-world/1.0.0/manifest.json").read_bytes()
-    # A directory whose name is not a version, a staging directory, a hidden one, a path that is not
-    # a dataset ID, and a manifest at the root and one level below.
-    for stray in (
+    # A directory whose name is not a version, a version in another spelling, a staging directory, a
+    # hidden one, a path that is not a dataset ID, and a manifest at the root and one level below.
+    strays = (
         "timenet/hello-world/draft",
+        "timenet/hello-world/01.0.0",
         "timenet/hello-world/2.0.0.tmp-1",
         ".trash/x/1.0.0",
         "a/b/c/1.0.0",
         ".",
         "1.0.0",
-    ):
+    )
+    for stray in strays:
         (tmp_path / "store" / stray).mkdir(parents=True, exist_ok=True)
         (tmp_path / "store" / stray / "manifest.json").write_bytes(manifest)
     assert [str(item.release) for item in stored_releases(store)] == [
         "timenet/hello-world@1.0.0",
         "timenet/hello-world@1.1.0",
     ]
+
+
+def test_releases_skips_an_unfinished_write_of_a_dataset_folder(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    store.put_dataset(make_dataset())
+    # The staging folder of a dataset has a name that is also a valid dataset ID.
+    staging = store.root / "timenet/hello-world.tmp-1/1.0.0"
+    staging.mkdir(parents=True)
+    (staging / "manifest.json").write_bytes((release_dir(store.root, GRAND) / "manifest.json").read_bytes())
+    assert [str(release) for release in store.releases()] == ["timenet/hello-world@1.0.0"]
 
 
 def test_clear_cache_keeps_a_store_inside_the_cache(tmp_path):
@@ -161,18 +238,22 @@ def test_clear_cache_keeps_and_reports_the_folders_without_the_marker(tmp_path):
 
 def test_clear_releases_deletes_every_release_but_no_other_file(tmp_path):
     store = _store_with_two_releases(tmp_path / "store")
-    store.put_dataset(_other_dataset())
+    store.put_dataset(make_dataset(dataset_id=OTHER.dataset_id))
+    # A download goes as well as the builds.
+    store.record_origin(OTHER, OriginKind.DOWNLOAD, "https://registry.example.org")
     notes = tmp_path / "store/notes.txt"
     notes.write_text("kept")
     staging = tmp_path / "store/timenet/hello-world/2.0.0.tmp-1/part.bin"
     staging.parent.mkdir()
     staging.write_bytes(b"kept")
     releases = stored_releases(store)
+    size = sum(item.size() for item in releases)
 
-    cleared = clear_releases(store)
+    cleared = clear_releases(store, kinds=[OriginKind.DOWNLOAD, OriginKind.BUILD])
 
-    assert cleared.freed == sum(item.size_bytes for item in releases)
+    assert cleared.freed == size
     assert cleared.removed == [item.path for item in releases]
+    assert cleared.kept == []
     assert stored_releases(store) == []
     # The dataset directories that the call emptied go, and the files that are not releases stay.
     assert not (tmp_path / "store/demo").exists()
@@ -264,6 +345,121 @@ def test_clear_cache_works_without_a_home_folder(tmp_path, monkeypatch):
     cleared = clear_cache(tmp_path / "cache", local_registry=LocalRegistry(tmp_path / "store"))
     assert cleared.removed == [tmp_path / "cache" / "downloads"]
     assert not raw.exists()
+
+
+def test_clearing_the_downloads_keeps_each_download_that_a_build_needs(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    _layout(store)
+    _record(store)
+    cleared = clear_releases(store, kinds=[OriginKind.DOWNLOAD])
+    assert _held(store) == {BUILT, PARENT, GRAND, HAND}
+    # BUILT declares PARENT as a parent, and PARENT reads files of GRAND.
+    assert cleared.kept == [KeptRelease(PARENT, BUILT), KeptRelease(GRAND, PARENT)]
+
+
+def test_clearing_the_downloads_deletes_a_parent_that_only_a_download_declares(tmp_path):
+    # A download needs its payload sources to be read, but not its parents.
+    store = LocalRegistry(tmp_path / "store")
+    copy = DatasetRef.parse("test/copy@1.0.0")
+    store.put_dataset(make_dataset(dataset_id=OTHER.dataset_id))
+    store.put_dataset(make_dataset(dataset_id=copy.dataset_id, parents={ParentAlias("parent"): OTHER}))
+    store.put_dataset(make_dataset(dataset_id=BUILT.dataset_id, parents={ParentAlias("parent"): copy}))
+    for release in (OTHER, copy):
+        store.record_origin(release, OriginKind.DOWNLOAD, "https://registry.example.org")
+    clear_releases(store, kinds=[OriginKind.DOWNLOAD])
+    assert [item.release for item in stored_releases(store)] == [BUILT, copy]
+
+
+def test_clearing_the_builds_keeps_each_build_that_a_download_needs(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    _layout(store)
+    _record(store)
+    # PARENT, a download, reads files of GRAND, a build.
+    store.record_origin(GRAND, OriginKind.BUILD, "timenet-connectors 0.9.0")
+    cleared = clear_releases(store, kinds=[OriginKind.BUILD])
+    assert _held(store) == {PARENT, GRAND, OTHER}
+    assert cleared.kept == [KeptRelease(GRAND, PARENT)]
+
+
+def test_clearing_every_kind_deletes_every_release_without_reading_a_manifest(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    _layout(store)
+    _record(store)
+    # Nothing stays, so no release needs another.
+    (release_dir(store.root, BUILT) / "manifest.json").write_text("{}")
+    releases = stored_releases(store)
+
+    cleared = clear_releases(store, kinds=[OriginKind.DOWNLOAD, OriginKind.BUILD])
+
+    assert cleared.removed == [item.path for item in releases]
+    assert cleared.kept == []
+    assert list((tmp_path / "store").iterdir()) == []
+
+
+def test_a_release_clear_with_a_damaged_record_deletes_nothing(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    _layout(store)
+    _record(store)
+    origin_file(store, OTHER).write_text("{}")
+    with pytest.raises(TimeFFormatError, match="is not a valid provenance record"):
+        clear_releases(store, kinds=[OriginKind.DOWNLOAD])
+    assert _held(store) == {BUILT, PARENT, GRAND, OTHER, HAND}
+
+
+def test_clearing_the_downloads_with_a_damaged_manifest_of_a_build_deletes_nothing(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    _layout(store)
+    _record(store)
+    (release_dir(store.root, BUILT) / "manifest.json").write_text("{}")
+    with pytest.raises(TimeFFormatError, match="is not a valid manifest"):
+        clear_releases(store, kinds=[OriginKind.DOWNLOAD])
+    assert {item.release for item in stored_releases(store)} == {BUILT, PARENT, GRAND, OTHER, HAND}
+
+
+def test_clearing_the_downloads_refuses_a_store_with_a_symlinked_dataset_folder(tmp_path):
+    # The listing skips a symlinked folder, so it would miss BUILT and delete the downloads that it needs.
+    store = LocalRegistry(tmp_path / "store")
+    _layout(store)
+    _record(store)
+    moved = tmp_path / "elsewhere/built"
+    moved.parent.mkdir()
+    (store.root / "test/built").rename(moved)
+    (store.root / "test/built").symlink_to(moved, target_is_directory=True)
+    with pytest.raises(TimeFValidationError, match="test/built is a symlink"):
+        clear_releases(store, kinds=[OriginKind.DOWNLOAD])
+    assert _held(store) == {BUILT, PARENT, GRAND, OTHER, HAND}
+
+
+def test_clearing_every_kind_refuses_a_store_with_a_symlinked_release_folder(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    _layout(store)
+    _record(store)
+    moved = tmp_path / "elsewhere/1.0.0"
+    moved.parent.mkdir()
+    release_dir(store.root, OTHER).rename(moved)
+    release_dir(store.root, OTHER).symlink_to(moved, target_is_directory=True)
+    with pytest.raises(TimeFValidationError, match=r"demo/other/1\.0\.0 is a symlink"):
+        clear_releases(store, kinds=[OriginKind.DOWNLOAD, OriginKind.BUILD])
+    assert _held(store) == {BUILT, PARENT, GRAND, OTHER, HAND}
+    # The link hides the release from the listing, not from a read of its exact version.
+    with TimeNet(sources=[store]).open(str(OTHER)) as reader:
+        assert reader.metadata.dataset_id == OTHER.dataset_id
+
+
+@pytest.mark.parametrize("clear", [releases_to_clear, clear_releases])
+def test_a_release_clear_refuses_an_empty_list_of_kinds_first(tmp_path, clear):
+    # A read-only local registry refuses a clear too, so the kinds must come first.
+    store = LocalRegistry(tmp_path / "store", read_only=True)
+    with pytest.raises(TimeFValidationError, match=r"^kinds names no kind of release$"):
+        clear(store, kinds=[])
+
+
+def test_the_symlink_check_skips_a_hidden_folder(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    store.put_dataset(make_dataset())
+    (tmp_path / "elsewhere").mkdir()
+    (store.root / ".trash").symlink_to(tmp_path / "elsewhere", target_is_directory=True)
+    store.check_no_linked_folders()
 
 
 def test_clear_cache_of_a_missing_cache_frees_nothing(tmp_path):

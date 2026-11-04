@@ -62,6 +62,11 @@ class S3Registry(LazyReadRegistry):
     def __str__(self) -> str:
         return f"S3 registry {self._display_root()}"
 
+    @property
+    def location(self) -> str:
+        """The ``s3://bucket/prefix`` root."""
+        return self._display_root()
+
     def list_datasets(self) -> list[DatasetMetadata]:
         """Unsupported: the S3 backend has no catalog.
 

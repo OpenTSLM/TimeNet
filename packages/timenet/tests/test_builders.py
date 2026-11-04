@@ -1,7 +1,10 @@
+from types import SimpleNamespace
+
 import pytest
 
+from timenet import builders
 from timenet.builders import declared, installed_builder
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
+from timenet.errors import TimeNetBuildError, TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
 from timenet.testing import install_backends, make_dataset
 from timenet.types.references import DatasetRef
 
@@ -57,3 +60,18 @@ def test_declared_returns_the_release_of_the_card_and_refuses_another_version(mo
     )
     with pytest.raises(TimeNetDatasetNotFoundError, match="no installed connector builds 'x/y'"):
         declared("x/y")
+
+
+def test_an_installed_builder_names_the_distribution_of_the_backend(monkeypatch):
+    install_backends(monkeypatch, _Backend("x/y", card=make_dataset().metadata))
+    builder = installed_builder("x/y")
+    assert builder is not None
+    assert builder.package == "timenet-testing 0"
+
+
+def test_a_backend_without_a_distribution_gives_no_installed_builder(monkeypatch):
+    backend = _Backend("a/b", card=make_dataset().metadata)
+    entry = SimpleNamespace(dist=None, load=lambda: lambda: backend)
+    monkeypatch.setattr(builders, "entry_points", lambda group: [entry])
+    with pytest.raises(TimeNetBuildError, match=f"the entry point of {__name__}._Backend names no installed package"):
+        installed_builder("a/b")

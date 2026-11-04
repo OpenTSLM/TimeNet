@@ -427,6 +427,10 @@ class _Hosted(WritableRegistry):
     def local_root(self):
         return self._local.root
 
+    @property
+    def location(self):
+        return self._local.location
+
     def list_datasets(self):
         return self._local.list_datasets()
 

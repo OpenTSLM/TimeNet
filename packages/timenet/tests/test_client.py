@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 from _demo_child import _child_of_the_demo
 from _fake_registry import build_service_fake
+from _origin_record import origin_file
 import httpx
 from pydantic import ValidationError
 import pytest
@@ -33,6 +34,7 @@ from timenet.manifest.files import FilePart
 from timenet.progress import BytesMoved, ProgressEvent, StepFinished, StepStarted
 from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import TIMENET_REGISTRY_URL, LocalRegistry, RemoteRegistry, open_local_version
+from timenet.registry.origin import OriginKind
 from timenet.sources import InstalledConnectors
 from timenet.testing import assert_datasets_equal, install_backends, make_dataset
 from timenet.types import Access, Annotation, AnswerTask, DatasetMetadata, Domain, License, Version
@@ -554,6 +556,25 @@ def test_get_manifest_names_every_source_when_none_provides_the_release(tmp_path
     )
 
 
+def test_download_records_each_copied_release(tmp_path):
+    origin, parent = _child_of_the_demo(tmp_path / "origin")
+    child = DatasetRef.parse("test/child@1.0.0")
+    store = LocalRegistry(tmp_path / "store")
+    client = TimeNet(sources=[store, origin.root])
+    client.download("test/child")
+    for release in (parent, child):
+        record = store.read_origin(release)
+        assert record is not None
+        assert (record.kind, record.source) == (OriginKind.DOWNLOAD, str(origin.root.resolve()))
+
+    # With force, the call copies only the requested release again, so only that release gets a record.
+    for release in (parent, child):
+        origin_file(store, release).unlink()
+    client.download("test/child", force=True)
+    assert store.read_origin(parent) is None
+    assert store.read_origin(child) is not None
+
+
 def test_download_needs_a_local_registry_that_is_not_read_only(registry_root):
     with pytest.raises(TimeFValidationError) as caught:
         TimeNet(sources=[LocalRegistry(registry_root, read_only=True)]).download("timenet/hello-world")
@@ -624,6 +645,12 @@ def test_download_copies_each_release_from_the_first_registry_that_provides_it(t
     assert path == store.root / "test/child/1.0.0"
     with TimeNet(sources=[store]).open("test/child") as reader:
         reader.verify()
+    # Each provenance record names the registry that the release came from.
+    records = {release: store.read_origin(release) for release in (DatasetRef.parse("test/child@1.0.0"), reference)}
+    assert {release: (record.kind, record.source) for release, record in records.items() if record} == {
+        DatasetRef.parse("test/child@1.0.0"): (OriginKind.DOWNLOAD, str((tmp_path / "first").resolve())),
+        reference: (OriginKind.DOWNLOAD, str((tmp_path / "second").resolve())),
+    }
 
 
 @pytest.mark.parametrize("case", ["force", "damaged"])

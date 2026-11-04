@@ -17,7 +17,7 @@ from timenet.errors import TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, parse_manifest
 from timenet.registry.lazy_read import LazyReadRegistry
-from timenet.registry.remote._download import ProgressCallback, download_version_files
+from timenet.registry.remote._download import ByteCountCallback, download_version_files
 from timenet.registry.remote._http import RegistryHttpClient, _reaching
 from timenet.registry.remote.filesystem import RegistryFileSystem
 from timenet.registry.remote.models import (
@@ -57,6 +57,11 @@ class RemoteRegistry(LazyReadRegistry):
 
     def __str__(self) -> str:
         return f"registry {self._base_url}"
+
+    @property
+    def location(self) -> str:
+        """The base URL of the service."""
+        return self._base_url
 
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
@@ -137,7 +142,7 @@ class RemoteRegistry(LazyReadRegistry):
         *,
         force: bool = False,
         manifest: Manifest | None = None,
-        progress_cb: ProgressCallback | None = None,
+        progress_cb: ByteCountCallback | None = None,
     ) -> None:
         """Download one release's files to a local directory.
 

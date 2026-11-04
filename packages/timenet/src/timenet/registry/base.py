@@ -29,7 +29,7 @@ from timenet.types.references import DatasetRef
 
 # Reports download progress: called with each file (or chunk) of bytes as it lands. A ``download_release``
 # implementation calls it so a caller can render a progress bar; ``None`` downloads silently.
-ProgressCallback = Callable[[int], None]
+ByteCountCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
@@ -50,6 +50,11 @@ class BaseRegistry(ABC):
     def read_only(self) -> bool:
         """Whether this registry refuses every write, set with ``read_only=True``."""
         return self._read_only
+
+    @property
+    @abstractmethod
+    def location(self) -> str:
+        """Where this registry is: a URL or a path, else the name of the registry."""
 
     def check_writable(self, write: str) -> None:
         """Refuse a write if this registry is read-only.
@@ -178,7 +183,7 @@ class BaseRegistry(ABC):
         *,
         force: bool = False,
         manifest: Manifest | None = None,
-        progress_cb: ProgressCallback | None = None,
+        progress_cb: ByteCountCallback | None = None,
     ) -> None:
         """Download one release's files to a local directory.
 
