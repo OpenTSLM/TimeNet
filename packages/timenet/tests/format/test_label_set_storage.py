@@ -1,4 +1,6 @@
 from dataclasses import replace
+from pathlib import Path
+import shutil
 
 import pyarrow as pa
 import pytest
@@ -64,21 +66,46 @@ def _read_tasks(path):
         return reader.read_tasks(reader.read_records())
 
 
-def test_tasks_that_use_one_label_set_share_one_stored_row_and_one_read_object(tmp_path):
+@pytest.fixture(scope="module")
+def release(tmp_path_factory) -> Path:
+    """Write one release with every kind of labelled task, once for the whole module.
+
+    Returns:
+        The path of its control database. A test that changes the release uses ``release_copy``.
+    """
     dataset, record = _dataset()
+    stage = record.annotate(Annotation(key="stage", value="N1"))
     dataset.add_tasks(
         tasks=[
-            ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES),
+            ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES),  # 1
+            AnswerTask(inputs=(record,), prompt="Alive?", targets=("Yes",)),  # 2
+            ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS),  # 3
+            ClassificationTask(inputs=(record,), target_annotations=(stage,), label_set=STAGES),  # 4
             # An equal set built separately is the same set.
-            ClassificationTask(inputs=(record,), targets=("R",), label_set=STAGES.model_copy()),
-            ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS),
-            ClassificationTask(inputs=(record,), targets=("anything",)),
+            ClassificationTask(inputs=(record,), targets=("R",), label_set=STAGES.model_copy()),  # 5
+            # A multi-label target with no label says that none applies.
+            ClassificationTask(inputs=(record,), targets=(), label_set=FINDINGS),  # 6
+            ClassificationTask(inputs=(record,), targets=("anything",)),  # 7
         ]
     )
-    path = tmp_path / "control.duckdb"
+    path = tmp_path_factory.mktemp("release") / "control.duckdb"
     _write(dataset, path)
+    return path
 
-    with connect_control(path, read_only=True) as connection:
+
+@pytest.fixture
+def release_copy(release, tmp_path) -> Path:
+    """Copy the module's release, so that a test can change it.
+
+    Returns:
+        The path of the copy's control database.
+    """
+    shutil.copytree(release.parent, tmp_path / "release")
+    return tmp_path / "release" / release.name
+
+
+def test_each_label_set_is_stored_once_and_read_as_one_object(release):
+    with connect_control(release, read_only=True) as connection:
         audit_control_database(connection, require_chunks=False)
         assert connection.execute("SELECT name, labels, mode FROM label_sets ORDER BY name").fetchall() == [
             ("findings", [{"name": "AF", "description": None}, {"name": "PVC", "description": None}], "multi"),
@@ -92,57 +119,48 @@ def test_tasks_that_use_one_label_set_share_one_stored_row_and_one_read_object(t
                 "single",
             ),
         ]
-        assert connection.execute("SELECT label_set FROM tasks ORDER BY task_id").fetchall() == [
-            ("stage",),
-            ("stage",),
-            ("findings",),
-            (None,),
-        ]
 
-    stage_w, stage_r, findings, unlabelled = _read_tasks(path)
+    stage_w, _, findings, stage_n1, stage_r, none_apply, unlabelled = _read_tasks(release)
     assert stage_w.label_set == STAGES
-    assert stage_w.label_set is stage_r.label_set
+    assert stage_w.label_set is stage_n1.label_set is stage_r.label_set
     assert findings.label_set == FINDINGS
+    assert findings.label_set is none_apply.label_set
     assert findings.targets is not None
     assert [target.read() for target in findings.targets] == ["PVC", "AF"]
+    assert none_apply.targets == ()
     assert unlabelled.label_set is None
 
 
-def test_the_task_table_names_each_task_label_set(tmp_path):
-    dataset, record = _dataset()
-    dataset.add_tasks(
-        tasks=[
-            ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES),
-            AnswerTask(inputs=(record,), prompt="Alive?", targets=("Yes",)),
+def test_the_task_table_shows_the_label_set_name(release):
+    with DuckDBControlReader(release) as reader:
+        assert reader.read_task_table()["label_set"].to_pylist() == [
+            "stage",
+            None,
+            "findings",
+            "stage",
+            "stage",
+            "findings",
+            None,
         ]
-    )
-    path = tmp_path / "control.duckdb"
-    _write(dataset, path)
-
-    with DuckDBControlReader(path) as reader:
-        assert reader.read_task_table()["label_set"].to_pylist() == ["stage", None]
 
 
 OTHER_STAGES = LabelSet(name="stage", labels=("W", "R"))
+SAME_NAME = r"ClassificationTask [0-9]+: label set 'stage' differs from another set"
 
 
-def test_a_second_label_set_with_a_used_name_is_rejected_when_the_task_is_added():
+def test_add_task_rejects_a_different_set_with_a_used_name():
     dataset, record = _dataset()
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES))
 
-    with pytest.raises(
-        TimeFValidationError, match=r"ClassificationTask [0-9]+: label set 'stage' differs from another set"
-    ):
+    with pytest.raises(TimeFValidationError, match=SAME_NAME):
         dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=OTHER_STAGES))
     assert len(dataset.tasks) == 1
 
 
-def test_two_label_sets_with_one_name_in_one_batch_add_no_task():
+def test_a_rejected_batch_leaves_no_label_set_behind():
     dataset, record = _dataset()
 
-    with pytest.raises(
-        TimeFValidationError, match=r"ClassificationTask [0-9]+: label set 'stage' differs from another set"
-    ):
+    with pytest.raises(TimeFValidationError, match=SAME_NAME):
         dataset.add_tasks(
             tasks=[
                 ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES),
@@ -150,11 +168,10 @@ def test_two_label_sets_with_one_name_in_one_batch_add_no_task():
             ]
         )
     assert dataset.tasks == ()
-    # The failed batch leaves no name behind.
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=OTHER_STAGES))
 
 
-def test_a_stream_rejects_two_label_sets_with_one_name():
+def test_a_stream_rejects_a_different_set_with_a_used_name():
     dataset, record = _dataset()
     dataset.set_task_stream(
         (ClassificationTask,),
@@ -166,33 +183,18 @@ def test_a_stream_rejects_two_label_sets_with_one_name():
         ),
     )
 
-    with pytest.raises(
-        TimeFValidationError, match=r"ClassificationTask [0-9]+: label set 'stage' differs from another set"
-    ):
+    with pytest.raises(TimeFValidationError, match=SAME_NAME):
         list(dataset.iter_streamed_tasks_validated())
 
 
-def test_the_writer_rejects_a_label_set_changed_after_the_task_was_added(tmp_path):
+def test_the_writer_rejects_a_label_set_changed_after_add_task(tmp_path):
     dataset, record = _dataset()
     second = ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES)
     dataset.add_tasks(tasks=[ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES), second])
     second.label_set = OTHER_STAGES
 
-    with pytest.raises(TimeFValidationError, match=r"ClassificationTask 2: label set 'stage' differs from another set"):
+    with pytest.raises(TimeFValidationError, match=SAME_NAME):
         _write(dataset, tmp_path / "control.duckdb")
-
-
-def test_an_empty_multi_label_target_survives_a_write_and_a_read(tmp_path):
-    dataset, record = _dataset()
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=(), label_set=FINDINGS))
-    path = tmp_path / "control.duckdb"
-    _write(dataset, path)
-
-    with connect_control(path, read_only=True) as connection:
-        audit_control_database(connection, require_chunks=False)
-    (task,) = _read_tasks(path)
-    assert task.targets == ()
-    assert task.label_set == FINDINGS
 
 
 @pytest.mark.parametrize(
@@ -207,7 +209,7 @@ def test_an_empty_multi_label_target_survives_a_write_and_a_read(tmp_path):
         (ClassificationTask(targets=(1,), label_set=STAGES), "each label must be text, not int"),
     ],
 )
-def test_adding_a_task_checks_its_labels_against_its_label_set(task, message):
+def test_add_task_rejects_targets_that_do_not_fit_the_label_set(task, message):
     dataset, record = _dataset()
 
     with pytest.raises(TimeFValidationError, match=message):
@@ -215,7 +217,7 @@ def test_adding_a_task_checks_its_labels_against_its_label_set(task, message):
     assert dataset.tasks == ()
 
 
-def test_target_annotations_are_checked_against_the_label_set():
+def test_add_task_checks_target_annotations_against_the_label_set():
     dataset, record = _dataset()
     awake = record.annotate(Annotation(key="stage", value="W"))
     unknown = record.annotate(Annotation(key="stage", value="X"))
@@ -225,14 +227,7 @@ def test_target_annotations_are_checked_against_the_label_set():
         dataset.add_task(task=ClassificationTask(inputs=(record,), target_annotations=(unknown,), label_set=STAGES))
 
 
-def test_a_multi_label_task_can_say_that_no_label_applies():
-    dataset, record = _dataset()
-
-    (task,) = dataset.add_tasks(tasks=[ClassificationTask(inputs=(record,), targets=(), label_set=FINDINGS)])
-    assert task.targets == ()
-
-
-def test_streamed_tasks_are_checked_against_their_label_set():
+def test_a_stream_rejects_targets_that_do_not_fit_the_label_set():
     dataset, record = _dataset()
     dataset.set_task_stream(
         (ClassificationTask,),
@@ -252,7 +247,7 @@ def test_streamed_tasks_are_checked_against_their_label_set():
         ("UPDATE label_sets SET labels = [{'name': 'W'}, {'name': ''}] WHERE name = 'stage'", "label_sets.labels"),
         ("UPDATE label_sets SET labels = [{'name': 'W', 'description': ''}] WHERE name = 'stage'", "label_sets.labels"),
         ("UPDATE tasks SET label_set = 'stage' WHERE task_type = 'answer'", "tasks.label_set"),
-        ("UPDATE tasks SET label_set = 'missing' WHERE task_type = 'classification'", "label_sets.name"),
+        ("UPDATE tasks SET label_set = 'missing' WHERE task_id = 1", "label_sets.name"),
         ("UPDATE task_targets SET text_value = 'BOGUS' WHERE task_id = 1", "task 1 has labels that do not fit"),
         ("INSERT INTO task_targets (task_id, position, target_kind, text_value) VALUES (1, 1, 'text', 'R')", "task 1"),
         (
@@ -266,38 +261,16 @@ def test_streamed_tasks_are_checked_against_their_label_set():
         ),
     ],
 )
-def test_the_audit_rejects_a_corrupt_label_set(tmp_path, corruption, field):
-    dataset, record = _dataset()
-    stage = record.annotate(Annotation(key="stage", value="N1"))
-    dataset.add_tasks(
-        tasks=[
-            ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES),
-            AnswerTask(inputs=(record,), prompt="Alive?", targets=("Yes",)),
-            ClassificationTask(inputs=(record,), targets=("AF", "PVC"), label_set=FINDINGS),
-            ClassificationTask(inputs=(record,), target_annotations=(stage,), label_set=STAGES),
-        ]
-    )
-    path = tmp_path / "control.duckdb"
-    _write(dataset, path)
-
-    with connect_control(path) as connection:
+def test_the_audit_rejects_a_corrupt_label_set(release_copy, corruption, field):
+    with connect_control(release_copy) as connection:
         connection.execute(corruption)
         with pytest.raises(TimeFFormatError, match=field):
             audit_control_database(connection, require_chunks=False)
 
 
-def test_the_reader_rejects_a_label_set_on_another_task_type(tmp_path):
-    dataset, record = _dataset()
-    dataset.add_tasks(
-        tasks=[
-            ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES),
-            AnswerTask(inputs=(record,), prompt="Alive?", targets=("Yes",)),
-        ]
-    )
-    path = tmp_path / "control.duckdb"
-    _write(dataset, path)
-    with connect_control(path) as connection:
+def test_the_reader_rejects_a_label_set_on_another_task_type(release_copy):
+    with connect_control(release_copy) as connection:
         connection.execute("UPDATE tasks SET label_set = 'stage' WHERE task_type = 'answer'")
 
     with pytest.raises(TimeFFormatError, match="answer task 2 has a label set"):
-        _read_tasks(path)
+        _read_tasks(release_copy)

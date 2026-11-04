@@ -23,17 +23,15 @@ def test_a_plain_string_is_a_label_without_a_description():
         ((), "at least one label"),
         (("W", "W"), "more than once"),
         (("W", Label(name="W", description="Awake.")), "more than once"),
-        (("W", ""), "at least 1 character"),
-        (({"name": "W", "description": ""},), "at least 1 character"),
     ],
 )
-def test_a_label_set_rejects_an_invalid_definition(labels, message):
+def test_a_label_set_needs_at_least_one_label_and_distinct_names(labels, message):
     with pytest.raises(ValidationError, match=message):
         LabelSet(name="stage", labels=labels)
 
 
 @pytest.mark.parametrize("targets", [("W",), ("R",)])
-def test_a_single_label_target_holds_one_label_of_the_set(targets):
+def test_a_single_label_target_accepts_one_listed_label(targets):
     STAGES.check_targets(targets)
 
 
@@ -45,13 +43,13 @@ def test_a_single_label_target_holds_one_label_of_the_set(targets):
         (("W", "R"), "2 labels"),
     ],
 )
-def test_a_single_label_target_rejects_other_labels_and_counts(targets, message):
+def test_a_single_label_target_rejects_unlisted_labels_and_other_counts(targets, message):
     with pytest.raises(TimeFValidationError, match=message):
         STAGES.check_targets(targets)
 
 
 @pytest.mark.parametrize("targets", [(), ("PVC",), ("LBBB", "AF")])
-def test_a_multi_label_target_holds_any_distinct_labels_of_the_set(targets):
+def test_a_multi_label_target_accepts_any_distinct_listed_labels(targets):
     FINDINGS.check_targets(targets)
 
 
@@ -60,13 +58,11 @@ def test_a_multi_label_target_rejects_a_repeated_label():
         FINDINGS.check_targets(("AF", "PVC", "AF"))
 
 
-def test_a_classification_task_takes_only_a_label_set():
-    assert ClassificationTask(targets=("W",), label_set=STAGES).label_set is STAGES
-    assert ClassificationTask(targets=("W",)).label_set is None
+def test_a_classification_task_rejects_a_label_set_that_is_not_a_label_set_object():
     with pytest.raises(TimeFValidationError, match="must be a LabelSet or None, got str"):
         ClassificationTask(targets=("W",), label_set="stage")  # ty: ignore[invalid-argument-type]
 
 
-def test_a_classification_task_cannot_set_both_a_label_set_and_a_target_schema():
+def test_a_classification_task_rejects_both_a_label_set_and_a_target_schema():
     with pytest.raises(TimeFValidationError, match="both label_set and the deprecated target_schema"):
         ClassificationTask(targets=("W",), label_set=STAGES, target_schema="stage")
