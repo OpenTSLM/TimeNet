@@ -184,7 +184,8 @@ class TimeNetVersionUnavailableError(TimeNetDatasetNotFoundError, TimeFValidatio
     def __str__(self) -> str:
         message = (
             f"connector for {self.release.dataset_id!r} builds version {self.declared}, "
-            f"not the requested {self.release.version}."
+            f"not the requested {self.release.version}. "
+            f"Ask for version {self.declared}, or leave out the version."
         )
         return message if self.hint is None else f"{message} {self.hint}"
 

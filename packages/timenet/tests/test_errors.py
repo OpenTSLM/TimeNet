@@ -136,7 +136,8 @@ _PAGE_C = AccessRequirement(_C, Access.RESTRICTED, "https://c.example")
         (
             TimeNetVersionUnavailableError(_B, Version(1, 0, 0)),
             {"release": _B, "declared": Version(1, 0, 0)},
-            "connector for 'org/b' builds version 1.0.0, not the requested 2.0.0.",
+            "connector for 'org/b' builds version 1.0.0, not the requested 2.0.0. "
+            "Ask for version 1.0.0, or leave out the version.",
         ),
     ],
 )
