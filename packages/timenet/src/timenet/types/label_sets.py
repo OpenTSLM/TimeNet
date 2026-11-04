@@ -68,7 +68,7 @@ class LabelSet(TimeFModel):
         descriptions: Mapping[StrEnum, str] | None = None,
         multi_label: bool = False,
     ) -> Self:
-        """Build a label set from the members of a ``StrEnum``, in the order that the enum defines them.
+        """Build a label set from a ``StrEnum``. Preserve the enum's definition order.
 
         Each member's value is a label name, so a connector can pass a member as a target::
 

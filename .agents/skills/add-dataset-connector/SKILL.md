@@ -53,8 +53,8 @@ latter). For PhysioNet, inspect the archive layout and a WFDB header (`fs`, `sig
   `ScalarPredictionTask` (a number with a unit), `TemporalLocalizationTask` (regions to find),
   `ForecastingTask`, `TSEditingTask`, `TSGenerationTask`, or `TSCorrespondenceTask`. Any of them can carry
   a `rationale`, so a chain-of-thought dataset is not a separate type.
-- If a `ClassificationTask`'s connector defines fixed labels, declare a `StrEnum`. Build the label
-  set with `LabelSet.from_enum`.
+- If the connector defines fixed classification labels, declare a `StrEnum`. Build the label set
+  with `LabelSet.from_enum`.
 - Sketch one `Record`: its `TimeSeries` signal(s) with their `spec` and `time_axis`;
   the annotations you'll attach; and the task payload. Concrete values, not placeholders.
 
