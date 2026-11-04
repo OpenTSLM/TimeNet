@@ -10,6 +10,8 @@ from timenet.types import (
     AnswerTask,
     ClassificationTask,
     InputModality,
+    LazyText,
+    LazyTextList,
     TextHandle,
     TextListHandle,
     TimePoint,
@@ -340,3 +342,62 @@ def test_a_task_equals_one_whose_prompt_is_stored():
     stored = AnswerTask(prompt=_StoredText("Question?"), rationale=_StoredText("Because."))
     assert inline == stored
     assert inline == pickle.loads(pickle.dumps(inline))
+
+
+def test_a_lazy_text_reads_through_its_function_on_every_read():
+    calls = []
+
+    def function():
+        calls.append(1)
+        return "sleep"
+
+    handle = LazyText(function, length=5)
+    assert not handle.is_loaded
+    assert handle.length == 5
+    assert handle
+    assert not calls
+    assert handle.read() == handle.read() == "sleep"
+    assert handle == "sleep"
+    assert len(calls) == 3
+    assert not handle.is_loaded
+    assert LazyText(function, length=5)._content_key() == handle._content_key()
+    with pytest.raises(AttributeError, match="immutable"):
+        handle.function = function
+
+
+def test_a_lazy_text_without_a_length_learns_it_from_one_read():
+    calls = []
+
+    def function():
+        calls.append(1)
+        return "sleep"
+
+    handle = LazyText(function)
+    assert not calls
+    assert handle.length == 5
+    assert handle
+    assert len(calls) == 1
+    assert handle == "sleep"
+    assert len(calls) == 2
+    # The key never reads, and a handle with a known length over the same function is a different content.
+    assert handle._content_key() != LazyText(function, length=5)._content_key()
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("make", "message"),
+    [
+        (lambda: LazyText("sleep", length=5), "takes a function"),  # ty: ignore[invalid-argument-type]
+        (lambda: LazyText(lambda: "sleep", length=-1), "non-negative integer length"),
+        (
+            lambda: LazyText(lambda: "sleep", length=4).read(),
+            "returned 5 characters, but the handle was given length 4",
+        ),
+        (lambda: LazyText(lambda: 5, length=1).read(), "must return a string, got int"),  # ty: ignore[invalid-argument-type]
+        (lambda: LazyTextList(lambda: ["a", 1], length=2).read(), "must return a list of strings"),  # ty: ignore[invalid-argument-type]
+        (lambda: LazyTextList(lambda: ["a"], length=2).read(), "returned 1 strings, but the handle was given length 2"),
+    ],
+)
+def test_a_lazy_handle_rejects_a_bad_function_length_or_result(make, message):
+    with pytest.raises(TimeFValidationError, match=message):
+        make()

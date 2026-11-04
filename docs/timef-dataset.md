@@ -57,7 +57,7 @@ lead_i = Signal(
 | `loader` | `ArrayHandle` or callable | Lazy values, passed to `Signal.from_loader()`. |
 | `n_values` | `int` | Required for a lazy Signal and inferred from eager data. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Signal. |
-| `metadata` | `dict[str, object]` | Optional JSON-compatible metadata. |
+| `metadata` | `JsonMapping` | Optional JSON-compatible metadata. |
 
 Read values through `to_arrow()`, `to_numpy()`, and `read_steps()`. These accessors apply the
 spec: `to_numpy()` rejects nulls, and tensor values keep their trailing shape.
@@ -82,7 +82,7 @@ Call `signal.annotate(annotation)` to attach one occurrence to a Signal.
 ## Source
 
 A `Source` represents a device, sensor, or subsystem. It can contain both direct Signals and child
-Sources:
+Sources. [Sources](data-model/sources.md) describes the concept in full.
 
 ```python
 from timenet.dataset import Source
@@ -104,7 +104,7 @@ imu = Source(
 | `sources` | `tuple[Source, ...]` | Direct child Sources. |
 | `signals` | `tuple[Signal, ...]` | Signals produced directly by this Source. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Source. |
-| `metadata` | `dict[str, object]` | Optional device, sensor, or subsystem metadata. |
+| `metadata` | `JsonMapping` | Optional device, sensor, or subsystem metadata. |
 
 `walk_sources()` and `walk_signals()` traverse a complete subtree. TimeNet rejects cycles, a Source
 with two parents, and a Signal with two owners.
@@ -141,7 +141,7 @@ record = Record(
 | `id` | `int` | Read-only identity. Set when the Record joins a dataset. |
 | `sources` | `tuple[Source, ...]` | Root Sources in the recording hierarchy. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
-| `metadata` | `dict[str, object]` | Optional session metadata. |
+| `metadata` | `JsonMapping` | Optional session metadata. |
 | `start_time` | `TimeOrigin` | Common relative zero with an optional absolute timestamp. |
 | `time_span` | `TimeInterval \| None` | Optional overall session interval. |
 
@@ -204,9 +204,10 @@ dataset.add_record(record=record)
 dataset.add_task(task=task)
 ```
 
-`add_record()` validates hierarchy ownership and ID uniqueness. `add_task()` validates referenced
-objects, the answer representation, and temporal scopes. A validation error leaves the dataset
-unchanged.
+`add_record()` validates hierarchy ownership. It rejects a Record that is already in a dataset,
+and a Source or Signal that another Record owns. It then gives the Record and its Signals their IDs.
+`add_task()` validates referenced objects, the answer representation, and temporal scopes. A
+validation error leaves the dataset unchanged.
 
 For a large corpus, `set_task_stream()` accepts a re-iterable task source. The writer validates and
 inserts that stream once without retaining every Task in memory.

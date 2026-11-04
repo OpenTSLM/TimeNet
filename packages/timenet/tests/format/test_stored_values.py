@@ -48,6 +48,8 @@ from timenet.types import (
     AnswerTask,
     ArrayHandle,
     DatasetSchema,
+    LazyText,
+    LazyTextList,
     ObjectKind,
     TextHandle,
     TextListHandle,
@@ -512,6 +514,53 @@ def test_large_text_is_packed(tmp_path, value, kind):
     assert packed.locator.location == PackedLocation(
         path=packed.locator.value_path, row=0, kind=kind, length=len(value)
     )
+
+
+@pytest.mark.parametrize(
+    ("value", "kind"),
+    [
+        (LazyText(lambda: "short", length=5), PackedValueKind.TEXT),
+        (LazyTextList(lambda: ["a", "b"], length=2), PackedValueKind.TEXT_LIST),
+    ],
+)
+def test_a_lazy_handle_is_packed_whatever_its_size(tmp_path, value, kind):
+    packed = PackedValueWriter(tmp_path, StorageSources()).pack(
+        ObjectKind.ANNOTATION_CONTENT, 1, PackedField.VALUE, value
+    )
+    assert isinstance(packed, ExternalValue)
+    assert packed.locator.value_kind is kind
+    assert packed.locator.n_values == value.length
+
+
+def test_a_short_lazy_annotation_reads_back_as_stored_text(tmp_path):
+    dataset = make_dataset()
+    dataset.records[0].annotate(Annotation(key="feature", value=LazyText(lambda: "[0.1 0.2 0.3]", length=13)))
+    version_dir = _write_dataset(tmp_path, dataset)
+
+    (content_id,) = _content_ids(version_dir, "feature")
+    assert (ObjectKind.ANNOTATION_CONTENT.value, content_id, PackedField.VALUE.value, 0) in _external_rows(version_dir)
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        (feature,) = [
+            annotation.value
+            for record in reader.read(load=LoadPlan.ALL_LAZY).records
+            for annotation in record.annotations
+            if annotation.key == "feature"
+        ]
+    assert isinstance(feature, StoredText)
+    assert not feature.is_loaded
+    assert feature.read() == "[0.1 0.2 0.3]"
+
+
+def test_lazy_handles_over_one_function_with_different_lengths_do_not_share_a_row(tmp_path):
+    def read():
+        return "sleep"
+
+    dataset = make_dataset()
+    dataset.records[0].annotate(Annotation(key="right", value=LazyText(read, length=5)))
+    dataset.records[0].annotate(Annotation(key="wrong", value=LazyText(read, length=4)))
+
+    with pytest.raises(TimeFValidationError, match="returned 5 characters, but the handle was given length 4"):
+        _write_dataset(tmp_path, dataset)
 
 
 def test_locators_name_their_owner_by_kind_and_int_id(tmp_path):

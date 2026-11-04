@@ -15,8 +15,8 @@ deliberately not wired into ``make docs`` -- regenerate by hand when the concept
 The figures are deliberately schematic: a plain signal plus the minimum marks that explain one concept
 (a span, a point, an input-to-output arrow). They carry no domain detail; that lives in the page HTML
 around the image. Set ``FIG_PNG_DIR=/some/dir`` to also drop PNG copies there for eyeballing; the
-committed artifacts are SVG only. The structural diagrams (pipeline, record, annotation/task) are
-mermaid, embedded inline in the pages; their sources are under ``docs/scripts/diagrams/``.
+committed artifacts are SVG only. The structural diagrams (pipeline, record) are mermaid, embedded
+inline in the pages.
 """
 
 from __future__ import annotations

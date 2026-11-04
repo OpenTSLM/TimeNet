@@ -77,7 +77,8 @@ remote payload ranges through a pyarrow `S3FileSystem`. The backend has no catal
 
 ## `BaseRegistry`
 
-Every backend implements this contract: four data-access methods and one shared `search` method.
+Every backend implements this contract: four data-access methods and two shared methods,
+`download_version` and `search`.
 
 | Method | Description |
 | --- | --- |
@@ -86,6 +87,7 @@ Every backend implements this contract: four data-access methods and one shared 
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
 | `local_root` | The local registry or cache directory for complete releases. |
 | `open_version(dataset_id, version=None)` | A `DatasetVersion`: the parsed manifest plus a filesystem-rooted, picklable handle to the version's files, with its [payload sources](#payload-sources) opened from this registry. This is the storage seam the [reader](timef-reader.md) reads through, so a read never re-opens the registry nor re-parses `manifest.json`. |
+| `download_version(dataset_id, version, dest_dir, *, force=False, manifest=None, progress_cb=None)` | Copy a version's files into a local directory (shared implementation). It stages the files under `<version>.tmp-*` with `manifest.json` last, then swaps the directory in with one rename. A subclass can override it: `RemoteRegistry` streams the files in parallel. |
 | `search(...)` | Filter datasets (shared implementation). |
 
 `LocalRegistry` serves a `<root>/<dataset_id>/<version>/` tree. `RemoteRegistry` serves the same layout
@@ -152,7 +154,7 @@ A `WritableRegistry` adds one write method to the read contract. As a result,
 
 | Method | Description |
 | --- | --- |
-| `store(dataset, *, force=False, progress_cb=None)` | Compile a dataset and publish it; returns the stored version. Derives the schema first if absent, skips an already-committed version unless `force`, and checks every payload source in this registry. |
+| `store(dataset, *, force=False, values_backend="parquet", progress_cb=None)` | Compile a dataset and publish it; returns the stored version. Derives the schema first if absent, skips an already-committed version unless `force`, and checks every payload source in this registry. `values_backend` picks the values plane format: `"parquet"` or `"zarr"`. |
 | `exists(dataset_id, version)` | Whether a committed version already exists (shared implementation). |
 
 `LocalRegistry` implements `store` by streaming the dataset through a [`TimeFWriter`](timef-writer.md),
