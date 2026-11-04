@@ -367,7 +367,7 @@ _KIND_WORDS = {OriginKind.DOWNLOAD: ("download", "Downloads"), OriginKind.BUILD:
 
 @local_app.command("info")
 def local_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
-    """Show the path and size of the cache, the downloads and the builds."""
+    """Show paths and sizes for the cache, downloads, and builds."""
     store, cache_dir = default_local_registry(local_registry=local_registry), settings().cache_dir
     by_kind = stored_releases_by_kind(store)
     # Plain lines, so that a long path does not wrap.

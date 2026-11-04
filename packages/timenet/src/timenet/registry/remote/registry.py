@@ -60,7 +60,7 @@ class RemoteRegistry(LazyReadRegistry):
 
     @property
     def location(self) -> str:
-        """The base URL of the service."""
+        """The registry service's base URL."""
         return self._base_url
 
     def list_datasets(self) -> list[DatasetMetadata]:

@@ -54,7 +54,7 @@ class BaseRegistry(ABC):
     @property
     @abstractmethod
     def location(self) -> str:
-        """Where this registry is: a URL or a path, else the name of the registry."""
+        """The registry's URL, path, or name."""
 
     def check_writable(self, write: str) -> None:
         """Refuse a write if this registry is read-only.

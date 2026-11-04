@@ -40,15 +40,15 @@ class Origin(BaseModel):
 
 
 def without_credentials(location: str) -> str:
-    """Remove the user info, the query and the fragment of a URL.
+    """Remove user information, the query, and the fragment from a URL.
 
-    A string that is not a URL with a host, such as a path, comes back unchanged.
+    Return strings unchanged unless they have both a URL scheme and a host.
 
     Args:
-        location: A URL, a path, or another name.
+        location: A URL, path, or name.
 
     Returns:
-        The location without credentials.
+        The URL without user information, query, or fragment, or the original non-URL string.
     """
     parts = urlsplit(location)
     if not (parts.scheme and parts.netloc):

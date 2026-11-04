@@ -18,15 +18,15 @@ from timenet.types.references import DatasetRef
 
 @dataclass(frozen=True)
 class StoredRelease:
-    """One release in the store, with its size on disk and its provenance record."""
+    """A stored release with its path, provenance record, and size on disk."""
 
     release: DatasetRef
     path: Path
     origin: Origin | None
-    """The provenance record, or ``None`` if the release has none."""
+    """The record of how the release reached the local registry, or ``None`` if it has no record."""
 
     def size(self) -> int:
-        """Measure the size on disk.
+        """Measure the size of the release on disk.
 
         Returns:
             The size in bytes, measured on each call.
@@ -102,16 +102,16 @@ def human_bytes(n: int) -> str:
 
 
 def stored_releases(store: LocalRegistry) -> list[StoredRelease]:
-    """List every release in the store, with its size and its provenance record.
+    """List stored releases with their provenance records and sizes.
 
     Args:
-        store: The local registry to inspect.
+        store: The local registry.
 
     Returns:
         The releases, sorted by dataset ID and version.
 
     Raises:
-        TimeFFormatError: If a provenance record is damaged.
+        TimeFFormatError: If a provenance record is invalid.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by read_origin)
     return [
         StoredRelease(release, release_dir(store.root, release), store.read_origin(release))
@@ -153,7 +153,7 @@ def releases_to_clear(store: LocalRegistry, *, kinds: Collection[OriginKind]) ->
     Raises:
         TimeFValidationError: If ``kinds`` is empty, or a dataset or release folder in the local registry is a symlink.
         TimeFFormatError: If a provenance record or the manifest of a release that stays is damaged.
-        OSError: If a folder of the store cannot be read.
+        OSError: If a folder of the local registry cannot be read.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by check_no_linked_folders and stored_releases)
     _check_kinds(kinds)
     store.check_no_linked_folders()
@@ -245,11 +245,9 @@ def clear_releases(store: LocalRegistry, *, kinds: Collection[OriginKind]) -> Cl
         The bytes freed, the release folders removed, and the releases kept with a release that needs each.
 
     Raises:
-        TimeNetRegistryError: If the local registry is read-only. Nothing is deleted then.
-        TimeFValidationError: If ``kinds`` is empty, or a dataset or release folder in the local registry is a symlink.
-            Nothing is deleted then.
-        TimeFFormatError: If a provenance record or the manifest of a release that stays is damaged.
-            Nothing is deleted then.
+        TimeNetRegistryError: Before any deletion, if the local registry is read-only.
+        TimeFValidationError: Before any deletion, if ``kinds`` is empty or a dataset or release folder is a symlink.
+        TimeFFormatError: Before any deletion, if a provenance record or a kept release's manifest is damaged.
         OSError: If a folder cannot be read or removed completely.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by releases_to_clear and remove_release)
     _check_kinds(kinds)
