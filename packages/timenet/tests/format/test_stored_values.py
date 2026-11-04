@@ -551,6 +551,18 @@ def test_a_short_lazy_annotation_reads_back_as_stored_text(tmp_path):
     assert feature.read() == "[0.1 0.2 0.3]"
 
 
+def test_lazy_handles_over_one_function_with_different_lengths_do_not_share_a_row(tmp_path):
+    def read():
+        return "sleep"
+
+    dataset = make_dataset()
+    dataset.records[0].annotate(Annotation(key="right", value=LazyText(read, length=5)))
+    dataset.records[0].annotate(Annotation(key="wrong", value=LazyText(read, length=4)))
+
+    with pytest.raises(TimeFValidationError, match="returned 5 characters, but the handle was given length 4"):
+        _write_dataset(tmp_path, dataset)
+
+
 def test_locators_name_their_owner_by_kind_and_int_id(tmp_path):
     dataset, answer = _packed_dataset()
     version_dir = _write_dataset(tmp_path, dataset)
