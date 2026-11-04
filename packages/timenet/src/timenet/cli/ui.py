@@ -30,7 +30,7 @@ from timenet.progress import BytesMoved, ProgressCallback, ProgressEvent, ShardW
 
 
 class _Console:
-    """Writes emoji status lines to stderr. Stdout stays reserved for machine-readable output."""
+    """CLI output on stderr with a quiet mode."""
 
     def __init__(self) -> None:
         self.quiet = False
@@ -45,9 +45,9 @@ class _Console:
         self._emit("✅", message, style="green")
 
     def detail(self, message: str) -> None:
-        """Prints a line without an emoji. Quiet mode suppresses this line.
+        """Print a plain text line without wrapping.
 
-        The console does not wrap the line, so a long line stays whole.
+        Quiet mode hides the line.
         """
         if not self.quiet:
             self.rich.print(message, markup=False, highlight=False, soft_wrap=True)
