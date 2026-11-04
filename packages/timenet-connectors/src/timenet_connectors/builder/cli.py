@@ -200,9 +200,7 @@ def build_release_command(
 ) -> None:
     """Build exactly one release into a local store that holds its parents and payload sources.
 
-    An isolated build runs this command in the environment of the connector. The command does not
-    plan, because the parent process already put each parent and payload source into the store. It
-    prints the status lines and the progress of the build to stderr, and nothing to stdout.
+    The command prints status lines and progress to stderr, and nothing to stdout.
     """
     # backend.py imports this module, so a module-level import here would be circular.
     from timenet_connectors.builder.backend import ConnectorBuilder  # ruff: ignore[import-outside-top-level]
