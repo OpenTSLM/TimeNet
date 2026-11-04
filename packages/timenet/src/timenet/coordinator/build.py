@@ -80,6 +80,7 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
                     step.registry,
                     store,
                     with_payload_sources=step.with_payload_sources,
+                    force=step.force,
                     progress=options.progress,
                 )
             case BuildStep():

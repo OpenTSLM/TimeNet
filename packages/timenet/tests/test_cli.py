@@ -4,6 +4,7 @@ import sys
 
 import click
 import pytest
+from rich.console import Console
 import typer
 from typer.testing import CliRunner
 
@@ -151,12 +152,28 @@ def test_info_lists_the_access_page_of_each_release_that_sets_one(tmp_path):
     assert cells[start + 3][0] == "domains"
 
 
-def test_download(registry_root, tmp_path, monkeypatch):
+def test_download_command_copies_into_the_store_and_then_has_nothing_to_do(registry_root, tmp_path, monkeypatch):
+    # The last line names a long path, so the console must not wrap it.
+    monkeypatch.setattr(_cli_module.ui, "rich", Console(stderr=True, width=1000))
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("TIMENET_STORAGE", str(tmp_path / "store"))
-    result = runner.invoke(app, ["download", "timenet/hello-world", "--registry", str(registry_root)])
-    assert result.exit_code == 0, result.output
-    assert (tmp_path / "store" / "timenet/hello-world" / "1.0.0" / "manifest.json").exists()
+    monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "store"))
+    command = ["download", "timenet/hello-world", "--registry", str(registry_root)]
+    target = tmp_path / "store" / "timenet/hello-world" / "1.0.0"
+
+    copied = runner.invoke(app, command)
+    again = runner.invoke(app, command)
+
+    assert copied.exit_code == 0, copied.output
+    assert copied.stdout == f"{target}\n"  # only the directory, for a script to capture
+    assert (target / "manifest.json").exists()
+    successes = [line for line in copied.stderr.splitlines() if line.startswith("✅")]
+    assert successes == ["✅ Copied 'timenet/hello-world' → 1.0.0"]
+    assert again.exit_code == 0, again.output
+    assert again.stdout == f"{target}\n"
+    stored = tmp_path / "store"
+    assert again.stderr.splitlines() == [
+        f"✅ Nothing to do: 'timenet/hello-world' 1.0.0 is already in local registry {stored}"
+    ]
 
 
 def test_search_rejects_unknown_filter_value(registry_root):

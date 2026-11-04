@@ -22,7 +22,7 @@ from timenet.registry.dependencies import (
     find_payload_sources,
     validate_manifest_reference,
 )
-from timenet.registry.local import LocalRegistry
+from timenet.registry.local import LocalRegistry, is_same_registry
 from timenet.registry.version import DatasetVersion
 from timenet.sources import (
     Found,
@@ -64,6 +64,8 @@ class CopyStep:
     """The releases with steps that must finish before this step runs."""
     with_payload_sources: bool = True
     """Also copy the payload sources that the manifest of the release lists."""
+    force: bool = False
+    """Copy the release again, also if the local registry holds it."""
     action: ClassVar[Literal["copy"]] = "copy"
     """The kind of step, for display."""
 
@@ -204,6 +206,8 @@ class _Graph:
     """The sources in preference order. A read reads the output like any other source."""
     open_only: bool
     """True if each release that the walk visits must declare ``access: open``."""
+    builds: bool = True
+    """True if the plan may build a release that only installed connectors provide."""
     releases: dict[DatasetRef, _Release] = field(default_factory=dict)
     """The nodes, in the order in which the walk found them."""
     pins: dict[DatasetRef, dict[DatasetRef, PayloadSource]] = field(default_factory=dict)
@@ -217,7 +221,7 @@ class _Graph:
     def build_sources(self) -> list[ReleaseSource]:
         """The sources without the output, which is never a source of its own copies and builds."""
         output = self.output
-        return [source for source in self.sources if output is None or not _is_same_registry(source, output)]
+        return [source for source in self.sources if output is None or not is_same_registry(source, output)]
 
     def visit(
         self,
@@ -311,6 +315,7 @@ class _Graph:
 
         Raises:
             TimeFValidationError: If the plan has no output.
+            TimeNetDatasetNotFoundError: If the plan builds nothing and only installed connectors provide the release.
             TimeNetFileError: If the output holds a damaged copy that no other registry provides.
             TimeNetAccessError: If a source lists the release but no source serves it.
             TimeNetMissingParentError: If no source provides the release.
@@ -334,6 +339,9 @@ class _Graph:
             # A copy from another registry repairs a damaged copy. Nothing else replaces it.
             raise damage
         elif isinstance(answer, FoundInConnector):
+            if not self.builds:
+                # A download builds nothing.
+                raise TimeNetDatasetNotFoundError(_not_built(reference))
             self.build(reference, role, answer.builder)
         elif isinstance(answer, NotServed):
             raise answer.access_error(reference.dataset_id)
@@ -342,7 +350,7 @@ class _Graph:
             searched = describe_searched_sources((output, *self.build_sources), reference)
             raise TimeNetMissingParentError(reference, needed_by, searched, payload_source=role == "payload-source")
 
-    def copy(self, reference: DatasetRef, role: Role, registry: BaseRegistry) -> None:
+    def copy(self, reference: DatasetRef, role: Role, registry: BaseRegistry, *, force: bool = False) -> None:
         """Add a copy step and plan the payload sources that the copy does not bring.
 
         A dataset copy brings each payload source that ``registry`` serves. Each other payload source that the output
@@ -352,6 +360,7 @@ class _Graph:
             reference: The exact release to copy.
             role: Whether the release is a dataset or a payload source.
             registry: The registry to copy from.
+            force: Copy the release again, also if the output holds a complete copy.
 
         Raises:
             TimeNetDatasetNotFoundError: If the release is absent from the registry.
@@ -374,7 +383,7 @@ class _Graph:
         if self.open_only:
             for found in (*sources.fetched.values(), *sources.held.values()):
                 require_open_access(found.metadata, found.lineage)
-        step = CopyStep(reference, registry, with_payload_sources=role == "dataset")
+        step = CopyStep(reference, registry, with_payload_sources=role == "dataset", force=force)
         # The node holds its final dependencies before the walk visits them. So a release of the walk
         # that depends on it closes a cycle and does not look it up again.
         self.releases[reference] = _Release(role, True, step, tuple(sources.missing))
@@ -594,19 +603,106 @@ def plan_steps(
     return root, graph.create_ordered_steps()
 
 
-def _is_same_registry(source: ReleaseSource, output: LocalRegistry) -> bool:
-    """Check whether a source is the output registry.
+def plan_download(
+    release: DatasetRef,
+    store: LocalRegistry,
+    *,
+    sources: Sequence[ReleaseSource],
+    force: bool = False,
+    lookups: Lookups | None = None,
+) -> Plan:
+    """Plan the copies that put a release and its payload sources into the local registry.
+
+    Each release that the local registry lacks comes from the first registry other than the local registry
+    that provides it. The plan builds nothing.
 
     Args:
-        source: The source to compare.
-        output: The destination registry.
+        release: The exact release.
+        store: The store to copy into.
+        sources: The sources, in order. The store, and each registry over its directory, do not count.
+        force: Copy the release again, even if the local registry holds a complete copy.
+        lookups: The answers and manifests that resolved ``release``, or ``None`` to ask the sources.
 
     Returns:
-        ``True`` for the same object or local registries with the same resolved directory.
+        The copy steps, in the order in which they run.
+
+    Raises:
+        TimeNetDatasetNotFoundError: If only installed connectors provide a release that the store
+            lacks, or if ``force`` is set and only the local registry holds the release.
+        TimeNetFileError: If the local registry holds a damaged copy that no other registry provides.
+        TimeNetAccessError: If a source lists a release that the local registry lacks but no source serves it.
+        TimeNetMissingParentError: If no registry provides a payload source that the local registry lacks.
+        TimeFFormatError: If a payload source differs from the files that a release pins.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the walk and as values
+    others = [source for source in sources if not is_same_registry(source, store)]
+    graph = _Graph(store, others, open_only=False, builds=False, lookups=lookups or Lookups())
+    held, damage = graph.in_output(release)
+    if held is not None and not force:
+        # The local registry holds a complete copy, so only the payload sources that it lacks need a copy.
+        pins = list(held.payload_sources.values())
+        graph.releases[release] = _Release("dataset", True, None, tuple(pinned.release for pinned in pins))
+        for pinned in pins:
+            graph.visit(pinned.release, release, pinned, needed_in_local_registry=True)
+    else:
+        _add_release_copy(graph, release, held=held is not None, damage=damage, force=force)
+    graph.check()
+    return Plan(tuple(graph.create_ordered_steps()))
+
+
+def _add_release_copy(
+    graph: _Graph, release: DatasetRef, *, held: bool, damage: TimeNetFileError | None, force: bool
+) -> None:
+    """Add the copy of a release that the store lacks, holds damaged, or must copy again.
+
+    Args:
+        graph: The graph of the download, whose sources leave out the local registry.
+        release: The exact release.
+        held: Whether the local registry holds a copy of the release.
+        damage: The first damaged file of the copy in the local registry, or ``None``.
+        force: Copy the release again, even if the local registry holds a complete copy.
+
+    Raises:
+        TimeNetFileError: If the local registry holds a damaged copy that no other registry provides.
+        TimeNetDatasetNotFoundError: If no registry other than the local registry provides the release.
+        TimeNetAccessError: If a registry lists the release but serves none of its files.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised as values
+    answer = graph.lookups.resolve(graph.sources, release.dataset_id, str(release.version))
+    if isinstance(answer, FoundInRegistry):
+        # A registry other than the local registry provides the release, so the plan copies it from there.
+        graph.copy(release, "dataset", answer.registry, force=force)
+    elif damage is not None:
+        # Only a registry replaces a damaged copy in the local registry.
+        raise damage
+    elif held:
+        # With force, the copy needs a registry other than the local registry, and none provides the release.
+        raise TimeNetDatasetNotFoundError(
+            f"No registry other than the local registry provides {release}, so download(force=True) cannot copy it again."
+        )
+    elif isinstance(answer, NotServed):
+        # A registry lists the release but serves none of its files.
+        raise answer.access_error(release.dataset_id)
+    elif isinstance(answer, FoundInConnector):
+        # Only installed connectors provide the release, and the plan builds nothing.
+        raise TimeNetDatasetNotFoundError(_not_built(release))
+    else:
+        # No source other than the local registry provides the release.
+        names = ", ".join(str(source) for source in graph.sources)
+        raise TimeNetDatasetNotFoundError(f"{release} is in none of the sources: {names}.")
+
+
+def _not_built(release: DatasetRef) -> str:
+    """Describe a release that only installed connectors provide, in a plan that builds nothing.
+
+    Args:
+        release: The release.
+
+    Returns:
+        The error message.
     """
-    if source is output:
-        return True
-    return isinstance(source, LocalRegistry) and source.root.resolve() == output.root.resolve()
+    return (
+        f"{release} is not built yet: only an installed connector provides it. open() or load() builds it into "
+        "the local registry."
+    )
 
 
 def describe_searched_sources(sources: Iterable[ReleaseSource], reference: DatasetRef) -> str:

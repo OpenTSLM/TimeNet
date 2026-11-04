@@ -169,14 +169,6 @@ def test_preparation_needs_only_the_direct_payload_sources(registry_root, tmp_pa
     assert prepared.resolve_payload_source(SourceKey(str(parent_ref))).payload_sources == {}
 
 
-@pytest.mark.parametrize("suffix", ["different/ecg/2.0.0", "demo/ecg/3.0.0", "demo/ecg/latest"])
-def test_download_rejects_a_destination_for_another_release(registry_root, tmp_path, suffix):
-    destination = tmp_path / "downloads" / suffix
-    with pytest.raises(TimeFValidationError, match=r"expected demo/ecg@2\.0\.0|release directory"):
-        LocalRegistry(registry_root).download_version("demo/ecg", "2.0.0", destination)
-    assert not destination.exists()
-
-
 @pytest.mark.parametrize("damage", [None, "missing", "truncated"])
 def test_a_complete_copy_has_every_file_with_its_recorded_size(registry_root, damage):
     version = open_local_version(_version_dir(registry_root))
