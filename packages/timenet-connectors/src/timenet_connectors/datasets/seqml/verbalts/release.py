@@ -30,11 +30,7 @@ class Attribute:
 
     @property
     def vocabulary(self) -> tuple[str, ...] | tuple[int, ...] | None:
-        """Return labels or integer codes in release order, if known.
-
-        Returns:
-            The known labels or codes, or ``None``.
-        """
+        """The labels or integer codes in release order, or ``None`` if they are not known."""
         return self.labels if self.labels is not None else self.codes
 
 

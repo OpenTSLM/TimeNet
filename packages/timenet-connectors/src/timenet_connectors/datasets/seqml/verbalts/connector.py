@@ -143,11 +143,7 @@ class VerbalTsComponent:
 
     @property
     def meta_path(self) -> Path:
-        """Return the path to this component's ``meta.json``.
-
-        Returns:
-            The metadata path.
-        """
+        """The path to this component's ``meta.json``."""
         return self.folder / "meta.json"
 
 
@@ -217,7 +213,7 @@ def _values_loader(path: str, row: int, signal: int) -> Callable[[], pa.Array]:
 class VerbalTsConnector(BaseConnector[VerbalTsComponent]):
     """Convert the six VerbalTS components from Google Drive."""
 
-    def download(self, cache_dir: Path) -> list[VerbalTsComponent]:  # noqa: PLR6301 - BaseConnector override
+    def download(self, cache_dir: Path) -> list[VerbalTsComponent]:  # ruff: ignore[no-self-use] - BaseConnector override
         """Download the pinned files and return a path for each component.
 
         Cached and new files must match their pinned SHA-256 digests.
@@ -231,7 +227,7 @@ class VerbalTsConnector(BaseConnector[VerbalTsComponent]):
         Raises:
             TimeNetDownloadError: If a file download fails.
         """
-        import gdown  # noqa: PLC0415  # ty: ignore[unresolved-import] - optional dependency
+        import gdown  # ruff: ignore[import-outside-top-level]  # ty: ignore[unresolved-import] - optional dependency
 
         cache_dir.mkdir(parents=True, exist_ok=True)
         for component, name, file_id, n_bytes, digest in FILES:
@@ -468,7 +464,7 @@ def _window_starts(
     return tuple(starts)
 
 
-def _window_record(  # noqa: PLR0913 - one row needs its split, arrays, labels, and position
+def _window_record(  # ruff: ignore[too-many-arguments] - one row needs its split, arrays, labels, and position
     component: VerbalTsComponent,
     split: str,
     row: int,
