@@ -32,7 +32,7 @@ from timenet.types.references import DatasetRef, is_latest
 
 
 class RemoteRegistry(LazyReadRegistry):
-    """Read and publish datasets through the hosted TimeNet HTTP service."""
+    """A dataset registry backed by the hosted TimeNet HTTP service."""
 
     def __init__(
         self,
@@ -119,14 +119,14 @@ class RemoteRegistry(LazyReadRegistry):
         return buffer
 
     def _open_remote_version(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
-        """Bind one remote manifest to a range-capable filesystem.
+        """Open a remote release with on-demand file reads.
 
         Args:
-            reference: The exact release.
-            manifest: The manifest of the release, if the caller already fetched it from this registry.
+            reference: The dataset ID and exact version to open.
+            manifest: A manifest already fetched from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle without its payload sources.
+            A handle to the remote release without attached payload sources.
         """
         if manifest is None:
             manifest = self.get_manifest(reference.dataset_id, str(reference.version))

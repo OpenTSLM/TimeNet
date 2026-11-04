@@ -82,14 +82,14 @@ class LazyReadRegistry(WritableRegistry, ABC):
             shutil.rmtree(staging, ignore_errors=True)
 
     def open_release(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
-        """Open one release without its payload sources, then read remote files on demand.
+        """Open a cached or remote release without attaching its payload sources.
 
         Args:
-            reference: The exact release.
-            manifest: The manifest of the release from this registry, if you already read it.
+            reference: The dataset ID and exact version to open.
+            manifest: A manifest already read from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle over a complete cached copy in :attr:`local_root`, else over remote files.
+            A handle to a complete copy in :attr:`local_root`, or to remote files read on demand.
         """
         return open_cached_or_remote_release(
             self.local_root, reference, lambda ref: self._open_remote_version(ref, manifest=manifest)
@@ -97,12 +97,12 @@ class LazyReadRegistry(WritableRegistry, ABC):
 
     @abstractmethod
     def _open_remote_version(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
-        """Bind one remote release to a range-capable filesystem, without its payload sources.
+        """Open a remote release on a filesystem that serves range reads.
 
         Args:
-            reference: The exact release.
-            manifest: The manifest of the release, if the caller already read it from this registry.
+            reference: The dataset ID and exact version to open.
+            manifest: A manifest already read from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle without its payload sources.
+            A handle to the remote release without attached payload sources.
         """
