@@ -13,7 +13,8 @@ live in memory.
 The connector imports the recordings and their patient metadata from the pinned PTB-XL TimeF
 parent. The per-template answer options come from the ``Jwoo5/ecg-qa`` GitHub repo. The precomputed
 CoT rows (question, answer, rationale, template) come from the OpenTSLM release, the only public
-source for the rationales. Build the PTB-XL parent first, or pass ``--build-parents``.
+source for the rationales. If the store lacks the PTB-XL parent, a build copies it from the remote
+registry or builds it from its connector first.
 
 The clinical context comes from the annotations of the imported PTB-XL records. It states the patient's
 age and sex, the recording device, and the signal-quality issues, extra beats, and pacemaker that PTB-XL

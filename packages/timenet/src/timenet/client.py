@@ -574,7 +574,7 @@ def _repair_hint(release: DatasetRef, entry: ReleaseSource | None, store: LocalR
         return f"Copy an intact release into the store with download('{release}')."
     if isinstance(entry, InstalledConnectors):
         # Only an installed connector provides the release.
-        command = f"timenet-build build {release.dataset_id} --out {shlex.quote(str(store.root))} --force"
+        command = f"timenet-build build {release.dataset_id} --local-registry {shlex.quote(str(store.root))} --force"
         return f"Build it again with `{command}`."
     # Only the store holds the release.
     return "No registry other than the store provides it, so download() cannot replace it."

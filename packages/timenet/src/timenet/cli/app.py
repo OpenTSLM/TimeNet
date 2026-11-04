@@ -267,10 +267,9 @@ def publish(
         bare_id, version = split_ref(dataset_id)
         wanted = bare_id if version is None else f"{bare_id}@{version}"
         # Repeat the store of --local-registry, so that each command of the hint uses it too.
-        path = shlex.quote(str(store.root))
-        out, flag = ("", "") if local_registry is None else (f" --out {path}", f" --local-registry {path}")
+        flag = "" if local_registry is None else f" --local-registry {shlex.quote(str(store.root))}"
         hint = (
-            f"Build it into the store with `timenet-build build {wanted}{out}`, "
+            f"Build it into the store with `timenet-build build {wanted}{flag}`, "
             f"or copy it there with `timenet download {wanted}{flag}`."
         )
         raise TimeNetDatasetNotFoundError(f"{str(error).rstrip('.')}. {hint}") from error
