@@ -66,7 +66,8 @@ def build(  # ruff: ignore[too-many-arguments]
         plan = plan_release_build(
             f"{dataset_id}@{version}" if version else dataset_id,
             store=store,
-            # Maps fetch_from and build_parents onto a list of sources for the coordinator.
+            # Glue: maps fetch_from and build_parents onto a list of sources, until the producer API
+            # replaces this function.
             parents_from=[
                 *([source] if source is not None else []),
                 *([InstalledConnectors()] if build_parents else []),
