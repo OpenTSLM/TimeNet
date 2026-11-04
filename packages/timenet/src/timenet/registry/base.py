@@ -21,7 +21,9 @@ from timenet.registry._paths import safe_version_path, split_release_dir
 from timenet.registry.dependencies import prepare_local_copy, validate_manifest_reference
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
-from timenet.types import DatasetMetadata, Domain, License, Task
+from timenet.sources import Found, NotFound, NotServed
+from timenet.types import Access, DatasetMetadata, Domain, License, Task
+from timenet.types.access import access_requirements, effective_access
 from timenet.types.references import DatasetRef
 
 
@@ -126,6 +128,35 @@ class BaseRegistry(ABC):
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
+
+    def resolve(self, dataset_id: str, version: str | None) -> Found | NotFound | NotServed:
+        """Say whether this registry serves a release, and at which version.
+
+        A registry that is not local serves the files of a release only if its effective access is
+        open: the strictest access of its card and of the cards in its lineage. It lists any other
+        release, with its card and its manifest, but it does not serve its files.
+        :class:`~timenet.registry.LocalRegistry` serves every release that it holds.
+
+        Args:
+            dataset_id: The dataset ID.
+            version: An exact version, such as ``"1.2.0"``, or ``None``, ``""`` or ``"latest"`` for the
+                latest version.
+
+        Returns:
+            ``Found`` with this registry, for a release that it serves. ``NotServed`` for a release
+            that it lists but does not serve, with the page of each card that is not open.
+            ``NotFound()`` for an unknown dataset ID or version.
+        """
+        try:
+            manifest = self.get_manifest(dataset_id, version)
+        except TimeNetDatasetNotFoundError:
+            return NotFound()
+        held = manifest.metadata.dataset_version
+        access = effective_access(manifest.metadata, manifest.lineage)
+        if access is Access.OPEN:
+            return Found(held, self, manifest)
+        requirements = access_requirements(manifest.metadata, manifest.lineage)
+        return NotServed(held, access, requirements[0].access_url if requirements else None, requirements, manifest)
 
     def download_version(  # ruff: ignore[too-many-arguments]
         self,

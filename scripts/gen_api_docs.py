@@ -19,7 +19,8 @@ Output goes to ``docs/api/`` (git-ignored; regenerated at build time).
 from __future__ import annotations
 
 import ast
-from dataclasses import dataclass
+from collections import Counter
+from dataclasses import dataclass, replace
 from pathlib import Path
 import re
 
@@ -62,7 +63,8 @@ class ApiModule:
 
     Attributes:
         dotted: Importable dotted path, e.g. ``timenet.registry``.
-        slug: Output filename stem under ``docs/api/`` (the last path component).
+        slug: Output filename stem under ``docs/api/``: the last path component, or the
+            dotted path if a module of the other package has the same last component.
         summary: Cleaned first line of the module docstring, or ``""``.
         show_submodules: Render submodules recursively (packages without ``__all__``).
     """
@@ -264,6 +266,15 @@ def main() -> None:
     """
     OUTPUT_DIR.mkdir(parents=True, exist_ok=True)
     by_package = {pkg: _discover(pkg, root) for pkg, root in PACKAGE_ROOTS.items()}
+    # Both packages can have a module with the same name, such as timenet.sources and
+    # timenet_connectors.sources. The page of each such module takes its full dotted path.
+    shared = {
+        slug for slug, count in Counter(mod.slug for mods in by_package.values() for mod in mods).items() if count > 1
+    }
+    by_package = {
+        pkg: [replace(mod, slug=mod.dotted) if mod.slug in shared else mod for mod in mods]
+        for pkg, mods in by_package.items()
+    }
     all_mods = [mod for mods in by_package.values() for mod in mods]
 
     # "index" is reserved for the landing page written by _write_index below.

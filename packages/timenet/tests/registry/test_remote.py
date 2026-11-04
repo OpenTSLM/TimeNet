@@ -22,8 +22,9 @@ from timenet.format.checksums import file_checksum
 from timenet.manifest import Manifest
 from timenet.reader import LoadPlan, TimeFReader
 from timenet.registry import LocalRegistry, RemoteRegistry, open_local_version
+from timenet.sources import Found, NotServed, resolve_release
 from timenet.testing import assert_datasets_equal, make_dataset
-from timenet.types import Access, DatasetSchema, Domain, License
+from timenet.types import Access, DatasetSchema, Domain, License, Version
 from timenet.types.access import AccessRequirement
 from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias
@@ -514,8 +515,8 @@ def test_child_streams_physical_sources_and_downloads_for_offline_reads(tmp_path
     assert requests == prepared_requests
 
 
-@pytest.mark.parametrize("page", ["own", "ancestor"])
-def test_a_local_client_checks_access_before_it_copies_from_a_remote_registry(tmp_path, page):
+def _gated_release(origin: Path, page: str) -> tuple[str, DatasetRef]:
+    """Write a release that is not open into ``origin``; return its ID and the release whose card is credentialed."""
     dataset = make_dataset()
     gated = {"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
     release = DatasetRef(dataset_id=dataset.metadata.dataset_id, version=dataset.metadata.dataset_version)
@@ -527,14 +528,82 @@ def test_a_local_client_checks_access_before_it_copies_from_a_remote_registry(tm
         dataset._import_state.lineage["test/ancestor@1.0.0"] = ParentDatasetCard(metadata=ancestor)
         release = DatasetRef.parse("test/ancestor@1.0.0")
     dataset.derive_schema()
-    with TimeFWriter(tmp_path / "origin", dataset) as writer:
+    with TimeFWriter(origin, dataset) as writer:
         writer.write()
+    return dataset.metadata.dataset_id, release
+
+
+@pytest.mark.parametrize("page", ["own", "ancestor"])
+def test_a_local_client_checks_access_before_it_copies_from_a_remote_registry(tmp_path, page):
+    dataset_id, release = _gated_release(tmp_path / "origin", page)
     transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
     remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
 
     with pytest.raises(TimeNetAccessError) as caught:
-        TimeNet(tmp_path / "local").open(dataset.metadata.dataset_id, auto_build=False, fetch_from=remote)
+        TimeNet(tmp_path / "local").open(dataset_id, auto_build=False, fetch_from=remote)
 
     assert caught.value.requirements == (AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua"),)
     assert not any("/download/" in request.url.path or request.url.host == "blob.local" for request in requests)
     assert not (tmp_path / "local").exists()
+
+
+@pytest.mark.parametrize("page", ["own", "ancestor"])
+def test_a_remote_registry_lists_but_does_not_serve_a_release_that_is_not_open(tmp_path, page):
+    dataset_id, release = _gated_release(tmp_path / "origin", page)
+    transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
+    remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
+    requirement = AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua")
+
+    for version in (None, "1.0.0"):
+        assert remote.resolve(dataset_id, version) == NotServed(
+            Version(1, 0, 0), Access.CREDENTIALED, "https://example.org/dua", (requirement,)
+        )
+    assert not any("/download/" in request.url.path or request.url.host == "blob.local" for request in requests)
+    # A local registry serves every release that it holds.
+    local = LocalRegistry(tmp_path / "origin")
+    assert local.resolve(dataset_id, None) == Found(Version(1, 0, 0), local)
+
+
+@pytest.mark.parametrize("version", [None, "1.0.0"])
+def test_resolve_keeps_the_manifest_that_it_fetched(version_dir, tmp_path, version):
+    registry, requests = _remote(version_dir, tmp_path)
+    _, manifest = version_dir
+    dataset_id = manifest.metadata.dataset_id
+
+    answer = registry.resolve(dataset_id, version)
+
+    assert isinstance(answer, Found)
+    assert answer.manifest == manifest
+    assert sum(request.url.path.endswith("/manifest") for request in requests) == 1
+
+
+def test_resolve_keeps_the_manifest_of_a_release_that_is_not_served(tmp_path):
+    dataset_id, _ = _gated_release(tmp_path / "origin", "own")
+    transport, _ = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
+    remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
+
+    answer = remote.resolve(dataset_id, None)
+
+    assert isinstance(answer, NotServed)
+    assert answer.manifest is not None
+    assert answer.manifest.metadata.dataset_id == dataset_id
+
+
+def _offline(request):
+    raise httpx.ConnectError("the network is down", request=request)
+
+
+def test_an_unreachable_registry_raises_a_registry_error_that_names_it(tmp_path):
+    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(_offline), cache_dir=tmp_path)
+
+    with pytest.raises(TimeNetRegistryError, match=r"^cannot reach http://api\.local: the network is down$"):
+        remote.resolve("timenet/hello-world", None)
+
+
+def test_the_latest_version_over_an_unreachable_registry_raises_a_registry_error(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    store.put_dataset(make_dataset())
+    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(_offline), cache_dir=tmp_path)
+
+    with pytest.raises(TimeNetRegistryError, match=r"cannot reach http://api\.local"):
+        resolve_release([store, remote], "timenet/hello-world", None)
