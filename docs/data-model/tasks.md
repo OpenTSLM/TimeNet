@@ -261,8 +261,12 @@ class Condition(StrEnum):
     FAULTY = "faulty"
 
 
-CONDITION = LabelSet.from_enum(Condition, name="condition", descriptions={Condition.FAULTY: "A bearing fault."})
-ClassificationTask(inputs=(record,), targets=(Condition.FAULTY,), label_set=CONDITION)
+CONDITION = LabelSet.from_enum(
+    Condition, name="condition", descriptions={Condition.FAULTY: "A bearing fault."}
+)
+ClassificationTask(
+    inputs=(record,), targets=(Condition.FAULTY,), label_set=CONDITION
+)
 ```
 
 Build the set from `Label` objects when the labels come from the source data instead.

@@ -1,4 +1,5 @@
 from enum import StrEnum
+import re
 
 from pydantic import ValidationError
 import pytest
@@ -52,6 +53,12 @@ def test_a_multi_label_target_rejects_a_repeated_label():
         FINDINGS.check_targets(("AF", "PVC", "AF"))
 
 
+class _Stage(StrEnum):
+    WAKE = "W"
+    N1 = "N1"
+    REM = "R"
+
+
 class _Sex(StrEnum):
     FEMALE = "F"
     MALE = "M"
@@ -61,19 +68,29 @@ class _Other(StrEnum):
     FEMALE = "F"
 
 
-def test_a_label_set_from_an_enum_has_one_label_per_member_in_order():
-    sexes = LabelSet.from_enum(_Sex, name="sex", descriptions={_Sex.FEMALE: "Female."}, multi_label=True)
+def test_a_label_set_from_an_enum_has_one_label_per_member_in_definition_order():
+    # W, N1, R is not sorted, so a sorted result would fail.
+    stages = LabelSet.from_enum(_Stage, name="stage", descriptions={_Stage.WAKE: "Awake."}, multi_label=True)
 
-    assert sexes == LabelSet(
-        name="sex",
-        labels=(Label(name="F", description="Female."), Label(name="M")),
+    assert stages == LabelSet(
+        name="stage",
+        labels=(Label(name="W", description="Awake."), Label(name="N1"), Label(name="R")),
         multi_label=True,
     )
 
 
-@pytest.mark.parametrize("key", [_Other.FEMALE, "F"])
-def test_a_label_set_from_an_enum_rejects_a_description_for_another_value(key):
+def test_a_label_set_from_an_enum_rejects_an_alias():
+    class Condition(StrEnum):
+        HEALTHY = "healthy"
+        FAULTY = "healthy"  # A copy-paste slip: FAULTY becomes an alias of HEALTHY.
+
+    with pytest.raises(TimeFValidationError, match=r"Condition gives one value more than one name.*\['FAULTY'\]"):
+        LabelSet.from_enum(Condition, name="condition")
+
+
+@pytest.mark.parametrize(("key", "shown"), [(_Other.FEMALE, "<_Other.FEMALE: 'F'>"), ("F", "'F'")])
+def test_a_label_set_from_an_enum_rejects_a_description_for_another_value(key, shown):
     # Both keys compare equal to _Sex.FEMALE. Reject them so that only members of _Sex can supply
-    # descriptions.
-    with pytest.raises(TimeFValidationError, match="not members of _Sex"):
+    # descriptions, and show each key as it was written.
+    with pytest.raises(TimeFValidationError, match=re.escape(f"not members of _Sex: [{shown!r}]")):
         LabelSet.from_enum(_Sex, name="sex", descriptions={key: "Female."})

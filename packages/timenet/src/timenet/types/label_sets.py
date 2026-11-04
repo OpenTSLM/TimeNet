@@ -2,13 +2,16 @@
 
 from collections.abc import Iterator, Mapping, Sequence
 from enum import StrEnum
-from typing import Self
+from typing import Self, TypeVar
 
 from pydantic import StrictBool, model_validator
 
 from timenet.errors import TimeFValidationError
 from timenet.types._model import TimeFModel
 from timenet.types.wire import NonEmptyString
+
+
+_Labels = TypeVar("_Labels", bound=StrEnum)
 
 
 class Label(TimeFModel):
@@ -62,10 +65,10 @@ class LabelSet(TimeFModel):
     @classmethod
     def from_enum(
         cls,
-        labels: type[StrEnum],
+        labels: type[_Labels],
         *,
         name: str,
-        descriptions: Mapping[StrEnum, str] | None = None,
+        descriptions: Mapping[_Labels, str] | None = None,
         multi_label: bool = False,
     ) -> Self:
         """Build a label set from a ``StrEnum``. Preserve the enum's definition order.
@@ -91,10 +94,18 @@ class LabelSet(TimeFModel):
             The label set.
 
         Raises:
-            TimeFValidationError: If ``descriptions`` has a key that is not a member of ``labels``.
+            TimeFValidationError: If ``labels`` gives one value more than one name, or ``descriptions``
+                has a key that is not a member of ``labels``.
         """
+        # An alias is a second name for an earlier member's value. Iteration skips it, so two
+        # intended labels would silently become one.
+        aliases = sorted(alias for alias, member in labels.__members__.items() if alias != member.name)
+        if aliases:
+            raise TimeFValidationError(
+                f"{labels.__name__} gives one value more than one name, so its labels would merge: {aliases}"
+            )
         described = dict(descriptions or {})
-        unknown = sorted(str(key) for key in described if not isinstance(key, labels))
+        unknown = sorted(repr(key) for key in described if not isinstance(key, labels))
         if unknown:
             raise TimeFValidationError(f"descriptions name values that are not members of {labels.__name__}: {unknown}")
         return cls(
