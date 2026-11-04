@@ -212,7 +212,7 @@ def build_release_command(
     with _renderer() as progress:
         if progress is not None:
             progress(StepStarted(reference, "build"))
-        options = BuildOptions(keep_cache=keep_cache, progress=progress)
+        options = BuildOptions(keep_cache=keep_cache, progress=progress, quiet=console.quiet)
         ConnectorBuilder().build_prepared(reference, LocalRegistry(store), force=force, pinned_by=pins, options=options)
         if progress is not None:
             progress(StepFinished(reference, "build"))
