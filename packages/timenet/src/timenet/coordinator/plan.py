@@ -215,9 +215,8 @@ def plan_parents(  # ruff: ignore[too-many-arguments]
         build_parents: Build missing parents with their installed connectors.
         force_build: Build the requested release again, even if the output holds it, and plan its
             parents.
-        open_access_only: Check the access of each release as for an output that is not local, even
-            if the output is local. A caller sets it when it copies the result to a registry that
-            holds only open releases.
+        open_access_only: Require ``access: open`` of each release, as for an output that is not
+            local.
 
     Returns:
         The steps to copy or build parents, with dependencies first.
@@ -230,11 +229,10 @@ def plan_parents(  # ruff: ignore[too-many-arguments]
         TimeNetDatasetNotFoundError: If a parent is missing and no installed connector builds it.
         TimeNetFileError: If a local output holds a damaged copy of a parent, and the plan cannot
             copy the parent again.
-        TimeNetAccessError: If the output is not local, or ``open_access_only`` is set, and the
-            requested card, or a card in the lineage of the requested release that the output
-            holds, does not declare ``access: open``, or the plan visits a release whose card, or a
-            card in its lineage, does not. Also if ``fetch_from`` is not local and the plan would
-            copy such a release from it.
+        TimeNetAccessError: If the output is not local or ``open_access_only`` is set, and the
+            requested release or a release that the plan visits does not declare ``access: open``
+            in its card or lineage. Also if ``fetch_from`` is not local and the plan would copy
+            such a release from it.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers of the walk
     if fetch_from is not None and not isinstance(output, LocalRegistry):
         # A registry that is not local accepts a child only if it already holds the parents. A copy
