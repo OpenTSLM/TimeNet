@@ -3,7 +3,8 @@ import shutil
 import pytest
 
 from timenet.builders import BuildOptions
-from timenet.coordinator.build import build_release
+from timenet.coordinator import build as build_module
+from timenet.coordinator.build import plan_release_build, run_plan
 from timenet.coordinator.plan import Step
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetAccessError, TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
@@ -12,6 +13,7 @@ from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
 from timenet.registry._paths import release_dir
 from timenet.registry.shared import complete_copy
+from timenet.sources import InstalledConnectors
 from timenet.testing import install_backends, make_dataset
 from timenet.types import Access
 from timenet.types.reference_keys import ParentAlias, SourceKey
@@ -119,33 +121,36 @@ def pins(store):
     return _store_child_without_parent(store)
 
 
-def test_build_release_builds_into_the_store_and_returns_the_plan(store, fake):
-    plan = build_release("a/b", store=store)
+def test_a_planned_build_runs_into_the_store(store, fake):
+    plan = plan_release_build("a/b", store=store)
+    run_plan(plan, store)
     assert [(s.action, s.release) for s in plan.steps] == [("build", REF_AB)]
     assert store.exists("a/b", "1.0.0")
     assert fake.calls == [(REF_AB, False, {})]
 
 
-def test_build_release_calls_the_claiming_backend_with_the_pins(store, fake_parent, fake_child, pins):
-    plan = build_release(CHILD_REF.dataset_id, store=store, build_parents=True)
+def test_a_build_calls_the_claiming_backend_with_the_pins(store, fake_parent, fake_child, pins):
+    plan = plan_release_build(CHILD_REF.dataset_id, store=store, parents_from=[InstalledConnectors()])
+    run_plan(plan, store)
     # (release, force, pinned_by): the backend of another package gets the pins of the child.
     assert fake_parent.calls == [(PARENT_REF, False, {CHILD_REF: pins})]
     # The store holds the child, so the plan builds only its missing payload source.
     assert fake_child.calls == []
-    assert plan.steps == (Step(PARENT_REF, "build", pinned_by={CHILD_REF: pins}),)
+    assert plan.steps == (Step(PARENT_REF, "build", InstalledConnectors(), pinned_by={CHILD_REF: pins}),)
     assert store.exists(PARENT_REF.dataset_id, str(PARENT_REF.version))
 
 
-def test_build_release_passes_the_pins_of_the_caller_to_the_backend(store, fake_parent, pins):
-    plan = build_release(PARENT_REF.dataset_id, store=store, pinned_by={CHILD_REF: pins})
+def test_a_build_passes_the_pins_of_the_caller_to_the_backend(store, fake_parent, pins):
+    plan = plan_release_build(PARENT_REF.dataset_id, store=store, pinned_by={CHILD_REF: pins})
+    run_plan(plan, store)
     assert fake_parent.calls == [(PARENT_REF, False, {CHILD_REF: pins})]
-    assert plan.steps == (Step(PARENT_REF, "build", pinned_by={CHILD_REF: pins}),)
+    assert plan.steps == (Step(PARENT_REF, "build", InstalledConnectors(), pinned_by={CHILD_REF: pins}),)
     assert store.exists(PARENT_REF.dataset_id, str(PARENT_REF.version))
 
 
-def test_build_release_rejects_a_version_the_connector_does_not_declare(store, fake):
+def test_plan_release_build_rejects_a_version_the_connector_does_not_declare(store, fake):
     with pytest.raises(TimeNetVersionUnavailableError) as caught:
-        build_release("a/b@2.0.0", store=store)
+        plan_release_build("a/b@2.0.0", store=store)
     assert (caught.value.release, caught.value.declared) == (DatasetRef.parse("a/b@2.0.0"), REF_AB.version)
     assert str(caught.value) == (
         "connector for 'a/b' builds version 1.0.0, not the requested 2.0.0. "
@@ -154,21 +159,23 @@ def test_build_release_rejects_a_version_the_connector_does_not_declare(store, f
     assert fake.calls == []
 
 
-def test_build_release_accepts_the_version_that_the_connector_declares(store, fake):
-    build_release("a/b@1.0.0", store=store)
+def test_a_build_accepts_the_version_that_the_connector_declares(store, fake):
+    run_plan(plan_release_build("a/b@1.0.0", store=store), store)
     assert fake.calls == [(REF_AB, False, {})]
 
 
-def test_build_release_copies_a_missing_parent_and_reports_each_step_once(tmp_path, store, fake_parent, fake_child):
+def test_a_build_copies_a_missing_parent_and_reports_each_step_once(tmp_path, store, fake_parent, fake_child):
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
     events = []
 
-    plan = build_release(
-        CHILD_REF.dataset_id, store=store, fetch_from=origin, options=BuildOptions(progress=events.append)
-    )
+    plan = plan_release_build(CHILD_REF.dataset_id, store=store, parents_from=[origin])
+    run_plan(plan, store, options=BuildOptions(progress=events.append))
 
-    assert plan.steps == (Step(PARENT_REF, "copy"), Step(CHILD_REF, "build", depends_on=(PARENT_REF,)))
+    assert plan.steps == (
+        Step(PARENT_REF, "copy", origin),
+        Step(CHILD_REF, "build", InstalledConnectors(), depends_on=(PARENT_REF,)),
+    )
     assert events == [
         StepStarted(PARENT_REF, "copy"),
         StepFinished(PARENT_REF, "copy"),
@@ -181,7 +188,7 @@ def test_build_release_copies_a_missing_parent_and_reports_each_step_once(tmp_pa
 
 @pytest.mark.usefixtures("fake_child")
 @pytest.mark.parametrize("payload_source", ["missing", "damaged"])
-def test_build_release_reuses_a_held_release_and_copies_only_its_payload_source(
+def test_a_build_reuses_a_held_release_and_copies_only_its_payload_source(
     tmp_path, store, fake_parent, pins, payload_source
 ):
     # The store holds the child, but not an intact copy of its payload source. The registry to copy
@@ -193,17 +200,17 @@ def test_build_release_reuses_a_held_release_and_copies_only_its_payload_source(
         (release_dir(store.root, PARENT_REF) / "control.duckdb").write_bytes(b"cut short")
     events = []
 
-    plan = build_release(
-        CHILD_REF.dataset_id, store=store, fetch_from=origin, options=BuildOptions(progress=events.append)
-    )
+    plan = plan_release_build(CHILD_REF.dataset_id, store=store, parents_from=[origin])
+    run_plan(plan, store, options=BuildOptions(progress=events.append))
 
-    assert plan.steps == (Step(CHILD_REF, "copy"),)
+    # The payload source gets its own copy step. The store keeps its copy of the child.
+    assert plan.steps == (Step(PARENT_REF, "copy", origin),)
     assert events == [StepStarted(PARENT_REF, "copy"), StepFinished(PARENT_REF, "copy")]
     assert fake_parent.calls == []
     assert complete_copy(release_dir(store.root, PARENT_REF), origin.get_manifest(PARENT_REF.dataset_id))
 
 
-def test_build_release_copies_a_release_whose_payload_source_only_the_store_holds(
+def test_a_build_copies_a_release_whose_payload_source_only_the_store_holds(
     tmp_path, store, fake_parent, fake_child, backends
 ):
     # The registry to copy from holds the child, but not the parent whose files the child reads.
@@ -213,15 +220,19 @@ def test_build_release_copies_a_release_whose_payload_source_only_the_store_hold
     fake_grandchild = _Backend(_grandchild_card())
     backends.append(fake_grandchild)
 
-    plan = build_release(GRANDCHILD_REF.dataset_id, store=store, fetch_from=origin)
+    plan = plan_release_build(GRANDCHILD_REF.dataset_id, store=store, parents_from=[origin])
+    run_plan(plan, store)
 
-    assert plan.steps == (Step(CHILD_REF, "copy"), Step(GRANDCHILD_REF, "build", depends_on=(CHILD_REF,)))
+    assert plan.steps == (
+        Step(CHILD_REF, "copy", origin),
+        Step(GRANDCHILD_REF, "build", InstalledConnectors(), depends_on=(CHILD_REF,)),
+    )
     assert fake_parent.calls == fake_child.calls == []
     assert fake_grandchild.calls == [(GRANDCHILD_REF, False, {})]
     assert store.get_manifest(CHILD_REF.dataset_id) == origin.get_manifest(CHILD_REF.dataset_id)
 
 
-def test_build_release_builds_a_payload_source_of_a_release_that_it_copies(
+def test_a_build_builds_a_payload_source_of_a_release_that_it_copies(
     tmp_path, store, fake_parent, fake_child, backends
 ):
     # The registry to copy from holds the child, but not the parent whose files the child reads.
@@ -230,12 +241,13 @@ def test_build_release_builds_a_payload_source_of_a_release_that_it_copies(
     fake_grandchild = _Backend(_grandchild_card())
     backends.append(fake_grandchild)
 
-    plan = build_release(GRANDCHILD_REF.dataset_id, store=store, fetch_from=origin, build_parents=True)
+    plan = plan_release_build(GRANDCHILD_REF.dataset_id, store=store, parents_from=[origin, InstalledConnectors()])
+    run_plan(plan, store)
 
     assert plan.steps == (
-        Step(PARENT_REF, "build", pinned_by={CHILD_REF: pins}),
-        Step(CHILD_REF, "copy", depends_on=(PARENT_REF,)),
-        Step(GRANDCHILD_REF, "build", depends_on=(CHILD_REF,)),
+        Step(PARENT_REF, "build", InstalledConnectors(), pinned_by={CHILD_REF: pins}),
+        Step(CHILD_REF, "copy", origin, depends_on=(PARENT_REF,)),
+        Step(GRANDCHILD_REF, "build", InstalledConnectors(), depends_on=(CHILD_REF,)),
     )
     assert fake_parent.calls == [(PARENT_REF, False, {CHILD_REF: pins})]
     assert fake_child.calls == []
@@ -243,39 +255,53 @@ def test_build_release_builds_a_payload_source_of_a_release_that_it_copies(
     assert store.get_manifest(CHILD_REF.dataset_id) == origin.get_manifest(CHILD_REF.dataset_id)
 
 
-def test_build_release_forces_only_the_requested_release(store, fake_parent, fake_child):
+def test_a_forced_build_forces_only_the_requested_release(store, fake_parent, fake_child):
     store.put_dataset(_demo(_child_card()))
 
-    plan = build_release(CHILD_REF.dataset_id, store=store, build_parents=True, force=True)
+    plan = plan_release_build(CHILD_REF.dataset_id, store=store, parents_from=[InstalledConnectors()], force=True)
+    run_plan(plan, store)
 
-    assert [(s.action, s.release) for s in plan.steps] == [("build", PARENT_REF), ("build", CHILD_REF)]
+    assert [(s.action, s.release, s.force) for s in plan.steps] == [
+        ("build", PARENT_REF, False),
+        ("build", CHILD_REF, True),
+    ]
     assert fake_parent.calls == [(PARENT_REF, False, {})]
     assert fake_child.calls == [(CHILD_REF, True, {})]
 
 
-def test_build_release_skips_a_release_the_store_holds(store, fake):
+def test_a_build_skips_a_release_the_store_holds(store, fake):
     store.put_dataset(_demo(_card(REF_AB)))
-    plan = build_release("a/b", store=store)
-    assert plan.steps == ()
-    assert fake.calls == []
+    assert plan_release_build("a/b", store=store).steps == ()
 
 
-def test_build_release_with_open_access_only_refuses_a_credentialed_card(store, backends):
+def test_a_damaged_copy_of_the_requested_release_gets_a_forced_build(store, fake):
+    store.put_dataset(_demo(_card(REF_AB)))
+    (release_dir(store.root, REF_AB) / "control.duckdb").write_bytes(b"cut short")
+
+    plan = plan_release_build("a/b", store=store)
+
+    assert plan.steps == (Step(REF_AB, "build", InstalledConnectors(), force=True),)
+    run_plan(plan, store)
+    assert fake.calls == [(REF_AB, True, {})]
+    assert store.damage(REF_AB) is None
+
+
+def test_plan_release_build_with_open_access_only_refuses_a_credentialed_card(store, backends):
     fake_credentialed = _Backend(_card(REF_AB, **_GATED))
     backends.append(fake_credentialed)
 
     with pytest.raises(TimeNetAccessError) as caught:
-        build_release("a/b", store=store, open_access_only=True)
+        plan_release_build("a/b", store=store, open_access_only=True)
 
     assert caught.value.dataset == REF_AB
     assert fake_credentialed.calls == []
     # Without the flag, the local store takes a release that is not open.
-    build_release("a/b", store=store)
+    run_plan(plan_release_build("a/b", store=store), store)
     assert fake_credentialed.calls == [(REF_AB, False, {})]
 
 
 @pytest.mark.parametrize("held", [False, True])
-def test_build_release_with_open_access_only_refuses_a_credentialed_parent(store, backends, held):
+def test_plan_release_build_with_open_access_only_refuses_a_credentialed_parent(store, backends, held):
     gated = _Backend(make_dataset().metadata.model_copy(update=_GATED))
     child = _Backend(_child_card())
     backends.extend([gated, child])
@@ -283,13 +309,15 @@ def test_build_release_with_open_access_only_refuses_a_credentialed_parent(store
         store.put_dataset(_demo(gated.cards[PARENT_REF.dataset_id]))
 
     with pytest.raises(TimeNetAccessError) as caught:
-        build_release(CHILD_REF.dataset_id, store=store, build_parents=True, open_access_only=True)
+        plan_release_build(
+            CHILD_REF.dataset_id, store=store, parents_from=[InstalledConnectors()], open_access_only=True
+        )
 
     assert caught.value.dataset == PARENT_REF
     assert gated.calls == child.calls == []
 
 
-def test_build_release_with_open_access_only_refuses_a_held_release_with_a_credentialed_ancestor(store, backends):
+def test_plan_release_build_with_open_access_only_refuses_a_held_release_with_a_credentialed_ancestor(store, backends):
     # The card of the child is open. The child keeps a Record of the open release a/b, which the store
     # lacks. It reads nothing from the credentialed parent, which is only in its lineage.
     child_card = _card(CHILD_REF, parents={ParentAlias("parent"): PARENT_REF, ParentAlias("open"): REF_AB})
@@ -312,12 +340,43 @@ def test_build_release_with_open_access_only_refuses_a_held_release_with_a_crede
     assert list(held.payload_sources) == [SourceKey(str(REF_AB))]
 
     with pytest.raises(TimeNetAccessError) as caught:
-        build_release(CHILD_REF.dataset_id, store=store, build_parents=True, open_access_only=True)
+        plan_release_build(
+            CHILD_REF.dataset_id, store=store, parents_from=[InstalledConnectors()], open_access_only=True
+        )
 
     assert caught.value.dataset == CHILD_REF
     assert other.calls == child.calls == []
 
 
-def test_build_release_without_a_backend_raises_not_found(store, backends):
+def test_a_plan_runs_only_through_run_plan(store, fake_parent, fake_child):
+    plan = plan_release_build(CHILD_REF.dataset_id, store=store, parents_from=[InstalledConnectors()])
+
+    assert plan.steps == (
+        Step(PARENT_REF, "build", InstalledConnectors()),
+        Step(CHILD_REF, "build", InstalledConnectors(), depends_on=(PARENT_REF,)),
+    )
+    assert not store.root.exists()
+    assert fake_parent.calls == fake_child.calls == []
+    run_plan(plan, store)
+    assert fake_parent.calls == [(PARENT_REF, False, {})]
+    assert fake_child.calls == [(CHILD_REF, False, {})]
+
+
+@pytest.mark.parametrize("dataset", ["a/b", "a/b@2.0.0"])
+def test_plan_release_build_checks_the_connector_before_it_plans(store, backends, monkeypatch, dataset):
+    def no_plan(*args, **kwargs):
+        raise AssertionError("the checks come before the plan")
+
+    monkeypatch.setattr(build_module, "plan_steps", no_plan)
+    if dataset == "a/b":
+        with pytest.raises(TimeNetDatasetNotFoundError, match="no installed connector builds 'a/b'"):
+            plan_release_build(dataset, store=store)
+        return
+    backends.append(_Backend(_card(REF_AB)))
+    with pytest.raises(TimeNetVersionUnavailableError):
+        plan_release_build(dataset, store=store)
+
+
+def test_plan_release_build_without_a_backend_raises_not_found(store, backends):
     with pytest.raises(TimeNetDatasetNotFoundError, match="no installed connector builds 'a/b'"):
-        build_release("a/b", store=store)
+        plan_release_build("a/b", store=store)
