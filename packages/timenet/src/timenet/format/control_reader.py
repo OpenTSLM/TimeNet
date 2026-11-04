@@ -6,7 +6,7 @@ The objects hold their stored values behind value handles, unloaded.
 from collections import ChainMap, Counter, defaultdict
 from collections.abc import Callable, Collection, Container, Iterable, Iterator, Mapping, MutableMapping
 from fractions import Fraction
-from functools import partial
+from functools import cached_property, partial
 from graphlib import CycleError, TopologicalSorter
 import json
 import os
@@ -17,11 +17,13 @@ import weakref
 
 import duckdb
 import pyarrow as pa
+from pydantic import ValidationError
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeAxis, TimeFDataset
+from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
-from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
+from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX, TABLES
 from timenet.format.duckdb import CATALOG_ERRORS, check_control_schema, connect_control
 from timenet.format.stored_array import ChunkLocation
 from timenet.format.stored_values import (
@@ -48,6 +50,7 @@ from timenet.types import (
     Annotation,
     ArrayHandle,
     InputModality,
+    LabelSet,
     Task,
     TaskType,
     TimeInterval,
@@ -60,7 +63,7 @@ from timenet.types import (
 from timenet.types.handles import CallableArray
 from timenet.types.ids import EntityId
 from timenet.types.object_kind import ObjectKind
-from timenet.types.reference_keys import SourceKey
+from timenet.types.reference_keys import ParentAlias, SourceKey
 from timenet.types.splits import Split, parse_split
 from timenet.types.wire import ValueDtype
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
@@ -85,7 +88,7 @@ _TasksById: TypeAlias = dict[EntityId, Task]
 
 
 class _RecordRow(NamedTuple):
-    """One ``records`` row in schema column order."""
+    """The ``records`` columns that build one Record, in schema column order."""
 
     record_id: EntityId
     clock_id: int
@@ -95,7 +98,7 @@ class _RecordRow(NamedTuple):
 
     @property
     def id(self) -> EntityId:
-        """Return the Record id."""
+        """The Record id."""
         return self.record_id
 
 
@@ -110,7 +113,7 @@ class _SourceRow(NamedTuple):
 
     @property
     def id(self) -> EntityId:
-        """Return the Source id."""
+        """The Source id."""
         return self.source_id
 
 
@@ -135,12 +138,12 @@ class _SignalRow(NamedTuple):
 
     @property
     def id(self) -> EntityId:
-        """Return the Signal id."""
+        """The Signal id."""
         return self.signal_id
 
     @property
     def spec_fields(self) -> tuple[Any, ...]:
-        """Return the columns that together identify one inline specification, as a hashable key."""
+        """The columns that together identify one inline specification, as a hashable key."""
         return (
             self.spec_type,
             self.spec_name,
@@ -244,7 +247,7 @@ class _TaskRow(NamedTuple):
     scope_end: int | None
     scope_signal_ids: list[int] | None
     has_inline_targets: bool
-    target_schema: str | None
+    label_set: str | None
     unit: str | None
     target_name: str | None
     mode: str | None
@@ -253,9 +256,8 @@ class _TaskRow(NamedTuple):
 
     @property
     def payload_columns(self) -> dict[str, str | None]:
-        """Return the subclass configuration columns for the task codec."""
+        """The subclass configuration columns for the task codec."""
         return {
-            "target_schema": self.target_schema,
             "unit": self.unit,
             "target_name": self.target_name,
             "mode": self.mode,
@@ -281,6 +283,9 @@ class _TargetRow(NamedTuple):
 
 TASK_BATCH_SIZE = 5_000
 """The most tasks one batch of a task read or stream holds, unless a stream sets another batch size."""
+
+RECORD_BATCH_SIZE = 1_000
+"""The most Records one batch of a Record stream holds, unless the stream sets another batch size."""
 
 
 def _annotation_query(owners: Mapping[ObjectKind, Collection[int] | None]) -> tuple[str, list[object]]:
@@ -321,7 +326,7 @@ def _annotation_query(owners: Mapping[ObjectKind, Collection[int] | None]) -> tu
                c.float_value, c.boolean_value, c.text_list_value, c.unit, c.description, c.metadata
         FROM {occurrences} o
         LEFT JOIN annotation_contents c USING (content_id)
-        ORDER BY o.occurrence_id"""  # noqa: S608 - fixed fragments
+        ORDER BY o.occurrence_id"""  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
     return query, parameters
 
 
@@ -338,11 +343,11 @@ _Ref = TypeVar("_Ref", Record, Annotation)
 _T = TypeVar("_T")
 
 _HIERARCHY_TABLES: dict[type[tuple[Any, ...]], tuple[str, str, str, ObjectKind]] = {
-    _RecordRow: ("records", "record_id", "record_id", ObjectKind.RECORD),
+    _RecordRow: ("records", "read_order", "record_id", ObjectKind.RECORD),
     _SourceRow: ("sources", "source_id", "record_id", ObjectKind.SOURCE),
     _SignalRow: ("signals", "signal_id", "source_id", ObjectKind.SIGNAL),
 }
-"""Table name, ID column, relation column, and object kind of each hierarchy row type."""
+"""Table name, ordering column, relation column, and object kind of each hierarchy row type."""
 
 
 def _rows(cursor: duckdb.DuckDBPyConnection, make: Callable[[Iterable[Any]], _Row]) -> list[_Row]:
@@ -427,6 +432,34 @@ def _require_found(kind: ObjectKind, requested: Iterable[EntityId], found: Conta
     missing = [identity for identity in requested if identity not in found]
     if missing:
         raise TimeFNotFoundError(f"no {kind.value} {', '.join(map(repr, missing))}")
+
+
+def _require_listed_once(aliases: Iterable[str], objects: Iterable[tuple[str, str, EntityId]]) -> None:
+    """Check that the catalog lists each parent alias, and each object imported under it, once.
+
+    The schema does not enforce the unique keys of ``imports`` and ``imported_objects``, so a corrupt
+    catalog can list one twice.
+
+    Args:
+        aliases: The alias of each ``imports`` row.
+        objects: The alias, object kind, and parent ID of each ``imported_objects`` row.
+
+    Raises:
+        TimeFFormatError: If the catalog lists an alias, or a parent ID under one alias and kind, more
+            than once.
+    """
+    repeated_aliases = sorted(alias for alias, count in Counter(aliases).items() if count > 1)
+    if repeated_aliases:
+        raise TimeFFormatError(
+            f"the catalog lists parent alias {', '.join(map(repr, repeated_aliases))} more than once"
+        )
+    repeated = sorted(key for key, count in Counter(objects).items() if count > 1)
+    if repeated:
+        alias, kind, _ = repeated[0]
+        parent_ids = [parent_id for other, other_kind, parent_id in repeated if (other, other_kind) == (alias, kind)]
+        raise TimeFFormatError(
+            f"the catalog lists {kind} {', '.join(map(repr, parent_ids))} more than once under parent alias {alias!r}"
+        )
 
 
 def _missing_values(signal_id: int, _spec: TimeSeriesSpec) -> pa.Array:
@@ -519,7 +552,7 @@ if hasattr(os, "register_at_fork"):
     os.register_at_fork(before=_CONNECTIONS.before_fork, after_in_child=_CONNECTIONS.after_fork_in_child)
 
 
-class DuckDBControlReader:
+class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public method per kind of catalog read
     """Keep one read-only DuckDB connection and build requested records from it.
 
     The connection opens again on the next query after :meth:`close`, and after the process forks,
@@ -548,7 +581,7 @@ class DuckDBControlReader:
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
-        """  # noqa: DOC502 - raised by _open
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _open
         self.path = Path(path)
         self._fetch = fetch
         self._connection: duckdb.DuckDBPyConnection | None = None
@@ -625,7 +658,7 @@ class DuckDBControlReader:
 
         Raises:
             TimeFFormatError: If the database cannot be opened or has an unsupported schema.
-        """  # noqa: DOC502 - raised by _connect
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _connect
         connection = self._connection
         if connection is not None:
             return connection
@@ -710,7 +743,7 @@ class DuckDBControlReader:
 
         Raises:
             TimeFFormatError: If the catalog has no locator table.
-        """  # noqa: DOC502 - raised by _stores_locators
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _stores_locators
         if self._packed_values_stored is None:
             self._packed_values_stored = self.run(_stores_locators)
         return self._packed_values_stored
@@ -753,6 +786,8 @@ class DuckDBControlReader:
         self._disconnect()
         self._clock_cache.clear()
         self._task_facts = None
+        # Drop the cached label sets, so that a reopened reader reads them again.
+        self.__dict__.pop("_label_sets_by_name", None)
         self._known_record_ids.clear()
         self._chunk_strings.clear()
 
@@ -772,9 +807,9 @@ class DuckDBControlReader:
         """Return every stored Record ID in the order :meth:`read_records` yields them, without building a Record.
 
         Returns:
-            The Record IDs sorted by ID.
+            The Record IDs in their stored read order.
         """
-        return tuple(row[0] for row in self._query("SELECT record_id FROM records ORDER BY record_id"))
+        return tuple(row[0] for row in self._query("SELECT record_id FROM records ORDER BY read_order"))
 
     def read_records(
         self,
@@ -783,13 +818,14 @@ class DuckDBControlReader:
         with_annotations: bool = True,
         shared_offsets: dict[EntityId, StoredOffsets] | None = None,
     ) -> tuple[Record, ...]:
+        # ruff: ignore[docstring-extraneous-exception] - row selection and hierarchy helpers validate the stored data
         """Build complete recursive records, with their stored values behind unloaded handles.
 
         Source links, clocks, axes, and time-offset locations are checked before any object is
         built. No payload file is opened.
 
         Args:
-            record_ids: Requested IDs in result order, or ``None`` for every record.
+            record_ids: Requested IDs in result order, or ``None`` for every record in read order.
             with_annotations: Whether to build annotations on records, sources, and signals.
             shared_offsets: Time-offset handles by axis ID, shared with earlier record reads of
                 the same call, and extended with this read's new ones. ``None`` shares nothing.
@@ -801,15 +837,116 @@ class DuckDBControlReader:
             TimeFValidationError: If a requested ID is not an int.
             TimeFNotFoundError: If a requested record is absent.
             TimeFFormatError: If the stored hierarchy is inconsistent.
-        """  # noqa: DOC502 - row selection and hierarchy helpers validate the stored data
+        """
+        records = self._build_records(record_ids, with_annotations=with_annotations, shared_offsets=shared_offsets)
+        self._known_record_ids.update(record.id for record in records)
+        return records
+
+    def iter_record_batches(
+        self,
+        record_ids: Iterable[int] | None = None,
+        *,
+        with_annotations: bool = True,
+        batch_size: int = RECORD_BATCH_SIZE,
+    ) -> Iterator[tuple[Record, ...]]:
+        """Yield complete records one bounded batch at a time, and build each batch on its own.
+
+        Without ``record_ids``, the stream reads the Record IDs one page at a time, in read order. A
+        page holds up to ``batch_size`` IDs. The stream builds one batch from each page that is not
+        empty. The next page starts after the last read order of the page before. The stream stops
+        after the first page that holds fewer than ``batch_size`` IDs. So the stream does not read
+        all Record IDs before the first batch.
+
+        With ``record_ids``, the stream checks every requested ID before it builds the first batch.
+        Each batch reads only its own rows. The records of a batch share no object with another
+        batch.
+
+        Args:
+            record_ids: Requested IDs in result order, or ``None`` for every record in read order.
+            with_annotations: Whether to build annotations on records, sources, and signals.
+            batch_size: The most records that a batch holds. By default, a batch holds up to 1,000
+                records (``RECORD_BATCH_SIZE``).
+
+        Yields:
+            The records of each batch, with their stored values behind unloaded handles.
+
+        Raises:
+            TimeFValidationError: If ``batch_size`` is not a positive int, or if a requested ID is
+                not an int.
+            TimeFNotFoundError: If a requested record is absent.
+        """
+        if type(batch_size) is not int or batch_size < 1:
+            raise TimeFValidationError(f"batch_size must be a positive int, got {batch_size!r}")
+        if record_ids is None:
+            after = None
+            while True:
+                page = self._record_id_page(after=after, limit=batch_size)
+                if page:
+                    # The stream keeps nothing of a yielded batch, so the reader does not remember these IDs.
+                    yield self._build_records([record_id for record_id, _ in page], with_annotations=with_annotations)
+                if len(page) < batch_size:
+                    return
+                after = page[-1][1]
+        ids = tuple(check_id(item, "record id") for item in record_ids)
+        missing = self._missing_ids("records", "record_id", ids)
+        if missing:
+            raise TimeFNotFoundError(f"no such record(s) in control.duckdb: {missing}")
+        for start in range(0, len(ids), batch_size):
+            # The stream keeps nothing of a yielded batch, so the reader does not remember these IDs.
+            yield self._build_records(ids[start : start + batch_size], with_annotations=with_annotations)
+
+    def _build_records(
+        self,
+        record_ids: Iterable[int] | None = None,
+        *,
+        with_annotations: bool = True,
+        shared_offsets: dict[EntityId, StoredOffsets] | None = None,
+    ) -> tuple[Record, ...]:
+        # ruff: ignore[docstring-extraneous-exception] - row selection and hierarchy helpers validate the stored data
+        """Build complete recursive records like :meth:`read_records`, but do not remember their IDs.
+
+        Args:
+            record_ids: Requested IDs in result order, or ``None`` for every record in read order.
+            with_annotations: Whether to build annotations on records, sources, and signals.
+            shared_offsets: Time-offset handles by axis ID, shared with earlier record reads of
+                the same call, and extended with this read's new ones. ``None`` shares nothing.
+
+        Returns:
+            The built records.
+
+        Raises:
+            TimeFValidationError: If a requested ID is not an int.
+            TimeFNotFoundError: If a requested record is absent.
+            TimeFFormatError: If the stored hierarchy is inconsistent.
+        """
         requested = None if record_ids is None else tuple(check_id(item, "record id") for item in record_ids)
         hierarchy = self._read_record_hierarchy(requested, shared_offsets)
         occurrences: _AnnotationsByOccurrence = {}
         annotations = self._read_record_annotations(hierarchy, occurrences) if with_annotations else {}
         signals_by_source = self._read_signals(hierarchy.signals, annotations)
-        records = self._assemble_records(hierarchy, signals_by_source, annotations, occurrences)
-        self._known_record_ids.update(hierarchy.owners[ObjectKind.RECORD])
-        return records
+        return self._assemble_records(hierarchy, signals_by_source, annotations, occurrences)
+
+    def _record_id_page(self, *, after: int | None, limit: int) -> list[tuple[EntityId, int]]:
+        """Return one page of Record IDs in read order, in one query.
+
+        The query reads its result in full. So no result stays open while the caller builds the
+        Records of the page.
+
+        Args:
+            after: The last read order of the page before, or ``None`` for the first page.
+            limit: The most IDs that the page holds.
+
+        Returns:
+            The Record ID and the read order of each Record of the page.
+        """
+        if after is None:
+            rows = self._query("SELECT record_id, read_order FROM records ORDER BY read_order LIMIT ?", [limit])
+        else:
+            rows = self._query(
+                "SELECT record_id, read_order FROM records WHERE read_order > ? ORDER BY read_order LIMIT ?",
+                [after, limit],
+            )
+        return [(record_id, read_order) for record_id, read_order in rows]
 
     def _read_record_hierarchy(
         self, requested: tuple[EntityId, ...] | None, shared_offsets: dict[EntityId, StoredOffsets] | None
@@ -850,7 +987,7 @@ class DuckDBControlReader:
         """Select and validate record rows, preserving the requested order.
 
         Args:
-            requested: Record IDs in result order, or ``None`` for every record.
+            requested: Record IDs in result order, or ``None`` for every record in read order.
 
         Returns:
             Record rows in result order, including repeated requests for the same record.
@@ -877,7 +1014,7 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If a signal refers to a missing axis, or its axis stores a different
                 number of time offsets.
-        """  # noqa: DOC502 - _signal_axis checks each signal's axis
+        """  # ruff: ignore[docstring-extraneous-exception] - _signal_axis checks each signal's axis
         axes = self._read_axes({row.axis_id for row in signal_rows})
         # Signals that share an axis share its handle, so its time offsets are read and checked once.
         time_offsets_by_axis = self._stored_offsets(axes, shared_offsets)
@@ -970,7 +1107,7 @@ class DuckDBControlReader:
                 annotations=annotations.get((ObjectKind.SIGNAL, row.signal_id), ()),
                 metadata=_decode_json(row.metadata, default={}),
             )
-            object.__setattr__(built, "_id", row.signal_id)  # noqa: PLC2801 (Signal is frozen)
+            object.__setattr__(built, "_id", row.signal_id)  # ruff: ignore[unnecessary-dunder-call] (Signal is frozen)
             signals_by_source[row.source_id].append(built)
         return signals_by_source
 
@@ -1006,7 +1143,7 @@ class DuckDBControlReader:
 
         Raises:
             TimeFFormatError: If a stored record span lacks its required end.
-        """  # noqa: DOC502 - the span helper rejects missing bounds
+        """  # ruff: ignore[docstring-extraneous-exception] - the span helper rejects missing bounds
         sources_by_id = hierarchy.sources
         children = hierarchy.children
         occurrence_ids = {id(annotation): key for key, annotation in occurrences.items()}
@@ -1057,16 +1194,17 @@ class DuckDBControlReader:
             related_ids: Values of the table's relation column to keep, or ``None`` for every row.
 
         Returns:
-            Rows from the requested hierarchy table in ID order.
+            Rows from the requested hierarchy table, sorted by its ordering column: Records in their
+            stored read order, Sources and Signals by ID.
 
         Raises:
             TimeFFormatError: If an ID occurs more than once.
         """
-        table, id_column, relation_column, kind = _HIERARCHY_TABLES[row_type]
+        table, order_column, relation_column, kind = _HIERARCHY_TABLES[row_type]
         columns = ", ".join(row_type._fields)
         query = (
-            f"SELECT {columns} FROM {table} WHERE ? OR {relation_column} "  # noqa: S608 - fixed identifiers
-            f"IN (SELECT unnest(?)) ORDER BY {id_column}"
+            # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+            f"SELECT {columns} FROM {table} WHERE ? OR {relation_column} IN (SELECT unnest(?)) ORDER BY {order_column}"
         )
         rows = self._query_named(query, [related_ids is None, list(related_ids or ())], row_type._make)
         indexed = {row.id: row for row in rows}
@@ -1177,7 +1315,7 @@ class DuckDBControlReader:
         rows = self._query_named(
             f"""SELECT {columns} FROM signal_chunks
                WHERE signal_id IN (SELECT unnest(?))
-               ORDER BY signal_id, chunk_index""",  # noqa: S608 - fixed column names
+               ORDER BY signal_id, chunk_index""",  # ruff: ignore[hardcoded-sql-expression] - fixed column names
             [list(ids)],
             _ChunkRow._make,
         )
@@ -1196,6 +1334,41 @@ class DuckDBControlReader:
             for signal_id, stored in chunks.items()
         }
 
+    def import_map(self) -> tuple[dict[str, str], ImportMap]:
+        """Return the parent release of each parent alias, and the import map of the catalog.
+
+        Returns:
+            The parent release that ``imports`` names for each parent alias, and the local ID of each
+            object in ``imported_objects``, keyed by parent alias, kind, and parent ID.
+
+        Raises:
+            TimeFFormatError: If the catalog lists a parent alias, or a parent ID under one alias and
+                kind, more than once.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _require_listed_once
+        releases = self._query("SELECT alias, parent_ref FROM imports")
+        rows = self._query("SELECT alias, object_kind, parent_id, object_id FROM imported_objects")
+        _require_listed_once(
+            (alias for alias, _ in releases), ((alias, kind, parent_id) for alias, kind, parent_id, _ in rows)
+        )
+        return dict(releases), {
+            (ParentAlias(alias), ObjectKind(kind), parent_id): object_id for alias, kind, parent_id, object_id in rows
+        }
+
+    def record_clock_ids(self, record_ids: Collection[EntityId]) -> dict[EntityId, int]:
+        """Return the clock of each of the given Records, building no object.
+
+        A clock ID names one clock within this catalog only. Records with one clock ID share one
+        ``TimeOrigin`` when a read builds them.
+
+        Returns:
+            The clock ID of each Record, by Record ID. An ID that names no Record is absent.
+        """
+        return dict(
+            self._query(
+                "SELECT record_id, clock_id FROM records WHERE record_id IN (SELECT unnest(?))", [list(record_ids)]
+            )
+        )
+
     def imported_ids(
         self, alias: str, kind: ObjectKind, parent_ids: Iterable[EntityId]
     ) -> tuple[str | None, dict[EntityId, EntityId]]:
@@ -1213,24 +1386,33 @@ class DuckDBControlReader:
         Raises:
             TimeFFormatError: If the catalog lists the alias more than once, or lists one of the
                 parent IDs more than once under the alias and kind.
-        """
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _require_listed_once
         found = self._query("SELECT parent_ref FROM imports WHERE alias = ?", [alias])
         if not found:
             return None, {}
-        if len(found) > 1:
-            raise TimeFFormatError(f"the catalog lists parent alias {alias!r} more than once")
         rows = self._query(
             "SELECT parent_id, object_id FROM imported_objects "
             "WHERE alias = ? AND object_kind = ? AND parent_id IN (SELECT unnest(?))",
             [alias, kind.value, list(parent_ids)],
         )
-        repeated = sorted(parent_id for parent_id, count in Counter(row[0] for row in rows).items() if count > 1)
-        if repeated:
-            raise TimeFFormatError(
-                f"the catalog lists {kind.value} {', '.join(map(repr, repeated))} more than once "
-                f"under parent alias {alias!r}"
-            )
+        _require_listed_once([alias] * len(found), [(alias, kind.value, parent_id) for parent_id, _ in rows])
         return found[0][0], dict(rows)
+
+    def signal_record_ids(self, signal_ids: Collection[EntityId]) -> dict[EntityId, EntityId]:
+        """Return the ID of the Record that holds each of the given Signals, building no object.
+
+        Args:
+            signal_ids: The Signals' IDs.
+
+        Returns:
+            The Record ID of each Signal, by Signal ID.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored Signal.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _require_found
+        owners = self._record_ids_of_signals(signal_ids)
+        _require_found(ObjectKind.SIGNAL, signal_ids, owners)
+        return owners
 
     def _record_ids_of_signals(self, signal_ids: Collection[EntityId]) -> dict[EntityId, EntityId]:
         """Return the ID of the Record that holds each stored Signal of the given IDs.
@@ -1260,15 +1442,8 @@ class DuckDBControlReader:
 
         Raises:
             TimeFNotFoundError: If an ID names no stored Signal.
-        """  # noqa: DOC502 - raised by _require_found
-        owners: dict[EntityId, EntityId] = dict(
-            self._query(
-                "SELECT signals.signal_id, sources.record_id FROM signals JOIN sources USING (source_id) "
-                "WHERE signals.signal_id IN (SELECT unnest(?))",
-                [list(signal_ids)],
-            )
-        )
-        _require_found(ObjectKind.SIGNAL, signal_ids, owners)
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by signal_record_ids
+        owners = self.signal_record_ids(signal_ids)
         signals: dict[EntityId, Signal] = {}
         for record in self.read_records(list(dict.fromkeys(owners.values()))):
             signals.update((signal.id, signal) for signal in record.signals if signal.id in owners)
@@ -1287,7 +1462,23 @@ class DuckDBControlReader:
 
         Raises:
             TimeFNotFoundError: If an ID names no stored task.
-        """  # noqa: DOC502 - raised by _require_found
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_tasks_with_records
+        return self._read_tasks_with_records(task_ids)[0]
+
+    def _read_tasks_with_records(
+        self, task_ids: Collection[EntityId]
+    ) -> tuple[dict[EntityId, Task], dict[EntityId, Record], tuple[Annotation, ...]]:
+        """Build the given tasks as :meth:`read_tasks_by_id` does, with every Record and dataset occurrence the read built.
+
+        Returns:
+            The tasks by ID; by ID, the Records the read built for them and the tasks they derive
+            from: the Records they reference, and those that hold their Signal targets and the
+            annotations they reference; and the occurrences of the dataset itself that they
+            reference.
+
+        Raises:
+            TimeFNotFoundError: If an ID names no stored task.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _require_found
         stored = {
             task_id
             for (task_id,) in self._query(
@@ -1295,10 +1486,11 @@ class DuckDBControlReader:
             )
         }
         _require_found(ObjectKind.TASK, task_ids, stored)
-        tasks = _TaskBuilder(self, None).read_ids(list(task_ids))
-        return {task.id: task for task in tasks}
+        builder = _TaskBuilder(self, None)
+        tasks = builder.read_ids(list(task_ids))
+        return {task.id: task for task in tasks}, dict(builder.records_by_id), tuple(builder.dataset_occurrences)
 
-    def read_tasks(  # noqa: PLR0913 - one argument per task selection axis
+    def read_tasks(  # ruff: ignore[too-many-arguments] - one argument per task selection axis
         self,
         records: Iterable[Record] | None = None,
         *,
@@ -1323,7 +1515,7 @@ class DuckDBControlReader:
 
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
-        """  # noqa: DOC502 - raised by _TaskBuilder
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _TaskBuilder
         builder = _TaskBuilder(
             self,
             None if records is None else tuple(records),
@@ -1366,7 +1558,7 @@ class DuckDBControlReader:
 
         Raises:
             TimeFFormatError: If a relationship refers to a missing object or has an invalid field.
-        """  # noqa: DOC502 - raised by _TaskBuilder
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _TaskBuilder
         builder = _TaskBuilder(
             self,
             None if records is None else tuple(records),
@@ -1432,7 +1624,7 @@ class DuckDBControlReader:
                 )
                 SELECT t.task_id, t.task_type, t.prompt, t.rationale,
                        t.scope_type, t.scope_start, t.scope_end, t.scope_signal_ids,
-                       t.target_schema, t.unit, t.target_name, t.mode, t.has_inline_targets,
+                       t.label_set, t.unit, t.target_name, t.mode, t.has_inline_targets,
                        t.input_modalities, t.split,
                        coalesce(inputs.input_record_ids, []) AS input_record_ids,
                        coalesce(parents.from_task_ids, []) AS from_task_ids,
@@ -1441,7 +1633,7 @@ class DuckDBControlReader:
                 LEFT JOIN inputs USING (task_id)
                 LEFT JOIN parents USING (task_id)
                 {where}
-                ORDER BY t.task_id""",  # noqa: S608 - fixed fragments
+                ORDER BY t.task_id""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
             parameters,
         )
 
@@ -1472,7 +1664,7 @@ class DuckDBControlReader:
                 FROM task_targets x
                 JOIN tasks t USING (task_id)
                 {where}
-                ORDER BY t.task_id, x.position""",  # noqa: S608 - fixed fragments
+                ORDER BY t.task_id, x.position""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
             parameters,
         )
 
@@ -1494,6 +1686,7 @@ class DuckDBControlReader:
             raise TimeFFormatError(f"unknown annotated object type {object_type!r}")
         where = "" if object_type is None else "WHERE o.object_type = ?"
         return self._query_table(
+            # ruff: ignore[hardcoded-sql-expression] - fixed fragments
             f"""SELECT o.occurrence_id, o.object_type, o.object_id, c.content_id, c.name AS key,
                        c.value_kind, c.text_value, c.integer_value, c.float_value, c.boolean_value,
                        c.text_list_value, c.unit, c.description, o.span_type, o.start_us, o.end_us,
@@ -1501,7 +1694,7 @@ class DuckDBControlReader:
                 FROM annotation_occurrences o
                 JOIN annotation_contents c USING (content_id)
                 {where}
-                ORDER BY o.object_type, o.object_id, o.occurrence_id""",  # noqa: S608 - fixed fragments
+                ORDER BY o.object_type, o.object_id, o.occurrence_id""",
             [] if object_type is None else [object_type],
         )
 
@@ -1518,7 +1711,7 @@ class DuckDBControlReader:
             f"""WHERE t.task_id IN (
                    SELECT task_id FROM task_record_refs
                    WHERE field = '{TaskRelationshipField.INPUTS}' AND record_id IN (SELECT unnest(?))
-               )""",  # noqa: S608 - fixed field name
+               )""",  # ruff: ignore[hardcoded-sql-expression] - fixed field name
             [[check_id(item, "record id") for item in record_ids]],
         )
 
@@ -1554,7 +1747,7 @@ class DuckDBControlReader:
 
         Raises:
             TimeFValidationError: If the split is unknown.
-        """  # noqa: DOC502 - raised by parse_split
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by parse_split
         if split is None:
             return "", []
         return "t.split = ?", [parse_split(split).value]
@@ -1597,7 +1790,7 @@ class DuckDBControlReader:
             parameters.append(supported)
         return " AND ".join(predicates), parameters
 
-    def _selected_task_ids(  # noqa: PLR0913 - one argument per task selection axis, and the page
+    def _selected_task_ids(  # ruff: ignore[too-many-arguments] - one argument per task selection axis, and the page
         self,
         record_ids: list[int] | None,
         required_modalities: Iterable[InputModality] | None,
@@ -1625,7 +1818,8 @@ class DuckDBControlReader:
         if after is not None:
             where = f"{where} AND t.task_id > ?" if where else "WHERE t.task_id > ?"
             params = [*params, after]
-        sql = f"SELECT t.task_id FROM tasks t {where} ORDER BY t.task_id LIMIT ?"  # noqa: S608 - fixed predicates
+        # ruff: ignore[hardcoded-sql-expression] - fixed predicates
+        sql = f"SELECT t.task_id FROM tasks t {where} ORDER BY t.task_id LIMIT ?"
         return [task_id for (task_id,) in self._query(sql, [*params, limit])]
 
     @staticmethod
@@ -1648,10 +1842,49 @@ class DuckDBControlReader:
         columns = ", ".join(_TaskRow._fields)
         where, parameters = self._task_filter(task_ids)
         return self._query_named(
-            f"SELECT {columns} FROM tasks {where} ORDER BY task_id",  # noqa: S608 - fixed identifiers
+            # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+            f"SELECT {columns} FROM tasks {where} ORDER BY task_id",
             parameters,
             _TaskRow._make,
         )
+
+    @cached_property
+    def _label_sets_by_name(self) -> dict[str, LabelSet]:
+        """The stored label sets by name.
+
+        The reader reads each set once. Tasks that use the same set share one object.
+
+        Raises:
+            TimeFFormatError: If a stored label set is not valid.
+        """
+        columns = ", ".join(TABLES["label_sets"].column_names)
+        # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+        rows = self._query_table(f"SELECT {columns} FROM label_sets").to_pylist()
+        label_sets: dict[str, LabelSet] = {}
+        for row in rows:
+            try:
+                label_set = LabelSet.model_validate(row)
+            except ValidationError as exc:
+                raise TimeFFormatError(f"the stored label set {row['name']!r} is not valid: {exc}") from exc
+            label_sets[label_set.name] = label_set
+        return label_sets
+
+    def _label_set(self, task_id: int, name: str | None) -> LabelSet:
+        """Return the stored label set that a classification task names.
+
+        Returns:
+            The shared label set.
+
+        Raises:
+            TimeFFormatError: If the task names no label set, no label set has this name, or a stored
+                label set is not valid.
+        """
+        if name is None:
+            raise TimeFFormatError(f"classification task {task_id!r} has no label set")
+        label_set = self._label_sets_by_name.get(name)
+        if label_set is None:
+            raise TimeFFormatError(f"tasks refer to a missing label set {name!r}")
+        return label_set
 
     def _target_rows(self, task_ids: list[int] | None) -> list[_TargetRow]:
         """Read the target rows for one batch of tasks, or every task, in task and position order.
@@ -1662,7 +1895,8 @@ class DuckDBControlReader:
         columns = ", ".join(_TargetRow._fields)
         where, parameters = self._task_filter(task_ids)
         return self._query_named(
-            f"SELECT {columns} FROM task_targets {where} ORDER BY task_id, position",  # noqa: S608 - fixed identifiers
+            # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+            f"SELECT {columns} FROM task_targets {where} ORDER BY task_id, position",
             parameters,
             _TargetRow._make,
         )
@@ -1678,7 +1912,8 @@ class DuckDBControlReader:
         stored = {
             row[0]
             for row in self._query(
-                f"SELECT {column} FROM {table} WHERE {column} IN (SELECT unnest(?))",  # noqa: S608 - fixed identifiers
+                # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+                f"SELECT {column} FROM {table} WHERE {column} IN (SELECT unnest(?))",
                 [list(ids)],
             )
         }
@@ -1703,7 +1938,8 @@ class DuckDBControlReader:
         """
         where, parameters = self._task_filter(task_ids)
         rows = self._query(
-            f"SELECT task_id, field, {column} FROM {table} {where} ORDER BY task_id, field, position",  # noqa: S608
+            # ruff: ignore[hardcoded-sql-expression]
+            f"SELECT task_id, field, {column} FROM {table} {where} ORDER BY task_id, field, position",
             parameters,
         )
         grouped = self._group_relationships(rows)
@@ -1720,7 +1956,8 @@ class DuckDBControlReader:
         """
         where, parameters = self._task_filter(task_ids)
         rows = self._query(
-            f"SELECT task_id, parent_task_id FROM task_dependencies {where} ORDER BY task_id, position",  # noqa: S608
+            # ruff: ignore[hardcoded-sql-expression]
+            f"SELECT task_id, parent_task_id FROM task_dependencies {where} ORDER BY task_id, position",
             parameters,
         )
         parents: dict[int, list[int]] = defaultdict(list)
@@ -2006,7 +2243,7 @@ class _TaskBuilder:
     objects.
     """
 
-    def __init__(  # noqa: PLR0913 - one argument per task selection axis
+    def __init__(  # ruff: ignore[too-many-arguments] - one argument per task selection axis
         self,
         reader: DuckDBControlReader,
         records: tuple[Record, ...] | None,
@@ -2038,6 +2275,8 @@ class _TaskBuilder:
         self._records_without_signal_index: list[Record] = []
         self.annotations_by_id: MutableMapping[_OccurrenceId, Annotation] = {}
         self._foreign_records: list[Record] = []
+        self.dataset_occurrences: list[Annotation] = []
+        """The occurrences of the dataset itself that the scope read for its tasks' references."""
         self.retained: _TasksById = {}
         # The lookups of the caller's objects that a stream's batches share, or None for one pass.
         self._given: _Lookups | None = None
@@ -2146,6 +2385,7 @@ class _TaskBuilder:
         self._foreign_records = given.foreign
         self._dataset_annotations_indexed = given.dataset_annotations_indexed
         self.retained = {}
+        self.dataset_occurrences = []
 
     def _build_scope(self, task_ids: list[EntityId], given: _Lookups) -> list[Task]:
         """Build one batch in a scope of its own, which ends when the batch is built.
@@ -2169,7 +2409,7 @@ class _TaskBuilder:
 
         Raises:
             TimeFFormatError: If the stored derivations contain a cycle.
-        """  # noqa: DOC502 - _check_derivations finds the cycle
+        """  # ruff: ignore[docstring-extraneous-exception] - _check_derivations finds the cycle
         pending = None if task_ids is None else [task_id for task_id in task_ids if task_id not in self.retained]
         if pending and self.parent_ids:
             ancestors = self.reader._task_ancestors(pending) - set(pending) - self.retained.keys()
@@ -2197,7 +2437,8 @@ class _TaskBuilder:
             raise TimeFFormatError(f"task dependency refers to missing task {task_id!r}")
         return task
 
-    def _build(self, task_ids: list[EntityId] | None) -> _TasksById:  # noqa: PLR0914 - one batch joins several tables
+    # ruff: ignore[too-many-locals] - one batch joins several tables
+    def _build(self, task_ids: list[EntityId] | None) -> _TasksById:
         """Read every table for one batch of task IDs and construct the tasks.
 
         Returns:
@@ -2286,6 +2527,12 @@ class _TaskBuilder:
                 "metadata": _decode_json(row.metadata, default={}),
                 **decode_task_payload(task_type, row.payload_columns),
             }
+            if task_type is TaskType.CLASSIFICATION:
+                kwargs["label_set"] = reader._label_set(row.task_id, row.label_set)
+            elif row.label_set is not None:
+                raise TimeFFormatError(
+                    f"{task_type} task {row.task_id!r} has a label set, but only a classification task can have one"
+                )
             if TaskRelationshipField.CANDIDATE_RECORDS in cls.__dataclass_fields__:
                 kwargs["candidate_records"] = reader._resolve(
                     row.task_id, TaskRelationshipField.CANDIDATE_RECORDS, refs, self.records_by_id, "record"
@@ -2443,7 +2690,8 @@ class _TaskBuilder:
                 resolved[occurrence_id] = annotation
         if unresolved and not self._dataset_annotations_indexed:
             # The scope's own lookup keeps them, so a later batch of a stream reads its own copies.
-            self.reader._read_annotations({ObjectKind.DATASET: unresolved}, self.annotations_by_id)
+            read = self.reader._read_annotations({ObjectKind.DATASET: unresolved}, self.annotations_by_id)
+            self.dataset_occurrences.extend(annotation for annotations in read.values() for annotation in annotations)
         for occurrence_id in unresolved:
             annotation = self.annotations_by_id.get(occurrence_id)
             if annotation is None:

@@ -89,12 +89,12 @@ class StoredArray(ArrayHandle):
 
     @property
     def is_loaded(self) -> bool:
-        """Return whether the handle keeps the values, so reads need no storage access."""
+        """Whether the handle keeps the values, so reads need no storage access."""
         return self._kept.value is not None
 
     @property
     def _location(self) -> ChunkLocation:
-        """Return where the chunks are stored, without reading them.
+        """Where the chunks are stored, found without reading them.
 
         A loaded handle keeps its location. An unloaded one asks its reader, which finds the
         locations of a batch of signals at a time and keeps them until it closes.
@@ -144,7 +144,7 @@ class StoredArray(ArrayHandle):
 
         Raises:
             TimeNetError: If the handle is already loaded.
-        """  # noqa: DOC502 - raised by WriteOnce.set
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by WriteOnce.set
         self._kept.set(_KeptArray(array, location))
 
     def __deepcopy__(self, memo: dict) -> Self:

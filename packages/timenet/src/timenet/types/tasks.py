@@ -1,10 +1,10 @@
 """Declarative modelling tasks over records and signals."""
 
-from collections.abc import Iterable
-from dataclasses import dataclass, field
+from collections.abc import Iterable, Mapping
+from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 from functools import lru_cache
-from typing import TYPE_CHECKING, ClassVar, TypeAlias, TypeGuard, final
+from typing import TYPE_CHECKING, ClassVar, Self, TypeAlias, TypeGuard, TypeVar, final
 
 import pint
 
@@ -13,6 +13,7 @@ from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._fields import ValueField
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import EntityId, assigned_id
+from timenet.types.label_sets import LabelSet, LabelSetRegistry
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
@@ -33,6 +34,8 @@ else:
     TargetItem = object
     TargetInput = object
     TargetValue = object
+
+_Item = TypeVar("_Item")
 
 
 @unique
@@ -231,12 +234,12 @@ class Task(SupportsAnnotate):
 
         Raises:
             TimeFValidationError: If the task is not in a dataset yet.
-        """  # noqa: DOC502 (raised by assigned_id)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by assigned_id)
         return assigned_id(self._id, type(self).__name__)
 
     @property
     def resolved_input_modalities(self) -> frozenset[InputModality]:
-        """Return the validated override, or infer kinds from the current inputs.
+        """The validated override, or kinds inferred from the current inputs.
 
         Inference reads Signal specs within the scope, the prompt, and text input annotations.
         It does not load values or inspect targets. NO_INPUT means there are no input Records.
@@ -284,18 +287,148 @@ class Task(SupportsAnnotate):
         spans.extend(target for target in self.targets or () if isinstance(target, Span))
         return tuple(spans)
 
+    def named_records(self) -> tuple["Record", ...]:
+        """Return the Records that the task names, each once: its inputs, then its Record targets.
+
+        A task class with candidate Records returns them too, after the inputs.
+        """
+        return _each_once((*self.inputs, *(target for target in self.targets or () if _is_record(target))))
+
+    def referenced_signals(self) -> tuple["Signal", ...]:
+        """Return the Signals that the task references, each once.
+
+        They are its Signal targets, then the Signals that its scope and its span targets name, in the
+        order of :meth:`spans`.
+        """
+        signals: list[Signal] = [target for target in self.targets or () if _is_signal(target)]
+        for span in self.spans():
+            if isinstance(span, StepSpan):
+                signals.append(span.time_series)
+            elif isinstance(span, TimeSpan):
+                signals.extend(span.time_series or ())
+        return _each_once(signals)
+
+    def with_references(self, records: Mapping[EntityId, "Record"], signals: Mapping[EntityId, "Signal"]) -> Self:
+        """Return a copy of the task that references the given Records and Signals, by ID.
+
+        The copy has the class of the task. Each input, candidate Record, Record target, and Signal
+        target of the copy is the object of the same ID in ``records`` or ``signals``. The scope and
+        the span targets of the copy name the Signals of the same IDs in ``signals``. Each span keeps
+        its class. The copy has no ID.
+
+        Every other field keeps its value: the annotations of the task, the annotations that it
+        references, ``from_tasks``, the text, and the metadata. A caller that needs other values for
+        them sets them on the copy.
+
+        Args:
+            records: The Records for the copy, by ID.
+            signals: The Signals for the copy, by ID.
+
+        Returns:
+            The copy.
+
+        Raises:
+            TimeFValidationError: If a Record or Signal that the task references has no ID, or if
+                ``records`` or ``signals`` has no object for its ID.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _by_id and assigned_id)
+        return replace(self, **self._references_by_id(records, signals))
+
+    def _references_by_id(
+        self, records: Mapping[EntityId, "Record"], signals: Mapping[EntityId, "Signal"]
+    ) -> dict[str, object]:
+        """Return the value for the copy of each field that references Records or Signals.
+
+        :meth:`with_references` builds the copy from these values. A task class with more such fields
+        adds them.
+
+        Returns:
+            The values, by field name.
+        """
+        targets = (
+            None if self.targets is None else tuple(_target_by_id(item, records, signals) for item in self.targets)
+        )
+        return {
+            "inputs": tuple(_by_id(records, record) for record in self.inputs),
+            "targets": targets,
+            "scope": None if self.scope is None else _span_by_id(self.scope, signals),
+        }
+
     def check_against_scope(self) -> None:
         """Validate configuration that depends on the finalized scope."""
+
+    def check_targets(self) -> None:
+        """Make sure that the final targets follow the rules of this task class."""
+
+    def register_label_set(self, label_sets: LabelSetRegistry) -> None:
+        """Add the label set of the task to the dataset's label sets.
+
+        Only a classification task has a label set.
+
+        Args:
+            label_sets: The label sets of the dataset so far.
+        """
 
 
 @final
 @dataclass(kw_only=True)
 class ClassificationTask(Task):
-    """Classify the inputs, optionally using a named label vocabulary."""
+    """Classify the inputs using a required set of allowed labels."""
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
-    target_schema: str | None = None
-    """Optional name of the label vocabulary."""
+    label_set: LabelSet
+    """The allowed labels and whether a target can contain more than one label."""
+
+    def __post_init__(self) -> None:
+        """Set the common fields to their standard form and make sure that the label set has the right type.
+
+        Raises:
+            TimeFValidationError: If ``label_set`` is not a LabelSet.
+        """
+        super().__post_init__()
+        if not isinstance(self.label_set, LabelSet):
+            raise TimeFValidationError(
+                f"ClassificationTask label_set must be a LabelSet, got {type(self.label_set).__name__}"
+            )
+
+    def check_targets(self) -> None:
+        """Make sure that the target labels follow the rules of the label set.
+
+        The labels come from the targets stored directly on the task or from its target annotations.
+        Each label must be text.
+
+        After the targets are final, the dataset calls this method when it adds or streams the task.
+
+        Raises:
+            TimeFValidationError: If a label is not text or the labels break a rule of the label set.
+        """
+        name = f"ClassificationTask {self.id!r}"
+        values = self.targets if self.targets is not None else [one.value for one in self.target_annotations]
+        labels: list[str] = []
+        for value in values:
+            if not isinstance(value, TextHandle):
+                raise TimeFValidationError(
+                    f"{name} has label set {self.label_set.name!r}, so each label must be text, "
+                    f"not {type(value).__name__}"
+                )
+            labels.append(value.read())
+        try:
+            self.label_set.check_targets(labels)
+        except TimeFValidationError as exc:
+            raise TimeFValidationError(f"{name}: {exc}") from exc
+
+    def register_label_set(self, label_sets: LabelSetRegistry) -> None:
+        """Add the label set of the task to the dataset's label sets.
+
+        Args:
+            label_sets: The label sets of the dataset so far.
+
+        Raises:
+            TimeFValidationError: If a different set already has the same name.
+        """
+        try:
+            label_sets.register_or_reuse_matching_label_set(self.label_set)
+        except TimeFValidationError as exc:
+            raise TimeFValidationError(f"ClassificationTask {self.id!r}: {exc}") from exc
 
 
 @final
@@ -401,18 +534,93 @@ class TSCorrespondenceTask(Task):
                 f"TSCorrespondenceTask Record targets at positions {outside} are not in candidate_records"
             )
 
+    def named_records(self) -> tuple["Record", ...]:
+        """Return the Records that the task names, each once.
+
+        They are its inputs, its candidate Records, then its Record targets.
+        """
+        targets = (target for target in self.targets or () if _is_record(target))
+        return _each_once((*self.inputs, *self.candidate_records, *targets))
+
+    def _references_by_id(
+        self, records: Mapping[EntityId, "Record"], signals: Mapping[EntityId, "Signal"]
+    ) -> dict[str, object]:
+        """Return the values of :meth:`Task._references_by_id`, and the candidate Records for the copy.
+
+        Returns:
+            The values, by field name.
+        """
+        candidates = tuple(_by_id(records, record) for record in self.candidate_records)
+        return {**super()._references_by_id(records, signals), "candidate_records": candidates}
+
 
 def _is_record(value: object) -> TypeGuard["Record"]:
     """Return whether a target is a Record without importing Record at module load time."""
-    from timenet.dataset.record import Record  # noqa: PLC0415
+    from timenet.dataset.record import Record  # ruff: ignore[import-outside-top-level]
 
     return isinstance(value, Record)
 
 
+def _is_signal(value: object) -> TypeGuard["Signal"]:
+    """Return whether a target is a Signal without importing Signal at module load time."""
+    from timenet.dataset.time_series import Signal  # ruff: ignore[import-outside-top-level]
+
+    return isinstance(value, Signal)
+
+
+def _each_once(items: Iterable[_Item]) -> tuple[_Item, ...]:
+    """Return the items in their order, without a second occurrence of one object."""
+    return tuple({id(item): item for item in items}.values())
+
+
+def _by_id(objects: Mapping[EntityId, _Item], reference: "Record | Signal") -> _Item:
+    """Return the object in ``objects`` with the ID of a Record or Signal that a task references.
+
+    Raises:
+        TimeFValidationError: If ``objects`` has no object for the ID.
+    """
+    found = objects.get(reference.id)
+    if found is None:
+        raise TimeFValidationError(
+            f"with_references() got no {type(reference).__name__} for ID {reference.id}, which the task references"
+        )
+    return found
+
+
+def _span_by_id(span: Span, signals: Mapping[EntityId, "Signal"]) -> Span:
+    """Return a span of the class of ``span`` that names the Signals of the same IDs in ``signals``.
+
+    Returns:
+        The new span, or ``span`` itself if it names no Signal.
+    """
+    if isinstance(span, StepSpan):
+        return replace(span, time_series=_by_id(signals, span.time_series))
+    if isinstance(span, TimeSpan) and span.time_series is not None:
+        return replace(span, time_series=tuple(_by_id(signals, signal) for signal in span.time_series))
+    return span
+
+
+def _target_by_id(
+    target: TargetItem, records: Mapping[EntityId, "Record"], signals: Mapping[EntityId, "Signal"]
+) -> TargetItem:
+    """Return the target for a copy: the Record, Signal, or span of the same IDs, or the same value.
+
+    Returns:
+        The target.
+    """
+    if _is_record(target):
+        return _by_id(records, target)
+    if _is_signal(target):
+        return _by_id(signals, target)
+    if isinstance(target, Span):
+        return _span_by_id(target, signals)
+    return target
+
+
 def _is_target_item(value: object) -> bool:
     """Return whether value can form one item in a task's expected answer."""
-    from timenet.dataset.record import Record  # noqa: PLC0415
-    from timenet.dataset.time_series import Signal  # noqa: PLC0415
+    from timenet.dataset.record import Record  # ruff: ignore[import-outside-top-level]
+    from timenet.dataset.time_series import Signal  # ruff: ignore[import-outside-top-level]
 
     return isinstance(value, (TextHandle, int, float, bool, Record, Signal, Span))
 

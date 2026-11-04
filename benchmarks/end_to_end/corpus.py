@@ -19,6 +19,8 @@ from timenet.types import (
     DatasetMetadata,
     Domain,
     ForecastingTask,
+    Label,
+    LabelSet,
     License,
     TimeInterval,
     TimePoint,
@@ -27,6 +29,12 @@ from timenet.types import (
     ureg,
 )
 from timenet.types.wire import ValueDtype
+
+
+CONDITION = LabelSet(name="condition", labels=(Label(name="healthy"), Label(name="outer-race-fault")))
+RHYTHM = LabelSet(name="rhythm", labels=(Label(name="normal-sinus"), Label(name="atrial-fibrillation")))
+SLEEP_STAGE = LabelSet(name="sleep-stage", labels=tuple(Label(name=stage) for stage in ("W", "N1", "N2", "N3", "REM")))
+MEAN_SIGN = LabelSet(name="mean-sign", labels=(Label(name="above-zero"), Label(name="below-zero")))
 
 
 @dataclass(frozen=True)
@@ -186,21 +194,21 @@ def _add_tasks(dataset: TimeFDataset, records: dict[str, Record]) -> None:
         task=ClassificationTask(
             inputs=(vibration,),
             targets=("outer-race-fault",),
-            target_schema="condition",
+            label_set=CONDITION,
         ),
     )
     dataset.add_task(
         task=ClassificationTask(
             inputs=(ecg,),
             targets=("atrial-fibrillation",),
-            target_schema="rhythm",
+            label_set=RHYTHM,
         ),
     )
     dataset.add_task(
         task=ClassificationTask(
             inputs=(sleep,),
             targets=("N2",),
-            target_schema="sleep-stage",
+            label_set=SLEEP_STAGE,
             scope=TimeInterval.seconds(30.0, 60.0),
         ),
     )
@@ -329,7 +337,7 @@ def _add_connector_patterns(dataset: TimeFDataset, records: dict[str, Record], s
             task=ClassificationTask(
                 inputs=(record,),
                 targets=("above-zero" if offset > 0 else "below-zero",),
-                target_schema="mean-sign",
+                label_set=MEAN_SIGN,
             ),
         )
 
@@ -436,7 +444,8 @@ def build_corpus(*, profile: str = "portable", scale: int = 1) -> TimeFDataset:
             Annotation(key="scenario", value=scenario.name),
             Annotation(key="event", span=TimePoint.seconds(1.0)),
         ]
-        if scenario.steps / scenario.sampling_rate_hz > 2:  # noqa: PLR2004, RUF100 - minimum interval duration
+        # ruff: ignore[magic-value-comparison] - minimum interval duration
+        if scenario.steps / scenario.sampling_rate_hz > 2:
             annotations.append(
                 Annotation(
                     key="quality-window",

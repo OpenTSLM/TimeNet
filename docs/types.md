@@ -32,39 +32,28 @@ assert version > Version(1, 2, 0)
 
 ## IDs
 
-Records, Signals, and Tasks have a public ID: a read-only, positive int64 `id` (`EntityId`). The
-dataset ID is the exception and stays an `org/name` string.
-
-You cannot pass an ID. The dataset sets it when you add the object. The reader sets it when it
-reads the object back. Each kind has its own counter. As a result, the first Record and the first
-Signal both get ID 1.
-
-- `add_record()` numbers the Record and its Signals.
-- `add_task()` and `add_tasks()` number the Tasks.
-- A streamed Task gets its ID when the writer reads it from the stream.
+Records, Signals, and Tasks have a read-only, positive int64 `id` (`EntityId`). When you add the
+object to a dataset, the dataset sets the ID. When the reader reads the object back, the reader
+sets it. You cannot set an ID. The dataset ID is the exception and stays an `org/name` string.
 
 If an object is not in a dataset, reading its `id` raises `TimeFValidationError`.
 
-```python
-record = dataset.add_record(record=record)
-signal_id = record.signals[0].id
-```
+IDs carry no meaning. Store upstream identifiers in `metadata` or in an annotation. To refer to
+another object, use the object itself. For example, a span holds Signal objects.
 
-Sources, axes, annotation contents, and annotation occurrences have no ID in Python. The writer
-numbers their rows each time it writes a version. It stores equal annotation contents once, and
-equal regular or ordinal axes once. Signals share an irregular axis only if they use the same axis
-object.
+Only a few APIs use Record IDs:
 
-Two annotation contents are equal if the name, the value and its type, the unit, the description,
-and the metadata are equal. `0.0` and `-0.0` are equal. All NaN values are equal. `True`, `1`, and
+- `TimeFReader.record_ids()`, and the `record_ids` argument of `iter_records()`, `task_table()`,
+  and `target_table()`.
+- `remove_records()` and `edit_version()` in `timenet.dataset.edit`.
+
+IDs are unique per kind within one dataset, and they stay the same across edits. Two datasets can
+use the same ID.
+
+Sources, axes, and annotations have no ID. The writer stores equal annotation contents once. Two
+annotation contents are equal if the name, the value and its type, the unit, the description, and
+the metadata are equal. `0.0` and `-0.0` are not equal. All NaN values are equal. `True`, `1`, and
 `1.0` are not equal.
-
-The writer stores the last ID of each kind. An edited version continues from these IDs. As a
-result, it never reuses the ID of a removed object.
-
-IDs are unique per kind within one dataset. They stay the same across edits. They do not follow
-storage order. Two datasets can use the same ID. IDs carry no meaning. Store upstream identifiers
-in `metadata` or in an annotation.
 
 ## Units
 
@@ -157,13 +146,32 @@ Step spans always name exactly one Signal through `time_series`. The writer stor
 Signals. The reader replaces these IDs with the Signals that it reads back.
 
 ```python
+import numpy as np
+
+from timenet.dataset import Signal
+from timenet.dataset.axis import OrdinalAxis, RegularAxis
 from timenet.types import StepInterval, TimeInterval, TimePoint
+
+accelerometer = Signal(
+    name="Accelerometer",
+    spec=vibration,
+    time_axis=RegularAxis.from_rate_hz(100),
+    data=np.zeros(1000, dtype=np.float32),
+)
+text_series = Signal(
+    name="Transcript",
+    spec=TimeSeriesSpec(
+        spec_type="token", name="Token", unit_value=None, dtype="str"
+    ),
+    time_axis=OrdinalAxis(),
+    data=["token"] * 200,
+)
 
 event = TimePoint.seconds(1.2)
 window = TimeInterval.seconds(
     5.0,
     8.0,
-    time_series=(vibration,),
+    time_series=(accelerometer,),
 )
 tokens = StepInterval(time_series=text_series, start=132, stop=144)
 ```
@@ -191,6 +199,12 @@ Record's known origin. Relative spans also work when its absolute timestamp is u
 | `access_url` | conditional | Access page for non-open data. |
 
 `DatasetMetadata.from_yaml()` validates a card against the packaged JSON Schema.
+
+A card keeps the `access` and the `access_url` that its author declared. An import into a child
+dataset does not change them. The effective access level of a dataset is the strictest level of its
+own card and of the cards in its `lineage`. `effective_access(metadata, lineage)` in
+`timenet.types.access` returns this level. `access_requirements(metadata, lineage)` lists each of
+these cards whose `access` is not `OPEN`, with its `access_url`.
 
 ## DatasetSchema
 
@@ -254,8 +268,10 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeFNullValuesError` | Values contain nulls that NumPy cannot hold. A `TimeFValidationError`. |
 | `TimeFNotFoundError` | An ID, parent alias, or parent release names nothing in the dataset, or the stored object has another kind. A `TimeFValidationError` and a `LookupError`. |
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
+| `TimeNetFileError` | A file of a release is missing, or does not match its manifest record. A `TimeFFormatError`. |
 | `TimeFReaderError` | A reader could not complete a read, e.g. its connection was closed while the read ran. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
+| `TimeNetConnectorError` | A connector found that an assumption about its source data, a download, or a parent does not hold. `TimeNetDownloadError` is a `TimeNetConnectorError`. |
 
 Pydantic `ValidationError` reports field and schema errors in a dataset card. The error includes the
 native field location and details.

@@ -3,13 +3,16 @@
 from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 import sys
-from typing import Literal, TextIO, TypeVar, cast, overload
+from types import MappingProxyType
+from typing import TYPE_CHECKING, Literal, TextIO, TypeVar, cast, overload
 
 import numpy as np
 import pyarrow as pa
 
+from timenet.dataset.composition import ImportedDataset, ImportState, import_from
 from timenet.dataset.describe import describe_text
 from timenet.dataset.record import Record
+from timenet.dataset.source import Source
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
@@ -20,6 +23,7 @@ from timenet.types import (
     DatasetSchema,
     EntityId,
     InputModality,
+    LabelSetRegistry,
     ObjectKind,
     StepSpan,
     SupportsAnnotate,
@@ -31,8 +35,15 @@ from timenet.types import (
     value_type_of,
 )
 from timenet.types.ids import IdCounters
+from timenet.types.load_plan import LoadPlan
+from timenet.types.parent_dataset_card import ParentDatasetCard
+from timenet.types.reference_keys import ParentAlias
 from timenet.types.splits import Split, parse_split, parse_splits
 from timenet.values_backends import ValuesBackend
+
+
+if TYPE_CHECKING:
+    from timenet.reader import TimeFReader
 
 
 T = TypeVar("T")
@@ -58,7 +69,7 @@ class _TaskValidationIndex:
         return known
 
 
-class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
+class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
     """Holds records and their tasks as Python objects. It does not do I/O. The writer handles persistence."""
 
     def __init__(self, *, metadata: DatasetMetadata) -> None:
@@ -68,13 +79,21 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             metadata: The dataset's descriptive identity.
         """
         self._metadata = metadata
+        self._import_state = ImportState()
+        """The parent cards, the lineage, and the import map of this dataset. :meth:`import_from`
+        fills them, and :meth:`from_parts` sets them as one state."""
         self._records: list[Record] = []
         self._records_by_id: dict[EntityId, Record] = {}
         self._signals_by_id: dict[EntityId, Signal] = {}
         self._sources: set[int] = set()
+        self._sources_by_record_id: dict[EntityId, tuple[Source, ...]] = {}
         self._signals_by_record_id: dict[EntityId, tuple[Signal, ...]] = {}
+        self._records_by_signal_id: dict[EntityId, Record] = {}
+        """The Record that holds each registered Signal, by Signal ID."""
         self._tasks: list[Task] = []
         self._tasks_by_id: dict[EntityId, Task] = {}
+        self._label_sets = LabelSetRegistry()
+        """The label sets that the registered tasks use, one per name."""
         self._ids = IdCounters()
         self._streamed_task_base = 0
         self._annotations: list[Annotation] = []
@@ -83,6 +102,75 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         self._task_stream: Callable[[], Iterator[Task]] | None = None
         self._streamed_task_types: tuple[type[Task], ...] = ()
         self._schema: DatasetSchema | None = None
+
+    def import_from(  # ruff: ignore[too-many-arguments] - one argument per selection
+        self,
+        parent: "TimeFReader",
+        *,
+        alias: ParentAlias | None = None,
+        records: Iterable[EntityId] = (),
+        signals: Iterable[EntityId] = (),
+        tasks: Iterable[EntityId] = (),
+        load: LoadPlan = LoadPlan.ALL_LAZY,
+    ) -> ImportedDataset:
+        """Copy Records, Signals, and tasks from a parent release into this dataset.
+
+        The parent must be a release that ``metadata.parents`` declares. The call records the parent
+        in :attr:`parent_cards` and :attr:`lineage`. It does not change the card of this dataset.
+
+        - ``records=`` copies each Record whole, with its Sources, Signals, and annotations.
+        - ``signals=`` copies each Signal into a copy of its Record and of the Sources above it. Such a
+          partial copy keeps the annotations that its Signals place.
+        - ``tasks=`` copies each task with the Records and Signals that it references and the tasks
+          that it derives from. Each annotation that a task references points at the matching
+          occurrence on the copy of its owner. If this dataset changed or removed that occurrence,
+          the import attaches a copy of the parent's next to it.
+
+        Each copy is this dataset's own object, with new IDs and its own metadata and annotations, so
+        edits do not change the parent. Its Signals keep the parent's value handles, so they read the
+        parent's stored values unless ``load`` loads them. A write of this dataset reuses the parent's
+        payloads, so it needs the parent release. Annotations on the parent dataset itself come only
+        with a task that references them.
+
+        An import of an object whose copy this dataset holds reuses that copy, with this dataset's
+        edits. If the call needs Signals that the copy of a Record lacks, it adds them to that copy,
+        with the Sources and annotations that they bring. An object whose copy this dataset removed is
+        copied again, under a new ID. An edit such as :func:`~timenet.dataset.edit.remove_signals`
+        keeps the import state in the dataset it builds, so an import into that dataset works the
+        same way. Imports are safe to repeat: if a call fails partway, repeating it completes it.
+        Select many objects in one call, because each call reads them in batches.
+        ``docs/timef-dataset.md`` describes the rules.
+
+        Args:
+            parent: A reader of the parent release.
+            alias: The parent alias that declares the parent. By default, the alias that the card
+                declares for its release.
+            records: The parent IDs of the Records to copy whole.
+            signals: The parent IDs of the Signals to copy.
+            tasks: The parent IDs of the tasks to copy.
+            load: Which kinds of stored values to load. The import reads the parent tasks and Records
+                without their values. Then it loads these kinds on the copies of the selected and
+                needed tasks, Records, and Signals, and on the annotations that it copies, through
+                their own value handles. This includes copies that this dataset holds already. The
+                other Signals of a partial copy stay as they are. The default loads none.
+
+        Returns:
+            The copies of the selected Records, Signals, and tasks, by their parent IDs.
+
+        Raises:
+            TimeFValidationError: If ``metadata.parents`` or ``alias`` does not declare the parent,
+                another alias imports the parent or this alias imports another release, a selection
+                is not a collection of positive int64 IDs, the copy of a Record that the call adds
+                to holds sibling Sources of one name or a Signal outside its ``time_span``, ``tasks``
+                is given and this dataset streams its tasks, a task to copy is a
+                ``TSCorrespondenceTask`` without ``candidate_records``, or the task copies fail to
+                register.
+            TimeFNotFoundError: If a selected ID names no parent object. This dataset does not change.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by composition.import_from
+        try:
+            return import_from(self, parent, alias=alias, records=records, signals=signals, tasks=tasks, load=load)
+        finally:
+            self._schema = None
 
     def add_record(self, *, record: Record) -> Record:
         """Register and return a complete record.
@@ -111,14 +199,17 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
         Raises:
             TimeFValidationError: If the record is already in this dataset. Also if the record
-                attaches one Signal or annotation occurrence twice, or holds a Source or Signal
-                that belongs to another record. Without ``keep_ids``, also if the record or one of
-                its signals already has an id from another dataset or a reader.
+                attaches one Signal or annotation occurrence twice, holds sibling Sources of one
+                name, or holds a Source or Signal that belongs to another record. Without
+                ``keep_ids``, also if the record or one of its signals already has an id from
+                another dataset or a reader.
         """
         if record._id is not None and self._records_by_id.get(record._id) is record:
             raise TimeFValidationError(f"{record._label} is already in this dataset")
         if record._id is not None and not keep_ids:
             raise TimeFValidationError(f"{record._label} already has an id from another dataset")
+        # A caller can assign Record.sources or Source.sources after construction.
+        record._check_source_names()
         signals = record.signals
         if len({id(signal) for signal in signals}) != len(signals):
             raise TimeFValidationError(f"{record._label} attaches one Signal more than once")
@@ -145,11 +236,65 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         for signal in signals:
             set_field(signal, "_id", self._take_id(ObjectKind.SIGNAL, signal._id, keep=keep_ids))
             self._signals_by_id[signal.id] = signal
+            self._records_by_signal_id[signal.id] = record
         self._sources.update(sources)
         self._records.append(record)
         self._records_by_id[record.id] = record
+        self._sources_by_record_id[record.id] = tuple(sources.values())
         self._signals_by_record_id[record.id] = signals
         return record
+
+    def _reindex_record(self, record: Record) -> None:
+        """Index a registered Record again after its hierarchy grew in place, as an import extends a copy.
+
+        Each Signal the Record gained gets the next Signal id, and the Sources and Signals it no
+        longer holds leave the indexes. Every check runs before an index or an id changes.
+
+        Raises:
+            TimeFValidationError: If the Record attaches one Signal or annotation occurrence twice,
+                holds sibling Sources of one name, or holds a Source or Signal that belongs to another
+                record, or a new Signal that has an id already. Also if construction would reject the
+                time of a Signal or the ``time_span`` of the Record.
+        """
+        record._check_source_names()
+        record._check_times()
+        sources = {id(source): source for source in record.walk_sources()}
+        before_sources = {id(source) for source in self._sources_by_record_id[record.id]}
+        shared = [source.name for identity, source in sources.items() if identity in self._sources - before_sources]
+        if shared:
+            raise TimeFValidationError(f"Sources {shared} already belong to another record; each Source has one owner")
+        signals = record.signals
+        if len({id(signal) for signal in signals}) != len(signals):
+            raise TimeFValidationError(f"{record._label} attaches one Signal more than once")
+        before = self._signals_by_record_id[record.id]
+        held = {id(signal) for signal in before}
+        added = [signal for signal in signals if id(signal) not in held]
+        owned = [
+            signal.name for signal in added if signal._id is not None and self._signals_by_id.get(signal._id) is signal
+        ]
+        if owned:
+            raise TimeFValidationError(f"Signals {owned} already belong to another record; each Signal has one owner")
+        foreign = [signal.name for signal in added if signal._id is not None]
+        if foreign:
+            raise TimeFValidationError(f"Signals {foreign} already have ids from another dataset")
+        annotations = tuple(record.walk_annotations())
+        if len({id(annotation) for annotation in annotations}) != len(annotations):
+            raise TimeFValidationError(f"{record._label} attaches one annotation occurrence more than once")
+
+        kept = {id(signal) for signal in signals}
+        for signal in before:
+            if id(signal) not in kept and self._signals_by_id.get(signal.id) is signal:
+                del self._signals_by_id[signal.id]
+                del self._records_by_signal_id[signal.id]
+        for signal in added:
+            # ruff: ignore[unnecessary-dunder-call] (Signal is frozen)
+            object.__setattr__(signal, "_id", self._ids.next(ObjectKind.SIGNAL))
+            self._signals_by_id[signal.id] = signal
+            self._records_by_signal_id[signal.id] = record
+        self._sources.difference_update(before_sources - sources.keys())
+        self._sources.update(sources)
+        self._sources_by_record_id[record.id] = tuple(sources.values())
+        self._signals_by_record_id[record.id] = signals
 
     def _take_id(self, kind: ObjectKind, value: EntityId | None, *, keep: bool) -> EntityId:
         """Return ``value`` after recording it when ``keep`` is set, else the next id of ``kind``."""
@@ -175,7 +320,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Returns:
             The committed version directory.
         """
-        from timenet.writer import TimeFWriter  # noqa: PLC0415
+        from timenet.writer import TimeFWriter  # ruff: ignore[import-outside-top-level]
 
         root = Path(path)
         if self.schema is None:
@@ -183,22 +328,6 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         with TimeFWriter(root, self, values_backend=values_backend) as writer:
             writer.write()
         return root / self.metadata.dataset_id / str(self.metadata.dataset_version)
-
-    @classmethod
-    def open(cls, *, path: str | Path) -> "TimeFDataset":
-        """Open one local TimeF version directory.
-
-        Args:
-            path: Directory containing ``manifest.json`` and ``control.duckdb``.
-
-        Returns:
-            The dataset, with lazy Signal values.
-        """
-        from timenet.reader import TimeFReader  # noqa: PLC0415
-        from timenet.registry.dependencies import open_local_version  # noqa: PLC0415
-
-        with TimeFReader(open_local_version(path)) as reader:
-            return reader.read()
 
     def add_task(self, *, task: Task) -> Task:
         """Validate and register one fully constructed task.
@@ -301,7 +430,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
         Raises:
             TimeFValidationError: If the selection is empty or contains an unknown split.
-        """  # noqa: DOC502 - raised by parse_splits
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by parse_splits
         required = frozenset(required_modalities or ())
         supported = None if supported_modalities is None else frozenset(supported_modalities)
         wanted = None if split is None else parse_splits(split)
@@ -335,12 +464,13 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
         Raises:
             TimeFValidationError: If a streamed task fails one of the per-task checks.
-        """  # noqa: DOC502 (raised by _validate_streamed_task, not directly here)
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by _validate_streamed_task, not directly here)
         index = _TaskValidationIndex(self)
         declared = set(self._streamed_task_types)
+        label_sets = LabelSetRegistry()
         for position, task in enumerate(self.iter_tasks(), start=1):
             task._id = self._ids.claim(ObjectKind.TASK, self._streamed_task_base + position)
-            self._validate_streamed_task(task, index, declared)
+            self._validate_streamed_task(task, index, declared, label_sets)
             yield task
 
     def _validate_streamed_task(
@@ -348,29 +478,50 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         task: Task,
         index: _TaskValidationIndex,
         declared: set[type[Task]],
+        label_sets: LabelSetRegistry,
     ) -> None:
-        """Run the per-task checks a streamed task must pass, without cross-task state.
+        """Make sure that each streamed task follows the dataset rules.
 
         Args:
             task: The streamed task.
-            index: Reusable dataset identity and annotation lookups.
+            index: The shared index of dataset objects and annotations.
             declared: The task types :meth:`set_task_stream` declared.
+            label_sets: The label sets used so far in the stream.
+                This method adds the label set of this task.
 
         Raises:
-            TimeFValidationError: If the task's type, record attachment, references, answer, or spans
-                are invalid.
+            TimeFValidationError: If the task's type is not declared, or the task fails a check of
+                :meth:`_check_task`.
         """
         if type(task) not in declared:
             raise TimeFValidationError(
                 f"streamed task {task.id!r} has type {type(task).__name__}, not one of the declared "
                 f"{sorted(t.__name__ for t in declared)}"
             )
+        self._check_task(task, index, label_sets)
+
+    def _check_task(self, task: Task, index: _TaskValidationIndex, label_sets: LabelSetRegistry) -> None:
+        """Make sure that a task follows the dataset rules.
+
+        This method handles tasks added alone, in a batch, or in a stream.
+
+        Args:
+            task: The task to check.
+            index: The shared index of dataset objects and annotations.
+            label_sets: The label sets used so far. This method adds the label set of this task.
+
+        Raises:
+            TimeFValidationError: If the task's record attachment, references, answer, labels, label
+                set, or spans are invalid.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by the checks that it calls)
         self._check_record_refs(task, index)
         task.check_against_scope()
         self._check_task_answer(task)
+        task.check_targets()
+        task.register_label_set(label_sets)
         self._check_signal_refs(task, index)
         self._validate_task_spans(task, index)
-        self._check_annotation_refs(task, task.inputs, index)
+        self._check_annotation_refs(task, self._referenced_records(task), index)
 
     def _register_batch(self, batch: tuple[Task, ...]) -> tuple[Task, ...]:
         """Validate a whole batch of tasks, then attach all of it or none of it.
@@ -405,7 +556,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         for offset, task in enumerate(batch):
             task._id = first + offset
         try:
-            self._validate_task_batch(batch)
+            label_sets = self._validate_task_batch(batch)
         except BaseException:
             for task, task_id in zip(batch, previous, strict=True):
                 task._id = task_id
@@ -414,21 +565,25 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             self._ids.claim(ObjectKind.TASK, task.id)
             self._tasks.append(task)
             self._tasks_by_id[task.id] = task
+        self._label_sets = label_sets
         return batch
 
     def _is_registered(self, task: Task) -> bool:
         """Return whether this exact task object is in the dataset."""
         return task._id is not None and self._tasks_by_id.get(task._id) is task
 
-    def _validate_task_batch(self, batch: tuple[Task, ...]) -> None:
-        """Run every check that the batch must pass, without attaching anything.
+    def _validate_task_batch(self, batch: tuple[Task, ...]) -> LabelSetRegistry:
+        """Make sure that a batch follows the dataset rules before attaching its tasks.
 
-        This method checks the cross-task rules that only a batch makes possible, in addition to
-        the per-task checks. Each ``from_tasks`` parent must already be registered or be in the
-        batch. No task can derive from itself or close a cycle.
+        This method examines each task and the relationships between tasks.
+        Each parent in ``from_tasks`` must already be registered or be in the batch.
+        No task can derive from itself, directly or through other tasks.
 
         Args:
             batch: The tasks to register together.
+
+        Returns:
+            A copy of the registry that includes the label sets from this batch.
 
         Raises:
             TimeFValidationError: This error occurs under the conditions documented on
@@ -446,13 +601,10 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                     )
         self._check_no_derivation_cycle(batch)
         index = _TaskValidationIndex(self)
+        label_sets = self._label_sets.copy()
         for task in batch:
-            self._check_record_refs(task, index)
-            task.check_against_scope()
-            self._check_task_answer(task)
-            self._check_signal_refs(task, index)
-            self._validate_task_spans(task, index)
-            self._check_annotation_refs(task, task.inputs, index)
+            self._check_task(task, index, label_sets)
+        return label_sets
 
     @classmethod
     def _validate_task_spans(cls, task: Task, index: _TaskValidationIndex) -> None:
@@ -587,7 +739,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return self._schema
 
     @classmethod
-    def from_parts(  # noqa: PLR0913 - every part of a stored dataset
+    def from_parts(  # ruff: ignore[too-many-arguments] - every part of a stored dataset
         cls,
         *,
         metadata: DatasetMetadata,
@@ -596,6 +748,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         schema: DatasetSchema,
         annotations: Iterable[Annotation] = (),
         last_ids: Mapping[ObjectKind, EntityId] | None = None,
+        import_state: ImportState | None = None,
     ) -> "TimeFDataset":
         """Build a dataset from parts that are already constructed.
 
@@ -609,6 +762,9 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             annotations: Annotations attached directly to the dataset.
             last_ids: The id counters of the dataset these parts come from, so new objects never
                 reuse the id of a removed one.
+            import_state: The parent cards, the lineage, and the import map of the dataset these
+                parts come from. The new dataset keeps this object. Without it, the dataset starts
+                with no parent cards, no lineage, and an empty import map.
 
         Returns:
             The dataset, built from these parts. The records, signals, and tasks keep the ids they
@@ -621,8 +777,11 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         dataset._tasks = list(tasks)
         for task in dataset._tasks:
             dataset._tasks_by_id[dataset._ids.claim(ObjectKind.TASK, task.id)] = task
+            task.register_label_set(dataset._label_sets)
         dataset._annotations = list(annotations)
         dataset._schema = schema
+        if import_state is not None:
+            dataset._import_state = import_state
         return dataset
 
     @staticmethod
@@ -650,16 +809,16 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         records: tuple[Record, ...],
         index: _TaskValidationIndex,
     ) -> None:
-        """Reject a referenced annotation occurrence that neither the dataset nor a target record carries.
+        """Reject an annotation reference that lies neither on the dataset nor on a Record that the task references.
 
         Args:
             task: The task to register.
-            records: The records that the task attaches to.
+            records: The Records that the task references (:meth:`_referenced_records`).
             index: Reusable dataset identity and annotation lookups.
 
         Raises:
             TimeFValidationError: If a referenced annotation occurrence is attached neither to the
-                dataset nor to a target record.
+                dataset nor to a Record that the task references.
         """
         record_occurrences = tuple(index.annotations_for(record) for record in records)
         for field_name in ("input_annotations", "target_annotations"):
@@ -670,7 +829,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
                 ):
                     raise TimeFValidationError(
                         f"{type(task).__name__} {field_name} refers to an occurrence of annotation "
-                        f"{annotation.key!r} that is not attached to its dataset or input hierarchy"
+                        f"{annotation.key!r} that is not attached to its dataset or to a Record the task references"
                     )
 
     @staticmethod
@@ -684,7 +843,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Raises:
             TimeFValidationError: If a task references an unknown or replacement Record object.
         """
-        for record in TimeFDataset._task_records(task):
+        for record in task.named_records():
             if record._id is None or index.records_by_id.get(record._id) is not record:
                 raise TimeFValidationError(
                     f"{type(task).__name__} references a Record that is not registered in this dataset"
@@ -701,36 +860,31 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         Raises:
             TimeFValidationError: If a Signal target or span Signal is unknown or is a replacement object.
         """
-        for signal in TimeFDataset._task_signals(task):
+        for signal in task.referenced_signals():
             if signal._id is None or index.signals_by_id.get(signal._id) is not signal:
                 raise TimeFValidationError(
                     f"{type(task).__name__} references Signal {signal.name!r}, which is not registered in this dataset"
                 )
 
-    @staticmethod
-    def _task_records(task: Task) -> tuple[Record, ...]:
-        """Return all Records referenced by a task, without duplicate objects."""
-        candidates = cast("tuple[Record, ...]", getattr(task, "candidate_records", ()))
-        target_records = tuple(target for target in task.targets or () if isinstance(target, Record))
-        found: list[Record] = []
-        seen: set[int] = set()
-        for record in (*task.inputs, *candidates, *target_records):
-            identity = id(record)
-            if identity not in seen:
-                seen.add(identity)
-                found.append(record)
-        return tuple(found)
+    def _referenced_records(self, task: Task) -> tuple[Record, ...]:
+        """Return the Records that a task references, each once.
 
-    @staticmethod
-    def _task_signals(task: Task) -> tuple[Signal, ...]:
-        """Return all Signals referenced as target items or by the scope and span targets."""
-        signals = [target for target in task.targets or () if isinstance(target, Signal)]
-        for span in task.spans():
-            if isinstance(span, StepSpan):
-                signals.append(span.time_series)
-            elif isinstance(span, TimeSpan):
-                signals.extend(span.time_series or ())
-        return tuple(signals)
+        They are the Records it names (:meth:`~timenet.types.Task.named_records`), and the Records
+        that hold the Signals it references (:meth:`~timenet.types.Task.referenced_signals`). Each
+        Signal belongs to exactly one Record, which the dataset finds by the Signal's ID.
+
+        Args:
+            task: The task.
+
+        Returns:
+            The Records, the named ones first.
+        """
+        found = {id(record): record for record in task.named_records()}
+        for signal in task.referenced_signals():
+            record = self._records_by_signal_id.get(signal.id)
+            if record is not None:
+                found.setdefault(id(record), record)
+        return tuple(found.values())
 
     @staticmethod
     def _ordered_unique(items: Iterable[T]) -> list[T]:
@@ -743,8 +897,29 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
         return self._metadata
 
     @property
+    def parent_cards(self) -> Mapping[ParentAlias, ParentDatasetCard]:
+        """A copy of the card of each parent this dataset imports from, by parent alias.
+
+        The mapping is read-only. :meth:`import_from` adds to it.
+        """
+        return MappingProxyType(self._import_state.parent_cards)
+
+    @property
+    def lineage(self) -> Mapping[str, ParentDatasetCard]:
+        """The card of every ancestor release, parents included, keyed by ``org/name@version``.
+
+        The mapping is read-only. :meth:`import_from` adds to it.
+        """
+        return MappingProxyType(self._import_state.lineage)
+
+    @property
     def records(self) -> tuple[Record, ...]:
-        """All records in insertion order."""
+        """All records of the dataset.
+
+        For a dataset read from a release, the records come in the release's record order, as
+        :meth:`~timenet.reader.TimeFReader.record_ids` lists it. Records added later follow them.
+        For a dataset built in memory, the records come in the order in which they were added.
+        """
         return tuple(self._records)
 
     @property
@@ -754,7 +929,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
 
     @property
     def annotations(self) -> tuple[Annotation, ...]:
-        """Return annotations attached to the dataset itself."""
+        """Annotations attached to the dataset itself."""
         return tuple(self._annotations)
 
     @property
@@ -795,7 +970,7 @@ class TimeFDataset(SupportsAnnotate):  # noqa: PLR0904
             TimeFValidationError: If ``split`` is unknown, or if no task of the dataset belongs to any
                 split. Asking a partition of a dataset that has none is a mistake rather than an
                 empty selection, so it fails rather than returning nothing.
-        """  # noqa: DOC502 - raised by get_splits
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by get_splits
         return self.get_splits(split)
 
     def get_splits(self, *splits: Split | str) -> tuple[Task, ...]:

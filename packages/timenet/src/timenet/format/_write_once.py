@@ -25,7 +25,7 @@ class WriteOnce(Generic[_T]):
 
     @property
     def value(self) -> _T | None:
-        """Return the value the cell holds, or ``None`` if it is empty."""
+        """The value the cell holds, or ``None`` if it is empty."""
         return self._value
 
     def set(self, value: _T) -> None:

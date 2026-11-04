@@ -1,0 +1,17 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: physionet/ptb-xl
+dataset_version: 1.0.0
+source_revision: 1.0.3
+name: PTB-XL
+description: Original 500 Hz clinical ECG recordings and annotations, without downstream tasks.
+license: CC-BY-4.0
+domains: [cardiology, health]
+tags: [ecg, physionet, clinical, base-dataset]
+source_url: https://physionet.org/content/ptb-xl/1.0.3/
+citation: >-
+  Wagner, P., Strodthoff, N., Bousseljot, R., Samek, W., & Schaeffter, T. (2022). PTB-XL, a large
+  publicly available electrocardiography dataset (version 1.0.3). PhysioNet.
+  https://doi.org/10.13026/kfzx-aw45. Original publication: Wagner, P., Strodthoff, N.,
+  Bousseljot, R.-D., Kreiseler, D., Lunze, F.I., Samek, W., Schaeffter, T. (2020). PTB-XL: A Large
+  Publicly Available ECG Dataset. Scientific Data. https://doi.org/10.1038/s41597-020-0495-6

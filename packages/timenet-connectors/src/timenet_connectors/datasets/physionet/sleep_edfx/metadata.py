@@ -221,6 +221,7 @@ class SubjectTables:
         recording: RecordingIdentity,
         header: reader.EdfHeader,
     ) -> list[Annotation]:
+        # ruff: ignore[docstring-extraneous-exception] (raised by find_subject_row and find_night, not directly here)
         """Give every metadata annotation one recording carries.
 
         A value from a closed set comes from ``metadata_annotation``, so every record that
@@ -236,7 +237,7 @@ class SubjectTables:
 
         Raises:
             TimeFFormatError: If the table of that study holds no row for the recording.
-        """  # noqa: DOC502 (raised by find_subject_row and find_night, not directly here)
+        """
         shape = self._shapes[recording.study]
         row = tables.find_subject_row(
             self._tables[recording.study], shape, recording.subject_number, recording.night, recording.recording_id

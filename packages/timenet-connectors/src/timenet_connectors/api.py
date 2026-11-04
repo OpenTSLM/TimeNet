@@ -11,16 +11,20 @@ from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from timenet.dataset import TimeFDataset
+    from timenet.registry import BaseRegistry
 
 
-def build(
+def build(  # ruff: ignore[too-many-arguments]
     dataset_id: str,
     *,
     version: str | None = None,
     out: str | Path | None = None,
     force: bool = False,
     keep_cache: bool = False,
+    fetch_from: "str | BaseRegistry | None" = None,
+    build_parents: bool = False,
 ) -> Path:
+    # ruff: ignore[docstring-extraneous-exception] (raised by _check_version and the parent planner, not directly here)
     """Build a dataset into a local registry by connector id.
 
     This is the producer-side one-liner over the engine. The build reuses an already-built version
@@ -30,7 +34,8 @@ def build(
 
     Like ``timenet-build build``, this runs the connector in an environment built from its
     ``requirements.txt``. Set ``TIMENET_ISOLATION=off`` to run it in this interpreter instead, which
-    is what you want while writing a connector.
+    is what you want while writing a connector. Missing parent releases fail the build before any
+    download, unless ``fetch_from`` or ``build_parents`` obtains them.
 
     Args:
         dataset_id: The dataset id (``org/name``).
@@ -40,6 +45,8 @@ def build(
         out: Output registry directory. Defaults to the shared local registry.
         force: Rebuild even if the registry already has a built version.
         keep_cache: Keep the raw download cache. A successful build deletes it by default.
+        fetch_from: The registry, or its URI, to copy missing parent releases from.
+        build_parents: Build missing parent releases from their installed connectors.
 
     Returns:
         The committed version directory.
@@ -47,25 +54,28 @@ def build(
     Raises:
         TimeFValidationError: If the caller sets ``version`` and it does not match the connector's
             declared version.
-    """  # noqa: DOC502 (raised by _check_version, not directly here)
-    from timenet.config import settings  # noqa: PLC0415
-    from timenet.registry import default_registry_path  # noqa: PLC0415
+        TimeNetMissingParentError: If a parent release is missing, with a hint that names the
+            keywords.
+    """
+    from timenet.errors import TimeNetMissingParentError  # ruff: ignore[import-outside-top-level]
+    from timenet.registry import default_registry_path  # ruff: ignore[import-outside-top-level]
+    from timenet_connectors.builder.cli import build_one  # ruff: ignore[import-outside-top-level]
 
     if version is not None:
         _check_version(dataset_id, version)
     root = Path(out).expanduser() if out is not None else default_registry_path()
-    if settings().isolation == "on":
-        from timenet_connectors.builder.env import run_isolated  # noqa: PLC0415
-
-        return Path(run_isolated(dataset_id, root, force=force, keep_cache=keep_cache))
-
-    from timenet.engine import run_pipeline  # noqa: PLC0415
-    from timenet_connectors.discovery import resolve  # noqa: PLC0415
-
-    return run_pipeline(resolve(dataset_id)(), root, force=force, keep_cache=keep_cache)
+    try:
+        built = build_one(
+            dataset_id, root, fetch_from=fetch_from, build_parents=build_parents, force=force, keep_cache=keep_cache
+        )
+    except TimeNetMissingParentError as error:
+        error.hint = "Copy it with fetch_from=<registry> or build it with build_parents=True."
+        raise
+    return Path(built)
 
 
 def _check_version(dataset_id: str, version: str) -> None:
+    # ruff: ignore[docstring-extraneous-exception] (LookupError and TimeNetInvalidCardError come from the calls below)
     """Reject a requested version the connector does not build.
 
     Deliberately import-free, like :func:`timenet_connectors.discovery.requirements_for`. This guard
@@ -80,10 +90,10 @@ def _check_version(dataset_id: str, version: str) -> None:
         TimeFValidationError: If the connector declares a different version.
         LookupError: If no connector exists for the id.
         TimeNetInvalidCardError: If the connector's card is missing or invalid.
-    """  # noqa: DOC502 (LookupError and TimeNetInvalidCardError come from the calls below)
-    from timenet.errors import TimeFValidationError  # noqa: PLC0415
-    from timenet.types import DatasetMetadata  # noqa: PLC0415
-    from timenet_connectors.discovery import connector_dir  # noqa: PLC0415
+    """
+    from timenet.errors import TimeFValidationError  # ruff: ignore[import-outside-top-level]
+    from timenet.types import DatasetMetadata  # ruff: ignore[import-outside-top-level]
+    from timenet_connectors.discovery import connector_dir  # ruff: ignore[import-outside-top-level]
 
     card = DatasetMetadata.from_yaml(connector_dir(dataset_id) / "dataset.yaml")
     available = str(card.dataset_version)
@@ -93,7 +103,13 @@ def _check_version(dataset_id: str, version: str) -> None:
         )
 
 
-def load(dataset_id: str, version: str | None = None) -> "TimeFDataset":
+def load(
+    dataset_id: str,
+    version: str | None = None,
+    *,
+    fetch_from: "str | BaseRegistry | None" = None,
+    build_parents: bool = False,
+) -> "TimeFDataset":
     """Build a dataset if needed, then load it into memory.
 
     This is the one-call sugar over :func:`build` plus :meth:`timenet.client.TimeNet.load`. For a
@@ -103,11 +119,14 @@ def load(dataset_id: str, version: str | None = None) -> "TimeFDataset":
         dataset_id: The dataset id (``org/name``).
         version: The version string, or ``None`` for the latest. :func:`build` checks this value
             against the connector's declared version and rejects a mismatch.
+        fetch_from: The registry, or its URI, that the build and the read copy missing parent
+            releases and payload sources from.
+        build_parents: Build missing parent releases from their installed connectors.
 
     Returns:
         The loaded dataset.
     """
-    from timenet.client import TimeNet  # noqa: PLC0415
+    from timenet.client import TimeNet  # ruff: ignore[import-outside-top-level]
 
-    build(dataset_id, version=version)
-    return TimeNet().load(dataset_id, version)
+    build(dataset_id, version=version, fetch_from=fetch_from, build_parents=build_parents)
+    return TimeNet().load(dataset_id, version, fetch_from=fetch_from)

@@ -3,10 +3,13 @@ import sys
 
 import pytest
 
-from timenet.manifest import Manifest
+from timenet.errors import TimeNetInvalidCardError
+from timenet.manifest import Manifest, PayloadSource
+from timenet.manifest.files import FilePart
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
-from timenet_connectors.builder import backend as backend_module
+from timenet.types.references import DatasetRef
+from timenet_connectors.builder import backend as backend_module, cli as cli_module
 from timenet_connectors.builder.backend import ConnectorBuilder
 
 
@@ -27,16 +30,28 @@ def test_knows_rejects_an_unknown_id_without_importing_a_connector():
     assert leaf not in sys.modules
 
 
+def test_a_card_that_cannot_be_read_raises_and_only_a_missing_connector_gives_none(tmp_path, monkeypatch):
+    assert ConnectorBuilder().card("nope/nothing") is None
+    assert ConnectorBuilder().declared_version("nope/nothing") is None
+    (tmp_path / "dataset.yaml").write_text("dataset_id: [unclosed\n")
+    monkeypatch.setattr(backend_module, "connector_dir", lambda dataset_id: tmp_path)
+
+    with pytest.raises(TimeNetInvalidCardError, match="could not read dataset card"):
+        ConnectorBuilder().card("test/broken")
+    with pytest.raises(TimeNetInvalidCardError, match="could not read dataset card"):
+        ConnectorBuilder().declared_version("test/broken")
+
+
 @pytest.mark.parametrize("values_backend", [None, "zarr", "parquet"])
 def test_build_runs_in_an_isolated_environment_by_default(tmp_path, monkeypatch, values_backend):
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     calls = []
 
-    def fake_isolated(dataset_id, root, *, force=False, values_backend=None):
+    def fake_isolated(dataset_id, root, *, force=False, values_backend=None, **_):
         calls.append((dataset_id, root, force, values_backend))
         return Path(root) / "1.0.0"
 
-    monkeypatch.setattr(backend_module, "run_isolated", fake_isolated)
+    monkeypatch.setattr(cli_module, "run_isolated", fake_isolated)
 
     version_dir = ConnectorBuilder().build("timenet/hello-world", tmp_path, force=True, values_backend=values_backend)
 
@@ -44,10 +59,31 @@ def test_build_runs_in_an_isolated_environment_by_default(tmp_path, monkeypatch,
     assert calls == [("timenet/hello-world", tmp_path, True, values_backend)]
 
 
+def test_build_hands_its_pins_to_the_build(tmp_path, monkeypatch):
+    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
+    received = []
+
+    def fake_isolated(dataset_id, root, *, pinned_by=None, **_):
+        received.append(pinned_by)
+        return str(Path(root) / "1.0.0")
+
+    monkeypatch.setattr(cli_module, "run_isolated", fake_isolated)
+    pinned = FilePart(path="control.duckdb", checksum="sha256:" + "0" * 64, size=1)
+    pins = {
+        DatasetRef.parse("test/reader@1.0.0"): PayloadSource(
+            release=DatasetRef.parse("timenet/hello-world@1.0.0"), files=(pinned,)
+        )
+    }
+
+    ConnectorBuilder().build("timenet/hello-world", tmp_path, pinned_by=pins)
+
+    assert received == [pins]
+
+
 def test_build_runs_in_process_when_isolation_is_off(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
-    monkeypatch.setattr(backend_module, "run_isolated", _unexpected_isolation)
+    monkeypatch.setattr(cli_module, "run_isolated", _unexpected_isolation)
 
     version_dir = ConnectorBuilder().build("timenet/hello-world", tmp_path / "registry")
 
@@ -56,7 +92,7 @@ def test_build_runs_in_process_when_isolation_is_off(tmp_path, monkeypatch):
 
 def test_build_in_process_round_trips_the_connector_default_zarr_backend(tmp_path, monkeypatch):
     pytest.importorskip("zarr")
-    connector_cls = backend_module.resolve("timenet/hello-world")
+    connector_cls = cli_module.resolve("timenet/hello-world")
     monkeypatch.setattr(connector_cls, "values_backend", "zarr")
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
@@ -74,12 +110,12 @@ def test_build_in_process_uses_the_connector_default_values_backend(tmp_path, mo
 
     captured = {}
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
-    monkeypatch.setattr(backend_module, "resolve", lambda dataset_id: Connector)
+    monkeypatch.setattr(cli_module, "resolve", lambda dataset_id: Connector)
 
-    def pipeline(connector, root, *, force, values_backend):
+    def pipeline(connector, root, *, force, values_backend, **_):
         captured["backend"] = values_backend
         return Path(root) / "1.0.0"
 
-    monkeypatch.setattr(backend_module, "run_pipeline", pipeline)
+    monkeypatch.setattr(cli_module, "run_pipeline", pipeline)
     ConnectorBuilder().build("timenet/hello-world", tmp_path)
     assert captured["backend"] == "zarr"

@@ -37,7 +37,7 @@ class PayloadTableCache:
 
     @property
     def nbytes(self) -> int:
-        """Return the decoded bytes of the payload files the cache holds."""
+        """The decoded bytes of the payload files the cache holds."""
         return self._nbytes
 
     def read_table(self, version: "DatasetVersion", path: str, schema: pa.Schema) -> pa.Table:

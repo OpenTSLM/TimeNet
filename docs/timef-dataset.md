@@ -57,7 +57,7 @@ lead_i = Signal(
 | `loader` | `ArrayHandle` or callable | Lazy values, passed to `Signal.from_loader()`. |
 | `n_values` | `int` | Required for a lazy Signal and inferred from eager data. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Signal. |
-| `metadata` | `dict[str, object]` | Optional JSON-compatible metadata. |
+| `metadata` | `JsonMapping` | Optional JSON-compatible metadata. |
 
 Read values through `to_arrow()`, `to_numpy()`, and `read_steps()`. These accessors apply the
 spec: `to_numpy()` rejects nulls, and tensor values keep their trailing shape.
@@ -82,7 +82,7 @@ Call `signal.annotate(annotation)` to attach one occurrence to a Signal.
 ## Source
 
 A `Source` represents a device, sensor, or subsystem. It can contain both direct Signals and child
-Sources:
+Sources. [Sources](data-model/sources.md) describes the concept in full.
 
 ```python
 from timenet.dataset import Source
@@ -104,7 +104,7 @@ imu = Source(
 | `sources` | `tuple[Source, ...]` | Direct child Sources. |
 | `signals` | `tuple[Signal, ...]` | Signals produced directly by this Source. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Source. |
-| `metadata` | `dict[str, object]` | Optional device, sensor, or subsystem metadata. |
+| `metadata` | `JsonMapping` | Optional device, sensor, or subsystem metadata. |
 
 `walk_sources()` and `walk_signals()` traverse a complete subtree. TimeNet rejects cycles, a Source
 with two parents, and a Signal with two owners.
@@ -141,7 +141,7 @@ record = Record(
 | `id` | `int` | Read-only identity. Set when the Record joins a dataset. |
 | `sources` | `tuple[Source, ...]` | Root Sources in the recording hierarchy. |
 | `annotations` | `tuple[Annotation, ...]` | Annotation occurrences attached to this Record. |
-| `metadata` | `dict[str, object]` | Optional session metadata. |
+| `metadata` | `JsonMapping` | Optional session metadata. |
 | `start_time` | `TimeOrigin` | Common relative zero with an optional absolute timestamp. |
 | `time_span` | `TimeInterval \| None` | Optional overall session interval. |
 
@@ -204,9 +204,10 @@ dataset.add_record(record=record)
 dataset.add_task(task=task)
 ```
 
-`add_record()` validates hierarchy ownership and ID uniqueness. `add_task()` validates referenced
-objects, the answer representation, and temporal scopes. A validation error leaves the dataset
-unchanged.
+`add_record()` validates hierarchy ownership. It rejects a Record that is already in a dataset,
+and a Source or Signal that another Record owns. It then gives the Record and its Signals their IDs.
+`add_task()` validates referenced objects, the answer representation, and temporal scopes. A
+validation error leaves the dataset unchanged.
 
 For a large corpus, `set_task_stream()` accepts a re-iterable task source. The writer validates and
 inserts that stream once without retaining every Task in memory.
@@ -250,10 +251,14 @@ version_path = dataset.write(
 )
 ```
 
-Open a local version with lazy Signal values:
+Open a local version with [`TimeFReader.open()`](timef-reader.md). The reader's `read()` returns
+the dataset with lazy Signal values:
 
 ```python
-dataset = TimeFDataset.open(path=version_path)
+from timenet.reader import TimeFReader
+
+with TimeFReader.open(version_path) as reader:
+    dataset = reader.read()
 ```
 
 The stored version contains `manifest.json`, an immutable `control.duckdb`, and a Parquet or Zarr
@@ -261,3 +266,193 @@ values plane. See [TimeF format](timef-format.md) and [TimeFWriter](timef-writer
 layout.
 
 See the [API reference for `timenet.dataset`](api/dataset.md) for the full symbol listing.
+
+## Importing from a parent
+
+A child dataset copies objects from a parent release with `import_from()`. A parent release is one
+version of another dataset. The child must declare the parent in `metadata.parents`, under a parent
+alias. A parent alias is the name that the child gives the parent.
+
+```python
+from timenet.reader import TimeFReader
+
+with TimeFReader.open(parent_path) as parent:
+    imported = child.import_from(parent, records=[12, 13])
+copy = imported.records[12]
+```
+
+The unit of import is an object with an ID. Records, Signals, and tasks have IDs. An import makes
+sure that each selected object, and each object that it needs, is in the child. If the child holds a
+copy of the object, the import uses that copy as it is, with the edits of the child. Otherwise, the
+import copies the object under a new ID. This includes an object that the child removed.
+
+Sources and annotations have no IDs. They come only with the Records and Signals that they belong
+to. An import can also add them to a copy that the child holds, as [Later imports](#later-imports)
+describes.
+
+### The parent
+
+Pass a reader of the parent release. The child must declare that exact release. A card declares each
+release under one alias only, and the import uses that alias. An alias imports one release only.
+
+Each import records the parent in the child. `parent_cards` holds a copy of the card of each
+parent, by parent alias. `lineage` holds the card of each ancestor release. An ancestor release is a
+parent, a parent of a parent, and so on.
+
+An import does not change the card of the child. Each card keeps the `access` level and the
+`access_url` that its author declared. A parent can be credentialed, and the card of its child can
+still say `open`. The effective access level of a dataset is the strictest level of its own card and
+of the cards in its `lineage`. A user must have this level of access to use the data of the dataset.
+
+`timenet info` shows the effective access level and the page of each card that requires access.
+`effective_access()` and `access_requirements()` in `timenet.types.access` return the same
+information.
+
+### Records
+
+`records=` copies each Record whole: its Sources, its Signals, and the annotations on each of them.
+Each copy is a Record of the child. The copy and its Signals get new IDs in the child. The copy has
+its own metadata and its own annotations, so an edit of the copy does not change the parent.
+
+The annotations of the parent dataset itself come only with a task that references them. If the
+child holds a copy of a selected Record, the import uses that copy. It adds only what the copy lacks,
+as [Later imports](#later-imports) describes.
+
+Copies keep the time axes of the parent. If Records share a time origin in the parent, their copies
+share one time origin in the child. This is also true when separate imports copy them.
+
+A copy does not duplicate the stored values of the parent. It reads them from the parent release,
+unless the import loaded them, and a written child stores none of them. So a written child needs the
+parent release.
+
+Each call reads the selected Records, and the Records that hold the selected Signals, from the
+parent in one batch, without their stored values. Select many objects in one call, not one object
+per call.
+
+By default, the import loads no stored values. To load them during the import, pass `load=`, as for
+`TimeFReader.get_many()`. The import then loads these values on the copies of the selected Records
+and Signals, also on a copy that the child holds already. It does not load the other Signals of a
+partial copy. A value that a copy holds already does not load again. With `load=LoadPlan.ALL_EAGER`,
+you can read these copies after the parent reader closes.
+
+If an import fails partway, the Records that it copied stay in the child. Fix the cause and repeat
+the call. An import is safe to repeat.
+
+### Signals
+
+`signals=` copies each selected Signal with its annotations. The Signal goes into a copy of its
+Record, below copies of the Sources above it. Such a copy holds only the Signals that an import
+selected or needed, so it is a partial copy.
+
+A partial copy keeps the annotations of the Signals that it holds. The window of a Signal is the time
+range that its values cover. The copy keeps an annotation of a Record or Source in these cases:
+
+- The copy holds every Signal below that Record or Source.
+- The annotation has no span.
+- The span of the annotation lies inside the windows of the Signals that the copy holds below that
+  Record or Source.
+
+If a Record has a `time_span`, that session span takes the place of the windows. So a partial copy
+of such a Record keeps every Record annotation inside the session.
+
+### Tasks
+
+`tasks=` copies each selected task with the objects that it references:
+
+- Its input Records, its candidate Records, and its Record targets come whole, as `records=` copies
+  them.
+- Each Signal target comes in a partial copy of its Record, as `signals=` copies it. If that
+  Record holds an annotation that the task references, the Record comes whole.
+- The tasks that it derives from through `from_tasks` come too, with the objects that they
+  reference. So do the tasks that those tasks derive from, and so on.
+
+Each task copy references the copies in the child, not the objects of the parent. It holds copies of
+the annotations of the task itself. It gets the next task ID of the child. You can find it by its
+parent ID, as [Find a copy by its parent ID](#find-a-copy-by-its-parent-id) describes.
+`imported.tasks` holds the copy of each selected task, by its parent ID.
+
+If the child holds a copy of a task, the import uses that copy as it is, with the edits of the
+child. It does not read that task from the parent again. If an edit removed some references of the
+copy, they stay removed. A new task copy that derives from a task copy in the child references that
+copy.
+
+The import refuses a `TSCorrespondenceTask` without `candidate_records`, because the candidates of
+such a task are all Records of the parent. For a child that streams its tasks, `tasks=` raises
+`TimeFValidationError`.
+
+Each call reads the selected tasks, the tasks that they derive from, and the Records that they
+reference in one batch, before the other Records. This read loads no stored values either. `load=`
+loads them on the task copies, and on the copies of the Records and Signals that the tasks need. The
+task copies register after every Record, all together or not at all. If they fail, the Records that
+the call copied stay. The child then holds no task copy of the call, and no annotation that the call
+attached for the task copies.
+
+#### Annotation references
+
+A task can reference annotations in `input_annotations` and `target_annotations`. Each of these
+annotations lies on the parent dataset itself or on a Record that the task references, as
+[Annotations](data-model/annotations.md#use-annotations-in-tasks) describes. So the import copies
+the Record of each referenced annotation. The Records that the task names come whole. A Record of a
+Signal target that holds a referenced annotation comes whole too.
+
+Annotations have no IDs, so the import cannot find their copies by a parent ID. Instead, the import
+resolves each reference to the matching occurrence on the copy of its owner. The owner is the
+Record, Source, or Signal that holds the annotation. A match is equal to the annotation of the
+parent in every field, for example the key, the value, and the span.
+
+If the child previously changed or removed that occurrence on its copy, the import attaches a copy
+of the annotation of the parent next to it. The task copy then references the attached copy. The
+occurrence that the child changed stays as it is.
+
+An annotation on the parent dataset itself comes to the child dataset with the first task that
+references it. The other annotations of the parent dataset do not come. If the tasks of one call
+reference identical occurrences, each occurrence gets its own copy. References in separate calls can
+share one copy.
+
+### Later imports
+
+A later import reuses the copies that the child holds, and adds to them in place. If the call selects
+or needs a Signal that a copy lacks, the import adds the Signal to the copy. It also adds the
+Sources above the Signal that the copy lacks. Then it attaches the annotations that the copy keeps
+now, by the rules in [Signals](#signals), and did not keep before. Other annotations and the edits of
+the child stay as they are. So an import of a whole Record completes a partial copy.
+
+The import checks a copy that it adds to, as for a new Record. For example, a new Signal must lie
+inside the `time_span` of the copy. If a check fails, the import raises `TimeFValidationError` and
+restores the copy as it was.
+
+A Signal that an import adds goes below the copy of its Source. The import finds that copy through
+the Signals that it imported below the Source before, or else by the name of the Source. Sibling
+Sources have distinct names. If the child moved or renamed Sources of the copy, the import can find
+another Source, or it raises `TimeFValidationError`.
+
+Do not assign `Source.signals` or `Source.sources` on a copy. A later import can then attach an
+annotation that the copy already holds a second time. To remove a Signal from a copy, use
+`remove_signals()`.
+
+`remove_signals()` is in `timenet.dataset.edit`. It also drops each annotation that the copy keeps
+only because it holds that Signal, by the rules in [Signals](#signals). A later import that copies
+the Signal back then attaches these annotations once.
+
+### Find a copy by its parent ID
+
+A copy gets its own ID in the child. Nothing derives that ID from the parent ID. To find the copy of
+a parent object in a written child, pass the parent ID and the parent alias:
+
+```python
+from timenet.types.reference_keys import ParentAlias
+
+with TimeFReader.open(child_path) as reader:
+    copy = reader.get(Record, 12, parent=ParentAlias("ptbxl"))
+```
+
+In memory, `import_from()` returns the copies by their parent IDs.
+
+A later import reuses the copies that the child holds, also after you write the child and read it
+back. If you removed a copy, a later import copies the object again, under a new ID. So remove
+imported objects after your last import.
+
+An edit with `remove_records()` or `remove_signals()` keeps the parent cards and the lineage of the
+child. A later import into the new dataset reuses each copy that the edit keeps. `edit_version()`
+does the same for the version that it derives. A reader of that version finds its copies by their
+parent IDs.

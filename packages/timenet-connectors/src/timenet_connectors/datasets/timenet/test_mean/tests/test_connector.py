@@ -45,8 +45,10 @@ def test_has_balanced_binary_labels():
     assert labels == Counter({"above_zero": 500, "below_zero": 500})
 
 
-def test_target_has_no_schema():
-    assert all(task.target_schema is None for task in _convert().tasks_of(ClassificationTask))
+def test_every_task_shares_the_mean_sign_label_set():
+    label_sets = [task.label_set for task in _convert().tasks_of(ClassificationTask)]
+    assert {label_set.name for label_set in label_sets} == {"mean_sign"}
+    assert len({id(label_set) for label_set in label_sets}) == 1
 
 
 def test_every_record_is_a_single_signal():

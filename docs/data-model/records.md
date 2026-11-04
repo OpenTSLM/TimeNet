@@ -28,8 +28,8 @@ flowchart TB
     S2 --> B
 ```
 
-A Source represents a device, sensor, or subsystem. It can contain child Sources and direct Signals.
-A Signal is always a leaf.
+A [Source](sources.md) represents a device, sensor, or subsystem. It can contain child Sources and
+direct Signals. A Signal is always a leaf.
 
 ## Create a Record
 
@@ -50,17 +50,20 @@ record = Record(
     sources=(imu,),
     metadata={"site": "lab-a", "run": "run-001"},
 )
+dataset.add_record(record=record)
 ```
 
-The dataset gives the Record and each of its Signals a read-only int64 `id` when you add the
-Record. A Source has no ID. Keep upstream identifiers, such as the run name above, in `metadata`
-or an annotation.
+`dataset.add_record()` gives the Record and each of its Signals a read-only int64 `id`. A Source
+[has no ID](sources.md#sources-have-no-id). Keep upstream identifiers, such as the run name above,
+in `metadata` or an annotation.
 
 `record.signals` returns every Signal in deterministic hierarchy order. Use `walk_sources()` or
 `walk_signals()` when you need an iterator.
 
-Each Source and Signal has one owner. TimeNet rejects cycles and objects attached in more than one
-place.
+Each Source and Signal has [one owner](sources.md#ownership). TimeNet rejects cycles and objects
+attached in more than one place.
+
+The root Sources of a Record must have distinct names, and so must the child Sources of a Source.
 
 ## Store context
 
@@ -116,11 +119,17 @@ A [Task](tasks.md) refers directly to its input Records. Registering a Task does
 Records.
 
 ```python
-from timenet.types import ClassificationTask
+from timenet.types import ClassificationTask, Label, LabelSet
+
+CONDITION = LabelSet(
+    name="condition",
+    labels=(Label(name="healthy"), Label(name="faulty")),
+)
 
 task = ClassificationTask(
     inputs=(record,),
     targets=("healthy",),
+    label_set=CONDITION,
 )
 dataset.add_task(task=task)
 ```

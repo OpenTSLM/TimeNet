@@ -22,10 +22,21 @@ from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
     Domain,
+    Label,
+    LabelSet,
     License,
     TimeSeriesSpec,
     Version,
     ureg,
+)
+
+
+RHYTHM = LabelSet(
+    name="rhythm",
+    labels=(
+        Label(name="afib"),
+        Label(name="normal"),
+    ),
 )
 
 
@@ -51,7 +62,7 @@ def _second_dataset() -> TimeFDataset:
     )
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
     record.annotate(Annotation(key="age", value=70, unit="years"))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",)))
+    dataset.add_task(task=ClassificationTask(label_set=RHYTHM, inputs=(record,), targets=("afib",)))
     return dataset
 
 
@@ -63,7 +74,7 @@ class Backend(NamedTuple):
 def _s3_registry(request, tmp_path, monkeypatch) -> S3Registry:
     boto3 = pytest.importorskip("boto3")
     pytest.importorskip("moto")
-    from moto.server import ThreadedMotoServer  # noqa: PLC0415
+    from moto.server import ThreadedMotoServer  # ruff: ignore[import-outside-top-level]
 
     server = ThreadedMotoServer(port=0)
     try:
