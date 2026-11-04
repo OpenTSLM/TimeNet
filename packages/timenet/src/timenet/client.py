@@ -445,14 +445,11 @@ def _obtain(  # ruff: ignore[too-many-arguments]
     """Find a version that the local registry lacks in ``fetch_from``, or build it.
 
     Returns:
-        The manifest from ``fetch_from`` or the local build.
+        The manifest from ``fetch_from``, without its files, or the local one after the build.
 
     Raises:
         TimeNetDatasetNotFoundError: If neither ``fetch_from`` nor a connector provides the version.
-            The message names each keyword that the call did not use and that can provide the
-            version.
-        TimeNetVersionUnavailableError: If the connector declares another version than the one asked
-            for. The build does not start then.
+        TimeNetVersionUnavailableError: If the connector declares another version.
         TimeNetInvalidCardError: If the card of the connector cannot be read.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by build_release
     if fetch_from is not None:
