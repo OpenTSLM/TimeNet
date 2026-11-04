@@ -1,6 +1,6 @@
 """The closed set of labels that a classification target takes."""
 
-from collections.abc import Sequence
+from collections.abc import Iterator, Sequence
 from enum import StrEnum, unique
 from typing import Any, Self
 
@@ -106,3 +106,53 @@ class LabelSet(TimeFModel):
         repeated = sorted({label for label in targets if targets.count(label) > 1})
         if repeated:
             raise TimeFValidationError(f"repeated labels of label set {self.name!r}: {repeated}")
+
+
+class LabelSetRegistry:
+    """The label sets of a dataset by name, so that one name stands for one set.
+
+    The sets keep the order in which tasks first claimed them.
+    """
+
+    def __init__(self) -> None:
+        """Start with no label sets."""
+        self._by_name: dict[str, LabelSet] = {}
+
+    def claim(self, label_set: LabelSet) -> LabelSet:
+        """Store a label set under its name, or return the equal set that the name already has.
+
+        Returns:
+            The set that the registry holds under the name.
+
+        Raises:
+            TimeFValidationError: If a different set already has the same name.
+        """
+        known = self._by_name.setdefault(label_set.name, label_set)
+        if known is not label_set and known != label_set:
+            raise TimeFValidationError(
+                f"label set {label_set.name!r} differs from another set with that name. "
+                "A name stands for one label set in a dataset"
+            )
+        return known
+
+    def copy(self) -> "LabelSetRegistry":
+        """Return a registry with the same sets, which a caller can change without changing this one.
+
+        Returns:
+            The copy.
+        """
+        copy = LabelSetRegistry()
+        copy._by_name = dict(self._by_name)
+        return copy
+
+    def __iter__(self) -> Iterator[LabelSet]:
+        """Iterate over the sets in the order in which tasks first claimed them.
+
+        Returns:
+            The iterator.
+        """
+        return iter(self._by_name.values())
+
+    def __len__(self) -> int:
+        """Return the number of sets."""
+        return len(self._by_name)

@@ -124,7 +124,9 @@ def test_a_second_label_set_with_a_used_name_is_rejected_when_the_task_is_added(
     dataset, record = _dataset()
     dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES))
 
-    with pytest.raises(TimeFValidationError, match="label set named 'stage' that differs from another set"):
+    with pytest.raises(
+        TimeFValidationError, match=r"ClassificationTask [0-9]+: label set 'stage' differs from another set"
+    ):
         dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=OTHER_STAGES))
     assert len(dataset.tasks) == 1
 
@@ -132,7 +134,9 @@ def test_a_second_label_set_with_a_used_name_is_rejected_when_the_task_is_added(
 def test_two_label_sets_with_one_name_in_one_batch_add_no_task():
     dataset, record = _dataset()
 
-    with pytest.raises(TimeFValidationError, match="label set named 'stage' that differs from another set"):
+    with pytest.raises(
+        TimeFValidationError, match=r"ClassificationTask [0-9]+: label set 'stage' differs from another set"
+    ):
         dataset.add_tasks(
             tasks=[
                 ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES),
@@ -156,7 +160,9 @@ def test_a_stream_rejects_two_label_sets_with_one_name():
         ),
     )
 
-    with pytest.raises(TimeFValidationError, match="label set named 'stage' that differs from another set"):
+    with pytest.raises(
+        TimeFValidationError, match=r"ClassificationTask [0-9]+: label set 'stage' differs from another set"
+    ):
         list(dataset.iter_streamed_tasks_validated())
 
 

@@ -13,7 +13,7 @@ from timenet.types.clock import US_PER_S, TimeOrigin, offset_us, seconds_to_us, 
 from timenet.types.domains import Domain
 from timenet.types.handles import ArrayHandle, ValueHandle
 from timenet.types.ids import EntityId, check_id
-from timenet.types.label_sets import Label, LabelMode, LabelSet
+from timenet.types.label_sets import Label, LabelMode, LabelSet, LabelSetRegistry
 from timenet.types.licenses import License
 from timenet.types.metadata import DatasetMetadata, DatasetSchema
 from timenet.types.modalities import InputModality
@@ -68,6 +68,7 @@ __all__ = [
     "Label",
     "LabelMode",
     "LabelSet",
+    "LabelSetRegistry",
     "License",
     "LocalizationMode",
     "ObjectKind",

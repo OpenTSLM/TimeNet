@@ -13,7 +13,7 @@ from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types._fields import ValueField
 from timenet.types.annotations import Annotation, SupportsAnnotate, value_type_of
 from timenet.types.ids import EntityId, assigned_id
-from timenet.types.label_sets import LabelSet
+from timenet.types.label_sets import LabelSet, LabelSetRegistry
 from timenet.types.modalities import InputModality
 from timenet.types.spans import Span, StepSpan, TimeSpan
 from timenet.types.splits import Split, parse_split
@@ -359,6 +359,13 @@ class Task(SupportsAnnotate):
     def check_targets(self) -> None:
         """Make sure that the finished targets fit the configuration of the concrete task class."""
 
+    def claim_label_set(self, label_sets: LabelSetRegistry) -> None:
+        """Add the label set of the task to the dataset's label sets. Only a classification task has one.
+
+        Args:
+            label_sets: The label sets of the dataset so far.
+        """
+
 
 @final
 @dataclass(kw_only=True)
@@ -415,6 +422,22 @@ class ClassificationTask(Task):
             self.label_set.check_targets(labels)
         except TimeFValidationError as exc:
             raise TimeFValidationError(f"{name}: {exc}") from exc
+
+    def claim_label_set(self, label_sets: LabelSetRegistry) -> None:
+        """Add the label set of the task to the dataset's label sets.
+
+        Args:
+            label_sets: The label sets of the dataset so far.
+
+        Raises:
+            TimeFValidationError: If a different set already has the same name.
+        """
+        if self.label_set is None:
+            return
+        try:
+            label_sets.claim(self.label_set)
+        except TimeFValidationError as exc:
+            raise TimeFValidationError(f"ClassificationTask {self.id!r}: {exc}") from exc
 
 
 @final
