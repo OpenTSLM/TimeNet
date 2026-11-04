@@ -306,6 +306,14 @@ def test_a_client_accepts_at_most_one_store(tmp_path):
         TimeNet(sources=[*stores, InstalledConnectors()])
 
 
+@pytest.mark.parametrize(("store", "cache"), [("cache/store", "cache"), ("store", "store/cache")])
+def test_a_client_rejects_a_store_that_overlaps_the_cache(tmp_path, monkeypatch, store, cache):
+    monkeypatch.setenv("TIMENET_CACHE", str(tmp_path / cache))
+    given = LocalRegistry(tmp_path / store, store=True)
+    with pytest.raises(TimeFValidationError, match=r"^The store \(.*\) and TIMENET_CACHE \(.*\) overlap\."):
+        TimeNet(sources=[given, InstalledConnectors()])
+
+
 def test_a_list_with_installed_connectors_needs_a_store(tmp_path):
     with pytest.raises(TimeFValidationError, match=r"LocalRegistry\(<path>, store=True\)"):
         TimeNet(sources=[LocalRegistry(tmp_path), InstalledConnectors()])

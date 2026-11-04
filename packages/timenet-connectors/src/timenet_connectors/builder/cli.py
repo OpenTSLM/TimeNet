@@ -11,11 +11,12 @@ from pathlib import Path
 
 import typer
 
+from timenet import plan_build
 from timenet.builders import BuildOptions, declared
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console, progress_renderer
 from timenet.config import settings
-from timenet.coordinator.build import plan_release_build, run_plan
+from timenet.coordinator.build import run_plan
 from timenet.errors import (
     TimeNetAccessError,
     TimeNetFileError,
@@ -244,7 +245,7 @@ def _build_to(  # ruff: ignore[too-many-arguments]
         fetch_from = fetch_from if fetch_from is not None else remote
     # A remote registry holds only open releases. So for a remote output, the build refuses another
     # release before any download, as a build into that registry would.
-    plan = plan_release_build(
+    plan = plan_build(
         dataset_id,
         store=store,
         # TODO(adrian): Remove temporary glue which maps --fetch-from and --build-parents onto a

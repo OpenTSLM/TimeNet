@@ -6,6 +6,7 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
+import timenet
 from timenet import builders
 from timenet.connectors import BaseConnector
 from timenet.coordinator.build import plan_release_build, run_plan
@@ -32,7 +33,6 @@ from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias, SourceKey
 from timenet.types.references import DatasetRef
 from timenet.values_backends import ValuesBackend
-import timenet_connectors
 from timenet_connectors.builder import backend as backend_module, cli as cli_module, env as env_module
 from timenet_connectors.builder.backend import ConnectorBuilder
 from timenet_connectors.builder.cli import app
@@ -537,45 +537,32 @@ def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch)
     assert result.stdout.strip() == str(out / CHILD.dataset_id / str(CHILD.version))
 
 
-@pytest.mark.parametrize("obtain", ["fetch_from", "build_parents"])
-def test_load_obtains_a_missing_parent_before_it_builds_and_reads(tmp_path, monkeypatch, obtain):
+@pytest.mark.parametrize("entry", ["producer", "coordinator"])
+def test_every_build_entry_point_prepares_parents(tmp_path, monkeypatch, child_builds, entry):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "out"))
-    calls = []
-    monkeypatch.setattr(backend_module, "run_isolated_build", _prepared_builds(calls))
+    out = tmp_path / "out"
+
+    def build(origin=None):
+        parents_from = [] if origin is None else [origin]
+        if entry == "producer":
+            timenet.build(CHILD.dataset_id, store=out, parents_from=parents_from)
+        else:
+            # The client builds through the coordinator.
+            store = LocalRegistry(out)
+            run_plan(plan_release_build(CHILD.dataset_id, store=store, parents_from=parents_from), store)
+
+    with pytest.raises(TimeNetMissingParentError, match=r"parent release test/parent@1\.0\.0 of test/child@1\.0\.0"):
+        build()
+    assert child_builds == []
+
+    # A registry instance to fetch from, as the SDK layers accept one.
     origin = LocalRegistry(tmp_path / "origin")
     parent = make_dataset()
     parent._metadata = cards[PARENT.dataset_id]
     origin.put_dataset(parent)
-
-    with pytest.raises(TimeNetMissingParentError, match=r"^parent release test/parent@1\.0\.0 of test/child") as caught:
-        timenet_connectors.load(CHILD.dataset_id)
-    assert str(caught.value).endswith(". Copy it with fetch_from=<registry> or build it with build_parents=True.")
-    if obtain == "fetch_from":
-        dataset = timenet_connectors.load(CHILD.dataset_id, fetch_from=origin)
-    else:
-        dataset = timenet_connectors.load(CHILD.dataset_id, build_parents=True)
-
-    assert dataset.metadata.dataset_id == CHILD.dataset_id
-    # The child holds the Record it imported from the parent.
-    assert [record.id for record in dataset.records] == [make_dataset().records[0].id]
-    builds = [(CHILD.dataset_id, False)]
-    assert calls == (builds if obtain == "fetch_from" else [(PARENT.dataset_id, False), *builds])
-
-
-def test_load_copies_a_missing_payload_source_through_fetch_from(tmp_path, monkeypatch):
-    _install_cards(monkeypatch, parent={"parent": GRAND})
-    out = LocalRegistry(tmp_path / "out")
-    _parent_without_its_source(out)
-    origin = LocalRegistry(tmp_path / "origin")
-    origin.put_dataset(make_dataset())
-    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(out.root))
-
-    dataset = timenet_connectors.load(PARENT.dataset_id, fetch_from=origin)
-
-    assert len(dataset.records) == 2
-    # The build copies the payload source into the store, where the read finds it.
-    assert out.exists(GRAND.dataset_id, str(GRAND.version))
+    build(origin)
+    assert child_builds == [(CHILD.dataset_id, False)]
+    assert LocalRegistry(out).exists(PARENT.dataset_id, str(PARENT.version))
 
 
 class _NoDownloads(_Hosted):
@@ -900,16 +887,13 @@ def test_the_requested_build_waits_for_a_payload_source_of_a_held_parent(tmp_pat
 
 
 _HINTS = {
-    ("cli", "fetch-from"): "Build it with --build-parents.",
-    ("cli", "build-parents"): "Fetch it with --fetch-from <registry>.",
-    ("api", "fetch-from"): "Build it with build_parents=True.",
-    ("api", "build-parents"): "Copy it with fetch_from=<registry>.",
+    "fetch-from": "Build it with --build-parents.",
+    "build-parents": "Fetch it with --fetch-from <registry>.",
 }
 
 
 @pytest.mark.parametrize("used", ["fetch-from", "build-parents", "both"])
-@pytest.mark.parametrize("entry", ["cli", "api"])
-def test_the_hint_names_only_the_options_that_the_build_did_not_use(tmp_path, monkeypatch, entry, used):
+def test_the_hint_names_only_the_options_that_the_build_did_not_use(tmp_path, monkeypatch, used):
     # No registry holds the parent, and no installed connector builds it.
     cards = _install_cards(monkeypatch, child={"parent": PARENT})
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
@@ -917,16 +901,11 @@ def test_the_hint_names_only_the_options_that_the_build_did_not_use(tmp_path, mo
     build_parents = used != "fetch-from"
     out = tmp_path / "out"
 
-    if entry == "cli":
-        options = [*(["--fetch-from", fetch_from] if fetch_from else []), *(["--build-parents"] * build_parents)]
-        error = runner.invoke(app, ["build", CHILD.dataset_id, "--out", str(out), *options]).exception
-    else:
-        with pytest.raises(TimeNetMissingParentError) as caught:
-            timenet_connectors.build(CHILD.dataset_id, out=out, fetch_from=fetch_from, build_parents=build_parents)
-        error = caught.value
+    options = [*(["--fetch-from", fetch_from] if fetch_from else []), *(["--build-parents"] * build_parents)]
+    error = runner.invoke(app, ["build", CHILD.dataset_id, "--out", str(out), *options]).exception
 
     assert isinstance(error, TimeNetMissingParentError)
-    assert error.hint == _HINTS.get((entry, used))
+    assert error.hint == _HINTS.get(used)
 
 
 def _count_reads(monkeypatch, registry) -> dict[str, int]:

@@ -14,7 +14,7 @@ import shlex
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
 from timenet.builders import BuildOptions
-from timenet.config import settings
+from timenet.config import check_store, settings
 from timenet.coordinator.build import run_plan
 from timenet.coordinator.plan import Lookups, plan_download
 from timenet.coordinator.read import raise_not_found, read_release
@@ -121,39 +121,62 @@ def _resolve_ref(dataset_id: str, version: str | None) -> tuple[str, str | None]
     return ref_id, ref_version if ref_version is not None else version
 
 
-def _open_sources(sources: Sequence[ReleaseSource | str | Path] | None) -> tuple[ReleaseSource, ...]:
-    """Validate sources and open registry URLs and paths.
+def as_release_sources(
+    items: Sequence[ReleaseSource | str | Path], *, keyword: str, store: str | Path | None = None
+) -> list[ReleaseSource]:
+    """Check a list of sources, and open each string or path in it as a registry.
+
+    A string or a :class:`~pathlib.Path` is a registry: a URL, a ``file://`` URI, or a local path. A
+    source stays as it is.
 
     Args:
-        sources: A nonempty sequence of sources, registry URLs, or paths.
+        items: A sequence of sources, registry URLs, or local paths.
+        keyword: The argument name to show in errors.
+        store: The store directory whose copies of the same releases a registry URL reads, or ``None`` for none.
 
     Returns:
-        A tuple of sources in the given order.
+        The sources, in order. An empty list stays empty.
 
     Raises:
-        TimeFValidationError: If sources are not a nonempty sequence of valid sources, registry URLs, or paths.
+        TimeFValidationError: If ``items`` is not a valid list, or ``store`` overlaps ``TIMENET_CACHE``.
         TimeNetRegistryError: If a registry URL or path is blank or cannot be opened.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by open_registry
-    if isinstance(sources, (str, os.PathLike)) or not isinstance(sources, Sequence):
-        shown = repr(str(sources)) if isinstance(sources, (str, os.PathLike)) else f"{type(sources).__name__}(...)"
-        if isinstance(sources, (str, os.PathLike)):
+    if isinstance(items, (str, os.PathLike)) or not isinstance(items, Sequence):
+        shown = repr(str(items)) if isinstance(items, (str, os.PathLike)) else f"{type(items).__name__}(...)"
+        if keyword == "sources" and isinstance(items, (str, os.PathLike)):
             raise TimeFValidationError(
                 f"sources takes a list of sources. Pass sources=[{shown}], or "
                 f"sources=[LocalRegistry({shown}, store=True), InstalledConnectors()] to build what the path lacks"
             )
-        raise TimeFValidationError(f"sources takes a list of sources. Pass sources=[{shown}]")
-    if not sources:
-        raise TimeFValidationError("sources is empty. Pass at least one source, or None for the default list")
+        raise TimeFValidationError(f"{keyword} takes a list of sources. Pass {keyword}=[{shown}].")
+    if store is not None:
+        check_store(Path(store))
     opened: list[ReleaseSource] = []
-    for index, item in enumerate(sources):
+    for index, item in enumerate(items):
         # A path has a method named resolve, so it passes the protocol check. Paths come first.
         if isinstance(item, (str, os.PathLike)):
-            opened.append(open_registry(item if isinstance(item, str) else Path(item), label=f"sources[{index}]"))
+            path = item if isinstance(item, str) else Path(item)
+            opened.append(open_registry(path, store=store, label=f"{keyword}[{index}]"))
         elif isinstance(item, ReleaseSource):
             opened.append(item)
         else:
-            raise TimeFValidationError(f"sources[{index}] is not a source, a registry URL or a path: {item!r}")
-    return tuple(opened)
+            raise TimeFValidationError(f"{keyword}[{index}] is not a source, a registry URL or a path: {item!r}")
+    return opened
+
+
+def _store_root(items: object) -> Path | None:
+    """Return the root of the store among the sources of a list that are not strings or paths.
+
+    Args:
+        items: The value of ``sources``, other than ``None``.
+
+    Returns:
+        The root of the first :class:`~timenet.registry.LocalRegistry` with ``store=True``, or ``None``
+        if the list holds none or is not a list.
+    """
+    if isinstance(items, (str, os.PathLike)) or not isinstance(items, Sequence):
+        return None
+    return next((item.root for item in items if isinstance(item, LocalRegistry) and item.is_store), None)
 
 
 class TimeNet:
@@ -162,15 +185,22 @@ class TimeNet:
     def __init__(self, sources: Sequence[ReleaseSource | str | Path] | None = None) -> None:
         """Create a client with an ordered list of dataset sources.
 
-        At most one local registry can have ``store=True``. Installed connectors require that store for builds.
+        ``InstalledConnectors()`` requires one ``LocalRegistry`` with ``store=True`` to hold builds.
+        A registry URL reads the copies of the same releases in that store, and without a store none.
 
         Args:
             sources: Ordered registries, URLs, paths or connectors, or ``None`` for :func:`default_sources`.
 
         Raises:
-            TimeFValidationError: If sources are invalid, empty, contain multiple stores or lack a store for connectors.
+            TimeFValidationError: If ``sources`` is not a valid list, has a wrong number of stores,
+                or has a store that overlaps ``TIMENET_CACHE``.
         """
-        self._sources = tuple(default_sources()) if sources is None else _open_sources(sources)
+        if sources is None:
+            self._sources = tuple(default_sources())
+        else:
+            self._sources = tuple(as_release_sources(sources, keyword="sources", store=_store_root(sources)))
+            if not self._sources:
+                raise TimeFValidationError("sources is empty. Pass at least one source, or None for the default list")
         stores = [source for source in self._sources if isinstance(source, LocalRegistry) and source.is_store]
         if len(stores) > 1:
             raise TimeFValidationError(

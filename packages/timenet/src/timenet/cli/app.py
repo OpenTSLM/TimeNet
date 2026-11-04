@@ -3,6 +3,7 @@
 from collections.abc import Callable, Iterable
 from functools import partial
 from pathlib import Path
+import shlex
 from typing import TypeVar
 
 from rich.console import Console
@@ -15,7 +16,10 @@ from timenet.cli.runner import run_cli
 from timenet.cli.ui import console as ui, progress_renderer
 from timenet.client import TimeNet, default_sources, default_store
 from timenet.config import settings
+from timenet.errors import TimeNetDatasetNotFoundError
+from timenet.producer import publish as publish_release
 from timenet.progress import ProgressCallback, ProgressEvent, StepStarted
+from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.types import DatasetMetadata, Domain, License, TaskType
 from timenet.types.access import access_requirements, effective_access
 from timenet.types.references import split_ref
@@ -227,6 +231,71 @@ def _keep_steps(started: list[StepStarted], show: ProgressCallback | None, event
         started.append(event)
     if show is not None:
         show(event)
+
+
+@app.command()
+def publish(
+    dataset_id: str,
+    dest: str = typer.Option(..., "--dest", metavar="URL", help="The registry to copy to: a URL or a local path."),
+    source: str | None = typer.Option(
+        None,
+        "--source",
+        metavar="URL",
+        help="The registry to copy from: a URL or a local path (default: the store).",
+    ),
+    local_registry: str | None = LOCAL_REGISTRY,
+) -> None:
+    """Copy a release and its payload sources to another registry. Prints the release to stdout.
+
+    Without ``--source``, the release comes from the store. A published version cannot change, so
+    the command copies nothing if the destination holds the same files, and fails if it holds other
+    files.
+    \f
+
+    Raises:
+        TimeNetDatasetNotFoundError: If the source lacks the release. Without ``--source``, the
+            message says how to put the release into the store.
+    """  # ruff: ignore[escape-sequence-in-docstring] - the form feed ends the help text of the command
+    store = default_store(local_registry=local_registry)
+    origin = store if source is None else _source_registry(source, store)
+    try:
+        with progress_renderer() as progress:
+            release = publish_release(dataset_id, dest=dest, source=origin, progress=progress)
+    except TimeNetDatasetNotFoundError as error:
+        # The hint fits only a release that the store lacks. A subclass, such as a missing payload
+        # source, names its own registries.
+        if source is not None or type(error) is not TimeNetDatasetNotFoundError:
+            raise
+        bare_id, version = split_ref(dataset_id)
+        wanted = bare_id if version is None else f"{bare_id}@{version}"
+        # Repeat the store of --local-registry, so that each command of the hint uses it too.
+        path = shlex.quote(str(store.root))
+        out, flag = ("", "") if local_registry is None else (f" --out {path}", f" --local-registry {path}")
+        hint = (
+            f"Build it into the store with `timenet-build build {wanted}{out}`, "
+            f"or copy it there with `timenet download {wanted}{flag}`."
+        )
+        raise TimeNetDatasetNotFoundError(f"{str(error).rstrip('.')}. {hint}") from error
+    ui.success(f"Published {release} to {dest}")
+    typer.echo(str(release))
+
+
+def _source_registry(source: str, store: LocalRegistry) -> BaseRegistry:
+    """Open the registry that ``--source`` names.
+
+    A remote registry reads the copies of the same releases in ``store``.
+
+    Args:
+        source: The value of ``--source``.
+        store: The store of the command.
+
+    Returns:
+        The registry.
+
+    Raises:
+        TimeNetRegistryError: If ``source`` cannot be opened as a registry.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by open_registry
+    return open_registry(source, store=store.root, label="--source")
 
 
 local_app = typer.Typer(help="Inspect and clear the local files of TimeNet.", no_args_is_help=True)

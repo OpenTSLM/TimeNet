@@ -4,6 +4,7 @@ import platform
 import pytest
 from typer.testing import CliRunner
 
+import timenet
 from timenet.client import TimeNet
 from timenet.config import settings
 from timenet.errors import TimeFValidationError, TimeNetRegistryError
@@ -11,7 +12,6 @@ from timenet.provenance import build_env
 from timenet.registry import LocalRegistry, RemoteRegistry
 from timenet.sources import InstalledConnectors
 from timenet.testing import assert_datasets_equal
-from timenet_connectors import build, load
 from timenet_connectors.builder.cli import _resolve_target, app as build_app
 from timenet_connectors.datasets.timenet.hello_world import HelloWorldConnector
 from timenet_connectors.discovery import available, resolve
@@ -63,15 +63,10 @@ def test_build_unknown_id_fails(tmp_path):
     assert result.exit_code != 0
 
 
-def test_build_rejects_version_mismatch():
-    # The guard fires before the pipeline runs, so no registry is written.
+def test_load_rejects_version_mismatch(tmp_path):
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "store", store=True), InstalledConnectors()])
     with pytest.raises(TimeFValidationError, match="builds version"):
-        build("timenet/hello-world", version="9.9.9")
-
-
-def test_load_rejects_version_mismatch():
-    with pytest.raises(TimeFValidationError, match="builds version"):
-        load("timenet/hello-world", "9.9.9")
+        client.load("timenet/hello-world", "9.9.9")
 
 
 # ---- where a bare `build` writes -----------------------------------------------------------------
@@ -115,10 +110,10 @@ def test_sdk_build_cleans_cache_but_keep_cache_retains(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_ISOLATION", "off")  # the in-process path, the one that kept the cache
     cache = settings().downloads_dir / "timenet" / "hello-world"
 
-    build("timenet/hello-world", out=tmp_path / "r1")
+    timenet.build("timenet/hello-world", store=tmp_path / "r1")
     assert not cache.exists()
 
-    build("timenet/hello-world", out=tmp_path / "r2", keep_cache=True)
+    timenet.build("timenet/hello-world", store=tmp_path / "r2", keep_cache=True)
     assert cache.exists()
 
 
