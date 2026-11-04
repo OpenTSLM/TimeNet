@@ -44,10 +44,8 @@ class BuildOptions:
 class BuilderBackend(Protocol):
     """Something that can build a dataset release from its connector.
 
-    The build coordinator plans the build first. It puts each parent of a release, and each payload
-    source of such a parent, into the local store before it calls :meth:`build_prepared` for that
-    release. So :meth:`build_prepared` builds exactly one release, and it does not plan, copy or
-    build other releases.
+    :meth:`build_prepared` builds exactly one release, into a store that already holds the parents
+    of that release and their payload sources. It does not plan, copy or build other releases.
     """
 
     def dataset_ids(self) -> Iterable[str]:

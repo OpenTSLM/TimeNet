@@ -1,4 +1,4 @@
-"""Build a release and each release that its build needs, through one coordinator.
+"""Build a release and each parent release that it depends on, through one coordinator.
 
 The coordinator does three things in order. First, it finds the installed builder backend that
 claims the dataset, and it checks a requested version against the card of the connector. Then it
