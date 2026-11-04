@@ -6,7 +6,7 @@ import numpy as np
 import pytest
 
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
 from timenet.types import TimeInterval
@@ -161,8 +161,8 @@ def _walk(start_us: int, end_us: int) -> tuple:
     return ("activity", _WALK, start_us, end_us, _WALK_CLASSES)
 
 
-_WILLETTS = connector.WILLETTS_SPECIFIC_2018.name
-_WALMSLEY = connector.WALMSLEY_2020.name
+_WILLETTS = connector.WILLETTS_SPECIFIC_2018_VOCABULARY.name
+_WALMSLEY = connector.WALMSLEY_2020_VOCABULARY.name
 
 # The whole converted fixture, written out by hand from the fixture rows above.
 _EXPECTED = {
@@ -188,7 +188,7 @@ _EXPECTED = {
             "metadata": {"file": "P001.csv.gz"},
             "annotations": {
                 "subject_ids": ["P001"],
-                "age": "38-52",
+                "age_band": "38-52",
                 "sex": "female",
                 "recording_start_local": "2016-11-13T02:18:00.000000",
             },
@@ -212,7 +212,7 @@ _EXPECTED = {
             "metadata": {"file": "P100.csv.gz"},
             "annotations": {
                 "subject_ids": ["P100"],
-                "age": "30-37",
+                "age_band": "30-37",
                 "sex": "female",
                 "recording_start_local": "2016-11-13T02:18:00.000000",
             },
@@ -224,7 +224,7 @@ _EXPECTED = {
             "metadata": {"file": "P101.csv.gz"},
             "annotations": {
                 "subject_ids": ["P101"],
-                "age": "18-29",
+                "age_band": "18-29",
                 "sex": "male",
                 "recording_start_local": "2016-11-13T02:18:00.000000",
             },
@@ -240,42 +240,22 @@ _EXPECTED = {
         },
     },
     # One task per window and scheme: WillettsSpecific2018, then Walmsley2020.
+    # One benchmark per scheme, as benchmark.py runs them: every participant's windows in time order.
     "tasks": [
         ("P001", 0, 10_000_000, _WILLETTS, ("sleep",), "train"),
-        ("P001", 0, 10_000_000, _WALMSLEY, ("sleep",), "train"),
-        (
-            "P001",
-            10_000_000,
-            20_000_000,
-            _WILLETTS,
-            ("sitting",),
-            "train",
-        ),
-        ("P001", 10_000_000, 20_000_000, _WALMSLEY, ("light",), "train"),
-        (
-            "P001",
-            20_000_000,
-            30_000_000,
-            _WILLETTS,
-            ("walking",),
-            "train",
-        ),
-        ("P001", 20_000_000, 30_000_000, _WALMSLEY, ("light",), "train"),
+        ("P001", 10_000_000, 20_000_000, _WILLETTS, ("sitting",), "train"),
+        ("P001", 20_000_000, 30_000_000, _WILLETTS, ("walking",), "train"),
         # P100 is the last train participant and P101 the first test one.
         ("P100", 0, 10_000_000, _WILLETTS, ("sleep",), "train"),
-        ("P100", 0, 10_000_000, _WALMSLEY, ("sleep",), "train"),
         ("P101", 0, 10_000_000, _WILLETTS, ("sitting",), "test"),
-        ("P101", 0, 10_000_000, _WALMSLEY, ("sedentary",), "test"),
         # The bin [3620 s, 3630 s) of the first segment's grid. Its samples start 5 ms into it, so the
         # scope does too, and ends where the segment does.
-        (
-            "P101",
-            3_620_005_000,
-            3_630_005_000,
-            _WILLETTS,
-            ("walking",),
-            "test",
-        ),
+        ("P101", 3_620_005_000, 3_630_005_000, _WILLETTS, ("walking",), "test"),
+        ("P001", 0, 10_000_000, _WALMSLEY, ("sleep",), "train"),
+        ("P001", 10_000_000, 20_000_000, _WALMSLEY, ("light",), "train"),
+        ("P001", 20_000_000, 30_000_000, _WALMSLEY, ("light",), "train"),
+        ("P100", 0, 10_000_000, _WALMSLEY, ("sleep",), "train"),
+        ("P101", 0, 10_000_000, _WALMSLEY, ("sedentary",), "test"),
         ("P101", 3_620_005_000, 3_630_005_000, _WALMSLEY, ("light",), "test"),
     ],
 }
@@ -324,6 +304,16 @@ def test_recording_start_says_that_it_is_anonymized(tmp_path):
         assert "shifted the time by a small random amount" in start.description
 
 
+def test_age_band_says_that_it_is_a_band(tmp_path):
+    # Other connectors store an exact age under "age", so the band needs its own key and a description.
+    dataset = Capture24Connector().convert([_release(tmp_path)])
+    for record in dataset.records:
+        (band,) = [a for a in record.annotations if a.key == "age_band"]
+        assert band.description is not None
+        assert "no exact age" in band.description
+        assert not any(a.key == "age" for a in record.annotations)
+
+
 def test_recording_start_keeps_one_format_when_it_has_microseconds(tmp_path):
     # isoformat() alone drops the fraction when it is zero, so two Records could differ in format.
     root = _release(tmp_path)
@@ -337,7 +327,9 @@ def test_card_pins_the_archive_the_connector_downloads():
     assert Capture24Connector().metadata().source_revision == f"sha256:{connector.ARCHIVE_SHA256}"
 
 
-@pytest.mark.parametrize("vocabulary", [connector.WILLETTS_SPECIFIC_2018, connector.WALMSLEY_2020])
+@pytest.mark.parametrize(
+    "vocabulary", [connector.WILLETTS_SPECIFIC_2018_VOCABULARY, connector.WALMSLEY_2020_VOCABULARY]
+)
 def test_vocabularies_are_in_string_order(vocabulary):
     # A tie between classes goes to the first in string order, which is the first in the vocabulary.
     assert list(vocabulary.labels) == sorted(vocabulary.labels)
@@ -409,6 +401,8 @@ def _with_x(line: str, value: str) -> str:
     ("edit", "message"),
     [
         (lambda lines: ["time,x,y,z,label", *lines[1:]], "expected the header"),
+        # A first field over the csv module's size limit raises csv.Error.
+        (lambda lines: ["t" * 200_000, *lines[1:]], "field larger than field limit"),
         (lambda lines: [lines[0], lines[2], lines[1], *lines[3:]], "doesn't follow the one before it"),
         (lambda lines: [*lines[:5], lines[5].replace(_SLEEP, "unknown;MET 1.0"), *lines[6:]], "label dictionary"),
         (lambda lines: [*lines[:5], ",0.1,0.2,0.3,", *lines[6:]], "have no timestamp"),
@@ -419,7 +413,7 @@ def _with_x(line: str, value: str) -> str:
 def test_malformed_recording_fails_with_its_path(tmp_path, edit, message):
     root = _release(tmp_path)
     _rewrite(root / "P001.csv.gz", edit)
-    with pytest.raises(TimeFFormatError, match=message) as error:
+    with pytest.raises(TimeNetConnectorError, match=message) as error:
         Capture24Connector().convert([root])
     assert "P001.csv.gz" in str(error.value)
 
@@ -443,16 +437,26 @@ def test_changed_recording_fails_when_reread(tmp_path, edit, message):
     root = _release(tmp_path)
     dataset = Capture24Connector().convert([root])
     _rewrite(root / "P001.csv.gz", edit)
-    with pytest.raises(TimeFFormatError, match=message) as error:
+    with pytest.raises(TimeNetConnectorError, match=message) as error:
         _x_of(dataset, "P001").to_numpy()
     assert "P001.csv.gz" in str(error.value)
     assert "the file changed" in str(error.value)
 
 
+def test_a_release_with_no_participants_fails(tmp_path):
+    # With no rows and no recordings, the two sets of participants are equal, and both are empty.
+    root = _release(tmp_path)
+    for recording in root.glob("P*.csv.gz"):
+        recording.unlink()
+    (root / "metadata.csv").write_text("pid,age,sex\n", encoding="utf-8")
+    with pytest.raises(TimeNetConnectorError, match="lists no participants"):
+        Capture24Connector().convert([root])
+
+
 def test_metadata_and_recordings_must_name_the_same_participants(tmp_path):
     root = _release(tmp_path)
     (root / "P101.csv.gz").unlink()
-    with pytest.raises(TimeFFormatError, match=r"recordings missing for \['P101'\]"):
+    with pytest.raises(TimeNetConnectorError, match=r"recordings missing for \['P101'\]"):
         Capture24Connector().convert([root])
 
 
@@ -503,7 +507,7 @@ def test_malformed_tables_fail_with_their_path(tmp_path, table, old, new, messag
     root = _release(tmp_path)
     path = root / table
     path.write_text(path.read_text(encoding="utf-8").replace(old, new), encoding="utf-8")
-    with pytest.raises(TimeFFormatError, match=message) as error:
+    with pytest.raises(TimeNetConnectorError, match=message) as error:
         Capture24Connector().convert([root])
     assert table in str(error.value)
 
@@ -517,7 +521,7 @@ def test_malformed_tables_fail_with_their_path(tmp_path, table, old, new, messag
 def test_unreadable_tables_fail_with_their_path(tmp_path, table, damage):
     root = _release(tmp_path)
     damage(root / table)
-    with pytest.raises(TimeFFormatError) as error:
+    with pytest.raises(TimeNetConnectorError) as error:
         Capture24Connector().convert([root])
     assert table in str(error.value)
 
@@ -534,7 +538,7 @@ def test_window_across_a_short_gap_fails(tmp_path):
     rows = [(index * 10_000, _SIT) for index in range(500)]
     rows += [(4_990_000 + 15_000 + index * 10_000, _SIT) for index in range(500)]
     _write_recording(root / "P001.csv.gz", rows)
-    with pytest.raises(TimeFFormatError, match="across a gap") as error:
+    with pytest.raises(TimeNetConnectorError, match="across a gap") as error:
         Capture24Connector().convert([root])
     assert "P001.csv.gz" in str(error.value)
 
@@ -543,6 +547,6 @@ def test_truncated_recording_fails_with_its_path(tmp_path):
     root = _release(tmp_path)
     path = root / "P001.csv.gz"
     path.write_bytes(path.read_bytes()[:100])
-    with pytest.raises(TimeFFormatError) as error:
+    with pytest.raises(TimeNetConnectorError) as error:
         Capture24Connector().convert([root])
     assert "P001.csv.gz" in str(error.value)

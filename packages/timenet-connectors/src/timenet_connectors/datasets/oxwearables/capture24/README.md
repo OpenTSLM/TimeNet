@@ -62,7 +62,7 @@ are kept instead:
 | --- | --- | --- |
 | Record metadata | `file` | The recording's file name |
 | Record annotation | `subject_ids` | A list that holds the participant id, such as `["P001"]` |
-| Record annotation | `age` | The age band of `metadata.csv`, such as `38-52` |
+| Record annotation | `age_band` | The age band of `metadata.csv`, such as `38-52`. Other connectors use `age` for an exact age in years, so this key is different |
 | Record annotation | `sex` | `female` or `male`, from the `F` or `M` of `metadata.csv` |
 | Record annotation | `recording_start_local` | The first sample's published timestamp, in ISO 8601 with microseconds and no zone, such as `2016-11-13T02:18:00.000000` |
 
@@ -114,8 +114,9 @@ dictionary gives a class that the scheme's vocabulary does not list.
 The build also fails if the label dictionary does not have exactly the raw label column and the six
 scheme columns, or if a class is blank in any scheme. A blank class in a scheme without tasks would
 otherwise go into the activity annotations unnoticed. In the same way, the build fails on an age
-band or a sex that `metadata.csv` does not use. Both tables must have exactly their columns, and
-the build fails on a row with more fields than the header, so no extra value is dropped unnoticed.
+band or a sex that `metadata.csv` does not use, and on a `metadata.csv` that lists no participants.
+Both tables must have exactly their columns, and the build fails on a row with more fields than the
+header, so no extra value is dropped unnoticed. These failures raise `TimeNetConnectorError`.
 
 The dictionary has four more schemes (`WillettsMET2018`, `DohertySpecific2018`, `Willetts2018` and
 `Doherty2018`). They have no tasks. Their classes are in the metadata of each activity annotation.
@@ -136,6 +137,10 @@ their `benchmark.py` scores:
 
 There is no prompt because the benchmark asks no question in words.
 
+The task stream holds one benchmark per scheme, as `benchmark.py` runs them: first every
+WillettsSpecific2018 task, then every Walmsley2020 task. Within a scheme, the tasks follow the
+participants in id order and each participant's windows in time order.
+
 `make_windows` cuts each recording into 10 s bins that start at its first sample. After a gap the
 bins stay on the first segment's grid. It keeps a bin with exactly 1000 samples and at least one
 labeled sample, so a kept window can have as few as one labeled sample. The activity annotations
@@ -155,7 +160,7 @@ is the window. A model that reads one window uses the `x`, `y` and `z` of the on
 holds the scope, 1000 samples each. In a Record with a gap, both segments have signals with the
 same names, so pick the segment by its time span, not the signal by name. The authors' sequence
 models read more: their RNN reads 8 consecutive windows and their HMM a participant's whole
-sequence. For those, take a participant's tasks in `scope.start_us` order.
+sequence. For those, take one scheme's tasks of a participant, which are already in time order.
 
 A model that reads samples outside its window can guess the class from its neighbors. Two adjacent
 windows have the same class in more than 99.9% of pairs, because the labels come from photos taken
