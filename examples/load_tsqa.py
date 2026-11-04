@@ -5,10 +5,9 @@ Build the dataset into an explicit local registry, then run this script::
     uv run timenet-build build "chengsenwang/tsqa" --out .timenet-registry
     uv run python examples/load_tsqa.py
 
-``TimeNet(sources=[registry]).open(...)`` returns a reader, and its ``read()`` returns a
-``TimeFDataset``. ``describe()`` prints its identity, counts, per-spec columns, and a record
-preview. Signal values stay in storage until you ask for them. Pass a dataset ID as the first
-argument and a registry path as the second argument.
+``TimeNet(sources=[registry]).open(...)`` returns a reader, whose ``read()`` returns a
+``TimeFDataset`` with its Signal values still in storage. Pass a dataset ID as the first argument
+and a registry path as the second argument.
 """
 
 from pathlib import Path
