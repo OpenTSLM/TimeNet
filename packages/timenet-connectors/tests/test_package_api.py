@@ -40,7 +40,6 @@ def test_build_then_load_round_trip(monkeypatch, tmp_path):
 def test_build_runs_in_an_isolated_environment_by_default(monkeypatch, tmp_path):
     # The parent reads only the card. It does not import the connector, which needs dependencies
     # that only the environment of the child has.
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(backend_module, "resolve", _unexpected_resolve)
     calls = []
 
@@ -58,7 +57,6 @@ def test_build_runs_in_an_isolated_environment_by_default(monkeypatch, tmp_path)
 
 
 def test_build_rejects_a_version_the_connector_does_not_declare(monkeypatch, tmp_path):
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(backend_module, "resolve", _unexpected_resolve)
     monkeypatch.setattr(backend_module, "run_isolated_build", _unexpected_isolation)
 

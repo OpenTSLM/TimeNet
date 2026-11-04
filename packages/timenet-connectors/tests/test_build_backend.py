@@ -129,7 +129,6 @@ def test_build_in_process_round_trips_the_connector_default_zarr_backend(tmp_pat
 # Only BuildOptions.quiet silences the child. An SDK build without a progress callback still prints.
 @pytest.mark.parametrize("quiet", [False, True])
 def test_build_runs_an_isolated_child_with_the_release_and_the_pins(tmp_path, monkeypatch, quiet):
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(backend_module, "run_pipeline", _unexpected_pipeline)
     calls = []
     monkeypatch.setattr(
@@ -148,7 +147,6 @@ def test_build_runs_an_isolated_child_with_the_release_and_the_pins(tmp_path, mo
 
 
 def test_build_rejects_another_version(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_ISOLATION", "on")
     monkeypatch.setattr(backend_module, "run_isolated_build", _unexpected_isolation)
     monkeypatch.setattr(backend_module, "run_pipeline", _unexpected_pipeline)
     release = DatasetRef.parse("timenet/hello-world@9.9.9")
