@@ -112,8 +112,7 @@ def load(
     Args:
         dataset_id: The dataset ID (``org/name``).
         version: The version to load, which the card must declare, or ``None`` for the latest.
-        fetch_from: The registry, or its URI, that the build copies missing parent releases
-            from, and that the read reads missing payload sources from, where they are.
+        fetch_from: The registry, or its URI, that provides missing parents and payload sources.
         build_parents: Build missing parent releases from their installed connectors.
 
     Returns:
