@@ -1,7 +1,4 @@
-"""Parse the value that names a registry: a URL, a ``file://`` URI or a local path.
-
-This module imports only TimeNet's errors, so that the settings can parse the store path.
-"""
+"""Parse registry URLs and local directory paths."""
 
 from pathlib import Path
 from urllib.parse import urlparse
@@ -11,7 +8,7 @@ from timenet.errors import TimeNetRegistryError
 
 
 TIMENET_REGISTRY_URL = "https://registry.timenet.ai"
-"""The hosted TimeNet registry that the ``timenet://`` scheme is an alias for."""
+"""The hosted registry URL represented by ``timenet://``."""
 
 _REMOTE_SCHEMES = ("timenet://", "http://", "https://", "s3://")
 
@@ -26,12 +23,10 @@ def registry_location(uri: str | Path, *, label: str = "registry") -> str | Path
         label: The name of the value in an error message, such as ``sources[0]``.
 
     Returns:
-        An ``http(s)://`` or ``s3://`` URL, with ``timenet://`` as the hosted registry, or a local directory
-        with ``~`` expanded.
+        A remote URL with ``timenet://`` resolved, or a local path with ``~`` expanded.
 
     Raises:
-        TimeNetRegistryError: If the value is blank, has a scheme that no backend handles, is a
-            ``timenet://`` URI with a path, or is a ``file://`` URI with a host.
+        TimeNetRegistryError: If the value is blank or uses an unsupported scheme or invalid registry URI.
     """
     text = str(uri)
     if text.startswith("timenet://"):
@@ -47,7 +42,7 @@ def registry_location(uri: str | Path, *, label: str = "registry") -> str | Path
 
 
 def local_registry_path(uri: str | Path, *, label: str = "registry") -> Path:
-    """Resolve a registry URI to the local directory it names, for example the directory of the store.
+    """Resolve a local registry address to a directory path.
 
     Args:
         uri: A ``file://`` URI or local path.
@@ -57,8 +52,7 @@ def local_registry_path(uri: str | Path, *, label: str = "registry") -> Path:
         The local directory path with ``~`` expanded.
 
     Raises:
-        TimeNetRegistryError: If the value is blank, names a remote backend, or is not a valid local
-            registry URI.
+        TimeNetRegistryError: If the value is blank, remote or an invalid local registry URI.
     """
     text = str(uri)
     if not text.strip():

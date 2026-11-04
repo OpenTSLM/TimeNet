@@ -1,8 +1,6 @@
-"""Inspect and clear the cache and the releases in the store (see :mod:`timenet.config`).
+"""Inspect and clear the cache and the stored releases.
 
-The cache holds files that a build or a read can make again: the raw source files in
-``<cache>/downloads`` and the control databases in ``<cache>/control``. :func:`clear_cache` deletes
-only a folder with TimeNet's ``CACHEDIR.TAG`` file, so it never deletes a folder of the user.
+Cache removal requires TimeNet's ``CACHEDIR.TAG`` marker.
 """
 
 from dataclasses import dataclass
@@ -20,7 +18,7 @@ from timenet.types.references import DatasetRef
 
 @dataclass(frozen=True)
 class StoredRelease:
-    """One release in the store, with its size on disk."""
+    """A stored release with its path and size in bytes."""
 
     release: DatasetRef
     path: Path
@@ -28,23 +26,23 @@ class StoredRelease:
 
 
 class ClearedCache(NamedTuple):
-    """What :func:`clear_cache` did."""
+    """The bytes freed and paths removed or kept by a cache clear."""
 
     freed: int
-    """The bytes freed."""
+    """The number of bytes freed."""
     removed: list[Path]
-    """The paths removed. Each one is gone when :func:`clear_cache` returns."""
+    """The paths successfully removed."""
     kept: list[Path]
-    """The folders of the cache that stay, because TimeNet did not create them."""
+    """The cache paths kept because they lack TimeNet's cache marker."""
 
 
 class ClearedReleases(NamedTuple):
-    """What :func:`clear_releases` did."""
+    """The bytes freed and release folders removed by a release clear."""
 
     freed: int
-    """The bytes freed."""
+    """The number of bytes freed."""
     removed: list[Path]
-    """The release folders removed."""
+    """The release folders successfully removed."""
 
 
 def human_bytes(n: int) -> str:
@@ -66,13 +64,12 @@ def human_bytes(n: int) -> str:
 
 
 def stored_releases(store: LocalRegistry) -> list[StoredRelease]:
-    """List every release in the store, with its size.
+    """List stored releases and their sizes in bytes.
 
-    A release is a ``<dataset_id>/<version>`` directory with a ``manifest.json``. A hidden directory
-    or the directory of an unfinished write does not count.
+    Releases have a ``<dataset_id>/<version>/manifest.json`` file outside hidden or temporary directories.
 
     Args:
-        store: The store.
+        store: The local registry to inspect.
 
     Returns:
         The releases, sorted by dataset ID and version.
@@ -94,16 +91,16 @@ def stored_releases(store: LocalRegistry) -> list[StoredRelease]:
 
 
 def cache_size(cache_dir: Path) -> int:
-    """Return the size in bytes of the folders of the cache that :func:`clear_cache` deletes.
+    """Measure cached downloads and control databases marked as TimeNet's.
 
-    These are ``<cache>/downloads`` and ``<cache>/control``, each only with TimeNet's
-    ``CACHEDIR.TAG`` file. A symlink counts as itself, not as its target.
+    Only ``downloads`` and ``control`` folders with TimeNet's ``CACHEDIR.TAG`` file count.
+    A symlink contributes its own size rather than its target's size.
 
     Args:
         cache_dir: The cache directory.
 
     Returns:
-        The total size. ``0`` if neither folder exists.
+        The total size in bytes, or ``0`` if no marked cache folders exist.
     """
     total = 0
     for folder in _cache_folders(cache_dir):
@@ -113,21 +110,20 @@ def cache_size(cache_dir: Path) -> int:
 
 
 def clear_cache(cache_dir: Path, *, store: LocalRegistry) -> ClearedCache:
-    """Delete the raw source files and the control databases of the cache.
+    """Clear cached raw source files and control databases.
 
-    Each folder goes only if it holds TimeNet's ``CACHEDIR.TAG`` file, and a symlink goes without its
-    target.
+    Only folders with TimeNet's ``CACHEDIR.TAG`` marker are removed.
+    Removing a symlink keeps its target.
 
     Args:
         cache_dir: The cache directory.
-        store: The store, which must not overlap a folder that the call deletes.
+        store: The store, which must not overlap a cache folder selected for deletion.
 
     Returns:
-        The bytes freed, the paths removed and the folders kept.
+        The bytes freed, paths successfully removed and cache paths kept.
 
     Raises:
-        TimeFValidationError: If the store and a folder that the call deletes overlap. Nothing is
-            deleted then.
+        TimeFValidationError: If the store overlaps a cache folder selected for deletion, before any deletion.
         OSError: If a folder cannot be removed completely.
     """  # ruff: ignore[docstring-extraneous-exception] (OSError is raised by _delete_and_measure)
     folders = _cache_folders(cache_dir)
@@ -151,7 +147,7 @@ def clear_cache(cache_dir: Path, *, store: LocalRegistry) -> ClearedCache:
 
 
 def clear_releases(store: LocalRegistry) -> ClearedReleases:
-    """Delete every release in the store, and each dataset folder that this leaves empty.
+    """Delete stored releases and the dataset directories left empty.
 
     Other files in the store stay.
 
@@ -174,21 +170,21 @@ def clear_releases(store: LocalRegistry) -> ClearedReleases:
 
 
 def _cache_folders(cache_dir: Path) -> list[Path]:
-    """Return ``<cache>/downloads`` and ``<cache>/control``, those that exist.
+    """Find existing download and control cache paths.
 
     Returns:
-        The paths that exist, as files, folders or symlinks.
+        The ``downloads`` and ``control`` paths that exist, including symlinks.
     """
     folders = (cache_dir / "downloads", cache_dir / "control")
     return [folder for folder in folders if folder.is_symlink() or folder.exists()]
 
 
 def _remove_empty_dataset_dirs(directory: Path, root: Path) -> None:
-    """Remove ``directory`` and each parent below ``root`` while it is empty.
+    """Remove empty dataset directories up to but excluding the store root.
 
     Args:
         directory: The first directory to remove.
-        root: The directory that stays, with each folder above it.
+        root: The store directory to preserve.
     """
     while root in directory.parents and not any(directory.iterdir()):
         directory.rmdir()

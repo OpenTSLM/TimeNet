@@ -58,16 +58,16 @@ _OrList: TypeAlias = T | list[T] | None
 
 
 def default_store(*, local_registry: str | Path | None = None) -> LocalRegistry:
-    """Return the store of the default sources, where downloads and builds land.
+    """Open the default local store for downloaded and built releases.
 
     Args:
         local_registry: The store directory (``TIMENET_LOCAL_REGISTRY``, default ``~/.timenet/registry``).
 
     Returns:
-        A :class:`~timenet.registry.LocalRegistry` with ``store=True``.
+        A local registry with ``store=True``.
 
     Raises:
-        TimeFValidationError: If ``local_registry`` or a variable is invalid, for example empty.
+        TimeFValidationError: If the store path or another setting is invalid.
         TimeNetRegistryError: If ``local_registry`` names a remote registry.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by settings)
     return LocalRegistry(settings(local_registry=local_registry).local_registry_dir, store=True)
@@ -79,10 +79,10 @@ def default_sources(
     remote_registry: str | Path | None = None,
     auto_build: bool | None = None,
 ) -> list[ReleaseSource]:
-    """Return the default sources: the store, a registry, and the installed connectors.
+    """Return the store, a registry and optional installed connectors in lookup order.
 
-    The remote registry reuses the complete copies of the same releases in the store.
-    Each ``None`` argument uses its environment variable or default at the time of the call.
+    Remote registries reuse complete matching releases in the store.
+    A ``None`` argument uses the current environment setting or its default.
 
     Args:
         local_registry: The store directory (``TIMENET_LOCAL_REGISTRY``, default ``~/.timenet/registry``).
@@ -90,12 +90,11 @@ def default_sources(
         auto_build: Whether to end with ``InstalledConnectors()`` (``TIMENET_AUTO_BUILD``, default true).
 
     Returns:
-        A new list.
+        A new list of sources in lookup order.
 
     Raises:
-        TimeFValidationError: If an argument or a variable is invalid, for example empty.
-        TimeNetRegistryError: If the store names a remote registry, or the remote registry cannot be
-            opened.
+        TimeFValidationError: If an argument or environment setting is invalid.
+        TimeNetRegistryError: If the local store is remote or the other registry cannot be opened.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by settings and open_registry)
     store = default_store(local_registry=local_registry)
     cfg = settings(remote_registry=remote_registry, auto_build=auto_build)
@@ -163,17 +162,13 @@ class TimeNet:
     def __init__(self, sources: Sequence[ReleaseSource | str | Path] | None = None) -> None:
         """Create a client with an ordered list of dataset sources.
 
-        Sources accept registries, registry URLs or paths, and ``InstalledConnectors()``.
-        At most one ``LocalRegistry`` can set ``store=True``, and ``InstalledConnectors()`` requires
-        this store for builds.
+        At most one local registry can have ``store=True``. Installed connectors require that store for builds.
 
         Args:
-            sources: The sources, in order. ``None`` means :func:`default_sources`, which reads
-                ``TIMENET_LOCAL_REGISTRY``, ``TIMENET_REMOTE_REGISTRY`` and ``TIMENET_AUTO_BUILD``.
-                The variables do not change a list that you pass.
+            sources: Ordered registries, URLs, paths or connectors, or ``None`` for :func:`default_sources`.
 
         Raises:
-            TimeFValidationError: If sources are invalid, include multiple stores, or lack a store for connectors.
+            TimeFValidationError: If sources are invalid, empty, contain multiple stores or lack a store for connectors.
         """
         self._sources = tuple(default_sources()) if sources is None else _open_sources(sources)
         stores = [source for source in self._sources if isinstance(source, LocalRegistry) and source.is_store]

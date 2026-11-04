@@ -32,7 +32,7 @@ from timenet.types.references import DatasetRef, is_latest
 
 
 class RemoteRegistry(LazyReadRegistry):
-    """A dataset registry backed by the hosted TimeNet HTTP service."""
+    """A TimeNet registry that reads and publishes datasets over HTTP(S)."""
 
     def __init__(
         self,
@@ -42,12 +42,12 @@ class RemoteRegistry(LazyReadRegistry):
         store: str | Path | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        """Open a remote registry.
+        """Configure a connection to a remote TimeNet registry.
 
         Args:
             base_url: The service root URL, such as ``https://registry.timenet.ai``.
-            token: Bearer token, or ``None`` to use ``TIMENET_TOKEN`` if set and anonymous access otherwise.
-            store: The store directory whose copies of the same releases this registry reads, or ``None`` for none.
+            token: Bearer token, or ``None`` for ``TIMENET_TOKEN`` with anonymous access when unset.
+            store: A directory of complete matching releases to reuse, or ``None`` to read remotely.
             transport: Custom HTTP transport, or ``None`` to use the network.
         """
         cfg = settings()

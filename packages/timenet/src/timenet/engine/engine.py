@@ -101,16 +101,15 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
 
 
 def _downloads_dir(dataset_id: str) -> Path:
-    """Return the default folder of the raw downloads of a dataset, ``<TIMENET_CACHE>/downloads/<dataset_id>``.
+    """Return a dataset's default raw download path.
 
-    The call creates the ``downloads`` folder with its ``CACHEDIR.TAG`` marker file if the folder does
-    not exist yet. It does not create the folder of the dataset.
+    Create the parent ``downloads`` folder and its cache marker if it is missing.
 
     Args:
         dataset_id: The dataset ID.
 
     Returns:
-        The folder of the dataset in the downloads folder.
+        The path ``<TIMENET_CACHE>/downloads/<dataset_id>``.
     """
     downloads = settings().downloads_dir
     make_cache_folder(downloads)
@@ -118,13 +117,10 @@ def _downloads_dir(dataset_id: str) -> Path:
 
 
 def _remove_downloads(folder: Path) -> None:
-    """Delete the raw downloads of a dataset, but only if the downloads folder is TimeNet's.
-
-    A ``downloads`` folder without TimeNet's ``CACHEDIR.TAG`` file can hold files of the user, for
-    example ``~/Downloads`` on a volume that ignores case, so it keeps ``folder``.
+    """Remove dataset downloads when the download cache has TimeNet's marker.
 
     Args:
-        folder: The folder of the dataset in the downloads folder.
+        folder: The dataset directory under the configured download cache.
     """
     if folder.is_dir() and is_cache_folder(settings().downloads_dir):
         shutil.rmtree(folder)

@@ -264,13 +264,13 @@ def open_cached_or_remote_release(
     Payload sources remain unattached.
 
     Args:
-        root: The local directory to check before opening remote files, or ``None`` to skip it.
+        root: The local directory to check first, or ``None`` to read remotely.
         reference: The exact dataset ID and version to open.
         manifest: The manifest of the remote release.
         open_remote_version: Open one remote release without its payload sources.
 
     Returns:
-        A handle to the local copy if it is the same release as ``manifest``, or else a remote handle.
+        A handle to a complete local copy matching the manifest, or to the remote release.
 
     Raises:
         TimeFFormatError: If a manifest declares a different release.

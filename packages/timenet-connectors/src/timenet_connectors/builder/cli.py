@@ -48,17 +48,13 @@ def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress stat
 
 
 def _resolve_target(out: str | None) -> WritableRegistry | Path:
-    """Resolve the registry or local directory for build output.
-
-    Without ``--out``, the build lands in the store, ``$TIMENET_LOCAL_REGISTRY``, where ``TimeNet()``
-    reads.
+    """Resolve a build output to a local directory or writable remote registry.
 
     Args:
-        out: The ``--out`` value, or ``None`` for the store.
+        out: The output URL or path, or ``None`` to use ``TIMENET_LOCAL_REGISTRY``.
 
     Returns:
-        A :class:`~timenet.registry.WritableRegistry` for a ``timenet://`` / ``http(s)://`` / ``s3://``
-        target, or the local directory ``Path`` for a plain path or ``file://`` URI.
+        A local directory ``Path`` or a remote ``WritableRegistry``.
 
     Raises:
         TimeNetRegistryError: If ``out`` is blank or cannot be opened as a registry.
@@ -208,20 +204,21 @@ def _build_to(  # ruff: ignore[too-many-arguments]
     force: bool,
     options: BuildOptions,
 ) -> str:
-    """Build a release locally and copy it to a remote output if needed.
+    """Build a release for a local or remote output.
 
-    Reuse an existing release unless ``force`` is true.
+    Remote outputs receive a copy of a build in the local store. If the output already holds the release and
+    ``force`` is not set, nothing runs and a status line says so.
 
     Args:
         dataset_id: The dataset ID.
-        target: The local directory or remote registry to write to.
-        fetch_from: The registry to copy missing parents from. ``None`` uses a remote output, if any.
+        target: The local output directory or remote registry.
+        fetch_from: The registry to copy missing parents from, or ``None`` to use the remote output if present.
         build_parents: Build missing parents with installed connectors.
         force: Rebuild an existing local release.
-        options: Settings for each build.
+        options: Options for each build.
 
     Returns:
-        The local version directory or the remote version string.
+        The local version directory or remote version string.
 
     Raises:
         BadParameter: If ``force`` is set and the remote output already holds the version.

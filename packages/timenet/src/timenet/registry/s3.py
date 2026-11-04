@@ -35,7 +35,7 @@ _DATASETS_PREFIX = "datasets"
 
 
 class S3Registry(LazyReadRegistry):
-    """A registry that reads and writes datasets under an ``s3://bucket/prefix`` root."""
+    """A registry that reads and publishes datasets under an S3 bucket or prefix."""
 
     _staging_prefix = "timenet-s3-"
 
@@ -44,10 +44,10 @@ class S3Registry(LazyReadRegistry):
 
         Args:
             uri: The bucket or prefix URL, such as ``s3://my-bucket/registry``.
-            store: The store directory whose copies of the same releases this registry reads, or ``None`` for none.
+            store: A directory of complete matching releases to reuse, or ``None`` to read remotely.
 
         Raises:
-            TimeNetRegistryError: If ``uri`` is not an ``s3://bucket[/prefix]`` URL.
+            TimeNetRegistryError: If the URL lacks an ``s3`` scheme or bucket name.
         """
         parsed = urlparse(uri)
         if parsed.scheme != "s3" or not parsed.netloc:
