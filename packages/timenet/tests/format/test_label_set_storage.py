@@ -28,7 +28,9 @@ from timenet.types import (
 
 
 SPEC = TimeSeriesSpec(spec_type="voltage", name="Voltage", unit_value=ureg.millivolt)
-STAGES = LabelSet(name="stage", labels=(Label(name="W"), Label(name="N1"), Label(name="R", description="REM sleep.")))
+STAGE_LABELS = LabelSet(
+    name="stage", labels=(Label(name="W"), Label(name="N1"), Label(name="R", description="REM sleep."))
+)
 FINDINGS = LabelSet(name="findings", labels=(Label(name="AF"), Label(name="PVC")), multi_label=True)
 
 
@@ -76,12 +78,12 @@ def release(tmp_path_factory) -> Path:
     stage = record.annotate(Annotation(key="stage", value="N1"))
     dataset.add_tasks(
         tasks=[
-            ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES),  # 1
+            ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGE_LABELS),  # 1
             AnswerTask(inputs=(record,), prompt="Alive?", targets=("Yes",)),  # 2
             ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS),  # 3
-            ClassificationTask(inputs=(record,), target_annotations=(stage,), label_set=STAGES),  # 4
+            ClassificationTask(inputs=(record,), target_annotations=(stage,), label_set=STAGE_LABELS),  # 4
             # An equal set built separately is the same set.
-            ClassificationTask(inputs=(record,), targets=("R",), label_set=STAGES.model_copy()),  # 5
+            ClassificationTask(inputs=(record,), targets=("R",), label_set=STAGE_LABELS.model_copy()),  # 5
             # A multi-label target with no label says that none applies.
             ClassificationTask(inputs=(record,), targets=(), label_set=FINDINGS),  # 6
             ClassificationTask(inputs=(record,), targets=("anything",)),  # 7
@@ -120,7 +122,7 @@ def test_each_label_set_is_stored_once_and_read_as_one_object(release):
         ]
 
     stage_w, _, findings, stage_n1, stage_r, none_apply, unlabeled = _read_tasks(release)
-    assert stage_w.label_set == STAGES
+    assert stage_w.label_set == STAGE_LABELS
     assert stage_w.label_set is stage_n1.label_set is stage_r.label_set
     assert findings.label_set == FINDINGS
     assert findings.label_set is none_apply.label_set
@@ -143,16 +145,16 @@ def test_the_task_table_shows_the_label_set_name(release):
         ]
 
 
-OTHER_STAGES = LabelSet(name="stage", labels=(Label(name="W"), Label(name="R")))
+OTHER_STAGE_LABELS = LabelSet(name="stage", labels=(Label(name="W"), Label(name="R")))
 SAME_NAME = r"ClassificationTask [0-9]+: label set 'stage' differs from another set"
 
 
 def test_add_task_rejects_a_different_set_with_a_used_name():
     dataset, record = _dataset()
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES))
+    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGE_LABELS))
 
     with pytest.raises(TimeFValidationError, match=SAME_NAME):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=OTHER_STAGES))
+        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=OTHER_STAGE_LABELS))
     assert len(dataset.tasks) == 1
 
 
@@ -162,12 +164,12 @@ def test_a_rejected_batch_leaves_no_label_set_behind():
     with pytest.raises(TimeFValidationError, match=SAME_NAME):
         dataset.add_tasks(
             tasks=[
-                ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES),
-                ClassificationTask(inputs=(record,), targets=("W",), label_set=OTHER_STAGES),
+                ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGE_LABELS),
+                ClassificationTask(inputs=(record,), targets=("W",), label_set=OTHER_STAGE_LABELS),
             ]
         )
     assert dataset.tasks == ()
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=OTHER_STAGES))
+    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("W",), label_set=OTHER_STAGE_LABELS))
 
 
 def test_a_stream_rejects_a_different_set_with_a_used_name():
@@ -176,8 +178,8 @@ def test_a_stream_rejects_a_different_set_with_a_used_name():
         (ClassificationTask,),
         lambda: iter(
             [
-                ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES),
-                ClassificationTask(inputs=(record,), targets=("W",), label_set=OTHER_STAGES),
+                ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGE_LABELS),
+                ClassificationTask(inputs=(record,), targets=("W",), label_set=OTHER_STAGE_LABELS),
             ]
         ),
     )
@@ -189,14 +191,14 @@ def test_a_stream_rejects_a_different_set_with_a_used_name():
 @pytest.mark.parametrize(
     ("changed", "message"),
     [
-        (OTHER_STAGES, SAME_NAME),
+        (OTHER_STAGE_LABELS, SAME_NAME),
         (LabelSet(name="other", labels=(Label(name="X"),)), "ClassificationTask 2: labels not in label set 'other'"),
     ],
 )
 def test_the_writer_rejects_a_label_set_changed_after_add_task(tmp_path, changed, message):
     dataset, record = _dataset()
-    second = ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES)
-    dataset.add_tasks(tasks=[ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES), second])
+    second = ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGE_LABELS)
+    dataset.add_tasks(tasks=[ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGE_LABELS), second])
     second.label_set = changed
 
     with pytest.raises(TimeFValidationError, match=message):
@@ -207,10 +209,10 @@ def test_the_writer_rejects_a_label_set_changed_after_add_task(tmp_path, changed
     ("task", "message"),
     [
         (
-            ClassificationTask(targets=("X",), label_set=STAGES),
+            ClassificationTask(targets=("X",), label_set=STAGE_LABELS),
             "^ClassificationTask 1: labels not in label set 'stage': \\['X'\\]",
         ),
-        (ClassificationTask(targets=(1,), label_set=STAGES), "each label must be text, not int"),
+        (ClassificationTask(targets=(1,), label_set=STAGE_LABELS), "each label must be text, not int"),
     ],
 )
 def test_add_task_rejects_targets_that_do_not_fit_the_label_set(task, message):
@@ -225,17 +227,19 @@ def test_add_task_checks_target_annotations_against_the_label_set():
     dataset, record = _dataset()
     awake = record.annotate(Annotation(key="stage", value="W"))
     unknown = record.annotate(Annotation(key="stage", value="X"))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), target_annotations=(awake,), label_set=STAGES))
+    dataset.add_task(task=ClassificationTask(inputs=(record,), target_annotations=(awake,), label_set=STAGE_LABELS))
 
     with pytest.raises(TimeFValidationError, match="labels not in label set 'stage': \\['X'\\]"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), target_annotations=(unknown,), label_set=STAGES))
+        dataset.add_task(
+            task=ClassificationTask(inputs=(record,), target_annotations=(unknown,), label_set=STAGE_LABELS)
+        )
 
 
 def test_a_stream_rejects_targets_that_do_not_fit_the_label_set():
     dataset, record = _dataset()
     dataset.set_task_stream(
         (ClassificationTask,),
-        lambda: iter([ClassificationTask(inputs=(record,), targets=("X",), label_set=STAGES)]),
+        lambda: iter([ClassificationTask(inputs=(record,), targets=("X",), label_set=STAGE_LABELS)]),
     )
 
     with pytest.raises(TimeFValidationError, match="labels not in label set 'stage': \\['X'\\]"):

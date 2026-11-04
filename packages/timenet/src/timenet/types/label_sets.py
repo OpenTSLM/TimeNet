@@ -65,6 +65,13 @@ class LabelSet(TimeFModel):
     def check_targets(self, targets: Sequence[str]) -> None:
         """Make sure that the target labels follow the rules of this set.
 
+        For a set with the labels ``W``, ``N1`` and ``R``, the rules are:
+
+        - Each label must be in the set. ``("X",)`` fails.
+        - If ``multi_label`` is ``False``, the target holds exactly one label. ``("W",)`` passes.
+          ``()`` and ``("W", "R")`` fail.
+        - No label can repeat. ``("W", "W")`` fails, also when ``multi_label`` is ``True``.
+
         Args:
             targets: The target labels, in the order that the task stores them.
 
