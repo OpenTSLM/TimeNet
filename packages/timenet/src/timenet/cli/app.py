@@ -272,7 +272,10 @@ def cache_clear(
     all_: bool = typer.Option(False, "--all", help="Also remove the default local registry (builds and downloads)."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
 ) -> None:
-    """Delete cached data: the storage directory and the raw cache. ``--all`` also removes the default local registry."""
+    """Delete the storage directory and raw cache.
+
+    Use ``--all`` to also remove the default local registry.
+    """
     if not yes:
         what = "the storage directory and the raw cache"
         if all_:

@@ -29,27 +29,27 @@ def copy_release(  # ruff: ignore[too-many-arguments]
     force: bool = False,
     progress: ProgressCallback | None = None,
 ) -> None:
-    """Copy a release and its required payload sources to another registry.
+    """Copy a release and its required payload sources to a registry.
 
-    The copy reuses complete releases in ``dest`` and fetches damaged local copies again.
-    It checks access, file records and pins before copying payload sources and then the requested release.
+    Payload sources go first, a complete copy in ``dest`` is reused, and a damaged local copy is fetched again.
+    All checks run before the first copy, so a failed check copies nothing.
 
     Args:
         reference: The exact release to copy.
         source: The registry to copy from.
         dest: The registry to copy to.
         with_payload_sources: Also copy the payload sources that the manifest of the release lists.
-        force: Fetch ``reference`` again, even if a local ``dest`` holds a complete copy of it.
-        progress: Receives the step events of each copied release, and its bytes for a local ``dest``.
+        force: Fetch ``reference`` again, even if ``dest`` has a complete local copy.
+        progress: Receives step events for each copied release and byte counts when ``dest`` is local.
 
     Raises:
         TimeNetRegistryError: If ``dest`` is read-only.
         TimeFValidationError: If ``force`` is set and ``dest`` is not local.
         TimeNetVersionConflictError: If ``dest`` holds a release of the copy with other files or another card.
-        TimeNetAccessError: If a release is not open, and ``dest`` or ``source`` requires open access.
-        TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
-        TimeNetMissingParentError: If ``source`` lacks a payload source and ``dest`` holds no complete copy of it.
-        TimeFFormatError: If a manifest names a different release or a pin fails.
+        TimeNetAccessError: If a release is not open and ``dest`` or ``source`` requires open access.
+        TimeNetDatasetNotFoundError: If ``source`` lacks the release.
+        TimeNetMissingParentError: If neither registry holds a complete payload source.
+        TimeFFormatError: If a manifest names the wrong release or a pin fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     dest.check_writable(f"a copy of {reference}")
     if force and not isinstance(dest, LocalRegistry):
@@ -88,16 +88,16 @@ def _copy_one(  # ruff: ignore[too-many-arguments]
     force: bool,
     progress: ProgressCallback | None,
 ) -> None:
-    """Copy one release without its payload sources to ``dest``, or repair its local copy.
+    """Copy or repair one release without its payload sources in the destination registry.
 
     Args:
         reference: The release to copy.
-        manifest: The release's manifest from ``source``.
+        manifest: The release manifest from ``source``.
         source: The registry to copy from.
         dest: The registry to copy to.
-        staging: A temporary directory for a download from a non-local ``source``.
-        force: Fetch the release again, even if a local ``dest`` holds a complete copy.
-        progress: Receives the bytes of a local copy as they arrive.
+        staging: A temporary directory for downloads from a remote source.
+        force: Fetch the release again, even if ``dest`` has a complete local copy.
+        progress: Receives byte progress events when ``dest`` is local.
     """
     # A local registry is a folder that the copy reads or writes directly.
     if isinstance(dest, LocalRegistry):
@@ -117,15 +117,15 @@ def _copy_one(  # ruff: ignore[too-many-arguments]
 
 
 def _bytes_of(reference: DatasetRef, manifest: Manifest, progress: ProgressCallback) -> Callable[[int], None]:
-    """Turn the byte counts of a release download into :class:`~timenet.progress.BytesMoved` events.
+    """Create a callback that reports cumulative bytes for a release.
 
     Args:
-        reference: The release.
-        manifest: The manifest of the release, whose file sizes give the total.
-        progress: Receives the events.
+        reference: The release to report.
+        manifest: The manifest whose file sizes define the total.
+        progress: The callback that receives ``BytesMoved`` events.
 
     Returns:
-        A function that takes the bytes of each file or chunk as it arrives, and sends the bytes so far.
+        A callback that accepts each file or chunk's byte count and reports the bytes moved so far.
     """
     total = sum(part.size for part in manifest.files.all_files())
     done = 0

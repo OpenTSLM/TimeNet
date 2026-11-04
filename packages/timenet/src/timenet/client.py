@@ -1,8 +1,7 @@
-"""The :class:`TimeNet` class is the SDK's single entry point for using TimeNet from code.
+"""Find, read, and download datasets with :class:`TimeNet`.
 
-A client reads releases through an ordered list of sources, and builds a release that only
-``InstalledConnectors()`` provides into its first local registry that is not read-only. ``download``
-copies a release into that local registry, and :func:`default_sources` makes the list of ``TimeNet()``.
+Clients search their sources in order. Builds and downloads go into the first local registry that is
+not read-only.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -244,17 +243,17 @@ class TimeNet:
         force: bool = False,
         progress: ProgressCallback | None = None,
     ) -> Path:
-        """Copy a release and its payload sources into the local registry.
+        """Copy a dataset release and its payload sources into the local registry.
 
         The release resolves as in :meth:`open`, without a build. The release and each payload source that the
         local registry lacks or holds damaged come from the first registry other than the local registry that
         provides them.
 
         Args:
-            dataset_id: The dataset ID.
+            dataset_id: The dataset ID, optionally followed by ``@version``.
             version: An exact version, ``"latest"``, or ``None``, as in :meth:`open`.
             force: Copy the release again, even if the local registry holds a complete copy.
-            progress: Receives a step event for each copied release, and its bytes as they arrive.
+            progress: Receives step events and byte counts for each copied release.
 
         Returns:
             The release directory in the local registry.
@@ -264,10 +263,10 @@ class TimeNet:
             TimeNetAccessError: If a required release is only listed or a remote release is not open.
             TimeNetDatasetNotFoundError: If no registry other than the local registry provides the release.
             TimeNetVersionUnavailableError: If the version is missing and its connector builds another version.
-            TimeNetMissingParentError: If no registry provides a payload source that the store lacks.
+            TimeNetMissingParentError: If no registry provides a missing payload source.
             TimeNetVersionConflictError: If the local registry holds a release of the copy with different files.
             TimeNetFileError: If a copied file is damaged or no registry can replace a damaged local copy.
-            TimeFFormatError: If a payload source differs from its recorded files or the payload sources form a cycle.
+            TimeFFormatError: If payload sources have conflicting file records or form a dependency cycle.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by the plan and the copies)
         dataset_id, version = _resolve_ref(dataset_id, version)
         store = self._store
@@ -405,13 +404,13 @@ class TimeNet:
             return reader.read(load=LoadPlan.ALL_EAGER)
 
     def _catalog(self) -> BaseRegistry:
-        """Return the registry that :meth:`list`, :meth:`get`, and :meth:`search` ask.
+        """Select a registry from the sources.
 
         Returns:
-            The first registry other than the local registry, or the local registry if it is the only one.
+            The first registry other than the local registry, or the local registry if no other registry exists.
 
         Raises:
-            TimeFValidationError: If the sources contain no registry.
+            TimeFValidationError: If no source is a registry.
         """
         # TODO(adrian): Remove temporary glue which maps these methods onto one registry until
         # list() and search() ask every source. This registry gives the results of the client of
@@ -423,7 +422,7 @@ class TimeNet:
         return registry
 
     def _file_hint(self, error: TimeNetFileError) -> str | None:
-        """Tell the caller how to replace the damaged copy that an error names, if the store holds it.
+        """Suggest how to replace a damaged release in the local registry.
 
         Args:
             error: The error that names the damaged release.
@@ -505,15 +504,15 @@ def _access_hint(dataset_id: str, sources: Sequence[ReleaseSource]) -> str:
 
 
 def _copy_source(sources: Sequence[ReleaseSource], store: LocalRegistry, release: DatasetRef) -> Found | None:
-    """Return the answer for a release, among the sources other than the store.
+    """Find the answer of a release source outside the local registry.
 
     Args:
-        sources: The sources of the client.
-        store: The local registry.
-        release: The exact release.
+        sources: The sources to search, in order.
+        store: The local registry to exclude.
+        release: The dataset ID and exact version.
 
     Returns:
-        The answer of the source that serves or builds it, or ``None``.
+        The answer of the source that provides or builds the release, or ``None`` if none exists.
     """
     others = [source for source in sources if not is_same_registry(source, store)]
     answer = resolve_release(others, release.dataset_id, str(release.version))
@@ -521,15 +520,15 @@ def _copy_source(sources: Sequence[ReleaseSource], store: LocalRegistry, release
 
 
 def _repair_hint(release: DatasetRef, found: Found | None, store: LocalRegistry) -> str:
-    """Tell the caller how to replace a damaged copy of a release in the store.
+    """Suggest how to replace a damaged release in the local registry.
 
     Args:
-        release: The release.
-        found: The answer that :func:`_copy_source` returns for the release.
+        release: The damaged release.
+        found: The answer of the available source, or ``None`` if none exists.
         store: The local registry.
 
     Returns:
-        The hint as a full sentence: a download from a registry, else a new build.
+        A message with a download or build command, or the reason replacement is unavailable.
     """
     if isinstance(found, FoundInRegistry) and not is_same_registry(found.registry, store):
         # A registry other than the local registry provides the release.

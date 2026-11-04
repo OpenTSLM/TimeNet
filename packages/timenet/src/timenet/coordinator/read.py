@@ -97,7 +97,7 @@ def raise_not_found(dataset_id: str, version: str | None, sources: Sequence[Rele
         sources: The sources searched for the release.
 
     Raises:
-        TimeNetVersionUnavailableError: If the installed connector declares another version than the exact request.
+        TimeNetVersionUnavailableError: If the installed connector declares a different version.
         TimeNetInvalidCardError: If the card of the connector cannot be read.
         TimeNetDatasetNotFoundError: Otherwise, with a message that names the searched sources.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by declared

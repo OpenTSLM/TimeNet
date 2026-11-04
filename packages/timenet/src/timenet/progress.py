@@ -39,7 +39,7 @@ class StepFinished:
 
 @dataclass(frozen=True)
 class BytesMoved:
-    """The byte count of a transfer in progress.
+    """The byte count for a transfer in progress.
 
     Attributes:
         subject: What moves: a source or target URL, or a copied release ID such as ``"org/name@1.0.0"``.
