@@ -26,23 +26,23 @@ def copy_release(
     *,
     progress: ProgressCallback | None = None,
 ) -> None:
-    """Copy a release and its payload sources to another registry.
+    """Copy a release and its required payload sources to another registry.
 
-    Copy payload sources first, reuse complete releases in ``dest``, and fetch damaged local copies again.
-    All checks run before the first copy, so a failed check leaves ``dest`` unchanged.
+    The copy reuses complete releases in ``dest`` and fetches damaged local copies again.
+    It checks access, file records and pins before copying payload sources and then the requested release.
 
     Args:
         reference: The exact release to copy.
         source: The registry to copy from.
         dest: The registry to copy to.
-        progress: Receives a ``StepStarted`` and a ``StepFinished`` event for each copied release.
+        progress: Callback for ``StepStarted`` and ``StepFinished`` events for each copied release.
 
     Raises:
-        TimeNetVersionConflictError: If ``dest`` holds a release of the copy with other files or another card.
-        TimeNetAccessError: If a release is not open, and ``dest`` or ``source`` requires open access.
+        TimeNetVersionConflictError: If ``dest`` holds other files or another card for a release being copied.
+        TimeNetAccessError: If a release fails an open access requirement of ``dest`` or ``source``.
         TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
-        TimeNetMissingParentError: If neither registry holds a complete payload source.
-        TimeFFormatError: If a manifest names another release, a pin fails, or sources form a cycle.
+        TimeNetMissingParentError: If ``source`` lacks a payload source and ``dest`` holds no complete copy of it.
+        TimeFFormatError: If a manifest names a different release, a pin fails or payload sources form a cycle.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     manifests = _manifests(reference, source, dest)
     # Check every release before anything is copied, so that a refusal leaves dest unchanged. A payload
@@ -156,19 +156,19 @@ def _manifests(reference: DatasetRef, source: BaseRegistry, dest: WritableRegist
 def _payload_source_manifest(
     source: BaseRegistry, dest: WritableRegistry, reference: DatasetRef, needed_by: DatasetRef
 ) -> Manifest:
-    """Find a payload source's manifest in ``source`` or a complete copy in ``dest``.
+    """Get a payload source's manifest from the source registry or a complete destination copy.
 
     Args:
         source: The registry to copy from.
         dest: The registry to copy to.
-        reference: The payload source to find.
-        needed_by: The release that reads the payload source.
+        reference: The payload source release.
+        needed_by: The release that requires the payload source.
 
     Returns:
         The payload source's manifest.
 
     Raises:
-        TimeNetMissingParentError: If ``source`` lacks the payload source and ``dest`` lacks a complete copy.
+        TimeNetMissingParentError: If ``source`` lacks the payload source and ``dest`` holds no complete copy of it.
     """
     manifest = source.find_manifest(reference)
     if manifest is not None:

@@ -1,9 +1,4 @@
-"""Plan how to obtain the parent releases that a build needs, before any connector runs.
-
-A plan is a list of :class:`Step` objects. Each step copies a release from a registry or builds it
-with :class:`~timenet.sources.InstalledConnectors`, after the steps of the releases that it depends
-on.
-"""
+"""Plan release copies and builds with dependencies first, before any connector runs."""
 
 from collections import deque
 from collections.abc import Mapping, Sequence
@@ -36,16 +31,16 @@ from timenet.types.references import DatasetRef, is_latest
 
 @dataclass(frozen=True)
 class Step:
-    """A plan step that copies or builds one release.
+    """A step that copies or builds one release.
 
-    A copy takes the release from the registry ``entry``, with every payload source that it needs. A
-    build builds the release with ``entry``, an :class:`~timenet.sources.InstalledConnectors`.
+    A copy requires a registry in ``entry`` and includes the release's payload sources.
+    A build requires ``InstalledConnectors`` in ``entry``.
     """
 
     release: DatasetRef
     action: Literal["copy", "build"]
     entry: ReleaseSource
-    """For a copy: the registry to copy from. For a build: the installed connectors."""
+    """The registry for a copy or ``InstalledConnectors`` for a build."""
     depends_on: tuple[DatasetRef, ...] = ()
     """The releases with steps that must finish before this step runs."""
     pinned_by: Mapping[DatasetRef, PayloadSource] = field(default_factory=dict, hash=False)
@@ -65,30 +60,31 @@ class Plan:
 
 
 Role = Literal["dataset", "payload-source"]
-"""How the build uses a release. It opens a "dataset" and needs its payload sources too. It only
-reads files of a "payload-source"."""
+"""The release's role as a dataset or a source of payload files.
+
+A ``"dataset"`` requires its payload sources to open. A ``"payload-source"`` supplies only its own files.
+"""
 
 
 @dataclass(frozen=True)
 class _Release:
-    """A required release, its dependencies, and its planned action."""
+    """A required release with its role, planned step and dependencies."""
 
     role: Role
-    """How the build uses the release."""
+    """The release's role as a dataset or a source of payload files."""
     step: Step | None
-    """The copy or the build, without its dependencies, or ``None`` if the output holds the release."""
+    """The copy or build step before dependencies are set, or ``None`` for an existing release."""
     dependencies: tuple[DatasetRef, ...]
-    """The releases that must be in place first: the parents on the card of a build, the payload
-    sources with a step of their own for a copy, or the payload sources of a held dataset."""
+    """The parent or payload source releases that must be ready first."""
 
 
 @dataclass
 class _Graph:
-    """The releases a build needs and the dependencies between them."""
+    """A graph of required releases and their copy or build steps."""
 
     output: LocalRegistry
     sources: Sequence[ReleaseSource]
-    """The sources of the releases that the output lacks, in order, without the output."""
+    """Sources for missing releases in preference order, excluding the output."""
     open_only: bool
     """True if each release that the walk visits must declare ``access: open``."""
     releases: dict[DatasetRef, _Release] = field(default_factory=dict)
@@ -96,31 +92,27 @@ class _Graph:
     pins: dict[DatasetRef, dict[DatasetRef, PayloadSource]] = field(default_factory=dict)
     """For each payload source: each release that reads its files, with its pins on them."""
     answers: dict[tuple[int, DatasetRef], Answer] = field(default_factory=dict)
-    """Each answer that the plan got, by ``id()`` of the source and release. A source need not be
-    hashable, and each keyed source stays alive while the plan runs."""
+    """Cached source answers by source identity and release."""
     manifests: dict[tuple[int, DatasetRef], Manifest | None] = field(default_factory=dict)
-    """Each manifest that the plan used, by registry and release, or ``None`` if the registry lacks
-    the release. A manifest comes from the answer of the registry, or from a read of the output or a
-    local registry."""
+    """Cached manifests keyed by registry identity and release, with ``None`` for missing releases."""
     damage: dict[DatasetRef, TimeNetFileError | None] = field(default_factory=dict)
-    """For each release that a local output holds: the error of its first missing or resized file."""
+    """The first file error per checked local release, or ``None`` if all file sizes match."""
 
     def visit(self, reference: DatasetRef, needed_by: DatasetRef, pinned: PayloadSource | None = None) -> None:
-        """Add a release and its required dependencies to the graph.
+        """Add a release and its dependencies to the graph.
 
-        The walk stops at a release that it already found as a dataset, and at a payload source that
-        it already found.
+        The graph revisits an existing entry only when its role changes from payload source to dataset.
 
         Args:
             reference: The release to add.
             needed_by: The release that needs ``reference``.
-            pinned: The pins of ``needed_by`` on ``reference``, or ``None`` for a parent.
+            pinned: File pins from ``needed_by``, or ``None`` for a parent dataset.
 
         Raises:
             TimeNetFileError: If the output holds a damaged copy that no other registry provides.
-            TimeNetAccessError: If a source only lists the release, and no later one provides it.
+            TimeNetAccessError: If a source lists the release but no source serves it.
             TimeNetMissingParentError: If no source provides the release.
-            TimeFValidationError: If an entry is neither a registry nor the installed connectors.
+            TimeFValidationError: If the selected entry is neither a registry nor ``InstalledConnectors``.
         """  # ruff: ignore[docstring-extraneous-exception] - the file and access errors are raised as values
         role: Role = "dataset" if pinned is None else "payload-source"
         if pinned is not None:
@@ -163,11 +155,11 @@ class _Graph:
             )
 
     def copy(self, reference: DatasetRef, role: Role, registry: BaseRegistry) -> None:
-        """Add a release that the plan copies from a registry, and walk the payload sources of the copy.
+        """Add a copy step and plan its required payload sources.
 
         Args:
-            reference: The release.
-            role: How the build uses the release.
+            reference: The release to copy.
+            role: Whether the release is a dataset or a payload source.
             registry: The registry to copy from.
 
         Raises:
@@ -187,11 +179,10 @@ class _Graph:
     def resolve_dependencies_of_copy(
         self, release: DatasetRef, registry: BaseRegistry, manifest: Manifest
     ) -> tuple[DatasetRef, ...]:
-        """Plan the payload sources that a copy of a release cannot bring, and return them.
+        """Plan separate steps for payload sources unavailable to a copy.
 
-        A copy brings each payload source that ``registry`` serves, at every depth, and uses each
-        one that the output holds complete. Each other payload source gets a step of its own, which
-        runs before the copy.
+        The copy includes the payload sources that ``registry`` serves, at every depth, and reuses complete output
+        copies. Other payload sources need separate steps before the copy.
 
         Args:
             release: The release to copy.
@@ -199,10 +190,10 @@ class _Graph:
             manifest: The manifest of the release in ``registry``.
 
         Returns:
-            The payload sources that get a step of their own.
+            The payload source releases that need separate steps.
 
         Raises:
-            TimeFFormatError: If a payload source differs from the pins of a release that reads it.
+            TimeFFormatError: If a payload source fails a required file pin.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by check_pins
         steps: list[DatasetRef] = []
         readers = deque([(release, manifest)])
@@ -228,12 +219,12 @@ class _Graph:
         return tuple(steps)
 
     def build(self, reference: DatasetRef, role: Role, connectors: InstalledConnectors) -> None:
-        """Add a release that the plan builds, then visit the parents on its card.
+        """Add a build step and plan the parents declared in its card.
 
         Args:
-            reference: The release.
-            role: How the build uses the release.
-            connectors: The source that builds it.
+            reference: The release to build.
+            role: Whether the release is a dataset or a payload source.
+            connectors: The installed connector source for the build.
 
         Raises:
             TimeNetDatasetNotFoundError: If no installed connector builds the release.
@@ -248,26 +239,26 @@ class _Graph:
             self.visit(parent, reference)
 
     def resolve(self, reference: DatasetRef) -> Answer:
-        """Ask the sources for the exact version of a release, by the rules of :mod:`timenet.sources`.
+        """Find an exact release across the sources in preference order.
 
         Args:
-            reference: The release.
+            reference: The exact release to find.
 
         Returns:
-            The ``Found`` answer, else the first ``NotServed``, else ``NotFound()``.
+            The first ``Found`` answer, otherwise the first ``NotServed`` answer or ``NotFound()``.
         """
         sources = [_Remembered(source, self) for source in self.sources]
         return resolve_release(sources, reference.dataset_id, str(reference.version))
 
     def ask(self, source: ReleaseSource, reference: DatasetRef) -> Answer:
-        """Ask one source for the exact version of a release, once in this plan.
+        """Get and cache a source's answer for an exact release.
 
         Args:
-            source: The source.
-            reference: The release.
+            source: The source to query.
+            reference: The exact release to find.
 
         Returns:
-            The answer of the source.
+            The cached or newly fetched answer.
         """
         key = (id(source), reference)
         if key not in self.answers:
@@ -275,7 +266,7 @@ class _Graph:
         return self.answers[key]
 
     def served(self, registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
-        """Return the manifest of a release that a registry serves.
+        """Get a release's manifest if the registry serves it.
 
         Returns:
             The manifest, or ``None`` if the registry does not serve the release.
@@ -284,9 +275,9 @@ class _Graph:
         return self.manifest(registry, reference) if isinstance(answer, Found) else None
 
     def manifest(self, registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
-        """Return the manifest of a release in a registry, once in this plan.
+        """Read and cache a release's manifest.
 
-        The manifest comes from the answer of the registry if that carries one, else from a read.
+        A manifest in a cached source answer takes precedence over a registry read.
 
         Returns:
             The manifest, or ``None`` if the registry does not hold the release.
@@ -302,9 +293,7 @@ class _Graph:
         return self.manifests[key]
 
     def in_output(self, reference: DatasetRef) -> tuple[Manifest | None, TimeNetFileError | None]:
-        """Look for an intact copy of a release in the output.
-
-        In a local output, a copy with a missing file or a file of another size is damaged.
+        """Check a release in the output for missing files or incorrect file sizes.
 
         Returns:
             ``(manifest, None)`` if intact, ``(None, error)`` if damaged, else ``(None, None)``.
@@ -318,13 +307,15 @@ class _Graph:
         return (manifest, None) if damage is None else (None, damage)
 
     def describe_searched_sources(self, reference: DatasetRef) -> str:
-        """Name the output and each source, for the message of a missing release.
+        """Describe the output and sources searched for a missing release.
+
+        Connector descriptions include their declared version when it differs from the requested version.
 
         Args:
             reference: The missing release.
 
         Returns:
-            The names, joined with " or ", with the version that a connector builds if it is another.
+            The source descriptions joined with ``" or "``.
         """
         names = [str(self.output)]
         for source in self.sources:
@@ -336,10 +327,10 @@ class _Graph:
         return " or ".join(names)
 
     def check_copied_pins(self) -> None:
-        """Make sure that each payload source that the plan copies matches the pins of its readers.
+        """Check copied payload sources against all required file pins.
 
         Raises:
-            TimeFFormatError: If a copied payload source differs from the pins of a reader.
+            TimeFFormatError: If a copied payload source fails a required file pin.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by check_pins
         for reference, readers in self.pins.items():
             step = self.releases[reference].step
@@ -380,13 +371,13 @@ class _Graph:
             raise TimeFValidationError(f"dataset parent cycle: {path}") from error
 
     def create_ordered_steps(self) -> list[Step]:
-        """Make one step for each release that the plan copies or builds, in the order of :meth:`order`.
+        """Create copy and build steps in dependency order.
 
         Returns:
-            The steps, the requested build included, each after the steps that it depends on.
+            The ordered steps, including the requested build if needed.
 
         Raises:
-            TimeFValidationError: If the releases form a dependency cycle.
+            TimeFValidationError: If the dependencies form a cycle.
         """  # ruff: ignore[docstring-extraneous-exception] - order() raises the cycle error
         nearest: dict[DatasetRef, tuple[DatasetRef, ...]] = {}
         steps = []
@@ -404,21 +395,21 @@ class _Graph:
 
 
 class _Remembered:
-    """A source that answers through :meth:`_Graph.ask`, so the plan asks it once per release."""
+    """A release source with cached answers for exact versions."""
 
     def __init__(self, source: ReleaseSource, graph: _Graph) -> None:
         self._source = source
         self._graph = graph
 
     def resolve(self, dataset_id: str, version: str | None) -> Answer:
-        """Answer for the source.
+        """Resolve a release and cache answers for exact versions.
 
         Args:
             dataset_id: The dataset ID.
             version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
 
         Returns:
-            The answer of the source.
+            The source's cached or newly fetched answer.
         """
         # The plan asks only for exact versions, so it keeps only those answers.
         if is_latest(version):
@@ -435,7 +426,7 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
     open_access_only: bool,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> tuple[DatasetRef, list[Step]]:
-    """Plan each step of a build of ``dataset_id``, its own build included.
+    """Plan a dataset build and its dependencies.
 
     A damaged copy of the requested release in the output gets a forced build.
 
@@ -448,7 +439,7 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
         pinned_by: File pins grouped by dependent release that the requested build must preserve.
 
     Returns:
-        The requested release and the steps. Its own build comes last, if the plan has one.
+        The requested release and ordered steps, with its own build last if needed.
 
     Raises:
         TimeNetDatasetNotFoundError: If no installed connector builds the dataset.
@@ -488,14 +479,14 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
 
 
 def _is_same_registry(source: ReleaseSource, output: LocalRegistry) -> bool:
-    """Return whether a source is the output, or a local registry over the same directory.
+    """Check whether a source is the output registry.
 
     Args:
-        source: The source.
-        output: The registry that the build writes to.
+        source: The source to compare.
+        output: The destination registry.
 
     Returns:
-        ``True`` if a copy from the source would copy the output onto itself.
+        ``True`` for the same object or local registries with the same resolved directory.
     """
     if source is output:
         return True

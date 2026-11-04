@@ -1,7 +1,4 @@
-"""Build a release after each parent release that it needs.
-
-Use ``plan_release_build`` to plan a build, and ``run_plan`` to run the plan.
-"""
+"""Plan and run release builds with dependencies first."""
 
 from collections.abc import Mapping, Sequence
 from typing import cast
@@ -27,9 +24,9 @@ def plan_release_build(  # ruff: ignore[too-many-arguments]
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
     open_access_only: bool = False,
 ) -> Plan:
-    """Plan a build of a release into the local store, and run nothing.
+    """Plan a release build in a local registry.
 
-    The requested build comes last, unless the store holds an intact copy and ``force`` is false.
+    The plan reuses an intact release unless ``force`` is true.
     Planning leaves the registry unchanged.
 
     Args:
@@ -41,11 +38,11 @@ def plan_release_build(  # ruff: ignore[too-many-arguments]
         open_access_only: Require ``access: open`` for every needed release.
 
     Returns:
-        The plan: its steps in the order in which they run.
+        A plan with steps in execution order.
 
     Raises:
-        TimeNetDatasetNotFoundError: If no installed backend builds the dataset.
-        TimeNetVersionUnavailableError: If ``dataset`` names another version than the card declares.
+        TimeNetDatasetNotFoundError: If no installed connector builds the dataset.
+        TimeNetVersionUnavailableError: If the requested version differs from the connector's card.
         TimeNetMissingParentError: If no source provides a parent or a payload source.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by declared and the plan
     dataset_id, version = split_ref(dataset_id)
@@ -65,14 +62,14 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
     """Run a plan's copy and build steps in order.
 
     Args:
-        plan: The plan, for example from :func:`plan_release_build`.
+        plan: The steps to run in dependency order.
         store: The local registry to copy and build into.
         options: Build settings, including the progress callback for copies and builds.
 
     Raises:
-        TimeNetVersionConflictError: If ``store`` holds a copied release with other files.
-        TimeFFormatError: If a build does not reproduce the files that other releases pin.
-        TimeNetBuildError: If a build runs but fails.
+        TimeNetVersionConflictError: If ``store`` holds different files for a copied release.
+        TimeFFormatError: If a build fails to reproduce pinned files.
+        TimeNetBuildError: If a build fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the copy and the backends
     options = options or BuildOptions()
     for step in plan.steps:
@@ -84,10 +81,10 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
 
 
 def _build(step: Step, store: LocalRegistry, *, options: BuildOptions) -> None:
-    """Build a step's exact release and check that its required files are available.
+    """Build an exact release and check its required files.
 
     Args:
-        step: The build step. Its ``force`` builds the release again, even if ``store`` holds it.
+        step: The build step, with ``force`` set to rebuild an existing release.
         store: The local registry to build into.
         options: The build settings.
 
