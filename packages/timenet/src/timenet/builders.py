@@ -32,8 +32,7 @@ class BuildOptions:
     Attributes:
         keep_cache: Keep the raw download cache after the build.
         progress: Receives the progress events of the build, or ``None``.
-        quiet: Ask the backend to print nothing of its own. An isolated child otherwise prints its
-            build lines and downloads to the inherited stderr.
+        quiet: Ask the backend to print nothing of its own, also from an isolated child process.
     """
 
     keep_cache: bool = False
@@ -42,17 +41,12 @@ class BuildOptions:
 
 
 class BuilderBackend(Protocol):
-    """Something that can build a dataset release from its connector.
-
-    :meth:`build_prepared` builds exactly one release, into a store that already holds the parents
-    of that release and their payload sources. It does not plan, copy or build other releases.
-    """
+    """Something that can build a dataset release from its connector."""
 
     def dataset_ids(self) -> Iterable[str]:
         """Return the IDs of the datasets that this backend can build.
 
-        Implementations must answer without importing a connector: this runs before any connector
-        environment exists.
+        Implementations must answer without importing a connector.
 
         Returns:
             The dataset IDs.
@@ -152,26 +146,22 @@ class BuilderBackend(Protocol):
     ) -> None:
         """Build exactly this release into the store.
 
-        Each parent of the release, and each payload source of such a parent, is already in
-        ``store`` when this method runs. If ``pinned_by`` is not empty, other releases already
-        read files of this release. The build then publishes the release only if it writes each
-        pinned file again with the same path, size and checksum. Otherwise it publishes nothing
-        and raises an error.
+        The store already holds each parent of the release with its payload sources. If
+        ``pinned_by`` is not empty, publish the release only if the build writes each pinned file
+        again with the same path, size and checksum.
 
         Args:
             release: The exact dataset ID and version to build.
             store: The local registry to build into.
             force: Build the release again, even if ``store`` already holds it.
             pinned_by: The releases that already read files of this release, with their pins.
-            options: The options of the build that do not change its files. The backend sends the
-                progress events of the build to ``options.progress``. If ``options.quiet`` is set,
-                the backend prints nothing of its own, also not in an isolated child.
+            options: The options of the build. Send its progress events to ``options.progress``.
 
         Raises:
             TimeNetDatasetNotFoundError: If this backend does not know the dataset ID of ``release``.
             TimeNetVersionUnavailableError: If the connector declares another version than
-                ``release``. It is also a ``TimeFValidationError``.
-            TimeFFormatError: If the build does not reproduce a pinned file. Nothing is published
+                ``release``.
+            TimeFFormatError: If the build does not write a pinned file again. Nothing is published
                 then.
             TimeNetBuildError: If the build runs but fails.
         """
@@ -188,8 +178,7 @@ def find_builder(dataset_id: str) -> BuilderBackend | None:
         The backend, or ``None`` when no installed package claims the id.
 
     Raises:
-        TimeNetInvalidCardError: If a backend cannot list its dataset IDs, because the card of a
-            connector cannot be read.
+        TimeNetInvalidCardError: If the card of a connector cannot be read.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
     for entry in entry_points(group=ENTRY_POINT_GROUP):
         backend = entry.load()()
