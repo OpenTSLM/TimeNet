@@ -169,14 +169,12 @@ class _Graph:
     """The first file error per checked local release, or ``None`` if all file sizes match."""
 
     def visit(self, reference: DatasetRef, needed_by: DatasetRef, pinned: PayloadSource | None = None) -> None:
-        """Add a release and its dependencies to the graph.
-
-        Existing nodes are reused unless a payload source is also needed as a parent.
+        """Add a required release and its dependencies to the graph.
 
         Args:
             reference: The release to add.
             needed_by: The release that requires ``reference``.
-            pinned: The file records that ``needed_by`` requires, or ``None`` for a parent dataset.
+            pinned: Required file records, or ``None`` for a build parent.
 
         Raises:
             TimeNetFileError: If the output holds a damaged copy that no other registry provides.
@@ -510,7 +508,7 @@ def plan_download(
         store: The destination store.
         sources: The sources to search in order, excluding registries at the store's directory.
         force: Copy the release again, even if the store holds a complete copy.
-        lookups: The answers and manifests that resolved ``release``, or ``None`` to ask the sources.
+        lookups: Cached source answers and manifests, or ``None`` to query sources.
 
     Returns:
         The copy steps, in the order in which they run.
