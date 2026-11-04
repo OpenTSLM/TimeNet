@@ -16,6 +16,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetFileError
 from timenet.registry import LocalRegistry, RemoteRegistry, S3Registry, WritableRegistry
+from timenet.sources import FoundInRegistry, NotFound
 from timenet.testing import make_dataset, sine_loader
 from timenet.types import (
     Annotation,
@@ -152,6 +153,18 @@ def test_get_manifest_unknown_id_raises(backend):
 def test_get_manifest_unknown_version_raises(backend):
     with pytest.raises(TimeNetDatasetNotFoundError):
         backend.registry.get_manifest("timenet/hello-world", "9.9.9")
+
+
+# ---- resolve ----------------------------------------------------------------------------------
+
+
+def test_a_registry_resolves_a_held_release_and_not_an_unknown_one(backend):
+    registry = backend.registry
+    assert registry.resolve("timenet/hello-world", None) == FoundInRegistry(Version(1, 1, 0), registry)
+    assert registry.resolve("timenet/hello-world", Version(1, 0, 0)) == FoundInRegistry(Version(1, 0, 0), registry)
+    assert registry.resolve("no/such", None) == NotFound()
+    assert registry.resolve("no/such", Version(1, 0, 0)) == NotFound()
+    assert registry.resolve("timenet/hello-world", Version(9, 9, 9)) == NotFound()
 
 
 # ---- open_file --------------------------------------------------------------------------------

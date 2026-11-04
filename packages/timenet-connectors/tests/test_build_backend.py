@@ -16,6 +16,8 @@ from timenet.manifest.files import FilePart
 from timenet.progress import BytesMoved, ShardWritten
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
+from timenet.sources import FoundInConnector, InstalledConnectors
+from timenet.types import Version
 from timenet.types.references import DatasetRef
 from timenet.values_backends import ValuesBackend
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
@@ -99,6 +101,11 @@ def test_a_card_that_cannot_be_read_is_skipped_with_a_warning(tmp_path, monkeypa
         found = installed_builder("timenet/hello-world")
     assert found is not None
     assert found.card.dataset_id == "timenet/hello-world"
+    # The installed connectors still answer for the other datasets.
+    with pytest.warns(ConnectorCardWarning, match=expected):
+        answer = InstalledConnectors().resolve("timenet/hello-world", None)
+    assert isinstance(answer, FoundInConnector)
+    assert answer.version == Version(1, 0, 0)
 
 
 def test_build_in_process_round_trips_the_connector_default_zarr_backend(tmp_path, monkeypatch):

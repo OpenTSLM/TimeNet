@@ -33,7 +33,7 @@ from timenet.registry import (
     open_writable_registry,
 )
 from timenet.registry._paths import release_dir  # ruff: ignore[import-private-name]
-from timenet.types.references import DatasetRef, split_ref
+from timenet.types.references import DatasetRef, is_latest, split_ref
 from timenet_connectors.builder.backend import ConnectorBuilder
 from timenet_connectors.discovery import known_ids
 
@@ -141,7 +141,7 @@ def build(
     known = known_ids()
     if dataset_id not in known:
         raise typer.BadParameter(f"no connector for {dataset_id!r}; known: {', '.join(known) or '(none)'}")
-    if version is not None:
+    if not is_latest(version):
         declared(dataset_id, version)
     try:
         # The parent shows each copy and build step. An isolated child shows its own downloads and shards.

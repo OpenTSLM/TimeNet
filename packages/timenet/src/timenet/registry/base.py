@@ -21,7 +21,9 @@ from timenet.registry._paths import safe_version_path, split_release_dir
 from timenet.registry.dependencies import prepare_local_copy, validate_manifest_reference
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
-from timenet.types import DatasetMetadata, Domain, License, Task
+from timenet.sources import FoundInRegistry, NotFound, NotServed, ReleaseLookup
+from timenet.types import Access, DatasetMetadata, Domain, License, Task, Version
+from timenet.types.access import access_requirements, effective_access
 from timenet.types.references import DatasetRef
 
 
@@ -126,6 +128,29 @@ class BaseRegistry(ABC):
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
+
+    def resolve(self, dataset_id: str, version: Version | None) -> ReleaseLookup:
+        """Check whether the registry serves a dataset release.
+
+        If :attr:`requires_open_access` is true, the registry serves a release only if its card and each card in its
+        lineage declare open access.
+
+        Args:
+            dataset_id: The dataset ID.
+            version: An exact version, or ``None`` for the latest version.
+
+        Returns:
+            ``FoundInRegistry`` if served, ``NotServed`` if access is restricted, or ``NotFound`` if absent.
+        """
+        try:
+            manifest = self.get_manifest(dataset_id, None if version is None else str(version))
+        except TimeNetDatasetNotFoundError:
+            return NotFound()
+        held = manifest.metadata.dataset_version
+        access = effective_access(manifest.metadata, manifest.lineage)
+        if access is Access.OPEN or not self.requires_open_access:
+            return FoundInRegistry(held, self, manifest)
+        return NotServed(held, access, access_requirements(manifest.metadata, manifest.lineage), manifest)
 
     def download_version(  # ruff: ignore[too-many-arguments]
         self,
