@@ -1,12 +1,12 @@
 """Check that the task table and the prompts describe every task directory coherently."""
 
-from timenet.types import ClassificationTask, ScalarPredictionTask, TSCorrespondenceTask, read_value
+from timenet.types import ClassificationTask, ScalarPredictionTask, TSCorrespondenceTask
 from timenet_connectors.datasets.yang_ai_lab.hearts.release import (
     COLUMN_SPECS,
+    LABEL_SETS,
     PROMPTS,
     REVISION,
     TASKS,
-    VOCABULARIES,
     Answer,
     Waveform,
 )
@@ -40,7 +40,7 @@ def test_prompts_name_only_the_values_the_connector_fills_in():
 def test_answers_and_inputs_fit_their_task_types():
     for directory, definition in TASKS.items():
         assert bool(definition.options) == (definition.task_type is ClassificationTask), directory
-        assert (directory in VOCABULARIES) == bool(definition.options), directory
+        assert (directory in LABEL_SETS) == bool(definition.options), directory
         if definition.task_type is ScalarPredictionTask:
             assert definition.target_name, directory
         assert bool(definition.candidates) == (definition.task_type is TSCorrespondenceTask), directory
@@ -50,10 +50,11 @@ def test_answers_and_inputs_fit_their_task_types():
         assert len(waveforms) <= 1 and (not waveforms or len(definition.inputs) == 1), directory
 
 
-def test_vocabulary_ids_are_distinct():
-    ids = [annotation.key for annotation in VOCABULARIES.values()]
-    assert len(ids) == len(set(ids)) == 14
-    assert read_value(VOCABULARIES["cgmacros/meal_img_classification"].value) == ["a.jpg", "b.jpg", "c.jpg", "d.jpg"]
+def test_label_set_names_are_distinct():
+    # A name stands for one label set in a dataset, so two directories cannot share one.
+    names = [label_set.name for label_set in LABEL_SETS.values()]
+    assert len(names) == len(set(names)) == 14
+    assert LABEL_SETS["cgmacros/meal_img_classification"].names == ("a.jpg", "b.jpg", "c.jpg", "d.jpg")
 
 
 def test_every_value_column_has_a_spec_of_its_own_family():

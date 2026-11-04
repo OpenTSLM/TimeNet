@@ -2,7 +2,7 @@
 
 import functools
 from pathlib import Path
-import pickle  # noqa: S403 - every load goes through _RestrictedUnpickler, never bare pickle.load
+import pickle  # ruff: ignore[suspicious-pickle-import] - every load goes through _RestrictedUnpickler, never bare pickle.load
 from typing import Any
 
 from timenet.errors import TimeFFormatError
@@ -30,7 +30,7 @@ _ALLOWED_GLOBALS: frozenset[tuple[str, str]] = frozenset(
 """Every global the pinned release names. A pickle can run code as it loads, so any other is refused."""
 
 
-class _RestrictedUnpickler(pickle.Unpickler):  # noqa: S301 - this class is the guard S301 asks for
+class _RestrictedUnpickler(pickle.Unpickler):  # ruff: ignore[suspicious-pickle-usage] - this class is the guard S301 asks for
     """Resolve only the globals in the allowlist."""
 
     def find_class(self, module: str, name: str) -> Any:

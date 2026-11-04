@@ -44,17 +44,17 @@ class Case:
 
     @property
     def corpus(self) -> str:
-        """Return the corpus directory of the case, such as ``cgmacros``."""
+        """The corpus directory of the case, such as ``cgmacros``."""
         return self.directory.partition("/")[0]
 
     @property
     def task(self) -> str:
-        """Return the task directory inside the corpus, such as ``meal_forecasting``."""
+        """The task directory inside the corpus, such as ``meal_forecasting``."""
         return self.directory.partition("/")[2]
 
     @property
     def id(self) -> str:
-        """Return the stable id the case's records and task are named after."""
+        """The stable id that the case's records and task are named after."""
         return f"hearts-{self.corpus}-{self.task}-{self.index:02d}"
 
     def at(self, keys: tuple[str, ...]) -> Any:

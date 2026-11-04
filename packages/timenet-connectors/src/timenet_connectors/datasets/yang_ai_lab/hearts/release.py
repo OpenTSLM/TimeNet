@@ -14,11 +14,12 @@ from string import Template
 import yaml
 
 from timenet.types import (
-    Annotation,
     AnswerTask,
     ClassificationTask,
     ForecastingTask,
     InputModality,
+    Label,
+    LabelSet,
     ScalarPredictionTask,
     Task,
     TemporalLocalizationTask,
@@ -102,7 +103,6 @@ SYMPTOM_NAMES: dict[str, str] = {
 PHOTOGRAPHS = ("a.jpg", "b.jpg", "c.jpg", "d.jpg")
 """The meal photographs of a case, in option order."""
 DESCRIPTIONS: dict[str, str] = {
-    "answer_options": "The closed set of answers the reference harness accepts for this task.",
     "subject_id": "The subject identifier, qualified by the HEARTS corpus directory.",
     "recording_start_local": (
         "The local date and time of the first sample, exactly as the source states it. The source names no time zone."
@@ -153,7 +153,7 @@ class TaskDef:
     candidates: tuple[str, ...] = ()
     """Keys of dictionaries of frames whose entries are the candidates a pairing task matches to."""
     options: tuple[str, ...] = ()
-    """The closed answer vocabulary of a classification task."""
+    """The answers a classification task accepts, in order. They become the labels of its label set."""
     answer: Answer = Answer.LABEL
     """How a classification label is spelt in the source answer."""
     unit: str | None = None
@@ -255,13 +255,12 @@ PROMPTS: dict[str, Template] = {
 }
 """The prompt of each task directory, with a placeholder for each value the harness filled in per case."""
 
-VOCABULARIES: dict[str, Annotation] = {
-    directory: Annotation(
-        key=f"answer_options_{directory.partition('/')[2]}",
-        value=list(definition.options),
-        description=DESCRIPTIONS["answer_options"],
+LABEL_SETS: dict[str, LabelSet] = {
+    directory: LabelSet(
+        name=directory.partition("/")[2],
+        labels=tuple(Label(name=option) for option in definition.options),
     )
     for directory, definition in TASKS.items()
     if definition.options
 }
-"""The reusable answer vocabulary of each classification directory, registered once per dataset."""
+"""The label set of each classification directory: the answers the reference harness accepts, in order."""

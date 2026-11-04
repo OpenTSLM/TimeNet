@@ -33,17 +33,17 @@ from timenet_connectors.datasets.yang_ai_lab.hearts.release import (
     ANSWER_KEY,
     DESCRIPTIONS,
     HELD_OUT_READINGS,
+    LABEL_SETS,
     MEAL_COLUMNS,
     PROMPTS,
     SYMPTOM_NAMES,
     US_PER_MINUTE,
-    VOCABULARIES,
     Answer,
     TaskDef,
 )
 
 
-def convert_case(dataset: TimeFDataset, case: Case) -> Task:  # noqa: PLR0911 - one return per task type the release holds
+def convert_case(dataset: TimeFDataset, case: Case) -> Task:  # ruff: ignore[too-many-return-statements] - one return per task type the release holds
     """Register a case's input and candidate records and build its task.
 
     Returns:
@@ -123,7 +123,7 @@ def _classification(case: Case, inputs: list[Built], shared: Mapping[str, Any]) 
         context.extend(inputs[0].record.add_annotations(flags))
     task = ClassificationTask(
         targets=(_label(definition, case.payload[ANSWER_KEY]),),
-        target_schema=VOCABULARIES[case.directory].key,
+        label_set=LABEL_SETS[case.directory],
         input_annotations=tuple(context),
         **shared,
     )

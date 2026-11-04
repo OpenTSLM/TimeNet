@@ -165,7 +165,7 @@ def _by_key(annotations):
 def test_every_case_is_a_test_item_with_its_provenance(dataset):
     assert len(dataset.tasks) == len(CASES)
     assert {task.split for task in dataset.tasks} == {Split.TEST}
-    assert all(annotation.key.startswith("answer_options_") for annotation in dataset.annotations)
+    assert not dataset.annotations
     for task in dataset.tasks:
         assert task.metadata == {
             "corpus": "cgmacros",
@@ -278,9 +278,7 @@ def test_compared_windows_are_records_of_their_own_subject(dataset):
     ]
     assert [source.name for record in task.inputs for source in record.sources] == ["A", "B"]
     assert read_values(task.targets) == ("B",)
-    assert task.target_schema == "answer_options_meal_react_comparison"
-    vocabulary = next(annotation for annotation in dataset.annotations if annotation.key == task.target_schema)
-    assert read_value(vocabulary.value) == ["A", "B"]
+    assert (task.label_set.name, task.label_set.names) == ("meal_react_comparison", ("A", "B"))
 
 
 def test_meal_photographs_are_image_signals_and_the_meal_is_marked(dataset):

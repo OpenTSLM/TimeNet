@@ -8,7 +8,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDownloadError
 from timenet_connectors.datasets.yang_ai_lab.hearts.pickles import load_payload
 from timenet_connectors.datasets.yang_ai_lab.hearts.records import Case
-from timenet_connectors.datasets.yang_ai_lab.hearts.release import REPO, REVISION, TASKS, VOCABULARIES
+from timenet_connectors.datasets.yang_ai_lab.hearts.release import REPO, REVISION, TASKS
 from timenet_connectors.datasets.yang_ai_lab.hearts.tasks import convert_case
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
 
@@ -18,7 +18,7 @@ class HeartsConnector(BaseConnector[Path]):
 
     values_backend = "zarr"  # the meal photographs are image tensors
 
-    def download(self, cache_dir: Path) -> list[Path]:  # noqa: PLR6301 - BaseConnector override
+    def download(self, cache_dir: Path) -> list[Path]:  # ruff: ignore[no-self-use] - BaseConnector override
         """Fetch every task directory of the pinned release.
 
         Args:
@@ -46,8 +46,6 @@ class HeartsConnector(BaseConnector[Path]):
             The populated dataset.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        for annotation in VOCABULARIES.values():
-            dataset.annotate(annotation)
         dataset.add_tasks(tasks=[convert_case(dataset, case) for case in _cases(raw_refs[0])])
         return dataset
 

@@ -139,7 +139,7 @@ def test_answers_are_spelt_as_the_harness_scores_them(dataset):
     assert read_values(_task(dataset, "coughvid", "cough_detection_good_qual").targets) == ("true",)
     diagnosis = _task(dataset, "coughvid", "diagnosis_classification")
     assert read_values(diagnosis.targets) == ("upper_infection",)
-    assert diagnosis.target_schema == "answer_options_diagnosis_classification"
+    assert diagnosis.label_set.name == "diagnosis_classification"
     coefficients = _task(dataset, "coughvid", "mfcc_mean_std")
     assert read_values(coefficients.targets) == (*MFCC_MEAN, *MFCC_STD)
     assert (coefficients.unit, coefficients.target_name) == (None, "mfcc_mean_std")
