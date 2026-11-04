@@ -241,7 +241,7 @@ def value_type_of(value: Any) -> ValueType | None:
 
     Returns:
         One of ``"bool" | "int" | "float" | "str" | "list"``, or ``None`` for a marker with no value.
-        A list holds only strings, such as the subject IDs of a record.
+        A list holds only strings, such as the names of activities in a recording.
 
     Raises:
         TimeFValidationError: If ``value`` is a non-null value of an unsupported type.

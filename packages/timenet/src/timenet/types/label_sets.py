@@ -11,30 +11,36 @@ from timenet.types.wire import NonEmptyString
 
 
 class Label(TimeFModel):
-    """One label in a label set, such as ``N1`` for a sleep stage."""
+    """One label in a label set, such as ``awake`` in a sleep-stage task."""
 
     name: NonEmptyString
     """The text that a target holds for this label."""
     description: NonEmptyString | None = None
-    """What the label means, such as ``Light sleep, stage 1.``."""
+    """What the label means, such as ``The subject is awake.``."""
 
 
 class LabelSet(TimeFModel):
-    """The allowed labels for a classification target and the rules for their number.
+    """The allowed labels for a classification target.
+
+    A target must contain one label unless ``multi_label=True``.
 
     Tasks that ask the same kind of question share one label set::
 
-        TRUE_OR_FALSE = LabelSet(
-            name="true_or_false",
-            labels=(Label(name="T", description="True."), Label(name="F", description="False.")),
+        SLEEP_STAGE = LabelSet(
+            name="sleep_stage",
+            labels=(
+                Label(name="awake", description="The subject is awake."),
+                Label(name="non_rem_sleep"),
+                Label(name="rem_sleep"),
+            ),
         )
-        ClassificationTask(inputs=(record,), targets=("T",), label_set=TRUE_OR_FALSE)
+        ClassificationTask(inputs=(record,), targets=("awake",), label_set=SLEEP_STAGE)
 
     Each name identifies one label set in a dataset.
     """
 
     name: NonEmptyString
-    """The name of the set within a dataset, such as ``true_or_false``."""
+    """The name of the set within a dataset, such as ``sleep_stage``."""
     labels: tuple[Label, ...]
     """The allowed labels in a fixed order."""
     multi_label: StrictBool = False
@@ -109,7 +115,8 @@ class LabelSetRegistry:
     def copy(self) -> "LabelSetRegistry":
         """Return a separate registry with the same label sets.
 
-        A caller can add sets to the copy without changing this registry.
+        The dataset uses the copy to check a batch before adding its tasks.
+        If a task fails, the dataset discards the copy and keeps its original registry.
 
         Returns:
             The copy.

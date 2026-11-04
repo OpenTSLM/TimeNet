@@ -155,7 +155,7 @@ column is separate from metadata, which can contain its own `description` key.
 
 The value sits in one typed column selected by `value_kind`: `text_value`, `integer_value`, `float_value`,
 `boolean_value`, or `text_list_value`. The `text_list_value` column holds a list of strings, such as
-the subject IDs of a record. A marker annotation defines only a span. All its value columns are
+the names of activities in a recording. A marker annotation defines only a span. All its value columns are
 `NULL`.
 
 The `annotation_occurrences` table records where the content applies. It points at

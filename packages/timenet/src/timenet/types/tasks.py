@@ -376,7 +376,7 @@ class ClassificationTask(Task):
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
     label_set: LabelSet | None = None
-    """The allowed labels and the rules for their number, if set.
+    """The allowed labels and whether a target can contain more than one label.
 
     If this is ``None``, TimeNet does not examine the labels."""
     target_schema: str | None = None

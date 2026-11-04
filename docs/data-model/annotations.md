@@ -116,7 +116,7 @@ Tasks on ordinal Signals.
 ## Valid values
 
 An annotation value can be a string, integer, float, Boolean, or list of strings. For example, a
-list of strings can hold the subject IDs of a record. To define the allowed labels for a
+list of strings can hold the names of activities in a recording. To define the allowed labels for a
 classification target, use a `LabelSet`. See [Tasks](tasks.md).
 
 An Annotation must have a value, a span, or both. A marker can omit its value when its span carries
