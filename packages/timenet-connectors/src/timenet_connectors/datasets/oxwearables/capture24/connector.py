@@ -8,8 +8,8 @@ Each run of consecutive samples with the same raw label becomes one ``activity``
 A label scheme groups raw labels into activity classes. Each 10 s window kept by the authors' benchmark
 becomes one task per scheme that the benchmark scores. README.md describes the benchmark rules.
 
-The build reads the data in two passes. The first reads one recording at a time and retains its
-segments, each window's start and class, and a digest of the acceleration values.
+The build reads the data in two passes. The first reads one recording at a time and keeps its
+segments, its raw label runs, each window's start and class, and a digest of the acceleration values.
 A digest is a value used to detect changes. Missing or non-finite acceleration values fail the build.
 Non-finite values are NaN, positive infinity, or negative infinity.
 
@@ -130,7 +130,7 @@ class _Sex(StrEnum):
     """A participant's sex, as the connector stores it.
 
     The values match ``Sex`` in ``timenet_connectors.demographics``, which PR #624 adds.
-    After that enum reaches the base branch, replace this enum with it.
+    TODO(#624): replace this enum with that one once it is on the base branch.
     """
 
     FEMALE = "female"
@@ -404,7 +404,7 @@ def _parse_person_value(path: Path, line: int, column: str, value: str, parse: C
         The parsed value.
 
     Raises:
-        TimeNetConnectorError: If the value is not one of the allowed values in the release.
+        TimeNetConnectorError: If ``parse`` does not accept the value.
     """
     try:
         return parse(value)
@@ -442,13 +442,13 @@ def _read_people(root: Path) -> list[_Person]:
 
 
 def _person_of_row(path: Path, line: int, row: dict[str, str], recordings: dict[str, Path]) -> _Person:
-    """Build a participant from one ``metadata.csv`` row and its recording path.
+    """Build the person of one ``metadata.csv`` row, with the path of their recording.
 
     Returns:
         The person.
 
     Raises:
-        TimeNetConnectorError: If the age band or sex is not one of the allowed values in the release.
+        TimeNetConnectorError: If the age band or the sex is not one that the connector knows.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _parse_person_value
     pid = row[_MetadataColumn.PID]
     age_band = _parse_person_value(path, line, _MetadataColumn.AGE, row[_MetadataColumn.AGE], _AgeBand)
@@ -474,7 +474,8 @@ def _recordings_by_pid(root: Path) -> dict[str, Path]:
 def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant:
     """Summarize a recording's segments, raw label runs, selected windows, and acceleration digest.
 
-    An empty ``annotation`` field is an unlabeled sample. No other value is.
+    Only an empty ``annotation`` field marks an unlabeled sample. Any other text must be a raw label
+    from the label dictionary.
 
     Returns:
         The participant, without the samples.
@@ -507,7 +508,8 @@ def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant
 def _convert_options(columns: list[str]) -> pa_csv.ConvertOptions:
     """Return the same parsing configuration for both reads of a recording's ``columns``.
 
-    Only an empty field counts as missing. A written ``nan`` remains a value, which ``_axis_values`` rejects as non-finite.
+    Only an empty field counts as missing. A written ``nan`` stays a value, and ``_axis_values`` then
+    fails on it because it is not finite.
     """
     return pa_csv.ConvertOptions(
         include_columns=columns,
@@ -565,7 +567,7 @@ def _read_stamps(path: Path, table: pa.Table) -> np.ndarray:
 
 
 def _make_segments(stamps: np.ndarray) -> tuple[_Segment, ...]:
-    """Split the samples wherever consecutive timestamps differ by more or less than one sample period.
+    """Split the samples wherever the step to the next timestamp is not exactly one sample period.
 
     Returns:
         The segments, in time order.
@@ -580,7 +582,7 @@ def _make_segments(stamps: np.ndarray) -> tuple[_Segment, ...]:
 def _label_runs(raw_codes: np.ndarray, segment: _Segment) -> _LabelRuns:
     """Find a segment's runs of one raw label. Unlabeled samples belong to no run.
 
-    The function processes each segment separately, so a run never crosses a gap.
+    The function sees only one segment, so a run never crosses a gap.
     Within a segment, samples are one period apart.
     A row's time relative to the segment's first sample equals its index within the segment times the period.
 
@@ -666,14 +668,14 @@ def _make_windows(
     sample.
 
     A bin that crosses a gap usually has fewer samples. A step between one and two sample periods is
-    also a gap, but its bin can still contain 1000 samples. This function rejects such windows, so no
-    selected window crosses a gap.
+    also a gap, but its bin can still contain 1000 samples. This function fails the build on such a
+    window, so no kept window crosses a gap.
 
     A window's class in a scheme is the most common class among its labeled samples. A tie goes to the
     first class in string order.
 
     The authors' ``make_windows`` also drops windows with NaN acceleration values.
-    This connector rejects a recording if any acceleration value is missing or non-finite.
+    This connector instead fails the build if any acceleration value is missing or not finite.
 
     Returns:
         The kept windows.
@@ -714,7 +716,7 @@ def _make_windows(
 def _read_acceleration(participant: _Participant) -> _Acceleration:
     """Read a recording's x, y and z columns as float32.
 
-    Make sure that the row count and acceleration values match the first pass.
+    The build fails if the row count or the acceleration values differ from the first pass.
 
     Returns:
         The float32 values of each axis.
@@ -745,7 +747,8 @@ class _OneRecording:
     """Read a recording's acceleration once for all its signals and keep only the latest recording.
 
     A Record's signals load one after another, so the cache needs only one recording.
-    lru_cache(maxsize=1) reads the next recording before releasing the previous one, which briefly keeps both in memory.
+    The class does not use lru_cache(maxsize=1), because that would read the next recording before it
+    releases the previous one, and so hold both in memory.
     """
 
     def __init__(self) -> None:
@@ -755,7 +758,8 @@ class _OneRecording:
     def __call__(self, participant: _Participant) -> _Acceleration:
         """Return the recording's x, y and z values.
 
-        If the recording is already cached, reuse its values. Otherwise, release the cache and read the recording.
+        The values come from the cache if it holds this recording. Otherwise the cache drops the
+        previous recording and then reads this one.
 
         Returns:
             The float32 values of each axis.
@@ -866,9 +870,9 @@ class Capture24Connector(BaseConnector[Path]):
     """Build CAPTURE-24 from the pinned zip of its Oxford Research Archive record."""
 
     async def download_async(self, cache_dir: Path) -> list[Path]:  # ruff: ignore[no-self-use] - the connector interface
-        """Fetch the pinned archive and make sure that its digest matches before extracting it.
+        """Fetch the pinned archive, check its SHA-256 digest, and extract it.
 
-        Extract the archive only once.
+        A later call reuses the extracted directory and downloads nothing.
 
         Returns:
             A list containing the extracted ``capture24`` directory.
@@ -879,9 +883,9 @@ class Capture24Connector(BaseConnector[Path]):
     def convert(self, raw_refs: list[Path]) -> TimeFDataset:
         """Build one Record per recording and stream one task per window and benchmarked scheme.
 
-        The first pass reads each recording to validate it and retain its segments, windows, and acceleration digest.
-        The writer loads acceleration values from the files when needed.
-        Keep the files available and unchanged until the writer finishes.
+        The first pass reads each recording to check it, and keeps its segments, raw label runs,
+        windows and acceleration digest. The writer loads the acceleration values from the files when it
+        needs them, so the files must stay available and unchanged until the writer finishes.
 
         Args:
             raw_refs: The one extracted ``capture24`` directory.
