@@ -39,12 +39,12 @@ class StepFinished:
 
 @dataclass(frozen=True)
 class BytesMoved:
-    """Bytes of a transfer moved.
+    """The byte count of a transfer in progress.
 
     Attributes:
-        url: Where the bytes come from or go to.
+        url: The source or destination URL.
         done: The number of bytes moved so far.
-        total: The number of bytes of the whole transfer, or ``None`` if it is not known.
+        total: The transfer size in bytes, or ``None`` if unknown.
     """
 
     url: str
@@ -54,10 +54,10 @@ class BytesMoved:
 
 @dataclass(frozen=True)
 class ShardWritten:
-    """A build wrote shards of a release.
+    """The number of completed shards in a release build.
 
     Attributes:
-        release: The release that the build writes.
+        release: The release being built.
         count: The number of shards written so far.
     """
 
@@ -66,7 +66,7 @@ class ShardWritten:
 
 
 ProgressEvent = StepStarted | StepFinished | BytesMoved | ShardWritten
-"""One progress event."""
+"""A step, transfer, or shard progress event."""
 
 ProgressCallback = Callable[[ProgressEvent], None]
 """A callback that receives a progress event and returns nothing."""

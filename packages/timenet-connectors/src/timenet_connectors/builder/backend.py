@@ -120,27 +120,21 @@ class ConnectorBuilder:
         pinned_by: Mapping[DatasetRef, PayloadSource],
         options: BuildOptions,
     ) -> None:
-        """Build exactly this release into the store.
+        """Build a release in a local registry.
 
-        The store must already hold each parent of the release with its payload sources. The build
-        runs in an environment built from the requirements of the connector, or in this interpreter
-        if ``TIMENET_ISOLATION=off``.
+        The registry must already contain all parent releases and their payload sources.
+        Set ``TIMENET_ISOLATION=off`` to build in this interpreter.
 
         Args:
             release: The exact dataset ID and version to build.
             store: The local registry to build into.
-            force: Build the release again, even if ``store`` already holds it.
-            pinned_by: The releases that already read files of this release, with their pins. The
-                build publishes the release only if it writes each pinned file again.
-            options: The options of the build. A build in this interpreter sends
-                :class:`~timenet.progress.BytesMoved` and :class:`~timenet.progress.ShardWritten`
-                events to ``options.progress``. An isolated build prints its own progress instead,
-                unless ``options.quiet`` is set.
+            force: Rebuild even if ``store`` already contains the release.
+            pinned_by: Releases that depend on this release, with file pins that the build must preserve.
+            options: Cache and output settings, with a progress callback for builds in this interpreter.
 
         Raises:
             TimeNetDatasetNotFoundError: If no connector exists for the dataset.
-            TimeNetVersionUnavailableError: If the card of the connector declares another version
-                than ``release``. Nothing runs then.
+            TimeNetVersionUnavailableError: If the requested version differs from the connector's card.
             TimeNetBuildError: If the isolated build fails.
         """  # ruff: ignore[docstring-extraneous-exception] - TimeNetBuildError is raised by run_isolated_build
         card = self.card(release.dataset_id)
@@ -170,14 +164,14 @@ def _build_in_process(
     pinned_by: Mapping[DatasetRef, PayloadSource],
     options: BuildOptions,
 ) -> None:
-    """Build the release in this interpreter.
+    """Build a release in the current interpreter.
 
     Args:
-        release: The release to build. Its version is the version that the card declares.
-        root: The directory of the local registry to build into.
-        force: Build the release again, even if ``root`` already holds it.
-        pinned_by: The releases that already read files of this release, with their pins.
-        options: The options of the build.
+        release: The dataset ID and version declared in the connector's card.
+        root: The local registry directory to build into.
+        force: Rebuild even if ``root`` already contains the release.
+        pinned_by: Releases that depend on this release, with file pins that the build must preserve.
+        options: Cache settings and a progress callback.
     """
     connector = resolve(release.dataset_id)()
     relay = None if options.progress is None else _ProgressRelay(release, options.progress)
@@ -196,24 +190,24 @@ def _build_in_process(
 
 @dataclass(frozen=True)
 class _ProgressRelay:
-    """Sends the download and writer progress of an in-process build as progress events of the build."""
+    """Convert download and write updates into build progress events."""
 
     release: DatasetRef
     report: ProgressCallback
 
     def download(self, event: DownloadProgress) -> None:
-        """Send the progress of a download as a :class:`~timenet.progress.BytesMoved` event.
+        """Report downloaded bytes as a :class:`~timenet.progress.BytesMoved` event.
 
         Args:
-            event: The progress of the download.
+            event: The download progress update.
         """
         self.report(BytesMoved(event.url, event.downloaded, event.total))
 
     def write(self, event: WriteProgressEvent) -> None:
-        """Send each finished shard as a :class:`~timenet.progress.ShardWritten` event.
+        """Report a completed shard as a :class:`~timenet.progress.ShardWritten` event.
 
         Args:
-            event: The progress of the writer.
+            event: The writer progress update.
         """
         if event.stage is ProgressStage.SHARD_FINALIZED:
             self.report(ShardWritten(self.release, event.completed))

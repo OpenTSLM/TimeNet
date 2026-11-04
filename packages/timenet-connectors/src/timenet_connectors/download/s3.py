@@ -71,8 +71,8 @@ def download_s3_object(s3_url: str, dest: Path, *, sha256: str | None = None) ->
         sha256: An optional SHA-256 hash in hexadecimal that the downloaded file must match.
 
     Raises:
-        TimeFValidationError: If the URL uses a scheme other than ``s3://`` or lacks a bucket or key.
-        TimeFFormatError: If the downloaded file does not match the supplied SHA-256 hash.
+        TimeFValidationError: If the URL is not an ``s3://`` URL with a bucket and key.
+        TimeFFormatError: If the downloaded file does not match ``sha256``.
     """
     parsed = urlparse(s3_url)
     bucket, key = parsed.netloc, parsed.path.lstrip("/")
