@@ -57,16 +57,17 @@ def _enum_list(values: list[str], factory: Callable[[str], T], flag: str, choice
 
 
 def _client(local_registry: str | None, remote_registry: str | None, auto_build: bool | None) -> TimeNet:
-    """Create the client of a command, with the default list of sources that its flags set.
+    """Create a client with the selected registries and build setting.
+
+    Pass ``None`` to use the matching ``TIMENET_*`` environment variable or its default.
 
     Args:
-        local_registry: The value of ``--local-registry``, or ``None`` for ``$TIMENET_LOCAL_REGISTRY``.
-        remote_registry: The value of ``--remote-registry``, or ``None`` for ``$TIMENET_REMOTE_REGISTRY``.
-        auto_build: The value of ``--auto-build``/``--no-auto-build``, or ``None`` for
-            ``$TIMENET_AUTO_BUILD``.
+        local_registry: The local registry path.
+        remote_registry: The remote registry URL or path.
+        auto_build: Whether to build missing datasets with installed connectors.
 
     Returns:
-        A client with the configured sources.
+        The configured client.
     """
     sources = default_sources(local_registry=local_registry, remote_registry=remote_registry, auto_build=auto_build)
     return TimeNet(sources=sources)
@@ -103,7 +104,7 @@ def list_datasets(
     remote_registry: str | None = REMOTE_REGISTRY,
     auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """List every dataset in the registry."""
+    """List the datasets in the registry."""
     rows = _client(local_registry, remote_registry, auto_build).list()
     if not rows:
         typer.echo("No datasets in the registry.")
@@ -125,7 +126,10 @@ def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
     remote_registry: str | None = REMOTE_REGISTRY,
     auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """Search datasets by filter. Repeat a flag to pass several values."""
+    """Search for datasets that match the filters.
+
+    Repeat a filter flag to supply multiple values.
+    """
     results = _client(local_registry, remote_registry, auto_build).search(
         query=query or None,
         domain=_enum_list(domain, Domain, "--domain", [d.value for d in Domain]),
@@ -149,7 +153,7 @@ def info(
     remote_registry: str | None = REMOTE_REGISTRY,
     auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """Print a dataset's manifest summary: metadata, schema, and counts."""
+    """Show a dataset's metadata, schema, and counts."""
     manifest = _client(local_registry, remote_registry, auto_build).get(dataset_id)
     counts = manifest.counts
     table = Table(title=manifest.dataset_id, title_justify="left", title_style="bold", show_header=False)
@@ -196,7 +200,10 @@ def download(
     remote_registry: str | None = REMOTE_REGISTRY,
     auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """Copy a release and its payload sources into the local registry. Prints its directory to stdout."""
+    """Copy a release and its data files into the local registry.
+
+    The command prints the release directory to stdout.
+    """
     started: list[StepStarted] = []
     with progress_renderer() as show:
         client = _client(local_registry, remote_registry, auto_build)
@@ -235,7 +242,7 @@ _YES = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt.")
 
 @local_app.command("info")
 def local_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
-    """Show the path and size of the cache and the local registry."""
+    """Show cache and local registry paths and sizes."""
     store, cache_dir = default_local_registry(local_registry=local_registry), settings().cache_dir
     releases = stored_releases(store)
     size = human_bytes(sum(item.size_bytes for item in releases))

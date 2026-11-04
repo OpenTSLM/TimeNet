@@ -1,7 +1,7 @@
-"""The CLI flags that set the default list of sources.
+"""CLI flags for registry locations and automatic builds.
 
-Each flag overrides one variable of :mod:`timenet.config`, and a flag that is not given is ``None``.
-Pass the values to :func:`~timenet.client.default_sources` or :func:`~timenet.client.default_store`.
+Each flag overrides the matching ``TIMENET_*`` environment variable.
+Omitted flags have the value ``None``.
 """
 
 import typer
