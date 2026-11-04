@@ -43,8 +43,10 @@ def copy_release(
         TimeNetVersionConflictError: If ``dest`` holds the release or a payload source with other files or another card.
         TimeNetAccessError: If a release lacks open access where the source or destination requires it.
         TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
-        TimeNetMissingParentError: If ``source`` lacks a payload source and ``dest`` lacks a complete copy.
-        TimeFFormatError: If a manifest names the wrong release or pinned files differ.
+        TimeNetMissingParentError: If a payload source is neither in ``source`` nor complete in
+            ``dest``. The error names both registries.
+        TimeFFormatError: If a manifest names another release, or a payload source differs from the
+            files that the release pins.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     manifests = _manifests(reference, source, dest, with_payload_sources=with_payload_sources)
     # Check every release before anything is copied, so that a refusal leaves dest unchanged. A payload
@@ -146,7 +148,7 @@ def _manifests(
         if listed is not None:
             # The source lists the payload source, but does not serve its files.
             require_open_access(listed.metadata, listed.lineage)
-        raise TimeNetMissingParentError(missing, reference, str(source), payload_source=True)
+        raise TimeNetMissingParentError(missing, reference, f"{source} or {dest}", payload_source=True)
     return {**sources.fetched, **sources.held, reference: manifest}
 
 
