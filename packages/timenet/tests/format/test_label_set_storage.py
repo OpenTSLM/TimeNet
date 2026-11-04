@@ -16,6 +16,7 @@ from timenet.types import (
     AnswerTask,
     ClassificationTask,
     DatasetMetadata,
+    Label,
     LabelMode,
     LabelSet,
     License,
@@ -26,7 +27,7 @@ from timenet.types import (
 
 
 SPEC = TimeSeriesSpec(spec_type="voltage", name="Voltage", unit_value=ureg.millivolt)
-STAGES = LabelSet(name="stage", labels=("W", "N1", "R"), label_descriptions={"R": "REM sleep."})
+STAGES = LabelSet(name="stage", labels=("W", "N1", Label(name="R", description="REM sleep.")))
 FINDINGS = LabelSet(name="findings", labels=("AF", "PVC"), mode=LabelMode.MULTI)
 
 
@@ -185,9 +186,12 @@ def test_an_empty_multi_label_target_survives_a_write_and_a_read(tmp_path):
 @pytest.mark.parametrize(
     ("task", "message"),
     [
-        (ClassificationTask(targets=("X",), label_set=STAGES), "does not list: \\['X'\\]"),
-        (ClassificationTask(targets=("W", "R"), label_set=STAGES), "has 2 labels"),
-        (ClassificationTask(targets=("AF", "AF"), label_set=FINDINGS), "repeats a label"),
+        (
+            ClassificationTask(targets=("X",), label_set=STAGES),
+            "^ClassificationTask 1: labels not in label set 'stage': \\['X'\\]",
+        ),
+        (ClassificationTask(targets=("W", "R"), label_set=STAGES), ": 2 labels"),
+        (ClassificationTask(targets=("AF", "AF"), label_set=FINDINGS), "repeated labels"),
         (ClassificationTask(targets=(1,), label_set=STAGES), "each label must be text, not int"),
     ],
 )
@@ -205,7 +209,7 @@ def test_target_annotations_are_checked_against_the_label_set():
     unknown = record.annotate(Annotation(key="stage", value="X"))
     dataset.add_task(task=ClassificationTask(inputs=(record,), target_annotations=(awake,), label_set=STAGES))
 
-    with pytest.raises(TimeFValidationError, match="does not list: \\['X'\\]"):
+    with pytest.raises(TimeFValidationError, match="labels not in label set 'stage': \\['X'\\]"):
         dataset.add_task(task=ClassificationTask(inputs=(record,), target_annotations=(unknown,), label_set=STAGES))
 
 
@@ -223,7 +227,7 @@ def test_streamed_tasks_are_checked_against_their_label_set():
         lambda: iter([ClassificationTask(inputs=(record,), targets=("X",), label_set=STAGES)]),
     )
 
-    with pytest.raises(TimeFValidationError, match="does not list: \\['X'\\]"):
+    with pytest.raises(TimeFValidationError, match="labels not in label set 'stage': \\['X'\\]"):
         list(dataset.iter_streamed_tasks_validated())
 
 

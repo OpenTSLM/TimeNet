@@ -23,6 +23,7 @@ from timenet.types import (
     ClassificationTask,
     EntityId,
     InputModality,
+    Label,
     LabelMode,
     LabelSet,
     LocalizationMode,
@@ -216,8 +217,8 @@ def encode_label_set(label_set: LabelSet, label_set_id: int) -> dict[str, object
     return {
         "label_set_id": label_set_id,
         "name": label_set.name,
-        "labels": list(label_set.labels),
-        "label_descriptions": list(label_set.label_descriptions),
+        "labels": [label.name for label in label_set.labels],
+        "label_descriptions": [label.description for label in label_set.labels],
         "mode": str(label_set.mode),
     }
 
@@ -233,7 +234,12 @@ def decode_label_set(name: str, labels: list[str], label_descriptions: list[str 
     """
     try:
         return LabelSet(
-            name=name, labels=tuple(labels), label_descriptions=tuple(label_descriptions), mode=LabelMode(mode)
+            name=name,
+            labels=tuple(
+                Label(name=label, description=description)
+                for label, description in zip(labels, label_descriptions, strict=True)
+            ),
+            mode=LabelMode(mode),
         )
     except ValueError as exc:
         raise TimeFFormatError(f"the stored label set {name!r} is not valid: {exc}") from exc

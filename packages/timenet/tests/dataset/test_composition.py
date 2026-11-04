@@ -25,6 +25,7 @@ from timenet.types import (
     DatasetMetadata,
     ForecastingTask,
     InputModality,
+    Label,
     LabelSet,
     License,
     LocalizationMode,
@@ -59,7 +60,7 @@ from timenet.writer import TimeFWriter
 
 _ALIAS = ParentAlias("base")
 _SPEC = TimeSeriesSpec(spec_type="sine", name="Sine", unit_value=ureg.dimensionless)
-SCP = LabelSet(name="scp", labels=("normal", "abnormal"), label_descriptions={"normal": "No finding."})
+SCP = LabelSet(name="scp", labels=(Label(name="normal", description="No finding."), "abnormal"))
 
 
 def store(root, dataset):

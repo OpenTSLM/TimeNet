@@ -205,12 +205,11 @@ dataset.add_task(task=age_question(record, 64))
 ### Classification
 
 ```python
-from timenet.types import LabelMode, LabelSet
+from timenet.types import Label, LabelMode, LabelSet
 
 CONDITION = LabelSet(
     name="condition",
-    labels=("healthy", "faulty"),
-    label_descriptions={"faulty": "A bearing fault."},
+    labels=("healthy", Label(name="faulty", description="A bearing fault.")),
 )
 FINDINGS = LabelSet(
     name="findings",

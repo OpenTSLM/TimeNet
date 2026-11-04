@@ -376,12 +376,17 @@ class ClassificationTask(Task):
         """Normalize the common fields and make sure that the label set has the right type.
 
         Raises:
-            TimeFValidationError: If ``label_set`` is neither a LabelSet nor ``None``.
+            TimeFValidationError: If ``label_set`` is neither a LabelSet nor ``None``, or if the task
+                sets both ``label_set`` and the deprecated ``target_schema``.
         """
         super().__post_init__()
         if self.label_set is not None and not isinstance(self.label_set, LabelSet):
             raise TimeFValidationError(
                 f"ClassificationTask label_set must be a LabelSet or None, got {type(self.label_set).__name__}"
+            )
+        if self.label_set is not None and self.target_schema is not None:
+            raise TimeFValidationError(
+                "ClassificationTask sets both label_set and the deprecated target_schema. Set only label_set"
             )
 
     def check_targets(self) -> None:
@@ -406,7 +411,10 @@ class ClassificationTask(Task):
                     f"not {type(value).__name__}"
                 )
             labels.append(value.read())
-        self.label_set.check_targets(labels, name)
+        try:
+            self.label_set.check_targets(labels)
+        except TimeFValidationError as exc:
+            raise TimeFValidationError(f"{name}: {exc}") from exc
 
 
 @final
