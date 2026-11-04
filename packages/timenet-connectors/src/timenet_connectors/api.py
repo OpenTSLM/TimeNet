@@ -109,19 +109,18 @@ def load(
     fetch_from: "str | BaseRegistry | None" = None,
     build_parents: bool = False,
 ) -> "TimeFDataset":
-    """Build a dataset if needed and load it into memory.
+    """Build a dataset if needed and load its values into memory.
 
-    This runs :func:`build` into the store of :func:`timenet.client.default_sources`, then
-    :meth:`timenet.client.TimeNet.load` through that list.
+    The build writes to the default local registry.
 
     Args:
         dataset_id: The dataset ID (``org/name``).
-        version: The version to load, which the card must declare, or ``None`` for the latest.
-        fetch_from: The registry, or its URI, to copy missing parents and payload sources from.
+        version: The version declared in the connector's card, or ``None`` for the latest.
+        fetch_from: A registry or URI to copy missing dependencies from.
         build_parents: Build missing parent releases from their installed connectors.
 
     Returns:
-        The loaded dataset.
+        The dataset with all stored values in memory.
     """
     from timenet.client import TimeNet  # ruff: ignore[import-outside-top-level]
 
