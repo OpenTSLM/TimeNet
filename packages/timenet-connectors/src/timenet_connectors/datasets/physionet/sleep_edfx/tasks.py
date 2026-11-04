@@ -20,6 +20,7 @@ from timenet.types import (
     US_PER_S,
     Annotation,
     ClassificationTask,
+    Label,
     LabelSet,
     LocalizationMode,
     ScalarPredictionTask,
@@ -37,42 +38,37 @@ EPOCH_MICROSECONDS = 30 * US_PER_S
 
 # The labels the release writes for a scored epoch. Five name a stage of sleep. `Sleep stage W`
 # is wake, `Movement time` marks a disturbed epoch, and `Sleep stage ?` marks one the
-# technician left unscored.
-STAGE_LABELS = (
-    "Sleep stage W",
-    "Sleep stage 1",
-    "Sleep stage 2",
-    "Sleep stage 3",
-    "Sleep stage 4",
-    "Sleep stage R",
-    "Movement time",
-    "Sleep stage ?",
+# technician left unscored. Each classification task draws its target from one closed set, named
+# after the key whose values it holds, and each target is exactly one label.
+SLEEP_STAGES = LabelSet(
+    name=str(AnnotationKey.SLEEP_STAGE),
+    labels=(
+        Label(name="Sleep stage W", description="Wake."),
+        Label(name="Sleep stage 1"),
+        Label(name="Sleep stage 2"),
+        Label(name="Sleep stage 3"),
+        Label(name="Sleep stage 4"),
+        Label(name="Sleep stage R", description="Rapid eye movement (REM) sleep."),
+        Label(name="Movement time", description="An epoch that body movement obscures, so it has no stage."),
+        Label(name="Sleep stage ?", description="An epoch the technician left unscored."),
+    ),
 )
+STAGE_LABELS = SLEEP_STAGES.names
 
 # The five labels that say the subject was asleep. None of the other three bounds a night.
 ASLEEP_LABELS = frozenset(STAGE_LABELS[1:6])
 
 # The sexes, after each sheet is decoded. The two sheets code the column with opposite
 # meanings, so a raw code never reaches a task.
-SEX_LABELS = ("F", "M")
+SEXES = LabelSet(
+    name=str(AnnotationKey.SEX),
+    labels=(Label(name="F", description="Female."), Label(name="M", description="Male.")),
+)
+SEX_LABELS = SEXES.names
 
 # The two nights of the telemetry study.
 CONDITION_LABELS = tuple(Condition)
-
-# Each classification task draws its target from one of these closed sets. Each set has the name of
-# the key whose values it holds, and each target is exactly one label.
-SLEEP_STAGES = LabelSet(
-    name=str(AnnotationKey.SLEEP_STAGE),
-    labels=STAGE_LABELS,
-    label_descriptions={
-        "Sleep stage W": "Wake.",
-        "Sleep stage R": "Rapid eye movement (REM) sleep.",
-        "Movement time": "An epoch that body movement obscures, so it has no stage.",
-        "Sleep stage ?": "An epoch the technician left unscored.",
-    },
-)
-SEXES = LabelSet(name=str(AnnotationKey.SEX), labels=SEX_LABELS, label_descriptions={"F": "Female.", "M": "Male."})
-CONDITIONS = LabelSet(name=str(AnnotationKey.CONDITION), labels=CONDITION_LABELS)
+CONDITIONS = LabelSet(name=str(AnnotationKey.CONDITION), labels=tuple(Label(name=str(one)) for one in Condition))
 
 
 def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation]) -> Iterator[ClassificationTask]:
