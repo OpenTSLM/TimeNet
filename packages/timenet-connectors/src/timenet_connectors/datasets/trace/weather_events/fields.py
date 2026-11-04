@@ -6,8 +6,9 @@ type it must have, so a JSON ``true`` never passes as an integer and blank text 
 
 from typing import Any
 
+import numpy as np
+
 from timenet.errors import TimeFValidationError
-from timenet_connectors.datasets.trace.weather_events.vocabulary import EventLabel
 
 
 def as_object(value: object) -> dict[str, Any]:
@@ -91,17 +92,19 @@ def degrees(value: object, name: str, limit: float) -> float:
     return float(value)
 
 
-def event_label(value: object, name: str) -> EventLabel:
-    """Return the label that a published event type names.
+def exact_numbers(values: list[Any], dtype: type[np.int64] | type[np.float64], name: str, problem: str) -> np.ndarray:
+    """Convert published numbers of the exact JSON types ``dtype`` allows, or fail naming the problem.
 
     Returns:
-        The label.
+        The values as an array.
 
     Raises:
-        TimeFValidationError: If the value is not an int that EVENT_MAP numbers.
+        TimeFValidationError: If a value has another type, such as a JSON true or a string, or is too big.
     """
-    number = exact_int(value, name)
+    allowed = {int} if dtype is np.int64 else {int, float}
+    if not set(map(type, values)) <= allowed:
+        raise TimeFValidationError(f"{name}: expected {problem}")
     try:
-        return EventLabel(number)
-    except ValueError as exc:
-        raise TimeFValidationError(f"{name}: no event type is numbered {number}") from exc
+        return np.array(values, dtype=dtype)
+    except OverflowError as exc:
+        raise TimeFValidationError(f"{name}: expected {problem}, got a value out of range") from exc

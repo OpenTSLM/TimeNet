@@ -18,6 +18,10 @@ SOURCE_URL = (
     "https://drive.usercontent.google.com/download?id=1hX4D91QbXa0UQlgf6Jnf-1ii96gfp1aY&export=download&confirm=t"
 )
 SOURCE_SHA256 = "a5d24d75a0b9f0f846a185caa46c4f77e0ef98272c12808df76fac25a181be58"
+ARCHIVE_FILENAME = "trace_dataset.zip"
+"""The name the downloaded archive is cached under."""
+_ARCHIVE_ROOT = "dataset"
+"""The archive's top-level folder, which holds the three folders."""
 
 
 @unique
@@ -36,6 +40,11 @@ class Kind(StrEnum):
     def holds_windows(self) -> bool:
         """Whether the folder's files hold windows, not text about windows."""
         return self is not Kind.RETRIEVAL
+
+    @property
+    def file_suffix(self) -> str:
+        """The suffix of the folder's split files: JSON windows, or parquet retrieval rows."""
+        return ".json" if self.holds_windows else ".parquet"
 
     @property
     def holds_forecasts(self) -> bool:
@@ -78,7 +87,7 @@ def archive_path(kind: Kind, split: SplitName) -> str:
     Returns:
         The path, such as ``dataset/pretrain/train.json``.
     """
-    return f"dataset/{kind}/{split}.{'json' if kind.holds_windows else 'parquet'}"
+    return f"{_ARCHIVE_ROOT}/{kind}/{split}{kind.file_suffix}"
 
 
 @dataclass(frozen=True)

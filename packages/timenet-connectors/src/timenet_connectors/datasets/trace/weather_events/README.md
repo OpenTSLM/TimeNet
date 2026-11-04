@@ -26,7 +26,7 @@ and one of three modes.
 An event is one report in the NOAA Storm Events Database: an id, one of nine event types, a county
 and a narrative. For each event, the authors take three windows at a nearby station, one per mode,
 that end before the event begins. These three windows are an anchor, with window ids `3k`, `3k+1`
-and `3k+2`. A window without a following event has the label `-100`.
+and `3k+2`. A window without a following event has the label `-100`, which no task uses.
 
 Paper Table 8 counts the windows:
 
@@ -64,10 +64,10 @@ cloud covers), 09 means that the sky is obscured, and 10 means partial obscurati
 
 [ncei-sky]: https://www.aos.wisc.edu/oldsco/stations/NCEI-hrly-doc_for_clds-BNA.txt
 
-The Record metadata holds the `station` id, its `coordinates`, the `sampling` and `windows`. The
-`windows` list has each published window with these measurements: its `window_id`, `anchor`,
-`source_file`, `county` and published `event_type`. Metadata is never model input. The Record
-annotations `window_start` and `window_end` hold the first and last timestamps, as published.
+The Record metadata holds the `station` id, its `coordinates`, the `sampling`, and `window_start`
+and `window_end`, the first and last timestamps as published. Its `windows` list has each published
+window with these measurements: its `window_id`, `anchor`, `source_file`, `county` and published
+`event_type`. Metadata is never model input. A Record has no annotations.
 
 ## Time
 
@@ -100,15 +100,14 @@ tasks name no candidates, and TimeF reads that as the whole dataset, test Record
 rank train tasks against that pool. A copy of a measurement shares its Record, so a copy counts as
 a right answer, where the authors count it as a miss.
 
-Give the candidates to a model as series only. A Record's annotations and its windows' `county`
-repeat the dates and county that a description starts with.
+A description starts with its window's dates and county. The Record keeps these only in metadata,
+so a model that sees the Record cannot match them by string.
 
 Forecasting: the target is the last 24 values of all seven channels. The input is the window before
 them, as the authors' `ForecastingDataset` splits it. The horizon is 24 values, the default of the
 authors' `forecast_finetune.py`.
 
-The dataset annotations are `event_type_vocabulary`, the nine event types in label order, and
-`no_event_label`, which is `-100`.
+The dataset annotation `event_type_vocabulary` lists the nine event types in label order.
 
 ## Checks
 
@@ -129,20 +128,21 @@ forecasting, its target for retrieval.
 ```python
 from datetime import datetime
 
+from timenet.types import Split
+
 FIRST_CUT, SECOND_CUT = datetime(2022, 6, 10), datetime(2023, 3, 18)  # example cuts
 
 
-def time_split(record):
+def time_split(record) -> Split | None:
     """Return a Record's split, or None when its window crosses a cut."""
-    dates = {a.key: a.value.read() for a in record.annotations}
-    start = datetime.fromisoformat(dates["window_start"])
-    end = datetime.fromisoformat(dates["window_end"])
+    start = datetime.fromisoformat(record.metadata["window_start"])
+    end = datetime.fromisoformat(record.metadata["window_end"])
     if end < FIRST_CUT:
-        return "train"
+        return Split.TRAIN
     if start >= FIRST_CUT and end < SECOND_CUT:
-        return "validation"
+        return Split.VALIDATION
     if start >= SECOND_CUT:
-        return "test"
+        return Split.TEST
     return None
 ```
 

@@ -13,7 +13,6 @@ from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDownlo
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
 from timenet.types import ClassificationTask, ForecastingTask, Split, Task, TimeInterval, TSCorrespondenceTask
-from timenet.types.text import TextHandle
 from timenet_connectors.datasets.trace.weather_events import archive, connector as module
 from timenet_connectors.datasets.trace.weather_events.archive import FILES, Kind, SplitName, TraceFile
 from timenet_connectors.datasets.trace.weather_events.connector import TraceWeatherEventsConnector
@@ -163,6 +162,12 @@ def _convert(tmp_path, **kwargs):
     return TraceWeatherEventsConnector().convert(_write(tmp_path, **kwargs))
 
 
+@pytest.fixture(scope="module")
+def converted(tmp_path_factory):
+    """The fixture archive, converted once for the tests that only read the dataset."""
+    return _convert(tmp_path_factory.mktemp("trace"))
+
+
 def _windows_with(part: str, key: str, row) -> dict:
     """Return a copy of the fixture windows with the window ``key`` of ``part`` set to ``row``."""
     windows = {name: dict(rows) for name, rows in _WINDOWS.items()}
@@ -204,8 +209,8 @@ def _read_all_values(dataset) -> None:
             signal.to_numpy()
 
 
-def test_identical_windows_share_one_record_and_keep_their_own_tasks(tmp_path):
-    dataset = _convert(tmp_path)
+def test_identical_windows_share_one_record_and_keep_their_own_tasks(converted):
+    dataset = converted
 
     record = _record_of(dataset, 12)
     assert _record_of(dataset, 15) is record
@@ -239,24 +244,24 @@ def test_identical_windows_share_one_record_and_keep_their_own_tasks(tmp_path):
     assert (retrievals[12].split, retrievals[15].split) == (Split.TRAIN, Split.TEST)
 
 
-def test_every_distinct_window_becomes_a_record_with_its_signals(tmp_path):
-    dataset = _convert(tmp_path)
+def test_every_distinct_window_becomes_a_record_with_its_signals(converted):
+    dataset = converted
 
     rows = {key: row for part in _WINDOWS.values() for key, row in part.items()}
     assert len(dataset.records) == len(rows) - 1
     for record in dataset.records:
         (window_id, *_) = sorted(_window_of(record))
         row = rows[str(window_id)]
-        # The station is TRACE's own field, beside where it stands, its sampling and its windows.
-        assert record.metadata.keys() == {"station", "coordinates", "sampling", "windows"}
+        # The station is TRACE's own field, beside where it stands, its sampling, its dates and its windows.
+        assert record.metadata.keys() == {"station", "coordinates", "sampling", "window_start", "window_end", "windows"}
         assert record.metadata["station"] == row["station_id"]
         assert record.metadata["coordinates"] == {"latitude": row["latitude"], "longitude": row["longitude"]}
         assert record.metadata["sampling"] == row["mode"]
         # The source states no time zone, so the Record has no absolute anchor, only its published dates.
         assert not record.has_absolute_time
-        notes = {a.key: a for a in record.annotations}
-        assert notes.keys() == {"window_start", "window_end"}
-        assert (notes["window_start"].value, notes["window_end"].value) == (row["DATE"][0], row["DATE"][-1])
+        assert (record.metadata["window_start"], record.metadata["window_end"]) == (row["DATE"][0], row["DATE"][-1])
+        # The dates repeat what a description starts with, so they stay out of the annotations.
+        assert not record.annotations
         (source,) = record.sources
         # The station id is a prior on the label, so it stays out of the source name.
         assert (source.name, source.metadata) == ("station", {"channel_order": list(_CHANNELS)})
@@ -275,11 +280,11 @@ def test_every_distinct_window_becomes_a_record_with_its_signals(tmp_path):
             assert _offsets(signal) == want_offsets
 
     annotations = {annotation.key: annotation.value for annotation in dataset.annotations}
-    assert annotations == {"no_event_label": -100, "event_type_vocabulary": _VOCABULARY}
+    assert annotations == {"event_type_vocabulary": _VOCABULARY}
 
 
-def test_classified_windows_get_an_event_type_task_with_their_report(tmp_path):
-    dataset = _convert(tmp_path)
+def test_classified_windows_get_an_event_type_task_with_their_report(converted):
+    dataset = converted
 
     events = _tasks(dataset, ClassificationTask)
     # 30 has no event, and 33 is too short.
@@ -297,8 +302,8 @@ def test_classified_windows_get_an_event_type_task_with_their_report(tmp_path):
         assert task.metadata["event_type_index"] == event_type
 
 
-def test_every_retrieval_row_becomes_a_retrieval_task(tmp_path):
-    dataset = _convert(tmp_path)
+def test_every_retrieval_row_becomes_a_retrieval_task(converted):
+    dataset = converted
 
     retrievals = _tasks(dataset, TSCorrespondenceTask)
     assert sorted(retrievals) == [0, 1, 3, 12, 15, 30, 60]
@@ -321,8 +326,8 @@ def test_every_retrieval_row_becomes_a_retrieval_task(tmp_path):
     assert _window_of(_record_of(dataset, 63))[63]["county"] == {"name": "DOÑA ANA", "state": "NEW MEXICO"}
 
 
-def test_forecasting_windows_forecast_their_last_values(tmp_path):
-    dataset = _convert(tmp_path)
+def test_forecasting_windows_forecast_their_last_values(converted):
+    dataset = converted
 
     forecasts = _tasks(dataset, ForecastingTask)
     # 61 is too short.
@@ -365,9 +370,9 @@ def test_storage_round_trip_keeps_values_timestamps_and_tasks(tmp_path):
         for signal in record.signals:
             np.testing.assert_array_equal(signal.to_numpy(), signals[signal.name].to_numpy())
         # The published timestamps rebuild from the first one and the local-clock offsets.
-        start = next(a.value for a in record.annotations if a.key == "window_start")
-        assert isinstance(start, TextHandle)
-        first = datetime.fromisoformat(start.read())
+        start = record.metadata["window_start"]
+        assert isinstance(start, str)
+        first = datetime.fromisoformat(start)
         rebuilt = [(first + timedelta(microseconds=offset)).isoformat() for offset in _offsets(record.signals[0])]
         for window_id in _window_of(record):
             assert rebuilt == rows[str(window_id)]["DATE"]
@@ -563,6 +568,19 @@ def test_a_retrieval_file_without_a_needed_column_is_a_format_error(tmp_path, co
     pq.write_table(pq.read_table(path).drop_columns([column]), path)
     with pytest.raises(TimeFFormatError, match=rf"train\.parquet: no column \['{column}'\]"):
         TraceWeatherEventsConnector().convert(files)
+
+
+@pytest.mark.parametrize(
+    ("windows", "reports", "message"),
+    [
+        # A truncated file can still be valid JSON or parquet.
+        ({**_WINDOWS, "forecasting/test": {}}, _REPORTS, r"forecasting/test\.json: holds no windows"),
+        (_WINDOWS, {**_REPORTS, "retrieval/test": {}}, r"retrieval/test\.parquet: holds no retrieval rows"),
+    ],
+)
+def test_an_empty_split_file_fails(tmp_path, windows, reports, message):
+    with pytest.raises(TimeFValidationError, match=message):
+        _convert(tmp_path, windows=windows, reports=reports)
 
 
 def test_a_file_that_is_not_parquet_fails_as_a_format_error(tmp_path):

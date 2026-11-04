@@ -9,7 +9,9 @@ from enum import IntEnum, StrEnum, unique
 import numpy as np
 import pyarrow as pa
 
-from timenet.types import Annotation, TimeSeriesSpec, ureg
+from timenet.errors import TimeFValidationError
+from timenet.types import US_PER_S, Annotation, TimeSeriesSpec, ureg
+from timenet_connectors.datasets.trace.weather_events.fields import exact_int, exact_numbers
 
 
 # Fewest timestamps a window needs to get an event-type or forecasting task. The authors'
@@ -41,6 +43,22 @@ class EventLabel(IntEnum):
     HAIL = 6
     FLOOD = 7
     THUNDERSTORM_WIND = 8
+
+    @classmethod
+    def parse(cls, value: object, name: str) -> "EventLabel":
+        """Return the label that a published event type names.
+
+        Returns:
+            The label.
+
+        Raises:
+            TimeFValidationError: If the value is not an int that EVENT_MAP numbers.
+        """
+        number = exact_int(value, name)
+        try:
+            return cls(number)
+        except ValueError as exc:
+            raise TimeFValidationError(f"{name}: no event type is numbered {number}") from exc
 
     @property
     def is_event(self) -> bool:
@@ -83,10 +101,7 @@ class SourceField(StrEnum):
 class AnnotationKey(StrEnum):
     """The key of an annotation the connector builds."""
 
-    NO_EVENT_LABEL = "no_event_label"
     EVENT_TYPE_VOCABULARY = "event_type_vocabulary"
-    WINDOW_START = "window_start"
-    WINDOW_END = "window_end"
     CHANNEL_DESCRIPTION = "channel_description"
 
 
@@ -98,6 +113,10 @@ class MetadataKey(StrEnum):
     STATION = "station"
     COORDINATES = "coordinates"
     SAMPLING = "sampling"
+    WINDOW_START = "window_start"
+    """The first timestamp, as published: station local clock time, with no time zone."""
+    WINDOW_END = "window_end"
+    """The last timestamp, as published."""
     WINDOWS = "windows"
     # A window, in its Record's ``windows`` and in its tasks.
     WINDOW_ID = "window_id"
@@ -115,11 +134,8 @@ class MetadataKey(StrEnum):
     CHANNEL = "channel"
 
 
-DATASET_ANNOTATIONS = (
-    Annotation(key=AnnotationKey.NO_EVENT_LABEL, value=EventLabel.NO_EVENT.value),
-    Annotation(key=AnnotationKey.EVENT_TYPE_VOCABULARY, value=_VOCABULARY),
-)
-"""The event labels of the full dataset. They do not come from the files, so the connector adds them."""
+DATASET_ANNOTATIONS = (Annotation(key=AnnotationKey.EVENT_TYPE_VOCABULARY, value=_VOCABULARY),)
+"""The event types that the event-type task's targets come from. The files do not list them."""
 
 
 @unique
@@ -149,10 +165,11 @@ class Sampling(StrEnum):
         return window_id // len(cls)
 
 
+_HOUR_US = 3600 * US_PER_S
 _CADENCE_US = {
-    Sampling.HOURLY_7_DAYS: 3_600_000_000,
-    Sampling.FOUR_HOURLY_28_DAYS: 14_400_000_000,
-    Sampling.DAILY_180_DAYS: 86_400_000_000,
+    Sampling.HOURLY_7_DAYS: _HOUR_US,
+    Sampling.FOUR_HOURLY_28_DAYS: 4 * _HOUR_US,
+    Sampling.DAILY_180_DAYS: 24 * _HOUR_US,
 }
 
 # GHCN-h sky cover codes 00-10, after NCEI's hourly coverage code table. Codes 00-08 count oktas, the
@@ -189,6 +206,30 @@ class Channel(StrEnum):
     def spec(self) -> TimeSeriesSpec:
         """The channel's TimeF spec: what it measures, and in which unit."""
         return _SPECS[self]
+
+    def parse_values(self, values: object, count: int) -> np.ndarray:
+        """Check one channel's published values: finite numbers, or sky cover codes in the codebook.
+
+        Returns:
+            Float64 values, or int64 sky cover codes, one per timestamp.
+
+        Raises:
+            TimeFValidationError: If the values are not one per timestamp, are not finite, or hold a code
+                outside the codebook.
+        """
+        if not isinstance(values, list) or len(values) != count:
+            raise TimeFValidationError(f"{self} must be a list of {count} values, one per timestamp")
+        if self is Channel.SKY_COVER:
+            problem = f"integer codes from 0 to {len(SKY_COVER_LABELS) - 1}"
+            codes = exact_numbers(values, np.int64, self, problem)
+            if codes.min() < 0 or codes.max() >= len(SKY_COVER_LABELS):
+                raise TimeFValidationError(f"{self}: expected {problem}")
+            return codes
+        numbers = exact_numbers(values, np.float64, self, "finite numbers")
+        # NaN and infinity, which Python's json accepts, are not measurements.
+        if not np.isfinite(numbers).all():
+            raise TimeFValidationError(f"{self}: expected finite numbers")
+        return numbers
 
     def to_arrow(self, values: np.ndarray) -> pa.Array:
         """Return checked values as the channel stores them: float32, or sky cover codes as codebook indices."""

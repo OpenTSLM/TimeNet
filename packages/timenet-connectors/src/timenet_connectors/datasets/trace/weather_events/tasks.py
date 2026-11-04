@@ -72,10 +72,9 @@ class TaskStream:
         """Yield one correspondence task for each retrieval row: its description must find the window's Record.
 
         A task's split is its retrieval file's, which is the authors' own: most retrieval test tasks are
-        on windows from the ``pretrain`` train and val files. The query is text only. The candidates must
-        stay series only: a description opens with its window's county and dates, which the Records'
-        ``county`` metadata and ``window_start`` and ``window_end`` annotations also hold, so naming
-        either as an input would let a model match by string.
+        on windows from the ``pretrain`` train and val files. The query is text only, and the target is
+        the Record's series. A description starts with its window's county and dates, which the Record
+        keeps only in metadata, so a model cannot match them by string.
         """
         for checked in self._retrieval.rows():
             file, window, row = checked.file, checked.window, checked.row

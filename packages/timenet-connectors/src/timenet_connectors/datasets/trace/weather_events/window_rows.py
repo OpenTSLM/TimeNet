@@ -15,20 +15,8 @@ import numpy as np
 from timenet.errors import TimeFValidationError
 from timenet.types import TimeInterval
 from timenet_connectors.datasets.trace.weather_events.archive import Kind
-from timenet_connectors.datasets.trace.weather_events.fields import (
-    as_object,
-    degrees,
-    event_label,
-    field,
-    text,
-)
-from timenet_connectors.datasets.trace.weather_events.vocabulary import (
-    SKY_COVER_LABELS,
-    Channel,
-    EventLabel,
-    Sampling,
-    SourceField,
-)
+from timenet_connectors.datasets.trace.weather_events.fields import as_object, degrees, field, text
+from timenet_connectors.datasets.trace.weather_events.vocabulary import Channel, EventLabel, Sampling, SourceField
 
 
 # YYYY-MM-DDTHH:MM:SS with no fractional seconds or time zone. NumPy would parse looser inputs such as
@@ -36,6 +24,10 @@ from timenet_connectors.datasets.trace.weather_events.vocabulary import (
 _TIMESTAMP = re.compile(r"[0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9]{2}:[0-9]{2}:[0-9]{2}")
 _LOCATION_PARTS = 2
 """A published ``location`` names a county and its state."""
+_MAX_LATITUDE = 90
+_MAX_LONGITUDE = 180
+_PREVIEW_CHARS = 80
+"""How much of a bad published value an error message shows."""
 
 
 class Coordinates(NamedTuple):
@@ -43,6 +35,17 @@ class Coordinates(NamedTuple):
 
     latitude: float
     longitude: float
+
+    @classmethod
+    def parse(cls, published: dict[str, Any]) -> "Coordinates":
+        """Return a window's published latitude and longitude, checked to lie on the Earth.
+
+        Returns:
+            The coordinates.
+        """
+        latitude = degrees(field(published, SourceField.LATITUDE), SourceField.LATITUDE, _MAX_LATITUDE)
+        longitude = degrees(field(published, SourceField.LONGITUDE), SourceField.LONGITUDE, _MAX_LONGITUDE)
+        return cls(latitude, longitude)
 
 
 class County(NamedTuple):
@@ -100,7 +103,7 @@ class LocalTimestamps(NamedTuple):
             TimeFValidationError: If a timestamp is malformed, out of order or off the cadence.
         """
         if not isinstance(dates, list) or not dates:
-            raise TimeFValidationError(f"DATE: expected a non-empty list, got {dates!r:.80}")
+            raise TimeFValidationError(f"DATE: expected a non-empty list, got {dates!r:.{_PREVIEW_CHARS}}")
         for index, date in enumerate(dates):
             if not isinstance(date, str) or not _TIMESTAMP.fullmatch(date):
                 raise TimeFValidationError(f"DATE[{index}]: expected YYYY-MM-DDTHH:MM:SS, got {date!r}")
@@ -131,50 +134,6 @@ class LocalTimestamps(NamedTuple):
             The interval from the ``count``-th last timestamp to just after the last one.
         """
         return TimeInterval(start_us=int(self.offsets_us[-count]), end_us=int(self.offsets_us[-1]) + 1)
-
-
-def _numbers(values: list[Any], dtype: type[np.int64] | type[np.float64], name: str, problem: str) -> np.ndarray:
-    """Convert published numbers of the exact JSON types ``dtype`` allows, or fail naming the problem.
-
-    Returns:
-        The values as an array.
-
-    Raises:
-        TimeFValidationError: If a value has another type, such as a JSON true or a string, or is too big.
-    """
-    allowed = {int} if dtype is np.int64 else {int, float}
-    if not set(map(type, values)) <= allowed:
-        raise TimeFValidationError(f"{name}: expected {problem}")
-    try:
-        return np.array(values, dtype=dtype)
-    except OverflowError as exc:
-        raise TimeFValidationError(f"{name}: expected {problem}, got a value out of range") from exc
-
-
-def _channel_values(published: dict[str, Any], channel: Channel, count: int) -> np.ndarray:
-    """Return one channel's values: finite numbers, or sky cover codes in the codebook.
-
-    Returns:
-        Float64 values, or int64 sky cover codes.
-
-    Raises:
-        TimeFValidationError: If the channel is missing, is not one number per timestamp, is not finite,
-            or holds a code outside the codebook.
-    """
-    values = field(published, channel.value)
-    if not isinstance(values, list) or len(values) != count:
-        raise TimeFValidationError(f"{channel} must be a list of {count} values, one per timestamp")
-    if channel is Channel.SKY_COVER:
-        problem = f"integer codes from 0 to {len(SKY_COVER_LABELS) - 1}"
-        codes = _numbers(values, np.int64, channel, problem)
-        if codes.min() < 0 or codes.max() >= len(SKY_COVER_LABELS):
-            raise TimeFValidationError(f"{channel}: expected {problem}")
-        return codes
-    numbers = _numbers(values, np.float64, channel, "finite numbers")
-    # NaN and infinity, which Python's json accepts, are not measurements.
-    if not np.isfinite(numbers).all():
-        raise TimeFValidationError(f"{channel}: expected finite numbers")
-    return numbers
 
 
 def parse_sampling(published: dict[str, Any]) -> Sampling:
@@ -209,7 +168,7 @@ class Readings(NamedTuple):
         """
         dates = field(published, SourceField.DATE)
         timestamps = LocalTimestamps.parse(dates, sampling)
-        values = {channel: _channel_values(published, channel, len(dates)) for channel in Channel}
+        values = {channel: channel.parse_values(field(published, channel.value), len(dates)) for channel in Channel}
         return cls(timestamps, values)
 
     @property
@@ -261,15 +220,12 @@ class WindowRow(NamedTuple):
         # Only pretrain windows publish a label, and they must. A published null is not an absent label.
         label = None
         if kind is Kind.PRETRAIN:
-            label = event_label(field(published, SourceField.EVENT_TYPE), SourceField.EVENT_TYPE)
+            label = EventLabel.parse(field(published, SourceField.EVENT_TYPE), SourceField.EVENT_TYPE)
         elif SourceField.EVENT_TYPE in published:
             raise TimeFValidationError(f"a {kind} window must not publish an event_type")
         return cls(
             station_id=text(field(published, SourceField.STATION_ID), SourceField.STATION_ID),
-            coordinates=Coordinates(
-                degrees(field(published, SourceField.LATITUDE), SourceField.LATITUDE, 90),
-                degrees(field(published, SourceField.LONGITUDE), SourceField.LONGITUDE, 180),
-            ),
+            coordinates=Coordinates.parse(published),
             county=County.parse(field(published, SourceField.LOCATION)),
             sampling=sampling,
             readings=Readings.parse(published, sampling),

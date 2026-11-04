@@ -29,6 +29,7 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError, TimeNetDownloadError
 from timenet_connectors.datasets.trace.weather_events.archive import (
+    ARCHIVE_FILENAME,
     FILES,
     SOURCE_SHA256,
     SOURCE_URL,
@@ -55,7 +56,7 @@ class TraceWeatherEventsConnector(BaseConnector[TraceFile]):
         Raises:
             TimeNetDownloadError: If the archive lacks a split file.
         """
-        root = await ensure_archive(SOURCE_URL, cache_dir, filename="trace_dataset.zip", sha256=SOURCE_SHA256)
+        root = await ensure_archive(SOURCE_URL, cache_dir, filename=ARCHIVE_FILENAME, sha256=SOURCE_SHA256)
         # The sha256 pins the layout: every split file sits under the archive's top-level dataset/.
         files = [TraceFile(root / archive_path(kind, split), kind, split) for kind, split in FILES]
         missing = [str(file.path) for file in files if not file.path.is_file()]
@@ -76,7 +77,7 @@ class TraceWeatherEventsConnector(BaseConnector[TraceFile]):
             raw_refs: The archive's eight split files, each once.
 
         Returns:
-            A dataset with the label annotations, the Records, and a stream of every task.
+            A dataset with the event-type vocabulary, the Records, and a stream of every task.
 
         Raises:
             TimeFValidationError: If the file set, a window or a retrieval row is invalid.

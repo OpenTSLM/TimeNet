@@ -18,13 +18,12 @@ from timenet.dataset import Record, Signal, Source
 from timenet.dataset.axis import IrregularAxis, RegularAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.json import JsonValue
-from timenet.types import Annotation, TimeInterval
+from timenet.types import TimeInterval
 from timenet_connectors.datasets.trace.weather_events.archive import TraceFile
 from timenet_connectors.datasets.trace.weather_events.fields import as_object, field
 from timenet_connectors.datasets.trace.weather_events.vocabulary import (
     FORECAST_HORIZON,
     MIN_TASK_VALUES,
-    AnnotationKey,
     Channel,
     EventLabel,
     MetadataKey,
@@ -42,7 +41,22 @@ from timenet_connectors.sources.json_stream import iter_object, read_entry
 from timenet_connectors.time_axes import axis_for_offsets
 
 
-_DATE_NOTE = "station local clock time, no time zone. Not a retrieval input: every description restates these dates"
+_STATION_SOURCE = "station"
+"""The name of each Record's one Source. It is generic: the station id is a strong prior on the event type."""
+
+
+def _key_context(path: Path, key: str) -> str:
+    """Return the file and key that error messages name for a window."""
+    return f"{path} (key {key})"
+
+
+def _is_canonical_window_id(key: str) -> bool:
+    """Check that a JSON key reads exactly as the integer id a retrieval row gives, such as 12, not 012.
+
+    Returns:
+        Whether the key is canonical.
+    """
+    return key.isascii() and key.isdecimal() and key == str(int(key))
 
 
 class WindowLocation(NamedTuple):
@@ -146,6 +160,8 @@ class Measurement:
             MetadataKey.STATION: self.station_id,
             MetadataKey.COORDINATES: self.coordinates._asdict(),
             MetadataKey.SAMPLING: self.sampling.value,
+            MetadataKey.WINDOW_START: self.first_date,
+            MetadataKey.WINDOW_END: self.last_date,
             MetadataKey.WINDOWS: [window.metadata() for window in windows],
         }
 
@@ -153,7 +169,7 @@ class Measurement:
         """Build the measurement's seven-channel station Record, whose values stay in the source file.
 
         The Record has no start time: the timestamps are local clock time in an unstated zone, so it has no
-        absolute anchor. The published first and last timestamps stay in its annotations.
+        absolute anchor. The published first and last timestamps stay in its metadata.
 
         Returns:
             A Record with lazy signals on one shared time axis.
@@ -172,22 +188,12 @@ class Measurement:
             for channel in Channel
         )
         source = Source(
-            # A generic name: the station id is a strong prior on the event type, so it stays in metadata,
-            # which is never model input.
-            name="station",
+            name=_STATION_SOURCE,
             signals=signals,
             # TimeF does not keep signal order on read, so record the source's channel order.
             metadata={MetadataKey.CHANNEL_ORDER: [channel.value for channel in Channel]},
         )
-        record = Record(sources=(source,), metadata=self.metadata())
-        for key, date, which in (
-            (AnnotationKey.WINDOW_START, self.first_date, "First"),
-            (AnnotationKey.WINDOW_END, self.last_date, "Last"),
-        ):
-            record.annotate(
-                Annotation(key=key, value=date, description=f"{which} timestamp, as published: {_DATE_NOTE}")
-            )
-        return record
+        return Record(sources=(source,), metadata=self.metadata())
 
 
 @dataclass(frozen=True, eq=False)
@@ -225,7 +231,7 @@ class Window:
     @property
     def error_context(self) -> str:
         """The file and key that error messages name."""
-        return f"{self.file.path} (key {self.key})"
+        return _key_context(self.file.path, self.key)
 
     @property
     def is_classified(self) -> bool:
@@ -260,21 +266,25 @@ class WindowIndex:
         """Check every window of one file and group it with the windows that share its measurements.
 
         Raises:
-            TimeFValidationError: If a window is invalid, naming the file and key.
+            TimeFValidationError: If a window is invalid, naming the file and key, or the file has no windows.
         """
+        n_windows = 0
         for key, published, offset, length in iter_object(file.path):
             try:
                 self._add(file, key, published, offset, length)
             except TimeFValidationError as exc:
-                raise TimeFValidationError(f"{file.path} (key {key}): {exc}") from exc
+                raise TimeFValidationError(f"{_key_context(file.path, key)}: {exc}") from exc
+            n_windows += 1
+        # A truncated file can still be valid JSON. Every split file of the archive holds windows.
+        if n_windows == 0:
+            raise TimeFValidationError(f"{file.path}: holds no windows")
 
     def get(self, window_id: int) -> Window | None:
         """Return the window with this id, or ``None`` if no window file has it."""
         return self.windows.get(str(window_id))
 
     def _add(self, file: TraceFile, key: str, published: object, offset: int, length: int) -> None:
-        # Retrieval rows give integer ids, so a key must read exactly as str(id), such as 12, not 012.
-        if not key.isascii() or not key.isdecimal() or key != str(int(key)):
+        if not _is_canonical_window_id(key):
             raise TimeFValidationError(f"expected a canonical decimal window id, got {key!r}")
         if key in self.windows:
             raise TimeFValidationError(f"window {key} also appears in {self.windows[key].file.path}")
