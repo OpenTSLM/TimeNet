@@ -1,9 +1,6 @@
-"""Find, inspect, download, and read datasets with :class:`TimeNet`.
+"""Find, inspect, download, and read TimeF datasets.
 
-A client reads releases through an ordered list of sources, by default :func:`default_sources`, and
-builds a release that only ``InstalledConnectors()`` provides into its first local registry that is not
-read-only. ``download`` copies a release into that local registry, ``get_manifest`` and ``get_card``
-describe one without a copy or a build, and ``list`` and ``search`` merge the rows of every source.
+:class:`TimeNet` checks sources in order and uses :func:`default_sources` by default.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -203,12 +200,12 @@ class TimeNet:
             )
 
     def list(self) -> _Metadatas:
-        """Return one row per dataset across the sources, connector cards included, at the highest version.
+        """List each dataset at its highest version across all sources, including connector cards.
 
-        A row can show a higher version than :meth:`open` reads, because a registry can list a version
-        that it does not serve. A source without a catalog is left out with a
-        :class:`~timenet.errors.CatalogWarning`. An error of a source, for example a registry that cannot be
-        reached, stops the call.
+        A listed version can be newer than the one that :meth:`open` reads, which skips a version that a registry
+        does not serve and, without a version, takes the first source that serves the dataset.
+        A source without a catalog is left out with a :class:`~timenet.errors.CatalogWarning`. Source errors stop
+        the call.
 
         Returns:
             One :class:`~timenet.types.DatasetMetadata` per dataset, sorted by dataset ID.
@@ -318,12 +315,12 @@ class TimeNet:
         the call.
 
         Args:
-            query: Free text terms for the name, description, and tags.
+            query: Match any term in the name, description, or tags, ignoring case.
             domain: Match any of these domains.
             task: Match any of these task classes in the schema.
             license: Match any of these licenses.
             time_series_spec: Match all of these ``spec_type`` values.
-            dataset_id: Match only these IDs.
+            dataset_id: Match any of these IDs.
             tag: Match all of these tags.
             limit: The maximum number of results.
 

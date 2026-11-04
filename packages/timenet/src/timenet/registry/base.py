@@ -33,7 +33,7 @@ ProgressCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
-    """A searchable source of TimeF datasets, manifests, and files.
+    """A registry of TimeF manifests, files, and searchable dataset metadata.
 
     :meth:`open_release` and :meth:`download_release` handle one release without its payload
     sources. :func:`~timenet.registry.copy_release` copies a release with its payload sources.
