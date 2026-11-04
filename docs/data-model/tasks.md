@@ -12,9 +12,9 @@ A Task describes one modeling problem. It holds ordered input Records and one re
 expected output.
 
 ```python
-from timenet.types import ClassificationTask, LabelSet
+from timenet.types import ClassificationTask, Label, LabelSet
 
-CONDITION = LabelSet(name="condition", labels=("healthy", "faulty"))
+CONDITION = LabelSet(name="condition", labels=(Label(name="healthy"), Label(name="faulty")))
 
 task = ClassificationTask(
     inputs=(record,),
@@ -209,11 +209,11 @@ from timenet.types import Label, LabelSet
 
 CONDITION = LabelSet(
     name="condition",
-    labels=("healthy", Label(name="faulty", description="A bearing fault.")),
+    labels=(Label(name="healthy"), Label(name="faulty", description="A bearing fault.")),
 )
 FINDINGS = LabelSet(
     name="findings",
-    labels=("AF", "PVC", "LBBB"),
+    labels=(Label(name="AF"), Label(name="PVC"), Label(name="LBBB")),
     multi_label=True,
 )
 

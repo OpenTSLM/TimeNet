@@ -28,8 +28,8 @@ from timenet.types import (
 
 
 SPEC = TimeSeriesSpec(spec_type="voltage", name="Voltage", unit_value=ureg.millivolt)
-STAGES = LabelSet(name="stage", labels=("W", "N1", Label(name="R", description="REM sleep.")))
-FINDINGS = LabelSet(name="findings", labels=("AF", "PVC"), multi_label=True)
+STAGES = LabelSet(name="stage", labels=(Label(name="W"), Label(name="N1"), Label(name="R", description="REM sleep.")))
+FINDINGS = LabelSet(name="findings", labels=(Label(name="AF"), Label(name="PVC")), multi_label=True)
 
 
 def _record() -> Record:
@@ -143,7 +143,7 @@ def test_the_task_table_shows_the_label_set_name(release):
         ]
 
 
-OTHER_STAGES = LabelSet(name="stage", labels=("W", "R"))
+OTHER_STAGES = LabelSet(name="stage", labels=(Label(name="W"), Label(name="R")))
 SAME_NAME = r"ClassificationTask [0-9]+: label set 'stage' differs from another set"
 
 
@@ -190,7 +190,7 @@ def test_a_stream_rejects_a_different_set_with_a_used_name():
     ("changed", "message"),
     [
         (OTHER_STAGES, SAME_NAME),
-        (LabelSet(name="other", labels=("X",)), "ClassificationTask 2: labels not in label set 'other'"),
+        (LabelSet(name="other", labels=(Label(name="X"),)), "ClassificationTask 2: labels not in label set 'other'"),
     ],
 )
 def test_the_writer_rejects_a_label_set_changed_after_add_task(tmp_path, changed, message):

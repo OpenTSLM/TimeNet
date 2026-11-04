@@ -33,7 +33,7 @@ from timenet.format.stored_values import (
     offsets_digest,
 )
 from timenet.format.table_writer import insert_rows
-from timenet.format.task_codec import TaskRelationshipField, encode_label_set, encode_span, encode_task_payload
+from timenet.format.task_codec import TaskRelationshipField, encode_span, encode_task_payload
 from timenet.format.task_target_row import TargetValueRow
 from timenet.json import validate_json_value
 from timenet.types import (
@@ -557,9 +557,7 @@ class DuckDBControlWriter:
             # Store this batch's locators now, so a streamed task source never holds them all.
             self.external.write_locators(connection)
         # Tasks refer to a label set by its name, so the sets can follow the tasks that use them.
-        insert_rows(
-            connection, TABLES["label_sets"], [encode_label_set(label_set)._asdict() for label_set in label_sets]
-        )
+        insert_rows(connection, TABLES["label_sets"], [label_set.model_dump() for label_set in label_sets])
         duplicate = connection.execute(
             "SELECT task_id FROM tasks GROUP BY task_id HAVING count(*) > 1 LIMIT 1"
         ).fetchone()

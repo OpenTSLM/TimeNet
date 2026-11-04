@@ -5,21 +5,15 @@ from timenet.errors import TimeFValidationError
 from timenet.types import ClassificationTask, Label, LabelSet
 
 
-STAGES = LabelSet(name="stage", labels=(Label(name="W", description="Awake."), "N1", "R"))
-FINDINGS = LabelSet(name="findings", labels=("AF", "PVC", "LBBB"), multi_label=True)
-
-
-def test_a_plain_string_is_a_label_without_a_description():
-    assert STAGES.labels == (Label(name="W", description="Awake."), Label(name="N1"), Label(name="R"))
-    assert STAGES.names == ("W", "N1", "R")
+STAGES = LabelSet(name="stage", labels=(Label(name="W", description="Awake."), Label(name="N1"), Label(name="R")))
+FINDINGS = LabelSet(name="findings", labels=(Label(name="AF"), Label(name="PVC"), Label(name="LBBB")), multi_label=True)
 
 
 @pytest.mark.parametrize(
     ("labels", "message"),
     [
         ((), "at least one label"),
-        (("W", "W"), "more than once"),
-        (("W", Label(name="W", description="Awake.")), "more than once"),
+        ((Label(name="W"), Label(name="W", description="Awake.")), "more than once"),
     ],
 )
 def test_a_label_set_needs_at_least_one_label_and_distinct_names(labels, message):

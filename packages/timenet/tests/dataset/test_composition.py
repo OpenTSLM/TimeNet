@@ -60,7 +60,7 @@ from timenet.writer import TimeFWriter
 
 _ALIAS = ParentAlias("base")
 _SPEC = TimeSeriesSpec(spec_type="sine", name="Sine", unit_value=ureg.dimensionless)
-SCP = LabelSet(name="scp", labels=(Label(name="normal", description="No finding."), "abnormal"))
+SCP = LabelSet(name="scp", labels=(Label(name="normal", description="No finding."), Label(name="abnormal")))
 
 
 def store(root, dataset):

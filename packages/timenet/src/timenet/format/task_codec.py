@@ -10,7 +10,7 @@ Signals up by id.
 from collections.abc import Iterable, Mapping
 from enum import StrEnum, unique
 from functools import lru_cache
-from typing import Any, NamedTuple, TypedDict, TypeVar, cast
+from typing import Any, TypeVar, cast
 
 from pydantic import ValidationError
 
@@ -23,8 +23,6 @@ from timenet.types import (
     ClassificationTask,
     EntityId,
     InputModality,
-    Label,
-    LabelSet,
     LocalizationMode,
     ObjectKind,
     ScalarPredictionTask,
@@ -207,54 +205,6 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
     if task_type is TaskType.TEMPORAL_LOCALIZATION:
         return {"mode": LocalizationMode(columns.get("mode") or LocalizationMode.SPARSE)}
     return {}
-
-
-class LabelRow(TypedDict):
-    """One entry of ``label_sets.labels``."""
-
-    name: str
-    description: str | None
-
-
-class LabelSetRow(NamedTuple):
-    """One ``label_sets`` row, with the fields in the order of the table's columns."""
-
-    name: str
-    labels: list[LabelRow]
-    """One entry per label, in label order."""
-    multi_label: bool
-
-
-def encode_label_set(label_set: LabelSet) -> LabelSetRow:
-    """Encode a label set as one ``label_sets`` row.
-
-    Returns:
-        The row.
-    """
-    return LabelSetRow(
-        name=label_set.name,
-        labels=[LabelRow(name=label.name, description=label.description) for label in label_set.labels],
-        multi_label=label_set.multi_label,
-    )
-
-
-def decode_label_set(row: LabelSetRow) -> LabelSet:
-    """Decode one ``label_sets`` row.
-
-    Returns:
-        The label set.
-
-    Raises:
-        TimeFFormatError: If the row does not hold a valid label set.
-    """
-    try:
-        return LabelSet(
-            name=row.name,
-            labels=tuple(Label.model_validate(label) for label in row.labels),
-            multi_label=row.multi_label,
-        )
-    except ValueError as exc:
-        raise TimeFFormatError(f"the stored label set {row.name!r} is not valid: {exc}") from exc
 
 
 def decode_target(  # ruff: ignore[too-many-return-statements] - each target kind has one direct decoding branch

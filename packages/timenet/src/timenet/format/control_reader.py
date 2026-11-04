@@ -6,7 +6,7 @@ The objects hold their stored values behind value handles, unloaded.
 from collections import ChainMap, Counter, defaultdict
 from collections.abc import Callable, Collection, Container, Iterable, Iterator, Mapping, MutableMapping
 from fractions import Fraction
-from functools import partial
+from functools import cached_property, partial
 from graphlib import CycleError, TopologicalSorter
 import json
 import os
@@ -17,12 +17,13 @@ import weakref
 
 import duckdb
 import pyarrow as pa
+from pydantic import ValidationError
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeAxis, TimeFDataset
 from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
-from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX
+from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX, TABLES
 from timenet.format.duckdb import CATALOG_ERRORS, check_control_schema, connect_control
 from timenet.format.stored_array import ChunkLocation
 from timenet.format.stored_values import (
@@ -37,10 +38,8 @@ from timenet.format.stored_values import (
 from timenet.format.task_codec import (
     ANNOTATION_FIELDS,
     RECORD_FIELDS,
-    LabelSetRow,
     TaskRelationshipField,
     decode_input_modalities,
-    decode_label_set,
     decode_span,
     decode_split,
     decode_target,
@@ -596,9 +595,6 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         self._record_occurrences: dict[int, _AnnotationsByOccurrence] = {}
         """The occurrences on each live Record the reader built, by occurrence id, keyed by ``id(record)``."""
         self._task_facts: _TaskFacts | None = None
-        self._label_sets: dict[str, LabelSet] | None = None
-        """Every stored label set by name. The reader reads them all the first time that a task needs
-        one, so tasks share one object per set."""
         self._known_record_ids: set[int] = set()
         # Chunk files and sources named by the chunk locations read so far, so equal names share one string.
         self._chunk_strings: dict[str, str] = {}
@@ -792,7 +788,8 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         self._disconnect()
         self._clock_cache.clear()
         self._task_facts = None
-        self._label_sets = None
+        # Drop the cached label sets, so that a reopened reader reads them again.
+        self.__dict__.pop("_label_sets_by_name", None)
         self._known_record_ids.clear()
         self._chunk_strings.clear()
 
@@ -1853,26 +1850,37 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             _TaskRow._make,
         )
 
+    @cached_property
+    def _label_sets_by_name(self) -> dict[str, LabelSet]:
+        """Every stored label set by name, read once, so that the tasks that use a set share one object.
+
+        Raises:
+            TimeFFormatError: If a stored label set is not valid.
+        """
+        columns = ", ".join(TABLES["label_sets"].column_names)
+        # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+        rows = self._query_table(f"SELECT {columns} FROM label_sets").to_pylist()
+        label_sets: dict[str, LabelSet] = {}
+        for row in rows:
+            try:
+                label_set = LabelSet.model_validate(row)
+            except ValidationError as exc:
+                raise TimeFFormatError(f"the stored label set {row['name']!r} is not valid: {exc}") from exc
+            label_sets[label_set.name] = label_set
+        return label_sets
+
     def _label_set(self, name: str | None) -> LabelSet | None:
-        """Return the stored label set with this name. The first call reads every label set.
+        """Return the stored label set with this name.
 
         Returns:
             The shared label set, or ``None`` if ``name`` is ``None``.
 
         Raises:
-            TimeFFormatError: If no label set has this name, or a stored label set is invalid.
+            TimeFFormatError: If no label set has this name, or a stored label set is not valid.
         """
         if name is None:
             return None
-        if self._label_sets is None:
-            columns = ", ".join(LabelSetRow._fields)
-            rows = self._query_named(
-                f"SELECT {columns} FROM label_sets",  # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
-                [],
-                LabelSetRow._make,
-            )
-            self._label_sets = {row.name: decode_label_set(row) for row in rows}
-        label_set = self._label_sets.get(name)
+        label_set = self._label_sets_by_name.get(name)
         if label_set is None:
             raise TimeFFormatError(f"tasks refer to a missing label set {name!r}")
         return label_set

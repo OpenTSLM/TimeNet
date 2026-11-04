@@ -1,9 +1,9 @@
 """The closed set of labels that a classification target takes."""
 
 from collections.abc import Iterator, Sequence
-from typing import Any, Self
+from typing import Self
 
-from pydantic import StrictBool, field_validator, model_validator
+from pydantic import StrictBool, model_validator
 
 from timenet.errors import TimeFValidationError
 from timenet.types._model import TimeFModel
@@ -30,8 +30,7 @@ class LabelSet(TimeFModel):
         )
         ClassificationTask(inputs=(record,), targets=("T",), label_set=TRUE_OR_FALSE)
 
-    A plain string in ``labels`` is a label without a description, so ``labels=("T", "F")`` also
-    works. Within a dataset, a name stands for one set.
+    Within a dataset, a name stands for one set.
     """
 
     name: NonEmptyString
@@ -41,14 +40,6 @@ class LabelSet(TimeFModel):
     multi_label: StrictBool = False
     """If ``False``, a target holds exactly one label of the set. If ``True``, a target holds every
     label of the set that applies, which can be none."""
-
-    @field_validator("labels", mode="before")
-    @classmethod
-    def _plain_names(cls, value: Any) -> Any:
-        # A plain string is a label without a description.
-        if isinstance(value, Sequence) and not isinstance(value, str):
-            return tuple(Label(name=item) if isinstance(item, str) else item for item in value)
-        return value
 
     @model_validator(mode="after")
     def _valid_set(self) -> Self:
