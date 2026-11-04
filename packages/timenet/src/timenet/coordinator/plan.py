@@ -64,19 +64,23 @@ class Plan:
     steps: tuple[Step, ...]
 
 
+Role = Literal["dataset", "payload-source"]
+"""How the build uses a release. It opens a "dataset" and needs its payload sources too. It only
+reads files of a "payload-source"."""
+
+
 @dataclass(frozen=True)
 class _Release:
     """A required release, its dependencies, and its planned action."""
 
-    opened: bool
-    """True if the build opens the release with its payload sources. False if the release is only a
-    payload source of another release, and the build reads only its pinned files."""
+    role: Role
+    """How the build uses the release."""
     step: Step | None
     """The copy or the build, without its dependencies, or ``None`` if the output holds the release."""
     dependencies: tuple[DatasetRef, ...]
     """The releases that must be in place before this release. A release to build depends on the
     parents on its card. A release to copy depends on each payload source of its copy that gets a
-    step of its own. An opened release that the output holds depends on its payload sources."""
+    step of its own. A dataset that the output holds depends on its payload sources."""
 
 
 @dataclass
@@ -106,7 +110,8 @@ class _Graph:
     def visit(self, reference: DatasetRef, needed_by: DatasetRef, pinned: PayloadSource | None = None) -> None:
         """Add a release and its required dependencies to the graph.
 
-        Use :meth:`order` to check the completed graph for cycles.
+        The walk does not look for cycles. It stops at a release that it already found as a dataset,
+        and at a payload source that it already found.
 
         Args:
             reference: The release to add.
@@ -124,13 +129,13 @@ class _Graph:
             TimeFValidationError: If a source answers with an entry that is neither a registry nor
                 the installed connectors.
         """  # ruff: ignore[docstring-extraneous-exception] - the file and access errors are raised as values
-        opened = pinned is None
+        role: Role = "dataset" if pinned is None else "payload-source"
         if pinned is not None:
             self.pins.setdefault(reference, {})[needed_by] = pinned
         found = self.releases.get(reference)
         # If the walk found a payload source first, and later finds it as a parent, it looks at the
         # release again with its payload sources.
-        if found is not None and (found.opened or not opened):
+        if found is not None and (found.role == "dataset" or role == "payload-source"):
             return
         held, damage = self.in_output(reference)
         if held is not None:
@@ -138,36 +143,38 @@ class _Graph:
                 require_open_access(held.metadata, held.lineage)
             # To open a release, the build needs its direct payload sources. These are the releases
             # whose files the release reads. The build does not need their own payload sources.
-            sources = list(held.payload_sources.values()) if opened else []
-            self.releases[reference] = _Release(opened, None, tuple(source.release for source in sources))
+            sources = list(held.payload_sources.values()) if role == "dataset" else []
+            self.releases[reference] = _Release(role, None, tuple(source.release for source in sources))
             for source in sources:
                 self.visit(source.release, reference, source)
             return
         answer = self.resolve(reference)
         entry = answer.entry if isinstance(answer, Found) else None
         if isinstance(entry, BaseRegistry) and not _is_output(entry, self.output):
-            self.copy(reference, opened, entry)
+            self.copy(reference, role, entry)
         elif damage is not None:
             # A copy from another registry repairs a damaged copy. Nothing else replaces it.
             raise damage
         elif isinstance(entry, InstalledConnectors):
-            self.build(reference, opened, entry)
+            self.build(reference, role, entry)
         elif isinstance(answer, NotServed):
             raise answer.access_error(reference.dataset_id)
         elif entry is None or _is_output(entry, self.output):
-            raise TimeNetMissingParentError(reference, needed_by, self.searched(reference), payload_source=not opened)
+            raise TimeNetMissingParentError(
+                reference, needed_by, self.searched(reference), payload_source=role == "payload-source"
+            )
         else:
             raise TimeFValidationError(
                 f"{entry} provides {reference}, but a build copies only from a registry and builds only "
                 "with InstalledConnectors()"
             )
 
-    def copy(self, reference: DatasetRef, opened: bool, registry: BaseRegistry) -> None:
+    def copy(self, reference: DatasetRef, role: Role, registry: BaseRegistry) -> None:
         """Add a release that the plan copies from a registry, and walk the payload sources of the copy.
 
         Args:
             reference: The release.
-            opened: True if the build opens the release.
+            role: How the build uses the release.
             registry: The registry to copy from.
 
         Raises:
@@ -180,17 +187,19 @@ class _Graph:
             require_open_access(manifest.metadata, manifest.lineage)
         # The node is in the graph before the walk, so that a release of the walk that depends on it
         # closes a cycle and does not look it up again.
-        self.releases[reference] = _Release(opened, Step(reference, "copy", registry), ())
-        steps = self.closure(reference, registry, manifest)
-        self.releases[reference] = _Release(opened, Step(reference, "copy", registry), steps)
+        self.releases[reference] = _Release(role, Step(reference, "copy", registry), ())
+        steps = self.resolve_dependencies_of_copy(reference, registry, manifest)
+        self.releases[reference] = _Release(role, Step(reference, "copy", registry), steps)
 
-    def closure(self, release: DatasetRef, registry: BaseRegistry, manifest: Manifest) -> tuple[DatasetRef, ...]:
-        """Walk the payload sources that a copy of a release needs, at every depth.
+    def resolve_dependencies_of_copy(
+        self, release: DatasetRef, registry: BaseRegistry, manifest: Manifest
+    ) -> tuple[DatasetRef, ...]:
+        """Plan the payload sources that a copy of a release cannot bring, and return them.
 
-        A copy of the release brings each payload source that ``registry`` serves. It uses a payload
-        source that the output holds complete. Each other payload source gets a step of its own,
-        from the first source that provides its exact version. Each release of the walk must match
-        the files that each release that reads it pins.
+        A copy from ``registry`` brings each payload source that ``registry`` serves, at every depth,
+        and uses each payload source that the output holds complete. Each other payload source gets
+        a step of its own, and the copy step runs after it. Each payload source must match the files
+        that the release that reads it pins.
 
         Args:
             release: The release to copy.
@@ -198,7 +207,7 @@ class _Graph:
             manifest: The manifest of the release in ``registry``.
 
         Returns:
-            Each payload source of the walk that gets a step of its own.
+            The payload sources that get a step of their own.
 
         Raises:
             TimeFFormatError: If a payload source differs from the files that a release that reads it
@@ -227,12 +236,12 @@ class _Graph:
                     readers.append((source, held))
         return tuple(steps)
 
-    def build(self, reference: DatasetRef, opened: bool, connectors: InstalledConnectors) -> None:
+    def build(self, reference: DatasetRef, role: Role, connectors: InstalledConnectors) -> None:
         """Add a release that the plan builds, then visit the parents on its card.
 
         Args:
             reference: The release.
-            opened: True if the build opens the release.
+            role: How the build uses the release.
             connectors: The source that builds it.
 
         Raises:
@@ -242,7 +251,7 @@ class _Graph:
         if self.open_only:
             require_open_access(card)
         parents = tuple(card.parents.values())
-        self.releases[reference] = _Release(opened, Step(reference, "build", connectors), parents)
+        self.releases[reference] = _Release(role, Step(reference, "build", connectors), parents)
         # A build opens each of its parents with the payload sources of that parent.
         for parent in parents:
             self.visit(parent, reference)
@@ -484,13 +493,13 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
     # closes a cycle, and the walk does not look it up again.
     if held is None:
         step = Step(root, "build", InstalledConnectors(), force=force_build or damage is not None)
-        graph.releases[root] = _Release(opened=True, step=step, dependencies=tuple(card.parents.values()))
+        graph.releases[root] = _Release(role="dataset", step=step, dependencies=tuple(card.parents.values()))
         for parent in card.parents.values():
             graph.visit(parent, root)
     else:
         sources = list(held.payload_sources.values())
         graph.releases[root] = _Release(
-            opened=True, step=None, dependencies=tuple(source.release for source in sources)
+            role="dataset", step=None, dependencies=tuple(source.release for source in sources)
         )
         for source in sources:
             graph.visit(source.release, root, source)

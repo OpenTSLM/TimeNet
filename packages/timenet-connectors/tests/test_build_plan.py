@@ -899,7 +899,7 @@ def test_a_payload_source_at_depth_two_builds_against_the_pins_of_its_reader(tmp
     ]
 
 
-def test_a_closure_that_cannot_be_completed_fails_before_any_step_runs(tmp_path, monkeypatch, child_builds):
+def test_a_copy_whose_payload_source_no_source_provides_fails_before_any_step_runs(tmp_path, monkeypatch, child_builds):
     cards = _install_cards(monkeypatch, child={"parent": PARENT, "declared": DECLARED}, parent={})
     del cards[GRAND.dataset_id]
     output, origin = LocalRegistry(tmp_path / "output"), LocalRegistry(tmp_path / "origin")
