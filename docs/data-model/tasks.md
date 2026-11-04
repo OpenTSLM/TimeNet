@@ -222,23 +222,20 @@ ClassificationTask(inputs=(record,), targets=("PVC", "AF"), label_set=FINDINGS)
 ```
 
 A `LabelSet` is the closed set of labels that a classification target takes. Its `mode` says how
-many of them a target holds:
+many of them are in a target:
 
 - `LabelMode.SINGLE`, the default: exactly one label.
-- `LabelMode.MULTI`: every label that applies, and only those. A label left out does not apply, so
-  an empty target says that none applies. The order of the labels has no meaning.
+- `LabelMode.MULTI`: every label that applies. Omitted labels do not apply, so an empty target means
+  that no label applies. Labels are unordered.
 
-`add_task()` and a task stream make sure that each target fits its label set. Every label must be in
-the set, no label can repeat, and a single-label target must hold exactly one label. The labels are
-the inline targets or the text of the target annotations. TimeNet does not examine the labels of a
-task that has no label set.
+`add_task()` and a task stream make sure that every target matches its label set. Every label must
+be in the set, no label can repeat, and a single-label target must hold exactly one label. The
+labels are the inline targets or the text of the target annotations. TimeNet does not examine the
+labels of a task that has no label set.
 
-Tasks that ask the same kind of question share one label set. Within a dataset, a name stands for
-one set. If two different sets have the same name, the writer stops with an error. TimeF stores
+Tasks can share one label set. Label set names must be unique within a dataset: `add_task()`, a
+task stream and the writer raise an error if two different sets have the same name. TimeF stores
 each set once, and the reader gives every task that uses the set the same object.
-
-Do not use `target_schema`, the name of a vocabulary without its labels. A later release removes
-it. Use `label_set`.
 
 ### Answer and rationale
 
