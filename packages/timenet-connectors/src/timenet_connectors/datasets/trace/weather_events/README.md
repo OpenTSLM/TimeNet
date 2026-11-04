@@ -45,8 +45,9 @@ windows hold the same measurements but have their own id, label, county, descrip
 ## Records
 
 A Record is one published window, as the authors count it: the paper's 74,337 windows give 74,337
-Records. Windows with the same station, mode, timestamps and values are copies. We expect about
-63,366 distinct measurements, so the copies store about 11,000 series twice. Each Record has one
+Records. Windows with the same station, mode, timestamps and values are copies. The archive has
+63,366 distinct measurements, so 10,971 Records copy another. 5,007 copies are in another split
+than their original, and 2,027 have another event type. 13,823 Records have gaps. Each Record has one
 Source, `station`, with seven Signals on one time axis:
 
 | Channel | Unit | Spec |
@@ -84,7 +85,7 @@ mode's cadence. A window with gaps keeps the time offset of each value.
 Each window or row that qualifies is a task of its own, under the authors' split. The task uses the
 window's Record. Its metadata holds its window id, anchor and source file.
 
-| Task | One per | Model input | Target | Split | Expected count |
+| Task | One per | Model input | Target | Split | Count |
 | --- | --- | --- | --- | --- | --- |
 | `ClassificationTask` | `pretrain` event window with at least 100 values | The series | The event type | `pretrain` file | 14,446 |
 | `TSCorrespondenceTask` | Row of the `retrieval` files | The description, as the prompt | The window's Record | `retrieval` file | 44,186 |
@@ -157,14 +158,16 @@ def time_split(record) -> Split | None:
 
 ## Limitations
 
-- This version has not run on the real archive. The counts above, the run time and the memory use
-  are not checked. The writer rereads each window once per channel, so a write parses the window
-  files about seven times.
-- If a window repeats an hour at the end of daylight saving time, the first pass stops with an
-  error. The archive was not checked for such windows.
-- The authors give precipitation in mm, and do not say how 4-hourly and daily values are made
-  from hourly ones. So a 4-hourly or daily value can be a total over its interval or a mean hourly
-  amount. To find out, compare it with the hourly window of the same anchor.
+- The writer rereads each window once per channel, so a write parses the window files about seven
+  times. On one laptop, the conversion took 21 s and the write took 105 s. The written dataset is
+  167 MiB.
+- The authors give precipitation in mm, and do not say how 4-hourly and daily values are made from
+  hourly ones. A 4-hourly or daily value is not the total of the hourly values of the same anchor.
+  None of about 9,800 compared values with rain matched a total. Most do not match a mean either.
+  So the interval that a value covers is not known.
+- Many precipitation series repeat one nonzero value for 24 values or more, such as 1.12 mm for
+  days. 6,426 of the 21,123 distinct hourly series do this. This looks like filled gaps, but the
+  authors do not say. The dataset keeps the values as published.
 - Some values are not physically possible, such as relative humidity above 100%. The dataset keeps
   them as published.
 - The generated descriptions have errors, such as `wind_v` called the "vertical" component.

@@ -7,14 +7,13 @@ description: >-
   Weather station windows from the TRACE paper: NOAA GHCN-hourly data with
   seven channels at hourly, 4-hourly or daily cadence. The authors publish one
   window per NOAA Storm Events report, so some windows are copies that hold
-  the same measurements. Each window is one Record, and its metadata names
-  the window it copies. Each window that qualifies has its own tasks under
-  the authors' splits: event-type
-  classification, retrieval from a generated description, and forecasting of
-  the last 24 values. The Record and task counts in the README are expected
-  values. This version of the connector has not run on the real archive. The
-  authors' splits share measurements across splits. The README describes a
-  split by time that does not.
+  the same measurements. Each window is one Record, and its metadata names the
+  window it copies. Each window that qualifies has its own tasks under the
+  authors' splits: event-type classification, retrieval from a generated
+  description, and forecasting of the last 24 values. The README gives the
+  Record and task counts of the real archive. The authors' splits share
+  measurements across splits. The README describes a split by time that does
+  not.
 # The original NOAA sources, GHCN-hourly observations ("Use Constraints") and the Storm Events
 # Database ("Access & Use"), both list CC0-1.0 terms, but the descriptions are the TRACE authors'
 # ChatGPT-generated text. Neither the TRACE archive, its Hugging Face mirror, nor the code
