@@ -37,7 +37,7 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class RemoteRegistry(LazyReadRegistry):
-    """Serves datasets from the hosted TimeNet registry over HTTP(S)."""
+    """Read and publish datasets through the hosted TimeNet HTTP service."""
 
     def __init__(
         self,
@@ -169,23 +169,22 @@ class RemoteRegistry(LazyReadRegistry):
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
         pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
     ) -> DatasetRef:
-        """Compile a dataset locally and publish it to the remote registry.
+        """Write a dataset locally and publish it to the remote registry.
 
-        If the version is already committed, this method skips it unless ``force`` is set.
+        If the version already exists, return its reference unless ``force`` is set.
 
         Args:
-            dataset: The populated dataset to store.
-            force: Publish even if the version is already committed.
-            values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
-            progress_cb: Optional writer progress callback.
-            pinned_by: The releases that already read files of this release, with their pins. The
-                writer publishes only if it reproduced each pinned file.
+            dataset: The dataset to write.
+            force: Publish even if the version already exists.
+            values_backend: Storage format for values (``"parquet"`` or ``"zarr"``).
+            progress_cb: Optional callback for write progress.
+            pinned_by: Releases that already read this release's files, with the pins that the new files must match.
 
         Returns:
-            The stored release.
+            A reference to the stored release.
 
         Raises:
-            TimeNetRegistryError: If the service requests a file that the compile did not write.
+            TimeNetRegistryError: If the service omits a listed file or requests a file that the write did not produce.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by put_release
         if dataset.schema is None:
             dataset.derive_schema()
@@ -213,21 +212,18 @@ class RemoteRegistry(LazyReadRegistry):
     def put_release(self, from_directory: Path) -> DatasetRef:
         """Publish a release directory to the remote registry.
 
-        The directory must hold ``manifest.json`` and every file that it lists. The method uploads
-        only those files and does not change the directory.
+        The directory must contain ``manifest.json`` and every file it lists.
 
         Args:
             from_directory: The release directory.
 
         Returns:
-            The published release.
+            A reference to the published release.
 
         Raises:
-            TimeFFormatError: If ``manifest.json`` is missing or cannot be read.
-            TimeNetFileError: If a listed file is missing or has another size. Nothing is published
-                then.
-            TimeNetRegistryError: If the service asks for a file that is not in the directory, or
-                does not ask for a listed file.
+            TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
+            TimeNetFileError: If a listed file is missing or its size differs from the manifest.
+            TimeNetRegistryError: If the service skips a listed file or requests a missing file.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release
         manifest = self._read_release(from_directory)
         dataset_id = manifest.dataset_id

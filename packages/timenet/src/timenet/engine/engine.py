@@ -113,27 +113,26 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
     force: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Run one connector and publish the result to a writable registry.
+    """Run a connector and publish its dataset to a registry.
 
-    If the registry already holds the version, the function returns it at once unless ``force`` is
-    set. A registry that is not local takes only a release whose card and lineage declare
-    ``access: open``.
+    If the version already exists, return it unless ``force`` is set. Remote and S3 registries
+    require ``access: open`` on the dataset card and its lineage.
 
     Args:
         connector: The connector to build.
-        registry: The local, remote, or S3 registry to publish to.
-        cache_dir: Download directory to keep, or ``None`` for ``<TIMENET_CACHE>/<dataset_id>``.
-        keep_cache: Keep the default download cache after publishing.
-        progress_cb: Optional writer progress callback.
-        force: Republish an existing version.
-        pinned_by: Releases that read this dataset's files, with file pins the build must match.
+        registry: The destination registry.
+        cache_dir: Download directory, or ``None`` for ``<TIMENET_CACHE>/<dataset_id>``.
+        keep_cache: Keep the default cache after publishing (a supplied ``cache_dir`` is always kept).
+        progress_cb: Optional callback for write progress.
+        force: Republish even if the version already exists.
+        pinned_by: Releases that already read this release's files, with the pins that the new files must match.
 
     Returns:
         The published version string.
 
     Raises:
-        TimeFValidationError: If a card with parents has no ``compose`` override, or ``compose`` changes the card.
-        TimeNetAccessError: If a release or ancestor lacks open access for a nonlocal registry.
+        TimeFValidationError: If declared parents lack a custom ``compose``, or ``compose`` changes the dataset card.
+        TimeNetAccessError: If a nonlocal publish includes a dataset or ancestor without open access.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, and require_open_access
     values_backend = _check_values_backend(connector)
     metadata = connector.metadata()

@@ -159,20 +159,19 @@ class S3Registry(LazyReadRegistry):
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
         pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
     ) -> DatasetRef:
-        """Compile a dataset locally and upload it under this registry's prefix.
+        """Write a dataset locally and upload it to S3.
 
-        If the version is already committed, this method skips it unless ``force`` is set.
+        If the version already exists, return its reference unless ``force`` is set.
 
         Args:
-            dataset: The populated dataset to store.
-            force: Publish even if the version is already committed.
-            values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
-            progress_cb: Optional writer progress callback.
-            pinned_by: The releases that already read files of this release, with their pins. The
-                writer publishes only if it reproduced each pinned file.
+            dataset: The dataset to write.
+            force: Publish even if the version already exists.
+            values_backend: Storage format for values (``"parquet"`` or ``"zarr"``).
+            progress_cb: Optional callback for write progress.
+            pinned_by: Releases that already read this release's files, with the pins that the new files must match.
 
         Returns:
-            The stored release.
+            A reference to the stored release.
         """
         if dataset.schema is None:
             dataset.derive_schema()
@@ -198,21 +197,20 @@ class S3Registry(LazyReadRegistry):
             shutil.rmtree(staging, ignore_errors=True)
 
     def put_release(self, from_directory: Path) -> DatasetRef:
-        """Upload a release directory under this registry's prefix.
+        """Upload a release directory to S3.
 
-        The directory must hold ``manifest.json`` and every file that it lists. The method uploads
-        only those files, and readers see the version only after ``manifest.json`` is in place.
+        The directory must contain ``manifest.json`` and every file it lists. This method uploads
+        the listed files and publishes ``manifest.json`` last.
 
         Args:
             from_directory: The release directory.
 
         Returns:
-            The published release.
+            A reference to the published release.
 
         Raises:
-            TimeFFormatError: If ``manifest.json`` is missing or cannot be read.
-            TimeNetFileError: If a listed file is missing or has another size. Nothing is uploaded
-                then.
+            TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
+            TimeNetFileError: If a listed file is missing or its size differs from the manifest.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release
         manifest = self._read_release(from_directory)
         client = self._client()
