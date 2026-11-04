@@ -8,9 +8,11 @@ Each run of consecutive samples with the same raw label becomes one ``activity``
 A label scheme groups raw labels into activity classes. Each 10 s window kept by the authors' benchmark
 becomes one task per scheme that the benchmark scores. README.md describes the benchmark rules.
 
-The build reads the data in two passes. The first reads one recording at a time and keeps its
-segments, its raw label runs, each window's start and class, and a digest of the acceleration values.
-A digest is a value used to detect changes. Missing or non-finite acceleration values fail the build.
+The build reads the data in two passes. The first reads one recording at a time.
+It keeps the segments, raw label runs, and each window's start and class.
+It also keeps a digest of the acceleration values. A digest is a value used to detect changes.
+
+Missing or non-finite acceleration values fail the build.
 Non-finite values are NaN, positive infinity, or negative infinity.
 
 The second pass builds the Records and streams the tasks. Acceleration values load from the files
@@ -130,7 +132,7 @@ class _Sex(StrEnum):
     """A participant's sex, as the connector stores it.
 
     The values match ``Sex`` in ``timenet_connectors.demographics``, which PR #624 adds.
-    TODO(#624): replace this enum with that one once it is on the base branch.
+    TODO(#624): use that enum after PR #624 reaches the base branch.
     """
 
     FEMALE = "female"
@@ -442,13 +444,13 @@ def _read_people(root: Path) -> list[_Person]:
 
 
 def _person_of_row(path: Path, line: int, row: dict[str, str], recordings: dict[str, Path]) -> _Person:
-    """Build the person of one ``metadata.csv`` row, with the path of their recording.
+    """Build a _Person from one ``metadata.csv`` row and the path to that person's recording.
 
     Returns:
-        The person.
+        The _Person with the participant's ID, age band, sex, and recording path.
 
     Raises:
-        TimeNetConnectorError: If the age band or the sex is not one that the connector knows.
+        TimeNetConnectorError: If the connector does not recognize the age band or sex.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _parse_person_value
     pid = row[_MetadataColumn.PID]
     age_band = _parse_person_value(path, line, _MetadataColumn.AGE, row[_MetadataColumn.AGE], _AgeBand)
@@ -508,8 +510,8 @@ def _read_participant(person: _Person, labels: _LabelDictionary) -> _Participant
 def _convert_options(columns: list[str]) -> pa_csv.ConvertOptions:
     """Return the same parsing configuration for both reads of a recording's ``columns``.
 
-    Only an empty field counts as missing. A written ``nan`` stays a value, and ``_axis_values`` then
-    fails on it because it is not finite.
+    Only an empty field counts as missing. A written ``nan`` remains a value.
+    The build fails when ``_axis_values`` reads it because it is not finite.
     """
     return pa_csv.ConvertOptions(
         include_columns=columns,
@@ -582,7 +584,7 @@ def _make_segments(stamps: np.ndarray) -> tuple[_Segment, ...]:
 def _label_runs(raw_codes: np.ndarray, segment: _Segment) -> _LabelRuns:
     """Find a segment's runs of one raw label. Unlabeled samples belong to no run.
 
-    The function sees only one segment, so a run never crosses a gap.
+    This function receives one segment, so a run never crosses a gap.
     Within a segment, samples are one period apart.
     A row's time relative to the segment's first sample equals its index within the segment times the period.
 
@@ -668,8 +670,8 @@ def _make_windows(
     sample.
 
     A bin that crosses a gap usually has fewer samples. A step between one and two sample periods is
-    also a gap, but its bin can still contain 1000 samples. This function fails the build on such a
-    window, so no kept window crosses a gap.
+    also a gap, but its bin can still contain 1000 samples.
+    If a selected window crosses a gap, this function fails the build. No kept window crosses a gap.
 
     A window's class in a scheme is the most common class among its labeled samples. A tie goes to the
     first class in string order.
@@ -747,8 +749,10 @@ class _OneRecording:
     """Read a recording's acceleration once for all its signals and keep only the latest recording.
 
     A Record's signals load one after another, so the cache needs only one recording.
-    The class does not use lru_cache(maxsize=1), because that would read the next recording before it
-    releases the previous one, and so hold both in memory.
+    This class uses its own cache instead of lru_cache(maxsize=1).
+    A cache built with lru_cache(maxsize=1) loads the next recording before releasing the previous one.
+    Both recordings briefly remain in memory.
+    This class releases the previous recording first.
     """
 
     def __init__(self) -> None:
@@ -758,8 +762,8 @@ class _OneRecording:
     def __call__(self, participant: _Participant) -> _Acceleration:
         """Return the recording's x, y and z values.
 
-        The values come from the cache if it holds this recording. Otherwise the cache drops the
-        previous recording and then reads this one.
+        If the cache holds this recording, the method returns its values.
+        Otherwise, it releases the previous recording before reading this one.
 
         Returns:
             The float32 values of each axis.
@@ -870,9 +874,10 @@ class Capture24Connector(BaseConnector[Path]):
     """Build CAPTURE-24 from the pinned zip of its Oxford Research Archive record."""
 
     async def download_async(self, cache_dir: Path) -> list[Path]:  # ruff: ignore[no-self-use] - the connector interface
-        """Fetch the pinned archive, check its SHA-256 digest, and extract it.
+        """Fetch and extract the pinned archive.
 
-        A later call reuses the extracted directory and downloads nothing.
+        The downloaded archive must match the expected SHA-256 digest.
+        Later calls reuse the extracted directory without downloading the archive again.
 
         Returns:
             A list containing the extracted ``capture24`` directory.
@@ -883,9 +888,10 @@ class Capture24Connector(BaseConnector[Path]):
     def convert(self, raw_refs: list[Path]) -> TimeFDataset:
         """Build one Record per recording and stream one task per window and benchmarked scheme.
 
-        The first pass reads each recording to check it, and keeps its segments, raw label runs,
-        windows and acceleration digest. The writer loads the acceleration values from the files when it
-        needs them, so the files must stay available and unchanged until the writer finishes.
+        The first pass reads each recording and makes sure that its data follows the connector's rules.
+        It keeps the segments, raw label runs, windows, and acceleration digest.
+        The writer loads acceleration values from the files when it needs them.
+        The files must remain available and unchanged until the writer finishes.
 
         Args:
             raw_refs: The one extracted ``capture24`` directory.
