@@ -111,15 +111,13 @@ def load(
 ) -> "TimeFDataset":
     """Build a dataset if needed and load it into memory.
 
-    The build lands in the store of the default list of sources
-    (:func:`timenet.client.default_sources`), with each parent and payload source that it needs. The
-    read then reads it through that list.
+    This runs :func:`build` into the store of :func:`timenet.client.default_sources`, then
+    :meth:`timenet.client.TimeNet.load` through that list.
 
     Args:
         dataset_id: The dataset ID (``org/name``).
         version: The version to load, which the card must declare, or ``None`` for the latest.
-        fetch_from: The registry, or its URI, that the build copies missing parent releases and
-            payload sources from.
+        fetch_from: The registry, or its URI, to copy missing parents and payload sources from.
         build_parents: Build missing parent releases from their installed connectors.
 
     Returns:

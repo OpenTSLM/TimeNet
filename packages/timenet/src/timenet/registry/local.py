@@ -31,9 +31,7 @@ class LocalRegistry(WritableRegistry):
 
         Args:
             root: The directory containing ``<dataset_id>/<version>/`` layouts. This expands ``~``.
-            store: Make this registry the store of a :class:`~timenet.client.TimeNet` client: the
-                registry where its builds land. A client accepts at most one store. Without the
-                flag, a client only reads from this registry.
+            store: Make this the store of a :class:`~timenet.client.TimeNet`, where its builds land.
         """
         self._root = Path(root).expanduser()
         self._is_store = store
