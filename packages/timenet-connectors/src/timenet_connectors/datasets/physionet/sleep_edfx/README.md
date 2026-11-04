@@ -121,11 +121,11 @@ where the recording came from.
 
 ### How the connector writes them
 
-**Each classification task carries the closed set of labels that its target draws from.** Three
-sets exist: the eight sleep stages, the two sexes and the two conditions. Each set is one `LabelSet`
-with the name of the key whose values it holds. Every task that asks the same question shares it.
-Each target is exactly one label of its set. TimeNet makes sure of this when it writes the
-dataset.
+**Each classification task carries the set of labels it can answer with.** There are three sets:
+the eight sleep stages, the two sexes, and the two study conditions. Each one is a `LabelSet` named
+after the annotation key it covers (`sleep_stage`, `sex` or `condition`), and every task that asks
+the same question shares the same set. A task's target is always exactly one label from its set,
+and TimeNet checks this when it writes the dataset.
 
 **The tasks stream, and the connector does not hold them in memory.** `set_task_stream` exists for
 a dataset with far more tasks than records. This release has about 2450 tasks for each recording.
