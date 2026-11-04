@@ -175,12 +175,13 @@ its own `occurrence_id` and temporal placement.
 `Task` is abstract. Each concrete task gets one row in `tasks`. The `task_type` column selects the
 Python subclass. Four typed columns store the scope: `scope_type`, `scope_start`, `scope_end`, and
 `scope_signal_ids`. Subclass configuration uses one nullable column per field (`target_schema`,
-`unit`, `target_name`, `mode`). With these columns, SQL can filter tasks without parsing JSON.
+`label_set`, `unit`, `target_name`, `mode`). With these columns, SQL can filter tasks without
+parsing JSON.
 
-A classification task names its label set with `label_set_id`. Each set is one `label_sets` row:
-`name`, `labels`, `label_descriptions` and `mode`. `label_descriptions` holds one entry per label, in
-label order, and `NULL` where a label has no description. The writer numbers the sets from 1 each
-time that it writes a release, and `name` is unique within the release.
+Classification tasks refer to their label set by name in `tasks.label_set`. Each label set is one
+`label_sets` row with `name`, `labels` and `mode`. The name is unique within a release. `labels`
+holds one `{name, description}` entry per label, in label order, with a `NULL` description where a
+label has none.
 
 Each inline target is one row in `task_targets`. Its `target_kind` names the typed value column
 that is set. A target stores public IDs directly: `record_id` for a Record, `signal_id` for a

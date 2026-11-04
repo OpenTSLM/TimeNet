@@ -80,16 +80,22 @@ def test_tasks_that_use_one_label_set_share_one_stored_row_and_one_read_object(t
 
     with connect_control(path, read_only=True) as connection:
         audit_control_database(connection, require_chunks=False)
-        assert connection.execute(
-            "SELECT label_set_id, name, labels, label_descriptions, mode FROM label_sets ORDER BY label_set_id"
-        ).fetchall() == [
-            (1, "stage", ["W", "N1", "R"], [None, None, "REM sleep."], "single"),
-            (2, "findings", ["AF", "PVC"], [None, None], "multi"),
+        assert connection.execute("SELECT name, labels, mode FROM label_sets ORDER BY name").fetchall() == [
+            ("findings", [{"name": "AF", "description": None}, {"name": "PVC", "description": None}], "multi"),
+            (
+                "stage",
+                [
+                    {"name": "W", "description": None},
+                    {"name": "N1", "description": None},
+                    {"name": "R", "description": "REM sleep."},
+                ],
+                "single",
+            ),
         ]
-        assert connection.execute("SELECT label_set_id FROM tasks ORDER BY task_id").fetchall() == [
-            (1,),
-            (1,),
-            (2,),
+        assert connection.execute("SELECT label_set FROM tasks ORDER BY task_id").fetchall() == [
+            ("stage",),
+            ("stage",),
+            ("findings",),
             (None,),
         ]
 
@@ -172,7 +178,7 @@ def test_the_writer_rejects_a_label_set_changed_after_the_task_was_added(tmp_pat
     dataset.add_tasks(tasks=[ClassificationTask(inputs=(record,), targets=("W",), label_set=STAGES), second])
     second.label_set = OTHER_STAGES
 
-    with pytest.raises(TimeFValidationError, match="label set named 'stage' that differs from an earlier set"):
+    with pytest.raises(TimeFValidationError, match=r"ClassificationTask 2: label set 'stage' differs from another set"):
         _write(dataset, tmp_path / "control.duckdb")
 
 
@@ -241,11 +247,12 @@ def test_streamed_tasks_are_checked_against_their_label_set():
     ("corruption", "field"),
     [
         ("UPDATE label_sets SET mode = 'several'", "label_sets.mode"),
-        ("UPDATE label_sets SET label_descriptions = [NULL]", "label_sets.label_descriptions"),
-        ("UPDATE label_sets SET labels = ['W', 'W', 'R'] WHERE name = 'stage'", "label_sets.labels"),
-        ("UPDATE label_sets SET labels = ['W', '', 'R'] WHERE name = 'stage'", "label_sets.labels"),
-        ("UPDATE tasks SET label_set_id = 1 WHERE task_type = 'answer'", "tasks.label_set_id"),
-        ("UPDATE tasks SET label_set_id = 9 WHERE task_type = 'classification'", "label_sets.label_set_id"),
+        ("UPDATE label_sets SET labels = [] WHERE name = 'stage'", "label_sets.labels"),
+        ("UPDATE label_sets SET labels = [{'name': 'W'}, {'name': 'W'}] WHERE name = 'stage'", "label_sets.labels"),
+        ("UPDATE label_sets SET labels = [{'name': 'W'}, {'name': ''}] WHERE name = 'stage'", "label_sets.labels"),
+        ("UPDATE label_sets SET labels = [{'name': 'W', 'description': ''}] WHERE name = 'stage'", "label_sets.labels"),
+        ("UPDATE tasks SET label_set = 'stage' WHERE task_type = 'answer'", "tasks.label_set"),
+        ("UPDATE tasks SET label_set = 'missing' WHERE task_type = 'classification'", "label_sets.name"),
         ("UPDATE task_targets SET text_value = 'BOGUS' WHERE task_id = 1", "task 1 has labels that do not fit"),
         ("INSERT INTO task_targets (task_id, position, target_kind, text_value) VALUES (1, 1, 'text', 'R')", "task 1"),
         (
@@ -290,7 +297,7 @@ def test_the_reader_rejects_a_label_set_on_another_task_type(tmp_path):
     path = tmp_path / "control.duckdb"
     _write(dataset, path)
     with connect_control(path) as connection:
-        connection.execute("UPDATE tasks SET label_set_id = 1 WHERE task_type = 'answer'")
+        connection.execute("UPDATE tasks SET label_set = 'stage' WHERE task_type = 'answer'")
 
     with pytest.raises(TimeFFormatError, match="answer task 2 has a label set"):
         _read_tasks(path)

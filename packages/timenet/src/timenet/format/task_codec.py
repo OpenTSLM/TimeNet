@@ -10,7 +10,7 @@ Signals up by id.
 from collections.abc import Iterable, Mapping
 from enum import StrEnum, unique
 from functools import lru_cache
-from typing import Any, TypeVar, cast
+from typing import Any, NamedTuple, TypeVar, cast
 
 from pydantic import ValidationError
 
@@ -60,9 +60,10 @@ ANNOTATION_FIELDS = frozenset({TaskRelationshipField.INPUT_ANNOTATIONS, TaskRela
 """The fields stored in ``task_annotation_refs``."""
 
 
-PAYLOAD_COLUMNS = ("target_schema", "unit", "target_name", "mode")
+PAYLOAD_COLUMNS = ("target_schema", "label_set", "unit", "target_name", "mode")
 """The ``tasks`` columns that hold subclass-specific configuration. Unused ones are NULL. A
-classification task names its label set in ``label_sets`` with ``tasks.label_set_id``."""
+classification task stores the name of its label set in ``label_set``. The set itself is a row of
+``label_sets``."""
 
 
 def decode_input_modalities(values: list[str] | None) -> frozenset[InputModality]:
@@ -185,6 +186,7 @@ def encode_task_payload(task: Task) -> dict[str, str | None]:
     columns: dict[str, str | None] = dict.fromkeys(PAYLOAD_COLUMNS)
     if isinstance(task, ClassificationTask):
         columns["target_schema"] = task.target_schema
+        columns["label_set"] = None if task.label_set is None else task.label_set.name
     elif isinstance(task, ScalarPredictionTask):
         columns["unit"] = None if task.unit is None else str(task.unit)
         columns["target_name"] = task.target_name
@@ -208,22 +210,29 @@ def decode_task_payload(task_type: TaskType, columns: dict[str, str | None]) -> 
     return {}
 
 
-def encode_label_set(label_set: LabelSet, label_set_id: int) -> dict[str, object]:
+class LabelSetRow(NamedTuple):
+    """One ``label_sets`` row, with the fields in the order of the table's columns."""
+
+    name: str
+    labels: list[dict[str, str | None]]
+    """One ``{"name": ..., "description": ...}`` entry per label, in label order."""
+    mode: str
+
+
+def encode_label_set(label_set: LabelSet) -> LabelSetRow:
     """Encode a label set as one ``label_sets`` row.
 
     Returns:
-        The row, with one description per label, ``None`` where a label has none.
+        The row.
     """
-    return {
-        "label_set_id": label_set_id,
-        "name": label_set.name,
-        "labels": [label.name for label in label_set.labels],
-        "label_descriptions": [label.description for label in label_set.labels],
-        "mode": str(label_set.mode),
-    }
+    return LabelSetRow(
+        name=label_set.name,
+        labels=[{"name": label.name, "description": label.description} for label in label_set.labels],
+        mode=str(label_set.mode),
+    )
 
 
-def decode_label_set(name: str, labels: list[str], label_descriptions: list[str | None], mode: str) -> LabelSet:
+def decode_label_set(row: LabelSetRow) -> LabelSet:
     """Decode one ``label_sets`` row.
 
     Returns:
@@ -234,15 +243,12 @@ def decode_label_set(name: str, labels: list[str], label_descriptions: list[str 
     """
     try:
         return LabelSet(
-            name=name,
-            labels=tuple(
-                Label(name=label, description=description)
-                for label, description in zip(labels, label_descriptions, strict=True)
-            ),
-            mode=LabelMode(mode),
+            name=row.name,
+            labels=tuple(Label.model_validate(label) for label in row.labels),
+            mode=LabelMode(row.mode),
         )
     except ValueError as exc:
-        raise TimeFFormatError(f"the stored label set {name!r} is not valid: {exc}") from exc
+        raise TimeFFormatError(f"the stored label set {row.name!r} is not valid: {exc}") from exc
 
 
 def decode_target(  # ruff: ignore[too-many-return-statements] - each target kind has one direct decoding branch

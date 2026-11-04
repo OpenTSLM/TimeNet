@@ -37,6 +37,7 @@ from timenet.format.stored_values import (
 from timenet.format.task_codec import (
     ANNOTATION_FIELDS,
     RECORD_FIELDS,
+    LabelSetRow,
     TaskRelationshipField,
     decode_input_modalities,
     decode_label_set,
@@ -248,7 +249,7 @@ class _TaskRow(NamedTuple):
     scope_signal_ids: list[int] | None
     has_inline_targets: bool
     target_schema: str | None
-    label_set_id: int | None
+    label_set: str | None
     unit: str | None
     target_name: str | None
     mode: str | None
@@ -595,9 +596,9 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         self._record_occurrences: dict[int, _AnnotationsByOccurrence] = {}
         """The occurrences on each live Record the reader built, by occurrence id, keyed by ``id(record)``."""
         self._task_facts: _TaskFacts | None = None
-        self._label_sets: dict[int, LabelSet] | None = None
-        """Every stored label set by id. The reader reads them all the first time that a task needs one,
-        so tasks share one object per set."""
+        self._label_sets: dict[str, LabelSet] | None = None
+        """Every stored label set by name. The reader reads them all the first time that a task needs
+        one, so tasks share one object per set."""
         self._known_record_ids: set[int] = set()
         # Chunk files and sources named by the chunk locations read so far, so equal names share one string.
         self._chunk_strings: dict[str, str] = {}
@@ -1628,7 +1629,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 )
                 SELECT t.task_id, t.task_type, t.prompt, t.rationale,
                        t.scope_type, t.scope_start, t.scope_end, t.scope_signal_ids,
-                       t.target_schema, label_sets.name AS label_set, t.unit, t.target_name, t.mode, t.has_inline_targets,
+                       t.target_schema, t.label_set, t.unit, t.target_name, t.mode, t.has_inline_targets,
                        t.input_modalities, t.split,
                        coalesce(inputs.input_record_ids, []) AS input_record_ids,
                        coalesce(parents.from_task_ids, []) AS from_task_ids,
@@ -1636,7 +1637,6 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 FROM tasks t
                 LEFT JOIN inputs USING (task_id)
                 LEFT JOIN parents USING (task_id)
-                LEFT JOIN label_sets USING (label_set_id)
                 {where}
                 ORDER BY t.task_id""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
             parameters,
@@ -1853,27 +1853,28 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             _TaskRow._make,
         )
 
-    def _label_set(self, label_set_id: int | None) -> LabelSet | None:
-        """Return the stored label set with this id. The first call reads every label set.
+    def _label_set(self, name: str | None) -> LabelSet | None:
+        """Return the stored label set with this name. The first call reads every label set.
 
         Returns:
-            The shared label set, or ``None`` if ``label_set_id`` is ``None``.
+            The shared label set, or ``None`` if ``name`` is ``None``.
 
         Raises:
-            TimeFFormatError: If no label set has this id, or a stored label set is invalid.
+            TimeFFormatError: If no label set has this name, or a stored label set is invalid.
         """
-        if label_set_id is None:
+        if name is None:
             return None
         if self._label_sets is None:
-            rows = self.run(
-                lambda connection: connection.execute(
-                    "SELECT label_set_id, name, labels, label_descriptions, mode FROM label_sets"
-                ).fetchall()
+            columns = ", ".join(LabelSetRow._fields)
+            rows = self._query_named(
+                f"SELECT {columns} FROM label_sets",  # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
+                [],
+                LabelSetRow._make,
             )
-            self._label_sets = {row[0]: decode_label_set(*row[1:]) for row in rows}
-        label_set = self._label_sets.get(label_set_id)
+            self._label_sets = {row.name: decode_label_set(row) for row in rows}
+        label_set = self._label_sets.get(name)
         if label_set is None:
-            raise TimeFFormatError(f"tasks refer to a missing label set {label_set_id!r}")
+            raise TimeFFormatError(f"tasks refer to a missing label set {name!r}")
         return label_set
 
     def _target_rows(self, task_ids: list[int] | None) -> list[_TargetRow]:
@@ -2518,8 +2519,8 @@ class _TaskBuilder:
                 **decode_task_payload(task_type, row.payload_columns),
             }
             if task_type is TaskType.CLASSIFICATION:
-                kwargs["label_set"] = reader._label_set(row.label_set_id)
-            elif row.label_set_id is not None:
+                kwargs["label_set"] = reader._label_set(row.label_set)
+            elif row.label_set is not None:
                 raise TimeFFormatError(
                     f"{task_type} task {row.task_id!r} has a label set, but only a classification task can have one"
                 )

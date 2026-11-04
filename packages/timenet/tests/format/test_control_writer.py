@@ -99,7 +99,7 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
         assert connection.execute("SELECT count(*) FROM signals").fetchone() == (2,)
         assert connection.execute("SELECT count(*) FROM axes").fetchone() == (1,)
         assert connection.execute(
-            "SELECT task_type, prompt, scope_type, target_schema, label_set_id, unit, target_name, mode FROM tasks"
+            "SELECT task_type, prompt, scope_type, target_schema, label_set, unit, target_name, mode FROM tasks"
         ).fetchone() == ("answer", "Alive?", None, None, None, None, None, None)
         assert connection.execute(
             "SELECT position, target_kind, text_value, integer_value, record_id FROM task_targets"

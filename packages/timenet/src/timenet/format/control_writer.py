@@ -39,8 +39,7 @@ from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
     ArrayHandle,
-    ClassificationTask,
-    LabelSet,
+    LabelSetRegistry,
     ObjectKind,
     Task,
     TSCorrespondenceTask,
@@ -496,16 +495,16 @@ class DuckDBControlWriter:
         dependencies: list[tuple[int, int, Task]] = []
         annotation_refs: list[_AnnotationRef] = []
         task_counts: dict[str, int] = {}
-        label_sets: dict[str, tuple[int, LabelSet]] = {}
+        label_sets = LabelSetRegistry()
         index = _TaskValidationIndex(dataset)
         for batch in _task_batches(tasks_source):
-            label_set_rows: list[dict[str, object]] = []
             task_rows: list[dict[str, object]] = []
             target_rows: list[dict[str, object]] = []
             record_ref_rows: list[dict[str, object]] = []
             for task in batch:
                 TimeFDataset._check_record_refs(task, index)
                 TimeFDataset._check_signal_refs(task, index)
+                task.claim_label_set(label_sets)
                 task_id = task.id
                 written[task_id] = task
                 task_type = str(task.task_type)
@@ -519,7 +518,6 @@ class DuckDBControlWriter:
                         "split": None if task.split is None else parse_split(task.split).value,
                         **self._scope_columns(task, signal_ids),
                         "has_inline_targets": task.targets is not None,
-                        "label_set_id": self._label_set_id(task, label_sets, label_set_rows),
                         **encode_task_payload(task),
                         "rationale": self._pack(ObjectKind.TASK, task_id, PackedField.RATIONALE, task.rationale),
                         "metadata": _json(task.metadata),
@@ -551,12 +549,15 @@ class DuckDBControlWriter:
                 ):
                     annotation_refs.extend((task_id, field, position, item) for position, item in enumerate(values))
                 dependencies.extend((task_id, position, parent) for position, parent in enumerate(task.from_tasks))
-            insert_rows(connection, TABLES["label_sets"], label_set_rows)
             insert_rows(connection, TABLES["tasks"], task_rows)
             insert_rows(connection, TABLES["task_targets"], target_rows)
             insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
             # Store this batch's locators now, so a streamed task source never holds them all.
             self.external.write_locators(connection)
+        # Tasks refer to a label set by its name, so the sets can follow the tasks that use them.
+        insert_rows(
+            connection, TABLES["label_sets"], [encode_label_set(label_set)._asdict() for label_set in label_sets]
+        )
         duplicate = connection.execute(
             "SELECT task_id FROM tasks GROUP BY task_id HAVING count(*) > 1 LIMIT 1"
         ).fetchone()
@@ -626,36 +627,6 @@ class DuckDBControlWriter:
             return {"task_id": task_id, "position": position, **row.model_dump()}
         except (TimeFFormatError, ValidationError) as exc:
             raise TimeFValidationError(f"{target_label}: {exc}") from exc
-
-    def _label_set_id(
-        self, task: Task, label_sets: dict[str, tuple[int, LabelSet]], rows: list[dict[str, object]]
-    ) -> int | None:
-        """Return the id of the task's label set. Add the set's row the first time that a task uses its name.
-
-        Args:
-            task: The task to write.
-            label_sets: The id and set of each name written so far.
-            rows: The batch's new ``label_sets`` rows.
-
-        Returns:
-            The label set's id, or ``None`` if the task has no label set.
-
-        Raises:
-            TimeFValidationError: If an earlier task used the same name for a different set.
-        """
-        if not isinstance(task, ClassificationTask) or task.label_set is None:
-            return None
-        label_set = task.label_set
-        stored = label_sets.get(label_set.name)
-        if stored is None:
-            stored = label_sets[label_set.name] = (next(self._storage_ids["label_set"]), label_set)
-            rows.append(encode_label_set(label_set, stored[0]))
-        elif stored[1] is not label_set and stored[1] != label_set:
-            raise TimeFValidationError(
-                f"task {task.id!r} uses a label set named {label_set.name!r} that differs from an "
-                "earlier set with that name. A name stands for one label set in a dataset"
-            )
-        return stored[0]
 
     @staticmethod
     def _task_record_refs(task: Task) -> tuple[tuple[TaskRelationshipField, tuple[int, ...]], ...]:
