@@ -289,14 +289,16 @@ def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-argument
     force: bool,
     progress_cb: Callable[[int], None] | None,
 ) -> Manifest:
-    """Reuse or fetch one complete release, and repair a damaged copy only by fetching it.
+    """Reuse a complete local release or fetch it from a registry.
+
+    Local checks compare file sizes. Downloads also check file hashes.
 
     Returns:
-        The release manifest. File hashes are checked during transfer, not on every read.
+        The complete release's manifest.
 
     Raises:
-        TimeNetDatasetNotFoundError: If the release is absent and this function cannot fetch it.
-        TimeNetFileError: If a local file is damaged and ``fetch_from`` is not given, or a fetched file does not match.
+        TimeNetDatasetNotFoundError: If the release is missing and ``fetch_from`` is unset or lacks it.
+        TimeNetFileError: If a local file is damaged and ``fetch_from`` is unset, or a downloaded file is damaged.
         TimeFFormatError: If a manifest identifies a different release.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     if manifest is not None:
@@ -348,12 +350,10 @@ def _download_dataset_version(
     manifest: Manifest | None,
     progress_cb: Callable[[int], None] | None,
 ) -> Manifest:
-    """Check a release's identity and download its files.
-
-    Run ``before_fetch`` after checking the manifest and before downloading files.
+    """Download a complete release after checking its dataset ID and version.
 
     Returns:
-        The manifest of the downloaded and verified release.
+        The manifest for the downloaded and verified release.
     """
     if manifest is None:
         manifest = registry.get_manifest(reference.dataset_id, str(reference.version))
