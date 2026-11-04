@@ -76,6 +76,8 @@ _FIRST_DATA_LINE = 2
 _RECORD_FILE_KEY = "file"
 """The Record metadata key that holds the recording's file name."""
 
+# The paper's Methods: an Axivity AX3 on the dominant wrist, at 100 Hz with a range of ±8 g. The
+# authors resampled every recording to exactly 100 Hz before release.
 _DEVICE = "Axivity AX3"
 _SAMPLE_RATE_HZ = 100
 _SAMPLE_PERIOD_US = US_PER_S // _SAMPLE_RATE_HZ
@@ -143,8 +145,8 @@ _NO_LABEL = -1
 _AGE_BAND_DESCRIPTION = "The participant's age band in years, as metadata.csv writes it. The authors give no exact age."
 _RECORDING_START_DESCRIPTION = (
     "The first sample's timestamp as the authors published it, with no zone. For anonymity they randomized "
-    "the date and shifted the time by a small random amount, so the time of day is close to local time "
-    "but not exact."
+    "the date and shifted the time by a small random amount. The time of day is as published, not an "
+    "exact local time."
 )
 
 
