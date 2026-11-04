@@ -25,28 +25,27 @@ def build(  # ruff: ignore[too-many-arguments]
     build_parents: bool = False,
 ) -> Path:
     # ruff: ignore[docstring-extraneous-exception] (raised by build_release, not directly here)
-    """Build a dataset release into a local registry by its dataset ID.
+    """Build a dataset release in a local registry.
 
-    The build reuses a release that the registry already holds, unless you set ``force``. The
-    connector runs in an environment built from its ``requirements.txt``, or in this interpreter if
-    ``TIMENET_ISOLATION=off``.
+    The build reuses an existing release unless you set ``force``. The connector runs in an environment
+    with its required packages, or in this interpreter if ``TIMENET_ISOLATION=off``.
 
     Args:
-        dataset_id: The dataset ID, exactly as the card of the connector declares it (``org/name``).
-        version: The version that the card must declare. ``None`` accepts any version.
-        out: The local registry directory. Defaults to the shared one that ``TimeNet`` reads.
-        force: Build the release again, even if the registry already holds it.
-        keep_cache: Keep the raw download cache. A successful build deletes it by default.
+        dataset_id: The connector's dataset ID (``org/name``).
+        version: The version to build, or ``None`` for the connector's declared version.
+        out: The output directory, or ``None`` to use the default local registry.
+        force: Rebuild the release even if it exists in the registry.
+        keep_cache: Keep downloaded source files after a successful build.
         fetch_from: The registry, or its URI, to copy missing parent releases from.
         build_parents: Build missing parent releases from their installed connectors.
 
     Returns:
-        The version directory of the release.
+        The release's version directory.
 
     Raises:
         TimeNetDatasetNotFoundError: If no installed connector builds ``dataset_id``.
-        TimeNetVersionUnavailableError: If ``version`` is set and the card declares another version.
-        TimeNetMissingParentError: If a parent release is missing. Its hint names the two keywords.
+        TimeNetVersionUnavailableError: If ``version`` differs from the connector's declared version.
+        TimeNetMissingParentError: If a required parent release is still missing.
     """
     from timenet.builders import BuildOptions, declared  # ruff: ignore[import-outside-top-level]
     from timenet.coordinator.build import build_release  # ruff: ignore[import-outside-top-level]
@@ -82,13 +81,11 @@ def load(
     fetch_from: "str | BaseRegistry | None" = None,
     build_parents: bool = False,
 ) -> "TimeFDataset":
-    """Build a dataset if needed, then load it into memory.
-
-    This runs :func:`build`, then :meth:`timenet.client.TimeNet.load`.
+    """Build a dataset if needed and load it into memory.
 
     Args:
         dataset_id: The dataset ID (``org/name``).
-        version: The version to load, which the card must declare, or ``None`` for the latest.
+        version: The version declared by the connector, or ``None`` to load the latest version.
         fetch_from: The registry, or its URI, to copy missing parents and payload sources from.
         build_parents: Build missing parent releases from their installed connectors.
 

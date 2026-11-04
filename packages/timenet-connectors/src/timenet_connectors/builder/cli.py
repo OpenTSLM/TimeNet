@@ -197,24 +197,24 @@ def _build_to(  # ruff: ignore[too-many-arguments]
     pinned_by: Mapping[DatasetRef, PayloadSource] | None,
     options: BuildOptions,
 ) -> str:
-    """Build a release into a local output, or build it locally and copy it to a remote output.
+    """Build a release locally and copy it to a remote output if needed.
 
-    If nothing runs because the output already holds the release, a status line says so.
+    The build reuses an existing release unless you set ``force``.
 
     Args:
         dataset_id: The dataset ID.
-        target: The local directory, or the registry that is not local.
-        fetch_from: The registry to copy missing parents from. ``None`` uses a remote output, if any.
+        target: The local output directory or remote registry.
+        fetch_from: The registry to copy missing parents from, or ``None`` to use the remote output if present.
         build_parents: Build missing parents with their installed connectors.
-        force: Build the release again, even if the local registry holds it.
-        pinned_by: The releases that already read files of the release, with their pins.
-        options: The options of each build.
+        force: Rebuild the release even if it exists in the local registry.
+        pinned_by: The file records that dependent releases require this build to match.
+        options: The settings for each build.
 
     Returns:
-        The version directory for a local output, or the version for a remote one.
+        The local version directory or remote version as a string.
 
     Raises:
-        BadParameter: If ``force`` is set and the remote output holds the version. Nothing runs then.
+        BadParameter: If ``force`` is set and the version exists in the remote output.
     """
     release = declared(dataset_id).release
     if isinstance(target, Path):
@@ -289,24 +289,23 @@ def build_one(  # ruff: ignore[too-many-arguments]
     isolation: bool | None = None,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Prepare a dataset's parents, then build or reuse its release.
+    """Prepare parent releases and build a dataset.
 
-    A missing parent comes from ``fetch_from`` or ``build_parents``, or the build fails before any
-    download. If the output already holds the version and ``force`` is not set, the build only
-    prepares the missing payload sources of the version.
+    A missing parent comes from ``fetch_from`` or ``build_parents``, or the build fails before any download. If the
+    output has the version and ``force`` is off, the build only prepares missing releases that supply its data files.
 
     Args:
         dataset_id: The dataset ID.
         output: A local directory, or a ``timenet://``, ``http(s)://`` or ``s3://`` URL.
         fetch_from: The registry, or its URI, to copy missing parent releases from.
         build_parents: Build missing parents with installed connectors.
-        force: Build the release again, even if the output already holds it.
-        keep_cache: Keep the raw download cache after building.
-        isolation: ``True`` builds in the environment of the connector. ``None`` reads ``TIMENET_ISOLATION``.
-        pinned_by: The pins that other releases hold on this release. The build must reproduce them.
+        force: Rebuild the release even if it exists in the output.
+        keep_cache: Keep downloaded source files after the build.
+        isolation: Use a separate environment if true, this process if false, or ``TIMENET_ISOLATION`` if ``None``.
+        pinned_by: The file records that dependent releases require this build to match.
 
     Returns:
-        The version directory for a local output, or the published version.
+        The local version directory or published version as a string.
     """
     target = _resolve_target(str(output))
     registry = LocalRegistry(target) if isinstance(target, Path) else target
@@ -414,19 +413,19 @@ def _build(  # ruff: ignore[too-many-arguments]
     keep_cache: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Build a dataset in a local directory or writable registry.
+    """Build a dataset in a local directory or remote registry.
 
     Args:
-        dataset_id: The dataset id.
-        target: The output for a build in the current interpreter.
-        forwarded: The output path or URL to pass to an isolated build.
-        isolated: Build in an environment built from the connector's requirements.
-        force: Rebuild an existing version.
-        keep_cache: Keep the raw download cache after building.
-        pinned_by: The releases that already read files of this release, with their pins.
+        dataset_id: The dataset ID.
+        target: The output directory or registry when building in this interpreter.
+        forwarded: The output path or URI when building in a separate environment.
+        isolated: Build in a separate environment with the connector's required packages.
+        force: Rebuild the release even if it exists in the output.
+        keep_cache: Keep downloaded source files after the build.
+        pinned_by: The file records that dependent releases require this build to match.
 
     Returns:
-        The committed version directory for a local output, or the published version.
+        The local version directory or published version as a string.
     """
     pinned_by = pinned_by or None
     if isolated:
