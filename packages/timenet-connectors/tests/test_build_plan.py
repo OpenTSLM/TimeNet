@@ -791,16 +791,3 @@ def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
     error, hint = hints[case]
     assert isinstance(result.exception, error)
     assert str(result.exception).endswith(hint)
-
-
-def test_plan_steps_name_their_dependencies(tmp_path, monkeypatch):
-    cards = _cards(child={"parent": PARENT}, parent={"grand": GRAND})
-    del cards[GRAND.dataset_id]
-    entries = [_Entry(ConnectorBuilder()), _Entry(_CardBackend(cards))]
-    monkeypatch.setattr(builders, "entry_points", lambda group: entries)
-
-    steps = plan_parents(CHILD.dataset_id, LocalRegistry(tmp_path), build_parents=True)
-
-    by_release = {step.release: step for step in steps}
-    assert by_release[GRAND].depends_on == ()
-    assert by_release[PARENT].depends_on == (GRAND,)

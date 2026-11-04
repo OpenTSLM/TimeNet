@@ -48,13 +48,6 @@ class Step:
 
 
 @dataclass(frozen=True)
-class Plan:
-    """The steps that get each release that a build needs, in the order in which they run."""
-
-    steps: tuple[Step, ...]
-
-
-@dataclass(frozen=True)
 class _Release:
     """One node of the graph: a release that the build needs, and what the plan does with it."""
 
@@ -234,9 +227,11 @@ def plan_parents(
             local and the plan would copy such a release from it.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers of the walk
     if fetch_from is not None and not isinstance(output, LocalRegistry):
-        # A registry that is not local accepts a child only if it already holds the parents. Also, a
-        # fetch copies a parent into the local cache, not into the output.
-        raise TimeFValidationError("fetching parents needs a local output; publish the parents to the registry first")
+        # A registry that is not local accepts a child only if it already holds the parents. A copy
+        # step writes a parent only to a local directory, never to such a registry.
+        raise TimeFValidationError(
+            "copying parents from a registry needs a local output; publish the parents to the registry first"
+        )
     card = find_card(dataset_id)
     if card is None:
         raise LookupError(f"no installed connector declares a card for {dataset_id!r}")
