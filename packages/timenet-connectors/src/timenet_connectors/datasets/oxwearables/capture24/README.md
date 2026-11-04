@@ -34,7 +34,8 @@ The archive's `capture24/` directory holds:
 An Axivity AX3 on the dominant wrist records acceleration along three axes, in g, at 100 Hz with a
 range of ±8 g. The published values are not raw device output. The authors resampled each recording
 to exactly 100 Hz with nearest-neighbor interpolation, which selects the nearest existing sample.
-They also applied gravity autocalibration, which uses gravity to calibrate the sensor.
+They also applied gravity autocalibration, which corrects the sensor's calibration errors by using
+the periods when the device is still and measures only gravity.
 
 The source values have eight significant digits. The connector reads and stores them as float32,
 which keeps about seven, as the authors' own loader does. This rounding is far below the sensor's
@@ -124,8 +125,8 @@ Each row must name a class in every scheme, including schemes without tasks.
 This prevents blank classes from entering the activity annotations.
 
 The `metadata.csv` table must list at least one participant and use the expected age bands and sex
-values. Both tables must contain exactly the expected columns. Every row must have one nonempty
-field per column, so the connector cannot silently drop extra values.
+values. Both tables must contain exactly the expected columns. A blank or missing field fails the
+build. A row with more fields than the header also fails, so no extra value is dropped unnoticed.
 Violations of these rules raise `TimeNetConnectorError`.
 
 The dictionary has four more schemes (`WillettsMET2018`, `DohertySpecific2018`, `Willetts2018` and
@@ -153,10 +154,12 @@ Each participant's windows appear in time order.
 
 A bin is a fixed 10 s time interval. `make_windows` starts the bins at the recording's first sample.
 After a gap, the bins stay on this original time grid. A bin becomes a window if it contains exactly
-1000 samples and at least one labeled sample. The activity annotations show how much of each window
-has a label.
+1000 samples and at least one labeled sample. So a window's class can come from a single labeled
+sample. The activity annotations show how much of each window has a label.
 
-The build fails if a selected window crosses a gap, even if it contains 1000 samples.
+A bin that crosses a gap usually has fewer than 1000 samples, so it is dropped. A step between one
+and two sample periods is also a gap, but the bin around it can still hold 1000 samples. The build
+fails on such a bin, so no window crosses a gap.
 A window's class is the most common class among its labeled samples. If classes tie, the class
 that sorts first by its text wins, as in the authors' `Series.mode`.
 A window's scope starts at its first sample. After a gap, that sample can fall up to 10 ms after
@@ -168,10 +171,9 @@ The authors randomly select groups from the training set for validation.
 This selection is not fixed, so the connector assigns no task to `validation`.
 
 A task's `inputs` contains the participant's whole Record, and its `scope` identifies the window.
-For a model that reads one window, first select the segment that contains the scope.
-Read 1000 samples from each of `x`, `y`, and `z` within that scope. If a Record has a gap, select
-the segment by its time span.
-Both segments have signals with the same names.
+For a model that reads one window, find the Source whose time span contains the scope, and read the
+1000 samples of its `x`, `y`, and `z` within the scope. In a Record with a gap, both Sources have
+signals with the same names, so pick the Source by its time span, not a signal by its name.
 
 The authors' sequence models read several windows together. Their recurrent neural network (RNN)
 reads 8 consecutive windows. Their hidden Markov model (HMM) reads a participant's whole sequence.
