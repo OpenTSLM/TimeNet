@@ -198,52 +198,29 @@ def plan_parents(
     build_parents: bool = False,
     force_build: bool = False,
 ) -> list[ParentStep]:
-    """Plan how to get each parent release that a build of ``dataset_id`` needs.
+    """Plan how to fetch or build the releases a dataset needs.
 
-    For each declared parent, a build needs the parent and the payload sources of that parent. It
-    does not need the payload sources of those payload sources. The plan visits the declared parents
-    of a release only if the plan builds that release. So if the output already holds the requested
-    release, the plan visits its parents only if ``force_build`` is set. If ``force_build`` is not
-    set, the plan visits only the payload sources of that release.
-
-    If the output does not hold a release, the plan fetches it from ``fetch_from``. If ``fetch_from``
-    does not hold it either, the plan builds it with the installed connector that declares that
-    exact version. If a local output holds a damaged copy, the plan fetches the release again and
-    does not build it. A registry that is not local holds only releases whose cards declare
-    ``access: open``. So for such an output, each release that the plan visits must declare
-    ``access: open``. If ``fetch_from`` is not local, each release that the plan fetches from it
-    must declare ``access: open`` too.
-
-    The plan works in two phases. First, a walk from the requested release finds the graph of the
-    releases that the build needs. Then :class:`graphlib.TopologicalSorter` orders the graph and
-    finds cycles, and the plan makes its steps in that order.
+    Prefer complete copies, then ``fetch_from``, then builds if ``build_parents`` is true.
+    An existing release needs only its payload sources unless ``force_build`` is set.
 
     Args:
         dataset_id: The dataset to build.
-        output: The registry that the build writes to.
-        fetch_from: The registry to fetch missing parents from. If it is ``None``, the plan fetches
-            nothing.
+        output: The registry to build into.
+        fetch_from: The registry to fetch missing or damaged parents from, or ``None``.
         build_parents: Build missing parents with their installed connectors.
-        force_build: Build the requested release again, even if the output holds it, and plan its
-            parents.
+        force_build: Plan the requested release's parents even if the output already holds the release.
 
     Returns:
-        The steps to fetch or build parents. Each step comes after the steps of the releases that it
-        depends on.
+        Fetch or build steps, ordered with dependencies first.
 
     Raises:
-        LookupError: If no installed connector declares a card for ``dataset_id``.
-        TimeNetInvalidCardError: If the card of an installed connector cannot be read.
-        TimeFValidationError: If the parents form a cycle, if an installed connector declares another
-            version than a parent pins, or if ``fetch_from`` is set and the output is not local.
-        TimeNetMissingParentError: If a parent or a payload source is missing and ``build_parents``
-            is not set.
+        LookupError: If no installed connector declares a dataset card for ``dataset_id``.
+        TimeNetInvalidCardError: If an installed connector's dataset card cannot be read.
+        TimeFValidationError: If parents cycle, a connector builds the wrong version, or fetching uses non-local output.
+        TimeNetMissingParentError: If a parent or payload source is missing and ``build_parents`` is false.
         TimeNetDatasetNotFoundError: If a parent is missing and no installed connector builds it.
-        TimeNetFileError: If a local output holds a damaged copy of a parent, and the plan cannot
-            fetch the parent again.
-        TimeNetAccessError: If the output is not local and the plan visits a release whose card, or
-            a card in its lineage, does not declare ``access: open``. Also if ``fetch_from`` is not
-            local and the plan would fetch such a release from it.
+        TimeNetFileError: If a local parent copy has a missing or resized file and cannot be fetched again.
+        TimeNetAccessError: If a release or its lineage lacks open access where a registry requires it.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers of the walk
     if fetch_from is not None and not isinstance(output, LocalRegistry):
         # A registry that is not local accepts a child only if it already holds the parents. Also, a
@@ -346,21 +323,16 @@ def _locate(
 ) -> tuple[Manifest | None, Literal["fetch"] | None]:
     # The damage is raised from a variable, the access error by require_open_access.
     # ruff: ignore[docstring-extraneous-exception]
-    """Find a release in the output, or else in ``fetch_from``.
+    """Find a release in ``output`` or ``fetch_from``.
 
-    The output must hold an intact copy. In a local output, a copy with a missing file or a file of
-    another size is damaged.
+    A local copy is intact when every file has its recorded size.
 
     Returns:
-        The manifest and ``None`` if the output holds an intact copy. The manifest and ``"fetch"`` if
-        the plan fetches the release. ``None`` and ``None`` if the plan builds it.
+        ``(manifest, None)`` for an output copy, ``(manifest, "fetch")`` for a fetch, or ``(None, None)`` if absent.
 
     Raises:
-        TimeNetFileError: If a local output holds a copy with a missing file or a file of another
-            size, and the plan cannot fetch the release again.
-        TimeNetAccessError: If the card of the release, or a card in its lineage, does not declare
-            ``access: open``, and the output that holds the release, or the ``fetch_from`` registry
-            to fetch it from, is not local.
+        TimeNetFileError: If the local copy has a missing or resized file and ``fetch_from`` lacks the release.
+        TimeNetAccessError: If the release or its lineage lacks open access where its registry requires it.
     """
     manifest = _manifest(output, reference)
     damage = None
@@ -399,14 +371,14 @@ def _card_to_build(  # ruff: ignore[too-many-arguments]
     pinned: bool,
     searched: str,
 ) -> DatasetMetadata:
-    """Return the card to build a release that the output does not hold and the plan cannot fetch.
+    """Find a dataset card for building a missing release.
 
     Returns:
-        The card of the installed connector that builds exactly ``reference``.
+        The installed connector's card for the exact release in ``reference``.
 
     Raises:
-        TimeNetMissingParentError: If ``build_parents`` is not set.
-        TimeNetAccessError: If the output is not local and the card does not declare ``access: open``.
+        TimeNetMissingParentError: If ``build_parents`` is false.
+        TimeNetAccessError: If the card lacks open access and the output requires it.
     """  # ruff: ignore[docstring-extraneous-exception] - the access error is raised by require_open_access
     if not build_parents:
         raise TimeNetMissingParentError(reference, needed_by, searched, payload_source=pinned)

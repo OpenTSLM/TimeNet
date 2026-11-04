@@ -52,13 +52,13 @@ def download_version_files(  # ruff: ignore[too-many-arguments]
 
     Args:
         http: The registry HTTP client.
-        manifest: The version's parsed manifest (its file list drives the download).
+        manifest: The release's manifest.
         dataset_id: The ``org/name`` id.
         version: The version string.
         dest_dir: The target ``<...>/<id>/<version>`` directory.
         force: Re-download even if ``dest_dir/manifest.json`` already exists.
         max_concurrency: Maximum concurrent file downloads.
-        progress_cb: Called with each chunk's byte count as it is written, for a progress display.
+        progress_cb: Callback that receives each downloaded chunk's byte count, or ``None``.
 
     Returns:
         ``dest_dir``.

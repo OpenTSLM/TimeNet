@@ -140,15 +140,15 @@ class RemoteRegistry(LazyReadRegistry):
         manifest: Manifest | None = None,
         progress_cb: ProgressCallback | None = None,
     ) -> None:
-        """Download the files of one release into a local directory.
+        """Download one release's files to a local directory.
 
         Args:
             dataset_id: The dataset ID, as ``org/name``.
-            version: The version string.
-            directory: The directory of the release, ``<root>/<dataset_id>/<version>``.
-            force: Download again, even if ``directory`` holds a complete copy.
-            manifest: The manifest of the release, or ``None`` to read it from this registry.
-            progress_cb: Receives the size of each downloaded chunk, or ``None``.
+            version: The exact version string.
+            directory: The local release directory, ``<root>/<dataset_id>/<version>``.
+            force: Download again even if a complete copy exists.
+            manifest: The release's manifest, or ``None`` to fetch it from this registry.
+            progress_cb: Callback that receives each downloaded chunk's byte count, or ``None``.
         """
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
