@@ -38,7 +38,7 @@ _DATASETS_PREFIX = "datasets"
 
 
 class S3Registry(LazyReadRegistry):
-    """Serves and publishes datasets under an ``s3://bucket/prefix`` root."""
+    """A registry that reads and writes datasets under an ``s3://bucket/prefix`` root."""
 
     _staging_prefix = "timenet-s3-"
 
@@ -141,14 +141,14 @@ class S3Registry(LazyReadRegistry):
         return response["Body"]
 
     def _open_remote_version(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
-        """Bind one remote manifest to Arrow's native S3 filesystem.
+        """Open a release through Arrow's S3 filesystem.
 
         Args:
-            reference: The exact release.
-            manifest: The manifest of the release, if the caller already fetched it from this registry.
+            reference: The dataset ID and exact version to open.
+            manifest: A manifest already fetched from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle without its payload sources.
+            A handle to the S3 release without attached payload sources.
         """
         if manifest is None:
             manifest = self.get_manifest(reference.dataset_id, str(reference.version))
