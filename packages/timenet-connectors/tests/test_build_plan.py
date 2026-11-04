@@ -33,7 +33,6 @@ from timenet.types.reference_keys import ParentAlias, SourceKey
 from timenet.types.references import DatasetRef
 from timenet.values_backends import ValuesBackend
 import timenet_connectors
-from timenet_connectors import api as api_module
 from timenet_connectors.builder import backend as backend_module, cli as cli_module, env as env_module
 from timenet_connectors.builder.backend import ConnectorBuilder
 from timenet_connectors.builder.cli import app
@@ -569,23 +568,20 @@ def test_load_obtains_a_missing_parent_before_it_builds_and_reads(tmp_path, monk
     assert calls == (builds if obtain == "fetch_from" else [(PARENT.dataset_id, False), *builds])
 
 
-def test_load_reads_a_missing_payload_source_through_fetch_from(tmp_path, monkeypatch):
+def test_load_copies_a_missing_payload_source_through_fetch_from(tmp_path, monkeypatch):
+    _install_cards(monkeypatch, parent={"parent": GRAND})
     out = LocalRegistry(tmp_path / "out")
     _parent_without_its_source(out)
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("TIMENET_REGISTRY", str(out.root))
-    # The build has nothing to do, and no builder backend can build the payload source, so only the
-    # read can get it.
-    monkeypatch.setattr(api_module, "build", lambda dataset_id, **options: None)
-    monkeypatch.setattr(builders, "entry_points", lambda group: [])
 
     dataset = timenet_connectors.load(PARENT.dataset_id, fetch_from=origin)
 
     assert len(dataset.records) == 2
-    # The read opens the payload source in origin, where it is, and copies nothing.
-    assert not out.exists(GRAND.dataset_id, str(GRAND.version))
+    # The build copies the payload source into the store, where the read finds it.
+    assert out.exists(GRAND.dataset_id, str(GRAND.version))
 
 
 class _NoDownloads(_Hosted):

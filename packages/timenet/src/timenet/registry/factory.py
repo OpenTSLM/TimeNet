@@ -6,7 +6,6 @@ from urllib.request import url2pathname
 
 from timenet.config import settings
 from timenet.errors import TimeNetRegistryError
-from timenet.registry.base import BaseRegistry
 from timenet.registry.local import LocalRegistry
 from timenet.registry.remote import RemoteRegistry
 from timenet.registry.s3 import S3Registry
@@ -19,7 +18,10 @@ TIMENET_REGISTRY_URL = "https://registry.timenet.ai"
 _REMOTE_SCHEMES = ("timenet://", "http://", "https://", "s3://")
 
 
-def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None) -> BaseRegistry:
+_SCHEMES = "Use an http(s)://, s3://, timenet:// or file:// URL, or a local path."
+
+
+def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None, label: str = "registry") -> WritableRegistry:
     """Open a registry from a URI or path.
 
     The scheme selects the backend. ``http(s)://`` and ``timenet://`` open a :class:`RemoteRegistry`,
@@ -30,14 +32,15 @@ def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None) -> Ba
         uri: A URL, ``timenet://`` / ``s3://`` / ``file://`` URI, or local path.
         cache_dir: Where a remote backend caches downloads. The local backend ignores it. Defaults to
             the configured storage directory when ``None``.
+        label: The name of the value in an error message, such as ``sources[0]``.
 
     Returns:
         The matching registry backend.
 
     Raises:
-        ValueError: If ``uri`` carries a scheme no backend handles, if a ``timenet://`` URI carries a
-            path, or if ``uri`` is a ``file://`` URI with a host component (the host would be dropped
-            without notice).
+        TimeNetRegistryError: If ``uri`` is blank or carries a scheme no backend handles, if a
+            ``timenet://`` URI carries a path, or if ``uri`` is a ``file://`` URI with a host component
+            (the host would be dropped without notice) or without a path.
     """
     text = str(uri)
     if text.startswith("timenet://"):
@@ -45,68 +48,44 @@ def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None) -> Ba
         # passed to the client methods, not folded into the registry URI). Reject a stray remainder
         # rather than drop it silently, so a mistyped URI fails loudly instead of hitting the default host.
         if text[len("timenet://") :].strip("/"):
-            raise ValueError(f"timenet:// takes no path; got {text!r}")
+            raise TimeNetRegistryError(f"{label} {text!r}: timenet:// takes no path")
         return RemoteRegistry(TIMENET_REGISTRY_URL, cache_dir=cache_dir)
     if text.startswith(("http://", "https://")):
         return RemoteRegistry(text, cache_dir=cache_dir)
     if text.startswith("s3://"):
         return S3Registry(text, cache_dir=cache_dir)
-    if text.startswith("file://"):
-        parsed = urlparse(text)
-        if parsed.netloc:
-            raise ValueError(f"file:// registry URI must be absolute (three slashes), got {text!r}")
-        return LocalRegistry(Path(url2pathname(parsed.path)).expanduser())
-    if "://" in text:
-        raise ValueError(f"unsupported registry scheme in {text!r}")
-    return LocalRegistry(Path(text).expanduser())
+    return LocalRegistry(local_registry_path(text, label=label))
 
 
-def open_writable_registry(uri: str | Path) -> WritableRegistry:
-    """Open a writable registry from a URI or local path.
-
-    Args:
-        uri: A URL, ``timenet://`` / ``s3://`` / ``file://`` URI, or local path.
-
-    Returns:
-        The writable registry for the URI or path.
-
-    Raises:
-        ValueError: If the registry does not support writing.
-    """
-    registry = open_registry(uri)
-    if not isinstance(registry, WritableRegistry):
-        raise ValueError(f"registry {uri!r} is not writable")
-    return registry
-
-
-def local_registry_path(uri: str | Path) -> Path:
+def local_registry_path(uri: str | Path, *, label: str = "registry") -> Path:
     """Resolve a registry URI to the local directory it names, for build to write into.
-
-    Every backend is a :class:`WritableRegistry`, so :func:`open_writable_registry` cannot separate a
-    directory the engine can write to from a remote stub. This function can.
 
     Args:
         uri: A ``file://`` URI or local path.
+        label: The name of the value in an error message, such as ``sources[0]``.
 
     Returns:
         The local directory the URI names, with ``~`` expanded.
 
     Raises:
-        TimeNetRegistryError: If the URI names a remote backend or carries an unsupported scheme, which
-            build cannot write to.
+        TimeNetRegistryError: If the value is blank, names a remote backend, or is not a valid local
+            registry URI.
     """
     text = str(uri)
+    if not text.strip():
+        # Path("") is the current directory, which a blank value never means.
+        raise TimeNetRegistryError(f"{label} is blank; give a registry URL or a local path")
     if text.startswith(_REMOTE_SCHEMES):
-        raise TimeNetRegistryError(f"registry {text!r} is remote; build writes to a local directory")
+        raise TimeNetRegistryError(f"{label} {text!r} is remote; build writes to a local directory")
     if text.startswith("file://"):
         parsed = urlparse(text)
         if parsed.netloc:
-            raise TimeNetRegistryError(f"file:// registry URI must be absolute (three slashes), got {text!r}")
+            raise TimeNetRegistryError(f"{label} {text!r} must be an absolute file:// URI (three slashes). {_SCHEMES}")
         if not parsed.path:
-            raise TimeNetRegistryError("file:// registry URI must name an absolute path")
+            raise TimeNetRegistryError(f"{label} {text!r} must name an absolute path")
         return Path(url2pathname(parsed.path)).expanduser()
     if "://" in text:
-        raise TimeNetRegistryError(f"unsupported registry scheme in {text!r}")
+        raise TimeNetRegistryError(f"{label} {text!r} has an unsupported registry scheme. {_SCHEMES}")
     return Path(text).expanduser()
 
 
