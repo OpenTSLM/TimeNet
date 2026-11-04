@@ -11,21 +11,26 @@ source partitions identify the contributing datasets, not train/test folds.
 ## Records and captioning tasks
 
 Each record contains one source named `IMU` with six signals. Record annotations identify the source
-dataset, partition, file, and row, along with the activity summary and sensor location when available.
+dataset, partition, file, and row, along with the activity summary, the sensor location when
+available, and the 12 derived features. The captioning task uses only the activity summary and
+the sensor location as input annotations.
 
 | Content | TimeF access |
 | --- | --- |
 | Sensor readings | Signals in `task.inputs[0]` |
-| Captioning instruction | Beginning of `task.prompt` |
+| Captioning instruction | `task.prompt` |
 | Activity label | `activity_summary` in `task.input_annotations` |
 | Sensor location, when available | `sensor_location` in `task.input_annotations` |
-| Moving averages, FFT, minimum, maximum, median, variance | Multiline feature text after the instruction in `task.prompt` |
+| Moving averages, FFT, minimum, maximum, median, variance | One entry per feature in `record.annotations`, such as `gyroscope_moving_average` |
 | Feature summary and narration | Complete response in `task.targets[0]` |
 
 Include the task's input annotations when using the captioning task: the activity label is an
-intended input. Feature text is retained verbatim, including complex numbers and NumPy ellipses.
-These features were computed before subsampling and cannot be regenerated from the 60 readings
-alone. Caption responses are retained without splitting or truncation.
+intended input. The derived features are not task inputs. Each row has about 36,000 characters of
+feature text. The generator computed the features from the 120-reading source window, not from the
+60 stored readings, so you cannot compute them again from the signals. To use them, read
+`task.inputs[0].annotations`. Each feature keeps the text that the source prints after its heading,
+with complex numbers and NumPy ellipses. The connector keeps each caption response complete. It does
+not split or cut it.
 
 ## Signals
 
