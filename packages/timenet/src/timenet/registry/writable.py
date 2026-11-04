@@ -91,7 +91,7 @@ class WritableRegistry(BaseRegistry, ABC):
         return manifest
 
     def exists(self, dataset_id: str, version: str) -> bool:
-        """Return whether a committed version already exists in this registry.
+        """Check whether this registry holds a dataset version.
 
         Args:
             dataset_id: The dataset id.

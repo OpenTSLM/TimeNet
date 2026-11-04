@@ -50,10 +50,10 @@ class LocalRegistry(WritableRegistry):
 
     @property
     def requires_open_access(self) -> bool:
-        """Whether this registry holds and serves only releases with open access.
+        """Whether local releases must declare open access.
 
         Returns:
-            ``False``: a local registry holds releases of any access.
+            ``False``, since a local registry accepts any access level.
         """
         return False
 

@@ -34,15 +34,14 @@ class TimeNetDatasetNotFoundError(TimeNetError):
 
 
 class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
-    """A release that another release needs is absent: a declared parent of a build, or a payload source.
+    """A required parent release or payload source is missing.
 
     Attributes:
         missing: The absent release.
         needed_by: The release that needs it.
-        payload_source: Whether ``needed_by`` reads files of ``missing`` (a payload source), rather than
-            declaring it as a parent to build from.
-        searched: Where the release was looked for.
-        hint: How the caller can obtain the release, added by the front end, or ``None``.
+        payload_source: ``True`` if ``needed_by`` reads files of ``missing``, ``False`` for a declared build parent.
+        searched: The search location.
+        hint: Advice on obtaining the release, or ``None``.
     """
 
     def __init__(self, missing: "DatasetRef", needed_by: "DatasetRef", searched: str, *, payload_source: bool) -> None:
@@ -65,18 +64,16 @@ class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
 
 
 class TimeNetVersionConflictError(TimeNetError):
-    """A registry already holds a release with other files than the copy that would go there.
+    """A registry already holds a release with other files than the copy.
 
-    A published version cannot change, so other files need a new version.
+    Different files require a new version.
 
     Attributes:
-        release: The release that the registry holds with other files.
-        registry: The registry that holds it, as text.
-        source: The registry that the copy comes from, as text.
-        needed_by: The release that the copy is for, if ``release`` is a payload source that it
-            needs, directly or through another payload source. ``None`` if ``release`` is the
-            release that the copy is for.
-        hint: What the caller can do instead, added by the front end, or ``None``.
+        release: The release with conflicting files.
+        registry: The destination registry, as text.
+        source: The source registry, as text.
+        needed_by: The requested release that needs this payload source, or ``None`` if ``release`` is the request.
+        hint: Advice to append to the error message, or ``None``.
     """
 
     def __init__(

@@ -1,8 +1,7 @@
-"""Typed progress events for copies and builds.
+"""Progress events for copying and building releases.
 
-A function that copies or builds releases sends these events to an optional
-:data:`ProgressCallback` and prints nothing. Each step, the copy or the build of one release, sends
-:class:`StepStarted` first and :class:`StepFinished` only if it succeeds.
+Each release starts with a :class:`StepStarted` event.
+A :class:`StepFinished` event follows only if the copy or build succeeds.
 """
 
 from collections.abc import Callable
@@ -14,11 +13,11 @@ from timenet.types.references import DatasetRef
 
 @dataclass(frozen=True)
 class StepStarted:
-    """A step started to copy or build one release.
+    """The start of a copy or build for one release.
 
     Attributes:
-        release: The release that the step copies or builds.
-        action: ``"copy"`` or ``"build"``.
+        release: The release to copy or build.
+        action: The operation, either ``"copy"`` or ``"build"``.
     """
 
     release: DatasetRef
@@ -27,11 +26,11 @@ class StepStarted:
 
 @dataclass(frozen=True)
 class StepFinished:
-    """A step finished the copy or the build of one release.
+    """The successful completion of a copy or build for one release.
 
     Attributes:
-        release: The release that the step copied or built.
-        action: ``"copy"`` or ``"build"``.
+        release: The copied or built release.
+        action: The completed operation, either ``"copy"`` or ``"build"``.
     """
 
     release: DatasetRef
@@ -39,7 +38,7 @@ class StepFinished:
 
 
 ProgressEvent = StepStarted | StepFinished
-"""One progress event."""
+"""An event that marks the start or successful end of a copy or build."""
 
 ProgressCallback = Callable[[ProgressEvent], None]
-"""A function that receives each progress event."""
+"""A callback that receives a progress event and returns nothing."""
