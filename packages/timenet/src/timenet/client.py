@@ -394,18 +394,17 @@ def _missing_hint(*, auto_build: bool, fetch_from: BaseRegistry | None) -> str |
 def _prepare(
     registry: LocalRegistry, dataset_id: str, version: str | None, *, auto_build: bool, fetch_from: BaseRegistry | None
 ) -> DatasetVersion:
-    """Prepare a local dataset version and its payload sources.
+    """Prepare a local dataset version and the releases that supply its payload files.
 
-    This function reuses local releases, tries ``fetch_from``, then builds missing releases if
-    ``auto_build`` is true. Each rebuilt payload source must match the version and file pins the
-    dataset requires.
+    The function copies missing releases from ``fetch_from`` or builds them when ``auto_build`` is set.
+    A payload source build must reproduce the exact version and pinned files.
 
     Returns:
         The release with each payload source attached.
 
     Raises:
-        TimeNetMissingParentError: If copying and building cannot provide a missing payload source.
-        TimeNetInvalidCardError: If reading a connector's card fails.
+        TimeNetMissingParentError: If a missing payload source cannot be copied or built.
+        TimeNetInvalidCardError: If a connector's card cannot be read.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _obtain, claim and the build
     try:
         manifest = registry.get_manifest(dataset_id, version)
@@ -447,17 +446,17 @@ def _obtain(  # ruff: ignore[too-many-arguments]
     auto_build: bool,
     fetch_from: BaseRegistry | None,
 ) -> Manifest:
-    """Get a missing version's manifest from another registry or a local build.
+    """Get a missing version's manifest from ``fetch_from``, or build the version locally.
 
-    Try ``fetch_from`` first, then build if ``auto_build`` is true.
+    A local build needs ``auto_build`` and an installed connector for the dataset.
 
     Returns:
-        The manifest from ``fetch_from`` without copying its files, or the local manifest after a build.
+        The manifest from ``fetch_from`` without its files, or the local manifest after a build.
 
     Raises:
         TimeNetDatasetNotFoundError: If neither ``fetch_from`` nor a connector provides the version.
         TimeNetVersionUnavailableError: If the connector declares a different version.
-        TimeNetInvalidCardError: If reading the connector's card fails.
+        TimeNetInvalidCardError: If the connector's card cannot be read.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the build
     if fetch_from is not None:
         try:

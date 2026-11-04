@@ -177,14 +177,14 @@ def build(
 
 
 def _missing_hint(*, fetch_from: str | None, build_parents: bool) -> str | None:
-    """Name the options of ``build`` that can get a missing release and that the command did not use.
+    """Suggest flags to obtain a missing release.
 
     Args:
         fetch_from: The value of ``--fetch-from``, or ``None``.
         build_parents: Whether ``--build-parents`` is set.
 
     Returns:
-        The hint as a full sentence, or ``None`` if the command used both options.
+        A sentence naming unused flags, or ``None`` if both are set.
     """
     ways = []
     if fetch_from is None:
@@ -214,12 +214,12 @@ def _build_to(  # ruff: ignore[too-many-arguments]
         dataset_id: The dataset ID.
         target: The local directory or remote registry to write to.
         fetch_from: The registry to copy missing parents from. ``None`` uses a remote output, if any.
-        build_parents: Build missing parents with their installed connectors.
-        force: Rebuild the release even if the local registry holds it.
+        build_parents: Build missing parents with installed connectors.
+        force: Rebuild an existing local release.
         options: Settings for each build.
 
     Returns:
-        The version directory for a local output, or the version string for a remote output.
+        The local version directory or the remote version string.
 
     Raises:
         BadParameter: If ``force`` is set and the remote output already holds the version.
