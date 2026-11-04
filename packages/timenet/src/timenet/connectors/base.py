@@ -40,7 +40,7 @@ class BaseConnector(ABC, Generic[TRaw]):
     reads the card from ``dataset.yaml`` in its own folder."""
 
     values_backend: ValuesBackend = ValuesBackend.PARQUET
-    """Storage backend for the values plane of the datasets that this connector builds."""
+    """Storage backend for the dataset's time-series values."""
 
     def __new__(cls, *args: object, **kwargs: object) -> Self:
         """Create a connector of a class that implements its hooks.

@@ -195,33 +195,21 @@ def build_one(  # ruff: ignore[too-many-arguments]
     narrate: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Build one dataset: prepare its parent releases, then run its connector.
+    """Prepare a dataset's parent releases, then build the dataset.
 
-    Every build entry point calls this function. These are the ``build`` command,
-    :class:`~timenet_connectors.builder.backend.ConnectorBuilder`, and
-    :func:`timenet_connectors.build`. If ``fetch_from`` or ``build_parents`` does not obtain a
-    missing parent, the build fails before any download. A parent builds the same way as this
-    dataset. A parent never builds with ``force``. If another builder backend claims a parent, the
-    ``build`` method of that backend builds the parent with its pins. If ``force`` is not set and
-    the output already holds the version, the build prepares only the missing payload sources of
-    the version. In that case, the build does not run the connector of this dataset. The connector
-    runs in an environment built from its requirements. If isolation is off, the connector runs in
-    this interpreter. A local output gets a version directory. A remote output gets a published
-    version.
+    A missing parent that ``fetch_from`` or ``build_parents`` does not provide fails the build before any download.
+    The build reuses an existing version unless ``force`` is true.
 
     Args:
         dataset_id: The dataset id.
-        output: The output registry. This is a local directory, or a ``timenet://``,
-            ``http(s)://``, or ``s3://`` URL. An isolated child gets it unchanged as ``--out``.
+        output: The output directory or a ``timenet://``, ``http(s)://``, or ``s3://`` registry URL.
         fetch_from: The registry, or its URI, to copy missing parent releases from.
         build_parents: Build missing parent releases from their installed connectors.
-        force: Rebuild even if the version is already built.
+        force: Rebuild an existing version.
         keep_cache: Keep the raw download cache after building.
-        isolation: If true, build in an environment built from the connector's requirements.
-            If ``None``, use the ``TIMENET_ISOLATION`` setting.
-        narrate: Print status lines and download progress for an in-process build.
-        pinned_by: The releases that already read files of this release, with their pins. The build
-            publishes the release only if it reproduces each pinned file.
+        isolation: Use isolation if true, this interpreter if false, or ``TIMENET_ISOLATION`` if ``None``.
+        narrate: Print status and download progress when isolation is off.
+        pinned_by: Releases that read this dataset's files, with file pins the build must match.
 
     Returns:
         The committed version directory for a local output, or the published version.
@@ -340,17 +328,17 @@ def _build(  # ruff: ignore[too-many-arguments]
     narrate: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Build one dataset into the output and return its result line.
+    """Build a dataset in a local directory or writable registry.
 
     Args:
         dataset_id: The dataset id.
-        target: The resolved output for an in-process build.
-        forwarded: The output as the caller gave it, for the ``--out`` of an isolated child.
+        target: The output for a build in the current interpreter.
+        forwarded: The output path or URL to pass to an isolated build.
         isolated: Build in an environment built from the connector's requirements.
-        force: Rebuild even if the version is already built.
+        force: Rebuild an existing version.
         keep_cache: Keep the raw download cache after building.
-        narrate: Print status lines and download progress for an in-process build.
-        pinned_by: The releases that already read files of this release, with their pins.
+        narrate: Print status and download progress when isolation is off.
+        pinned_by: Releases that read this dataset's files, with file pins the build must match.
 
     Returns:
         The committed version directory for a local output, or the published version.

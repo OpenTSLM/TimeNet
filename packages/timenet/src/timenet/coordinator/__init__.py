@@ -1,1 +1,1 @@
-"""Plan and run builds and reads."""
+"""Coordinate dataset builds and reads."""

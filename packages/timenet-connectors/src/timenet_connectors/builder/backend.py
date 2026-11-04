@@ -68,22 +68,17 @@ class ConnectorBuilder:
         fetch_from: str | BaseRegistry | None = None,
         pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
     ) -> Path:
-        """Build the dataset, in an isolated environment unless isolation is turned off.
+        """Build a dataset in an isolated environment.
 
-        ``TIMENET_ISOLATION=off`` builds in this interpreter instead, as ``--no-isolation`` does on
-        the CLI. That is also the recursion guard: an isolated child carries the setting, so a
-        connector that loads another dataset from inside one does not re-exec uv forever. The build
-        runs through :func:`~timenet_connectors.builder.cli.build_one`, which prepares missing parent
-        releases first, each the same way as this build.
+        Set ``TIMENET_ISOLATION=off`` to run in the current interpreter.
 
         Args:
             dataset_id: The dataset id.
             root: The output registry directory.
-            force: Rebuild even if the version is already built.
+            force: Rebuild an existing version.
             build_parents: Build missing parent releases from their installed connectors.
             fetch_from: The registry, or its URI, to copy missing parent releases from.
-            pinned_by: The releases that already read files of this release, with their pins. The
-                build publishes the release only if it reproduces each pinned file.
+            pinned_by: Releases that read this dataset's files, with file pins the build must match.
 
         Returns:
             The committed version directory.
