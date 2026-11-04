@@ -374,7 +374,7 @@ def test_signal_values_remain_lazy_until_access(tmp_path, monkeypatch, entry_poi
     if entry_point == "reader":
         reader = TimeFReader(open_local_version(version_dir))
     elif entry_point == "client":
-        reader = TimeNet(tmp_path, storage_path=tmp_path / "store").open("timenet/hello-world")
+        reader = TimeNet(sources=[str(tmp_path)]).open("timenet/hello-world")
     else:
         reader = TimeFReader.open(version_dir)
     with reader:

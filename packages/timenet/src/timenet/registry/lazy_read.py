@@ -52,8 +52,10 @@ class LazyReadRegistry(WritableRegistry, ABC):
             A reference to the stored release.
 
         Raises:
+            TimeNetRegistryError: If this registry is read-only.
             TimeFValidationError: If ``force`` is set.
-        """
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by check_writable
+        self.check_writable("put_dataset()")
         if force:
             raise TimeFValidationError(
                 f"force=True needs a local registry: {self} never writes a published version again"

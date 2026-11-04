@@ -5,9 +5,9 @@ import pytest
 from timenet import builders
 from timenet.builders import BuildOptions
 from timenet.coordinator.build import plan_release_build, run_plan
-from timenet.coordinator.plan import BuildStep, CopyStep
+from timenet.coordinator.plan import BuildStep, CopyStep, Plan
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetAccessError, TimeNetVersionUnavailableError
+from timenet.errors import TimeNetAccessError, TimeNetRegistryError, TimeNetVersionUnavailableError
 from timenet.progress import StepFinished, StepStarted
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
@@ -123,6 +123,13 @@ def test_plan_release_build_rejects_a_version_the_connector_does_not_declare(sto
     with pytest.raises(TimeNetVersionUnavailableError) as caught:
         plan_release_build("a/b@2.0.0", store=store)
     assert (caught.value.release, caught.value.declared) == (DatasetRef.parse("a/b@2.0.0"), REF_AB.version)
+
+
+def test_a_plan_that_builds_refuses_a_read_only_local_registry_before_any_step(tmp_path, fake):
+    store = LocalRegistry(tmp_path / "store", read_only=True)
+    with pytest.raises(TimeNetRegistryError, match=r"read_only=True, so it refuses the copies and builds of a plan\."):
+        run_plan(Plan((_build(REF_AB),)), store)
+    assert fake.calls == []
 
 
 def test_a_build_copies_a_missing_parent_and_reports_each_step_once(tmp_path, store, fake_parent, fake_child):

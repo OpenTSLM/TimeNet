@@ -13,7 +13,7 @@ import shutil
 from typing import BinaryIO, TypeVar
 
 from timenet._fs import staged_directory
-from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetFileError
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetFileError, TimeNetRegistryError
 from timenet.format.checksums import file_checksum
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import FilePart, Manifest
@@ -41,8 +41,29 @@ class BaseRegistry(ABC):
     sources. :func:`~timenet.registry.copy_release` copies a release with its payload sources.
     """
 
+    _read_only: bool = False
+
     def __str__(self) -> str:
         return type(self).__name__
+
+    @property
+    def read_only(self) -> bool:
+        """Whether this registry refuses every write, set with ``read_only=True``."""
+        return self._read_only
+
+    def check_writable(self, write: str) -> None:
+        """Refuse a write if this registry is read-only.
+
+        Args:
+            write: The write to refuse, for the message, such as ``"put_dataset()"``.
+
+        Raises:
+            TimeNetRegistryError: If this registry is read-only.
+        """
+        if self._read_only:
+            raise TimeNetRegistryError(
+                f"{self} has read_only=True, so it refuses {write}. Open it without read_only=True to write to it."
+            )
 
     @property
     @abstractmethod

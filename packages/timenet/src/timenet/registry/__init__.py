@@ -8,7 +8,6 @@ from timenet.registry.factory import (
     default_registry_path,
     local_registry_path,
     open_registry,
-    open_writable_registry,
 )
 from timenet.registry.local import LocalRegistry
 from timenet.registry.remote import RemoteRegistry
@@ -30,5 +29,4 @@ __all__ = [
     "local_registry_path",
     "open_local_version",
     "open_registry",
-    "open_writable_registry",
 ]

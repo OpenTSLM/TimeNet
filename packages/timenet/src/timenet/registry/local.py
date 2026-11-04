@@ -26,13 +26,15 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 class LocalRegistry(WritableRegistry):
     """A registry that reads and writes datasets in a local directory."""
 
-    def __init__(self, root: Path) -> None:
+    def __init__(self, root: str | Path, *, read_only: bool = False) -> None:
         """Open a local registry rooted at a directory.
 
         Args:
             root: The directory containing ``<dataset_id>/<version>/`` layouts. This expands ``~``.
+            read_only: Refuse every write to this registry.
         """
         self._root = Path(root).expanduser()
+        self._read_only = read_only
         # (dataset_id, version) -> (manifest mtime, parsed manifest). This avoids re-parsing on repeat
         # reads, for example list_datasets then search's schema filter. An mtime change invalidates it.
         self._manifest_cache: dict[tuple[str, str], tuple[float, Manifest]] = {}
@@ -200,9 +202,11 @@ class LocalRegistry(WritableRegistry):
             A reference to the stored release.
 
         Raises:
+            TimeNetRegistryError: If this registry is read-only.
             TimeNetDatasetNotFoundError: If a release that stores reused data is missing from this registry.
             TimeFFormatError: If a source release or the new output fails a file pin check.
         """  # ruff: ignore[docstring-extraneous-exception] - the writer checks payload sources before it publishes
+        self.check_writable("put_dataset()")
         if dataset.schema is None:
             dataset.derive_schema()
         version = str(dataset.metadata.dataset_version)
@@ -236,10 +240,12 @@ class LocalRegistry(WritableRegistry):
             A reference to the published release.
 
         Raises:
+            TimeNetRegistryError: If this registry is read-only.
             TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
             TimeNetFileError: If a listed file is missing or its size differs from the manifest.
             OSError: If copying or renaming fails, with the backup path if restoring the old directory also fails.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release and publish_directory
+        self.check_writable("put_release()")
         manifest = self._read_release(from_directory)
         reference = DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
         with staged_directory(release_dir(self._root, reference)) as staging:

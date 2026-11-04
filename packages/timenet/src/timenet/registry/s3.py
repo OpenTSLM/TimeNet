@@ -42,12 +42,13 @@ class S3Registry(LazyReadRegistry):
 
     _staging_prefix = "timenet-s3-"
 
-    def __init__(self, uri: str, *, cache_dir: str | Path | None = None) -> None:
+    def __init__(self, uri: str, *, cache_dir: str | Path | None = None, read_only: bool = False) -> None:
         """Open an S3-backed registry.
 
         Args:
             uri: The bucket or prefix root, for example ``s3://my-bucket/registry``.
             cache_dir: Where downloads are cached; defaults to the configured storage directory.
+            read_only: Refuse every write to this registry.
 
         Raises:
             TimeNetRegistryError: If ``uri`` is not an ``s3://bucket[/prefix]`` URL.
@@ -58,6 +59,7 @@ class S3Registry(LazyReadRegistry):
         self._bucket = parsed.netloc
         self._prefix = parsed.path.strip("/")
         self._cache_dir = Path(cache_dir) if cache_dir is not None else settings().storage_dir
+        self._read_only = read_only
 
     def __str__(self) -> str:
         return f"S3 registry {self._display_root()}"
@@ -168,9 +170,11 @@ class S3Registry(LazyReadRegistry):
             A reference to the published release.
 
         Raises:
+            TimeNetRegistryError: If this registry is read-only.
             TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
             TimeNetFileError: If a listed file is missing or its size differs from the manifest.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release
+        self.check_writable("put_release()")
         manifest = self._read_release(from_directory)
         client = self._client()
         final_base = self._key(manifest.dataset_id, str(manifest.metadata.dataset_version))

@@ -30,7 +30,6 @@ from timenet.registry import (
     copy_release,
     local_registry_path,
     open_registry,
-    open_writable_registry,
 )
 from timenet.registry._paths import release_dir  # ruff: ignore[import-private-name]
 from timenet.sources import InstalledConnectors
@@ -68,7 +67,7 @@ def _resolve_target(out: str | None) -> WritableRegistry | Path:
     try:
         return local_registry_path(target)
     except TimeNetRegistryError:
-        return open_writable_registry(target)
+        return open_registry(target)
 
 
 @app.command()

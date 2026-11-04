@@ -9,7 +9,8 @@ from timenet.config import settings
 from timenet.engine import run_pipeline
 from timenet.errors import TimeFValidationError
 from timenet.provenance import build_env
-from timenet.registry import RemoteRegistry
+from timenet.registry import LocalRegistry, RemoteRegistry
+from timenet.sources import InstalledConnectors
 from timenet.testing import assert_datasets_equal
 from timenet_connectors import build, load
 from timenet_connectors.builder.cli import _resolve_target, app as build_app
@@ -53,7 +54,7 @@ def test_build_then_load_round_trips(converted, tmp_path):
     assert (registry / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
 
     # CONSUME: load it back through the SDK and compare to the dataset the build wrote.
-    restored = TimeNet(registry, storage_path=tmp_path / "store").load("timenet/hello-world")
+    restored = TimeNet(sources=[str(registry)]).load("timenet/hello-world")
     [original] = converted
     assert_datasets_equal(original, restored)
 
@@ -97,7 +98,7 @@ def test_build_honors_timenet_registry(clean_env, monkeypatch, tmp_path):
     assert runner.invoke(build_app, ["build", "timenet/hello-world", "--no-isolation"]).exit_code == 0
     assert (registry / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
     # The SDK resolves $TIMENET_REGISTRY the same way, so it reads back what the build just wrote.
-    assert TimeNet(storage_path=tmp_path / "store").list()[0].dataset_id == "timenet/hello-world"
+    assert TimeNet().list()[0].dataset_id == "timenet/hello-world"
 
 
 def test_build_out_overrides_timenet_registry(clean_env, monkeypatch, tmp_path):
@@ -167,7 +168,7 @@ def test_build_cleans_cache_but_keep_flag_retains(tmp_path, monkeypatch):
 @pytest.mark.slow
 def test_load_builds_a_missing_dataset_in_an_isolated_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    client = TimeNet(tmp_path / "registry")
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "registry"), InstalledConnectors()])
 
     dataset = client.load("timenet/hello-world")
 
@@ -178,7 +179,7 @@ def test_load_builds_a_missing_dataset_in_an_isolated_environment(tmp_path, monk
 @pytest.mark.slow
 def test_an_isolated_build_records_its_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    TimeNet(tmp_path / "registry").load("timenet/hello-world")
+    TimeNet(sources=[LocalRegistry(tmp_path / "registry"), InstalledConnectors()]).load("timenet/hello-world")
 
     manifest = json.loads((tmp_path / "registry/timenet/hello-world/1.0.0/manifest.json").read_text())
     packages = manifest["build_env"]["packages"]
