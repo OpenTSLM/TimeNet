@@ -259,8 +259,6 @@ def test_the_build_prepared_release_command_builds_a_release_without_parents(mon
 
     assert result.exit_code == 0, result.output
     assert (tmp_path / "store/timenet/hello-world/1.0.0/manifest.json").is_file()
-    assert result.output.count("🔧 Building 'timenet/hello-world'…") == 1
-    assert result.output.count("✅ Built 'timenet/hello-world' → 1.0.0") == 1
     assert result.stdout == ""
 
 

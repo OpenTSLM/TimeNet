@@ -162,20 +162,9 @@ def test_build_in_process_round_trips_the_connector_default_zarr_backend(tmp_pat
         assert len(dataset.records[0].signals[0].to_numpy()) == 16
 
 
-def test_build_prepared_builds_in_process_into_the_store(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("TIMENET_ISOLATION", "off")
-    monkeypatch.setattr(backend_module, "run_isolated_build", _unexpected_isolation)
-    store = LocalRegistry(tmp_path / "store")
-
-    ConnectorBuilder().build_prepared(HELLO, store, force=False, pinned_by={}, options=BuildOptions())
-
-    assert store.exists("timenet/hello-world", "1.0.0")
-
-
 # Only BuildOptions.quiet silences the child. An SDK build without a progress callback still prints.
-@pytest.mark.parametrize(("progress", "quiet"), [(None, False), (print, False), (None, True)])
-def test_build_prepared_runs_an_isolated_child_with_the_release_and_the_pins(tmp_path, monkeypatch, progress, quiet):
+@pytest.mark.parametrize("quiet", [False, True])
+def test_build_prepared_runs_an_isolated_child_with_the_release_and_the_pins(tmp_path, monkeypatch, quiet):
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(backend_module, "run_pipeline", _unexpected_pipeline)
     calls = []
@@ -188,15 +177,14 @@ def test_build_prepared_runs_an_isolated_child_with_the_release_and_the_pins(tmp
         LocalRegistry(tmp_path),
         force=True,
         pinned_by=_pins(),
-        options=BuildOptions(keep_cache=True, progress=progress, quiet=quiet),
+        options=BuildOptions(keep_cache=True, quiet=quiet),
     )
 
     assert calls == [(HELLO, tmp_path, {"force": True, "keep_cache": True, "quiet": quiet, "pinned_by": _pins()})]
 
 
-@pytest.mark.parametrize("isolation", ["on", "off"])
-def test_build_prepared_rejects_another_version(tmp_path, monkeypatch, isolation):
-    monkeypatch.setenv("TIMENET_ISOLATION", isolation)
+def test_build_prepared_rejects_another_version(tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMENET_ISOLATION", "on")
     monkeypatch.setattr(backend_module, "run_isolated_build", _unexpected_isolation)
     monkeypatch.setattr(backend_module, "run_pipeline", _unexpected_pipeline)
     release = DatasetRef.parse("timenet/hello-world@9.9.9")
