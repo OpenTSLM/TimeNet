@@ -36,7 +36,7 @@ class Question(StrEnum):
 
 
 class Sex(StrEnum):
-    """The sex of a subject, after each sheet's code is decoded."""
+    """The subject's sex after the parser decodes the sheet's numeric code."""
 
     FEMALE = "F"
     MALE = "M"

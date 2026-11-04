@@ -49,8 +49,7 @@ _COSINE = TimeSeriesSpec(
 )
 
 
-# Each classification task draws its target from a label set that every task with the same question
-# shares.
+# Tasks that ask the same question share one label set.
 class _Rhythm(StrEnum):
     NORMAL = "normal"
     ABNORMAL = "abnormal"
