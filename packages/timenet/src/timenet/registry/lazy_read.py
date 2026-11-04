@@ -86,12 +86,10 @@ class LazyReadRegistry(WritableRegistry, ABC):
 
         Args:
             reference: The exact release.
-            manifest: The manifest of the release, if the caller already read it from this registry.
-                A complete cached copy uses its own manifest instead.
+            manifest: The manifest of the release from this registry, if you already read it.
 
         Returns:
-            A handle over the complete cached copy of the release, if :attr:`local_root` holds one.
-            Else a handle that reads the remote files with range reads.
+            A handle over a complete cached copy in :attr:`local_root`, else over remote files.
         """
         return open_cached_or_remote_release(
             self.local_root, reference, lambda ref: self._open_remote_version(ref, manifest=manifest)
