@@ -248,14 +248,14 @@ def publish(
     ),
     local_registry: str | None = LOCAL_REGISTRY,
 ) -> None:
-    """Copy a release and its payload sources to a registry, and print the release to stdout.
+    """Copy a release and its payload sources to another registry.
 
-    The source defaults to the local registry.
-    The copy skips identical releases and rejects releases with conflicting files.
+    Read from ``--source`` or the local registry, and print the release to stdout.
+    Skip identical releases and fail if the destination has different files for the same version.
     \f
 
     Raises:
-        TimeNetDatasetNotFoundError: If the source lacks the release.
+        TimeNetDatasetNotFoundError: If the source does not contain the release.
     """  # ruff: ignore[escape-sequence-in-docstring] - the form feed ends the help text of the command
     store = default_local_registry(local_registry=local_registry)
     origin = store if source is None else open_registry(source, label="--source")

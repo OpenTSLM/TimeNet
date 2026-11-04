@@ -173,13 +173,13 @@ def build(
 
 
 def _missing_hint(*, has_connectors: bool) -> str:
-    """Say how a build gets a parent that no source of its list provides.
+    """Explain how to obtain a missing parent release.
 
     Args:
-        has_connectors: Whether the list of sources holds the installed connectors.
+        has_connectors: Whether the source list includes installed connectors.
 
     Returns:
-        The hint, a full sentence that names ``--auto-build`` too if the list has no connectors.
+        Instructions to find the parent, including ``--auto-build`` when connectors are absent.
     """
     ways = (
         "copy it from a registry that holds it with --remote-registry <url>, or publish it to such a registry "
@@ -191,14 +191,14 @@ def _missing_hint(*, has_connectors: bool) -> str:
 
 
 def _access_hint(dest: WritableRegistry | None, *, has_connectors: bool) -> str | None:
-    """Say how a build gets a release that is not open.
+    """Explain how to resolve a release access error.
 
     Args:
-        dest: The registry that ``--publish-to`` names, or ``None``.
-        has_connectors: Whether the list of sources holds the installed connectors.
+        dest: The publish destination, or ``None``.
+        has_connectors: Whether the source list includes installed connectors.
 
     Returns:
-        The hint as a full sentence, or ``None`` if no flag of the command helps.
+        Instructions to use a local registry or build the release, or ``None`` if neither applies.
     """
     if dest is not None and dest.requires_open_access:
         return (
@@ -211,14 +211,14 @@ def _access_hint(dest: WritableRegistry | None, *, has_connectors: bool) -> str 
 
 
 def _registry_flags(*, local_registry: str | None, remote_registry: str | None) -> str:
-    """Repeat the registry flags that the command got, for a command in a hint.
+    """Format registry options as shell arguments.
 
     Args:
-        local_registry: The value of ``--local-registry``, or ``None``.
-        remote_registry: The value of ``--remote-registry``, or ``None``.
+        local_registry: The local registry path, or ``None``.
+        remote_registry: The remote registry URL, or ``None``.
 
     Returns:
-        Each given flag with its quoted value and a space before it, or an empty string.
+        Each supplied flag and shell-quoted value, preceded by a space, or an empty string.
     """
     flags = (("--local-registry", local_registry), ("--remote-registry", remote_registry))
     return "".join(f" {flag} {shlex.quote(value)}" for flag, value in flags if value is not None)
@@ -254,24 +254,23 @@ def _show_plan(release: DatasetRef, plan: Plan) -> None:
 
 
 _ACTIONS = {"read": "read from", "copy": "copy from", "build": "build with"}
-"""The words of each action of a step in a line of a plan."""
+"""Display text for each plan action."""
 
 _BRANCHES = {"├── ": "│   ", "└── ": "    "}
-"""For each branch of a tree line: what the lines below it show in its column."""
+"""Indentation below each tree branch."""
 
 
 def _plan_lines(plan: Plan) -> list[str]:
-    """Draw a plan as a tree, with the requested release at the top.
+    """Format a build plan as a tree with the requested release at the top.
 
-    Below each release come the releases that it needs. Each line names the release, the action and
-    the source, for example ``<release>: copy from <registry>``, or ``<release>: see above`` the second
-    time.
+    Each line shows a release, its action, and its source.
+    Repeated releases show ``see above``.
 
     Args:
-        plan: The plan.
+        plan: The build plan.
 
     Returns:
-        One line for each node of the tree, without line ends.
+        The tree lines without newline characters.
     """
     steps = {step.release: step for step in plan.steps}
     needed = {release for step in plan.steps for release in step.depends_on}
