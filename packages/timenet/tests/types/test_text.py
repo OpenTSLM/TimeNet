@@ -8,8 +8,9 @@ from timenet.errors import TimeFValidationError
 from timenet.types import (
     Annotation,
     AnswerTask,
-    ClassificationTask,
     InputModality,
+    LazyText,
+    LazyTextList,
     TextHandle,
     TextListHandle,
     TimePoint,
@@ -134,9 +135,10 @@ def test_handles_of_one_kind_compare_by_content():
 
 def test_handles_compare_with_native_values_of_their_kind_from_either_side():
     assert InlineText("note") == "note"
-    assert "note" == InlineText("note")  # noqa: SIM300 - the reflected comparison is the point
+    assert "note" == InlineText("note")  # ruff: ignore[yoda-conditions] - the reflected comparison is the point
     assert InlineTextList(["a", "b"]) == ["a", "b"]
-    assert ["a", "b"] == InlineTextList(["a", "b"])  # noqa: SIM300 - the reflected comparison is the point
+    # ruff: ignore[yoda-conditions] - the reflected comparison is the point
+    assert ["a", "b"] == InlineTextList(["a", "b"])
     assert InlineText("note") != "other"
     assert InlineTextList(["a"]) != ["b"]
 
@@ -160,8 +162,8 @@ def test_handles_of_different_kinds_compare_unequal_without_a_read():
 
 def test_a_handle_never_equals_a_non_text_value():
     assert InlineText("1") != 1
-    assert InlineText("note") != None  # noqa: E711
-    assert InlineTextList([]) != None  # noqa: E711
+    assert InlineText("note") != None  # ruff: ignore[none-comparison]
+    assert InlineTextList([]) != None  # ruff: ignore[none-comparison]
 
 
 def test_stored_and_inline_text_with_the_same_content_are_equal():
@@ -281,7 +283,7 @@ def test_text_fields_reject_a_list_handle():
 
 
 def test_string_targets_become_string_handles():
-    task = ClassificationTask(targets=("sleep", 3))
+    task = AnswerTask(targets=("sleep", 3))
     assert task.targets is not None
     assert isinstance(task.targets[0], InlineText)
     assert task.targets[1] == 3
@@ -290,14 +292,14 @@ def test_string_targets_become_string_handles():
 def test_a_bare_string_is_not_a_target_sequence():
     # Iterating "normal" would give one target per letter.
     with pytest.raises(TimeFValidationError, match="sequence of items"):
-        ClassificationTask(targets="normal")
+        AnswerTask(targets="normal")
     with pytest.raises(TimeFValidationError, match="sequence of items"):
-        ClassificationTask().targets = "normal"
+        AnswerTask().targets = "normal"
 
 
 def test_a_list_handle_is_not_a_target():
     with pytest.raises(TimeFValidationError, match="unsupported type InlineTextList"):
-        ClassificationTask(targets=(InlineTextList(["a"]),))  # ty: ignore[invalid-argument-type]
+        AnswerTask(targets=(InlineTextList(["a"]),))  # ty: ignore[invalid-argument-type]
 
 
 def test_annotation_values_become_handles_of_their_kind():
@@ -329,7 +331,8 @@ def test_a_text_annotation_equals_its_copies():
 def test_annotations_sharing_a_key_can_be_found_in_a_list():
     sleep = Annotation(key="label", value="sleep")
     wake = Annotation(key="label", value="wake")
-    assert wake in [sleep, wake]  # noqa: PLR6201 - annotations are unhashable, so a set cannot hold them
+    # ruff: ignore[literal-membership] - annotations are unhashable, so a set cannot hold them
+    assert wake in [sleep, wake]
     assert [sleep, wake].index(wake) == 1
 
 
@@ -338,3 +341,62 @@ def test_a_task_equals_one_whose_prompt_is_stored():
     stored = AnswerTask(prompt=_StoredText("Question?"), rationale=_StoredText("Because."))
     assert inline == stored
     assert inline == pickle.loads(pickle.dumps(inline))
+
+
+def test_a_lazy_text_reads_through_its_function_on_every_read():
+    calls = []
+
+    def function():
+        calls.append(1)
+        return "sleep"
+
+    handle = LazyText(function, length=5)
+    assert not handle.is_loaded
+    assert handle.length == 5
+    assert handle
+    assert not calls
+    assert handle.read() == handle.read() == "sleep"
+    assert handle == "sleep"
+    assert len(calls) == 3
+    assert not handle.is_loaded
+    assert LazyText(function, length=5)._content_key() == handle._content_key()
+    with pytest.raises(AttributeError, match="immutable"):
+        handle.function = function
+
+
+def test_a_lazy_text_without_a_length_learns_it_from_one_read():
+    calls = []
+
+    def function():
+        calls.append(1)
+        return "sleep"
+
+    handle = LazyText(function)
+    assert not calls
+    assert handle.length == 5
+    assert handle
+    assert len(calls) == 1
+    assert handle == "sleep"
+    assert len(calls) == 2
+    # The key never reads, and a handle with a known length over the same function is a different content.
+    assert handle._content_key() != LazyText(function, length=5)._content_key()
+    assert len(calls) == 2
+
+
+@pytest.mark.parametrize(
+    ("make", "message"),
+    [
+        (lambda: LazyText("sleep", length=5), "takes a function"),  # ty: ignore[invalid-argument-type]
+        (lambda: LazyText(lambda: "sleep", length=-1), "non-negative integer length"),
+        (
+            lambda: LazyText(lambda: "sleep", length=4).read(),
+            "returned 5 characters, but the handle was given length 4",
+        ),
+        (lambda: LazyText(lambda: 5, length=1).read(), "must return a string, got int"),  # ty: ignore[invalid-argument-type]
+        (lambda: LazyTextList(lambda: ["a", 1], length=2).read(), "must return a list of strings"),  # ty: ignore[invalid-argument-type]
+        (lambda: LazyTextList(lambda: ["a"], length=2).read(), "returned 1 strings, but the handle was given length 2"),
+    ],
+)
+def test_a_lazy_handle_rejects_a_bad_function_length_or_result(make, message):
+    with pytest.raises(TimeFValidationError, match=message):
+        make()

@@ -61,7 +61,11 @@ class DatasetMetadata(TimeFModel):
     citation: StrictStr | None = None
     """How to cite the dataset, when the source asks for attribution."""
     access: Access = Access.OPEN
-    """How a user obtains the data (see :class:`Access`). ``OPEN`` needs nothing."""
+    """How a user obtains the data (see :class:`Access`). ``OPEN`` needs nothing.
+
+    An import into a child dataset does not change it. The level that applies to a release with
+    parents is :func:`~timenet.types.access.effective_access`.
+    """
     access_url: StrictStr | None = None
     """Where to obtain access (the DUA or credentialing page). Required when ``access`` is not ``OPEN``."""
     yaml_schema_version: Annotated[int, Field(strict=True, ge=1, le=1)] = 1
@@ -89,6 +93,20 @@ class DatasetMetadata(TimeFModel):
             raise ValueError(f"access_url is required when access is {self.access.value!r}")
         return self
 
+    @model_validator(mode="after")
+    def _one_alias_per_parent(self) -> Self:
+        # A child imports a release under one alias only, so its card declares the release once.
+        aliases: dict[str, list[str]] = {}
+        for alias, ref in self.parents.items():
+            aliases.setdefault(str(ref), []).append(alias)
+        for release, names in aliases.items():
+            if len(names) > 1:
+                raise ValueError(
+                    f"{self.dataset_id} declares the parent {release} under the parent aliases {sorted(names)}; "
+                    "declare each parent release under one alias only"
+                )
+        return self
+
     @classmethod
     def from_yaml(cls, path: str | Path) -> "DatasetMetadata":
         """Load and validate a dataset card YAML into metadata.
@@ -107,11 +125,11 @@ class DatasetMetadata(TimeFModel):
             TimeNetInvalidCardError: If the build extra is missing, or the card is unreadable or is
                 not a mapping.
         """
-        from timenet.errors import TimeNetInvalidCardError  # noqa: PLC0415
+        from timenet.errors import TimeNetInvalidCardError  # ruff: ignore[import-outside-top-level]
 
         card_path = Path(path)
         try:
-            import yaml  # noqa: PLC0415
+            import yaml  # ruff: ignore[import-outside-top-level]
         except ModuleNotFoundError as exc:
             raise TimeNetInvalidCardError(
                 "reading a dataset card needs PyYAML; install the 'timenet[build]' extra"

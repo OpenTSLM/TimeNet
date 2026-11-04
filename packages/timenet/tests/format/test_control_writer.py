@@ -13,6 +13,7 @@ from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.duckdb import connect_control
 from timenet.format.storage import StorageSources
 from timenet.format.stored_values import PackedValueWriter
+from timenet.reader import TimeFReader
 from timenet.types import (
     Annotation,
     AnswerTask,
@@ -98,7 +99,7 @@ def test_control_writer_serializes_recursive_hierarchy_and_shared_axis(tmp_path,
         assert connection.execute("SELECT count(*) FROM signals").fetchone() == (2,)
         assert connection.execute("SELECT count(*) FROM axes").fetchone() == (1,)
         assert connection.execute(
-            "SELECT task_type, prompt, scope_type, target_schema, unit, target_name, mode FROM tasks"
+            "SELECT task_type, prompt, scope_type, label_set, unit, target_name, mode FROM tasks"
         ).fetchone() == ("answer", "Alive?", None, None, None, None, None)
         assert connection.execute(
             "SELECT position, target_kind, text_value, integer_value, record_id FROM task_targets"
@@ -292,7 +293,8 @@ def test_a_streamed_parent_that_streams_after_its_child_is_stored(tmp_path):
     child = AnswerTask(inputs=(record,), prompt="Child?", targets=("Yes",), from_tasks=(parent,))
     dataset.set_task_stream([AnswerTask], lambda: iter((child, parent)))
 
-    restored = TimeFDataset.open(path=dataset.write(path=tmp_path))
+    with TimeFReader.open(dataset.write(path=tmp_path)) as reader:
+        restored = reader.read()
 
     by_prompt = {read_value(task.prompt): task for task in restored.tasks}
     assert by_prompt["Child?"].from_tasks == (by_prompt["Parent?"],)
@@ -311,7 +313,7 @@ def test_control_writer_rejects_a_cross_record_parent_before_publication(tmp_pat
 
     def write_corrupt_relationship(writer, connection, dataset, tasks):
         task_counts = original(writer, connection, dataset, tasks)
-        connection.execute("INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}')")
+        connection.execute("INSERT INTO records (record_id, clock_id, metadata, read_order) VALUES (99, 1, '{}', 99)")
         connection.execute("UPDATE sources SET record_id = 99 WHERE source_id = ?", [MONITOR_ID])
         return task_counts
 

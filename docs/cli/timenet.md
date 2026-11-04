@@ -28,7 +28,7 @@ timenet download chengsenwang/tsqa
 
 | Command | What it does |
 | --- | --- |
-| `timenet list` | Print every dataset in the registry with its latest version. |
+| `timenet list` | Print every dataset in the registry (id, name, license, domains), from the metadata of its latest version. |
 | `timenet search [flags]` | Filter datasets. The flags map one-to-one to [`registry.search`](../registry.md#search). Repeat a flag for list values (`--spec` for `time_series_spec`, `--id` for `dataset_id`). |
 | `timenet info <id>[@version]` | Show a dataset's [manifest](../manifest.md): metadata, schema, and counts. |
 | `timenet download <id>[@version]` | Copy a version's files into local storage and print the directory. `--storage <dir>` picks the target (else `$TIMENET_STORAGE`, then `<home>/storage`). If a local version already exists, it skips the copy. |

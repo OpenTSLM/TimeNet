@@ -70,6 +70,19 @@ class Manifest(TimeFModel):
                 raise ValueError(f"payload source key {key!r} does not name its release {source.release}")
         return self
 
+    @model_validator(mode="after")
+    def _one_parent_card_per_release(self) -> Self:
+        aliases: dict[str, list[str]] = {}
+        for alias, card in self.parent_cards.items():
+            aliases.setdefault(str(card.source), []).append(alias)
+        for release, names in aliases.items():
+            if len(names) > 1:
+                raise ValueError(
+                    f"parent_cards hold the parent {release} under the parent aliases {sorted(names)}; "
+                    "a manifest holds each parent release under one alias only"
+                )
+        return self
+
     def to_dict(self) -> dict[str, Any]:
         """Serialize the manifest to a validated JSON-compatible dict with all keys present.
 

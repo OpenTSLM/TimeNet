@@ -67,6 +67,15 @@ def test_audit_accepts_a_freshly_written_database(control_path):
         audit_control_database(connection, require_chunks=False)
 
 
+def test_audit_accepts_imported_objects_whose_copies_exist(control_path):
+    with connect_control(control_path) as connection:
+        connection.execute("INSERT INTO imports VALUES ('base', 'org/parent@1.0.0')")
+        connection.execute(
+            "INSERT INTO imported_objects VALUES ('base', 'Record', 7, 1), ('base', 'Signal', 8, 1), ('base', 'Task', 9, 1)"
+        )
+        audit_control_database(connection, require_chunks=False)
+
+
 def test_audit_requires_chunks_to_cover_each_signal(control_path):
     with connect_control(control_path) as connection:
         with pytest.raises(TimeFFormatError, match="value chunks whose lengths do not match"):
@@ -85,8 +94,13 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
     ("statement", "message"),
     [
         (
-            "INSERT INTO records (record_id, clock_id, metadata) SELECT record_id, clock_id, metadata FROM records",
+            "INSERT INTO records (record_id, clock_id, metadata, read_order) "
+            "SELECT record_id, clock_id, metadata, read_order + 100 FROM records",
             "records contains duplicate values for record_id",
+        ),
+        (
+            "INSERT INTO records (record_id, clock_id, metadata, read_order) VALUES (99, 1, '{}', 0)",
+            "records contains duplicate values for read_order",
         ),
         (
             "UPDATE sources SET record_id = -1 WHERE source_id = 1",
@@ -114,7 +128,7 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
             r"invalid signals\.n_values value",
         ),
         (
-            "INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}'); "
+            "INSERT INTO records (record_id, clock_id, metadata, read_order) VALUES (99, 1, '{}', 99); "
             "UPDATE sources SET record_id = 99 WHERE source_id = 2",
             f"source {ECG_ID} and its parent belong to different records",
         ),
@@ -178,14 +192,14 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
             r"task_targets\.signal_id refers to missing signals\.signal_id value 999",
         ),
         (
-            "INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}'); "
+            "INSERT INTO records (record_id, clock_id, metadata, read_order) VALUES (99, 1, '{}', 99); "
             "UPDATE tasks SET scope_type = 'time_interval', scope_start = 0, scope_end = 2000, "
             "scope_signal_ids = [1]; "
             "UPDATE task_record_refs SET record_id = 99",
             "task 1 time span must resolve to exactly one input Record",
         ),
         (
-            "INSERT INTO records (record_id, clock_id, metadata) VALUES (99, 1, '{}'); "
+            "INSERT INTO records (record_id, clock_id, metadata, read_order) VALUES (99, 1, '{}', 99); "
             "UPDATE task_targets SET target_kind = 'time_interval', text_value = NULL, span_start = 0, "
             "span_end = 2000, span_signal_ids = [1]; "
             "UPDATE task_record_refs SET record_id = 99",
@@ -215,6 +229,27 @@ def test_audit_requires_chunks_to_cover_each_signal(control_path):
         (
             "UPDATE annotation_occurrences SET content_id = 999",
             r"annotation_occurrences\.content_id refers to missing annotation_contents\.content_id",
+        ),
+        (
+            "INSERT INTO imports VALUES ('base', 'org/parent@1.0.0'); "
+            "INSERT INTO imported_objects VALUES ('base', 'Record', 7, 999)",
+            "imported object of parent alias 'base' refers to missing Record 999",
+        ),
+        (
+            # Record 1 exists, but no Signal has the ID 2.
+            "INSERT INTO imports VALUES ('base', 'org/parent@1.0.0'); "
+            "INSERT INTO imported_objects VALUES ('base', 'Signal', 7, 2)",
+            "imported object of parent alias 'base' refers to missing Signal 2",
+        ),
+        (
+            "INSERT INTO imports VALUES ('base', 'org/parent@1.0.0'); "
+            "INSERT INTO imported_objects VALUES ('base', 'Task', 7, 999)",
+            "imported object of parent alias 'base' refers to missing Task 999",
+        ),
+        (
+            "INSERT INTO imports VALUES ('base', 'org/parent@1.0.0'); "
+            "INSERT INTO imported_objects VALUES ('base', 'Source', 7, 1)",
+            r"invalid imported_objects\.object_kind value",
         ),
     ],
 )

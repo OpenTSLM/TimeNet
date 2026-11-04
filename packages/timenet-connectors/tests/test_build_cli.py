@@ -7,6 +7,7 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
+from timenet.errors import TimeFValidationError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
@@ -20,8 +21,8 @@ runner = CliRunner()
 def test_build_runs_isolated_by_default(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
-        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+    def _fake_isolated(  # ruff: ignore[too-many-arguments] (mirrors run_isolated's full keyword surface)
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None, pinned_by=None
     ):
         captured["dataset_id"] = dataset_id
         captured["root"] = root
@@ -116,8 +117,8 @@ def test_build_forwards_an_explicit_values_backend_in_process(monkeypatch, tmp_p
 def test_build_forwards_an_explicit_values_backend_to_an_isolated_child(monkeypatch, tmp_path):
     captured = {}
 
-    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
-        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+    def _fake_isolated(  # ruff: ignore[too-many-arguments] (mirrors run_isolated's full keyword surface)
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None, pinned_by=None
     ):
         captured["values_backend"] = values_backend
         return Path(root) / "timenet/hello-world/1.0.0"
@@ -142,12 +143,22 @@ def test_build_rejects_an_unknown_values_backend(tmp_path):
     assert "values backend" in result.output.lower()
 
 
+def test_build_one_rejects_an_unknown_values_backend_before_it_prepares_parents(tmp_path, monkeypatch):
+    def prepare_parents(*args, **kwargs):
+        pytest.fail("build_one prepared the parents")
+
+    monkeypatch.setattr(cli_module, "prepare_parents", prepare_parents)
+
+    with pytest.raises(TimeFValidationError, match=r"^unknown values backend 'unknown'; supported: parquet, zarr$"):
+        cli_module.build_one("timenet/hello-world", tmp_path, values_backend="unknown")
+
+
 def test_build_isolates_when_the_flag_overrides_the_setting(monkeypatch, tmp_path):
     called = {"isolated": False}
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
 
-    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
-        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+    def _fake_isolated(  # ruff: ignore[too-many-arguments] (mirrors run_isolated's full keyword surface)
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None, pinned_by=None
     ):
         called["isolated"] = True
         return Path(root) / "timenet/hello-world/1.0.0"
@@ -185,8 +196,8 @@ def test_build_forwards_quiet_to_the_isolated_child(monkeypatch, tmp_path):
     # The console is a process-wide singleton; monkeypatch restores it for the tests that follow.
     monkeypatch.setattr(cli_module.console, "quiet", False)
 
-    def _fake_isolated(  # noqa: PLR0913 (mirrors run_isolated's full keyword surface)
-        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None
+    def _fake_isolated(  # ruff: ignore[too-many-arguments] (mirrors run_isolated's full keyword surface)
+        dataset_id, root, *, force=False, keep_cache=False, quiet=False, values_backend=None, pinned_by=None
     ):
         captured["quiet"] = quiet
         return Path(root) / "timenet/hello-world/1.0.0"

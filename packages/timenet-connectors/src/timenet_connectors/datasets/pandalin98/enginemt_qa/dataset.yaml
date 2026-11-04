@@ -5,7 +5,8 @@
 # the authors train and test (train_qa.jsonl, test_qa.jsonl). Closed questions are classifications over
 # their option letters, as the authors' model answers and their metric scores. 1,769 closed pairs with an
 # empty answer have no task. Signals are the release's z-scored values at 1 Hz, 33 unnamed channels per
-# 600-step cycle.
+# 600-step cycle. Tasks that the other split repeats name repeated_across_splits in their
+# source_issues metadata.
 yaml_schema_version: 1
 dataset_id: pandalin98/enginemt-qa
 dataset_version: 1.0.0
@@ -18,6 +19,7 @@ description: >-
   answers written with LLMs and checked by experts.
 license: MIT
 source_url: https://huggingface.co/datasets/pandalin98/EngineMT-QA
+source_revision: ea2051a15512212976c22c1a075ec549c7d48eef
 citation: >-
   Wang et al. ITFormer: Bridging Time Series and Natural Language for Multi-Modal QA with
   Large-Scale Multitask Dataset. ICML 2025. https://arxiv.org/abs/2506.20093

@@ -8,6 +8,7 @@ after each round trip, and tooling can run it on a published version.
 """
 
 from collections.abc import Iterable
+from typing import NamedTuple
 
 import duckdb
 
@@ -24,7 +25,7 @@ from timenet.format.duckdb import check_control_schema
 from timenet.format.stored_values import PackedField, PackedValueKind
 from timenet.format.task_codec import ANNOTATION_FIELDS, RECORD_FIELDS, TaskRelationshipField
 from timenet.format.task_target_kind import SPAN_KINDS, TaskTargetKind
-from timenet.types import ObjectKind
+from timenet.types import ObjectKind, TaskType
 
 
 def _sql_in(values: Iterable[str]) -> str:
@@ -40,6 +41,14 @@ _ANNOTATION_FIELDS = _sql_in(ANNOTATION_FIELDS)
 _OBJECT_TYPES_SQL = _sql_in(ANNOTATED_OBJECT_TYPES)
 _EXTERNAL_KINDS_SQL = _sql_in(EXTERNAL_OWNER_TABLES)
 
+_IMPORTED_OBJECT_TABLES: dict[ObjectKind, tuple[str, str]] = {
+    ObjectKind.RECORD: ("records", "record_id"),
+    ObjectKind.SIGNAL: ("signals", "signal_id"),
+    ObjectKind.TASK: ("tasks", "task_id"),
+}
+"""The table and key column of each object kind that ``imported_objects`` can list."""
+_IMPORTED_KINDS_SQL = _sql_in(_IMPORTED_OBJECT_TABLES)
+
 _ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
     ("records", "record_id"),
     ("sources", "source_id"),
@@ -52,7 +61,8 @@ _ENTITY_ID_COLUMNS: tuple[tuple[str, str], ...] = (
 """The primary id column of each entity table."""
 
 _ENTITY_ID_CHECKS = " UNION ALL ".join(
-    f"SELECT '{table}.{column}' FROM {table} WHERE {column} <= 0"  # noqa: S608 - fixed table names
+    # ruff: ignore[hardcoded-sql-expression] - fixed table names
+    f"SELECT '{table}.{column}' FROM {table} WHERE {column} <= 0"
     for table, column in _ENTITY_ID_COLUMNS
 )
 
@@ -71,6 +81,9 @@ _DOMAIN_CHECKS = f"""
     UNION ALL
     SELECT 'external_values.object_kind' FROM external_values
     WHERE object_kind NOT IN ({_EXTERNAL_KINDS_SQL})
+    UNION ALL
+    SELECT 'imported_objects.object_kind' FROM imported_objects
+    WHERE object_kind NOT IN ({_IMPORTED_KINDS_SQL})
     UNION ALL
     SELECT 'annotation_occurrences.span_type' FROM annotation_occurrences
     WHERE span_type NOT IN ('static', 'point', 'interval')
@@ -93,32 +106,117 @@ _DOMAIN_CHECKS = f"""
     SELECT 'tasks.scope_type' FROM tasks
     WHERE scope_type NOT IN ({_SPAN_KINDS})
     UNION ALL
+    SELECT 'label_sets.labels' FROM label_sets
+    WHERE len(labels) = 0
+       OR len(list_distinct([label.name FOR label IN labels])) <> len(labels)
+       OR list_contains([label.name FOR label IN labels], '')
+       OR list_contains([label.description FOR label IN labels], '')
+    UNION ALL
+    SELECT 'tasks.label_set' FROM tasks
+    WHERE (label_set IS NOT NULL) <> (task_type = '{TaskType.CLASSIFICATION}')
+    UNION ALL
     {_ENTITY_ID_CHECKS}
     LIMIT 1
-"""  # noqa: S608 - tags come only from internal enum values and fixed table names
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values and fixed table names
+
+_LABELED_TARGETS = f"""
+    WITH labeled AS (
+        SELECT t.task_id, [label.name FOR label IN s.labels] AS labels, s.multi_label
+        FROM tasks t JOIN label_sets s ON s.name = t.label_set
+    ),
+    targets AS (
+        SELECT x.task_id, x.target_kind = '{TaskTargetKind.TEXT}' AS is_text, x.text_value AS label,
+               EXISTS (SELECT 1 FROM external_values e
+                       WHERE e.object_kind = '{ObjectKind.TASK}' AND e.object_id = x.task_id
+                         AND e.field = '{PackedField.TARGETS}' AND e.position = x.position) AS packed
+        FROM task_targets x JOIN labeled USING (task_id)
+        UNION ALL
+        SELECT r.task_id, c.value_kind = '{AnnotationValueKind.TEXT}', c.text_value,
+               EXISTS (SELECT 1 FROM external_values e
+                       WHERE e.object_kind = '{ObjectKind.ANNOTATION_CONTENT}' AND e.object_id = c.content_id
+                         AND e.field = '{PackedField.VALUE}')
+        FROM task_annotation_refs r
+        JOIN labeled USING (task_id)
+        JOIN annotation_occurrences o USING (occurrence_id)
+        JOIN annotation_contents c USING (content_id)
+        WHERE r.field = '{TaskRelationshipField.TARGET_ANNOTATIONS}'
+    )
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
+"""The classification tasks with label sets and their stored target labels.
+
+The rules below start with this ``WITH`` clause. A packed label stores its value outside the catalog.
+The rules do not compare packed labels because the catalog holds only their placeholders."""
+
+
+class _LabelRule(NamedTuple):
+    """One rule that the stored labels of a classification task must follow."""
+
+    problem: str
+    """What is wrong with a task that breaks the rule, for the error message."""
+    query: str
+    """The query returns the id of one task that breaks the rule.
+
+    If no task breaks the rule, the query returns no row."""
+
+
+_LABEL_RULES = (
+    _LabelRule(
+        "has a label that is not text or not in its label set",
+        f"""{_LABELED_TARGETS}
+        SELECT x.task_id FROM targets x JOIN labeled l USING (task_id)
+        WHERE x.is_text IS NOT TRUE OR (NOT x.packed AND NOT list_contains(l.labels, x.label))
+        LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
+    ),
+    _LabelRule(
+        "does not have exactly one label, but its label set is not multi-label",
+        f"""{_LABELED_TARGETS}
+        SELECT l.task_id FROM labeled l LEFT JOIN targets x USING (task_id)
+        WHERE NOT l.multi_label
+        GROUP BY l.task_id HAVING count(x.task_id) <> 1
+        LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
+    ),
+    _LabelRule(
+        "repeats a label",
+        f"""{_LABELED_TARGETS}
+        SELECT task_id FROM targets WHERE NOT packed
+        GROUP BY task_id, label HAVING count(*) > 1
+        LIMIT 1""",  # ruff: ignore[hardcoded-sql-expression] - fixed fragments
+    ),
+)
 
 _OWNERLESS = {
     object_type: (
         "object_id IS NOT NULL"
         if owner is None
-        else f"NOT EXISTS (SELECT 1 FROM {owner[0]} WHERE {owner[0]}.{owner[1]} = object_id)"  # noqa: S608
+        # ruff: ignore[hardcoded-sql-expression]
+        else f"NOT EXISTS (SELECT 1 FROM {owner[0]} WHERE {owner[0]}.{owner[1]} = object_id)"
     )
     for object_type, owner in ANNOTATED_OWNER_TABLES.items()
 }
 """Per object type, the predicate of an occurrence whose owner does not exist."""
 
 _OCCURRENCE_OWNER = " UNION ALL ".join(
-    f"SELECT occurrence_id, object_type, object_id FROM annotation_occurrences "  # noqa: S608
+    # ruff: ignore[hardcoded-sql-expression]
+    f"SELECT occurrence_id, object_type, object_id FROM annotation_occurrences "
     f"WHERE object_type = '{object_type}' AND {predicate}"
     for object_type, predicate in _OWNERLESS.items()
 )
 
 _EXTERNAL_OWNER = " UNION ALL ".join(
-    f"SELECT field, object_kind, object_id FROM external_values WHERE object_kind = '{kind}' "  # noqa: S608
+    # ruff: ignore[hardcoded-sql-expression]
+    f"SELECT field, object_kind, object_id FROM external_values WHERE object_kind = '{kind}' "
     f"AND NOT EXISTS (SELECT 1 FROM {table} WHERE {table}.{column} = external_values.object_id)"
     for kind, (table, column) in EXTERNAL_OWNER_TABLES.items()
 )
 """The external values whose owner row does not exist."""
+
+_IMPORTED_OBJECT = " UNION ALL ".join(
+    # ruff: ignore[hardcoded-sql-expression]
+    f"SELECT alias, object_kind, object_id FROM imported_objects WHERE object_kind = '{kind}' "
+    f"AND NOT EXISTS (SELECT 1 FROM {table} WHERE {table}.{column} = imported_objects.object_id)"
+    for kind, (table, column) in _IMPORTED_OBJECT_TABLES.items()
+)
+"""The imported objects whose copy does not exist in the catalog."""
 
 _EXTERNAL_TARGET = f"""
     SELECT external.object_id, external.position
@@ -130,7 +228,7 @@ _EXTERNAL_TARGET = f"""
             AND targets.target_kind = '{TaskTargetKind.TEXT}'
       )
     LIMIT 1
-"""  # noqa: S608 - tags come only from internal enum values
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
 """A packed target whose task has no text target at its position."""
 
 _EXTERNAL_CONTENT_KIND = f"""
@@ -143,7 +241,7 @@ _EXTERNAL_CONTENT_KIND = f"""
           WHEN '{PackedValueKind.TEXT_LIST}' THEN '{AnnotationValueKind.TEXT_LIST}'
       END
     LIMIT 1
-"""  # noqa: S608 - tags come only from internal enum values
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
 """A packed annotation value whose content row holds another kind of value."""
 
 _EXTERNAL_AXIS_SHAPE = f"""
@@ -152,7 +250,7 @@ _EXTERNAL_AXIS_SHAPE = f"""
       AND (field <> '{PackedField.TIME_OFFSETS}' OR position <> 0
            OR value_kind <> '{PackedValueKind.TIME_OFFSETS}' OR value_digest IS NULL)
     LIMIT 1
-"""  # noqa: S608 - tags come only from internal enum values
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
 """An axis locator other than one digested time offsets array at position 0."""
 
 CROSS_RECORD_PARENT = """
@@ -217,7 +315,7 @@ _TASK_RECORD_SCOPE = f"""
         WHEN spans.signal_ids IS NULL OR list_contains(spans.signal_ids, signals.signal_id)
         THEN refs.record_id END) <> 1
     LIMIT 1
-"""  # noqa: S608 - tags come only from internal enum values
+"""  # ruff: ignore[hardcoded-sql-expression] - tags come only from internal enum values
 """A time span of a Task whose Signals do not resolve to exactly one input Record.
 
 Spans of one Task with the same Signal ids resolve to the same Records, so each such group is
@@ -225,8 +323,21 @@ checked once.
 """
 
 
+def _audit_task_labels(connection: duckdb.DuckDBPyConnection) -> None:
+    """Make sure that stored classification labels follow the rules of their label set.
+
+    Raises:
+        TimeFFormatError: If a task breaks one of the label rules.
+    """
+    for rule in _LABEL_RULES:
+        broken = connection.execute(rule.query).fetchone()
+        if broken is not None:
+            (task_id,) = broken
+            raise TimeFFormatError(f"classification task {task_id!r} {rule.problem}")
+
+
 def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool = True) -> None:
-    """Scan every control table and raise on the first violated invariant.
+    """Scan every control table and raise an error at the first broken rule.
 
     Args:
         connection: An open connection to the control database.
@@ -234,9 +345,11 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
             A metadata-only database written without value placements has none.
 
     Raises:
-        TimeFFormatError: If a key is repeated, a relationship dangles, a value is outside its
-            domain, the Source tree is not a forest of per-Record trees, or an axis or chunk length
-            disagrees with its Signal.
+        TimeFFormatError: If a key repeats, a reference points to a missing object,
+            or a value is not allowed.
+            Also if Sources do not form separate trees for each Record.
+            Also if an axis or chunk length differs from its Signal.
+            Also if classification labels break a rule of their label set.
     """
     for table in CONTROL_TABLES:
         _audit_unique_keys(connection, table)
@@ -263,7 +376,7 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
                   AND (len(list_filter(input_modalities, x -> x NOT IN ('text', 'no_input'))) > 0
                        OR EXISTS (SELECT 1 FROM task_record_refs r
                                   WHERE r.task_id = tasks.task_id AND r.field = '{TaskRelationshipField.INPUTS}')))
-           LIMIT 1"""  # noqa: S608 - fixed field name
+           LIMIT 1"""  # ruff: ignore[hardcoded-sql-expression] - fixed field name
     ).fetchone()
     if invalid_modality is not None:
         raise TimeFFormatError(f"task {invalid_modality[0]!r} has invalid input_modalities")
@@ -278,6 +391,9 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
         raise TimeFFormatError(f"annotation occurrence {occurrence_id!r} refers to missing {object_type} {object_id!r}")
 
     _audit_external_values(connection)
+    _audit_imported_objects(connection)
+
+    _audit_task_labels(connection)
 
     invalid_clock_scope = connection.execute(_TASK_RECORD_SCOPE).fetchone()
     if invalid_clock_scope is not None:
@@ -333,6 +449,22 @@ def _audit_external_values(connection: duckdb.DuckDBPyConnection) -> None:
         )
 
 
+def _audit_imported_objects(connection: duckdb.DuckDBPyConnection) -> None:
+    """Raise on the first ``imported_objects`` row whose copy does not exist.
+
+    ``object_id`` refers to the table of its ``object_kind``, so a plain foreign key cannot check it.
+
+    Raises:
+        TimeFFormatError: If a row names a copy that the table of its kind does not hold.
+    """
+    orphan = connection.execute(f"{_IMPORTED_OBJECT} LIMIT 1").fetchone()
+    if orphan is not None:
+        alias, object_kind, object_id = orphan
+        raise TimeFFormatError(
+            f"imported object of parent alias {alias!r} refers to missing {object_kind} {object_id!r}"
+        )
+
+
 def _audit_unique_keys(connection: duckdb.DuckDBPyConnection, table: Table) -> None:
     """Raise on the first repeated logical key of ``table``.
 
@@ -342,7 +474,8 @@ def _audit_unique_keys(connection: duckdb.DuckDBPyConnection, table: Table) -> N
     for columns in table.unique:
         names = ", ".join(columns)
         duplicate = connection.execute(
-            f"SELECT {names} FROM {table.name} GROUP BY {names} HAVING count(*) > 1 LIMIT 1"  # noqa: S608
+            # ruff: ignore[hardcoded-sql-expression]
+            f"SELECT {names} FROM {table.name} GROUP BY {names} HAVING count(*) > 1 LIMIT 1"
         ).fetchone()
         if duplicate is not None:
             raise TimeFFormatError(f"{table.name} contains duplicate values for {names}: {duplicate!r}")
@@ -356,7 +489,8 @@ def _audit_foreign_keys(connection: duckdb.DuckDBPyConnection, table: Table) -> 
     """
     for key in table.foreign_keys:
         child = (
-            f"(SELECT unnest({key.column}) AS {key.column} FROM {table.name})" if key.many else table.name  # noqa: S608
+            # ruff: ignore[hardcoded-sql-expression]
+            f"(SELECT unnest({key.column}) AS {key.column} FROM {table.name})" if key.many else table.name
         )
         orphan = connection.execute(
             f"""SELECT child.{key.column}
@@ -365,7 +499,7 @@ def _audit_foreign_keys(connection: duckdb.DuckDBPyConnection, table: Table) -> 
                   ON parent.{key.references} = child.{key.column}
                 WHERE child.{key.column} IS NOT NULL
                   AND parent.{key.references} IS NULL
-                LIMIT 1"""  # noqa: S608
+                LIMIT 1"""  # ruff: ignore[hardcoded-sql-expression]
         ).fetchone()
         if orphan is not None:
             raise TimeFFormatError(

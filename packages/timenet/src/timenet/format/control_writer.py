@@ -17,6 +17,7 @@ from pydantic import ValidationError
 
 from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
+from timenet.dataset.composition import ImportState
 from timenet.dataset.dataset import _TaskValidationIndex
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.format.annotation_codec import encode_annotation_value
@@ -38,6 +39,7 @@ from timenet.json import validate_json_value
 from timenet.types import (
     Annotation,
     ArrayHandle,
+    LabelSetRegistry,
     ObjectKind,
     Task,
     TSCorrespondenceTask,
@@ -257,6 +259,8 @@ class DuckDBControlWriter:
                         dataset.iter_tasks() if tasks is None else tasks,
                     )
                     self._write_chunks(connection, placements, signal_values)
+                    self._write_imports(connection, dataset._import_state)
+                    self._write_read_order(connection)
                     self._check_source_tree(connection)
                     self.external.finish(connection)
                 connection.execute("CHECKPOINT")
@@ -267,6 +271,76 @@ class DuckDBControlWriter:
             self.path.unlink(missing_ok=True)
             raise
         return task_counts
+
+    @staticmethod
+    def _write_imports(connection: duckdb.DuckDBPyConnection, import_state: ImportState) -> None:
+        """Store the parent aliases, and the parent ID of each imported Record, Signal, and task the dataset holds.
+
+        Raises:
+            TimeFValidationError: If the dataset holds objects imported under an alias that has no
+                parent card.
+        """
+        rows = []
+        if import_state.import_map:
+            # The map may name copies the dataset no longer holds; only the ones it holds get a row.
+            held = {
+                kind: {row[0] for row in connection.execute(query).fetchall()}
+                for kind, query in (
+                    (ObjectKind.RECORD, "SELECT record_id FROM records"),
+                    (ObjectKind.SIGNAL, "SELECT signal_id FROM signals"),
+                    (ObjectKind.TASK, "SELECT task_id FROM tasks"),
+                )
+            }
+            rows = [
+                {"alias": alias, "object_kind": kind.value, "parent_id": parent_id, "object_id": object_id}
+                for (alias, kind, parent_id), object_id in import_state.import_map.items()
+                if object_id in held[kind]
+            ]
+        cards = import_state.parent_cards
+        orphaned = sorted({row["alias"] for row in rows} - cards.keys())
+        if orphaned:
+            raise TimeFValidationError(f"objects are imported under parent aliases {orphaned} without a parent card")
+        insert_rows(
+            connection,
+            TABLES["imports"],
+            [{"alias": alias, "parent_ref": str(card.source)} for alias, card in cards.items()],
+        )
+        insert_rows(connection, TABLES["imported_objects"], rows)
+
+    @staticmethod
+    def _write_read_order(connection: duckdb.DuckDBPyConnection) -> None:
+        """Rank the records of a release that holds imported ones by where their values are stored.
+
+        A copy takes the child's next ID in the order an import selects it, which need not be the
+        order in which the parent stores its values, so walking such records by ID would jump across
+        the parent's values files. Any other release keeps the ID ranking from ``_write_objects``:
+        an edit keeps its base's IDs, and the base stored its values in ID order within each spec
+        type.
+        """
+        # Only a Record row whose copy the release holds counts.
+        if not connection.execute(
+            "SELECT 1 FROM imported_objects JOIN records ON object_id = record_id WHERE object_kind = ? LIMIT 1",
+            [ObjectKind.RECORD],
+        ).fetchone():
+            return
+        # Rank every record by its earliest-stored chunk across its Signals: this release's own
+        # values first, then by source release, values file, and coordinates, with records that
+        # have no chunks last. Ties fall back to the record ID, so each rank is unique and depends
+        # only on what the catalog stores.
+        connection.execute(
+            """UPDATE records SET read_order = ranked.position FROM (
+                SELECT record_id, row_number() OVER (ORDER BY location NULLS LAST, record_id) - 1 AS position
+                FROM records LEFT JOIN (
+                    SELECT sources.record_id, min(struct_pack(
+                        source := coalesce(source_key, ''), path := value_path,
+                        major := chunk_major_index, minor := coalesce(chunk_minor_index, 0)
+                    )) AS location
+                    FROM sources JOIN signals USING (source_id)
+                    JOIN signal_chunks USING (signal_id)
+                    GROUP BY sources.record_id
+                ) USING (record_id)
+            ) ranked WHERE records.record_id = ranked.record_id"""
+        )
 
     def _pack(self, kind: ObjectKind, object_id: int, field: PackedField, value: Any, position: int = 0) -> Any:
         """Construct a catalog value from the explicit packing result.
@@ -309,6 +383,8 @@ class DuckDBControlWriter:
             (ObjectKind.DATASET, None, annotation) for annotation in dataset.annotations
         ]
         record_ids: set[int] = set()
+        # Records rank by ID until _write_read_order ranks an imported child's by storage.
+        read_order = {identity: index for index, identity in enumerate(sorted(record.id for record in dataset.records))}
         for record in dataset.records:
             identity = id(record.start_time)
             if identity not in clock_keys:
@@ -322,6 +398,7 @@ class DuckDBControlWriter:
                     "time_span_start_us": None if span is None else span.start_us,
                     "time_span_end_us": None if span is None else span.end_us,
                     "metadata": _json(record.metadata),
+                    "read_order": read_order[record.id],
                 }
             )
             record_ids.add(record.id)
@@ -389,7 +466,7 @@ class DuckDBControlWriter:
             )
         chunks.flush()
 
-    def _write_tasks(  # noqa: PLR0913, PLR0917 - reference sets stay explicit
+    def _write_tasks(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] - reference sets stay explicit
         self,
         connection: duckdb.DuckDBPyConnection,
         dataset: TimeFDataset,
@@ -398,26 +475,27 @@ class DuckDBControlWriter:
         annotations: list[tuple[ObjectKind, int | None, Annotation]],
         tasks_source: Iterable[Task],
     ) -> tuple[dict[str, int], list[_AnnotationRef]]:
-        """Insert tasks and their relationships, one bounded batch at a time.
+        """Insert tasks and their relationships in batches of limited size.
 
         A dependency can name a task that the writer writes later. So the writer checks and stores
         dependencies after it writes every task. The method returns the annotation references,
         because occurrences get their ids only when :meth:`_write_annotations` writes them.
 
         Returns:
-            Counts keyed by concrete task type, and the annotation references.
+            The number of tasks of each type, and the annotation references.
 
         Raises:
-            TimeFValidationError: If a task refers to a Record or Signal outside the dataset, or to
-                a Record or Signal object that the dataset did not register under that id. Also if
-                two tasks share an id, or a task derives from a task that is not in the dataset or
-                from itself.
+            TimeFValidationError: If a task refers to a Record or Signal outside the dataset.
+                Also if the dataset registered a different Record or Signal object under that id.
+                Also if two tasks share an id, or a task derives from itself or a task outside the dataset.
+                Also if two tasks use different label sets with the same name.
         """
         # Weak: if no other task names a streamed task, Python can free it after the writer writes it.
         written: WeakValueDictionary[int, Task] = WeakValueDictionary()
         dependencies: list[tuple[int, int, Task]] = []
         annotation_refs: list[_AnnotationRef] = []
         task_counts: dict[str, int] = {}
+        label_sets = LabelSetRegistry()
         index = _TaskValidationIndex(dataset)
         for batch in _task_batches(tasks_source):
             task_rows: list[dict[str, object]] = []
@@ -426,6 +504,9 @@ class DuckDBControlWriter:
             for task in batch:
                 TimeFDataset._check_record_refs(task, index)
                 TimeFDataset._check_signal_refs(task, index)
+                # A task can change after add_task, so check its labels and its label set again.
+                task.check_targets()
+                task.register_label_set(label_sets)
                 task_id = task.id
                 written[task_id] = task
                 task_type = str(task.task_type)
@@ -475,6 +556,8 @@ class DuckDBControlWriter:
             insert_rows(connection, TABLES["task_record_refs"], record_ref_rows)
             # Store this batch's locators now, so a streamed task source never holds them all.
             self.external.write_locators(connection)
+        # Tasks refer to a label set by its name, so the sets can follow the tasks that use them.
+        insert_rows(connection, TABLES["label_sets"], [label_set.model_dump() for label_set in label_sets])
         duplicate = connection.execute(
             "SELECT task_id FROM tasks GROUP BY task_id HAVING count(*) > 1 LIMIT 1"
         ).fetchone()

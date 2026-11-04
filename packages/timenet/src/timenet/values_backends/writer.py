@@ -110,11 +110,12 @@ def make_values_backend(config: ValuesBackendConfig) -> BaseValuesBackend:
         The constructed backend.
     """
     if isinstance(config, ParquetValuesConfig):
-        from timenet.values_backends.parquet.writer import ParquetValuesBackend  # noqa: PLC0415
+        # ruff: ignore[import-outside-top-level]
+        from timenet.values_backends.parquet.writer import ParquetValuesBackend
 
         return ParquetValuesBackend(config)
     if isinstance(config, ZarrValuesConfig):
-        from timenet.values_backends.zarr.writer import ZarrValuesBackend  # noqa: PLC0415
+        from timenet.values_backends.zarr.writer import ZarrValuesBackend  # ruff: ignore[import-outside-top-level]
 
         return ZarrValuesBackend(config)
     assert_never(config)

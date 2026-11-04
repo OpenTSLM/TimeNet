@@ -121,6 +121,11 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   `record.add_annotations([...])` takes an iterable and returns a tuple. There is one annotation
   class, and its `span` gives its shape. No span means the whole record.
   `span=TimePoint.seconds(...)` means a time offset. `span=TimeInterval.seconds(...)` means a region.
+- For text that the connector reads from a source file, use `LazyText(function)` as the
+  annotation value. Import it from `timenet.types`. The function returns the string. If you know
+  its number of characters, pass it as `length=n` and every read checks the result against it.
+  The writer stores this text in a separate payload file so readers can load it on request. For a
+  list of strings, use `LazyTextList`, with the number of strings as `length` if you know it.
 - `dataset.add_task(task=<Task>(inputs=(record,), ...))` registers one task and returns it.
   `dataset.add_tasks(tasks=[...])` takes an iterable and registers the batch all-or-nothing. The task
   names its input records itself. Set `scope` and `from_tasks` on the task too. A batch can derive
@@ -143,7 +148,7 @@ So the type only says what *kind* of answer it is.
 
 | Task | Answer | Extra payload |
 | --- | --- | --- |
-| `ClassificationTask` | `target: str` (a label) | optional `target_schema` |
+| `ClassificationTask` | `target: str` (a label) | Required `label_set`: a `LabelSet` that defines the allowed labels, their descriptions, and how many labels a target can contain. |
 | `AnswerTask` | `targets: tuple[str, ...]` (free text, which is a caption when there is no `prompt`) | — |
 | `ScalarPredictionTask` | `target: float` | optional `unit`, `target_name` |
 | `TemporalLocalizationTask` | `target: tuple[Span, ...]` | `mode` (`SPARSE` / `EXHAUSTIVE`) |

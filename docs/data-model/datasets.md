@@ -43,9 +43,10 @@ back to the exact TimeF bytes of one version, not a moving target.
 
 ## Parent dataset cards
 
-A dataset card's `parents` maps local aliases to exact parent releases. The output manifest stores
-a copy of each parent's card in `parent_cards`. Each `ParentDatasetCard` holds that parent's
-metadata, whose `dataset_id` and `dataset_version` identify the exact release.
+A dataset card's `parents` maps local aliases to exact parent releases. A card declares each release
+under one alias only. The output manifest stores a copy of each parent's card in `parent_cards`.
+Each `ParentDatasetCard` holds that parent's metadata, whose `dataset_id` and `dataset_version`
+identify the exact release.
 
 For example, the alias `ptbxl` can name `physionet/ptb-xl@1.0.0`. Its parent card records that release
 and its license, citation, access requirements, and other metadata. This copy lets readers inspect
