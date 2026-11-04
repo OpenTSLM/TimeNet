@@ -45,22 +45,6 @@ def test_the_asleep_set_holds_the_five_stages_of_sleep():
     } == tasks.ASLEEP_LABELS
 
 
-def test_a_vocabulary_is_one_annotation_for_each_set():
-    built = tasks.build_vocabularies()
-    assert [one.key for one in built] == ["sleep_stage_vocabulary", "sex_vocabulary", "condition_vocabulary"]
-
-
-def test_a_vocabulary_holds_the_whole_set_and_not_one_member():
-    stages, sexes, conditions = tasks.build_vocabularies()
-    assert stages.value == list(tasks.STAGE_LABELS)
-    assert sexes.value == ["F", "M"]
-    assert conditions.value == ["placebo", "temazepam"]
-
-
-def test_a_vocabulary_carries_no_span():
-    assert all(one.span is None for one in tasks.build_vocabularies())
-
-
 def _scope(task) -> TimeInterval:
     # Task.scope is Span | None, so narrow the type before you read its bounds.
     assert isinstance(task.scope, TimeInterval)
@@ -108,9 +92,9 @@ def test_a_label_that_names_no_sleep_stage_still_becomes_a_task():
     assert built[0].targets == ("Movement time",)
 
 
-def test_every_task_names_the_stage_vocabulary():
+def test_every_task_shares_the_stage_label_set():
     built = list(tasks.build_epoch_tasks(_RECORDING_ID, [_stage("Sleep stage 2", 0, 60)]))
-    assert {one.target_schema for one in built} == {"sleep_stage_vocabulary"}
+    assert all(one.label_set is tasks.SLEEP_STAGES for one in built)
 
 
 def test_no_task_carries_a_prompt():
@@ -160,16 +144,16 @@ _CASSETTE_FACTS = [
 ]
 
 
-def _pick(built, kind, schema=None):
+def _pick(built, kind, label_set=None):
     # A task id is generated, so a task is found by its type and the set it draws from. The
     # builder yields Task, so narrow the type before you read a subclass field.
-    task = next(one for one in built if isinstance(one, kind) and (schema is None or one.target_schema == schema))
+    task = next(one for one in built if isinstance(one, kind) and (label_set is None or one.label_set is label_set))
     assert isinstance(task, kind)
     return task
 
 
-def _schemas(built):
-    return {one.target_schema for one in built if isinstance(one, ClassificationTask)}
+def _label_sets(built):
+    return {one.label_set.name for one in built if isinstance(one, ClassificationTask) and one.label_set is not None}
 
 
 def test_age_is_a_scalar_with_a_unit():
@@ -183,7 +167,7 @@ def test_age_is_a_scalar_with_a_unit():
 
 def test_sex_carries_the_decoded_letter():
     built = list(tasks.build_record_tasks(_RECORDING_ID, _CASSETTE_FACTS, []))
-    sex = _pick(built, ClassificationTask, "sex_vocabulary")
+    sex = _pick(built, ClassificationTask, tasks.SEXES)
     assert sex.targets == ("F",)
     assert sex.scope is None
 
@@ -193,20 +177,20 @@ def test_the_same_sheet_code_decodes_to_the_other_letter_elsewhere():
     # decoder gave.
     telemetry = [_fact("sex", "M"), _fact("age", 40)]
     built = list(tasks.build_record_tasks(_RECORDING_ID, telemetry, []))
-    assert _pick(built, ClassificationTask, "sex_vocabulary").targets == ("M",)
+    assert _pick(built, ClassificationTask, tasks.SEXES).targets == ("M",)
 
 
 def test_a_telemetry_night_carries_its_condition():
     facts = [*_CASSETTE_FACTS, _fact("condition", "placebo")]
     built = list(tasks.build_record_tasks(_RECORDING_ID, facts, []))
-    condition = _pick(built, ClassificationTask, "condition_vocabulary")
+    condition = _pick(built, ClassificationTask, tasks.CONDITIONS)
     assert condition.targets == ("placebo",)
     assert condition.scope is None
 
 
 def test_a_cassette_recording_carries_no_condition_task():
     built = list(tasks.build_record_tasks(_RECORDING_ID, _CASSETTE_FACTS, []))
-    assert "condition_vocabulary" not in _schemas(built)
+    assert "condition" not in _label_sets(built)
 
 
 def test_provenance_becomes_no_task():
@@ -219,7 +203,7 @@ def test_provenance_becomes_no_task():
     # This recording can answer these two questions. The builder draws nothing from the four
     # provenance keys that the input carries.
     assert [type(one) for one in built] == [ScalarPredictionTask, ClassificationTask]
-    assert _schemas(built) == {"sex_vocabulary"}
+    assert _label_sets(built) == {"sex"}
 
 
 def test_a_missing_age_raises_rather_than_dropping_the_question():

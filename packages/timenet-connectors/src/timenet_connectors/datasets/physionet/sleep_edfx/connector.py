@@ -305,8 +305,6 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             annotations.attach(recording.recording_id, series, sleep_stages)
             record.add_annotations(recording_metadata)
 
-        for vocabulary in tasks.build_vocabularies():
-            dataset.annotate(vocabulary)
         dataset.set_task_stream(
             [ClassificationTask, TemporalLocalizationTask, ScalarPredictionTask],
             lambda: tasks.iter_tasks(dataset.records),

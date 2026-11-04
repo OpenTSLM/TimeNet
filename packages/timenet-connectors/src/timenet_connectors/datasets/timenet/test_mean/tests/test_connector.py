@@ -45,8 +45,8 @@ def test_has_balanced_binary_labels():
     assert labels == Counter({"above_zero": 500, "below_zero": 500})
 
 
-def test_target_has_no_schema():
-    assert all(task.target_schema is None for task in _convert().tasks_of(ClassificationTask))
+def test_target_has_no_label_set():
+    assert all(task.label_set is None for task in _convert().tasks_of(ClassificationTask))
 
 
 def test_every_record_is_a_single_signal():

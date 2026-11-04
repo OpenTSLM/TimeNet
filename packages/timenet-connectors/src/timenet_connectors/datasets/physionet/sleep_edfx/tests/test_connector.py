@@ -20,7 +20,7 @@ from timenet.types import (
     read_value,
 )
 from timenet_connectors.bases import excel
-from timenet_connectors.datasets.physionet.sleep_edfx import tables
+from timenet_connectors.datasets.physionet.sleep_edfx import tables, tasks
 from timenet_connectors.datasets.physionet.sleep_edfx.connector import (
     SleepEdfxConnector,
     SleepEdfxSource,
@@ -161,6 +161,7 @@ def _asked(task) -> tuple[str, ...]:
         str(task.scope),
         str(tuple(record.metadata["recording_id"] for record in task.inputs)),
         str(task.prompt),
+        str(getattr(task, "label_set", None)),
     )
 
 
@@ -348,16 +349,11 @@ def test_every_streamed_task_carries_its_own_input_records(release, monkeypatch)
         assert {record.id for record in task.inputs} <= known
 
 
-def test_the_vocabularies_are_dataset_annotations_and_belong_to_no_record(release, monkeypatch):
+def test_every_classification_task_shares_one_of_the_label_sets(release, monkeypatch):
     dataset = _convert(release, monkeypatch)
-    assert {one.key for one in dataset.annotations} == {
-        "sleep_stage_vocabulary",
-        "sex_vocabulary",
-        "condition_vocabulary",
-    }
-    registered = {one.key for one in dataset.annotations}
-    for record in dataset.records:
-        assert not registered & {one.key for one in record.annotations}
+    used = {id(one.label_set) for one in _streamed(dataset) if isinstance(one, ClassificationTask)}
+    # The fixture holds cassette recordings only, so no task asks for a telemetry condition.
+    assert used == {id(tasks.SLEEP_STAGES), id(tasks.SEXES)}
 
 
 def test_an_epoch_task_covers_each_scored_epoch(release, monkeypatch):
