@@ -1,7 +1,7 @@
 """Define the writable-registry contract for a backend that build publishes datasets into.
 
 This class extends the read-only :class:`~timenet.registry.BaseRegistry` with two write primitives,
-:meth:`WritableRegistry.store` and :meth:`WritableRegistry.put_release`. Backends differ only in where a
+:meth:`WritableRegistry.put_dataset` and :meth:`WritableRegistry.put_release`. Backends differ only in where a
 release lands, for example a local directory, an S3 prefix, or a remote service. So these two are the
 abstract methods, and :meth:`exists` is shared.
 """
@@ -27,7 +27,7 @@ class WritableRegistry(BaseRegistry, ABC):
     """A registry that build can publish datasets into, not just read from."""
 
     @abstractmethod
-    def store(
+    def put_dataset(
         self,
         dataset: TimeFDataset,
         *,
@@ -54,21 +54,23 @@ class WritableRegistry(BaseRegistry, ABC):
         """
 
     @abstractmethod
-    def put_release(self, directory: Path, manifest: Manifest) -> None:
+    def put_release(self, from_directory: Path, manifest: Manifest) -> None:
         """Publish a complete local release directory to this registry as it is.
 
-        Before it publishes anything, this method makes sure that ``directory`` holds a
+        This method only reads ``from_directory``. It does not change, move or delete a file in it.
+        Before it publishes anything, this method makes sure that ``from_directory`` holds a
         ``manifest.json`` equal to ``manifest`` and every file that the manifest declares, with its
         recorded size. It publishes only those files and ``manifest.json``. It does not check the
         payload sources of the release, and it does not compare with a copy that this registry
         already holds. The caller decides whether this registry may receive the version.
 
         Args:
-            directory: The local release directory, with ``manifest.json`` and every declared file.
+            from_directory: The local release directory to read from, with ``manifest.json`` and
+                every declared file.
             manifest: The manifest of the release.
 
         Raises:
-            TimeNetFileError: If ``manifest.json`` is missing from ``directory`` or differs from
+            TimeNetFileError: If ``manifest.json`` is missing from ``from_directory`` or differs from
                 ``manifest``, or a declared file is missing or has another size than recorded.
                 Nothing is published then.
         """

@@ -250,22 +250,22 @@ def test_search_negative_limit_rejected(registry_root):
         LocalRegistry(registry_root).search(limit=-1)
 
 
-# ---- store (write side) -----------------------------------------------------------------------
+# ---- put_dataset (write side) -----------------------------------------------------------------
 
 
-def test_store_derives_schema_if_absent(tmp_path):
+def test_put_dataset_derives_schema_if_absent(tmp_path):
     dataset = make_dataset()
     assert dataset.schema is None
-    LocalRegistry(tmp_path).store(dataset)
+    LocalRegistry(tmp_path).put_dataset(dataset)
     assert dataset.schema is not None
 
 
-def test_a_forced_store_replaces_the_committed_release(tmp_path):
+def test_a_forced_put_dataset_replaces_the_committed_release(tmp_path):
     registry = LocalRegistry(tmp_path)
-    registry.store(make_dataset())
+    registry.put_dataset(make_dataset())
     replacement = make_dataset()
     replacement.records[0].annotate(Annotation(key="replaced", value=1))
-    registry.store(replacement, force=True)
+    registry.put_dataset(replacement, force=True)
 
     version_dir = tmp_path / "timenet/hello-world/1.0.0"
     with TimeFReader(open_local_version(version_dir)) as reader:
@@ -274,9 +274,9 @@ def test_a_forced_store_replaces_the_committed_release(tmp_path):
     assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]
 
 
-def test_a_failed_forced_store_keeps_the_committed_release(tmp_path, monkeypatch):
+def test_a_failed_forced_put_dataset_keeps_the_committed_release(tmp_path, monkeypatch):
     registry = LocalRegistry(tmp_path)
-    registry.store(make_dataset())
+    registry.put_dataset(make_dataset())
     version_dir = tmp_path / "timenet/hello-world/1.0.0"
     before = (version_dir / "manifest.json").read_bytes()
 
@@ -285,7 +285,7 @@ def test_a_failed_forced_store_keeps_the_committed_release(tmp_path, monkeypatch
 
     monkeypatch.setattr(TimeFWriter, "write", fail)
     with pytest.raises(RuntimeError, match="write failed"):
-        registry.store(make_dataset(), force=True)
+        registry.put_dataset(make_dataset(), force=True)
     assert (version_dir / "manifest.json").read_bytes() == before
     assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]
 
@@ -296,7 +296,7 @@ def _release_directory(root: Path, *, annotation: str | None = None) -> tuple[Pa
     if annotation is not None:
         dataset.records[0].annotate(Annotation(key=annotation, value=1))
     source = LocalRegistry(root)
-    source.store(dataset)
+    source.put_dataset(dataset)
     return root / "timenet/hello-world/1.0.0", source.get_manifest("timenet/hello-world", "1.0.0")
 
 

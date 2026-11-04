@@ -251,8 +251,6 @@ class TimeFWriter:
             raise RuntimeError("write() must run successfully before close()")
         self._check_pinned_by(self._write_manifest())
         self._final_dir.parent.mkdir(parents=True, exist_ok=True)
-        # A committed version can be in place only with replace=True, which LocalRegistry.store() and
-        # run_pipeline() pass for force. Otherwise the caller pre-created the directory.
         publish_directory(self._staging_dir, self._final_dir)
         self._emit(ProgressStage.COMMIT, 1, 1)
 

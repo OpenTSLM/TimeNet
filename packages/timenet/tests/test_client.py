@@ -41,7 +41,7 @@ def _child_of_the_demo(root: Path) -> tuple[LocalRegistry, DatasetRef]:
     """
     parent = make_dataset()
     registry = LocalRegistry(root)
-    registry.store(parent)
+    registry.put_dataset(parent)
     reference = DatasetRef(dataset_id=parent.metadata.dataset_id, version=parent.metadata.dataset_version)
     child = TimeFDataset(
         metadata=parent.metadata.model_copy(
@@ -50,7 +50,7 @@ def _child_of_the_demo(root: Path) -> tuple[LocalRegistry, DatasetRef]:
     )
     with TimeNet(registry).open(parent.metadata.dataset_id) as reader:
         child.import_from(reader, alias=ParentAlias("parent"), records=[parent.records[0].id])
-    registry.store(child)
+    registry.put_dataset(child)
     return registry, reference
 
 
@@ -82,7 +82,7 @@ class _Builder:
         self.calls.append((dataset_id, force, build_parents, fetch_from, pinned_by))
         dataset = make_dataset()
         dataset._metadata = self.card(dataset_id)
-        LocalRegistry(root).store(dataset, force=force, values_backend=self.BACKEND, pinned_by=pinned_by)
+        LocalRegistry(root).put_dataset(dataset, force=force, values_backend=self.BACKEND, pinned_by=pinned_by)
         return root / dataset_id / self.VERSION
 
 
@@ -151,7 +151,7 @@ class _Resampled(BaseConnector[str]):
 
 def test_resampled_child_reads_and_downloads_without_its_build_only_parent(tmp_path):
     origin = LocalRegistry(tmp_path / "origin")
-    origin.store(make_dataset())
+    origin.put_dataset(make_dataset())
     metadata = _Resampled().metadata()
     reference = metadata.parents[ParentAlias("parent")]
     run_pipeline(_Resampled(), origin.root, cache_dir=tmp_path / "build-cache")
