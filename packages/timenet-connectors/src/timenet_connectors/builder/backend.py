@@ -1,7 +1,7 @@
-"""The build backend the SDK reaches through the ``timenet.builders`` entry point.
+"""The built-in build backend: it lists dataset IDs, reads cards and builds releases.
 
-The SDK loads this module to list dataset IDs and to read cards. So it imports nothing of the
-``timenet-build`` CLI and its libraries.
+It imports nothing of the ``timenet-build`` CLI and its libraries, because listing dataset IDs and
+reading cards does not need them.
 """
 
 from collections.abc import Mapping
