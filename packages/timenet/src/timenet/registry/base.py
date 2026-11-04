@@ -133,19 +133,14 @@ class BaseRegistry(ABC):
         """Say whether this registry serves a release, and at which version.
 
         A remote registry serves the files of a release only if its effective access is open: the
-        strictest access of its card and of the cards in its lineage. It lists any other
-        release, with its card and its manifest, but it does not serve its files.
-        :class:`~timenet.registry.LocalRegistry` serves every release that it holds.
+        strictest access of its card and of the cards in its lineage.
 
         Args:
             dataset_id: The dataset ID.
-            version: An exact version, such as ``"1.2.0"``, or ``None``, ``""`` or ``"latest"`` for the
-                latest version.
+            version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
 
         Returns:
-            ``Found`` with this registry, for a release that it serves. ``NotServed`` for a release
-            that it lists but does not serve, with the page of each card that is not open.
-            ``NotFound()`` for an unknown dataset ID or version.
+            ``Found`` if it serves the release, ``NotServed`` if it only lists it, else ``NotFound``.
         """
         try:
             manifest = self.get_manifest(dataset_id, version)

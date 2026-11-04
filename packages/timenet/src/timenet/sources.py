@@ -1,19 +1,8 @@
 """Sources of releases, and the rules that pick the source of a release.
 
-A source says whether it can provide a release, and at which version. A registry serves the files of
-the releases that it holds. :class:`InstalledConnectors` builds a release with the installed connector
-that claims its dataset.
-
-:func:`resolve_release` asks an ordered list of sources and follows three rules:
-
-1. An exact version comes from the first source that provides it.
-2. "Latest" is the highest version that any source provides. The order then decides only which
-   source provides that version.
-3. Only :class:`NotFound` and :class:`NotServed` fall through to the next source. An error of a
-   source stops the resolution.
-
-This module imports nothing from :mod:`timenet.registry` at run time, so that the registries can
-import it.
+A source says whether it can provide a release, and at which version: a registry serves the
+releases that it holds, and :class:`InstalledConnectors` builds them. :func:`resolve_release` asks
+an ordered list of sources for a release.
 """
 
 from collections.abc import Sequence
@@ -39,9 +28,8 @@ Answer: TypeAlias = "Found | NotFound | NotServed"
 class ReleaseSource(Protocol):
     """Something that can provide releases: a registry or :class:`InstalledConnectors`.
 
-    A :class:`~pathlib.Path` also passes an ``isinstance`` check against this protocol, because it has
-    a ``resolve`` method. So a caller that takes paths and sources checks for ``str`` and
-    ``os.PathLike`` first.
+    A :class:`~pathlib.Path` also passes an ``isinstance`` check, because it has a ``resolve``
+    method, so check for ``str`` and ``os.PathLike`` first.
     """
 
     def resolve(self, dataset_id: str, version: str | None) -> Answer:
@@ -49,8 +37,7 @@ class ReleaseSource(Protocol):
 
         Args:
             dataset_id: The dataset ID.
-            version: An exact version, such as ``"1.2.0"``, or ``None``, ``""`` or ``"latest"`` for the
-                latest version.
+            version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
 
         Returns:
             :class:`Found`, :class:`NotFound` or :class:`NotServed`.
@@ -65,8 +52,7 @@ class Found:
     Attributes:
         version: The exact version.
         entry: The source that answered for the release.
-        manifest: The manifest that the source read to give this answer, so that a planner does not
-            fetch it again; ``None`` if the source read none.
+        manifest: The manifest that the source read for this answer, or ``None``.
     """
 
     version: Version
@@ -81,17 +67,14 @@ class NotFound:
 
 @dataclass(frozen=True)
 class NotServed:
-    """The source lists the release, but it does not serve its files, for example for a credentialed release.
+    """The source lists the release, but does not serve its files, for example a credentialed one.
 
     Attributes:
         version: The exact version that the source lists.
-        access: The effective access of the release: the strictest access of its card and of the
-            cards in its lineage.
+        access: The effective access: the strictest access of the card and the cards in its lineage.
         access_url: The page of the first card that is not open, where users get access, or ``None``.
-        requirements: Each card that is not open, with its access and its page, in the order of
-            :func:`~timenet.types.access.access_requirements`.
-        manifest: The manifest that the source read to give this answer, so that a planner does not
-            fetch it again; ``None`` if the source read none.
+        requirements: Each card that is not open, with its access and its page.
+        manifest: The manifest that the source read for this answer, or ``None``.
     """
 
     version: Version
@@ -107,9 +90,7 @@ class NotServed:
             dataset_id: The dataset ID of the release.
 
         Returns:
-            The error. It names the release, its effective access, and the page of each card that is
-            not open. If ``requirements`` is empty and ``access_url`` is set, it names that page for
-            the release.
+            The error, which names the release, its effective access and each access page.
         """
         release = DatasetRef(dataset_id=dataset_id, version=self.version)
         requirements = self.requirements
@@ -122,9 +103,8 @@ class NotServed:
 class InstalledConnectors:
     """Every builder backend that an installed package registers under the ``timenet.builders`` group.
 
-    A connector builds only the version that its card declares, so this source answers with that
-    version. If no connector package is installed, it answers :class:`NotFound` to every request.
-    All instances are equal.
+    A connector builds only the version that its card declares, so this source finds only that
+    version. All instances are equal.
     """
 
     def __str__(self) -> str:
@@ -135,22 +115,18 @@ class InstalledConnectors:
     def resolve(self, dataset_id: str, version: str | None) -> Answer:
         """Say whether an installed connector builds the release.
 
-        If two packages claim the dataset, the first entry point wins, as it does for a build.
+        If two packages claim the dataset, the first entry point wins.
 
         Args:
             dataset_id: The dataset ID.
-            version: An exact version, such as ``"1.2.0"``, or ``None``, ``""`` or ``"latest"`` for the
-                latest version.
+            version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
 
         Returns:
-            ``Found`` with the version that the card declares, if ``version`` is the latest version or
-            that version. Else ``NotFound()``. For a dataset that no connector claims, the answer is
-            ``NotFound()``, whatever ``version`` is.
+            ``Found`` with the declared version if it matches ``version``, else ``NotFound()``.
 
         Raises:
             TimeNetInvalidCardError: If the card of the connector cannot be read.
-            TimeFValidationError: If ``version`` is not a valid version. This error is raised only when
-                a connector claims the dataset.
+            TimeFValidationError: If a connector claims the dataset and ``version`` is not valid.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend and by Version.parse
         card = builders.find_card(dataset_id)
         wanted = None if is_latest(version) else version
@@ -160,27 +136,18 @@ class InstalledConnectors:
 
 
 def resolve_release(sources: Sequence[ReleaseSource], dataset_id: str, version: str | None) -> Answer:
-    """Find the source that provides a release, by the three rules of this module.
+    """Find the source that provides a release.
 
-    For an exact version, the sources are asked in order until one of them answers :class:`Found`.
-    For "latest", every source is asked. The highest version of the :class:`Found` answers wins. A
-    source that answered :class:`NotServed` with a higher version is asked again for the winning
-    version, because it can still serve that version. Then the first source in order that provides
-    the winning version answers.
-
-    A source that answers "latest" with :class:`NotServed` hides the older versions that it serves,
-    because a registry cannot list the versions that it serves.
+    An exact version comes from the first source that provides it, and "latest" is the highest
+    version that any source provides. An error of a source stops the search.
 
     Args:
         sources: The sources, in order.
         dataset_id: The dataset ID.
-        version: An exact version, such as ``"1.2.0"``, or ``None``, ``""`` or ``"latest"`` for the
-            latest version.
+        version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
 
     Returns:
-        The :class:`Found` answer of the source that provides the release. If no source provides it,
-        the first :class:`NotServed` answer, so that the caller can name the access page. Else
-        :class:`NotFound`.
+        The ``Found`` answer, else the first ``NotServed`` answer, else ``NotFound()``.
     """
     version = None if is_latest(version) else version
     if version is not None:  # rule 1

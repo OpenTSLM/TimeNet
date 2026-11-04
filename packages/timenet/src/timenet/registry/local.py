@@ -128,17 +128,14 @@ class LocalRegistry(WritableRegistry):
         """Say whether this registry holds a release, and at which version.
 
         A local registry serves every release that it holds, whatever its access, so it never
-        answers ``NotServed``. It looks only for the committed manifest of the release, so an unknown
-        release does not read the manifests of the other datasets.
+        answers ``NotServed``.
 
         Args:
             dataset_id: The dataset ID.
-            version: An exact version, such as ``"1.2.0"``, or ``None``, ``""`` or ``"latest"`` for the
-                latest version.
+            version: An exact version, or ``None``, ``""`` or ``"latest"`` for the latest version.
 
         Returns:
-            ``Found`` with this registry if it holds a committed manifest of the release. Else
-            ``NotFound()``.
+            ``Found`` if the registry holds a committed release, else ``NotFound()``.
 
         Raises:
             TimeFValidationError: If ``dataset_id`` or ``version`` is not valid.
