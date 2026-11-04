@@ -506,7 +506,7 @@ class DuckDBControlWriter:
                 TimeFDataset._check_signal_refs(task, index)
                 # A task can change after add_task, so check its labels and its label set again.
                 task.check_targets()
-                task.claim_label_set(label_sets)
+                task.register_label_set(label_sets)
                 task_id = task.id
                 written[task_id] = task
                 task_type = str(task.task_type)

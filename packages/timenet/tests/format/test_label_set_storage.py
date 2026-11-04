@@ -248,6 +248,8 @@ def test_a_stream_rejects_targets_that_do_not_fit_the_label_set():
         ("UPDATE label_sets SET labels = [] WHERE name = 'stage'", "label_sets.labels"),
         ("UPDATE label_sets SET labels = [{'name': 'W'}, {'name': 'W'}] WHERE name = 'stage'", "label_sets.labels"),
         ("UPDATE label_sets SET labels = [{'name': 'W'}, {'name': ''}] WHERE name = 'stage'", "label_sets.labels"),
+        # A NULL name drops out of list_distinct, so the check for distinct names finds it.
+        ("UPDATE label_sets SET labels = [{'name': 'W'}, {'name': NULL}] WHERE name = 'stage'", "label_sets.labels"),
         ("UPDATE label_sets SET labels = [{'name': 'W', 'description': ''}] WHERE name = 'stage'", "label_sets.labels"),
         ("UPDATE tasks SET label_set = 'stage' WHERE task_type = 'answer'", "tasks.label_set"),
         ("UPDATE tasks SET label_set = 'missing' WHERE task_id = 1", "label_sets.name"),

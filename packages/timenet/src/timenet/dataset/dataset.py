@@ -518,7 +518,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         task.check_against_scope()
         self._check_task_answer(task)
         task.check_targets()
-        task.claim_label_set(label_sets)
+        task.register_label_set(label_sets)
         self._check_signal_refs(task, index)
         self._validate_task_spans(task, index)
         self._check_annotation_refs(task, self._referenced_records(task), index)
@@ -777,7 +777,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         dataset._tasks = list(tasks)
         for task in dataset._tasks:
             dataset._tasks_by_id[dataset._ids.claim(ObjectKind.TASK, task.id)] = task
-            task.claim_label_set(dataset._label_sets)
+            task.register_label_set(dataset._label_sets)
         dataset._annotations = list(annotations)
         dataset._schema = schema
         if import_state is not None:

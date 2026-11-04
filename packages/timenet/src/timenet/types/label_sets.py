@@ -93,7 +93,7 @@ class LabelSetRegistry:
         """Start with no label sets."""
         self._by_name: dict[str, LabelSet] = {}
 
-    def claim(self, label_set: LabelSet) -> LabelSet:
+    def register_or_reuse_matching_label_set(self, label_set: LabelSet) -> LabelSet:
         """Store a label set by name.
 
         If the registry already holds an equal set with this name, return that set.

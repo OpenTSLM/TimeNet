@@ -359,7 +359,7 @@ class Task(SupportsAnnotate):
     def check_targets(self) -> None:
         """Make sure that the final targets follow the rules of this task class."""
 
-    def claim_label_set(self, label_sets: LabelSetRegistry) -> None:
+    def register_label_set(self, label_sets: LabelSetRegistry) -> None:
         """Add the label set of the task to the dataset's label sets.
 
         Only a classification task has a label set.
@@ -428,7 +428,7 @@ class ClassificationTask(Task):
         except TimeFValidationError as exc:
             raise TimeFValidationError(f"{name}: {exc}") from exc
 
-    def claim_label_set(self, label_sets: LabelSetRegistry) -> None:
+    def register_label_set(self, label_sets: LabelSetRegistry) -> None:
         """Add the label set of the task to the dataset's label sets.
 
         Args:
@@ -440,7 +440,7 @@ class ClassificationTask(Task):
         if self.label_set is None:
             return
         try:
-            label_sets.claim(self.label_set)
+            label_sets.register_or_reuse_matching_label_set(self.label_set)
         except TimeFValidationError as exc:
             raise TimeFValidationError(f"ClassificationTask {self.id!r}: {exc}") from exc
 

@@ -109,7 +109,6 @@ _DOMAIN_CHECKS = f"""
     SELECT 'label_sets.labels' FROM label_sets
     WHERE len(labels) = 0
        OR len(list_distinct([label.name FOR label IN labels])) <> len(labels)
-       OR list_contains([label.name FOR label IN labels], NULL)
        OR list_contains([label.name FOR label IN labels], '')
        OR list_contains([label.description FOR label IN labels], '')
     UNION ALL
