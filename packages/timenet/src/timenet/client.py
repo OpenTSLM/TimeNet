@@ -1,9 +1,4 @@
-"""The :class:`TimeNet` class is the SDK's single entry point for using TimeNet from code.
-
-This class wraps a :class:`~timenet.registry.BaseRegistry` (the catalog) and a local storage path
-(the download cache). ``open`` and ``load`` read a release where it is, and a local client builds a
-release that only an installed connector provides.
-"""
+"""Browse, download, and read datasets with :class:`TimeNet`."""
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
 # ``list[str]`` resolved to the builtin type, not to the method.
@@ -315,17 +310,15 @@ class TimeNet:
     def _read_sources(
         self, *, auto_build: bool, fetch_from: str | BaseRegistry | None
     ) -> tuple[_Sources, LocalRegistry | None]:
-        """Return the sources of a read, in order, and the local registry that its builds go to.
+        """Return the ordered sources for a read and the local registry for builds.
 
-        TODO(adrian): Remove temporary glue which maps ``fetch_from`` and ``auto_build`` onto a
-        list of sources until the client takes the list itself. A remote client gets only its own
-        registry, and no local registry.
+        Remote reads use only the configured registry.
 
         Returns:
-            The sources, and the local registry, or ``None`` for a remote client.
+            The source list, and the local registry for builds or ``None`` for a remote client.
 
         Raises:
-            TimeFValidationError: If a remote client gets ``fetch_from``.
+            TimeFValidationError: If ``fetch_from`` is set for a remote registry.
         """
         registry = self._registry
         if not isinstance(registry, LocalRegistry):
@@ -344,14 +337,14 @@ class TimeNet:
         return sources, registry
 
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
-        """Check dataset access against the registry's requirements.
+        """Enforce the registry's open access requirement.
 
         Args:
             dataset_id: The dataset ID without a version suffix.
-            version: The version string, or ``None`` for the latest.
+            version: The resolved version, or ``None`` for the latest.
 
         Raises:
-            TimeNetAccessError: If the dataset or its lineage lacks open access and the registry requires it.
+            TimeNetAccessError: If the dataset lacks open access and the registry requires it.
         """
         if not self._registry.requires_open_access:
             return
@@ -400,19 +393,19 @@ class TimeNet:
 
 
 def _unhosted_hint(dataset_id: str) -> str:
-    """Tell a remote client how to get a dataset whose data its registry does not serve.
+    """Return instructions for building a dataset locally.
 
     Returns:
-        The hint as a full sentence.
+        A sentence with the dataset's build command.
     """
     return f"TimeNet does not host its data, so build it locally with `timenet-build build {dataset_id}`."
 
 
 def _missing_hint(*, auto_build: bool, fetch_from: str | BaseRegistry | None) -> str | None:
-    """Name the keywords of :meth:`TimeNet.open` that can get a missing release.
+    """Suggest options for reading or building a missing release.
 
     Returns:
-        The hint as a full sentence, or ``None`` if the call already used both keywords.
+        A sentence with unused options, or ``None`` if both options are already enabled.
     """
     ways = []
     if fetch_from is None:
