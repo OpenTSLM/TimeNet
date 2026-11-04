@@ -22,7 +22,7 @@ from timenet.errors import (
 )
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
-from timenet.testing import make_dataset
+from timenet.testing import install_backends, make_dataset
 from timenet.types import Access, Domain
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
@@ -48,6 +48,11 @@ def registry_root(tmp_path):
 def _downloads_size(cache):
     """Return the size of the raw downloads and the marker file in ``<cache>/downloads``."""
     return sum(path.stat().st_size for path in (cache / "downloads").rglob("*") if path.is_file())
+
+
+def _table_cells(output: str) -> list[list[str]]:
+    """Return the cells of each table row in ``output``, without the borders."""
+    return [[cell.strip() for cell in line.split("│")[1:-1]] for line in output.splitlines() if "│" in line]
 
 
 @pytest.fixture
@@ -158,6 +163,89 @@ def test_search_no_match(registry_root):
     assert click.unstyle(result.output) == "No datasets match.\n"
 
 
+class _Backend:
+    """A builder backend with one connector, whose card declares ``test/gated@1.0.0``."""
+
+    def dataset_ids(self):
+        return ["test/gated"]
+
+    def card(self, dataset_id):
+        return make_dataset().metadata.model_copy(
+            update={
+                "dataset_id": dataset_id,
+                "access": Access.CREDENTIALED,
+                "access_url": "https://gated.example",
+                "citation": "A citation.",
+            }
+        )
+
+
+def test_info_shows_the_card_of_a_dataset_that_only_a_connector_has(tmp_path, monkeypatch):
+    install_backends(monkeypatch, _Backend())
+    store = tmp_path / "store"
+    flags = ["--local-registry", str(store), "--remote-registry", str(tmp_path / "empty"), "--auto-build"]
+
+    result = runner.invoke(app, ["info", "test/gated", *flags])
+
+    assert result.exit_code == 0, result.output
+    cells = _table_cells(result.stdout)
+    card = _Backend().card("test/gated")
+    assert cells == [
+        ["version", "1.0.0"],
+        ["name", card.name],
+        ["license", str(card.license)],
+        ["access", "credentialed"],
+        ["access_urls", "test/gated@1.0.0 (credentialed): https://gated.example"],
+        ["citation", "A citation."],
+        ["domains", "general"],
+    ]
+    assert result.stdout.splitlines()[-1] == (
+        "The schema and the counts appear after a build: "
+        f"`timenet-build build test/gated --local-registry {store} --remote-registry {tmp_path / 'empty'}`."
+    )
+    # The command reads the card and builds nothing.
+    assert not store.exists()
+
+
+def test_info_of_an_unbuilt_child_says_that_its_access_leaves_out_its_parents(tmp_path, monkeypatch):
+    class _Child(_Backend):
+        def dataset_ids(self):
+            return ["test/child"]
+
+        def card(self, dataset_id):
+            parents = {"a": "test/a@1.0.0", "b": "test/b@1.0.0"}
+            return make_dataset(dataset_id=dataset_id, parents=parents).metadata
+
+    install_backends(monkeypatch, _Child())
+    # The access row is long, so the console must not wrap it.
+    monkeypatch.setattr(_cli_module, "console", Console(width=1000))
+    flags = ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(tmp_path / "empty"), "--auto-build"]
+
+    result = runner.invoke(app, ["info", "test/child", *flags])
+
+    assert result.exit_code == 0, result.output
+    access = "open (this card only: the access of its 2 parents is known after a build)"
+    assert ["access", access] in _table_cells(click.unstyle(result.stdout))
+
+
+def test_info_of_a_dataset_that_only_a_connector_has_reads_its_card_once(tmp_path, monkeypatch):
+    reads = []
+
+    class _Counting(_Backend):
+        def card(self, dataset_id):
+            reads.append(dataset_id)
+            return super().card(dataset_id)
+
+    install_backends(monkeypatch, _Counting())
+    flags = ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(tmp_path / "empty"), "--auto-build"]
+
+    result = runner.invoke(app, ["info", "test/gated", *flags])
+
+    assert result.exit_code == 0, result.output
+    # Each resolution of the release reads the card, so one read means one resolution.
+    assert reads == ["test/gated"]
+
+
 def _write(root, dataset):
     with TimeFWriter(root, dataset) as writer:
         writer.write()
@@ -192,11 +280,10 @@ def test_info_lists_the_access_page_of_each_release_that_sets_one(tmp_path):
             child.import_from(reader)
     _write(root, child)
 
-    result = runner.invoke(app, ["info", "test/child", "--remote-registry", str(root)])
+    result = runner.invoke(app, ["info", "test/child", "--remote-registry", str(root), "--no-auto-build"])
 
     assert result.exit_code == 0, result.output
-    lines = click.unstyle(result.output).splitlines()
-    cells = [[cell.strip() for cell in line.split("│")[1:-1]] for line in lines if "│" in line]
+    cells = _table_cells(click.unstyle(result.output))
     start = cells.index(["access", "credentialed"])
     # The card of the child stays open. Its effective level comes from its parents, and each parent
     # names its own page.
@@ -205,6 +292,7 @@ def test_info_lists_the_access_page_of_each_release_that_sets_one(tmp_path):
         ["", "test/b@1.0.0 (credentialed): https://b.example"],
     ]
     assert cells[start + 3][0] == "domains"
+    assert ["records", str(len(child.records))] in cells
 
 
 def test_download_command_copies_into_the_store_and_then_has_nothing_to_do(registry_root, tmp_path, monkeypatch):
