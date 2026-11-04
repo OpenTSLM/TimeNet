@@ -112,7 +112,7 @@ def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tm
         def exists(self, dataset_id: str, version: str) -> bool:
             return False
 
-        def store(self, dataset, *, force: bool, values_backend: str, progress_cb) -> None:
+        def put_dataset(self, dataset, *, force: bool, values_backend: str, progress_cb) -> None:
             self.values_backend = values_backend
 
     class _ZarrConnector(_DemoConnector):
@@ -243,7 +243,7 @@ def _store_credentialed_parent(root: Path) -> None:
     parent._metadata = parent.metadata.model_copy(
         update={"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
     )
-    LocalRegistry(root).store(parent)
+    LocalRegistry(root).put_dataset(parent)
 
 
 class _ChildConnector(BaseConnector[str]):
@@ -350,7 +350,7 @@ def test_a_dataset_with_another_card_than_the_engine_read_fails_and_stores_no_re
     tmp_path, pipeline, connector, differ
 ):
     root = tmp_path / "root"
-    LocalRegistry(root).store(make_dataset())
+    LocalRegistry(root).put_dataset(make_dataset())
     before = sorted(root.rglob("*"))
     with pytest.raises(
         TimeFValidationError,
@@ -371,7 +371,7 @@ def test_run_pipeline_fails_on_a_missing_parent_before_downloading(tmp_path, mon
 
 
 def test_open_parents_closes_the_parents_it_opened_when_a_later_one_is_missing(tmp_path, monkeypatch):
-    LocalRegistry(tmp_path).store(make_dataset())
+    LocalRegistry(tmp_path).put_dataset(make_dataset())
     missing = DatasetRef.parse("test/missing@1.0.0")
     metadata = (
         _ChildConnector()
@@ -397,7 +397,7 @@ def test_a_parent_reader_that_fails_to_close_does_not_keep_the_other_open(tmp_pa
     second = make_dataset()
     second._metadata = second.metadata.model_copy(update={"dataset_id": "test/second"})
     for dataset in (make_dataset(), second):
-        LocalRegistry(tmp_path).store(dataset)
+        LocalRegistry(tmp_path).put_dataset(dataset)
     parents = {ParentAlias("parent"): _PARENT, ParentAlias("second"): DatasetRef.parse("test/second@1.0.0")}
     context = open_parents(
         _ChildConnector().metadata().model_copy(update={"parents": parents}), LocalRegistry(tmp_path)
@@ -426,7 +426,7 @@ def test_a_build_context_made_directly_closes_its_parent_readers(tmp_path, monke
     second._metadata = second.metadata.model_copy(update={"dataset_id": "test/second"})
     registry = LocalRegistry(tmp_path)
     for dataset in (make_dataset(), second):
-        registry.store(dataset)
+        registry.put_dataset(dataset)
     readers = {
         ParentAlias("parent"): TimeFReader(registry.open_version(_PARENT.dataset_id, str(_PARENT.version))),
         ParentAlias("second"): TimeFReader(registry.open_version("test/second", "1.0.0")),
@@ -492,7 +492,7 @@ class _HostedRegistry:
     def open_version(self, dataset_id, version=None):
         return self.local.open_version(dataset_id, version)
 
-    def store(self, dataset, **kwargs):
+    def put_dataset(self, dataset, **kwargs):
         pytest.fail("wrote a child whose parent is credentialed")
 
 

@@ -1,7 +1,7 @@
 """One contract, three backends. Every writable registry must behave the same way from a caller's seat.
 
 The ``registry`` fixture parametrizes over ``local``, ``s3``, and ``remote``. Each yields the same two
-datasets, published by calling ``store``, so a single test body runs against all three. Transport-specific
+datasets, published by calling ``put_dataset``, so a single test body runs against all three. Transport-specific
 behaviour (S3 key prefixes, remote 429/auth/presign, factory dispatch) stays in the per-backend files;
 this file only asserts the shared read/write contract.
 """
@@ -102,7 +102,7 @@ def _s3_registry(request, tmp_path, monkeypatch) -> S3Registry:
 
 @pytest.fixture(params=["local", "s3", "remote"])
 def backend(request, tmp_path, monkeypatch) -> Backend:
-    """A writable registry of the requested kind, seeded via ``store``.
+    """A writable registry of the requested kind, seeded via ``put_dataset``.
 
     Holds timenet/hello-world at 1.0.0 and 1.1.0 (so latest-resolution has a real choice) plus a
     second dataset demo/other, so listing has more than one id to sort.
@@ -123,7 +123,7 @@ def backend(request, tmp_path, monkeypatch) -> Backend:
     newer = make_dataset()
     newer._metadata = newer.metadata.model_copy(update={"dataset_version": Version(1, 1, 0)})
     for dataset in (make_dataset(), newer, _second_dataset()):
-        registry.store(dataset)
+        registry.put_dataset(dataset)
     return Backend(registry=registry, supports_listing=supports_listing)
 
 
@@ -190,16 +190,16 @@ def test_exists_false_for_unknown_version(backend):
     assert not backend.registry.exists("timenet/hello-world", "9.9.9")
 
 
-# ---- store ------------------------------------------------------------------------------------
+# ---- put_dataset ------------------------------------------------------------------------------
 
 
-def test_store_is_idempotent(backend):
-    # The version is already committed by the fixture; a second store must skip, not raise.
-    assert backend.registry.store(make_dataset()) == "1.0.0"
+def test_put_dataset_is_idempotent(backend):
+    # The version is already committed by the fixture; a second put_dataset() call must skip, not raise.
+    assert backend.registry.put_dataset(make_dataset()) == "1.0.0"
 
 
-def test_store_force_republishes(backend):
-    assert backend.registry.store(make_dataset(), force=True) == "1.0.0"
+def test_put_dataset_force_republishes(backend):
+    assert backend.registry.put_dataset(make_dataset(), force=True) == "1.0.0"
 
 
 def _local_release(tmp_path):
@@ -207,7 +207,7 @@ def _local_release(tmp_path):
     source = LocalRegistry(tmp_path / "src")
     dataset = make_dataset()
     dataset._metadata = dataset.metadata.model_copy(update={"dataset_version": Version(2, 0, 0)})
-    source.store(dataset)
+    source.put_dataset(dataset)
     return source.root / "timenet/hello-world/2.0.0", source.get_manifest("timenet/hello-world", "2.0.0")
 
 

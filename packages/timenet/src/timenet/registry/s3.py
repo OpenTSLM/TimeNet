@@ -6,7 +6,7 @@ the key prefix differs from a :class:`~timenet.registry.LocalRegistry`. Credenti
 optional endpoint override come from boto3's default session (``AWS_*`` vars, ``AWS_PROFILE``,
 ``AWS_ENDPOINT_URL``). Opening a version reads its payload sources' manifests upfront and reads remote
 payloads on demand. Complete cached releases are reused. The backend has no catalog, so listing and
-search are unsupported. Use it to ``store`` and to fetch by an explicit ``org/name@version``.
+search are unsupported. Use it to ``put_dataset`` and to fetch by an explicit ``org/name@version``.
 
 boto3 is optional. Install the ``timenet[s3]`` extra to use this backend.
 """
@@ -150,7 +150,7 @@ class S3Registry(LazyReadRegistry):
         root = f"{self._bucket}/{self._key(reference.dataset_id, str(reference.version))}"
         return DatasetVersion(manifest, self._s3_filesystem(), root)
 
-    def store(
+    def put_dataset(
         self,
         dataset: TimeFDataset,
         *,
@@ -200,10 +200,10 @@ class S3Registry(LazyReadRegistry):
             shutil.rmtree(staging, ignore_errors=True)
         return version
 
-    def put_release(self, directory: Path, manifest: Manifest) -> None:
+    def put_release(self, from_directory: Path, manifest: Manifest) -> None:
         """Upload a complete local release directory under this registry's prefix.
 
-        Before it uploads anything, this method makes sure that ``directory`` holds a ``manifest.json``
+        Before it uploads anything, this method makes sure that ``from_directory`` holds a ``manifest.json``
         equal to ``manifest`` and every file that the manifest declares, with its recorded size. It
         uploads only those files and ``manifest.json`` to a temporary ``<version>.tmp-<uuid>`` prefix
         first. Then it moves each object into the final ``<version>/`` prefix with a server-side copy,
@@ -211,15 +211,16 @@ class S3Registry(LazyReadRegistry):
         partial version a reader can trust.
 
         Args:
-            directory: The local release directory, with ``manifest.json`` and every declared file.
+            from_directory: The local release directory to read from, with ``manifest.json`` and
+                every declared file. This method does not change it.
             manifest: The manifest of the release.
 
         Raises:
-            TimeNetFileError: If ``manifest.json`` is missing from ``directory`` or differs from
+            TimeNetFileError: If ``manifest.json`` is missing from ``from_directory`` or differs from
                 ``manifest``, or a declared file is missing or has another size than recorded.
                 Nothing is uploaded then.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the check this method calls
-        self._check_release_files(directory, manifest)
+        self._check_release_files(from_directory, manifest)
         client = self._client()
         final_base = self._key(manifest.dataset_id, str(manifest.metadata.dataset_version))
         temp_base = f"{final_base}.tmp-{uuid.uuid4().hex}"
@@ -227,7 +228,7 @@ class S3Registry(LazyReadRegistry):
             self._delete_prefix(client, f"{final_base}.tmp-")  # sweep a prior crashed publish's temp prefix
             data_relpaths = sorted({part.path for part in manifest.files.all_files()})
             for relpath in (*data_relpaths, MANIFEST_FILE):
-                client.upload_file(str(directory / relpath), self._bucket, f"{temp_base}/{relpath}")
+                client.upload_file(str(from_directory / relpath), self._bucket, f"{temp_base}/{relpath}")
             for relpath in data_relpaths:
                 self._move(client, f"{temp_base}/{relpath}", f"{final_base}/{relpath}")
             self._move(client, f"{temp_base}/{MANIFEST_FILE}", f"{final_base}/{MANIFEST_FILE}")

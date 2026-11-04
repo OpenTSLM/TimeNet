@@ -120,7 +120,7 @@ def test_plan_uses_fetches_or_builds_each_parent_once_before_its_children(tmp_pa
     _install_cards(monkeypatch, child={"parent": PARENT, "grand": GRAND}, parent={"grand": GRAND})
     registries = {name: LocalRegistry(tmp_path / name) for name in ("output", "origin")}
     if grand_in in registries:
-        registries[grand_in].store(make_dataset())
+        registries[grand_in].put_dataset(make_dataset())
 
     steps = plan_parents(CHILD.dataset_id, registries["output"], fetch_from=registries["origin"], build_parents=True)
 
@@ -182,7 +182,7 @@ def _child_of(registry: LocalRegistry, reference: DatasetRef, parent: DatasetRef
             np.arange(16, dtype=np.float32), spec=_SPEC, name="own", time_axis=RegularAxis.from_rate_hz(16)
         )
         child.add_record(record=Record(sources=(Source(name="own", signals=(own,)),)))
-        registry.store(child)
+        registry.put_dataset(child)
 
 
 def _declared_without_its_sources_source(registry: LocalRegistry) -> None:
@@ -190,7 +190,7 @@ def _declared_without_its_sources_source(registry: LocalRegistry) -> None:
 
     DECLARED's payload sources are SOURCE alone; SOURCE's are GRAND. GRAND is removed afterwards.
     """
-    registry.store(make_dataset())
+    registry.put_dataset(make_dataset())
     _child_of(registry, SOURCE, GRAND, make_dataset().records[0].id)
     # SOURCE's own Record, which holds values it stores itself, takes the second Record ID.
     _child_of(registry, DECLARED, SOURCE, 2)
@@ -279,7 +279,7 @@ class _Grand(BaseConnector[str]):
 
 def _parent_without_its_source(output: LocalRegistry) -> None:
     """Store GRAND and PARENT, which reads a GRAND Record, then remove GRAND."""
-    output.store(make_dataset())
+    output.put_dataset(make_dataset())
     _child_of(output, PARENT, GRAND, make_dataset().records[0].id)
     shutil.rmtree(release_dir(output.root, GRAND))
 
@@ -326,7 +326,7 @@ def test_a_payload_source_that_two_releases_read_is_built_against_the_pins_of_bo
     sibling = DatasetRef.parse("test/sibling@1.0.0")
     _install_cards(monkeypatch, child={"parent": PARENT, "sibling": sibling})
     output = LocalRegistry(tmp_path / "output")
-    output.store(make_dataset())
+    output.put_dataset(make_dataset())
     # PARENT and the sibling each read another Record of GRAND, so their pins differ.
     _child_of(output, PARENT, GRAND, make_dataset().records[0].id)
     _child_of(output, sibling, GRAND, make_dataset().records[1].id)
@@ -357,7 +357,7 @@ def test_a_built_release_needs_only_its_payload_sources(tmp_path, monkeypatch):
     assert plan_parents(PARENT.dataset_id, output, build_parents=True, force_build=True) == [ParentStep(GRAND, "build")]
     # A registry that holds the source fills the gap: the local PARENT is reused and GRAND is copied.
     origin = LocalRegistry(tmp_path / "origin")
-    origin.store(make_dataset())
+    origin.put_dataset(make_dataset())
     assert plan_parents(PARENT.dataset_id, output, fetch_from=origin) == [ParentStep(PARENT, "fetch")]
     prepare_parents(PARENT.dataset_id, output, build=_no_build, fetch_from=origin)
     assert output.exists(GRAND.dataset_id, str(GRAND.version))
@@ -367,7 +367,7 @@ def test_a_damaged_parent_is_fetched_again_but_never_built_over(tmp_path, monkey
     _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
     output, origin = LocalRegistry(tmp_path / "output"), LocalRegistry(tmp_path / "origin")
     for registry in (output, origin):
-        registry.store(TimeFDataset(metadata=_cards(parent={})[PARENT.dataset_id]))
+        registry.put_dataset(TimeFDataset(metadata=_cards(parent={})[PARENT.dataset_id]))
     (release_dir(output.root, PARENT) / "control.duckdb").write_bytes(b"cut short")
 
     with pytest.raises(TimeNetFileError, match=r"'control\.duckdb' has 9 bytes, expected [\d,]+ bytes\.$") as caught:
@@ -401,11 +401,11 @@ class _Hosted(WritableRegistry):
     def open_version(self, dataset_id, version=None):
         return self._local.open_version(dataset_id, version)
 
-    def store(self, dataset, **options):
-        return self._local.store(dataset, **options)
+    def put_dataset(self, dataset, **options):
+        return self._local.put_dataset(dataset, **options)
 
-    def put_release(self, directory, manifest):
-        self._local.put_release(directory, manifest)
+    def put_release(self, from_directory, manifest):
+        self._local.put_release(from_directory, manifest)
 
 
 _GATED = {"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
@@ -418,7 +418,7 @@ def test_a_remote_output_refuses_a_plan_that_visits_a_release_that_is_not_open(t
     cards[gated_ref.dataset_id] = cards[gated_ref.dataset_id].model_copy(update=_GATED)
     output = _Hosted(tmp_path / "hosted")
     if gated == "held-parent":
-        output.store(TimeFDataset(metadata=cards[PARENT.dataset_id]))
+        output.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))
 
     with pytest.raises(TimeNetAccessError) as caught:
         plan_parents(CHILD.dataset_id, output, build_parents=True)
@@ -435,7 +435,7 @@ def test_a_remote_output_names_the_access_page_of_a_held_parent_from_its_lineage
     held = TimeFDataset(metadata=cards[PARENT.dataset_id])
     grand = make_dataset().metadata.model_copy(update=_GATED)
     held._import_state.lineage[str(GRAND)] = ParentDatasetCard(metadata=grand)
-    output.store(held)
+    output.put_dataset(held)
 
     with pytest.raises(TimeNetAccessError) as caught:
         plan_parents(CHILD.dataset_id, output, build_parents=True)
@@ -461,7 +461,7 @@ def _isolated_builds(calls: list) -> object:
             dataset._metadata = metadata
             for handle in context.parents.values():
                 dataset.import_from(handle, records=[make_dataset().records[0].id])
-            registry.store(dataset, force=force)
+            registry.put_dataset(dataset, force=force)
         return str(registry.root / dataset_id / str(metadata.dataset_version))
 
     return run_isolated
@@ -472,7 +472,7 @@ def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch)
     monkeypatch.setattr(cli_module, "connector_dir", lambda dataset_id: tmp_path)
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     origin = LocalRegistry(tmp_path / "origin")
-    origin.store(make_dataset())
+    origin.put_dataset(make_dataset())
     out = tmp_path / "out"
     calls = []
     monkeypatch.setattr(cli_module, "run_isolated", _isolated_builds(calls))
@@ -493,7 +493,7 @@ def test_a_built_version_starts_no_isolated_child(tmp_path, monkeypatch):
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(env_module.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("started a subprocess"))
     out = LocalRegistry(tmp_path / "out")
-    out.store(make_dataset())
+    out.put_dataset(make_dataset())
 
     assert cli_module.build_one(GRAND.dataset_id, out.root) == str(release_dir(out.root, GRAND))
 
@@ -519,7 +519,7 @@ def test_every_build_entry_point_prepares_parents(tmp_path, monkeypatch, entry):
     origin = LocalRegistry(tmp_path / "origin")
     parent = make_dataset()
     parent._metadata = cards[PARENT.dataset_id]
-    origin.store(parent)
+    origin.put_dataset(parent)
     build(CHILD.dataset_id, fetch_from=origin, **{"out" if entry == "api" else "root": out})
     assert calls == [(CHILD.dataset_id, False)]
     assert LocalRegistry(out).exists(PARENT.dataset_id, str(PARENT.version))
@@ -536,7 +536,7 @@ def test_load_obtains_a_missing_parent_before_it_builds_and_reads(tmp_path, monk
     origin = LocalRegistry(tmp_path / "origin")
     parent = make_dataset()
     parent._metadata = cards[PARENT.dataset_id]
-    origin.store(parent)
+    origin.put_dataset(parent)
 
     with pytest.raises(TimeNetMissingParentError, match=r"^parent release test/parent@1\.0\.0 of test/child"):
         timenet_connectors.load(CHILD.dataset_id)
@@ -556,7 +556,7 @@ def test_load_copies_a_missing_payload_source_through_fetch_from(tmp_path, monke
     out = LocalRegistry(tmp_path / "out")
     _parent_without_its_source(out)
     origin = LocalRegistry(tmp_path / "origin")
-    origin.store(make_dataset())
+    origin.put_dataset(make_dataset())
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("TIMENET_REGISTRY", str(out.root))
     # The build has nothing to do, and no builder backend can build the payload source, so only the
@@ -582,7 +582,7 @@ def test_a_fetch_of_a_release_that_is_not_open_fails_before_any_download(tmp_pat
     cards = _install_cards(monkeypatch, child={"grand": GRAND, "parent": PARENT}, parent={})
     origin = _NoDownloads(tmp_path / "origin")
     # GRAND is open and would be fetched first.
-    origin.store(make_dataset())
+    origin.put_dataset(make_dataset())
     ancestor = DatasetRef.parse("test/ancestor@1.0.0")
     if page == "own":
         parent, requirement = TimeFDataset(metadata=cards[PARENT.dataset_id].model_copy(update=_GATED)), PARENT
@@ -592,7 +592,7 @@ def test_a_fetch_of_a_release_that_is_not_open_fails_before_any_download(tmp_pat
         card = make_dataset().metadata.model_copy(update={"dataset_id": ancestor.dataset_id, **_GATED})
         parent._import_state.lineage[str(ancestor)] = ParentDatasetCard(metadata=card)
         requirement = ancestor
-    origin.store(parent)
+    origin.put_dataset(parent)
     output = LocalRegistry(tmp_path / "out")
 
     with pytest.raises(TimeNetAccessError) as caught:
@@ -613,7 +613,7 @@ def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, mo
     def run_pipeline(connector, root, *, pinned_by=None, **_):
         received.append(pinned_by)
         if pinned_by:
-            output.store(make_dataset())
+            output.put_dataset(make_dataset())
         return Path(root)
 
     def child(command, env):
@@ -661,7 +661,7 @@ def test_a_parent_that_another_backend_claims_builds_there_with_its_pins(tmp_pat
     output = LocalRegistry(tmp_path / "output")
     stored = make_dataset()
     stored._metadata = stored.metadata.model_copy(update={"dataset_id": STORED.dataset_id})
-    output.store(stored)
+    output.put_dataset(stored)
     _child_of(output, PARENT, STORED, make_dataset().records[0].id)
     pins = output.get_manifest(PARENT.dataset_id).payload_sources[SourceKey(str(STORED))]
     saved = tmp_path / "saved"
@@ -699,7 +699,7 @@ class _OwnBuild(_InRepoCards):
         self.calls.append((dataset_id, options))
         dataset = make_dataset()
         dataset._metadata = self.cards[dataset_id]
-        LocalRegistry(root).store(dataset)
+        LocalRegistry(root).put_dataset(dataset)
         return release_dir(root, DatasetRef.parse(f"{dataset_id}@{dataset.metadata.dataset_version}"))
 
 
@@ -761,7 +761,7 @@ def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
     monkeypatch.setattr(cli_module, "connector_dir", lambda dataset_id: tmp_path)
     out = LocalRegistry(tmp_path / "out")
     if case == "damaged":
-        out.store(TimeFDataset(metadata=cards[PARENT.dataset_id]))
+        out.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))
         (release_dir(out.root, PARENT) / "control.duckdb").write_bytes(b"cut short")
     if case == "not-open":
         cards[CHILD.dataset_id] = cards[CHILD.dataset_id].model_copy(update=_GATED)

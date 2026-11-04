@@ -375,20 +375,20 @@ def test_small_signal_read_fetches_ranges_and_keeps_registry_token_private(tmp_p
             assert len(server.responses) == transferred
 
 
-def test_store_publishes_uploads_and_finalizes(tmp_path):
+def test_put_dataset_publishes_uploads_and_finalizes(tmp_path):
     transport, state = build_publish_fake(token="tok_rw")
     registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path)
     dataset = make_dataset()
-    version = registry.store(dataset)
+    version = registry.put_dataset(dataset)
     assert version == str(dataset.metadata.dataset_version)
     assert state["finalized"] is True
     # every declared file was uploaded
     assert set(state["store"]) == set(state["published"])
 
 
-def test_store_refuses_a_payload_source_the_service_does_not_hold_before_publishing(tmp_path):
+def test_put_dataset_refuses_a_payload_source_the_service_does_not_hold_before_publishing(tmp_path):
     local = LocalRegistry(tmp_path / "local")
-    local.store(make_dataset())
+    local.put_dataset(make_dataset())
     transport, state = build_publish_fake(token="tok_rw")
     registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path / "cache")
     with TimeFReader(local.open_version(make_dataset().metadata.dataset_id)) as reader:
@@ -403,16 +403,16 @@ def test_store_refuses_a_payload_source_the_service_does_not_hold_before_publish
         with pytest.raises(
             TimeNetDatasetNotFoundError, match=r"of test/child@1\.0\.0 is not in registry http://api\.local"
         ):
-            registry.store(child)
+            registry.put_dataset(child)
     assert state["manifest"] is None
     assert not state["store"]
 
 
-def test_store_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path):
+def test_put_dataset_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path):
     import httpx  # ruff: ignore[import-outside-top-level]
 
     def handler(request):
-        # The service omits every declared file from its upload list. store() must reject that before
+        # The service omits every declared file from its upload list. put_dataset() must reject that before
         # uploading, rather than publish an incomplete version.
         if request.url.path.endswith("/publish"):
             return httpx.Response(200, json={"files": []})
@@ -422,10 +422,10 @@ def test_store_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path):
         "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
     )
     with pytest.raises(TimeNetRegistryError, match="disagrees with the manifest"):
-        registry.store(make_dataset(), force=True)
+        registry.put_dataset(make_dataset(), force=True)
 
 
-def test_store_rejects_unsafe_publish_paths(tmp_path):
+def test_put_dataset_rejects_unsafe_publish_paths(tmp_path):
     def handler(request):
         if request.url.path.endswith("/publish"):
             return httpx.Response(200, json={"files": ["../escape"]})
@@ -435,10 +435,10 @@ def test_store_rejects_unsafe_publish_paths(tmp_path):
         "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
     )
     with pytest.raises(ValidationError, match="stay within the dataset root"):
-        registry.store(make_dataset(), force=True)
+        registry.put_dataset(make_dataset(), force=True)
 
 
-def test_store_rejects_malformed_upload_grant(tmp_path):
+def test_put_dataset_rejects_malformed_upload_grant(tmp_path):
     def handler(request):
         if request.url.path.endswith("/publish"):
             manifest = json.loads(request.content)
@@ -452,7 +452,7 @@ def test_store_rejects_malformed_upload_grant(tmp_path):
         "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
     )
     with pytest.raises(ValidationError, match="headers"):
-        registry.store(make_dataset(), force=True)
+        registry.put_dataset(make_dataset(), force=True)
 
 
 def test_latest_detail_rejects_non_string_version(tmp_path):
@@ -473,11 +473,11 @@ def test_remote_registry_uses_client_storage_path(tmp_path):
     assert client._registry._cache_dir == client._storage == tmp_path / "store"
 
 
-def test_store_without_write_token_is_rejected(tmp_path):
+def test_put_dataset_without_write_token_is_rejected(tmp_path):
     transport, _ = build_publish_fake(token="tok_rw")
     registry = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path)  # anonymous
     with pytest.raises(TimeNetRegistryError):
-        registry.store(make_dataset())
+        registry.put_dataset(make_dataset())
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -487,7 +487,7 @@ def test_child_streams_physical_sources_and_downloads_for_offline_reads(tmp_path
     parent = make_dataset()
     build_only = parent.metadata.model_copy(update={"dataset_id": "test/build-only"})
     parent._import_state.parent_cards[ParentAlias("build-only")] = ParentDatasetCard(metadata=build_only)
-    local.store(parent, values_backend=backend)
+    local.put_dataset(parent, values_backend=backend)
     parent_id = parent.metadata.dataset_id
     with TimeFReader(local.open_version(parent_id, "1.0.0")) as reader:
         reference = DatasetRef(dataset_id=parent_id, version=parent.metadata.dataset_version)
@@ -499,7 +499,7 @@ def test_child_streams_physical_sources_and_downloads_for_offline_reads(tmp_path
         imported = child.import_from(reader, alias=ParentAlias("parent"), records=[parent.records[0].id])
         expected = parent.records[0].signals[0].to_arrow()
         signal_id = imported.records[parent.records[0].id].signals[0].id
-        local.store(child)
+        local.put_dataset(child)
     requests = []
 
     def handler(request):

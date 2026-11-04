@@ -160,7 +160,7 @@ class RemoteRegistry(LazyReadRegistry):
             self._http, manifest, dataset_id, version, Path(dest_dir), force=force, progress_cb=progress_cb
         )
 
-    def store(
+    def put_dataset(
         self,
         dataset: TimeFDataset,
         *,
@@ -213,29 +213,30 @@ class RemoteRegistry(LazyReadRegistry):
             shutil.rmtree(staging_root, ignore_errors=True)
         return version
 
-    def put_release(self, directory: Path, manifest: Manifest) -> None:
+    def put_release(self, from_directory: Path, manifest: Manifest) -> None:
         """Publish a complete local release directory through the service publish flow.
 
-        Before it publishes anything, this method makes sure that ``directory`` holds a
+        Before it publishes anything, this method makes sure that ``from_directory`` holds a
         ``manifest.json`` equal to ``manifest`` and every file that the manifest declares, with its
         recorded size. Then it POSTs the manifest, PUTs each file that the service requests to its
         presigned URL, and finalizes.
 
         Args:
-            directory: The local release directory, with ``manifest.json`` and every declared file.
+            from_directory: The local release directory to read from, with ``manifest.json`` and
+                every declared file. This method does not change it.
             manifest: The manifest of the release.
 
         Raises:
-            TimeNetFileError: If ``manifest.json`` is missing from ``directory`` or differs from
+            TimeNetFileError: If ``manifest.json`` is missing from ``from_directory`` or differs from
                 ``manifest``, or a declared file is missing or has another size than recorded.
                 Nothing is published then.
-            TimeNetRegistryError: If the service requests a file that is not in ``directory``, or does
+            TimeNetRegistryError: If the service requests a file that is not in ``from_directory``, or does
                 not request a declared file.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the check this method calls
-        self._check_release_files(directory, manifest)
+        self._check_release_files(from_directory, manifest)
         dataset_id = manifest.dataset_id
         version = str(manifest.metadata.dataset_version)
-        manifest_bytes = (directory / MANIFEST_FILE).read_bytes()
+        manifest_bytes = (from_directory / MANIFEST_FILE).read_bytes()
         declared = {part.path for part in manifest.files.all_files()}
         publish_endpoint = f"/datasets/{dataset_id}/{version}/publish"
         publish = PublishResponseModel.model_validate_json(
@@ -246,14 +247,14 @@ class RemoteRegistry(LazyReadRegistry):
         # the service omits would publish an incomplete version; a requested file we did not produce is
         # not ours to upload. Both fail loudly here instead of partway through the upload.
         unrequested = sorted(declared - set(files))
-        missing = [relpath for relpath in files if not (directory / relpath).is_file()]
+        missing = [relpath for relpath in files if not (from_directory / relpath).is_file()]
         if unrequested or missing:
             raise TimeNetRegistryError(
                 f"publish for {dataset_id}@{version} disagrees with the manifest: "
                 f"service did not request {unrequested}, requested files not produced locally {missing}"
             )
         for relpath in files:
-            self._upload_file(dataset_id, version, directory, relpath)
+            self._upload_file(dataset_id, version, from_directory, relpath)
         self._http.post(f"/datasets/{dataset_id}/{version}/finalize")
 
     def _upload_file(self, dataset_id: str, version: str, version_dir: Path, relpath: str) -> None:

@@ -62,7 +62,7 @@ def open_registry(uri: str | Path, *, cache_dir: str | Path | None = None) -> Ba
 
 
 def open_writable_registry(uri: str | Path) -> WritableRegistry:
-    """Open a registry that supports :meth:`~WritableRegistry.store`, for build to publish into.
+    """Open a registry that supports :meth:`~WritableRegistry.put_dataset`, for build to publish into.
 
     Args:
         uri: A URL, ``timenet://`` / ``s3://`` / ``file://`` URI, or local path.
