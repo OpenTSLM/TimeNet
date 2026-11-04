@@ -184,11 +184,10 @@ its own `occurrence_id` and temporal placement.
 Python subclass. Four typed columns store the scope: `scope_type`, `scope_start`, `scope_end`, and
 `scope_signal_ids`.
 
-Configuration for each task type uses the columns `target_schema`,
-`label_set`, `unit`, `target_name`, and `mode`. Each of these columns can contain `NULL`.
-SQL can filter these columns without parsing JSON.
+Configuration for each task type uses the columns `label_set`, `unit`, `target_name`, and `mode`.
+A column that a task type does not use is `NULL`. SQL can filter these columns without parsing JSON.
 
-If a classification task has a label set, `tasks.label_set` stores its name. Each row in
+Every classification task has a label set, and `tasks.label_set` stores its name. Each row in
 `label_sets` stores one set with the fields `name`, `labels`, and `multi_label`. The name is unique
 within a release.
 

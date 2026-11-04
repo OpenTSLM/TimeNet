@@ -16,6 +16,8 @@ from timenet.types import (
     Annotation,
     ClassificationTask,
     DatasetMetadata,
+    Label,
+    LabelSet,
     License,
     TimeSeriesSpec,
     Version,
@@ -24,6 +26,15 @@ from timenet.types import (
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
+
+
+CLASSES = LabelSet(
+    name="classes",
+    labels=(
+        Label(name="c0"),
+        Label(name="c1"),
+    ),
+)
 
 
 # Small enough that a modest dataset shards every artifact type into several parts, tiny on disk.
@@ -62,7 +73,7 @@ def _sharded_dataset(n_records: int, series_len: int) -> TimeFDataset:
         )
         record.annotate(Annotation(key="subject_ids", value=[f"subj-{i}"]))
         record.annotate(Annotation(key="label", value=f"cls-{i % 3}"))
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=(f"c{i % 2}",)))
+        dataset.add_task(task=ClassificationTask(label_set=CLASSES, inputs=(record,), targets=(f"c{i % 2}",)))
     return dataset
 
 

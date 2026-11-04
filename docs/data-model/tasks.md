@@ -81,9 +81,13 @@ A dataset that ships a partition marks each Task with its `split`. Records carry
 own: one Record may serve Tasks of several splits.
 
 ```python
-from timenet.types import ClassificationTask, Split
+from timenet.types import ClassificationTask, Label, LabelSet, Split
 
-dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("walking",), split=Split.TRAIN))
+ACTIVITY = LabelSet(name="activity", labels=(Label(name="walking"), Label(name="sitting")))
+
+dataset.add_task(
+    task=ClassificationTask(inputs=(record,), targets=("walking",), label_set=ACTIVITY, split=Split.TRAIN)
+)
 ```
 
 `TimeFDataset.get_train()`, `get_validation()`, and `get_test()` return the Tasks of one split, and
@@ -156,7 +160,8 @@ task = ClassificationTask(
         8.0,
         time_series=(vibration,),
     ),
-    targets=("fault_episode",),
+    targets=("faulty",),
+    label_set=CONDITION,
 )
 ```
 
@@ -233,7 +238,7 @@ label set. Each label must be in the set. No label can repeat. A target with `mu
 must contain exactly one label.
 
 Labels come from the targets stored directly on the task or from the text of its target
-annotations. If a task has no label set, TimeNet does not examine its labels.
+annotations.
 
 Tasks can share the same label set object. Each name identifies one label set within a dataset.
 If two different sets have the same name, `add_task()`, the task stream, and the writer raise an
@@ -332,6 +337,7 @@ An empty `candidate_records` tuple means that the candidate pool is dataset-wide
 label = ClassificationTask(
     inputs=(record,),
     targets=("faulty",),
+    label_set=CONDITION,
 )
 answer = AnswerTask(
     inputs=(record,),

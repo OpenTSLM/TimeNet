@@ -2,7 +2,7 @@ from pydantic import ValidationError
 import pytest
 
 from timenet.errors import TimeFValidationError
-from timenet.types import ClassificationTask, Label, LabelSet
+from timenet.types import Label, LabelSet
 
 
 STAGES = LabelSet(name="stage", labels=(Label(name="W", description="Awake."), Label(name="N1"), Label(name="R")))
@@ -42,8 +42,3 @@ def test_a_multi_label_target_accepts_any_distinct_listed_labels(targets):
 def test_a_multi_label_target_rejects_a_repeated_label():
     with pytest.raises(TimeFValidationError, match="repeated labels of label set 'findings': \\['AF'\\]"):
         FINDINGS.check_targets(("AF", "PVC", "AF"))
-
-
-def test_a_classification_task_rejects_both_a_label_set_and_a_target_schema():
-    with pytest.raises(TimeFValidationError, match="both label_set and the deprecated target_schema"):
-        ClassificationTask(targets=("W",), label_set=STAGES, target_schema="stage")

@@ -372,31 +372,22 @@ class Task(SupportsAnnotate):
 @final
 @dataclass(kw_only=True)
 class ClassificationTask(Task):
-    """Classify the inputs with an optional set of allowed labels."""
+    """Classify the inputs using a required set of allowed labels."""
 
     task_type: ClassVar[TaskType] = TaskType.CLASSIFICATION
-    label_set: LabelSet | None = None
-    """The allowed labels and whether a target can contain more than one label.
-
-    If this is ``None``, TimeNet does not examine the labels."""
-    target_schema: str | None = None
-    """Deprecated name of the set of allowed labels. Use ``label_set``, which also holds the labels."""
+    label_set: LabelSet
+    """The allowed labels and whether a target can contain more than one label."""
 
     def __post_init__(self) -> None:
         """Set the common fields to their standard form and make sure that the label set has the right type.
 
         Raises:
-            TimeFValidationError: If ``label_set`` is neither a LabelSet nor ``None``, or if the task
-                sets both ``label_set`` and the deprecated ``target_schema``.
+            TimeFValidationError: If ``label_set`` is not a LabelSet.
         """
         super().__post_init__()
-        if self.label_set is not None and not isinstance(self.label_set, LabelSet):
+        if not isinstance(self.label_set, LabelSet):
             raise TimeFValidationError(
-                f"ClassificationTask label_set must be a LabelSet or None, got {type(self.label_set).__name__}"
-            )
-        if self.label_set is not None and self.target_schema is not None:
-            raise TimeFValidationError(
-                "ClassificationTask sets both label_set and the deprecated target_schema. Set only label_set"
+                f"ClassificationTask label_set must be a LabelSet, got {type(self.label_set).__name__}"
             )
 
     def check_targets(self) -> None:
@@ -404,15 +395,12 @@ class ClassificationTask(Task):
 
         The labels come from the targets stored directly on the task or from its target annotations.
         Each label must be text.
-        If the task has no label set, this method does nothing.
 
         After the targets are final, the dataset calls this method when it adds or streams the task.
 
         Raises:
             TimeFValidationError: If a label is not text or the labels break a rule of the label set.
         """
-        if self.label_set is None:
-            return
         name = f"ClassificationTask {self.id!r}"
         values = self.targets if self.targets is not None else [one.value for one in self.target_annotations]
         labels: list[str] = []
@@ -437,8 +425,6 @@ class ClassificationTask(Task):
         Raises:
             TimeFValidationError: If a different set already has the same name.
         """
-        if self.label_set is None:
-            return
         try:
             label_sets.register_or_reuse_matching_label_set(self.label_set)
         except TimeFValidationError as exc:

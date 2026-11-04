@@ -14,6 +14,8 @@ from timenet.types import (
     DatasetMetadata,
     ForecastingTask,
     InputModality,
+    Label,
+    LabelSet,
     License,
     ScalarPredictionTask,
     Split,
@@ -26,6 +28,24 @@ from timenet.types import (
     TSEditingTask,
     Version,
     ureg,
+)
+
+
+TEST_LABELS = LabelSet(
+    name="labels",
+    labels=(
+        Label(name="N2"),
+        Label(name="a"),
+        Label(name="afib"),
+        Label(name="b"),
+        Label(name="beat"),
+        Label(name="c"),
+        Label(name="d"),
+        Label(name="e"),
+        Label(name="event"),
+        Label(name="walking"),
+        Label(name="x"),
+    ),
 )
 
 
@@ -61,7 +81,7 @@ def test_records_property_is_read_only_copy(make_series):
 def test_add_task_links_record_and_task(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = ds.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",)))
+    task = ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("afib",)))
     assert task.inputs == (record,)
     assert ds.tasks_for(record) == (task,)
     assert ds.tasks == (task,)
@@ -80,7 +100,7 @@ def test_add_task_multiple_records(make_series):
     ds = _dataset()
     s1 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     s2 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = ds.add_task(task=ClassificationTask(inputs=(s1, s2), targets=("x",)))
+    task = ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s1, s2), targets=("x",)))
     assert task.inputs == (s1, s2)
 
 
@@ -94,6 +114,7 @@ def test_task_time_span_requires_one_input_record(make_series, scope_ids):
     right = dataset.add_record(record=Record(start_time=origin, sources=(Source(name="right", signals=(second,)),)))
     scope = None if scope_ids is None else (first, second) if scope_ids == "both" else (first,)
     task = ClassificationTask(
+        label_set=TEST_LABELS,
         input_modalities=frozenset({InputModality.TIME_SERIES}),
         inputs=(left, right),
         targets=("event",),
@@ -113,6 +134,7 @@ def test_a_scope_must_name_signals_of_the_inputs(make_series):
     other = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     ds.add_task(
         task=ClassificationTask(
+            label_set=TEST_LABELS,
             inputs=(record,),
             targets=("beat",),
             scope=TimePoint.seconds(0.0, time_series=(ts,)),
@@ -121,6 +143,7 @@ def test_a_scope_must_name_signals_of_the_inputs(make_series):
     with pytest.raises(ValueError, match="not in its inputs"):
         ds.add_task(
             task=ClassificationTask(
+                label_set=TEST_LABELS,
                 inputs=(record,),
                 targets=("beat",),
                 scope=TimePoint.seconds(0.0, time_series=other.signals),
@@ -131,7 +154,7 @@ def test_a_scope_must_name_signals_of_the_inputs(make_series):
 def test_from_tasks_on_constructor_registers(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    base = ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
+    base = ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",)))
     derived = ds.add_task(task=AnswerTask(inputs=(record,), prompt="q", targets=("a",), from_tasks=(base,)))
     assert derived.from_tasks == (base,)
 
@@ -139,7 +162,7 @@ def test_from_tasks_on_constructor_registers(make_series):
 def test_add_task_rejects_a_from_tasks_parent_that_is_not_registered(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    orphan = ClassificationTask(targets=("a",))  # never added to the dataset
+    orphan = ClassificationTask(label_set=TEST_LABELS, targets=("a",))  # never added to the dataset
     qa = AnswerTask(inputs=(record,), prompt="q", targets=("a",), from_tasks=(orphan,))
     with pytest.raises(TimeFValidationError, match="derives from a task that is not registered"):
         ds.add_task(task=qa)
@@ -151,7 +174,7 @@ def test_derive_schema(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
     record.annotate(Annotation(key="age", value=64, unit="years"))
     record.annotate(Annotation(key="artifact", span=TimeInterval.seconds(0.0, 0.004)))
-    ds.add_task(task=ClassificationTask(inputs=(record,), targets=("afib",)))
+    ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("afib",)))
 
     schema = ds.derive_schema()
     assert schema.time_series_specs == (ts.spec,)
@@ -226,7 +249,7 @@ def test_no_loader_calls_during_build():
     )
     ts = Signal.from_loader(spec=spec, name="c", time_axis=RegularAxis.from_rate_hz(1), n_values=1, loader=loader)
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(ts,)),)))
-    ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
+    ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",)))
     ds.derive_schema()
     assert calls["n"] == 0  # building/deriving never reads values
 
@@ -303,7 +326,9 @@ def test_add_task_warns_for_a_scope_outside_record_span(make_series):
     )
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
         dataset.add_task(
-            task=ClassificationTask(inputs=(record,), targets=("walking",), scope=TimeInterval.seconds(5.0, 20.0))
+            task=ClassificationTask(
+                label_set=TEST_LABELS, inputs=(record,), targets=("walking",), scope=TimeInterval.seconds(5.0, 20.0)
+            )
         )
 
 
@@ -314,7 +339,11 @@ def test_add_task_warns_for_a_point_at_the_exclusive_window_end(make_series):
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(0.0,) * 5000),)),))
     )
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("walking",), scope=TimePoint.seconds(10.0)))
+        dataset.add_task(
+            task=ClassificationTask(
+                label_set=TEST_LABELS, inputs=(record,), targets=("walking",), scope=TimePoint.seconds(10.0)
+            )
+        )
 
 
 def test_add_task_accepts_an_interval_up_to_the_exclusive_window_end(make_series):
@@ -324,7 +353,9 @@ def test_add_task_accepts_an_interval_up_to_the_exclusive_window_end(make_series
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(0.0,) * 5000),)),))
     )
     task = dataset.add_task(
-        task=ClassificationTask(inputs=(record,), targets=("walking",), scope=TimeInterval.seconds(2.0, 10.0))
+        task=ClassificationTask(
+            label_set=TEST_LABELS, inputs=(record,), targets=("walking",), scope=TimeInterval.seconds(2.0, 10.0)
+        )
     )
     assert task.scope == TimeInterval.seconds(2.0, 10.0)
 
@@ -335,7 +366,9 @@ def test_add_task_accepts_scope_inside_record_span(make_series):
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(0.0,) * 5000),)),))
     )
     scope = TimeInterval.seconds(2.0, 8.0)
-    task = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("walking",), scope=scope))
+    task = dataset.add_task(
+        task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("walking",), scope=scope)
+    )
     assert task.scope == scope  # stamped onto the task, so a read-back task is self-describing
 
 
@@ -359,7 +392,7 @@ def test_add_task_requires_an_answer(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     with pytest.raises(TimeFValidationError, match="needs an answer"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,)))
+        dataset.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,)))
 
 
 def test_add_task_rejects_an_answer_given_twice(make_series):
@@ -367,7 +400,11 @@ def test_add_task_rejects_an_answer_given_twice(make_series):
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     annotation = record.annotate(Annotation(key="stage", value="N2"))
     with pytest.raises(TimeFValidationError, match="one answer representation"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("N2",), target_annotations=(annotation,)))
+        dataset.add_task(
+            task=ClassificationTask(
+                label_set=TEST_LABELS, inputs=(record,), targets=("N2",), target_annotations=(annotation,)
+            )
+        )
 
 
 def test_iter_tasks_infers_prompt_only_inputs():
@@ -394,7 +431,11 @@ def test_add_task_rejects_an_annotation_ref_the_records_do_not_carry(make_series
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     detached = Annotation(key="context", value="missing")
     with pytest.raises(TimeFValidationError, match="not attached"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), input_annotations=(detached,)))
+        dataset.add_task(
+            task=ClassificationTask(
+                label_set=TEST_LABELS, inputs=(record,), targets=("a",), input_annotations=(detached,)
+            )
+        )
 
 
 def _records(dataset, make_series, count):
@@ -508,14 +549,18 @@ def test_add_task_rejects_an_annotation_ref_on_an_unregistered_record(make_serie
     unregistered = Record(sources=(Source(name="Source", signals=(make_series(),)),))
     annotation = unregistered.annotate(Annotation(key="context", value="elsewhere"))
     with pytest.raises(TimeFValidationError, match=_NOT_REFERENCED):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), input_annotations=(annotation,)))
+        dataset.add_task(
+            task=ClassificationTask(
+                label_set=TEST_LABELS, inputs=(record,), targets=("a",), input_annotations=(annotation,)
+            )
+        )
     assert dataset.tasks == ()
 
 
 def test_set_task_stream_rejects_after_add_task(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
+    dataset.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",)))
     with pytest.raises(TimeFValidationError, match="either streams its tasks or"):
         dataset.set_task_stream([ClassificationTask], lambda: iter(()))
 
@@ -554,7 +599,7 @@ def test_streamed_task_validation_rejects_an_annotation_ref_on_a_record_the_task
 def test_streamed_task_validation_rejects_an_undeclared_type(make_series):
     dataset = _dataset()
     record = dataset.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = ClassificationTask(targets=("a",), inputs=(record,))
+    task = ClassificationTask(label_set=TEST_LABELS, targets=("a",), inputs=(record,))
     dataset.set_task_stream([AnswerTask], lambda: iter((task,)))  # declared AnswerTask, streamed a different type
     with pytest.raises(TimeFValidationError, match="not one of the declared"):
         list(dataset.iter_streamed_tasks_validated())
@@ -593,7 +638,7 @@ def test_add_task_accepts_a_series_answer_without_a_target(make_series):
 def test_tasks_of_filters_by_type(make_series):
     ds = _dataset()
     s = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    classification = ds.add_task(task=ClassificationTask(inputs=(s,), targets=("a",)))
+    classification = ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s,), targets=("a",)))
     qa = ds.add_task(task=AnswerTask(inputs=(s,), prompt="q", targets=("b",)))
     assert ds.tasks_of(ClassificationTask) == (classification,)
     assert ds.tasks_of(AnswerTask) == (qa,)
@@ -603,9 +648,9 @@ def test_tasks_for_resolves_and_filters_record_tasks(make_series):
     ds = _dataset()
     s1 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     s2 = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    classification = ds.add_task(task=ClassificationTask(inputs=(s1,), targets=("a",)))
+    classification = ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s1,), targets=("a",)))
     qa = ds.add_task(task=AnswerTask(inputs=(s1,), prompt="q", targets=("b",)))
-    ds.add_task(task=ClassificationTask(inputs=(s2,), targets=("c",)))
+    ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s2,), targets=("c",)))
     assert ds.tasks_for(s1) == (classification, qa)
     assert ds.tasks_for(s1, ClassificationTask) == (classification,)
     assert ds.tasks_for(s2, AnswerTask) == ()
@@ -628,7 +673,7 @@ def test_to_features_and_targets_returns_arrow_matrix_and_targets(make_series):
         s = ds.add_record(
             record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
         )
-        ds.add_task(task=ClassificationTask(inputs=(s,), targets=(label,)))
+        ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s,), targets=(label,)))
     x, y = ds.to_features_and_targets(task=ClassificationTask)
     assert isinstance(x, pa.Array) and pa.types.is_fixed_size_list(x.type)
     assert isinstance(y, pa.Array)
@@ -642,7 +687,7 @@ def test_to_features_and_targets_numpy_output(make_series):
         s = ds.add_record(
             record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
         )
-        ds.add_task(task=ClassificationTask(inputs=(s,), targets=(label,)))
+        ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s,), targets=(label,)))
     x, y = ds.to_features_and_targets(task=ClassificationTask, output="numpy")
     assert isinstance(x, np.ndarray) and x.shape == (2, 3) and x.dtype == np.float32
     assert isinstance(y, np.ndarray) and y.tolist() == ["a", "b"]
@@ -654,8 +699,8 @@ def _ragged_dataset(make_series):
     second = ds.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
     )
-    ds.add_task(task=ClassificationTask(inputs=(first,), targets=("a",)))
-    ds.add_task(task=ClassificationTask(inputs=(second,), targets=("b",)))
+    ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(first,), targets=("a",)))
+    ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(second,), targets=("b",)))
     return ds
 
 
@@ -693,7 +738,7 @@ def test_to_features_and_targets_unlabeled_record_raises(make_series):
     labeled = ds.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
     )
-    ds.add_task(task=ClassificationTask(inputs=(labeled,), targets=("a",)))
+    ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(labeled,), targets=("a",)))
     ds.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
     )  # no task on this one
@@ -704,8 +749,8 @@ def test_to_features_and_targets_unlabeled_record_raises(make_series):
 def test_to_features_and_targets_multiple_matching_tasks_raises(make_series):
     ds = _dataset()
     s = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    ds.add_task(task=ClassificationTask(inputs=(s,), targets=("a",)))
-    ds.add_task(task=ClassificationTask(inputs=(s,), targets=("b",)))
+    ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s,), targets=("a",)))
+    ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s,), targets=("b",)))
     with pytest.raises(TimeFValidationError, match="needs exactly one per record"):
         ds.to_features_and_targets(task=ClassificationTask)
 
@@ -716,7 +761,7 @@ def test_to_features_and_targets_infers_sole_task_type(make_series):
         s = ds.add_record(
             record=Record(sources=(Source(name="Source", signals=(make_series(values=(1.0, 2.0, 3.0)),)),))
         )
-        ds.add_task(task=ClassificationTask(inputs=(s,), targets=(label,)))
+        ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s,), targets=(label,)))
     x, y = ds.to_features_and_targets()  # task inferred: only ClassificationTask present
     assert len(x) == 2
     assert y.to_pylist() == ["a", "b"]
@@ -725,7 +770,7 @@ def test_to_features_and_targets_infers_sole_task_type(make_series):
 def test_to_features_and_targets_ambiguous_task_type_raises(make_series):
     ds = _dataset()
     s = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    ds.add_task(task=ClassificationTask(inputs=(s,), targets=("a",)))
+    ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s,), targets=("a",)))
     ds.add_task(task=AnswerTask(inputs=(s,), prompt="q", targets=("b",)))
     with pytest.raises(ValueError, match="pass task="):
         ds.to_features_and_targets()
@@ -747,7 +792,7 @@ def test_to_features_and_targets_rejects_a_task_with_no_inline_target(make_serie
     ds = _dataset()
     s = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     annotation = s.annotate(Annotation(key="stage", value="N2"))
-    ds.add_task(task=ClassificationTask(inputs=(s,), target_annotations=(annotation,)))
+    ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(s,), target_annotations=(annotation,)))
     with pytest.raises(ValueError, match="exactly one scalar target"):
         ds.to_features_and_targets(task=ClassificationTask)
 
@@ -757,9 +802,17 @@ def test_add_task_bounds_checks_a_point_span(make_series):
     record = dataset.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(0.0,) * 5000),)),))
     )
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("beat",), scope=TimePoint.seconds(9.5)))
+    dataset.add_task(
+        task=ClassificationTask(
+            label_set=TEST_LABELS, inputs=(record,), targets=("beat",), scope=TimePoint.seconds(9.5)
+        )
+    )
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("beat",), scope=TimePoint.seconds(10.5)))
+        dataset.add_task(
+            task=ClassificationTask(
+                label_set=TEST_LABELS, inputs=(record,), targets=("beat",), scope=TimePoint.seconds(10.5)
+            )
+        )
 
 
 def test_annotation_and_task_agree_on_an_out_of_window_span(make_series):
@@ -773,7 +826,9 @@ def test_annotation_and_task_agree_on_an_out_of_window_span(make_series):
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
         record.annotate(Annotation(key="mark", span=outside))
     with pytest.warns(SpanOutsideWindowWarning, match="falls outside record"):
-        dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",), scope=outside))
+        dataset.add_task(
+            task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("x",), scope=outside)
+        )
 
 
 def test_add_annotations_attaches_all_and_returns_them(make_series):
@@ -797,8 +852,8 @@ def test_add_tasks_registers_all_in_order_and_links(make_series):
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
     tasks = ds.add_tasks(
         tasks=[
-            ClassificationTask(inputs=(record,), targets=("a",)),
-            ClassificationTask(inputs=(record,), targets=("b",)),
+            ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",)),
+            ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("b",)),
         ]
     )
     assert tuple(t.targets for t in tasks) == (("a",), ("b",))
@@ -811,8 +866,9 @@ def test_add_tasks_rejects_the_whole_batch_when_one_is_invalid(make_series):
     record = ds.add_record(
         record=Record(sources=(Source(name="Source", signals=(make_series(values=(0.0,) * 5000),)),))
     )
-    good = ClassificationTask(inputs=(record,), targets=("a",))
+    good = ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",))
     bad = ClassificationTask(
+        label_set=TEST_LABELS,
         inputs=(record,),
         targets=("b",),
         scope=TimePoint.seconds(1.0, time_series=(make_series(),)),
@@ -827,7 +883,7 @@ def test_add_tasks_allows_deriving_from_another_task_in_the_same_batch(make_seri
     # as a unit rather than task by task.
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    base = ClassificationTask(inputs=(record,), targets=("a",))
+    base = ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",))
     derived = AnswerTask(inputs=(record,), prompt="q", targets=("a",), from_tasks=(base,))
     registered = ds.add_tasks(tasks=[derived, base])
     assert registered == (derived, base)
@@ -837,7 +893,7 @@ def test_add_tasks_allows_deriving_from_another_task_in_the_same_batch(make_seri
 def test_add_tasks_rejects_one_task_listed_twice(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = ClassificationTask(inputs=(record,), targets=("a",))
+    task = ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",))
     with pytest.raises(TimeFValidationError, match="lists one task more than once"):
         ds.add_tasks(tasks=[task, task])
     assert ds.tasks == ()
@@ -846,7 +902,7 @@ def test_add_tasks_rejects_one_task_listed_twice(make_series):
 def test_add_tasks_rejects_a_task_already_registered(make_series):
     ds = _dataset()
     record = ds.add_record(record=Record(sources=(Source(name="Source", signals=(make_series(),)),)))
-    task = ds.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
+    task = ds.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",)))
     with pytest.raises(TimeFValidationError, match="already in this dataset"):
         ds.add_tasks(tasks=[task])
     assert task.id == 1
@@ -879,7 +935,7 @@ def test_add_tasks_drains_the_batch_before_checking_refs(make_series):
 
     def gen():
         ann = record.annotate(Annotation(key="peak", span=TimePoint.seconds(0.0)))
-        yield ClassificationTask(inputs=(record,), targets=("x",), input_annotations=(ann,))
+        yield ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("x",), input_annotations=(ann,))
 
     (task,) = ds.add_tasks(tasks=gen())
     assert task.input_annotations == (record.annotations[0],)
@@ -916,9 +972,13 @@ def _record(dataset, make_series):
 def test_get_split_accessors_select_tasks_by_split(make_series):
     dataset = _dataset()
     record = _record(dataset, make_series)
-    train = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",), split=Split.TRAIN))
-    test_task = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("b",), split=Split.TEST))
-    unsplit = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("c",)))
+    train = dataset.add_task(
+        task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",), split=Split.TRAIN)
+    )
+    test_task = dataset.add_task(
+        task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("b",), split=Split.TEST)
+    )
+    unsplit = dataset.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("c",)))
 
     assert dataset.get_train() == (train,)
     assert dataset.get_test() == (test_task,)
@@ -932,7 +992,7 @@ def test_get_split_accessors_select_tasks_by_split(make_series):
 def test_get_split_rejects_a_dataset_that_assigns_no_splits(make_series):
     dataset = _dataset()
     record = _record(dataset, make_series)
-    task = dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
+    task = dataset.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",)))
     with pytest.raises(TimeFValidationError, match="assigns no split to any task"):
         dataset.get_train()
     assert dataset.get_all() == (task,)
@@ -943,11 +1003,13 @@ def split_dataset(request, make_series):
     dataset = _dataset()
     record = _record(dataset, make_series)
     tasks = (
-        ClassificationTask(inputs=(record,), targets=("a",), split=Split.VALIDATION, prompt="Classify."),
-        ClassificationTask(inputs=(record,), targets=("b",), split=Split.TRAIN),
-        ClassificationTask(inputs=(record,), targets=("c",), split=Split.TEST),
-        ClassificationTask(inputs=(record,), targets=("d",)),
-        ClassificationTask(inputs=(record,), targets=("e",), split=Split.TRAIN),
+        ClassificationTask(
+            label_set=TEST_LABELS, inputs=(record,), targets=("a",), split=Split.VALIDATION, prompt="Classify."
+        ),
+        ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("b",), split=Split.TRAIN),
+        ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("c",), split=Split.TEST),
+        ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("d",)),
+        ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("e",), split=Split.TRAIN),
     )
     if request.param:
         dataset.set_task_stream(task_types=(ClassificationTask,), source=lambda: iter(tasks))
@@ -985,8 +1047,8 @@ def test_iter_tasks_selects_multiple_splits_and_modalities(split_dataset):
 def test_multi_split_selection_reads_stream_once_and_iteration_is_lazy(make_series):
     dataset = _dataset()
     record = _record(dataset, make_series)
-    train = ClassificationTask(inputs=(record,), targets=("a",), split=Split.TRAIN)
-    validation = ClassificationTask(inputs=(record,), targets=("b",), split=Split.VALIDATION)
+    train = ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",), split=Split.TRAIN)
+    validation = ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("b",), split=Split.VALIDATION)
     visited = []
 
     def stream():
@@ -1029,12 +1091,12 @@ def test_iter_tasks_without_split_includes_unassigned_tasks(split_dataset):
 def test_get_splits_handles_missing_partitions_and_unpartitioned_datasets(make_series):
     dataset = _dataset()
     record = _record(dataset, make_series)
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("a",)))
+    dataset.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("a",)))
     with pytest.raises(TimeFValidationError, match="assigns no split"):
         dataset.get_splits(Split.TRAIN, Split.VALIDATION)
     assert tuple(dataset.iter_tasks(split=(Split.TRAIN, Split.VALIDATION))) == ()
 
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("b",), split=Split.TEST))
+    dataset.add_task(task=ClassificationTask(label_set=TEST_LABELS, inputs=(record,), targets=("b",), split=Split.TEST))
     assert dataset.get_splits(Split.TRAIN, Split.VALIDATION) == ()
 
 
@@ -1043,9 +1105,9 @@ def test_to_features_and_targets_can_take_one_split(make_series):
     records = [_record(dataset, make_series) for _ in range(3)]
     dataset.add_tasks(
         tasks=(
-            ClassificationTask(inputs=(records[0],), targets=("a",), split=Split.TRAIN),
-            ClassificationTask(inputs=(records[1],), targets=("b",), split=Split.TRAIN),
-            ClassificationTask(inputs=(records[2],), targets=("c",), split=Split.TEST),
+            ClassificationTask(label_set=TEST_LABELS, inputs=(records[0],), targets=("a",), split=Split.TRAIN),
+            ClassificationTask(label_set=TEST_LABELS, inputs=(records[1],), targets=("b",), split=Split.TRAIN),
+            ClassificationTask(label_set=TEST_LABELS, inputs=(records[2],), targets=("c",), split=Split.TEST),
         )
     )
 

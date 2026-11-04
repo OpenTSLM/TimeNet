@@ -86,7 +86,6 @@ def release(tmp_path_factory) -> Path:
             ClassificationTask(inputs=(record,), targets=("R",), label_set=STAGE_LABELS.model_copy()),  # 5
             # A multi-label target with no label says that none applies.
             ClassificationTask(inputs=(record,), targets=(), label_set=FINDINGS),  # 6
-            ClassificationTask(inputs=(record,), targets=("anything",)),  # 7
         ]
     )
     path = tmp_path_factory.mktemp("release") / "control.duckdb"
@@ -121,7 +120,7 @@ def test_each_label_set_is_stored_once_and_read_as_one_object(release):
             ),
         ]
 
-    stage_w, _, findings, stage_n1, stage_r, none_apply, unlabeled = _read_tasks(release)
+    stage_w, _, findings, stage_n1, stage_r, none_apply = _read_tasks(release)
     assert stage_w.label_set == STAGE_LABELS
     assert stage_w.label_set is stage_n1.label_set is stage_r.label_set
     assert findings.label_set == FINDINGS
@@ -129,7 +128,6 @@ def test_each_label_set_is_stored_once_and_read_as_one_object(release):
     assert findings.targets is not None
     assert [target.read() for target in findings.targets] == ["PVC", "AF"]
     assert none_apply.targets == ()
-    assert unlabeled.label_set is None
 
 
 def test_the_task_table_shows_the_label_set_name(release):
@@ -141,7 +139,6 @@ def test_the_task_table_shows_the_label_set_name(release):
             "stage",
             "stage",
             "findings",
-            None,
         ]
 
 
@@ -256,6 +253,7 @@ def test_a_stream_rejects_targets_that_do_not_fit_the_label_set():
         ("UPDATE label_sets SET labels = [{'name': 'W'}, {'name': NULL}] WHERE name = 'stage'", "label_sets.labels"),
         ("UPDATE label_sets SET labels = [{'name': 'W', 'description': ''}] WHERE name = 'stage'", "label_sets.labels"),
         ("UPDATE tasks SET label_set = 'stage' WHERE task_type = 'answer'", "tasks.label_set"),
+        ("UPDATE tasks SET label_set = NULL WHERE task_id = 1", "tasks.label_set"),
         ("UPDATE tasks SET label_set = 'missing' WHERE task_id = 1", "label_sets.name"),
         ("UPDATE task_targets SET text_value = 'BOGUS' WHERE task_id = 1", "task 1 has a label that is not"),
         (
@@ -278,6 +276,14 @@ def test_the_audit_rejects_a_corrupt_label_set(release_copy, corruption, field):
         connection.execute(corruption)
         with pytest.raises(TimeFFormatError, match=field):
             audit_control_database(connection, require_chunks=False)
+
+
+def test_the_reader_rejects_a_classification_task_without_a_label_set(release_copy):
+    with connect_control(release_copy) as connection:
+        connection.execute("UPDATE tasks SET label_set = NULL WHERE task_id = 1")
+
+    with pytest.raises(TimeFFormatError, match="classification task 1 has no label set"):
+        _read_tasks(release_copy)
 
 
 def test_the_reader_rejects_a_label_set_on_another_task_type(release_copy):

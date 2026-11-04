@@ -6,12 +6,17 @@ from timenet.testing import assert_datasets_equal, make_dataset, sine_loader
 from timenet.types import (
     ClassificationTask,
     DatasetMetadata,
+    Label,
+    LabelSet,
     License,
     TimeSeriesSpec,
     Version,
     ureg,
 )
 from timenet.writer import TimeFWriter
+
+
+LABELS = LabelSet(name="labels", labels=(Label(name="x"),))
 
 
 def _namespaced_dataset() -> TimeFDataset:
@@ -41,7 +46,7 @@ def _namespaced_dataset() -> TimeFDataset:
             sources=(Source(name="Source", signals=(series,)),),
         )
     )
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",)))
+    dataset.add_task(task=ClassificationTask(label_set=LABELS, inputs=(record,), targets=("x",)))
     return dataset
 
 

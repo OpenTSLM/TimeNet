@@ -113,7 +113,7 @@ _DOMAIN_CHECKS = f"""
        OR list_contains([label.description FOR label IN labels], '')
     UNION ALL
     SELECT 'tasks.label_set' FROM tasks
-    WHERE label_set IS NOT NULL AND task_type <> '{TaskType.CLASSIFICATION}'
+    WHERE (label_set IS NOT NULL) <> (task_type = '{TaskType.CLASSIFICATION}')
     UNION ALL
     {_ENTITY_ID_CHECKS}
     LIMIT 1

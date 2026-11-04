@@ -628,7 +628,7 @@ def test_typed_scope_and_payload_columns_round_trip(tmp_path):
         back = restored[task.id]
         assert type(back) is type(task)
         assert _scope_key(back) == _scope_key(task)
-        for field in ("target_schema", "unit", "target_name", "mode"):
+        for field in ("label_set", "unit", "target_name", "mode"):
             if hasattr(task, field):
                 assert getattr(back, field) == getattr(task, field), field
 

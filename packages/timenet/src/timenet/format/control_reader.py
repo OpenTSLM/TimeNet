@@ -247,7 +247,6 @@ class _TaskRow(NamedTuple):
     scope_end: int | None
     scope_signal_ids: list[int] | None
     has_inline_targets: bool
-    target_schema: str | None
     label_set: str | None
     unit: str | None
     target_name: str | None
@@ -259,7 +258,6 @@ class _TaskRow(NamedTuple):
     def payload_columns(self) -> dict[str, str | None]:
         """The subclass configuration columns for the task codec."""
         return {
-            "target_schema": self.target_schema,
             "unit": self.unit,
             "target_name": self.target_name,
             "mode": self.mode,
@@ -1626,7 +1624,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 )
                 SELECT t.task_id, t.task_type, t.prompt, t.rationale,
                        t.scope_type, t.scope_start, t.scope_end, t.scope_signal_ids,
-                       t.target_schema, t.label_set, t.unit, t.target_name, t.mode, t.has_inline_targets,
+                       t.label_set, t.unit, t.target_name, t.mode, t.has_inline_targets,
                        t.input_modalities, t.split,
                        coalesce(inputs.input_record_ids, []) AS input_record_ids,
                        coalesce(parents.from_task_ids, []) AS from_task_ids,
@@ -1871,17 +1869,18 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             label_sets[label_set.name] = label_set
         return label_sets
 
-    def _label_set(self, name: str | None) -> LabelSet | None:
-        """Return the stored label set with this name.
+    def _label_set(self, task_id: int, name: str | None) -> LabelSet:
+        """Return the stored label set that a classification task names.
 
         Returns:
-            The shared label set, or ``None`` if ``name`` is ``None``.
+            The shared label set.
 
         Raises:
-            TimeFFormatError: If no label set has this name, or a stored label set is not valid.
+            TimeFFormatError: If the task names no label set, no label set has this name, or a stored
+                label set is not valid.
         """
         if name is None:
-            return None
+            raise TimeFFormatError(f"classification task {task_id!r} has no label set")
         label_set = self._label_sets_by_name.get(name)
         if label_set is None:
             raise TimeFFormatError(f"tasks refer to a missing label set {name!r}")
@@ -2529,7 +2528,7 @@ class _TaskBuilder:
                 **decode_task_payload(task_type, row.payload_columns),
             }
             if task_type is TaskType.CLASSIFICATION:
-                kwargs["label_set"] = reader._label_set(row.label_set)
+                kwargs["label_set"] = reader._label_set(row.task_id, row.label_set)
             elif row.label_set is not None:
                 raise TimeFFormatError(
                     f"{task_type} task {row.task_id!r} has a label set, but only a classification task can have one"

@@ -119,11 +119,14 @@ A [Task](tasks.md) refers directly to its input Records. Registering a Task does
 Records.
 
 ```python
-from timenet.types import ClassificationTask
+from timenet.types import ClassificationTask, Label, LabelSet
+
+CONDITION = LabelSet(name="condition", labels=(Label(name="healthy"), Label(name="faulty")))
 
 task = ClassificationTask(
     inputs=(record,),
     targets=("healthy",),
+    label_set=CONDITION,
 )
 dataset.add_task(task=task)
 ```
