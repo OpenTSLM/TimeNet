@@ -113,36 +113,26 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
     force: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Run one connector and publish the result through a writable registry.
+    """Build and publish a dataset to a writable registry.
 
-    Like :func:`run_pipeline`, but the converted dataset is handed to ``registry.store`` instead of
-    written to a local directory, so it also targets a remote or S3 registry. It is idempotent: an
-    already-committed version skips the ``download`` and ``convert`` stages and returns unless ``force``.
-    Like :func:`run_pipeline`, it checks after ``compose`` that the dataset has the card that the
-    engine read.
-    A registry other than a local one holds open releases only, so a card that is not open fails
-    before any download. The composed dataset can be a child whose card says open while a parent is
-    not open. So the engine checks the dataset again with its lineage before the write.
+    The build reuses an existing version unless ``force`` is true.
+    All declared parents must already exist in the registry.
 
     Args:
         connector: The connector to build.
-        registry: The writable registry to publish into (local, remote, or S3).
-        cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
-        keep_cache: Keep the cache directory instead of removing it after publishing.
+        registry: The local, remote, or S3 registry to publish to.
+        cache_dir: Download directory to keep, or ``None`` for ``<TIMENET_CACHE>/<dataset_id>``.
+        keep_cache: Keep the default download cache after publishing.
         progress_cb: Optional writer progress callback.
-        force: Republish even if the version is already committed.
-        pinned_by: The releases that already read files of this release, with their pins. The store
-            publishes only if it reproduces each pinned file, and otherwise raises.
+        force: Republish an existing version.
+        pinned_by: Releases that read this dataset's files, with file pins the build must match.
 
     Returns:
         The published version string.
 
     Raises:
-        TimeFValidationError: If the card declares parents and the connector does not override
-            ``compose``, or the dataset that ``compose`` returns has another card than the one that
-            the engine read. Nothing is published then.
-        TimeNetAccessError: If the registry is not local, and the card, or the composed dataset with
-            its lineage, is not open.
+        TimeFValidationError: If a card with parents has no ``compose`` override, or ``compose`` changes the card.
+        TimeNetAccessError: If a release or ancestor lacks open access for a nonlocal registry.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, and require_open_access
     values_backend = _check_values_backend(connector)
     metadata = connector.metadata()
@@ -250,13 +240,13 @@ def _compose(connector: BaseConnector, metadata: DatasetMetadata, cache: Path, c
 
 
 def _check_values_backend(connector: BaseConnector) -> ValuesBackend:
-    """Check the values backend of a connector before a build changes any files.
+    """Validate and return a connector's values backend.
 
     Returns:
-        The values backend of the connector.
+        The connector's supported values backend.
 
     Raises:
-        TimeFValidationError: If the connector names an unknown backend.
+        TimeFValidationError: If the connector's values backend is unknown.
     """
     backend = connector.values_backend
     if backend not in SUPPORTED_VALUES_BACKENDS:
