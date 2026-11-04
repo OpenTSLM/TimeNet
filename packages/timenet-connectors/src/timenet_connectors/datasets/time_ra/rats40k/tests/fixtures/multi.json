@@ -1,0 +1,24 @@
+{
+  "TSAD_train": {
+    "0": {
+      "Observation": "\"pH\": [8.33, 8.527]; \"Redox\": [753.0, 729.281]",
+      "Source": "IoT-Drinking Water Quality",
+      "FigurePath": "figures_multi/train/0.jpg",
+      "Thought": "The joint behavior changes.\nKeep this complete explanation.",
+      "Action": "Joint Space Anomaly",
+      "ActionID": 4,
+      "Label": "Anomaly"
+    }
+  },
+  "TSAD_test": {
+    "0": {
+      "Observation": "\"ECG1\": [0.39, 0.46, 0.45]; \"ECG2\": [0.22, 0.22, 0.2]",
+      "Source": "Medical-ECG",
+      "FigurePath": "figures_multi/test/0.jpg",
+      "Thought": "The ECG channels behave normally.",
+      "Action": "Normal Sequence",
+      "ActionID": 0,
+      "Label": "Normal"
+    }
+  }
+}
