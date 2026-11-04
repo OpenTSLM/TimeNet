@@ -305,7 +305,6 @@ TASKS = Table(
         Column("scope_end", ColumnType.BIGINT),
         Column("scope_signal_ids", ColumnType.BIGINT_LIST),
         _required("has_inline_targets", ColumnType.BOOLEAN),
-        Column("target_schema", ColumnType.VARCHAR),
         Column("label_set", ColumnType.VARCHAR),
         Column("unit", ColumnType.VARCHAR),
         Column("target_name", ColumnType.VARCHAR),

@@ -156,7 +156,8 @@ metadata.
 | `puzzling` | `AnswerTask` | Four letters, such as `C,B,D,A` | 20,932 | 2,979 | 5,978 |
 
 - **A true-or-false question** is a classification, since `T` and `F` mean the same in every
-  question. Its `target_schema` is the `true_or_false_vocabulary` dataset annotation, `["T", "F"]`.
+  question. Every true-or-false task shares the `true_or_false` label set: `T` (True.) and `F`
+  (False.).
 - **A multiple-choice question or a puzzle** is an answer task. Its letters name choices that differ
   from one question to the next. A classification question's choices are its UCR dataset's class
   names, such as `normal process`. The `answer_text` metadata holds the right choice's text when the

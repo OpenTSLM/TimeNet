@@ -30,7 +30,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.json import JsonValue
-from timenet.types import Annotation, AnswerTask, ClassificationTask, Split, Task, TimeSeriesSpec
+from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, Split, Task, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.sources.parquet import iter_parquet_rows
 
@@ -74,8 +74,11 @@ class _Role(StrEnum):
     """The series a true-or-false question prints, which has no letter."""
 
 
-_TRUE_OR_FALSE_VOCABULARY = "true_or_false_vocabulary"
-"""The dataset annotation naming the choices of every true-or-false task, as its ``target_schema``."""
+_TRUE_OR_FALSE_LABEL_SET = LabelSet(
+    name="true_or_false",
+    labels=(Label(name="T", description="True."), Label(name="F", description="False.")),
+)
+"""The label set that every true-or-false task shares."""
 _CONTEXT_KEYS = ("meta_info", "domain", "dataset")
 """The published columns an input Record is annotated with, and its task gives the model as context."""
 _PUBLISHED_LISTS = {key: f"published_{key}" for key in _CONTEXT_KEYS}
@@ -92,7 +95,7 @@ _COMPARISON_SERIES = 2
 _MIN_CHOICES = 2
 _LETTERS = ("A", "B", "C", "D")
 """A puzzle's patch letters, and the most letters a multiple-choice question offers."""
-_TRUE_OR_FALSE_LETTERS = ("T", "F")
+_TRUE_OR_FALSE_LETTERS = _TRUE_OR_FALSE_LABEL_SET.names
 """The letters of a true-or-false question: T stands for 'True.' and F for 'False.'"""
 _INPUT_ROLES = (_Role.INPUT, _Role.SECOND_INPUT)
 """The roles of the input series, in order."""
@@ -708,7 +711,7 @@ def _task(
             targets=(row.answer,),
             split=_SPLITS[row.split],
             input_annotations=input_annotations,
-            target_schema=_TRUE_OR_FALSE_VOCABULARY,
+            label_set=_TRUE_OR_FALSE_LABEL_SET,
             metadata=metadata,
         )
     if row.choices:
@@ -741,7 +744,7 @@ class TSAQAConnector(BaseHuggingFaceConnector):
             raw_refs: The downloaded split files.
 
         Returns:
-            A dataset with the provenance and vocabulary annotations, the Records, and a stream of every task.
+            A dataset with the provenance annotations, the Records, and a stream of every task.
 
         Raises:
             TimeFValidationError: If a split file is missing, or a row is malformed.
@@ -761,13 +764,6 @@ class TSAQAConnector(BaseHuggingFaceConnector):
         dataset = TimeFDataset(metadata=self.metadata())
         for key, value in (("source_repository", self.HF_REPO), ("source_revision", self.SOURCE_REVISION)):
             dataset.annotate(Annotation(key=key, value=value))
-        dataset.annotate(
-            Annotation(
-                key=_TRUE_OR_FALSE_VOCABULARY,
-                value=list(_TRUE_OR_FALSE_LETTERS),
-                description="The choices of every true-or-false question: T stands for 'True.' and F for 'False.'",
-            )
-        )
         # The model reads the published task and question_type, so each distinct value is a dataset annotation.
         labels = {
             label: dataset.annotate(Annotation(key=label[0], value=label[1]))

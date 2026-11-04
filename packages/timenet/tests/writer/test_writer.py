@@ -20,6 +20,8 @@ from timenet.types import (
     Annotation,
     ClassificationTask,
     DatasetMetadata,
+    Label,
+    LabelSet,
     License,
     TimeSeriesSpec,
     Version,
@@ -28,6 +30,9 @@ from timenet.types import (
 from timenet.writer import TimeFWriter
 from timenet.writer.encodings import applied_matches, values_encoding_of
 from timenet.writer.value_encoding import ValueEncoding
+
+
+LABELS = LabelSet(name="labels", labels=(Label(name="x"),))
 
 
 def _written(tmp_path, dataset=None, **kwargs):
@@ -344,7 +349,7 @@ def test_abort_leaves_no_partial_dir(tmp_path):
         )
     )
     record.annotate(Annotation(key="k", value=1))
-    dataset.add_task(task=ClassificationTask(inputs=(record,), targets=("x",)))
+    dataset.add_task(task=ClassificationTask(label_set=LABELS, inputs=(record,), targets=("x",)))
     dataset.derive_schema()
 
     with pytest.raises(RuntimeError), TimeFWriter(tmp_path, dataset) as writer:

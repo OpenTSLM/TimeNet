@@ -8,7 +8,6 @@ from timenet.errors import TimeFValidationError
 from timenet.types import (
     Annotation,
     AnswerTask,
-    ClassificationTask,
     InputModality,
     LazyText,
     LazyTextList,
@@ -284,7 +283,7 @@ def test_text_fields_reject_a_list_handle():
 
 
 def test_string_targets_become_string_handles():
-    task = ClassificationTask(targets=("sleep", 3))
+    task = AnswerTask(targets=("sleep", 3))
     assert task.targets is not None
     assert isinstance(task.targets[0], InlineText)
     assert task.targets[1] == 3
@@ -293,14 +292,14 @@ def test_string_targets_become_string_handles():
 def test_a_bare_string_is_not_a_target_sequence():
     # Iterating "normal" would give one target per letter.
     with pytest.raises(TimeFValidationError, match="sequence of items"):
-        ClassificationTask(targets="normal")
+        AnswerTask(targets="normal")
     with pytest.raises(TimeFValidationError, match="sequence of items"):
-        ClassificationTask().targets = "normal"
+        AnswerTask().targets = "normal"
 
 
 def test_a_list_handle_is_not_a_target():
     with pytest.raises(TimeFValidationError, match="unsupported type InlineTextList"):
-        ClassificationTask(targets=(InlineTextList(["a"]),))  # ty: ignore[invalid-argument-type]
+        AnswerTask(targets=(InlineTextList(["a"]),))  # ty: ignore[invalid-argument-type]
 
 
 def test_annotation_values_become_handles_of_their_kind():

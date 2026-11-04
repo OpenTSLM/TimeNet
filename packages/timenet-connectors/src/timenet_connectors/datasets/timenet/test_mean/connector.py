@@ -15,7 +15,7 @@ import numpy as np
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
-from timenet.types import ClassificationTask, TimeSeriesSpec, ureg
+from timenet.types import ClassificationTask, Label, LabelSet, TimeSeriesSpec, ureg
 
 
 _N_RECORDS = 1000
@@ -23,6 +23,13 @@ _LENGTH = 64
 _SAMPLING_RATE_HZ = 16.0
 _NOISE_STD = 0.5
 _SEED = 20260715  # fixed base seed keeps every build's values identical
+_MEAN_SIGN = LabelSet(
+    name="mean_sign",
+    labels=(
+        Label(name="above_zero", description="The mean of the signal is above zero."),
+        Label(name="below_zero", description="The mean of the signal is below zero."),
+    ),
+)
 
 _SIGNAL = TimeSeriesSpec(
     spec_type="signal",
@@ -77,6 +84,7 @@ class TestMeanConnector(BaseConnector[None]):
                 task=ClassificationTask(
                     inputs=(record,),
                     targets=(label,),
+                    label_set=_MEAN_SIGN,
                 )
             )
         return dataset

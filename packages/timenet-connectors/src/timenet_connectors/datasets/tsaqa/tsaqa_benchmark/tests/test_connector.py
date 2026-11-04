@@ -109,7 +109,7 @@ def _check_task(task, row: dict[str, Any]) -> None:
     assert task.metadata["question_type"] == row["question_type"]
     assert task.metadata["source_issues"] == _EXPECTED_ISSUES.get(_row_of(task), [])
     if isinstance(task, ClassificationTask):
-        assert task.target_schema == "true_or_false_vocabulary"
+        assert (task.label_set.name, task.label_set.names) == ("true_or_false", ("T", "F"))
 
 
 def test_every_task_holds_its_published_row():
@@ -132,7 +132,6 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
         assert {a.key: a.value for a in restored.annotations if a.key not in {"task", "question_type"}} == {
             "source_repository": "TSAQA/TSAQA-Benchmark",
             "source_revision": "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd",
-            "true_or_false_vocabulary": ["T", "F"],
         }
         labels = [(a.key, a.value) for a in restored.annotations if a.key in {"task", "question_type"}]
         expected = {("task", row["task"]) for row in published.values()}

@@ -21,6 +21,12 @@ def test_a_label_set_needs_at_least_one_label_and_distinct_names(labels, message
         LabelSet(name="stage", labels=labels)
 
 
+@pytest.mark.parametrize(("label_set", "type_name"), [(None, "NoneType"), ("stage", "str")])
+def test_a_classification_task_requires_a_label_set(label_set, type_name):
+    with pytest.raises(TimeFValidationError, match=f"label_set must be a LabelSet, got {type_name}"):
+        ClassificationTask(targets=("W",), label_set=label_set)
+
+
 @pytest.mark.parametrize(
     ("targets", "message"),
     [
@@ -42,8 +48,3 @@ def test_a_multi_label_target_accepts_any_distinct_listed_labels(targets):
 def test_a_multi_label_target_rejects_a_repeated_label():
     with pytest.raises(TimeFValidationError, match="repeated labels of label set 'findings': \\['AF'\\]"):
         FINDINGS.check_targets(("AF", "PVC", "AF"))
-
-
-def test_a_classification_task_rejects_both_a_label_set_and_a_target_schema():
-    with pytest.raises(TimeFValidationError, match="both label_set and the deprecated target_schema"):
-        ClassificationTask(targets=("W",), label_set=STAGES, target_schema="stage")

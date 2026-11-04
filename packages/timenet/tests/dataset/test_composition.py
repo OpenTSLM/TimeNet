@@ -58,6 +58,9 @@ from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
 
+ORDER = LabelSet(name="order", labels=(Label(name="late"),))
+
+
 _ALIAS = ParentAlias("base")
 _SPEC = TimeSeriesSpec(spec_type="sine", name="Sine", unit_value=ureg.dimensionless)
 SCP = LabelSet(name="scp", labels=(Label(name="normal", description="No finding."), Label(name="abnormal")))
@@ -339,7 +342,7 @@ def test_a_record_import_extends_a_partial_copy_in_place(tmp_path):
     # a task can scope a span to it.
     assert signal_b.id == 2
     scope = TimeInterval.seconds(2.0, 2.5, time_series=(signal_b,))
-    child.add_task(task=ClassificationTask(inputs=(record,), targets=("late",), scope=scope))
+    child.add_task(task=ClassificationTask(label_set=ORDER, inputs=(record,), targets=("late",), scope=scope))
     aux = next(source for source in root.sources if source.name == "aux")
     assert {source.name for source in root.sources} == {"leads", "aux"}
     assert _keys(record) == ["age", "early", "late"]
