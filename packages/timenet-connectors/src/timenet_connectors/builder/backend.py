@@ -7,7 +7,7 @@ from pathlib import Path
 from timenet.builders import BuildOptions
 from timenet.config import settings
 from timenet.engine import run_pipeline
-from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
 from timenet.manifest import PayloadSource
 from timenet.progress import BytesMoved, ProgressCallback, ShardWritten
 from timenet.registry import BaseRegistry, LocalRegistry
@@ -120,14 +120,14 @@ class ConnectorBuilder:
         pinned_by: Mapping[DatasetRef, PayloadSource],
         options: BuildOptions,
     ) -> None:
-        """Build exactly this release into the store, in an isolated environment unless isolation is off.
+        """Build exactly this release into the store, in an isolated environment by default.
 
         Each parent of the release, and each payload source of such a parent, must already be in
-        ``store``, because this method does not plan. By default, the hidden ``timenet-build build-release`` command builds
-        the release in an environment built from the requirements of the connector. That child runs
-        with ``TIMENET_ISOLATION=off``, so it builds in its own interpreter and starts no other child.
-        ``TIMENET_ISOLATION=off`` builds in this interpreter, with the ``values_backend`` of the
-        connector.
+        ``store``, because this method does not plan. By default, the hidden
+        ``timenet-build build-release`` command builds the release in an environment built from the
+        requirements of the connector. That child runs with ``TIMENET_ISOLATION=off``, so it builds
+        in its own interpreter and starts no other child. ``TIMENET_ISOLATION=off`` builds in this
+        interpreter, with the ``values_backend`` of the connector.
 
         Args:
             release: The exact dataset ID and version to build.
@@ -139,22 +139,19 @@ class ConnectorBuilder:
                 :class:`~timenet.progress.BytesMoved` event for the downloads and a
                 :class:`~timenet.progress.ShardWritten` event for each finished shard to
                 ``options.progress``. An isolated child prints its own progress, unless
-                ``options.progress`` is ``None``.
+                ``options.quiet`` is set.
 
         Raises:
             TimeNetDatasetNotFoundError: If no connector exists for the dataset.
-            TimeFValidationError: If the card of the connector declares another version than
-                ``release``. Nothing runs then.
+            TimeNetVersionUnavailableError: If the card of the connector declares another version
+                than ``release``. Nothing runs then. It is also a ``TimeFValidationError``.
             TimeNetBuildError: If the isolated child fails.
         """  # ruff: ignore[docstring-extraneous-exception] - TimeNetBuildError is raised by run_isolated_build
         card = self.card(release.dataset_id)
         if card is None:
             raise TimeNetDatasetNotFoundError(f"no connector builds {release.dataset_id!r}")
         if card.dataset_version != release.version:
-            raise TimeFValidationError(
-                f"connector for {release.dataset_id!r} builds version {card.dataset_version}, "
-                f"not the requested {release.version}"
-            )
+            raise TimeNetVersionUnavailableError(release, card.dataset_version)
         if settings().isolation == "on":
             # Do not call resolve() here. It imports the connector, which needs the dependencies that
             # only the environment of the child has.
@@ -163,7 +160,7 @@ class ConnectorBuilder:
                 store.root,
                 force=force,
                 keep_cache=options.keep_cache,
-                quiet=options.progress is None,
+                quiet=options.quiet,
                 pinned_by=pinned_by,
             )
             return

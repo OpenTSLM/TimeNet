@@ -5,7 +5,12 @@ import sys
 import pytest
 
 from timenet.builders import BuildOptions, installed_builder
-from timenet.errors import ConnectorCardWarning, TimeFValidationError, TimeNetInvalidCardError
+from timenet.errors import (
+    ConnectorCardWarning,
+    TimeFValidationError,
+    TimeNetInvalidCardError,
+    TimeNetVersionUnavailableError,
+)
 from timenet.manifest import Manifest, PayloadSource
 from timenet.manifest.files import FilePart
 from timenet.progress import BytesMoved, ShardWritten
@@ -168,7 +173,8 @@ def test_build_prepared_builds_in_process_into_the_store(tmp_path, monkeypatch):
     assert store.exists("timenet/hello-world", "1.0.0")
 
 
-@pytest.mark.parametrize(("progress", "quiet"), [(None, True), (print, False)])
+# Only BuildOptions.quiet silences the child. An SDK build without a progress callback still prints.
+@pytest.mark.parametrize(("progress", "quiet"), [(None, False), (print, False), (None, True)])
 def test_build_prepared_runs_an_isolated_child_with_the_release_and_the_pins(tmp_path, monkeypatch, progress, quiet):
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(backend_module, "run_pipeline", _unexpected_pipeline)
@@ -182,7 +188,7 @@ def test_build_prepared_runs_an_isolated_child_with_the_release_and_the_pins(tmp
         LocalRegistry(tmp_path),
         force=True,
         pinned_by=_pins(),
-        options=BuildOptions(keep_cache=True, progress=progress),
+        options=BuildOptions(keep_cache=True, progress=progress, quiet=quiet),
     )
 
     assert calls == [(HELLO, tmp_path, {"force": True, "keep_cache": True, "quiet": quiet, "pinned_by": _pins()})]
@@ -195,10 +201,14 @@ def test_build_prepared_rejects_another_version(tmp_path, monkeypatch, isolation
     monkeypatch.setattr(backend_module, "run_pipeline", _unexpected_pipeline)
     release = DatasetRef.parse("timenet/hello-world@9.9.9")
 
-    with pytest.raises(TimeFValidationError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
+    with pytest.raises(TimeNetVersionUnavailableError) as caught:
         ConnectorBuilder().build_prepared(
             release, LocalRegistry(tmp_path), force=False, pinned_by={}, options=BuildOptions()
         )
+
+    # It is a TimeFValidationError too, so a handler of the old error still catches it.
+    assert isinstance(caught.value, TimeFValidationError)
+    assert (caught.value.release, str(caught.value.declared)) == (release, "1.0.0")
 
 
 def test_build_prepared_reports_downloads_and_shards(tmp_path, monkeypatch):

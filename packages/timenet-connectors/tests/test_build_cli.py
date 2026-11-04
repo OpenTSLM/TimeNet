@@ -285,3 +285,4 @@ def test_the_build_release_command_passes_the_pins_and_the_options(monkeypatch, 
     assert kwargs["pinned_by"] == {DatasetRef.parse("test/reader@1.0.0"): pinned}
     assert kwargs["options"].keep_cache is True
     assert (kwargs["options"].progress is None) is quiet
+    assert kwargs["options"].quiet is quiet
