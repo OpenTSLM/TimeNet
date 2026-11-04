@@ -1,21 +1,21 @@
 """The consumer command-line interface, the command-line mirror of the :class:`~timenet.client.TimeNet` SDK."""
 
 from collections.abc import Callable, Iterable
-from pathlib import Path
-import sys
+from functools import partial
 from typing import TypeVar
 
 from rich.console import Console
-from rich.progress import BarColumn, DownloadColumn, Progress, TextColumn, TimeRemainingColumn, TransferSpeedColumn
 from rich.table import Table
 import typer
 
 from timenet.cache import CachedDataset, cached_datasets, clear_cache, human_bytes, raw_cache_size
 from timenet.cli.runner import run_cli
-from timenet.cli.ui import console as ui
+from timenet.cli.ui import console as ui, progress_renderer
 from timenet.client import TimeNet, default_sources
+from timenet.progress import ProgressCallback, ProgressEvent, StepStarted
 from timenet.types import DatasetMetadata, Domain, License, TaskType
 from timenet.types.access import access_requirements, effective_access
+from timenet.types.references import split_ref
 from timenet.types.tasks import TASKS
 
 
@@ -27,6 +27,13 @@ _registry_option = typer.Option(
     "--registry",
     "-r",
     help="Registry URL or path that this command reads (else $TIMENET_REGISTRY, then timenet://).",
+)
+_download_registry_option = typer.Option(
+    None,
+    "--registry",
+    "-r",
+    help="Registry URL or path to put after the local registry in the list of sources. The release resolves "
+    "through the whole list.",
 )
 
 T = TypeVar("T")
@@ -184,49 +191,41 @@ def info(dataset_id: str, registry: str | None = _registry_option) -> None:
 
 
 @app.command()
-def download(dataset_id: str, registry: str | None = _registry_option) -> None:
-    """Download a dataset version and print its local directory to stdout.
+def download(
+    dataset_id: str,
+    registry: str | None = _download_registry_option,
+    force: bool = typer.Option(
+        False, "--force", help="Copy the release again, even if the local registry holds a complete copy."
+    ),
+) -> None:
+    """Copy a release and its payload sources into the local registry.
 
-    Files go to ``$TIMENET_STORAGE`` or ``<TIMENET_HOME>/storage``.
+    Print the release directory to standard output.
     """
-    client = _client(registry)
-    manifest = client.get(dataset_id)
-    files = list(manifest.files.all_files())
-    total = sum(part.size for part in files)
-    ui.status("⬇️", f"Downloading '{dataset_id}' ({len(files)} files, {human_bytes(total)})…")
-    target = _download(client, dataset_id, total)
-    ui.success(f"Downloaded '{dataset_id}' ({target.name})")
+    sources = default_sources(remote_registry=registry)
+    started: list[StepStarted] = []
+    with progress_renderer() as show:
+        target = TimeNet(sources=sources).download(
+            dataset_id, force=force, progress=partial(_keep_steps, started, show)
+        )
+    if not started:
+        # The local registry already held the release and its payload sources.
+        ui.success(f"Nothing to do: '{split_ref(dataset_id)[0]}' {target.name} is already in {sources[0]}")
     typer.echo(str(target))
 
 
-def _download(client: TimeNet, dataset_id: str, total: int) -> Path:
-    """Download a version, rendering a live progress bar on stderr when the terminal supports it.
+def _keep_steps(started: list[StepStarted], show: ProgressCallback | None, event: ProgressEvent) -> None:
+    """Keep each step event in ``started``, and pass every event on to ``show``.
 
     Args:
-        client: The client to download through.
-        dataset_id: The dataset id, optionally followed by ``@version``.
-        total: The total file size in bytes for the progress bar.
-
-    Returns:
-        The local version directory.
+        started: Receives the step events.
+        show: The callback that shows the events, or ``None`` for a quiet console.
+        event: The progress event.
     """
-    if ui.quiet or not sys.stderr.isatty():
-        return client.download(dataset_id)
-    progress = Progress(
-        TextColumn("[bold blue]{task.description}"),
-        BarColumn(bar_width=None),
-        "[progress.percentage]{task.percentage:>3.0f}%",
-        "•",
-        DownloadColumn(),
-        "•",
-        TransferSpeedColumn(),
-        "•",
-        TimeRemainingColumn(),
-        console=ui.rich,
-    )
-    with progress:
-        task = progress.add_task("downloading", total=total)
-        return client.download(dataset_id, progress_cb=lambda n: progress.advance(task, n))
+    if isinstance(event, StepStarted):
+        started.append(event)
+    if show is not None:
+        show(event)
 
 
 cache_app = typer.Typer(help="Inspect and clear the local cache.", no_args_is_help=True)
@@ -270,14 +269,14 @@ def _cache_table(datasets: list[CachedDataset]) -> Table:
 
 @cache_app.command("clear")
 def cache_clear(
-    all_: bool = typer.Option(False, "--all", help="Also remove the local registry (built datasets)."),
+    all_: bool = typer.Option(False, "--all", help="Also remove the default local registry (builds and downloads)."),
     yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
 ) -> None:
-    """Delete cached data. Clears downloads by default. The ``--all`` flag also removes built datasets."""
+    """Delete cached data: the storage directory and the raw cache. ``--all`` also removes the default local registry."""
     if not yes:
-        what = "downloaded datasets and the raw cache"
+        what = "the storage directory and the raw cache"
         if all_:
-            what += " and the local registry (built datasets)"
+            what += " and the local registry (builds and downloads)"
         typer.confirm(f"Remove {what}?", abort=True)
     freed, removed = clear_cache(include_registry=all_)
     typer.echo(f"Freed {human_bytes(freed)} from {len(removed)} location(s).")

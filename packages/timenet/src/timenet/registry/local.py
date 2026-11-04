@@ -7,16 +7,17 @@ from typing import BinaryIO
 
 import pyarrow.fs as pafs
 
-from timenet._fs import staged_directory
+from timenet._fs import same_directory, staged_directory
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetFileError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
+from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import check_file_sizes, validate_manifest_reference
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
-from timenet.sources import FoundInRegistry, NotFound, ReleaseLookup
+from timenet.sources import FoundInRegistry, NotFound, ReleaseLookup, ReleaseSource
 from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
 from timenet.types.references import DatasetRef, is_latest
@@ -323,6 +324,29 @@ class LocalRegistry(WritableRegistry):
         if not versions:
             return None
         return max(versions, key=Version.parse)
+
+
+def is_same_registry(source: ReleaseSource, registry: BaseRegistry) -> bool:
+    """Return whether a source is a given registry, or another local registry over the same directory.
+
+    Two local registries over one directory hold the same releases. So a copy from one of them to the
+    other copies the directory onto itself. A build counts such a source as its output, and
+    :meth:`~timenet.client.TimeNet.download` counts it as the store.
+
+    Args:
+        source: The source.
+        registry: The registry, for example the output of a build or the store of a client.
+
+    Returns:
+        ``True`` for the same object or local registries over the same directory.
+    """
+    if source is registry:
+        return True
+    return (
+        isinstance(source, LocalRegistry)
+        and isinstance(registry, LocalRegistry)
+        and same_directory(source.root, registry.root)
+    )
 
 
 def _is_version(name: str) -> bool:

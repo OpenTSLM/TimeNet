@@ -2,7 +2,24 @@ from pathlib import Path
 
 import pytest
 
-from timenet._fs import publish_directory
+from timenet._fs import publish_directory, same_directory
+
+
+def test_a_symlink_and_its_target_are_the_same_directory(tmp_path):
+    (tmp_path / "store").mkdir()
+    (tmp_path / "link").symlink_to(tmp_path / "store", target_is_directory=True)
+    assert same_directory(tmp_path / "link", tmp_path / "store")
+
+
+def test_two_missing_paths_that_differ_only_in_case_are_different_directories(tmp_path):
+    assert not same_directory(tmp_path / "store", tmp_path / "Store")
+
+
+def test_a_missing_path_is_never_the_same_directory_as_an_existing_one(tmp_path):
+    (tmp_path / "store").mkdir()
+    if (tmp_path / "Store").exists():
+        pytest.skip("the temporary folder ignores case, so the case variant exists too")
+    assert not same_directory(tmp_path / "Store", tmp_path / "store")
 
 
 def _directories(tmp_path: Path) -> tuple[Path, Path]:

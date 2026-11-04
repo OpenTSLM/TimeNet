@@ -125,7 +125,7 @@ def _download_bars() -> Progress:
 
 
 def _bar_reporter(progress: Progress) -> Callable[[BytesMoved], None]:
-    """Create a callback that displays a progress bar for each transfer URL.
+    """Create a callback that displays a progress bar for each transfer.
 
     Args:
         progress: The display that holds the bars.
@@ -136,10 +136,10 @@ def _bar_reporter(progress: Progress) -> Callable[[BytesMoved], None]:
     tasks: dict[str, TaskID] = {}
 
     def report(event: BytesMoved) -> None:
-        task_id = tasks.get(event.url)
+        task_id = tasks.get(event.subject)
         if task_id is None:
-            task_id = progress.add_task("download", name=event.url.rsplit("/", 1)[-1], total=event.total)
-            tasks[event.url] = task_id
+            task_id = progress.add_task("download", name=event.subject.rsplit("/", 1)[-1], total=event.total)
+            tasks[event.subject] = task_id
         progress.update(task_id, completed=event.done, total=event.total)
 
     return report
@@ -161,10 +161,10 @@ def _text_download_reporter() -> Callable[[BytesMoved], None]:
     def report(event: BytesMoved) -> None:
         # ~20% steps when the size is known, else one line every 50 MB.
         step = event.done * 5 // event.total if event.total else event.done // _UNKNOWN_TOTAL_STEP_BYTES
-        if last.get(event.url) == step:
+        if last.get(event.subject) == step:
             return
-        last[event.url] = step
-        name = event.url.rsplit("/", 1)[-1]
+        last[event.subject] = step
+        name = event.subject.rsplit("/", 1)[-1]
         if event.total:
             console.status("⬇️", f"{name} {event.done * 100 // event.total}% ({human_bytes(event.total)})")
         else:

@@ -1,10 +1,48 @@
-"""Replace a directory with a complete staging directory."""
+"""Compare directories, and replace a directory with a complete staging directory."""
 
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 import shutil
 import uuid
+
+
+def same_directory(a: Path, b: Path) -> bool:
+    """Check whether two paths name the same directory, as the file system sees them.
+
+    Two existing directories compare by their identity on disk, so a symlink or a case variant on a volume that
+    ignores case matches. An existing path never matches a missing one. Two missing paths match if their nearest
+    existing parents are the same directory and the names below those parents are equal as written.
+
+    Args:
+        a: The first path, whether or not it exists.
+        b: The second path, whether or not it exists.
+
+    Returns:
+        ``True`` if both paths name the same directory.
+    """
+    if a.exists() or b.exists():
+        # On a volume that ignores case, a case variant of an existing path exists too.
+        return a.exists() and b.exists() and a.samefile(b)
+    return _below_existing_parent(a.resolve()) == _below_existing_parent(b.resolve())
+
+
+def _below_existing_parent(path: Path) -> tuple[int, int, tuple[str, ...]]:
+    """Identify a missing path by its nearest existing parent and the names below that parent.
+
+    Args:
+        path: A missing absolute path without symlinks.
+
+    Returns:
+        The parent's device and inode numbers, followed by the names below it as written.
+    """
+    for depth, parent in enumerate(path.parents, start=1):
+        try:
+            info = parent.stat()
+        except OSError:
+            continue
+        return info.st_dev, info.st_ino, path.parts[len(path.parts) - depth :]
+    return 0, 0, path.parts  # nothing exists, not even the root
 
 
 def publish_directory(staging: Path, final: Path) -> None:
