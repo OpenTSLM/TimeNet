@@ -76,7 +76,7 @@ class _Role(StrEnum):
 
 @unique
 class _TrueOrFalse(StrEnum):
-    """The answer of a true-or-false question, as the release writes it."""
+    """The release's true-or-false answer labels: ``T`` and ``F``."""
 
     TRUE = "T"
     FALSE = "F"
