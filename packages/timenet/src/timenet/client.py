@@ -396,8 +396,8 @@ class TimeNet:
         """Copy a dataset release and its payload sources into the local registry.
 
         The release resolves as in :meth:`open`, without a build. The release and each payload source that the
-        local registry lacks or holds damaged come from the first registry other than the local registry that
-        provides them.
+        store lacks or holds damaged come from the first registry other than the store that provides them, and
+        get a provenance record that names that registry.
 
         Args:
             dataset_id: The dataset ID, optionally followed by ``@version``.

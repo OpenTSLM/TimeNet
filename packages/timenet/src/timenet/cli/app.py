@@ -10,7 +10,15 @@ from rich.console import Console
 from rich.table import Table
 import typer
 
-from timenet.cache import cache_size, clear_cache, clear_releases, human_bytes, stored_releases
+from timenet.cache import (
+    ReleaseKind,
+    cache_size,
+    clear_cache,
+    clear_releases,
+    human_bytes,
+    releases_to_clear,
+    stored_releases,
+)
 from timenet.cli.options import AUTO_BUILD, LOCAL_REGISTRY, REMOTE_REGISTRY
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console as ui, progress_renderer
@@ -332,28 +340,41 @@ cache_app = typer.Typer(
     no_args_is_help=True,
 )
 local_app.add_typer(cache_app, name="cache")
+downloads_app = typer.Typer(help="The releases in the local registry that came from a registry.", no_args_is_help=True)
+local_app.add_typer(downloads_app, name="downloads")
+builds_app = typer.Typer(
+    help="The releases in the local registry that a connector built. A release without a record counts as a build.",
+    no_args_is_help=True,
+)
+local_app.add_typer(builds_app, name="builds")
 
 _YES = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt.")
+_KINDS: tuple[ReleaseKind, ...] = ("download", "build")
 
 
 @local_app.command("info")
 def local_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
-    """Show cache and local registry paths and sizes."""
+    """Show the path and size of the cache, the downloads and the builds."""
     store, cache_dir = default_local_registry(local_registry=local_registry), settings().cache_dir
     releases = stored_releases(store)
-    size = human_bytes(sum(item.size_bytes for item in releases))
     # Plain lines, so that a long path does not wrap.
     typer.echo(_cache_line(cache_dir))
-    typer.echo(f"Local registry {store.root}: {_count(len(releases), 'release')}, {size}")
+    for kind in _KINDS:
+        of_kind = [item for item in releases if item.kind == kind]
+        size = human_bytes(sum(item.size_bytes for item in of_kind))
+        typer.echo(f"{kind.capitalize()}s in {store.root}: {_count(len(of_kind), 'release')}, {size}")
 
 
 @local_app.command("clear")
 def local_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
-    """Delete the cache and every release in the local registry."""
+    """Delete the cache, every download and every build."""
     store, cache_dir = default_local_registry(local_registry=local_registry), settings().cache_dir
     if not yes:
-        typer.confirm(f"Delete the cache in {cache_dir} and every release in {store.root}?", abort=True)
-    releases = clear_releases(store)
+        builds = _count(sum(item.kind == "build" for item in stored_releases(store)), "build")
+        typer.confirm(
+            f"Delete the cache in {cache_dir} and every release in {store.root}, {builds} included?", abort=True
+        )
+    releases = clear_releases(store, kinds=_KINDS)
     cache = clear_cache(cache_dir, local_registry=store)
     _warn_unmarked(cache.kept)
     _freed(releases.freed + cache.freed, len(releases.removed) + len(cache.removed))
@@ -373,6 +394,63 @@ def cache_clear(yes: bool = _YES) -> None:
         typer.confirm(f"Delete the raw source files and control databases in {cache_dir}?", abort=True)
     freed, removed, kept = clear_cache(cache_dir, local_registry=default_local_registry())
     _warn_unmarked(kept)
+    _freed(freed, len(removed))
+
+
+@downloads_app.command("info")
+def downloads_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
+    """Show each download in the local registry with its registry and size."""
+    _show_releases("download", local_registry)
+
+
+@downloads_app.command("clear")
+def downloads_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
+    """Delete the downloads in the local registry. A download that a release that stays needs stays too."""
+    _clear_releases("download", yes, local_registry)
+
+
+@builds_app.command("info")
+def builds_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
+    """Show each build in the local registry with its connector package and size."""
+    _show_releases("build", local_registry)
+
+
+@builds_app.command("clear")
+def builds_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
+    """Delete the builds in the local registry. A build that a release that stays needs stays too."""
+    _clear_releases("build", yes, local_registry)
+
+
+def _show_releases(kind: ReleaseKind, local_registry: str | None) -> None:
+    """Print a table of the releases of one kind in the store, or a line if the store holds none."""
+    store = default_local_registry(local_registry=local_registry)
+    releases = [item for item in stored_releases(store) if item.kind == kind]
+    if not releases:
+        typer.echo(f"No {kind}s in {store.root}.")
+        return
+    table = Table(title=f"{kind.capitalize()}s in {store.root}", title_justify="left", title_style="bold")
+    table.add_column("Dataset", style="cyan")
+    table.add_column("Version")
+    table.add_column("Source", overflow="fold")
+    table.add_column("Size", justify="right")
+    for item in releases:
+        # A build without a record has no source.
+        source = "-" if item.origin is None else item.origin.source
+        table.add_row(item.release.dataset_id, str(item.release.version), source, human_bytes(item.size_bytes))
+    table.add_section()
+    table.add_row("total", "", "", human_bytes(sum(item.size_bytes for item in releases)), style="bold")
+    console.print(table)
+
+
+def _clear_releases(kind: ReleaseKind, yes: bool, local_registry: str | None) -> None:
+    """Delete the releases of one kind after a prompt that counts them, and name each release that stays."""
+    store = default_local_registry(local_registry=local_registry)
+    if not yes:
+        releases, _ = releases_to_clear(store, kinds=[kind])
+        typer.confirm(f"Delete {_count(len(releases), kind)} from {store.root}?", abort=True)
+    freed, removed, kept = clear_releases(store, kinds=[kind])
+    for item in kept:
+        ui.warn(f"Kept {item.release}: {item.needed_by} needs it.")
     _freed(freed, len(removed))
 
 

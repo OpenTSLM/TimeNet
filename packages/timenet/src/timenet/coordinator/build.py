@@ -9,6 +9,7 @@ from timenet.progress import StepFinished, StepStarted
 from timenet.registry import copy_release
 from timenet.registry.dependencies import prepare_local_copy
 from timenet.registry.local import LocalRegistry
+from timenet.registry.origin import record_origin
 from timenet.sources import ReleaseSource
 from timenet.types.references import is_latest, split_ref
 
@@ -56,7 +57,8 @@ def plan_release_build(
 def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None = None) -> None:
     """Run the copy and build steps of a plan in order.
 
-    Skip read steps.
+    A read step runs nothing, because its release stays where it is. Each release that a copy or a
+    build puts into ``store`` gets a provenance record (see :mod:`timenet.registry.origin`).
 
     Args:
         plan: The steps to run.
@@ -75,7 +77,7 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
                 # A read opens the release where it is, so it has nothing to run.
                 pass
             case CopyStep():
-                copy_release(
+                copies = copy_release(
                     step.release,
                     step.registry,
                     store,
@@ -83,6 +85,8 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
                     force=step.force,
                     progress=options.progress,
                 )
+                for release in copies:
+                    record_origin(store, release, "copy", step.registry.location)
             case BuildStep():
                 _build(step, store, options=options)
             case _:
@@ -98,12 +102,14 @@ def _build(step: BuildStep, store: LocalRegistry, *, options: BuildOptions) -> N
         options: The build settings.
 
     Raises:
-        TimeNetDatasetNotFoundError: If the result lacks the release or a payload source.
+        TimeNetDatasetNotFoundError: If the backend does not put the release or a payload source of it
+            into ``store``.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by prepare_local_copy
     if options.progress is not None:
         options.progress(StepStarted(step.release, "build"))
     step.builder.backend.build(step.release, store, force=step.force, pinned_by=step.pinned_by, options=options)
     # After a successful build, the local registry must hold the exact release with its payload sources.
     prepare_local_copy(store.root, step.release)
+    record_origin(store, step.release, "build", step.builder.package)
     if options.progress is not None:
         options.progress(StepFinished(step.release, "build"))

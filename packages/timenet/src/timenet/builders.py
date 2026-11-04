@@ -8,7 +8,7 @@ package plug in the same way the first-party one does.
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from importlib.metadata import entry_points
+from importlib.metadata import EntryPoint, entry_points
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
@@ -112,15 +112,25 @@ class InstalledBuilder:
     Attributes:
         backend: The installed backend that builds the dataset.
         card: The dataset's connector card.
+        entry: The entry point that registers the backend.
     """
 
     backend: BuilderBackend
     card: DatasetMetadata
+    entry: EntryPoint
 
     @property
     def release(self) -> DatasetRef:
         """The release that the card declares."""
         return DatasetRef(dataset_id=self.card.dataset_id, version=self.card.dataset_version)
+
+    @property
+    def package(self) -> str:
+        """``"<distribution> <version>"`` of the backend, or its class path if no distribution declares it."""
+        if self.entry.dist is not None:
+            return f"{self.entry.dist.name} {self.entry.dist.version}"
+        kind = type(self.backend)
+        return f"{kind.__module__}.{kind.__qualname__}"
 
 
 def installed_builder(dataset_id: str) -> InstalledBuilder | None:
@@ -139,7 +149,7 @@ def installed_builder(dataset_id: str) -> InstalledBuilder | None:
         backend = entry.load()()
         if dataset_id in backend.dataset_ids():
             card = backend.card(dataset_id)
-            return None if card is None else InstalledBuilder(backend, card)
+            return None if card is None else InstalledBuilder(backend, card, entry)
     return None
 
 

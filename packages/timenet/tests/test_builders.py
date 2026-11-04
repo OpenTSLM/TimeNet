@@ -1,5 +1,8 @@
+from types import SimpleNamespace
+
 import pytest
 
+from timenet import builders
 from timenet.builders import declared, installed_builder
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
 from timenet.testing import install_backends, make_dataset
@@ -45,3 +48,19 @@ def test_declared_returns_the_release_of_the_card_and_refuses_another_version(mo
     )
     with pytest.raises(TimeNetDatasetNotFoundError, match="no installed connector builds 'x/y'"):
         declared("x/y")
+
+
+def test_an_installed_builder_names_the_distribution_of_the_backend(monkeypatch):
+    card = make_dataset().metadata
+    a_b, x_y = _Backend("a/b", card=card), _Backend("x/y", card=card)
+    # install_backends() gives entry points without a distribution, so this test makes its own.
+    entries = [
+        SimpleNamespace(dist=None, load=lambda: lambda: a_b),
+        SimpleNamespace(dist=SimpleNamespace(name="pkg", version="1.2.3"), load=lambda: lambda: x_y),
+    ]
+    monkeypatch.setattr(builders, "entry_points", lambda group: entries)
+    packaged, unpackaged = installed_builder("x/y"), installed_builder("a/b")
+    assert packaged is not None and unpackaged is not None
+    assert packaged.package == "pkg 1.2.3"
+    # No distribution declares the first entry point, so the class of its backend names it.
+    assert unpackaged.package == f"{_Backend.__module__}._Backend"
