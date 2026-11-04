@@ -108,24 +108,24 @@ def run_isolated(  # ruff: ignore[too-many-arguments]
     quiet: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Build a dataset in a separate environment with its connector's dependencies.
+    """Build a dataset in a separate environment.
 
-    The build streams status and errors to stderr.
+    The build forwards stderr as it runs and includes its last lines in build errors.
 
     Args:
-        dataset_id: The dataset id.
-        out: The output directory or a ``timenet://``, ``http(s)://``, or ``s3://`` registry URL.
+        dataset_id: The dataset ID.
+        out: A local directory or a ``timenet://``, ``http(s)://``, or ``s3://`` URL.
         force: Rebuild an existing version.
         keep_cache: Keep the raw download cache after building.
-        quiet: Suppress the build's status output.
-        pinned_by: Releases that read this dataset's files, with file pins the build must match.
+        quiet: Hide the build's status output.
+        pinned_by: File pins to preserve, grouped by dependent releases, or ``None``.
 
     Returns:
-        The version directory for a local output, or the published version for a remote output.
+        The local version directory or the published version for a remote target.
 
     Raises:
         TimeNetBuildError: If the build fails or prints no result.
-        LookupError: If no connector exists for the id.
+        LookupError: If no connector exists for the dataset ID.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by _run_in_env, not directly here)
     stdout = _run_in_env(
         dataset_id,
@@ -151,19 +151,18 @@ def run_isolated_build(  # ruff: ignore[too-many-arguments]
     quiet: bool,
     pinned_by: Mapping[DatasetRef, PayloadSource],
 ) -> None:
-    """Build one release into a local store, in the environment of its connector.
+    """Build a specific release into a local registry in its connector's environment.
 
-    The store must already hold each parent of the release with its payload sources. The error of a
-    failed build includes the last lines that the build wrote to stderr.
+    The registry must already contain all parent releases and their payload sources.
+    Build errors include the last lines of stderr.
 
     Args:
         release: The exact dataset ID and version to build.
-        store_root: The directory of the local registry to build into.
-        force: Build the release again, even if the store already holds it.
+        store_root: The local registry directory to build into.
+        force: Rebuild even if the registry already contains the release.
         keep_cache: Keep the raw download cache after building.
-        quiet: Print no status output from the build.
-        pinned_by: The releases that already read files of this release, with their pins. The build
-            publishes the release only if it writes each pinned file again.
+        quiet: Hide the build's status output.
+        pinned_by: Releases that depend on this release, with file pins that the build must preserve.
 
     Raises:
         TimeNetBuildError: If the build fails.
@@ -190,22 +189,22 @@ def _run_in_env(  # ruff: ignore[too-many-arguments]
     pinned_by: Mapping[DatasetRef, PayloadSource] | None,
     subject: str,
 ) -> str:
-    """Run a ``timenet-build`` subcommand in the environment of a connector.
+    """Run a ``timenet-build`` subcommand in a connector's environment.
 
     Args:
-        dataset_id: The dataset ID whose connector gives the environment.
-        subcommand: The subcommand with its arguments. The flags of the build go after it.
+        dataset_id: The dataset ID that selects the connector's environment.
+        subcommand: The subcommand and its arguments, before the build flags.
         force: Add ``--force``.
         keep_cache: Add ``--keep-cache``.
         quiet: Add ``--quiet``.
-        pinned_by: The pins to give the child in a file, or ``None``.
-        subject: What the error of a failed build names.
+        pinned_by: The file pins to pass to the build, or ``None``.
+        subject: The name to include in build errors.
 
     Returns:
-        What the child printed on stdout.
+        The command's stdout.
 
     Raises:
-        TimeNetBuildError: If the child fails.
+        TimeNetBuildError: If the command fails.
         LookupError: If no connector exists for the dataset ID.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by env_spec, not directly here)
     # --quiet belongs to timenet-build, not to the subcommand, so it goes first.

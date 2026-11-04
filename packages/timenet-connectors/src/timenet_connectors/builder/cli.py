@@ -198,9 +198,10 @@ def build_prepared_release_command(
         None, "--pinned-by", help="A JSON file of the releases that read files of this release, with their pins."
     ),
 ) -> None:
-    """Build exactly one release into a local store that holds its parents and payload sources.
+    """Build a release in a local registry.
 
-    The command prints status lines and progress to stderr, and nothing to stdout.
+    The registry must already contain all parent releases and their payload sources.
+    Status and progress go to stderr, and nothing goes to stdout.
     """
     # backend.py imports this module, so a module-level import here would be circular.
     from timenet_connectors.builder.backend import ConnectorBuilder  # ruff: ignore[import-outside-top-level]
@@ -441,15 +442,13 @@ def _report_progress(event: WriteProgressEvent) -> None:
 
 @contextmanager
 def _download_progress() -> Generator[Progress | None]:
-    """Install the download-progress sink for a build and render it.
+    """Install a download-progress sink for the block and display what it reports.
 
-    In an interactive terminal, downloads show as live progress bars, one row per file, updating in
-    parallel. When output goes through a pipe or you set ``--quiet``, this falls back to throttled
-    text lines (or silence), so redirected logs stay readable.
+    Interactive terminals show live bars, and other outputs show periodic text updates.
+    Quiet mode hides progress.
 
     Yields:
-        The live progress display when rendering bars, else ``None``. This installs the sink for
-        the duration of the block.
+        The live progress display for the block, or ``None`` for text output or quiet mode.
     """
     if console.quiet:
         with progress_sink(None):
@@ -466,12 +465,12 @@ def _download_progress() -> Generator[Progress | None]:
 
 @contextmanager
 def _renderer() -> Generator[Callable[[ProgressEvent], None] | None]:
-    """Show the progress events of a build on the console.
+    """Provide a callback that displays build progress.
 
-    Downloads show as live progress bars in an interactive terminal, else as throttled text lines.
+    Interactive terminals show download bars, and other outputs show periodic text updates.
 
     Yields:
-        The callback that shows each event, or ``None`` if the console is quiet.
+        The progress callback for the block, or ``None`` in quiet mode.
     """
     if console.quiet:
         yield None
@@ -484,10 +483,10 @@ def _renderer() -> Generator[Callable[[ProgressEvent], None] | None]:
 
 
 def _render(report_download: ProgressCallback, event: ProgressEvent) -> None:
-    """Show one progress event of a build on the console.
+    """Display a download or completed shard update.
 
     Args:
-        report_download: Shows the progress of one download.
+        report_download: The callback that displays download progress.
         event: The event to show.
     """
     if isinstance(event, BytesMoved):
@@ -497,10 +496,10 @@ def _render(report_download: ProgressCallback, event: ProgressEvent) -> None:
 
 
 def _download_bars() -> Progress:
-    """Make the live display that shows each download as a progress bar.
+    """Create a live display of download progress bars.
 
     Returns:
-        The display. It shows only inside a ``with`` block.
+        The progress display to activate with a ``with`` block.
     """
     return Progress(
         TextColumn("[bold blue]{task.fields[name]}", justify="right"),
