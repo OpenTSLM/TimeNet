@@ -1,3 +1,5 @@
+from enum import StrEnum
+
 from pydantic import ValidationError
 import pytest
 
@@ -48,3 +50,29 @@ def test_a_multi_label_target_accepts_any_distinct_listed_labels(targets):
 def test_a_multi_label_target_rejects_a_repeated_label():
     with pytest.raises(TimeFValidationError, match="repeated labels of label set 'findings': \\['AF'\\]"):
         FINDINGS.check_targets(("AF", "PVC", "AF"))
+
+
+class _Sex(StrEnum):
+    FEMALE = "F"
+    MALE = "M"
+
+
+class _Other(StrEnum):
+    FEMALE = "F"
+
+
+def test_a_label_set_from_an_enum_has_one_label_per_member_in_order():
+    sexes = LabelSet.from_enum(_Sex, name="sex", descriptions={_Sex.FEMALE: "Female."}, multi_label=True)
+
+    assert sexes == LabelSet(
+        name="sex",
+        labels=(Label(name="F", description="Female."), Label(name="M")),
+        multi_label=True,
+    )
+
+
+@pytest.mark.parametrize("key", [_Other.FEMALE, "F"])
+def test_a_label_set_from_an_enum_rejects_a_description_for_another_value(key):
+    # Both keys equal _Sex.FEMALE as strings, so without the check they would describe it silently.
+    with pytest.raises(TimeFValidationError, match="not members of _Sex"):
+        LabelSet.from_enum(_Sex, name="sex", descriptions={key: "Female."})

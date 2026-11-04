@@ -1,6 +1,7 @@
 """The allowed labels for a classification target."""
 
-from collections.abc import Iterator, Sequence
+from collections.abc import Iterator, Mapping, Sequence
+from enum import StrEnum
 from typing import Self
 
 from pydantic import StrictBool, model_validator
@@ -36,7 +37,8 @@ class LabelSet(TimeFModel):
         )
         ClassificationTask(inputs=(record,), targets=("awake",), label_set=SLEEP_STAGE)
 
-    Each name identifies one label set in a dataset.
+    Each name identifies one label set in a dataset. If a connector fixes the labels in its own code,
+    define them as a ``StrEnum`` and build the set with :meth:`from_enum`.
     """
 
     name: NonEmptyString
@@ -56,6 +58,49 @@ class LabelSet(TimeFModel):
         if len(set(self.names)) != len(self.labels):
             raise ValueError(f"label set {self.name!r} lists a label more than once")
         return self
+
+    @classmethod
+    def from_enum(
+        cls,
+        labels: type[StrEnum],
+        *,
+        name: str,
+        descriptions: Mapping[StrEnum, str] | None = None,
+        multi_label: bool = False,
+    ) -> Self:
+        """Build a label set from the members of a ``StrEnum``, in the order that the enum defines them.
+
+        Each member's value is a label name, so a connector can pass a member as a target::
+
+            class Sex(StrEnum):
+                FEMALE = "F"
+                MALE = "M"
+
+
+            SEXES = LabelSet.from_enum(Sex, name="sex", descriptions={Sex.FEMALE: "Female."})
+            ClassificationTask(inputs=(record,), targets=(Sex.FEMALE,), label_set=SEXES)
+
+        Args:
+            labels: The enum whose members are the labels.
+            name: The name of the set within a dataset.
+            descriptions: The description of some or all members. A member without one has none.
+            multi_label: Whether a target holds all labels that apply instead of exactly one.
+
+        Returns:
+            The label set.
+
+        Raises:
+            TimeFValidationError: If ``descriptions`` has a key that is not a member of ``labels``.
+        """
+        described = dict(descriptions or {})
+        unknown = sorted(str(key) for key in described if not isinstance(key, labels))
+        if unknown:
+            raise TimeFValidationError(f"descriptions name values that are not members of {labels.__name__}: {unknown}")
+        return cls(
+            name=name,
+            labels=tuple(Label(name=member.value, description=described.get(member)) for member in labels),
+            multi_label=multi_label,
+        )
 
     @property
     def names(self) -> tuple[str, ...]:
