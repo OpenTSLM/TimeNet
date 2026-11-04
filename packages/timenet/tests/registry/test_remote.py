@@ -460,8 +460,13 @@ def test_latest_detail_rejects_non_string_version(tmp_path):
 
 
 def test_the_default_list_passes_its_store_to_the_remote_registry(tmp_path):
-    # A remote registry reuses the complete copies in the store, where download() puts them, also in a
-    # store that an argument names.
+    # A remote registry reads the copies of the same releases in the store, where download() puts them.
+    # A list with its own store passes that store to each registry URL in it.
+    own = LocalRegistry(tmp_path / "own", store=True)
+    _, registry = TimeNet(sources=[own, "https://registry.example.test"])._sources
+    assert isinstance(registry, RemoteRegistry)
+    assert registry.local_root == own.root
+    # The default list passes its store to the remote registry, also a store that an argument names.
     store, remote, *_ = default_sources(
         local_registry=tmp_path / "other", remote_registry="https://registry.example.test"
     )

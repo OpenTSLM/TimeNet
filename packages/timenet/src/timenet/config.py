@@ -133,10 +133,10 @@ def settings(**overrides: Any) -> TimeNetSettings:
 
 
 def _load(values: dict[str, Any]) -> TimeNetSettings:
-    """Validate settings with the supplied values overriding the environment.
+    """Load and validate settings with explicit values taking priority over environment variables.
 
     Args:
-        values: Setting overrides with ``None`` values already removed.
+        values: Setting overrides with no ``None`` values.
 
     Returns:
         The validated settings.
@@ -157,12 +157,38 @@ def _load(values: dict[str, Any]) -> TimeNetSettings:
             "and control folders of the cache, so give TIMENET_CACHE a folder of its own, for example "
             f"{TimeNetSettings.model_fields['cache'].default}."
         )
+    _check_apart(store, cache, "TIMENET_LOCAL_REGISTRY")
+    return cfg
+
+
+def check_local_registry(local_registry: Path) -> None:
+    """Check that a local registry directory and ``TIMENET_CACHE`` do not overlap.
+
+    Args:
+        local_registry: The local registry directory.
+
+    Raises:
+        TimeFValidationError: If the local registry and cache are the same directory or one contains the other.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _check_apart)
+    _check_apart(local_registry.expanduser(), settings().cache_dir, "The local registry")
+
+
+def _check_apart(store: Path, cache: Path, name: str) -> None:
+    """Check that the local registry and cache directories are separate.
+
+    Args:
+        store: The local registry directory.
+        cache: The cache directory.
+        name: The local registry label to show in errors.
+
+    Raises:
+        TimeFValidationError: If the directories are the same or one contains the other.
+    """
     if lies_in(store, cache) or lies_in(cache, store):
         raise TimeFValidationError(
-            f"TIMENET_LOCAL_REGISTRY ({store}) and TIMENET_CACHE ({cache}) overlap. The local registry holds builds, "
+            f"{name} ({store}) and TIMENET_CACHE ({cache}) overlap. The local registry holds builds, "
             "and TimeNet deletes files in the cache, so one folder must not be the other or lie in it."
         )
-    return cfg
 
 
 def _sentence(item: ErrorDetails) -> str:
