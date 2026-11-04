@@ -335,8 +335,7 @@ def test_put_dataset_publishes_uploads_and_finalizes(tmp_path):
     transport, state = build_publish_fake(token="tok_rw")
     registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path)
     dataset = make_dataset()
-    version = registry.put_dataset(dataset)
-    assert version == str(dataset.metadata.dataset_version)
+    assert registry.put_dataset(dataset) == DatasetRef.parse(f"{dataset.metadata.dataset_id}@1.0.0")
     assert state["finalized"] is True
     # every declared file was uploaded
     assert set(state["store"]) == set(state["published"])

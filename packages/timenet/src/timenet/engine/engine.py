@@ -113,16 +113,11 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
     force: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Build and publish a dataset to a writable registry.
+    """Run one connector and publish the result to a writable registry.
 
-    Like :func:`run_pipeline`, but the converted dataset is handed to ``registry.put_dataset`` instead of
-    written to a local directory, so it also targets a remote or S3 registry. It is idempotent: an
-    already-committed version skips the ``download`` and ``convert`` stages and returns unless ``force``.
-    Like :func:`run_pipeline`, it checks after ``compose`` that the dataset has the card that the
-    engine read.
-    A registry other than a local one holds open releases only, so a card that is not open fails
-    before any download. The composed dataset can be a child whose card says open while a parent is
-    not open. So the engine checks the dataset again with its lineage before the write.
+    If the registry already holds the version, the function returns it at once unless ``force`` is
+    set. A registry that is not local takes only a release whose card and lineage declare
+    ``access: open``.
 
     Args:
         connector: The connector to build.
@@ -158,10 +153,9 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
         if not isinstance(registry, LocalRegistry):
             require_open_access(dataset.metadata, dataset.lineage.values())
         dataset.derive_schema()
-        # Pass pins only when there are any, so a registry written against the earlier put_dataset()
-        # signature keeps working for every other build.
-        pinned = {"pinned_by": pinned_by} if pinned_by else {}
-        registry.put_dataset(dataset, force=force, values_backend=values_backend, progress_cb=progress_cb, **pinned)
+        registry.put_dataset(
+            dataset, force=force, values_backend=values_backend, progress_cb=progress_cb, pinned_by=pinned_by
+        )
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version

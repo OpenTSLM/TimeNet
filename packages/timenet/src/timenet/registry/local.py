@@ -6,6 +6,7 @@ import shutil
 from typing import BinaryIO
 import uuid
 
+from timenet._fs import publish_directory
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE
@@ -18,7 +19,6 @@ from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
 from timenet.types.references import DatasetRef, is_latest
 from timenet.writer import TimeFWriter, WriteProgressEvent
-from timenet.writer.writer import publish_directory
 
 
 class LocalRegistry(WritableRegistry):
@@ -146,7 +146,7 @@ class LocalRegistry(WritableRegistry):
         values_backend: str = "parquet",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
         pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-    ) -> str:
+    ) -> DatasetRef:
         """Compile a dataset and write it into this registry's directory tree.
 
         Stream the dataset through a :class:`~timenet.writer.TimeFWriter`. The writer stages under
@@ -164,7 +164,7 @@ class LocalRegistry(WritableRegistry):
                 writer publishes only if it reproduced each pinned file.
 
         Returns:
-            The stored version string.
+            The stored release.
 
         Raises:
             TimeNetDatasetNotFoundError: If the dataset reuses payloads stored by a release that this
@@ -177,9 +177,9 @@ class LocalRegistry(WritableRegistry):
         version = str(dataset.metadata.dataset_version)
         dataset_id = dataset.metadata.dataset_id
         # DatasetRef validates the release before a write can touch its directory.
-        DatasetRef.parse(f"{dataset_id}@{version}")
+        reference = DatasetRef.parse(f"{dataset_id}@{version}")
         if self.exists(dataset_id, version) and not force:
-            return version
+            return reference
         with TimeFWriter(
             self._root,
             dataset,
@@ -190,30 +190,29 @@ class LocalRegistry(WritableRegistry):
             pinned_by=pinned_by,
         ) as writer:
             writer.write()
-        return version
+        return reference
 
-    def put_release(self, from_directory: Path, manifest: Manifest) -> None:
-        """Copy a complete local release directory into this registry's directory tree.
+    def put_release(self, from_directory: Path) -> DatasetRef:
+        """Copy a release directory into this registry.
 
-        Before it copies anything, this method makes sure that ``from_directory`` holds a ``manifest.json``
-        equal to ``manifest`` and every file that the manifest declares, with its recorded size. It
-        copies only those files and ``manifest.json`` to a sibling ``<version>.tmp-*`` directory, and
-        then publishes it with a single rename, as the writer does. An existing copy of the version is
-        renamed aside first and removed after the rename. If the rename fails, the old copy moves back.
+        The directory must hold ``manifest.json`` and every file that it lists. The method copies only
+        those files, and a copy of the version that this registry holds stays until the new one is in
+        place.
 
         Args:
-            from_directory: The local release directory to read from, with ``manifest.json`` and
-                every declared file. This method does not change it.
-            manifest: The manifest of the release.
+            from_directory: The release directory.
+
+        Returns:
+            The published release.
 
         Raises:
-            TimeNetFileError: If ``manifest.json`` is missing from ``from_directory`` or differs from
-                ``manifest``, or a declared file is missing or has another size than recorded.
-                Nothing is published then.
-            OSError: If the copy or the rename fails. The old copy of the version stays in place,
-                or the error names the ``<version>.old-<uuid>`` directory that holds it.
-        """  # ruff: ignore[docstring-extraneous-exception] - raised by the check and by publish_directory
-        self._check_release_files(from_directory, manifest)
+            TimeFFormatError: If ``manifest.json`` is missing or cannot be read.
+            TimeNetFileError: If a listed file is missing or has another size. Nothing is published
+                then.
+            OSError: If the copy or the rename fails. The error names the directory that holds the old
+                copy if the copy cannot move back.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release and publish_directory
+        manifest = self._read_release(from_directory)
         reference = DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
         final = release_dir(self._root, reference)
         final.parent.mkdir(parents=True, exist_ok=True)
@@ -226,6 +225,7 @@ class LocalRegistry(WritableRegistry):
             publish_directory(staging, final)
         finally:
             shutil.rmtree(staging, ignore_errors=True)
+        return reference
 
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
         """Open a committed version as a local, random-access handle.

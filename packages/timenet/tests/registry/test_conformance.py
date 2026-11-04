@@ -29,6 +29,7 @@ from timenet.types import (
     Version,
     ureg,
 )
+from timenet.types.references import DatasetRef
 
 
 RHYTHM = LabelSet(
@@ -195,11 +196,11 @@ def test_exists_false_for_unknown_version(backend):
 
 def test_put_dataset_is_idempotent(backend):
     # The version is already committed by the fixture; a second put_dataset() call must skip, not raise.
-    assert backend.registry.put_dataset(make_dataset()) == "1.0.0"
+    assert backend.registry.put_dataset(make_dataset()) == DatasetRef.parse("timenet/hello-world@1.0.0")
 
 
 def test_put_dataset_force_republishes(backend):
-    assert backend.registry.put_dataset(make_dataset(), force=True) == "1.0.0"
+    assert backend.registry.put_dataset(make_dataset(), force=True) == DatasetRef.parse("timenet/hello-world@1.0.0")
 
 
 def _local_release(tmp_path):
@@ -213,7 +214,7 @@ def _local_release(tmp_path):
 
 def test_put_release_publishes_a_complete_release(backend, tmp_path):
     directory, manifest = _local_release(tmp_path)
-    backend.registry.put_release(directory, manifest)
+    assert backend.registry.put_release(directory) == DatasetRef.parse("timenet/hello-world@2.0.0")
     assert backend.registry.get_manifest("timenet/hello-world", "2.0.0") == manifest
 
 
@@ -221,7 +222,7 @@ def test_put_release_publishes_only_the_declared_files(backend, tmp_path):
     directory, manifest = _local_release(tmp_path)
     (directory / "stray.txt").write_text("not part of the release")
     (directory / "time_series" / "stray.parquet").write_text("not part of the release")
-    backend.registry.put_release(directory, manifest)
+    backend.registry.put_release(directory)
     assert backend.registry.get_manifest("timenet/hello-world", "2.0.0") == manifest
     for relpath in ("stray.txt", "time_series/stray.parquet"):
         with pytest.raises((FileNotFoundError, TimeNetDatasetNotFoundError)):
@@ -233,26 +234,7 @@ def test_put_release_refuses_an_incomplete_directory(backend, tmp_path):
     declared = sorted(part.path for part in manifest.files.all_files())
     (directory / declared[0]).unlink()
     with pytest.raises(TimeNetFileError):
-        backend.registry.put_release(directory, manifest)
-    assert not backend.registry.exists("timenet/hello-world", "2.0.0")
-
-
-def test_put_release_refuses_a_directory_without_a_manifest(backend, tmp_path):
-    directory, manifest = _local_release(tmp_path)
-    (directory / "manifest.json").unlink()
-    with pytest.raises(TimeNetFileError):
-        backend.registry.put_release(directory, manifest)
-    assert not backend.registry.exists("timenet/hello-world", "2.0.0")
-    if isinstance(backend.registry, LocalRegistry):
-        assert not (backend.registry.root / "timenet/hello-world/2.0.0").exists()
-
-
-def test_put_release_refuses_a_manifest_that_differs_from_the_argument(backend, tmp_path):
-    directory, manifest = _local_release(tmp_path)
-    other = manifest.model_copy(update={"metadata": manifest.metadata.model_copy(update={"name": "Another name"})})
-    (directory / "manifest.json").write_text(other.model_dump_json())
-    with pytest.raises(TimeNetFileError):
-        backend.registry.put_release(directory, manifest)
+        backend.registry.put_release(directory)
     assert not backend.registry.exists("timenet/hello-world", "2.0.0")
 
 

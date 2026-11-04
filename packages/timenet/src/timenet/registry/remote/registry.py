@@ -168,11 +168,10 @@ class RemoteRegistry(LazyReadRegistry):
         values_backend: str = "parquet",
         progress_cb: Callable[[WriteProgressEvent], None] | None = None,
         pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-    ) -> str:
+    ) -> DatasetRef:
         """Compile a dataset locally and publish it to the remote registry.
 
-        Compiles to a temporary directory, then publishes it with :meth:`put_release`. An
-        already-committed version is skipped unless ``force``.
+        If the version is already committed, this method skips it unless ``force`` is set.
 
         Args:
             dataset: The populated dataset to store.
@@ -183,17 +182,18 @@ class RemoteRegistry(LazyReadRegistry):
                 writer publishes only if it reproduced each pinned file.
 
         Returns:
-            The stored version string.
+            The stored release.
 
         Raises:
-            TimeNetRegistryError: If the service requests a file that was not produced locally.
+            TimeNetRegistryError: If the service requests a file that the compile did not write.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by put_release
         if dataset.schema is None:
             dataset.derive_schema()
         dataset_id = dataset.metadata.dataset_id
         version = str(dataset.metadata.dataset_version)
+        reference = DatasetRef.parse(f"{dataset_id}@{version}")
         if not force and self.exists(dataset_id, version):
-            return version
+            return reference
         staging_root = Path(tempfile.mkdtemp(prefix="timenet-publish-"))
         try:
             # The writer stages locally but checks every payload source against this registry.
@@ -206,34 +206,30 @@ class RemoteRegistry(LazyReadRegistry):
                 pinned_by=pinned_by,
             ) as writer:
                 writer.write()
-            version_dir = release_dir(staging_root, DatasetRef.parse(f"{dataset_id}@{version}"))
-            manifest = Manifest.model_validate_json((version_dir / MANIFEST_FILE).read_text())
-            self.put_release(version_dir, manifest)
+            return self.put_release(release_dir(staging_root, reference))
         finally:
             shutil.rmtree(staging_root, ignore_errors=True)
-        return version
 
-    def put_release(self, from_directory: Path, manifest: Manifest) -> None:
-        """Publish a complete local release directory through the service publish flow.
+    def put_release(self, from_directory: Path) -> DatasetRef:
+        """Publish a release directory to the remote registry.
 
-        Before it publishes anything, this method makes sure that ``from_directory`` holds a
-        ``manifest.json`` equal to ``manifest`` and every file that the manifest declares, with its
-        recorded size. Then it POSTs the manifest, PUTs each file that the service requests to its
-        presigned URL, and finalizes.
+        The directory must hold ``manifest.json`` and every file that it lists. The method uploads
+        only those files and does not change the directory.
 
         Args:
-            from_directory: The local release directory to read from, with ``manifest.json`` and
-                every declared file. This method does not change it.
-            manifest: The manifest of the release.
+            from_directory: The release directory.
+
+        Returns:
+            The published release.
 
         Raises:
-            TimeNetFileError: If ``manifest.json`` is missing from ``from_directory`` or differs from
-                ``manifest``, or a declared file is missing or has another size than recorded.
-                Nothing is published then.
-            TimeNetRegistryError: If the service requests a file that is not in ``from_directory``, or does
-                not request a declared file.
-        """  # ruff: ignore[docstring-extraneous-exception] - raised by the check this method calls
-        self._check_release_files(from_directory, manifest)
+            TimeFFormatError: If ``manifest.json`` is missing or cannot be read.
+            TimeNetFileError: If a listed file is missing or has another size. Nothing is published
+                then.
+            TimeNetRegistryError: If the service asks for a file that is not in the directory, or
+                does not ask for a listed file.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release
+        manifest = self._read_release(from_directory)
         dataset_id = manifest.dataset_id
         version = str(manifest.metadata.dataset_version)
         manifest_bytes = (from_directory / MANIFEST_FILE).read_bytes()
@@ -256,6 +252,7 @@ class RemoteRegistry(LazyReadRegistry):
         for relpath in files:
             self._upload_file(dataset_id, version, from_directory, relpath)
         self._http.post(f"/datasets/{dataset_id}/{version}/finalize")
+        return DatasetRef(dataset_id=dataset_id, version=manifest.metadata.dataset_version)
 
     def _upload_file(self, dataset_id: str, version: str, version_dir: Path, relpath: str) -> None:
         """Fetch a presigned PUT URL for one file and upload its bytes.
