@@ -37,16 +37,14 @@ def copy_release(
         source: The registry to copy from.
         dest: The registry to copy to.
         with_payload_sources: Also copy the payload sources that the manifest of the release lists.
-        progress: Callback for ``StepStarted`` and ``StepFinished`` events for each copied or repaired release.
+        progress: Receives a ``StepStarted`` and a ``StepFinished`` event for each copied release.
 
     Raises:
-        TimeNetVersionConflictError: If ``dest`` holds the release or a payload source with other files or another card.
-        TimeNetAccessError: If a release lacks open access where the source or destination requires it.
+        TimeNetVersionConflictError: If ``dest`` holds a release of the copy with other files or another card.
+        TimeNetAccessError: If a release is not open, and ``dest`` or ``source`` requires open access.
         TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
-        TimeNetMissingParentError: If a payload source is neither in ``source`` nor complete in
-            ``dest``. The error names both registries.
-        TimeFFormatError: If a manifest names another release, or a payload source differs from the
-            files that the release pins.
+        TimeNetMissingParentError: If neither registry holds a complete payload source.
+        TimeFFormatError: If a manifest names another release or a pin fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     manifests = _manifests(reference, source, dest, with_payload_sources=with_payload_sources)
     # Check every release before anything is copied, so that a refusal leaves dest unchanged. A payload
