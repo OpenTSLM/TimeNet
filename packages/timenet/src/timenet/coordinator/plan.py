@@ -12,6 +12,7 @@ from timenet.errors import (
     TimeNetDatasetNotFoundError,
     TimeNetFileError,
     TimeNetMissingParentError,
+    TimeNetNotBuiltError,
 )
 from timenet.manifest import Manifest, PayloadSource
 from timenet.registry.base import BaseRegistry
@@ -181,7 +182,7 @@ class _Graph:
             TimeNetFileError: If the output holds a damaged copy that no other registry provides.
             TimeNetAccessError: If sources list the release but do not provide it.
             TimeNetMissingParentError: If no source provides the release.
-            TimeNetDatasetNotFoundError: If only connectors provide the release and ``builds`` is false.
+            TimeNetNotBuiltError: If only connectors provide the release and ``builds`` is false.
             TimeFValidationError: If the source is neither a registry nor ``InstalledConnectors``.
         """  # ruff: ignore[docstring-extraneous-exception] - the file and access errors are raised as values
         role: Role = "dataset" if pinned is None else "payload-source"
@@ -213,7 +214,7 @@ class _Graph:
         elif isinstance(entry, InstalledConnectors):
             if not self.builds:
                 # A download builds nothing.
-                raise TimeNetDatasetNotFoundError(_not_built(reference))
+                raise TimeNetNotBuiltError(reference, _not_built(reference))
             self.build(reference, role, entry)
         elif isinstance(answer, NotServed):
             raise answer.access_error(reference.dataset_id)
@@ -515,7 +516,8 @@ def plan_download(
         The copy steps, in the order in which they run.
 
     Raises:
-        TimeNetDatasetNotFoundError: If a needed release requires a build or no registry can supply a forced copy.
+        TimeNetNotBuiltError: If only installed connectors provide a release that the store lacks.
+        TimeNetDatasetNotFoundError: If ``force`` is set and only the store holds the release.
         TimeNetFileError: If the store holds a damaged copy that no other registry provides.
         TimeNetAccessError: If a source lists a release that the store lacks but no source serves it.
         TimeNetMissingParentError: If no registry provides a payload source that the store lacks.
@@ -550,6 +552,7 @@ def _add_release_copy(
 
     Raises:
         TimeNetFileError: If the store holds a damaged copy that no other registry provides.
+        TimeNetNotBuiltError: If only installed connectors provide the release.
         TimeNetDatasetNotFoundError: If no registry other than the store provides the release.
         TimeNetAccessError: If a registry lists the release but serves none of its files.
     """  # ruff: ignore[docstring-extraneous-exception] - raised as values
@@ -571,7 +574,7 @@ def _add_release_copy(
         raise answer.access_error(release.dataset_id)
     elif isinstance(entry, InstalledConnectors):
         # Only installed connectors provide the release, and the plan builds nothing.
-        raise TimeNetDatasetNotFoundError(_not_built(release))
+        raise TimeNetNotBuiltError(release, _not_built(release))
     else:
         # No source other than the store provides the release.
         names = ", ".join(str(source) for source in graph.sources)

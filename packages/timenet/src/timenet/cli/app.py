@@ -1,6 +1,6 @@
 """The consumer command-line interface, the command-line mirror of the :class:`~timenet.client.TimeNet` SDK."""
 
-from collections.abc import Callable, Iterable
+from collections.abc import Callable, Iterable, Sequence
 from functools import partial
 from pathlib import Path
 import shlex
@@ -16,12 +16,13 @@ from timenet.cli.runner import run_cli
 from timenet.cli.ui import console as ui, progress_renderer
 from timenet.client import TimeNet, default_sources, default_store
 from timenet.config import settings
-from timenet.errors import TimeNetDatasetNotFoundError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetNotBuiltError
 from timenet.producer import publish as publish_release
 from timenet.progress import ProgressCallback, ProgressEvent, StepStarted
 from timenet.registry import BaseRegistry, LocalRegistry, open_registry
 from timenet.types import DatasetMetadata, Domain, License, TaskType
 from timenet.types.access import access_requirements, effective_access
+from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.references import split_ref
 from timenet.types.tasks import TASKS
 
@@ -157,27 +158,26 @@ def info(
     remote_registry: str | None = REMOTE_REGISTRY,
     auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """Show a dataset's metadata, schema, and counts."""
-    manifest = _client(local_registry, remote_registry, auto_build).get(dataset_id)
+    """Print a dataset's manifest summary: metadata, schema, and counts.
+
+    For a release that only an installed connector provides, it prints the card and the build command,
+    because the schema and the counts appear only after a build.
+    """
+    client = _client(local_registry, remote_registry, auto_build)
+    try:
+        manifest = client.get_manifest(dataset_id)
+    except TimeNetNotBuiltError:
+        console.print(_card_table(client.get_card(dataset_id)))
+        build = f"timenet-build build {split_ref(dataset_id)[0]}"
+        if local_registry is not None:
+            build += f" --local-registry {shlex.quote(local_registry)}"
+        if remote_registry is not None:
+            build += f" --remote-registry {shlex.quote(remote_registry)}"
+        # A plain line, so that a long path does not wrap.
+        typer.echo(f"The schema and the counts appear after a build: `{build}`.")
+        return
     counts = manifest.counts
-    table = Table(title=manifest.dataset_id, title_justify="left", title_style="bold", show_header=False)
-    table.add_column("Field", style="cyan")
-    table.add_column("Value")
-    table.add_row("version", str(manifest.metadata.dataset_version))
-    table.add_row("name", manifest.metadata.name)
-    table.add_row("license", str(manifest.metadata.license))
-    if manifest.metadata.license_url:
-        table.add_row("license_url", manifest.metadata.license_url)
-    # The strictest level of the card and its lineage applies, also when the card itself says open.
-    table.add_row("access", str(effective_access(manifest.metadata, manifest.lineage)))
-    # Each card whose access is not open, the dataset or an ancestor, names its own page.
-    requirements = access_requirements(manifest.metadata, manifest.lineage)
-    if requirements:
-        pages = (f"{item.release} ({item.access}): {item.access_url}" for item in requirements)
-        table.add_row("access_urls", "\n".join(pages))
-    if manifest.metadata.citation:
-        table.add_row("citation", manifest.metadata.citation)
-    table.add_row("domains", ", ".join(str(domain) for domain in manifest.metadata.domains) or "-")
+    table = _card_table(manifest.metadata, manifest.lineage)
     table.add_row("specs", ", ".join(spec.spec_type for spec in manifest.dataset_schema.time_series_specs) or "-")
     table.add_row("tasks", ", ".join(str(task.task_type) for task in manifest.dataset_schema.tasks) or "-")
     table.add_section()
@@ -195,6 +195,37 @@ def info(
         for task_type, count in sorted(counts.tasks.items()):
             tasks.add_row(task_type, str(count))
         console.print(tasks)
+
+
+def _card_table(card: DatasetMetadata, lineage: Sequence[ParentDatasetCard] = ()) -> Table:
+    """Build the table of a card: version, name, license, access, citation, and domains.
+
+    Args:
+        card: The card, or the metadata of a manifest.
+        lineage: The card of each ancestor release from the manifest, or none for a release that is not built.
+
+    Returns:
+        A table without a header.
+    """
+    table = Table(title=card.dataset_id, title_justify="left", title_style="bold", show_header=False)
+    table.add_column("Field", style="cyan")
+    table.add_column("Value")
+    table.add_row("version", str(card.dataset_version))
+    table.add_row("name", card.name)
+    table.add_row("license", str(card.license))
+    if card.license_url:
+        table.add_row("license_url", card.license_url)
+    # The strictest level of the card and its lineage applies, also when the card itself says open.
+    table.add_row("access", str(effective_access(card, lineage)))
+    # Each card whose access is not open, the dataset or an ancestor, names its own page.
+    requirements = access_requirements(card, lineage)
+    if requirements:
+        pages = (f"{item.release} ({item.access}): {item.access_url}" for item in requirements)
+        table.add_row("access_urls", "\n".join(pages))
+    if card.citation:
+        table.add_row("citation", card.citation)
+    table.add_row("domains", ", ".join(str(domain) for domain in card.domains) or "-")
+    return table
 
 
 @app.command()
