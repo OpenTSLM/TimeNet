@@ -14,8 +14,8 @@ Reuse a base connector wherever the source allows: `BaseHuggingFaceConnector` fo
 `BasePhysioNetConnector` for PhysioNet/WFDB records. Write a raw `BaseConnector` subclass only when
 neither fits.
 
-Read `references/connector-anatomy.md` for the contract, the base-connector APIs, the task types, the
-folder layout, and a fully worked example before implementing.
+Read `references/connector-anatomy.md` for the contract, the base-connector APIs, the task types,
+and the folder layout before implementing.
 
 ## Workflow
 
@@ -82,9 +82,11 @@ Create `packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>
   installs it into the environment that the build runs in. The lazy import keeps `--no-isolation`
   usable while you write the connector.
 
-Add the org namespace `__init__.py` if the org is new. Keep `download` I/O-only and `convert` CPU-only
-with lazy value loaders (never materialize arrays in `convert`). See the worked example in
-`references/connector-anatomy.md`.
+Follow `docs/connectors.md` for code organization, source validation, and task streams. Use the
+connectors in its "Example connectors" section as API references.
+
+Add the org namespace `__init__.py` if the org is new. Keep `download` I/O-only and `convert`
+local, with no network.
 
 You cannot pass ids. Records, signals, and tasks get a read-only int `id` when you add them to the
 dataset. Sources, axes, and annotations have no id. Put upstream identifiers in `Record.metadata`
