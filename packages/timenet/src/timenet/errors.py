@@ -13,7 +13,7 @@ sentence.
 """
 
 from functools import partial
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Literal
 
 
 if TYPE_CHECKING:
@@ -64,33 +64,41 @@ class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
 
 
 class TimeNetVersionConflictError(TimeNetError):
-    """A registry already holds a release with other files than the copy.
+    """A registry already holds a release with other files or another card than the copy.
 
-    Different files require a new version.
+    A changed release needs a new version.
 
     Attributes:
-        release: The release with conflicting files.
+        release: The release that differs.
         registry: The destination registry, as text.
         source: The source registry, as text.
         needed_by: The requested release that needs this payload source, or ``None`` if ``release`` is the request.
+        difference: ``"files"`` if the file records differ, else ``"card"`` for the rest of the manifest.
         hint: Advice to append to the error message, or ``None``.
     """
 
     def __init__(
-        self, release: "DatasetRef", registry: str, source: str, needed_by: "DatasetRef | None" = None
+        self,
+        release: "DatasetRef",
+        registry: str,
+        source: str,
+        needed_by: "DatasetRef | None" = None,
+        difference: Literal["files", "card"] = "files",
     ) -> None:
-        super().__init__(release, registry, source, needed_by)
+        super().__init__(release, registry, source, needed_by, difference)
         self.release = release
         self.registry = registry
         self.source = source
         self.needed_by = needed_by
+        self.difference = difference
         self.hint: str | None = None
 
     def __str__(self) -> str:
         held = str(self.release) if self.needed_by is None else f"{self.release}, a payload source of {self.needed_by},"
+        other = "other files" if self.difference == "files" else "another card"
         message = (
-            f"{self.registry} already holds {held} with other files than {self.source}. "
-            "A published version cannot change, so other files need a new version."
+            f"{self.registry} already holds {held} with {other} than {self.source}. "
+            "A published version cannot change, so a changed release needs a new version."
         )
         return message if self.hint is None else f"{message} {self.hint}"
 
