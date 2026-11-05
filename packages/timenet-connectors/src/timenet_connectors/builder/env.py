@@ -19,13 +19,12 @@ import subprocess  # ruff: ignore[suspicious-subprocess-import] - the command is
 import sys
 import tempfile
 import threading
-from urllib.parse import urlparse
-from urllib.request import url2pathname
 
 from uv import find_uv_bin
 
 from timenet.errors import TimeNetBuildError
 from timenet.manifest import PayloadSource
+from timenet.provenance import local_source_path
 from timenet.types.references import DatasetRef
 from timenet_connectors.discovery import requirements_for
 
@@ -250,37 +249,9 @@ def _base_args() -> tuple[str, ...]:
                 f"cannot build a build environment: {name} is not installed in {sys.executable}. "
                 "Reinstall it, or build in this interpreter with TIMENET_ISOLATION=off."
             ) from exc
-        source = _local_source_path(dist)
+        source = local_source_path(dist)
         if source is not None:
             args += ["--with-editable", str(source)]
         else:
             args += ["--with", f"{name}=={dist.version}"]
     return tuple(args)
-
-
-def _local_source_path(dist: Distribution) -> Path | None:
-    """Return the on-disk project directory an editable or local path install points at.
-
-    ``direct_url.json`` records how a distribution was installed. An editable install carries
-    ``dir_info.editable``. A plain path install (``pip install ./packages/timenet``) records a
-    ``file://`` URL to the same source tree without that flag. Both let the child build against the
-    parent's on-disk source, so both return the directory. An index or wheel install has no
-    ``file://`` directory and returns ``None``, leaving the caller to pin the exact version.
-
-    Args:
-        dist: The installed distribution.
-
-    Returns:
-        The source directory for an editable or local path install, else ``None``.
-    """
-    raw = dist.read_text("direct_url.json")
-    if raw is None:
-        return None
-    info = json.loads(raw)
-    parsed = urlparse(info.get("url", ""))
-    if parsed.scheme != "file":
-        return None
-    path = Path(url2pathname(parsed.path))
-    if info.get("dir_info", {}).get("editable") or path.is_dir():
-        return path
-    return None

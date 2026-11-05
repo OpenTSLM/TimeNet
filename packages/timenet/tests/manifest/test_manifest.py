@@ -495,7 +495,8 @@ def test_build_env_defaults_to_empty():
 
 
 def test_build_env_round_trips():
-    m = _replace(_manifest(), build_env={"python": "3.11.9", "packages": {"timenet": "0.1.0"}})
+    git = {"timenet": {"sha": "a" * 40, "local_changes": False}}
+    m = _replace(_manifest(), build_env={"python": "3.11.9", "packages": {"timenet": "0.1.0"}, "git": git})
     assert Manifest.model_validate(m.to_dict()).build_env == m.build_env
 
 
@@ -503,6 +504,8 @@ def test_build_env_round_trips():
     "change",
     [
         {"build_env": {"python": 313}},
+        {"build_env": {"git": {"timenet": {"sha": "4818e37f", "local_changes": False}}}},
+        {"build_env": {"git": {"timenet": {"sha": "a" * 40, "local_changes": "no"}}}},
         {"value_encoding": {"ecg_lead": "zip"}},
     ],
 )

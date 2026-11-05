@@ -486,9 +486,10 @@ def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch)
 
 def test_a_built_version_starts_no_isolated_child(tmp_path, monkeypatch):
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
-    monkeypatch.setattr(env_module.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("started a subprocess"))
     out = LocalRegistry(tmp_path / "out")
+    # Store first: writing the manifest asks git for the commit, which starts a subprocess.
     out.store(make_dataset())
+    monkeypatch.setattr(env_module.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("started a subprocess"))
 
     assert cli_module.build_one(GRAND.dataset_id, out.root) == str(release_dir(out.root, GRAND))
 

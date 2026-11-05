@@ -42,7 +42,8 @@ timenet-build build org/name --out .timenet-registry --no-isolation
 ```
 
 `TIMENET_ISOLATION=off` provides the same setting. The manifest records the Python and package
-versions used for the build.
+versions used for the build, and the git commit of `timenet` and `timenet-connectors`. See
+[`build_env`](manifest.md) for the fields.
 
 ## Pipeline
 
