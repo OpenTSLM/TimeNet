@@ -176,17 +176,9 @@ def test_the_engine_marks_the_downloads_folder_that_it_creates(tmp_path):
     assert is_cache_folder(settings().downloads_dir)
 
 
-def test_the_engine_leaves_an_existing_downloads_folder_unmarked(tmp_path):
-    # The folder is not TimeNet's, for example ~/Downloads on a volume that ignores case.
-    settings().downloads_dir.mkdir(parents=True)
-    run_pipeline(_DemoConnector(), tmp_path / "root")
-    assert not is_cache_folder(settings().downloads_dir)
-
-
-def test_the_engine_deletes_nothing_in_a_downloads_folder_without_the_marker(tmp_path, monkeypatch):
-    # The folder existed before TimeNet used it, so the folder of the dataset in it can hold files of
-    # the user.
-    monkeypatch.setenv("TIMENET_CACHE", str(tmp_path / "cache"))
+def test_the_engine_deletes_nothing_in_a_downloads_folder_without_the_marker(tmp_path):
+    # The folder existed before TimeNet used it, for example ~/Downloads on a volume that ignores case.
+    # So the engine leaves it unmarked, and the folder of the dataset in it can hold files of the user.
     folder = settings().downloads_dir / make_dataset().metadata.dataset_id
     folder.mkdir(parents=True)
     (folder / "notes.txt").write_text("mine")

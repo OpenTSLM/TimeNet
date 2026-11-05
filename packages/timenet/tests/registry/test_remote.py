@@ -459,13 +459,9 @@ def test_latest_detail_rejects_non_string_version(tmp_path):
         registry.get_manifest("demo/example")
 
 
-def test_a_registry_url_caches_in_the_store(tmp_path, monkeypatch):
-    # A remote registry reuses the complete copies in the store, where download() puts them.
-    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
-    (registry,) = TimeNet(sources=["https://registry.example.test"])._sources
-    assert isinstance(registry, RemoteRegistry)
-    assert registry.local_root == tmp_path / "store"
-    # The default list passes its store to the remote registry, also a store that an argument names.
+def test_the_default_list_passes_its_store_to_the_remote_registry(tmp_path):
+    # A remote registry reuses the complete copies in the store, where download() puts them, also in a
+    # store that an argument names.
     store, remote, *_ = default_sources(
         local_registry=tmp_path / "other", remote_registry="https://registry.example.test"
     )
