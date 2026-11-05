@@ -4,8 +4,8 @@ import sys
 
 import pytest
 
-from timenet.builders import find_card
-from timenet.errors import TimeNetInvalidCardError
+from timenet.builders import installed_builder
+from timenet.errors import ConnectorCardWarning, TimeNetInvalidCardError
 from timenet.manifest import Manifest, PayloadSource
 from timenet.manifest.files import FilePart
 from timenet.reader import TimeFReader
@@ -66,18 +66,19 @@ def test_a_card_that_cannot_be_read_raises_and_only_a_missing_connector_gives_no
         ("title: no id\n", "dataset card {} must declare a dataset_id"),
     ],
 )
-def test_a_card_that_cannot_be_read_fails_each_lookup_with_the_card_error(tmp_path, monkeypatch, text, message):
-    for name, card in [("good", "dataset_id: test/good\n"), ("broken", text)]:
-        (tmp_path / "test" / name).mkdir(parents=True)
-        (tmp_path / "test" / name / "dataset.yaml").write_text(card)
-    monkeypatch.setattr(datasets_module, "__path__", [str(tmp_path)])
+def test_a_card_that_cannot_be_read_is_skipped_with_a_warning(tmp_path, monkeypatch, text, message):
+    (tmp_path / "test" / "broken").mkdir(parents=True)
+    (tmp_path / "test" / "broken" / "dataset.yaml").write_text(text)
+    monkeypatch.setattr(datasets_module, "__path__", [*datasets_module.__path__, str(tmp_path)])
     expected = re.escape(message.format(tmp_path / "test" / "broken" / "dataset.yaml"))
 
-    with pytest.raises(TimeNetInvalidCardError, match=expected):
-        known_ids()
+    with pytest.warns(ConnectorCardWarning, match=expected):
+        assert "timenet/hello-world" in known_ids()
     # The installed entry point loads the builder backend of this package, which lists its dataset IDs.
-    with pytest.raises(TimeNetInvalidCardError, match=expected):
-        find_card("test/good")
+    with pytest.warns(ConnectorCardWarning, match=expected):
+        found = installed_builder("timenet/hello-world")
+    assert found is not None
+    assert found.card.dataset_id == "timenet/hello-world"
 
 
 def test_build_runs_in_an_isolated_environment_by_default(tmp_path, monkeypatch):

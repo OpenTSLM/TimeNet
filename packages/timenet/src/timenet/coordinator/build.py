@@ -2,9 +2,9 @@
 
 from collections.abc import Mapping
 
-from timenet.builders import BuildOptions, exact_builder, find_card
+from timenet.builders import BuildOptions, declared
 from timenet.coordinator.plan import Plan, Step, plan_parents
-from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest, PayloadSource
 from timenet.progress import ProgressCallback, StepFinished, StepStarted
 from timenet.registry import copy_release
@@ -59,14 +59,8 @@ def build_release(  # ruff: ignore[too-many-arguments]
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the plan, the copy and the backends
     options = options or BuildOptions()
     dataset_id, version = split_ref(dataset)
-    card = find_card(dataset_id)
-    if card is None:
-        raise TimeNetDatasetNotFoundError(f"no installed connector builds {dataset_id!r}")
-    if version is not None:
-        wanted = DatasetRef(dataset_id=dataset_id, version=version)
-        if wanted.version != card.dataset_version:
-            raise TimeNetVersionUnavailableError(wanted, card.dataset_version)
-    requested = DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)
+    found = declared(dataset_id, version)
+    card, requested = found.card, found.release
     steps = plan_parents(
         dataset_id,
         store,
@@ -141,10 +135,8 @@ def _build(step: Step, store: LocalRegistry, *, force: bool, options: BuildOptio
 
     Raises:
         TimeNetDatasetNotFoundError: If no backend builds this version or the result lacks a release or payload source.
-    """
-    builder = exact_builder(step.release)
-    if builder is None:
-        raise TimeNetDatasetNotFoundError(f"no installed connector builds {step.release}")
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by declared and prepare_local_copy
+    builder = declared(step.release.dataset_id, step.release.version).backend
     if options.progress is not None:
         options.progress(StepStarted(step.release, "build"))
     builder.build_prepared(step.release, store, force=force, pinned_by=step.pinned_by, options=options)
