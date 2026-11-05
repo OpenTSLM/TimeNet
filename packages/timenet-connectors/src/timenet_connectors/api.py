@@ -1,8 +1,8 @@
 """Producer-side shortcuts to build and load a dataset from local code.
 
-:func:`build` runs a connector through the engine into the shared local registry. :func:`load` runs
-build and reads the result back. The writer and reader stacks are heavy, so they load lazily. This
-keeps the import of :mod:`timenet_connectors` cheap.
+:func:`build` runs a connector through the engine into the store. :func:`load` runs build and reads
+the result back. The writer and reader stacks are heavy, so they load lazily. This keeps the import
+of :mod:`timenet_connectors` cheap.
 """
 
 from pathlib import Path
@@ -31,13 +31,13 @@ def build(  # ruff: ignore[too-many-arguments]
     from its ``requirements.txt``, or in this interpreter if ``TIMENET_ISOLATION=off``.
 
     Args:
-        dataset_id: The ``org/name`` ID declared in the connector's card.
-        version: The required card version, or ``None`` to accept any version.
-        out: The local registry directory, or ``None`` to use the default local registry.
-        force: Rebuild an existing release.
-        keep_cache: Keep the raw download cache after a successful build.
-        fetch_from: The registry or URI to copy missing parents from before trying builds.
-        build_parents: Build missing parents with installed connectors.
+        dataset_id: The dataset ID, exactly as the card of the connector declares it (``org/name``).
+        version: The version that the card must declare. ``None`` accepts any version.
+        out: The local registry directory. Defaults to the store, which ``TimeNet()`` reads.
+        force: Build the release again, even if the registry already holds it.
+        keep_cache: Keep the raw download cache. A successful build deletes it by default.
+        fetch_from: The registry, or its URI, to copy missing parent releases from.
+        build_parents: Build missing parent releases from their installed connectors.
 
     Returns:
         The version directory of the release.
@@ -48,18 +48,16 @@ def build(  # ruff: ignore[too-many-arguments]
         TimeNetMissingParentError: If a required release cannot be copied or built.
     """
     from timenet.builders import BuildOptions, declared  # ruff: ignore[import-outside-top-level]
+    from timenet.config import settings  # ruff: ignore[import-outside-top-level]
     from timenet.coordinator.build import plan_release_build, run_plan  # ruff: ignore[import-outside-top-level]
     from timenet.errors import TimeNetMissingParentError  # ruff: ignore[import-outside-top-level]
-    from timenet.registry import (  # ruff: ignore[import-outside-top-level]
-        LocalRegistry,
-        default_registry_path,
-        open_registry,
-    )
+    from timenet.registry import LocalRegistry, open_registry  # ruff: ignore[import-outside-top-level]
     from timenet.registry._paths import release_dir  # ruff: ignore[import-outside-top-level, import-private-name]
     from timenet.sources import InstalledConnectors  # ruff: ignore[import-outside-top-level]
 
     release = declared(dataset_id).release
-    root = Path(out).expanduser() if out is not None else default_registry_path()
+    # Glue: the store of the default list, until timenet.build() replaces this function.
+    root = Path(out).expanduser() if out is not None else settings().local_registry_dir
     source = open_registry(fetch_from) if isinstance(fetch_from, str) else fetch_from
     store = LocalRegistry(root)
     try:
