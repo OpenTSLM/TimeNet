@@ -7,13 +7,14 @@
 #     "scikit-learn==1.7.2",
 # ]
 # ///
-"""Write splits.json, the split that OpenTSLM's loader gives each row of the SleepEDF-CoT CSV.
+"""Write splits.json, the frozen train, validation and test split of sleep-cot.
 
-The release has no split column. OpenTSLM's ``load_sleepedf_cot_splits``, in
-``src/opentslm/time_series_datasets/sleep/sleepedf_cot_loader.py``, splits the rows each time it
-loads them. This script repeats its calls with the library versions that OpenTSLM pins, and writes
-the positions of the validation and the test rows. The connector reads splits.json, so its split
-does not depend on the installed scikit-learn. The connector does not run this script.
+sleep-cot does not store the train/val/test splits explicitly. Rather they give a random seed and
+allow scikit to do the split. This is hard to reproduce, because it means the official split is
+dependent on a particular scikit version. Instead of pinning scikit in the connector, we rather
+generated the split indices once with this script and store them in the accompanying splits.json.
+This script is included, but really just for reference, so you get to see how the proverbial
+sausage got made.
 
 Run it once with the release CSV, from this directory::
 
@@ -53,7 +54,8 @@ def main() -> None:
         "validation": sorted(int(position) for position in val_df.index),
         "test": sorted(int(position) for position in test_df.index),
     }
-    SPLITS_PATH.write_text(json.dumps(splits) + "\n", encoding="utf-8")
+    # One position per line, so a diff of a regenerated file shows each row that changed split.
+    SPLITS_PATH.write_text(json.dumps(splits, indent=2) + "\n", encoding="utf-8")
 
 
 if __name__ == "__main__":
