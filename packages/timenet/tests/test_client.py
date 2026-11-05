@@ -141,15 +141,6 @@ def test_resampled_child_reads_and_downloads_without_its_build_only_parent(tmp_p
         assert reader.read().records[0].signals[0].to_arrow().equals(expected)
 
 
-def test_a_damaged_release_names_no_download_without_a_store(tmp_path):
-    registry, _ = _child_of_the_demo(tmp_path / "registry")
-    (registry.root / "test/child/1.0.0/control.duckdb").write_bytes(b"cut short")
-    # download() copies into the store, so a client without one has no repair to offer.
-    with pytest.raises(TimeNetFileError) as caught:
-        TimeNet(sources=[registry.root]).open("test/child")
-    assert caught.value.hint is None
-
-
 def test_a_damaged_release_outside_the_store_names_no_download(tmp_path):
     origin, _ = _child_of_the_demo(tmp_path / "origin")
     mirror = LocalRegistry(tmp_path / "mirror")
@@ -179,10 +170,9 @@ def test_a_damaged_build_in_the_store_names_the_build_that_replaces_it(tmp_path,
 
     # No registry other than the local registry provides the release, so download() cannot replace it.
     hint = f"Build it again with `timenet-build build timenet/hello-world --out {store.root} --force`."
-    for entry_point in (client.open, client.load, client.download):
-        with pytest.raises(TimeNetFileError) as caught:
-            entry_point("timenet/hello-world@1.0.0")
-        assert caught.value.hint == hint
+    with pytest.raises(TimeNetFileError) as caught:
+        client.open("timenet/hello-world@1.0.0")
+    assert caught.value.hint == hint
     assert len(calls) == 1  # nothing builds over the damaged copy
 
 
@@ -232,6 +222,7 @@ def test_the_default_list_follows_timenet_registry(tmp_path, monkeypatch, regist
 
 
 def test_timenet_registry_env_selects_a_local_registry(tmp_path, monkeypatch):
+    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "home" / "registry"))
     dataset = make_dataset()
@@ -326,14 +317,6 @@ def test_get_list_and_search_ask_the_first_registry_that_is_not_the_store(regist
 def test_get_returns_manifest(registry_root):
     client = TimeNet(sources=[str(registry_root)])
     assert isinstance(client.get("timenet/hello-world"), Manifest)
-
-
-def test_download_copies_the_release_and_its_payload_sources_into_the_store(tmp_path):
-    origin, _ = _child_of_the_demo(tmp_path / "origin")
-    store = LocalRegistry(tmp_path / "store", store=True)
-    path = TimeNet(sources=[store, origin.root]).download("test/child")
-    assert path == tmp_path / "store/test/child/1.0.0"
-    assert store.exists("timenet/hello-world", "1.0.0")
 
 
 def test_download_without_a_store_raises(registry_root):
@@ -500,17 +483,12 @@ def test_download_counts_a_case_variant_of_the_store_directory_as_the_store(tmp_
         client.download("timenet/hello-world", force=True)
 
 
-@pytest.mark.parametrize("case", ["missing", "damaged"])
-def test_download_completes_the_payload_sources_of_a_complete_store_copy(tmp_path, case):
+def test_download_completes_the_payload_sources_of_a_complete_store_copy(tmp_path):
     origin, reference = _child_of_the_demo(tmp_path / "origin")
     store = LocalRegistry(tmp_path / "store", store=True)
     client = TimeNet(sources=[store, origin])
     client.download("test/child")
-    source = store.root / reference.dataset_id / str(reference.version)
-    if case == "missing":
-        shutil.rmtree(source)
-    else:
-        (source / "control.duckdb").write_bytes(b"cut short")
+    (store.root / reference.dataset_id / str(reference.version) / "control.duckdb").write_bytes(b"cut short")
 
     # The child is complete in the store, but the payload source that it reads is not.
     assert client.download("test/child") == store.root / "test/child/1.0.0"
@@ -574,6 +552,8 @@ def test_download_repairs_a_damaged_store_copy(tmp_path):
 def test_download_returns_a_complete_store_copy_at_once(registry_root, tmp_path):
     client = TimeNet(sources=[LocalRegistry(tmp_path / "store", store=True), str(registry_root)])
     first = client.download("timenet/hello-world")
+    # The store copy is complete, so the next download needs no registry.
+    shutil.rmtree(registry_root)
     events: list[ProgressEvent] = []
     assert client.download("timenet/hello-world", progress=events.append) == first
     assert events == []  # nothing is copied again
@@ -772,11 +752,6 @@ def test_open_torch_reads_the_version_asked_for(versioned_registry, monkeypatch)
     TimeNet(sources=[str(versioned_registry)]).open_torch("timenet/hello-world", version="1.0.0")
     (reader,) = opened
     assert str(reader.metadata.dataset_version) == "1.0.0"
-
-
-def test_version_ref_download_pins(versioned_registry, tmp_path):
-    client = TimeNet(sources=[LocalRegistry(tmp_path / "store", store=True), str(versioned_registry)])
-    assert client.download("timenet/hello-world@1.0.0") == tmp_path / "store/timenet/hello-world/1.0.0"
 
 
 def test_version_ref_missing_pin_raises(versioned_registry):

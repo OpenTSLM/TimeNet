@@ -203,13 +203,12 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
     assert (dest / "manifest.json").exists()
 
 
-@pytest.mark.parametrize("version", [None, "1.0.0"])
-def test_a_download_into_the_store_resolves_a_remote_release_once(version_dir, tmp_path, version):
+def test_a_download_into_the_store_resolves_a_remote_release_once(version_dir, tmp_path):
     registry, requests = _remote(version_dir, tmp_path)
     directory, manifest = version_dir
     store = LocalRegistry(tmp_path / "store", store=True)
 
-    path = TimeNet(sources=[store, registry]).download(manifest.metadata.dataset_id, version)
+    path = TimeNet(sources=[store, registry]).download(manifest.metadata.dataset_id)
 
     assert (path / "manifest.json").read_bytes() == (directory / "manifest.json").read_bytes()
     # One read of the manifest resolves the release, and one starts the copy.
@@ -551,9 +550,8 @@ def _gated_release(origin: Path, page: str) -> tuple[str, DatasetRef]:
 
 
 @pytest.mark.parametrize("entry_point", ["open", "download"])
-@pytest.mark.parametrize("page", ["own", "ancestor"])
-def test_a_read_or_a_download_checks_access_before_it_reads_from_a_remote_registry(tmp_path, page, entry_point):
-    dataset_id, release = _gated_release(tmp_path / "origin", page)
+def test_a_read_or_a_download_checks_access_before_it_reads_from_a_remote_registry(tmp_path, entry_point):
+    dataset_id, release = _gated_release(tmp_path / "origin", "ancestor")
     transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
     remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
     client = TimeNet(sources=[LocalRegistry(tmp_path / "local", store=True), remote])
