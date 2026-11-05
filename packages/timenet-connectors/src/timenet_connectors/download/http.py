@@ -30,10 +30,10 @@ _TIMEOUT = httpx.Timeout(None, connect=60.0, read=60.0)
 
 @dataclass(frozen=True)
 class Artifact:
-    """One download: a URL, its destination, and optional headers, cookies, and a SHA-256 to verify.
+    """A file to download, with its URL, destination, and optional request settings and SHA-256 hash.
 
-    The ``headers``, ``cookies``, and ``sha256`` apply to an HTTP download. An ``s3://`` URL
-    ignores them.
+    The headers and cookies apply only to HTTP downloads.
+    The SHA-256 hash applies to both HTTP and S3 downloads.
     """
 
     url: str
@@ -41,6 +41,26 @@ class Artifact:
     headers: Mapping[str, str] | None = None
     cookies: Mapping[str, str] | None = None
     sha256: str | None = None
+
+
+def is_cached(artifact: Artifact) -> bool:
+    """Check whether the destination already contains the requested file.
+
+    An existing destination counts as cached if no SHA-256 hash is set.
+    If a hash is set, the file must match it.
+
+    Args:
+        artifact: The download details to check.
+
+    Returns:
+        Whether the destination exists and matches the hash, if one is set.
+    """
+    if not artifact.dest.exists():
+        return False
+    if artifact.sha256 is None:
+        return True
+    with artifact.dest.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest() == artifact.sha256.lower()
 
 
 async def download_http(  # ruff: ignore[too-many-arguments]
@@ -52,18 +72,18 @@ async def download_http(  # ruff: ignore[too-many-arguments]
     skip_existing: bool = True,
     sha256: str | None = None,
 ) -> Path:
-    """Download a single URL to ``dest``, streaming to disk and writing atomically.
+    """Download an HTTP URL to ``dest``.
 
-    Creates ``dest``'s parent directories if they are missing. A set ``sha256`` that does not match the
-    downloaded bytes raises :class:`~timenet.errors.TimeFFormatError` and leaves no file behind.
+    The function creates missing parent directories and replaces the destination only after success.
+    A SHA-256 mismatch raises :class:`~timenet.errors.TimeFFormatError` and preserves any existing destination.
 
     Args:
         url: The source URL.
         dest: The destination file path.
-        headers: Request headers, such as an auth token.
-        cookies: Request cookies, such as an auth token.
-        skip_existing: Return without downloading if ``dest`` already exists.
-        sha256: Optional hex digest the downloaded bytes must match.
+        headers: Request headers.
+        cookies: Request cookies.
+        skip_existing: Skip an existing file if it matches ``sha256`` or no expected hash is set.
+        sha256: An optional SHA-256 hash in hexadecimal that the downloaded file must match.
 
     Returns:
         The destination path.
@@ -82,18 +102,16 @@ async def download_http_many(
     max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
     skip_existing: bool = True,
 ) -> list[Path]:
-    """Download many artifacts concurrently, bounded by ``max_concurrency``, failing fast.
+    """Download multiple HTTP files concurrently.
 
-    Batch ``headers`` and ``cookies`` apply to every request. Each artifact's own headers and cookies
-    merge over them. The first failure propagates (its message names the URL). ``download_http_many``
-    leaves the destinations that were still in flight clean.
+    The first failure stops the batch and raises with the failing URL in its message.
 
     Args:
-        artifacts: The artifacts to download.
-        headers: Headers applied to every request, under each artifact's own headers.
-        cookies: Cookies applied to every request, under each artifact's own cookies.
+        artifacts: The files to download, with their URLs and destination paths.
+        headers: Default request headers that each artifact's headers override.
+        cookies: Default request cookies that each artifact's cookies override.
         max_concurrency: Maximum number of downloads running at once.
-        skip_existing: Skip any artifact whose destination already exists.
+        skip_existing: Skip existing files if they match ``sha256`` or have no expected hash.
 
     Returns:
         The destination paths, in input order.
@@ -120,22 +138,22 @@ async def _download_one(
     batch_cookies: Mapping[str, str] | None,
     skip_existing: bool,
 ) -> None:
-    """Stream one artifact to its destination via a ``.part`` temp file, renamed on success.
+    """Download one HTTP file to its destination.
 
-    Batch headers/cookies are merged under the artifact's own.
+    The function creates missing parent directories and replaces the destination only after success.
 
     Args:
-        client: The shared async client.
-        artifact: The artifact to download.
-        batch_headers: Headers applied to every request, under the artifact's own.
-        batch_cookies: Cookies applied to every request, under the artifact's own.
-        skip_existing: Return early if the destination already exists.
+        client: The HTTP client for the request.
+        artifact: The file to download, with its URL and destination path.
+        batch_headers: Default request headers that the artifact's headers override.
+        batch_cookies: Default request cookies that the artifact's cookies override.
+        skip_existing: Skip an existing file if it matches ``sha256`` or no expected hash is set.
 
     Raises:
-        TimeFFormatError: If the artifact's ``sha256`` is set and does not match the downloaded bytes.
+        TimeFFormatError: If the downloaded file does not match the supplied SHA-256 hash.
     """
     dest = artifact.dest
-    if skip_existing and dest.exists():
+    if skip_existing and is_cached(artifact):
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.parent / f"{dest.name}.part"

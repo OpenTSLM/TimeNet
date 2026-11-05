@@ -248,13 +248,16 @@ the URL. As a result, a connector never has to branch on `s3://` versus `http(s)
 
 Each `Artifact` takes optional `headers`, `cookies`, and a `sha256` value to validate the download.
 `download_files` also takes batch-level `headers` and `cookies`. These apply to every HTTP request. The
-per-artifact values merge over the batch-level values. S3 ignores all of these. HTTP downloads use
-`httpx` and `aiofiles`, both base dependencies. They stream to disk and write atomically, through a
-`.part` temporary file. If the SHA-256 value does not match, the download raises an error and leaves
-nothing behind. HTTP downloads skip an existing destination. S3 downloads use boto3 and stay
-synchronous. boto3 already parallelizes the transfer of a single object. `ensure_archive` also takes a
-`filename` override, for URLs whose path has no usable name, for example a trailing slash or a
-`/download` suffix. Call these helpers from `download_async`:
+per-artifact values merge over the batch-level values. S3 ignores the headers and cookies. HTTP
+downloads use `httpx` and `aiofiles`, both base dependencies. They stream to disk and write
+atomically, through a `.part` temporary file. S3 downloads use boto3 and stay synchronous. boto3
+already parallelizes the transfer of a single object. Both backends skip an existing destination.
+
+Pin every source file outside the Hub. Use a versioned or commit-pinned URL, never a moving branch
+such as `master`, and pass its `sha256`. A mismatch raises `TimeFFormatError`. A cached file is used
+again only while it matches its pin. `ensure_archive` also takes a `filename` override, for URLs
+whose path has no usable name, for example a trailing slash or a `/download` suffix. Call these
+helpers from `download_async`:
 
 ```python
 from timenet_connectors.download import Artifact, ensure_archive, download_files

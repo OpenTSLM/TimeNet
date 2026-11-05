@@ -8,12 +8,13 @@ such as physionet-open needs. The code imports ``boto3`` lazily, so users who bu
 datasets do not need it.
 """
 
+import hashlib
 import logging
 from pathlib import Path
 from typing import Any
 from urllib.parse import urlparse
 
-from timenet.errors import TimeFValidationError, TimeNetBuildError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetBuildError
 from timenet_connectors.download.progress import DownloadProgress, ProgressCallback, current_sink
 
 
@@ -59,19 +60,19 @@ def _s3_client() -> Any:
     return session.client("s3", config=Config(signature_version=UNSIGNED))
 
 
-def download_s3_object(s3_url: str, dest: Path) -> None:
-    """Download an ``s3://bucket/key`` object to ``dest``, creating parent directories.
+def download_s3_object(s3_url: str, dest: Path, *, sha256: str | None = None) -> None:
+    """Download an S3 object to ``dest``.
 
-    Writes atomically. The bytes land in a ``.part`` temp file, and a rename moves it into place
-    only on success. So an interrupted download never leaves a truncated file that a later
-    ``skip_existing`` check would trust.
+    The function creates missing parent directories and replaces the destination only after success.
 
     Args:
         s3_url: The object URL, ``s3://<bucket>/<key>``.
         dest: The local destination path.
+        sha256: An optional SHA-256 hash in hexadecimal that the downloaded file must match.
 
     Raises:
-        TimeFValidationError: If ``s3_url`` is not an ``s3://`` URL carrying both a bucket and a key.
+        TimeFValidationError: If the URL uses a scheme other than ``s3://`` or lacks a bucket or key.
+        TimeFFormatError: If the downloaded file does not match the supplied SHA-256 hash.
     """
     parsed = urlparse(s3_url)
     bucket, key = parsed.netloc, parsed.path.lstrip("/")
@@ -97,7 +98,14 @@ def download_s3_object(s3_url: str, dest: Path) -> None:
             client.download_file(bucket, key, str(part), Callback=_on_bytes)
         else:
             client.download_file(bucket, key, str(part))
+        if sha256 is not None:
+            with part.open("rb") as handle:
+                actual = hashlib.file_digest(handle, "sha256").hexdigest()
+            if actual != sha256.lower():
+                raise TimeFFormatError(
+                    f"SHA-256 mismatch downloading {s3_url!r}: expected {sha256.lower()}, got {actual}"
+                )
         part.replace(dest)
     except BaseException:
-        part.unlink(missing_ok=True)  # a partial or interrupted download must not masquerade as complete
+        part.unlink(missing_ok=True)  # a partial or mismatched download must not masquerade as complete
         raise

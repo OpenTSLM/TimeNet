@@ -44,6 +44,7 @@ from timenet_connectors.download import ensure_archive, find_dir_containing
 
 # The full release, as one zip on the open S3 bucket of PhysioNet. boto3 reads it anonymously.
 SLEEP_EDFX_ZIP_URL = "s3://physionet-open/sleep-edfx/sleep-edfx-1.0.0.zip"
+SLEEP_EDFX_ZIP_SHA256 = "a6d978fd0f9fd4693c05222f667f4d532169f8dac65ea201168b6e11ae3a80a0"
 
 # The two studies of the release. Each writes its own three characters at the front of a
 # recording id, and each numbers its subjects on its own.
@@ -242,7 +243,9 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
             TimeNetDownloadError: If the archive holds no directory for a study, or no subject table.
         """
         # The directory of the first study locates the release. Every study is checked below.
-        root = find_dir_containing(await ensure_archive(SLEEP_EDFX_ZIP_URL, cache_dir), self._STUDIES[0][0])
+        root = find_dir_containing(
+            await ensure_archive(SLEEP_EDFX_ZIP_URL, cache_dir, sha256=SLEEP_EDFX_ZIP_SHA256), self._STUDIES[0][0]
+        )
         studies: list[tuple[str, Path]] = []
         subject_tables: list[tuple[str, Path]] = []
         for study, shape in self._STUDIES:

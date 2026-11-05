@@ -15,6 +15,7 @@ from timenet_connectors.download import ensure_archive, find_dir_containing
 
 
 PTBXL_ZIP_URL = "s3://physionet-open/ptb-xl/ptb-xl-1.0.3.zip"
+PTBXL_ZIP_SHA256 = "2d98687a9c69c8df03dbd69e0c569b3363981a0f667861c279c747d4aec29812"
 _SAMPLING_RATE_HZ = 500
 _LEAD_COUNT = 12
 _VALIDATION_FOLD = 9
@@ -111,7 +112,9 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
 
     async def download_async(self, cache_dir: Path) -> list[PtbXlSource]:  # ruff: ignore[no-self-use]
         """Return the extracted pinned PTB-XL release."""
-        root = find_dir_containing(await ensure_archive(PTBXL_ZIP_URL, cache_dir), "ptbxl_database.csv")
+        root = find_dir_containing(
+            await ensure_archive(PTBXL_ZIP_URL, cache_dir, sha256=PTBXL_ZIP_SHA256), "ptbxl_database.csv"
+        )
         return [PtbXlSource(root, root / "ptbxl_database.csv")]
 
     def convert(self, raw_refs: list[PtbXlSource]) -> TimeFDataset:

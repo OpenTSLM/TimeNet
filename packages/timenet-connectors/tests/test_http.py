@@ -8,7 +8,7 @@ import httpx
 import pytest
 
 from timenet.errors import TimeFFormatError
-from timenet_connectors.download.http import Artifact, download_http, download_http_many
+from timenet_connectors.download.http import Artifact, download_http, download_http_many, is_cached
 from timenet_connectors.download.progress import progress_sink
 
 
@@ -231,6 +231,25 @@ def test_download_http_rejects_a_sha256_mismatch(tmp_path, monkeypatch):
         asyncio.run(download_http("http://host/f", tmp_path / "f", sha256="00" * 32))
     assert not (tmp_path / "f").exists()
     assert not (tmp_path / "f.part").exists()
+
+
+def test_is_cached_needs_a_pinned_file_to_match_its_pin(tmp_path):
+    dest = tmp_path / "f"
+    # Upper case on purpose: a pin copied from a tool that prints upper-case hex still matches.
+    artifact = Artifact("http://host/f", dest, sha256=hashlib.sha256(b"fresh").hexdigest().upper())
+    assert not is_cached(artifact)
+    dest.write_bytes(b"fresh")
+    assert is_cached(artifact)
+    dest.write_bytes(b"stale")
+    assert not is_cached(artifact)
+
+
+def test_downloads_again_over_a_file_that_misses_its_pin(tmp_path, monkeypatch):
+    _patch_transport(monkeypatch, _serve_bytes(b"fresh"))
+    dest = tmp_path / "f"
+    dest.write_bytes(b"stale")
+    asyncio.run(download_http("http://host/f", dest, sha256=hashlib.sha256(b"fresh").hexdigest()))
+    assert dest.read_bytes() == b"fresh"
 
 
 def test_cleans_up_part_file_on_mid_stream_failure(tmp_path, monkeypatch):

@@ -42,13 +42,18 @@ from timenet.types.reference_keys import ParentAlias
 from timenet_connectors.download import Artifact, download_files, ensure_archive, find_dir_containing
 
 
-# The per-template answer options (the multiple-choice candidates), keyed by template_id.
+# The per-template answer options (the multiple-choice candidates), keyed by template_id. The URL
+# names a specific commit of the ECG-QA repository, so the file cannot change under it.
 ECG_QA_TEMPLATE_ANSWERS_URL = (
-    "https://raw.githubusercontent.com/Jwoo5/ecg-qa/master/ecgqa/ptbxl/answers_for_each_template.csv"
+    "https://raw.githubusercontent.com/Jwoo5/ecg-qa/73386bb61b10d525c1e7c428bf5adee6140de750"
+    "/ecgqa/ptbxl/answers_for_each_template.csv"
 )
+ECG_QA_TEMPLATE_ANSWERS_SHA256 = "e7d2850227793b786c49dc8d276b2e29b440123862f0a9140c0214bbc403db10"
 # Precomputed CoT rows (question, answer, rationale, template). OpenTSLM's release is the only
 # public source. This is a swappable constant so a mirror can replace it.
 ECG_QA_COT_URL = "https://polybox.ethz.ch/index.php/s/D5QaJSEw4dXkzXm/download/ecg_qa_cot_final.zip"
+# A share link can serve new bytes at the same URL, so the digest is what pins the release.
+ECG_QA_COT_SHA256 = "f397786c949afc56a4c16fa31f5b01c7b0459a77a5d92a29b5d355577eb6164e"
 
 
 # The PTB-XL signal-quality annotations, each with the phrase that the clinical context states if a
@@ -273,8 +278,10 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         answers_path = cache_dir / "answers_for_each_template.csv"
         # The two HTTP artifacts download concurrently.
         _, cot_root = await asyncio.gather(
-            download_files([Artifact(ECG_QA_TEMPLATE_ANSWERS_URL, answers_path)]),
-            ensure_archive(ECG_QA_COT_URL, cache_dir),
+            download_files(
+                [Artifact(ECG_QA_TEMPLATE_ANSWERS_URL, answers_path, sha256=ECG_QA_TEMPLATE_ANSWERS_SHA256)]
+            ),
+            ensure_archive(ECG_QA_COT_URL, cache_dir, sha256=ECG_QA_COT_SHA256),
         )
         cot_csvs = tuple(
             (split, find_dir_containing(cot_root, csv_name) / csv_name) for split, csv_name in self._COT_CSVS
