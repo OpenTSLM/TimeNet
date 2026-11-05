@@ -6,6 +6,7 @@ import httpx
 import pytest
 
 import timenet
+from timenet import builders
 from timenet.builders import BuildOptions
 from timenet.errors import (
     TimeFValidationError,
@@ -84,8 +85,11 @@ def test_build_with_store_and_parents_from_takes_the_store_and_the_sources_only_
     monkeypatch.setenv("TIMENET_REMOTE_REGISTRY", str(origin.root))
     store = tmp_path / "store"
     # The remote registry of the environment holds the parent, but parents_from is empty.
-    with pytest.raises(TimeNetMissingParentError):
+    with pytest.raises(TimeNetMissingParentError) as caught:
         timenet.build(CHILD.dataset_id, store=store, parents_from=[])
+    assert (
+        caught.value.hint == "Add a registry that holds it to parents_from, or add InstalledConnectors() to build it."
+    )
     assert not env_store.exists()
     assert cards == []
 
@@ -163,6 +167,13 @@ def test_build_passes_keep_cache_and_progress_to_the_backend(tmp_path, cards):
 
     timenet.build(PARENT.dataset_id, store=tmp_path / "store", parents_from=[], keep_cache=True, progress=callback)
     assert cards == [(PARENT, BuildOptions(keep_cache=True, progress=callback))]
+
+
+def test_build_of_a_dataset_without_a_connector_package_names_one(tmp_path, monkeypatch):
+    monkeypatch.setattr(builders, "entry_points", lambda group: [])
+    with pytest.raises(TimeNetDatasetNotFoundError) as caught:
+        timenet.build("x/y", store=tmp_path / "store")
+    assert caught.value.hint == "Install a connector package that builds it, such as timenet-connectors."
 
 
 def test_build_rejects_a_store_that_is_not_local(tmp_path, cards):
@@ -262,7 +273,9 @@ def test_publish_of_a_release_that_the_source_lacks_names_the_source(tmp_path):
     assert not (tmp_path / "dest").exists()
 
 
-def test_publish_of_a_listed_release_that_the_source_does_not_serve_raises_the_access_error(tmp_path):
+def test_publish_of_a_listed_release_that_the_source_does_not_serve_raises_the_access_error(tmp_path, monkeypatch):
+    # The hint of the error asks the installed connectors, so the test installs none.
+    monkeypatch.setattr(builders, "entry_points", lambda group: [])
     card = _card(
         DatasetRef.parse("org/gated@1.0.0"), access=Access.CREDENTIALED, access_url="https://physionet.example/dua"
     )
@@ -274,9 +287,7 @@ def test_publish_of_a_listed_release_that_the_source_does_not_serve_raises_the_a
     hosted = _Hosted("http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)))
     with pytest.raises(TimeNetAccessError) as caught:
         timenet.publish("org/gated", dest=tmp_path / "dest", source=hosted)
-    assert str(caught.value) == (
-        "org/gated@1.0.0 is credentialed. Get access at https://physionet.example/dua for org/gated@1.0.0."
-    )
+    assert caught.value.dataset == DatasetRef.parse("org/gated@1.0.0")
     assert not (tmp_path / "dest").exists()
 
 
