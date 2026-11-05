@@ -425,8 +425,8 @@ def _prepare(
             if found is None or found.release != source:
                 raise
             pins = next(pinned for pinned in manifest.payload_sources.values() if pinned.release == source)
-            # Glue: maps fetch_from and auto_build onto the coordinator, until the client takes a
-            # list of sources.
+            # TODO(adrian): Remove temporary glue which maps fetch_from and auto_build onto the
+            # coordinator until the client takes a list of sources.
             build_release(
                 str(source), store=registry, fetch_from=fetch_from, build_parents=True, pinned_by={reference: pins}
             )
@@ -465,9 +465,10 @@ def _obtain(  # ruff: ignore[too-many-arguments]
         if hint is None:
             raise miss
         raise TimeNetDatasetNotFoundError(f"{miss}. {hint}") from miss
-    # Glue: maps fetch_from and auto_build onto the coordinator, until the client takes a list of
-    # sources. The build prepares the declared parents of the version in the same order: reuse,
-    # copy, then build. Sentinels such as "latest" are not pins, so a fresh build satisfies them.
+    # TODO(adrian): Remove temporary glue which maps fetch_from and auto_build onto the coordinator
+    # until the client takes a list of sources. The build prepares the declared parents of the
+    # version in the same order: reuse, copy, then build. Sentinels such as "latest" are not pins,
+    # so a fresh build satisfies them.
     build_release(
         dataset_id if is_latest(version) else f"{dataset_id}@{version}",
         store=registry,
