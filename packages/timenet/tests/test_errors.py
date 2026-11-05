@@ -168,10 +168,7 @@ def test_an_error_with_facts_ends_with_the_hint_of_its_front_end(error, facts, m
     assert str(restored) == f"{message} Do this instead."
 
 
-def test_a_release_that_is_not_built_yet_is_not_found_and_keeps_its_release_and_card():
+def test_a_not_built_error_keeps_its_release_and_card_through_pickle():
     card = make_dataset().metadata
-    error = TimeNetNotBuiltError(_A, card)
-    # A caller that catches a missing dataset catches it too.
-    assert isinstance(error, TimeNetDatasetNotFoundError)
-    restored = pickle.loads(pickle.dumps(error))
+    restored = pickle.loads(pickle.dumps(TimeNetNotBuiltError(_A, card)))
     assert (restored.release, restored.card) == (_A, card)

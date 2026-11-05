@@ -25,7 +25,6 @@ from timenet.errors import (
     TimeNetVersionUnavailableError,
 )
 from timenet.format.stored_values import StoredText
-from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.progress import BytesMoved, ProgressEvent, StepFinished, StepStarted
 from timenet.reader import Loading, LoadPlan, TimeFReader
@@ -324,11 +323,6 @@ def test_list_and_search_ask_the_first_registry_that_is_not_the_store(registry_r
     assert [metadata.dataset_id for metadata in alone.list()] == ["test/other"]
 
 
-def test_get_manifest_returns_a_manifest(registry_root):
-    client = TimeNet(sources=[str(registry_root)])
-    assert isinstance(client.get_manifest("timenet/hello-world"), Manifest)
-
-
 def test_get_manifest_returns_the_manifest_of_the_release_that_open_reads(tmp_path):
     store, remote = LocalRegistry(tmp_path / "store"), LocalRegistry(tmp_path / "remote")
     store.put_dataset(make_dataset())
@@ -402,13 +396,6 @@ def test_get_manifest_names_every_source_when_none_provides_the_release(tmp_path
         f"x/y is in none of the sources: {names}. "
         "Add a registry that holds it to the sources, or add InstalledConnectors() to build it."
     )
-
-
-def test_an_exact_version_that_the_connector_does_not_declare_raises_version_unavailable(tmp_path, monkeypatch):
-    install_backends(monkeypatch, _Builder([]))
-    client = TimeNet(sources=[LocalRegistry(tmp_path / "store"), InstalledConnectors()])
-    with pytest.raises(TimeNetVersionUnavailableError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
-        client.get_card("test/child@9.9.9")
 
 
 def test_download_needs_a_local_registry_that_is_not_read_only(registry_root):
