@@ -28,6 +28,8 @@ _registry_option = typer.Option(
     "-r",
     help="Registry URL or path that this command reads (else $TIMENET_REGISTRY, then timenet://).",
 )
+# TODO(adrian): Remove temporary glue which maps --registry onto the list after the local registry, until the CLI
+# takes the flags of the defaults.
 _download_registry_option = typer.Option(
     None,
     "--registry",

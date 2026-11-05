@@ -4,9 +4,10 @@ Datasets live in the local registry (built locally) and the download storage. Ra
 download cache. All three sit under the home directory.
 """
 
-# Glue: the "download storage" of this module is the storage directory, settings().storage_dir.
-# download() copies into the local registry now, so the storage directory holds only the copies that remote
-# registries cache. A later change replaces this module and its view of the storage directory.
+# TODO(adrian): Remove temporary glue which maps the "download storage" of this module onto the
+# storage directory, settings().storage_dir, until a later change replaces this module and its
+# view of the storage directory. download() copies into the local registry now, so the storage directory
+# holds only the copies that remote registries cache.
 
 from dataclasses import dataclass
 import os
@@ -53,7 +54,8 @@ def cached_datasets() -> list[CachedDataset]:
         The cached versions sorted by location, dataset ID, and version.
     """
     config = settings()
-    # Glue: the storage directory, as the note at the top of this module says.
+    # TODO(adrian): Remove temporary glue which maps the download storage onto the storage
+    # directory until a later change replaces this module, as the note at the top says.
     found = _scan(config.registry_path, "registry") + _scan(config.storage_dir, "storage")
     return sorted(found, key=lambda dataset: (dataset.location, dataset.dataset_id, dataset.version))
 
@@ -80,7 +82,8 @@ def clear_cache(*, include_registry: bool) -> tuple[int, list[Path]]:
         A ``(bytes_freed, removed_dirs)`` pair with the removed directory paths.
     """
     config = settings()
-    # Glue: the storage directory, as the note at the top of this module says.
+    # TODO(adrian): Remove temporary glue which maps the download storage onto the storage
+    # directory until a later change replaces this module, as the note at the top says.
     targets = [config.storage_dir, config.cache_dir]
     if include_registry:
         targets.append(config.registry_path)
