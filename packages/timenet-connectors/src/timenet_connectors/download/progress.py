@@ -23,13 +23,14 @@ class DownloadProgress:
     total: int | None
 
 
-ProgressCallback = Callable[[DownloadProgress], None]
+DownloadCallback = Callable[[DownloadProgress], None]
+"""A callback that receives download progress events."""
 
-_sink: ContextVar[ProgressCallback | None] = ContextVar("download_progress_sink", default=None)
+_sink: ContextVar[DownloadCallback | None] = ContextVar("download_progress_sink", default=None)
 
 
 @contextmanager
-def progress_sink(callback: ProgressCallback | None) -> Generator[None]:
+def progress_sink(callback: DownloadCallback | None) -> Generator[None]:
     """Install ``callback`` as the download-progress sink for the duration of the block.
 
     Args:
@@ -56,7 +57,7 @@ def report_progress(event: DownloadProgress) -> None:
         sink(event)
 
 
-def current_sink() -> ProgressCallback | None:
+def current_sink() -> DownloadCallback | None:
     """Return the installed download-progress sink, or ``None`` if none is installed.
 
     A downloader captures this on its own thread before handing a callback to a library that reports
