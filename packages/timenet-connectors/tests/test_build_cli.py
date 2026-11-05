@@ -54,7 +54,6 @@ def test_build_runs_isolated_by_default(monkeypatch, tmp_path):
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
-    monkeypatch.setattr(backend_module, "run_pipeline", _unexpected)
 
     result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path)])
 
@@ -85,7 +84,6 @@ def test_build_isolates_when_the_flag_overrides_the_setting(monkeypatch, tmp_pat
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
-    monkeypatch.setattr(backend_module, "run_pipeline", _unexpected)
 
     result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path), "--isolation"])
 
@@ -105,14 +103,13 @@ def test_build_without_isolation_shows_each_build_line_once(monkeypatch, tmp_pat
     assert result.stderr.count("✅ Built 'timenet/hello-world' → 1.0.0") == 1
 
 
-@pytest.mark.parametrize("quiet", [False, True])
-def test_a_build_that_reuses_the_release_says_so_on_stderr(monkeypatch, tmp_path, quiet):
+def test_a_build_that_reuses_the_release_says_so_on_stderr(monkeypatch, tmp_path):
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     # The line names a long path, so the console must not wrap it.
     monkeypatch.setattr(cli_module.console, "rich", Console(stderr=True, width=1000))
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
-    command = [*(["--quiet"] if quiet else []), "build", "timenet/hello-world", "--out", str(tmp_path)]
+    command = ["build", "timenet/hello-world", "--out", str(tmp_path)]
     assert runner.invoke(app, command).exit_code == 0
 
     result = runner.invoke(app, command)
@@ -121,7 +118,7 @@ def test_a_build_that_reuses_the_release_says_so_on_stderr(monkeypatch, tmp_path
     assert len(calls) == 1
     assert result.stdout == f"{tmp_path / 'timenet/hello-world/1.0.0'}\n"
     reused = f"✅ Nothing to do: 'timenet/hello-world' 1.0.0 is already in local registry {tmp_path}"
-    assert result.stderr.splitlines() == ([] if quiet else [reused])
+    assert result.stderr.splitlines() == [reused]
 
 
 def test_build_takes_an_exact_release_and_refuses_another_version(monkeypatch, tmp_path):

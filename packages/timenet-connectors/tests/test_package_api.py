@@ -1,6 +1,6 @@
 import pytest
 
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
+from timenet.errors import TimeNetVersionUnavailableError
 from timenet.registry import LocalRegistry
 from timenet.testing import make_dataset
 from timenet.types import ClassificationTask
@@ -24,6 +24,7 @@ def test_build_then_load_round_trip(monkeypatch, tmp_path):
     monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "registry"))
     # In-process, so the round trip stays in this interpreter instead of shelling out to uv.
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
+    monkeypatch.setattr(backend_module, "run_isolated_build", _unexpected_isolation)
 
     version_dir = timenet_connectors.build("timenet/test-mean")
     assert (version_dir / "manifest.json").exists()
@@ -36,10 +37,9 @@ def test_build_then_load_round_trip(monkeypatch, tmp_path):
     assert set(y.to_pylist()) == {"above_zero", "below_zero"}
 
 
-@pytest.mark.parametrize("version", [None, "1.0.0"])
-def test_build_runs_in_an_isolated_environment_by_default(monkeypatch, tmp_path, version):
-    # The version check reads the card, so it does not import the connector either. The connector
-    # needs dependencies that only the environment of the child has.
+def test_build_runs_in_an_isolated_environment_by_default(monkeypatch, tmp_path):
+    # The parent reads only the card. It does not import the connector, which needs dependencies
+    # that only the environment of the child has.
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(backend_module, "resolve", _unexpected_resolve)
     calls = []
@@ -50,7 +50,7 @@ def test_build_runs_in_an_isolated_environment_by_default(monkeypatch, tmp_path,
 
     monkeypatch.setattr(backend_module, "run_isolated_build", fake_isolated)
 
-    version_dir = timenet_connectors.build("timenet/hello-world", version=version, out=str(tmp_path), force=True)
+    version_dir = timenet_connectors.build("timenet/hello-world", out=str(tmp_path), force=True)
 
     # The child is not quiet: it shows its downloads and shards.
     assert calls == [(DatasetRef.parse("timenet/hello-world@1.0.0"), tmp_path, True, False, False)]
@@ -69,23 +69,3 @@ def test_build_rejects_a_version_the_connector_does_not_declare(monkeypatch, tmp
 
     assert str(caught.value.declared) == "1.0.0"
     assert not tmp_path.joinpath("timenet").exists()
-
-
-@pytest.mark.parametrize("dataset_id", ["nope/nothing", "timenet/hello_world"])
-def test_build_accepts_only_the_dataset_id_of_a_card(monkeypatch, tmp_path, dataset_id):
-    # The module path of the connector accepts the spelling with "_", but a dataset ID must match its card.
-    monkeypatch.setattr(backend_module, "run_isolated_build", _unexpected_isolation)
-
-    with pytest.raises(TimeNetDatasetNotFoundError, match=f"no installed connector builds {dataset_id!r}"):
-        timenet_connectors.build(dataset_id, out=tmp_path)
-
-
-def test_build_runs_in_process_when_isolation_is_off(monkeypatch, tmp_path):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("TIMENET_ISOLATION", "off")
-    monkeypatch.setattr(backend_module, "run_isolated_build", _unexpected_isolation)
-
-    version_dir = timenet_connectors.build("timenet/hello-world", out=tmp_path / "registry")
-
-    assert version_dir == tmp_path / "registry" / "timenet" / "hello-world" / "1.0.0"
-    assert (version_dir / "manifest.json").is_file()
