@@ -5,6 +5,7 @@ from contextlib import ExitStack
 from pathlib import Path
 import shutil
 
+from timenet import provenance
 from timenet.config import settings
 from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
@@ -150,7 +151,9 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
             the engine read. Nothing is published then.
         TimeNetAccessError: If the registry is not local, and the card, or the composed dataset with
             its lineage, is not open.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, and require_open_access
+        TimeNetBuildError: If the registry is not local, and an installed TimeNet distribution has
+            local changes or no known git commit. Nothing is downloaded then.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, require_open_access, and require_traceable_build
     resolved_backend = _resolve_values_backend(connector, values_backend)
     metadata = connector.metadata()
     dataset_id = metadata.dataset_id
@@ -159,6 +162,7 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
         return version
     if not isinstance(registry, LocalRegistry):
         require_open_access(metadata)
+        provenance.require_traceable_build()
     _check_composes(connector, metadata)
 
     cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id

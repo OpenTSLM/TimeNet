@@ -50,7 +50,8 @@ versions used for the build, and the git commit of `timenet` and `timenet-connec
 The engine runs these stages:
 
 1. Read and validate the connector's `dataset.yaml` card. If the output registry is not local, the
-   card must declare `access: open`.
+   card must declare `access: open`, and the TimeNet code must be traceable to a commit, as
+   [Traceable builds](#traceable-builds) describes.
 2. Open the parent releases that the card declares. The output registry must hold them, as
    [Prepare parent releases](#prepare-parent-releases) describes.
 3. Download raw artifacts into the build cache.
@@ -112,6 +113,18 @@ child declares `access: open` but its parent is credentialed, the second check r
 The error names the release and its effective access level, which is the strictest level of its
 card and of the cards in its lineage. It also names each `access_url` that a user needs, with the
 release that sets it. For a card, this is the `access_url` of the card.
+
+### Traceable builds
+
+A release in a registry that is not local outlives the machine that built it, so its manifest must
+name the exact code that built it. Before it downloads anything, `publish_pipeline()` raises
+`TimeNetBuildError` if an installed `timenet` or `timenet-connectors` distribution has no known git
+commit, or has uncommitted changes in its package directory. There is no override. Commit the
+changes first, or build to a local directory, which records the state and does not refuse.
+
+A local checkout reads the commit from git. A wheel reads it from the `_build_info.json` file that
+`scripts/write_build_info.py` writes before `uv build`. `make build` and the publish workflow run
+the script.
 
 ## Prepare parent releases
 

@@ -5,11 +5,12 @@ from typing import Any, ClassVar, cast
 import httpx
 import pytest
 
+from timenet import provenance
 from timenet.config import settings
 from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
 from timenet.engine import open_parents, publish_pipeline, run_pipeline, store_dataset
-from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeFValidationError, TimeNetAccessError, TimeNetBuildError, TimeNetDatasetNotFoundError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, RemoteRegistry
@@ -109,6 +110,14 @@ def test_run_pipeline_writes_the_requested_values_backend(tmp_path):
     assert manifest.values_backend == "zarr"
 
 
+@pytest.fixture
+def traceable_build(monkeypatch):
+    """Report every TimeNet distribution as committed, whatever the state of this checkout."""
+    clean = {"sha": "a" * 40, "local_changes": False}
+    monkeypatch.setattr(provenance, "git_sources", lambda: dict.fromkeys(provenance.TIMENET_DISTRIBUTIONS, clean))
+
+
+@pytest.mark.usefixtures("traceable_build")
 def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tmp_path):
     class _Registry:
         def __init__(self) -> None:
@@ -515,6 +524,7 @@ class _HostedRegistry:
         pytest.fail("wrote a child whose parent is credentialed")
 
 
+@pytest.mark.usefixtures("traceable_build")
 def test_publish_pipeline_refuses_an_open_child_of_a_credentialed_parent_before_the_write(tmp_path):
     _store_credentialed_parent(tmp_path)
     registry = cast(WritableRegistry, _HostedRegistry(tmp_path))
@@ -530,3 +540,21 @@ def test_publish_pipeline_refuses_an_open_child_of_a_credentialed_parent_before_
         Access.CREDENTIALED,
         (AccessRequirement(_PARENT, Access.CREDENTIALED, "https://example.org/dua"),),
     )
+
+
+def test_publish_pipeline_refuses_a_build_with_local_changes_before_downloading(tmp_path, monkeypatch):
+    dirty = {"sha": "a" * 40, "local_changes": True}
+    monkeypatch.setattr(provenance, "git_sources", lambda: {"timenet": dirty})
+    monkeypatch.setattr(_DemoConnector, "download", lambda self, cache_dir: pytest.fail("downloaded"))
+    remote = RemoteRegistry(
+        "http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)), cache_dir=tmp_path
+    )
+
+    with pytest.raises(TimeNetBuildError, match="timenet has uncommitted changes"):
+        publish_pipeline(_DemoConnector(), remote, cache_dir=tmp_path / "cache")
+
+    # A local registry is the user's own, so a build with local changes may go there.
+    monkeypatch.undo()
+    monkeypatch.setattr(provenance, "git_sources", lambda: {"timenet": dirty})
+    publish_pipeline(_DemoConnector(), LocalRegistry(tmp_path / "local"), cache_dir=tmp_path / "cache")
+    assert LocalRegistry(tmp_path / "local").exists(_PARENT.dataset_id, str(_PARENT.version))

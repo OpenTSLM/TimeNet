@@ -17,7 +17,8 @@ from timenet.manifest import BuildEnvironment, GitSource
 
 
 TIMENET_DISTRIBUTIONS = ("timenet", "timenet-connectors")
-"""The distributions whose git commit a build records."""
+"""The distributions whose git commit a build records. Each one that is installed must be traceable
+before a build publishes to a registry that is not local."""
 
 BUILD_INFO_FILE = "_build_info.json"
 """The commit record that ``scripts/build_dists.py`` writes into each package of a wheel."""
@@ -69,6 +70,35 @@ def git_sources() -> dict[str, GitSource]:
         The commits, keyed by distribution name.
     """
     return {name: commit for name, commit in _read_git().items() if not isinstance(commit, UnknownCommit)}
+
+
+def require_traceable_build() -> None:
+    """Refuse a build whose TimeNet code cannot be traced to a commit.
+
+    A release in a registry that is not local outlives the machine that built it. Its manifest must
+    name the exact code, so each installed TimeNet distribution needs a known commit and no local
+    changes.
+
+    Raises:
+        TimeNetBuildError: If an installed TimeNet distribution has local changes or no known commit.
+    """
+    sources = git_sources()
+    problems: list[str] = []
+    for name in TIMENET_DISTRIBUTIONS:
+        try:
+            Distribution.from_name(name)
+        except PackageNotFoundError:
+            continue
+        source = sources.get(name)
+        if source is None:
+            problems.append(f"{name} has no known git commit")
+        elif source["local_changes"]:
+            problems.append(f"{name} has uncommitted changes at {source['sha']}")
+    if problems:
+        raise TimeNetBuildError(
+            f"refusing to publish a build that cannot be traced to a commit: {'; '.join(problems)}. "
+            "Commit the changes, or build to a local directory."
+        )
 
 
 def local_source_path(dist: Distribution) -> Path | None:
