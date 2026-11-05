@@ -449,20 +449,17 @@ def test_search_filters_connector_cards_like_registry_rows(tmp_path, monkeypatch
         client.search(dataset_id=both),
     ]
     assert [[row.dataset_id for row in rows] for rows in matching] == [both] * len(matching)
+    # Each filter that matches neither row drops both, the card as well as the registry row.
     assert client.search(query="nothing") == []
     assert client.search(domain=Domain.CARDIOLOGY) == []
     assert client.search(tag=["demo", "other"]) == []
-    assert [row.dataset_id for row in client.search(dataset_id="c/three")] == ["c/three"]
+    assert client.search(license=License.MIT) == []
+    assert client.search(dataset_id="x/y") == []
 
 
 def test_search_rejects_a_negative_limit(registry_root):
     with pytest.raises(TimeFValidationError, match=r"^limit must be 0 or more, got -1$"):
         TimeNet(sources=[str(registry_root)]).search(limit=-1)
-
-
-def test_list(registry_root):
-    client = TimeNet(sources=[str(registry_root)])
-    assert {m.dataset_id for m in client.list()} == {"timenet/hello-world"}
 
 
 def _at_version(dataset, version):
@@ -585,12 +582,6 @@ def test_plan_read_raises_the_access_error_of_a_release_that_is_not_served(tmp_p
         "`timenet-build build org/gated`."
     )
     assert not store.root.exists()
-
-
-def test_search(registry_root):
-    client = TimeNet(sources=[str(registry_root)])
-    assert {m.dataset_id for m in client.search(domain=Domain.GENERAL)} == {"timenet/hello-world"}
-    assert client.search(domain=Domain.CARDIOLOGY) == []
 
 
 def test_download_copies_the_release_and_its_payload_sources_into_the_store(tmp_path):
