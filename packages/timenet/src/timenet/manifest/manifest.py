@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Annotated, Any, Self
 
-from pydantic import Field, StrictBool, StrictStr, StringConstraints, ValidationError, model_validator
+from pydantic import ConfigDict, Field, StrictBool, StrictStr, StringConstraints, ValidationError, model_validator, with_config
 from typing_extensions import TypedDict
 
 from timenet.errors import ReleaseDifference, TimeFFormatError, TimeNetManifestError
@@ -24,6 +24,7 @@ GitSha = Annotated[str, StringConstraints(strict=True, pattern=r"^(?:[0-9a-f]{40
 """A full git commit id: 40 hex digits, or 64 in a SHA-256 repository."""
 
 
+@with_config(ConfigDict(extra="forbid"))
 class GitSource(TypedDict):
     """The git commit that one TimeNet distribution was built from."""
 

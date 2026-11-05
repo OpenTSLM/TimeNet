@@ -144,6 +144,7 @@ testpaths = ["packages", "benchmarks/end_to_end/tests"]
 markers = [
     "slow: full-disk round-trip and property tests (deselect with '-m \"not slow\"')",
     "value_dtypes: scalar value-dtype round-trip tests (run with '-m value_dtypes')",
+    "real_git: run real git for provenance instead of the clean commit that packages/conftest.py reports",
 ]
 
 [tool.ty.src]
