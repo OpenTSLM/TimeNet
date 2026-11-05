@@ -69,7 +69,8 @@ def _client(registry: str | None) -> TimeNet:
     Returns:
         The client.
     """
-    # Glue: --registry maps onto default_sources() until the CLI takes the flags of the defaults.
+    # TODO(adrian): Remove temporary glue which maps --registry onto default_sources() until the
+    # CLI takes the flags of the defaults.
     return TimeNet(sources=default_sources(remote_registry=registry))
 
 
