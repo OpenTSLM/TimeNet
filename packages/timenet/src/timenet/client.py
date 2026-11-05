@@ -252,8 +252,8 @@ class TimeNet:
         """  # ruff: ignore[docstring-extraneous-exception] (raised by read_release and the builder)
         dataset_id, version = _resolve_ref(dataset_id, version)
         sources, store = self._read_sources(auto_build=auto_build, fetch_from=fetch_from)
-        # Glue: maps fetch_from and auto_build onto hints for a local client, until the client
-        # takes a list of sources.
+        # TODO(adrian): Remove temporary glue which maps fetch_from and auto_build onto hints for
+        # a local client until the client takes a list of sources.
         try:
             return TimeFReader(read_release(dataset_id, version, sources=sources, store=store))
         except TimeNetAccessError as error:
@@ -320,11 +320,11 @@ class TimeNet:
     ) -> tuple[_Sources, LocalRegistry | None]:
         """Return the sources of a read, in order, and the local registry that its builds go to.
 
-        Glue: maps ``fetch_from`` and ``auto_build`` onto a list of sources for the read
-        coordinator, until the client takes the list itself. A local client reads from its own
-        registry, then from ``fetch_from``, then from the installed connectors if ``auto_build`` is
-        set. Its builds go to its own registry. A remote client reads only from its own registry,
-        and it never builds.
+        TODO(adrian): Remove temporary glue which maps ``fetch_from`` and ``auto_build`` onto a
+        list of sources for the read coordinator until the client takes the list itself. A local
+        client reads from its own registry, then from ``fetch_from``, then from the installed
+        connectors if ``auto_build`` is set. Its builds go to its own registry. A remote client
+        reads only from its own registry, and it never builds.
 
         Returns:
             The sources, and the local registry, or ``None`` for a remote client.
