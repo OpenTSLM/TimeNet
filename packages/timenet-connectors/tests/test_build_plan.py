@@ -6,7 +6,6 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-import timenet
 from timenet import builders
 from timenet.connectors import BaseConnector
 from timenet.coordinator.build import plan_release_build, run_plan
@@ -535,19 +534,16 @@ def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch)
     assert result.stdout.strip() == str(out / CHILD.dataset_id / str(CHILD.version))
 
 
-@pytest.mark.parametrize("entry", ["producer", "coordinator"])
-def test_every_build_entry_point_prepares_parents(tmp_path, monkeypatch, child_builds, entry):
+def test_every_build_entry_point_prepares_parents(tmp_path, monkeypatch, child_builds):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
     out = tmp_path / "out"
 
     def build(origin=None):
-        parents_from = [] if origin is None else [origin]
-        if entry == "producer":
-            timenet.build(CHILD.dataset_id, local_registry=out, parents_from=parents_from)
-        else:
-            # The client builds through the coordinator.
-            store = LocalRegistry(out)
-            run_plan(plan_release_build(CHILD.dataset_id, store=store, parents_from=parents_from), store)
+        # The client and timenet.build() build through the coordinator.
+        store = LocalRegistry(out)
+        run_plan(
+            plan_release_build(CHILD.dataset_id, store=store, parents_from=[] if origin is None else [origin]), store
+        )
 
     with pytest.raises(TimeNetMissingParentError, match=r"parent release test/parent@1\.0\.0 of test/child@1\.0\.0"):
         build()
