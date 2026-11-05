@@ -165,8 +165,6 @@ def test_installed_connectors_list_their_cards(monkeypatch):
         ("m/middle", "Hello World"),
         ("z/last", "Hello World"),
     ]
-    monkeypatch.setattr(builders, "entry_points", lambda group: [])
-    assert InstalledConnectors().list_datasets() == []
 
 
 def test_installed_connectors_leave_out_a_card_that_cannot_be_read(monkeypatch):

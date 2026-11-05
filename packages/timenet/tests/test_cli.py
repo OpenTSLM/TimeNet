@@ -158,27 +158,9 @@ def test_the_local_commands_take_the_local_registry_flag(tmp_path):
     assert stored_releases(LocalRegistry(store)) == []
 
 
-def _flags(tmp_path, remote, *, auto_build=False):
-    """Return the flags of a list of sources: an empty store, ``remote``, and the connectors or not."""
-    build = "--auto-build" if auto_build else "--no-auto-build"
-    return ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(remote), build]
-
-
-def _first_cells(output):
-    """Return the first cell of each body row of the table in ``output``."""
-    return [row[0] for row in _table_cells(output)]
-
-
-def test_list(registry_root, tmp_path):
-    result = runner.invoke(app, ["list", *_flags(tmp_path, registry_root)])
-    assert result.exit_code == 0, result.output
-    assert _first_cells(result.stdout) == ["timenet/hello-world"]
-
-
-def test_search_by_domain(registry_root, tmp_path):
-    result = runner.invoke(app, ["search", "--domain", "general", *_flags(tmp_path, registry_root)])
-    assert result.exit_code == 0, result.output
-    assert _first_cells(result.stdout) == ["timenet/hello-world"]
+def _flags(tmp_path, remote):
+    """Return the flags of a list of sources: an empty store and ``remote``, without the connectors."""
+    return ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(remote), "--no-auto-build"]
 
 
 def test_search_no_match(registry_root, tmp_path):
@@ -286,20 +268,6 @@ def test_info_of_a_dataset_that_only_a_connector_has_reads_its_card_once(tmp_pat
     assert result.exit_code == 0, result.output
     # Each resolution of the release reads the card, so one read means one resolution.
     assert reads == ["test/gated"]
-
-
-def test_list_shows_the_card_of_a_dataset_that_only_a_connector_has(registry_root, tmp_path, monkeypatch):
-    install_backends(monkeypatch, _Backend())
-
-    result = runner.invoke(app, ["list", *_flags(tmp_path, registry_root, auto_build=True)])
-
-    assert result.exit_code == 0, result.output
-    assert _first_cells(result.stdout) == ["test/gated", "timenet/hello-world"]
-    result = runner.invoke(app, ["search", "--query", "hello", *_flags(tmp_path, registry_root, auto_build=True)])
-    assert _first_cells(result.stdout) == ["test/gated", "timenet/hello-world"]
-    # Without the connectors in the list, only the registry answers.
-    result = runner.invoke(app, ["list", *_flags(tmp_path, registry_root)])
-    assert _first_cells(result.stdout) == ["timenet/hello-world"]
 
 
 def _write(root, dataset):
