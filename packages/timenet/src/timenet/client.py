@@ -65,8 +65,9 @@ def default_sources(*, remote_registry: str | Path | None = None) -> list[Releas
     Returns:
         A new list, made from the environment at the time of the call.
     """
-    # Glue: this body reads TIMENET_REGISTRY and TIMENET_HOME. The variables of the defaults
-    # (TIMENET_LOCAL_REGISTRY, TIMENET_REMOTE_REGISTRY, TIMENET_AUTO_BUILD) replace them later.
+    # TODO(adrian): Remove temporary glue which maps TIMENET_REGISTRY and TIMENET_HOME onto the
+    # list until the variables of the defaults (TIMENET_LOCAL_REGISTRY, TIMENET_REMOTE_REGISTRY,
+    # TIMENET_AUTO_BUILD) replace them.
     cfg = settings()
     configured = None if cfg.registry is None else open_registry(cfg.registry)
     local = configured if isinstance(configured, LocalRegistry) else None
@@ -261,8 +262,9 @@ class TimeNet:
         Returns:
             The local ``<storage>/<dataset_id>/<version>/`` directory.
         """
-        # Glue: the interim download() copies from one registry into the storage directory, as before
-        # the list of sources. A download into the store replaces it.
+        # TODO(adrian): Remove temporary glue which maps download() onto a copy from one registry
+        # into the storage directory, as before the list of sources, until a download into the
+        # store replaces it.
         dataset_id, version = _resolve_ref(dataset_id, version)
         registry = self._catalog()
         self._reject_unhosted_access(dataset_id, version)
@@ -378,15 +380,17 @@ class TimeNet:
         Raises:
             TimeFValidationError: If the sources hold no registry.
         """
-        # Glue: until list() and search() ask every source, these methods ask one registry. This
-        # registry gives the results of the client of one registry, from before the list of sources.
+        # TODO(adrian): Remove temporary glue which maps these methods onto one registry until
+        # list() and search() ask every source. This registry gives the results of the client of
+        # one registry, from before the list of sources.
         registries = [source for source in self._sources if isinstance(source, BaseRegistry)]
         registry = next((registry for registry in registries if registry is not self._store), self._store)
         if registry is None:
             raise TimeFValidationError("list(), get(), search() and download() need a registry in the sources")
         return registry
 
-    # Glue: only the interim download() uses this check. A later change replaces download().
+    # TODO(adrian): Remove temporary glue which checks access only for the interim download()
+    # until a later change replaces download().
     def _reject_unhosted_access(self, dataset_id: str, version: str | None) -> None:
         """Enforce the registry's open access requirement.
 
@@ -465,7 +469,8 @@ def _access_hint(dataset_id: str, sources: Sequence[ReleaseSource]) -> str:
     return f"No source serves its files. Add InstalledConnectors() to the sources, or build it locally with {build}."
 
 
-# Glue: only the interim download() uses this hint. A later change replaces download().
+# TODO(adrian): Remove temporary glue which gives a hint only for the interim download() until a
+# later change replaces download().
 def _unhosted_hint(dataset_id: str) -> str:
     """Tell the caller how to get a dataset whose data the registry of :meth:`TimeNet.download` does not serve.
 
