@@ -5,14 +5,10 @@ recording, at 50 Hz, so each window has 1500 values. Each row becomes one Record
 ClassificationTask. The target is the sleep stage. The rationale is the GPT-4o text that leads to
 the stage.
 
-The release has no split column. OpenTSLM splits the rows when it loads them, and this connector
-gives each row the same split.
-
-The task also keeps the GPT-4o prompt that produced the rationale, as a task annotation. That
-prompt names the correct stage, so it is not an input annotation and a model does not see it.
+GPT-4o prompts used to generate the rationales are attached to the tasks as annotations.
 """
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Mapping
 import csv
 from dataclasses import dataclass
 import json
@@ -21,7 +17,7 @@ import re
 from typing import Self
 
 import numpy as np
-from sklearn.model_selection import train_test_split
+from pydantic import BaseModel, ConfigDict, NonNegativeInt, ValidationError
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -36,12 +32,8 @@ SLEEP_COT_SHA256 = "8c3ecd9b42179ab50d14e30edae87f9c5a0b7acfd4d15598198dfeaaedae
 COLUMNS = ("id", "time_series", "label", "prompt", "rationale")
 SAMPLES_PER_WINDOW = 1500
 """30 seconds at 50 Hz."""
-
-# The settings of OpenTSLM's load_sleepedf_cot_splits.
-_TEST_FRACTION = 0.1
-_VALIDATION_FRACTION = 0.1
-_TEST_SEED = 42
-_VALIDATION_SEED = 43
+SPLITS_PATH = Path(__file__).with_name("splits.json")
+"""The split of OpenTSLM's loader for each row of the release, as generate_splits.py wrote it."""
 
 # The release writes the stage codes of the Rechtschaffen and Kales manual. The prompts and the
 # rationales write the names in the descriptions.
@@ -185,64 +177,93 @@ def read_rows(path: Path) -> list[SleepCotRow]:
         ]
 
 
-def reproduce_opentslm_splits(labels: Sequence[str]) -> list[Split]:
-    """Give each row the split that OpenTSLM's ``load_sleepedf_cot_splits`` gives it.
+class FrozenSplits(BaseModel):
+    """The validation and test rows of OpenTSLM's split, as row positions from 0 in file order.
 
-    OpenTSLM splits the rows with two stratified ``train_test_split`` calls: 10 % of all rows for
-    test, then 10 % of all rows for validation. Splitting the row positions with the same
-    settings selects the same rows.
-
-    Args:
-        labels: The label of each row, in file order.
-
-    Returns:
-        The split of each row, in file order.
+    The connector reads the split from splits.json.
     """
-    stratify = np.asarray(labels)
-    positions = np.arange(len(stratify))
-    train_and_validation, test = train_test_split(
-        positions, test_size=_TEST_FRACTION, random_state=_TEST_SEED, stratify=stratify
-    )
-    _, validation = train_test_split(
-        train_and_validation,
-        test_size=_VALIDATION_FRACTION / (1.0 - _TEST_FRACTION),
-        random_state=_VALIDATION_SEED,
-        stratify=stratify[train_and_validation],
-    )
-    splits = [Split.TRAIN] * len(stratify)
-    for position in validation:
-        splits[position] = Split.VALIDATION
-    for position in test:
-        splits[position] = Split.TEST
-    return splits
+
+    model_config = ConfigDict(extra="forbid", frozen=True)
+
+    source_sha256: str
+    """The SHA-256 digest of the release CSV that the split was made from."""
+    validation: tuple[NonNegativeInt, ...]
+    test: tuple[NonNegativeInt, ...]
+
+    @classmethod
+    def read_from_file(cls, path: Path) -> Self:
+        """Read the split from a splits.json file.
+
+        Returns:
+            The split.
+
+        Raises:
+            TimeNetConnectorError: If the file does not hold a valid split.
+        """
+        try:
+            return cls.model_validate_json(path.read_text(encoding="utf-8"))
+        except ValidationError as exc:
+            raise TimeNetConnectorError(f"{path.name} does not hold a valid split: {exc}") from exc
+
+    def assign_split_to_each_row(self, n_rows: int) -> list[Split]:
+        """Give the split of each row of the pinned release, in file order.
+
+        Returns:
+            The split of each row. A row that the file does not name is a train row.
+
+        Raises:
+            TimeNetConnectorError: If the split was made from another CSV than the pinned one, or
+                names a row outside the release or a row twice.
+        """
+        if self.source_sha256 != SLEEP_COT_SHA256:
+            raise TimeNetConnectorError(
+                f"the split was made from the CSV {self.source_sha256}, not from the pinned {SLEEP_COT_SHA256}"
+            )
+        splits = [Split.TRAIN] * n_rows
+        for split, positions in ((Split.VALIDATION, self.validation), (Split.TEST, self.test)):
+            for position in positions:
+                if position >= n_rows or splits[position] is not Split.TRAIN:
+                    raise TimeNetConnectorError(f"the split names row {position} twice or outside the {n_rows} rows")
+                splits[position] = split
+        return splits
 
 
-class SleepCotConnector(BaseConnector[Path]):
+@dataclass(frozen=True)
+class SleepCotRelease:
+    """The files the connector converts: the release CSV and the frozen split of its rows."""
+
+    csv_path: Path
+    splits_path: Path
+
+
+class SleepCotConnector(BaseConnector[SleepCotRelease]):
     """Connector for the SleepEDF-CoT release of OpenTSLM."""
 
-    async def download_async(self, cache_dir: Path) -> list[Path]:  # ruff: ignore[no-self-use]
+    async def download_async(self, cache_dir: Path) -> list[SleepCotRelease]:  # ruff: ignore[no-self-use]
         """Download the release CSV once.
 
         Args:
             cache_dir: The directory that holds the downloaded file.
 
         Returns:
-            The path of the CSV file.
+            The CSV file, with the splits.json beside this module.
         """
-        return await download_files([Artifact(SLEEP_COT_URL, cache_dir / "sleep_cot.csv", sha256=SLEEP_COT_SHA256)])
+        artifact = Artifact(SLEEP_COT_URL, cache_dir / "sleep_cot.csv", sha256=SLEEP_COT_SHA256)
+        (csv_path,) = await download_files([artifact])
+        return [SleepCotRelease(csv_path=csv_path, splits_path=SPLITS_PATH)]
 
-    def convert(self, raw_refs: list[Path]) -> TimeFDataset:
+    def convert(self, raw_refs: list[SleepCotRelease]) -> TimeFDataset:
         """Create one Record and one ClassificationTask for each window.
 
         Args:
-            raw_refs: The CSV file from :meth:`download_async`.
+            raw_refs: The release files from :meth:`download_async`.
 
         Returns:
             The populated dataset.
         """
-        (csv_path,) = raw_refs
-        rows = read_rows(csv_path)
-        splits = reproduce_opentslm_splits([row.label for row in rows])
+        (release,) = raw_refs
+        rows = read_rows(release.csv_path)
+        splits = FrozenSplits.read_from_file(release.splits_path).assign_split_to_each_row(len(rows))
         dataset = TimeFDataset(metadata=self.metadata())
         for row, split in zip(rows, splits, strict=True):
             record = dataset.add_record(record=row.create_record())
