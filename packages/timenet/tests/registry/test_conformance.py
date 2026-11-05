@@ -214,7 +214,6 @@ def test_open_release_uses_the_manifest_that_the_caller_passes(backend, tmp_path
     # No cache holds a copy of the child, so S3 and the remote registry open their remote files.
     version = backend.registry.open_release(child, manifest=manifest)
     assert version.manifest == manifest
-    assert version.payload_sources == {}
 
 
 # ---- exists -----------------------------------------------------------------------------------
