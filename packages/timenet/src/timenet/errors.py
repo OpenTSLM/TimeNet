@@ -198,6 +198,10 @@ class TimeNetWarning(UserWarning):
     """Base class for all TimeNet warnings."""
 
 
+class ConnectorCardWarning(TimeNetWarning):
+    """An unreadable or invalid connector card excludes its dataset from listings."""
+
+
 class SpanOutsideWindowWarning(TimeNetWarning):
     """An annotation's span falls outside the window of the series it names, and is kept."""
 

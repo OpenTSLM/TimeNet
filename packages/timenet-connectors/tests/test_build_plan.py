@@ -449,8 +449,7 @@ def _isolated_builds(calls: list) -> object:
     def run_isolated(dataset_id, root, *, force=False, **_):
         calls.append((dataset_id, force))
         registry = LocalRegistry(Path(root))
-        backend = builders.find_builder(dataset_id)
-        metadata = None if backend is None else backend.card(dataset_id)
+        metadata = builders.find_card(dataset_id)
         assert metadata is not None
         with open_parents(metadata, registry) as context:
             dataset = TimeFDataset(metadata=metadata) if context.parents else make_dataset()

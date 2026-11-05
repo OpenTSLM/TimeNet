@@ -11,11 +11,12 @@ import importlib.machinery
 import importlib.util
 from pathlib import Path
 import pkgutil
+import warnings
 
 import yaml
 
 from timenet.connectors import BaseConnector
-from timenet.errors import TimeNetInvalidCardError
+from timenet.errors import ConnectorCardWarning
 import timenet_connectors.datasets as _datasets
 
 
@@ -86,28 +87,44 @@ def requirements_for(dataset_id: str) -> Path | None:
 def known_ids() -> list[str]:
     """List dataset IDs from connector cards without importing connectors.
 
+    A card that cannot be read, is not a YAML mapping, or lacks ``dataset_id`` is skipped with a
+    :class:`~timenet.errors.ConnectorCardWarning`, so it fails only its own dataset.
+
     Returns:
         The sorted dataset IDs, with duplicates removed.
-
-    Raises:
-        TimeNetInvalidCardError: If a card is unreadable, is not a YAML mapping, or lacks ``dataset_id``.
     """
     ids: set[str] = set()
     for root in _datasets.__path__:
         # A flat id sits at ``datasets/<name>/``, an ``org/name`` id one level deeper.
         for card in (*Path(root).glob("*/dataset.yaml"), *Path(root).glob("*/*/dataset.yaml")):
-            # A card that cannot be read fails each lookup, as DatasetMetadata.from_yaml fails for it.
-            try:
-                raw = yaml.safe_load(card.read_text(encoding="utf-8"))
-            except (OSError, yaml.YAMLError) as error:
-                raise TimeNetInvalidCardError(f"could not read dataset card {card}: {error}") from error
-            if not isinstance(raw, dict):
-                raise TimeNetInvalidCardError(f"dataset card {card} must be a YAML mapping, got {type(raw).__name__}")
-            declared = raw.get("dataset_id")
-            if not declared:
-                raise TimeNetInvalidCardError(f"dataset card {card} must declare a dataset_id")
-            ids.add(declared)
+            declared = _declared_id(card)
+            if declared is not None:
+                ids.add(declared)
     return sorted(ids)
+
+
+def _declared_id(card: Path) -> str | None:
+    """Read the dataset ID of a card, or warn and return ``None`` for a card that cannot be read.
+
+    Args:
+        card: The ``dataset.yaml`` file.
+
+    Returns:
+        The declared dataset ID, or ``None``.
+    """
+    try:
+        raw = yaml.safe_load(card.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as error:
+        problem = f"could not read dataset card {card}: {error}"
+    else:
+        if not isinstance(raw, dict):
+            problem = f"dataset card {card} must be a YAML mapping, got {type(raw).__name__}"
+        elif not raw.get("dataset_id"):
+            problem = f"dataset card {card} must declare a dataset_id"
+        else:
+            return raw["dataset_id"]
+    warnings.warn(f"{problem}; its dataset is skipped", ConnectorCardWarning, stacklevel=3)
+    return None
 
 
 def _connector_spec(dataset_id: str) -> importlib.machinery.ModuleSpec | None:
