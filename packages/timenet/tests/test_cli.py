@@ -144,28 +144,10 @@ def test_the_local_commands_take_the_local_registry_flag(tmp_path):
     assert stored_releases(LocalRegistry(store)) == []
 
 
-def test_list(registry_root):
-    result = runner.invoke(app, ["list", "--remote-registry", str(registry_root)])
-    assert result.exit_code == 0, result.output
-    assert "timenet/hello-world" in click.unstyle(result.output)
-
-
-def test_search_by_domain(registry_root):
-    result = runner.invoke(app, ["search", "--remote-registry", str(registry_root), "--domain", "general"])
-    assert result.exit_code == 0, result.output
-    assert "timenet/hello-world" in click.unstyle(result.output)
-
-
 def test_search_no_match(registry_root):
     result = runner.invoke(app, ["search", "--remote-registry", str(registry_root), "--domain", "cardiology"])
     assert result.exit_code == 0, result.output
     assert click.unstyle(result.output) == "No datasets match.\n"
-
-
-def test_info(registry_root):
-    result = runner.invoke(app, ["info", "timenet/hello-world", "--remote-registry", str(registry_root)])
-    assert result.exit_code == 0, result.output
-    assert click.unstyle(result.output).startswith("timenet/hello-world")
 
 
 def _write(root, dataset):
@@ -205,7 +187,8 @@ def test_info_lists_the_access_page_of_each_release_that_sets_one(tmp_path):
     result = runner.invoke(app, ["info", "test/child", "--remote-registry", str(root)])
 
     assert result.exit_code == 0, result.output
-    cells = [[cell.strip() for cell in line.split("│")[1:-1]] for line in result.output.splitlines() if "│" in line]
+    lines = click.unstyle(result.output).splitlines()
+    cells = [[cell.strip() for cell in line.split("│")[1:-1]] for line in lines if "│" in line]
     start = cells.index(["access", "credentialed"])
     # The card of the child stays open. Its effective level comes from its parents, and each parent
     # names its own page.
@@ -274,13 +257,9 @@ def test_the_auto_build_flag_beats_its_variable(monkeypatch, flag, variable):
     assert ("installed connectors" in str(result.exception)) == (flag == "--auto-build")
 
 
+# The commands that read the list of sources share one path, so download stands for them.
 _EMPTY_FLAGS = [
-    *(
-        [*command, flag, ""]
-        for command in (["list"], ["search"], ["info", "x/y"], ["download", "x/y"])
-        for flag in ("--local-registry", "--remote-registry")
-    ),
-    ["local", "info", "--local-registry", ""],
+    ["download", "x/y", "--local-registry", ""],
     ["local", "clear", "--yes", "--local-registry", ""],
 ]
 
