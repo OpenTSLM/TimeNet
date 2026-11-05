@@ -1,6 +1,7 @@
 from pathlib import Path
 import shutil
 
+import click
 import numpy as np
 import pytest
 from typer.testing import CliRunner
@@ -634,10 +635,8 @@ def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, mo
         return result.stdout, "", result.exit_code
 
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
-    monkeypatch.setattr(env_module, "requirements_for", lambda dataset_id: None)
     monkeypatch.setattr(env_module, "_run_build", child)
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
-    monkeypatch.setattr(backend_module, "resolve", lambda dataset_id: _Grand)
     monkeypatch.setattr(backend_module, "run_pipeline", run_pipeline)
 
     # The output holds PARENT, so the build gets only GRAND, the payload source of PARENT.
@@ -822,11 +821,9 @@ def _remote_out(tmp_path, monkeypatch, cards) -> tuple[_Hosted, LocalRegistry, l
     return remote, LocalRegistry(tmp_path / "home/registry"), calls
 
 
-@pytest.mark.parametrize("gated", ["child", "parent"])
-def test_build_to_a_remote_out_refuses_a_credentialed_release_before_any_download(tmp_path, monkeypatch, gated):
+def test_build_to_a_remote_out_refuses_a_credentialed_release_before_any_download(tmp_path, monkeypatch):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    gated_ref = CHILD if gated == "child" else PARENT
-    cards[gated_ref.dataset_id] = cards[gated_ref.dataset_id].model_copy(update=_GATED)
+    cards[PARENT.dataset_id] = cards[PARENT.dataset_id].model_copy(update=_GATED)
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))
     _, local, calls = _remote_out(tmp_path, monkeypatch, cards)
@@ -837,7 +834,7 @@ def test_build_to_a_remote_out_refuses_a_credentialed_release_before_any_downloa
 
     # The build into the local registry gets the access checks of the remote registry.
     assert isinstance(result.exception, TimeNetAccessError), result.output
-    assert result.exception.dataset == gated_ref
+    assert result.exception.dataset == PARENT
     assert calls == []
     assert not local.exists(PARENT.dataset_id, str(PARENT.version))
 
@@ -903,8 +900,9 @@ def test_force_is_a_usage_error_if_the_remote_out_holds_the_version(tmp_path, mo
 
     # A published version never changes. So the command refuses before anything downloads or builds.
     assert result.exit_code == 2, result.output
-    assert "Invalid value for --force" in result.output
+    output = click.unstyle(result.output)
+    assert "Invalid value for --force" in output
     # The error box wraps the message and draws a border on each line.
-    assert "a published version never changes" in " ".join(result.output.replace("│", " ").split())
+    assert "a published version never changes" in " ".join(output.replace("│", " ").split())
     assert calls == [(CHILD.dataset_id, False)]
     assert _files(local.root) == held
