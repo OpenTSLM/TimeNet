@@ -1,4 +1,5 @@
 from pathlib import Path
+import re
 
 from pydantic import ValidationError
 import pytest
@@ -142,6 +143,13 @@ def test_get_manifest_rejects_mismatched_id(registry_root):
     (misplaced / "manifest.json").write_text((registry_root / real_id / version / "manifest.json").read_text())
     with pytest.raises(TimeFFormatError, match="inconsistent"):
         registry.get_manifest("wrong/place")
+
+
+def test_get_manifest_names_the_path_of_a_cut_manifest(registry_root):
+    path = registry_root / "timenet/hello-world/1.0.0/manifest.json"
+    path.write_text(path.read_text()[:100])
+    with pytest.raises(TimeFFormatError, match=f"{re.escape(str(path))} is not a valid manifest: Invalid JSON"):
+        LocalRegistry(registry_root).get_manifest("timenet/hello-world", "1.0.0")
 
 
 def test_latest_version_ignores_staging_dirs(registry_root):
@@ -321,7 +329,7 @@ def test_put_release_refuses_a_directory_without_a_readable_manifest(tmp_path, m
     else:
         (directory / "manifest.json").write_text(manifest_text)
     registry = LocalRegistry(tmp_path / "reg")
-    with pytest.raises(TimeFFormatError, match="cannot read the release manifest"):
+    with pytest.raises(TimeFFormatError, match=re.escape(str(directory / "manifest.json"))):
         registry.put_release(directory)
     assert not registry.root.exists()
 

@@ -10,7 +10,7 @@ from timenet._fs import publish_directory
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE
-from timenet.manifest import Manifest, PayloadSource
+from timenet.manifest import Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
 from timenet.registry.dependencies import open_local_release
 from timenet.registry.version import DatasetVersion
@@ -88,8 +88,7 @@ class LocalRegistry(WritableRegistry):
 
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version has no committed manifest.
-            TimeFFormatError: If the stored manifest declares a dataset id that differs from its
-                directory. This means a misplaced or corrupt artifact.
+            TimeFFormatError: If the manifest is unreadable, invalid, or names a different dataset.
         """
         resolved = self._latest_version(dataset_id) if is_latest(version) else version
         if resolved is None:
@@ -105,7 +104,7 @@ class LocalRegistry(WritableRegistry):
         cached = self._manifest_cache.get((dataset_id, resolved))
         if cached is not None and cached[0] == mtime:
             return cached[1]
-        manifest = Manifest.model_validate_json(path.read_text())
+        manifest = read_manifest(path)
         if manifest.metadata.dataset_id != dataset_id:
             raise TimeFFormatError(
                 f"manifest under {dataset_id!r}/{resolved} declares dataset id "
