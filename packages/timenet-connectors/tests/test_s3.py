@@ -1,3 +1,4 @@
+import hashlib
 from pathlib import Path
 import sys
 import threading
@@ -7,7 +8,7 @@ from botocore import UNSIGNED
 from botocore.exceptions import BotoCoreError
 import pytest
 
-from timenet.errors import TimeNetBuildError
+from timenet.errors import TimeFFormatError, TimeNetBuildError
 from timenet_connectors.download import s3
 from timenet_connectors.download.progress import progress_sink
 from timenet_connectors.download.s3 import _s3_client, download_s3_object
@@ -124,3 +125,28 @@ def test_download_s3_object_reports_progress(monkeypatch, tmp_path):
 
     assert [event.downloaded for event in events] == [60, 100]  # accumulated across the worker thread
     assert all(event.total == 100 for event in events)
+
+
+def _payload_client(payload: bytes):
+    class _FakeClient:
+        def download_file(self, Bucket, Key, Filename, Callback=None):  # ruff: ignore[invalid-argument-name]
+            Path(Filename).write_bytes(payload)
+
+    return _FakeClient
+
+
+def test_download_s3_object_accepts_matching_sha256(monkeypatch, tmp_path):
+    monkeypatch.setattr(s3, "_s3_client", _payload_client(b"payload"))
+    dest = tmp_path / "obj.bin"
+    # Upper case on purpose: a pin copied from a tool that prints upper-case hex still matches.
+    download_s3_object("s3://bucket/key.bin", dest, sha256=hashlib.sha256(b"payload").hexdigest().upper())
+    assert dest.read_bytes() == b"payload"
+
+
+def test_download_s3_object_rejects_sha256_mismatch(monkeypatch, tmp_path):
+    monkeypatch.setattr(s3, "_s3_client", _payload_client(b"tampered"))
+    dest = tmp_path / "obj.bin"
+    with pytest.raises(TimeFFormatError, match="SHA-256 mismatch"):
+        download_s3_object("s3://bucket/key.bin", dest, sha256=hashlib.sha256(b"payload").hexdigest())
+    assert not dest.exists()
+    assert not (tmp_path / "obj.bin.part").exists()

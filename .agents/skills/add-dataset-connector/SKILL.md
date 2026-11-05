@@ -47,6 +47,12 @@ latter). For PhysioNet, inspect the archive layout and a WFDB header (`fs`, `sig
   `download_files` from `timenet_connectors.download`) and `convert` (use `_read_header` / `_lead_loader`).
 - Neither: subclass `BaseConnector[TRaw]` and implement `download` + `convert` yourself.
 
+Pin every source file outside the Hub. Use a versioned or commit-pinned URL (never a moving branch
+such as `master`), and pass its `sha256` to `ensure_archive` / `Artifact`. A cached file is not
+checked again, so give a `download_files` destination a name that contains the pin. Compute the
+digest once with `curl -fsSL <url> | shasum -a 256`. curl cannot read `s3://`, so for an S3 object
+use `aws s3 cp --no-sign-request s3://<bucket>/<key> - | shasum -a 256`.
+
 ### 4. Determine the task and sketch an example row
 - Choose one built-in `Task` by the *kind of answer* the dataset supervises: `ClassificationTask` (a
   category, whole-record or over a `scope`), `AnswerTask` (free text; a caption without a `prompt`),

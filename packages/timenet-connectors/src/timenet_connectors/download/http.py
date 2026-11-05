@@ -32,8 +32,8 @@ _TIMEOUT = httpx.Timeout(None, connect=60.0, read=60.0)
 class Artifact:
     """One download: a URL, its destination, and optional headers, cookies, and a SHA-256 to verify.
 
-    The ``headers``, ``cookies``, and ``sha256`` apply to an HTTP download. An ``s3://`` URL
-    ignores them.
+    The ``headers`` and ``cookies`` apply to an HTTP download. An ``s3://`` URL ignores them. The
+    ``sha256`` applies to both.
     """
 
     url: str

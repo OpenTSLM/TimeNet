@@ -95,7 +95,7 @@ async def download_files(
             raise TimeFValidationError(f"unsupported download URL scheme: {artifact.url!r}")
     for artifact in items:
         if _is_s3(artifact.url) and not (skip_existing and artifact.dest.exists()):
-            download_s3_object(artifact.url, artifact.dest)
+            download_s3_object(artifact.url, artifact.dest, sha256=artifact.sha256)
     http = [artifact for artifact in items if _is_http(artifact.url)]
     if http:
         await download_http_many(
@@ -115,8 +115,9 @@ async def ensure_archive(  # ruff: ignore[too-many-arguments]
 ) -> Path:
     """Download a zip archive (``s3://`` or ``http(s)://``) and extract it into ``target`` once.
 
-    Idempotent: the function writes a marker file under ``target``, keyed by the archive URL, after a
-    successful extraction. A re-run then reuses the extracted contents and skips the download.
+    Idempotent: the function writes a marker file under ``target``, keyed by the archive URL and the
+    ``sha256`` pin, after a successful extraction. A re-run then reuses the extracted contents and
+    skips the download. A changed pin misses the marker and downloads the archive again.
 
     A successful extraction then deletes the archive, because the marker alone makes the next run
     cheap. A failed one keeps it, so the next run extracts it again instead of downloading it again.
@@ -128,7 +129,7 @@ async def ensure_archive(  # ruff: ignore[too-many-arguments]
             trailing slash or a ``/download`` suffix).
         headers: Request headers for an HTTP download (ignored for S3).
         cookies: Request cookies for an HTTP download (ignored for S3).
-        sha256: Optional hex digest the downloaded archive must match (HTTP only).
+        sha256: Optional hex digest the downloaded archive must match.
 
     Returns:
         ``target`` (the extraction root).
@@ -136,8 +137,10 @@ async def ensure_archive(  # ruff: ignore[too-many-arguments]
     target = Path(target)
     name = filename or _safe_filename(url)
     # Key the cache path and marker on the URL. This keeps two archives that share a basename from
-    # colliding, which would silently skip the second download.
-    key = hashlib.sha256(url.encode()).hexdigest()[:8]
+    # colliding, which would silently skip the second download. A pin joins the key, so a changed
+    # pin downloads again instead of reusing an extraction that matched the old one.
+    source = url if sha256 is None else f"{url}#sha256={sha256.lower()}"
+    key = hashlib.sha256(source.encode()).hexdigest()[:8]
     marker = target / f".{key}-{name}.extracted"
     zip_path = target / f"{key}-{name}"
     if marker.exists():

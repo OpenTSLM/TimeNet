@@ -24,7 +24,7 @@ def test_download_files_routes_s3_sequential_and_http_batched(monkeypatch, tmp_p
     s3_urls = []
     http_urls = []
 
-    def _fake_s3(url, dest):
+    def _fake_s3(url, dest, *, sha256=None):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(b"s3")
         s3_urls.append(url)
@@ -113,7 +113,7 @@ def test_ensure_archive_is_idempotent(monkeypatch, tmp_path):
     payload = _zip_bytes("hello.txt", "hi")
     calls = {"n": 0}
 
-    def _fake_s3(url, dest):
+    def _fake_s3(url, dest, *, sha256=None):
         dest.parent.mkdir(parents=True, exist_ok=True)
         dest.write_bytes(payload)
         calls["n"] += 1
@@ -124,6 +124,24 @@ def test_ensure_archive_is_idempotent(monkeypatch, tmp_path):
     asyncio.run(ensure_archive("s3://b/data.zip", target))  # marker short-circuits
     assert calls["n"] == 1
     assert (target / "hello.txt").read_text() == "hi"
+
+
+def test_ensure_archive_downloads_again_when_the_pin_changes(monkeypatch, tmp_path):
+    payload = _zip_bytes("hello.txt", "hi")
+    pins = []
+
+    def _fake_s3(url, dest, *, sha256=None):
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        dest.write_bytes(payload)
+        pins.append(sha256)
+
+    monkeypatch.setattr(fetch, "download_s3_object", _fake_s3)
+    target = tmp_path / "out"
+    asyncio.run(ensure_archive("s3://b/data.zip", target, sha256="aa"))
+    asyncio.run(ensure_archive("s3://b/data.zip", target, sha256="aa"))  # same pin: marker short-circuits
+    # A new pin must not reuse an extraction that was checked against the old one.
+    asyncio.run(ensure_archive("s3://b/data.zip", target, sha256="bb"))
+    assert pins == ["aa", "bb"]
 
 
 def test_ensure_archive_disambiguates_same_basename_urls(monkeypatch, tmp_path):
@@ -246,19 +264,30 @@ def test_ensure_archive_uses_a_filename_override(monkeypatch, tmp_path):
     assert (target / "hello.txt").read_text() == "hi"
 
 
-def test_download_files_forwards_sha256_to_the_download(monkeypatch, tmp_path):
+def test_download_files_forwards_sha256_to_both_backends(monkeypatch, tmp_path):
     seen = {}
 
+    def _fake_s3(url, dest, *, sha256=None):
+        seen["s3"] = sha256
+        dest.write_bytes(b"x")
+
     async def _fake_many(artifacts, *, headers=None, cookies=None, max_concurrency=8, skip_existing=True):
-        seen["sha256"] = artifacts[0].sha256
+        seen["http"] = artifacts[0].sha256
         for artifact in artifacts:
-            artifact.dest.parent.mkdir(parents=True, exist_ok=True)
             artifact.dest.write_bytes(b"x")
         return [artifact.dest for artifact in artifacts]
 
+    monkeypatch.setattr(fetch, "download_s3_object", _fake_s3)
     monkeypatch.setattr(fetch, "download_http_many", _fake_many)
-    asyncio.run(download_files([Artifact("https://h/a", tmp_path / "a", sha256="abc123")]))
-    assert seen["sha256"] == "abc123"
+    asyncio.run(
+        download_files(
+            [
+                Artifact("https://h/a", tmp_path / "a", sha256="abc123"),
+                Artifact("s3://b/c", tmp_path / "c", sha256="def456"),
+            ]
+        )
+    )
+    assert seen == {"http": "abc123", "s3": "def456"}
 
 
 def test_find_dir_containing_returns_the_parent_of_a_nested_match(tmp_path):
