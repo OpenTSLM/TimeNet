@@ -3,7 +3,7 @@
 from pathlib import Path
 from typing import Annotated, Any, Self
 
-from pydantic import Field, StrictStr, ValidationError, model_validator
+from pydantic import Field, StrictBool, StrictStr, StringConstraints, ValidationError, model_validator
 from typing_extensions import TypedDict
 
 from timenet.errors import ReleaseDifference, TimeFFormatError, TimeNetManifestError
@@ -20,11 +20,27 @@ from timenet.types.wire import ValueEncoding
 from timenet.values_backends import ValuesBackend
 
 
+GitSha = Annotated[str, StringConstraints(strict=True, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")]
+"""A full git commit id: 40 hex digits, or 64 in a SHA-256 repository."""
+
+
+class GitSource(TypedDict):
+    """The git commit that one TimeNet distribution was built from."""
+
+    sha: GitSha
+    """The commit of the checkout, or of the checkout that built the wheel."""
+    local_changes: StrictBool
+    """Whether the package directory had uncommitted changes, untracked files included."""
+
+
 class BuildEnvironment(TypedDict, total=False):
     """Build-provenance fields recorded in a manifest."""
 
     python: StrictStr
     packages: dict[StrictStr, StrictStr]
+    git: dict[StrictStr, GitSource]
+    """The commit of each TimeNet distribution, keyed by distribution name. A distribution whose
+    commit is unknown is absent."""
 
 
 class Manifest(TimeFModel):

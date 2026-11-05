@@ -56,6 +56,7 @@ license-check:
 		--format=markdown
 
 build:
+	uv run scripts/write_build_info.py
 	uv build --package timenet
 	uv build --package timenet-connectors
 

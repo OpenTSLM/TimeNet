@@ -51,6 +51,8 @@ jobs:
         uses: actions/checkout@v5
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
+      - name: Record the commit in each package
+        run: uv run scripts/write_build_info.py
       - name: Build
         run: |
           if [ "${{ inputs.package }}" = "both" ]; then
