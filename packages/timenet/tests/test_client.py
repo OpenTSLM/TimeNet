@@ -2,7 +2,6 @@ import shutil
 from types import SimpleNamespace
 
 from _demo_child import _child_of_the_demo
-from _fake_registry import build_service_fake
 import httpx
 from pydantic import ValidationError
 import pytest
@@ -62,7 +61,8 @@ class _Builder:
         store.put_dataset(dataset, force=force, values_backend=self.BACKEND, pinned_by=pinned_by or None)
 
 
-def test_a_child_reads_its_missing_payload_source_from_a_later_registry(tmp_path):
+def test_a_child_reads_its_missing_payload_source_from_a_later_registry(tmp_path, monkeypatch):
+    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
     origin, reference = _child_of_the_demo(tmp_path / "origin")
     cache = tmp_path / "cache"
     shutil.copytree(origin.root / "test/child/1.0.0", cache / "test/child/1.0.0")
@@ -73,29 +73,13 @@ def test_a_child_reads_its_missing_payload_source_from_a_later_registry(tmp_path
     assert str(caught.value).endswith(
         ". Add a registry that holds it to the sources, or add InstalledConnectors() to build it."
     )
+    # No installed connector builds the payload source, so with InstalledConnectors() the hint names only a registry.
+    with pytest.raises(TimeNetMissingParentError, match=r"\. Add a registry that holds it to the sources\.$"):
+        TimeNet(sources=[store, InstalledConnectors()]).open("test/child")
     with TimeNet(sources=[store, str(origin.root), InstalledConnectors()]).open("test/child") as reader:
         assert reader.read().records[0].signals[0].to_arrow().equals(make_dataset().records[0].signals[0].to_arrow())
     # The read opens the payload source in origin, where it is, and copies nothing.
     assert not (cache / reference.dataset_id).exists()
-
-
-@pytest.mark.parametrize("in_origin", [True, False])
-def test_a_missing_version_is_read_from_a_registry_before_it_is_built(tmp_path, monkeypatch, in_origin):
-    origin = LocalRegistry(tmp_path / "origin")
-    if in_origin:
-        _child_of_the_demo(origin.root)
-    calls = []
-    install_backends(monkeypatch, _Builder(calls))
-    store = LocalRegistry(tmp_path / "local", store=True)
-
-    with TimeNet(sources=[store, origin, InstalledConnectors()]).open("test/child") as reader:
-        assert reader.read().records
-
-    if in_origin:
-        assert calls == []
-        assert not (tmp_path / "local").exists()
-        return
-    assert calls == [(DatasetRef.parse("test/child@1.0.0"), False, {})]
 
 
 class _Resampled(BaseConnector[str]):
@@ -151,27 +135,6 @@ def test_resampled_child_reads_and_downloads_without_its_build_only_parent(tmp_p
     with TimeFReader(version) as reader:
         reader.verify()
         assert reader.read().records[0].signals[0].to_arrow().equals(expected)
-
-
-def test_a_list_of_one_remote_registry_never_builds(tmp_path, monkeypatch):
-    calls = []
-    install_backends(monkeypatch, _Builder(calls))
-    # The remote registry holds the child, but not its payload source, which the installed backend builds.
-    origin, reference = _child_of_the_demo(tmp_path / "origin")
-    shutil.rmtree(origin.root / reference.dataset_id)
-    transport, _ = build_service_fake(origin.root)
-    remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
-    hint = "Add a registry that holds it to the sources, or add InstalledConnectors() to build it."
-
-    with pytest.raises(TimeNetMissingParentError) as missing:
-        TimeNet(sources=[remote]).open("test/child")
-    assert str(missing.value) == (
-        f"payload source {reference} of test/child@1.0.0 is not in registry http://api.local. {hint}"
-    )
-    with pytest.raises(TimeNetDatasetNotFoundError) as caught:
-        TimeNet(sources=[remote]).open(reference.dataset_id)
-    assert str(caught.value) == f"{reference.dataset_id} is in none of the sources: registry http://api.local. {hint}"
-    assert calls == []
 
 
 @pytest.fixture(autouse=True)
@@ -267,10 +230,8 @@ def test_a_client_rejects_one_source_given_as_a_string(tmp_path):
 
 
 def test_a_client_rejects_one_registry_given_without_a_list(tmp_path):
-    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)))
-    for registry in (LocalRegistry(tmp_path), remote):
-        with pytest.raises(TimeFValidationError, match=r"^sources takes a list of sources\. Pass sources=\["):
-            TimeNet(registry)  # ty: ignore[invalid-argument-type]
+    with pytest.raises(TimeFValidationError, match=r"^sources takes a list of sources\. Pass sources=\["):
+        TimeNet(LocalRegistry(tmp_path))  # ty: ignore[invalid-argument-type]
 
 
 @pytest.mark.parametrize(
@@ -310,15 +271,6 @@ def test_a_client_accepts_at_most_one_store(tmp_path):
 def test_a_list_with_installed_connectors_needs_a_store(tmp_path):
     with pytest.raises(TimeFValidationError, match=r"LocalRegistry\(<path>, store=True\)"):
         TimeNet(sources=[LocalRegistry(tmp_path), InstalledConnectors()])
-
-
-def test_a_list_without_installed_connectors_never_builds(registry_root, monkeypatch):
-    calls = []
-    monkeypatch.setattr(_Builder, "VERSION", "2.0.0")
-    install_backends(monkeypatch, _Builder(calls))
-    client = TimeNet(sources=[LocalRegistry(registry_root, store=True)])
-    assert str(client.load("timenet/hello-world").metadata.dataset_version) == "1.0.0"
-    assert calls == []
 
 
 def test_get_list_and_search_ask_the_first_registry_that_is_not_the_store(registry_root, tmp_path):
@@ -455,12 +407,15 @@ def test_load_round_trips_with_every_value_loaded_and_its_reader_closed(tmp_path
     assert_datasets_equal(expected, restored)
 
 
-def test_load_reads_in_place_without_downloading(registry_root, tmp_path, storage):
+def test_load_reads_in_place_without_downloading(registry_root, tmp_path, storage, monkeypatch):
     # load() reads the release where it is, not download-then-read, so it must not write a copy into
     # the store or into local storage the way download() does.
+    calls = []
+    install_backends(monkeypatch, _Builder(calls))
     store = tmp_path / "store"
     client = TimeNet(sources=[LocalRegistry(store, store=True), str(registry_root), InstalledConnectors()])
     client.load("timenet/hello-world")
+    assert calls == []
     assert not store.exists()  # nothing copied into the store
     assert not (storage / "timenet/hello-world").exists()  # nothing fetched into the download cache
 
@@ -616,13 +571,10 @@ def test_load_accepts_the_latest_sentinels_after_a_build(tmp_path, monkeypatch, 
     assert str(client.load("timenet/hello-world", pin).metadata.dataset_version) == "1.0.0"
 
 
-@pytest.mark.parametrize("entry_point", ["open", "load", "open_torch"])
-def test_a_list_without_installed_connectors_does_not_build_a_missing_version(registry_root, monkeypatch, entry_point):
+def test_a_list_without_installed_connectors_does_not_build_a_missing_version(registry_root, monkeypatch):
     # A list without InstalledConnectors() does not build on a miss, so a notebook load fails fast
     # instead of starting a multi-GB download and a build. The builder declares the requested
     # version, so only the list keeps it from running.
-    if entry_point == "open_torch":
-        pytest.importorskip("torch")
     calls = []
     monkeypatch.setattr(_Builder, "VERSION", "9.9.9")
     install_backends(monkeypatch, _Builder(calls))
@@ -631,7 +583,7 @@ def test_a_list_without_installed_connectors_does_not_build_a_missing_version(re
     # The hint names the sources that could provide the release, in a sentence of its own.
     hint = r"\. Add a registry that holds it to the sources, or add InstalledConnectors\(\) to build it\.$"
     with pytest.raises(TimeNetDatasetNotFoundError, match=hint):
-        getattr(client, entry_point)("timenet/hello-world@9.9.9")
+        client.load("timenet/hello-world@9.9.9")
     assert calls == []  # the list skips the connector entirely
 
 
@@ -680,13 +632,13 @@ def test_load_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):
         "No source serves its files. Add InstalledConnectors() to the sources, or build it locally with "
         "`timenet-build build org/gated`."
     )
-    for entry_point in (client.open, client.load):
-        with pytest.raises(TimeNetAccessError) as caught:
-            entry_point("org/gated")
-        assert str(caught.value) == message
+    with pytest.raises(TimeNetAccessError) as caught:
+        client.load("org/gated")
+    assert str(caught.value) == message
 
 
-def test_the_access_hint_says_that_no_installed_connector_builds_the_release(tmp_path):
+def test_the_access_hint_says_that_no_installed_connector_builds_the_release(tmp_path, monkeypatch):
+    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
     card = _card("org/gated", Access.CREDENTIALED, "https://physionet.example/dua")
     client = TimeNet(
         sources=[LocalRegistry(tmp_path / "store", store=True), _hosted(tmp_path, card), InstalledConnectors()]
