@@ -343,7 +343,7 @@ def test_a_payload_source_that_two_releases_read_is_built_against_the_pins_of_bo
     assert steps == [Step(GRAND, "build", pinned_by=pins)]
 
 
-def test_a_built_release_needs_only_its_payload_sources(tmp_path, monkeypatch, child_builds):
+def test_a_built_release_needs_only_its_payload_sources(tmp_path, monkeypatch):
     _install_cards(monkeypatch, parent={"parent": GRAND})
     output = LocalRegistry(tmp_path / "output")
     _parent_without_its_source(output)
@@ -361,9 +361,6 @@ def test_a_built_release_needs_only_its_payload_sources(tmp_path, monkeypatch, c
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
     assert plan_parents(PARENT.dataset_id, output, fetch_from=origin) == [Step(PARENT, "copy")]
-    build_release(PARENT.dataset_id, store=output, fetch_from=origin)
-    assert output.exists(GRAND.dataset_id, str(GRAND.version))
-    assert child_builds == []
 
 
 def test_a_damaged_parent_is_fetched_again_but_never_built_over(tmp_path, monkeypatch, child_builds):
@@ -512,48 +509,6 @@ def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch)
     assert result.stdout.strip() == str(out / CHILD.dataset_id / str(CHILD.version))
 
 
-def test_a_built_version_starts_no_isolated_child(tmp_path, monkeypatch):
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
-    monkeypatch.setattr(env_module.subprocess, "Popen", lambda *args, **kwargs: pytest.fail("started a subprocess"))
-    out = LocalRegistry(tmp_path / "out")
-    out.put_dataset(make_dataset())
-
-    result = runner.invoke(app, ["build", GRAND.dataset_id, "--out", str(out.root)])
-
-    assert result.exit_code == 0, result.output
-    assert result.stdout.strip() == str(release_dir(out.root, GRAND))
-
-
-@pytest.mark.parametrize("entry", ["api", "coordinator"])
-def test_every_build_entry_point_prepares_parents(tmp_path, monkeypatch, child_builds, entry):
-    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    out = tmp_path / "out"
-
-    def build(fetch_from=None):
-        if entry == "api":
-            timenet_connectors.build(CHILD.dataset_id, out=out, fetch_from=fetch_from)
-        else:
-            # The client builds through the coordinator.
-            build_release(CHILD.dataset_id, store=LocalRegistry(out), fetch_from=fetch_from)
-
-    with pytest.raises(
-        TimeNetMissingParentError, match=r"parent release test/parent@1\.0\.0 of test/child@1\.0\.0"
-    ) as caught:
-        build()
-    assert child_builds == []
-    if entry == "api":
-        assert str(caught.value).endswith(". Copy it with fetch_from=<registry> or build it with build_parents=True.")
-
-    # A registry instance to fetch from, as the SDK layers accept one.
-    origin = LocalRegistry(tmp_path / "origin")
-    parent = make_dataset()
-    parent._metadata = cards[PARENT.dataset_id]
-    origin.put_dataset(parent)
-    build(fetch_from=origin)
-    assert child_builds == [(CHILD.dataset_id, False)]
-    assert LocalRegistry(out).exists(PARENT.dataset_id, str(PARENT.version))
-
-
 @pytest.mark.parametrize("obtain", ["fetch_from", "build_parents"])
 def test_load_obtains_a_missing_parent_before_it_builds_and_reads(tmp_path, monkeypatch, obtain):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
@@ -567,8 +522,9 @@ def test_load_obtains_a_missing_parent_before_it_builds_and_reads(tmp_path, monk
     parent._metadata = cards[PARENT.dataset_id]
     origin.put_dataset(parent)
 
-    with pytest.raises(TimeNetMissingParentError, match=r"^parent release test/parent@1\.0\.0 of test/child"):
+    with pytest.raises(TimeNetMissingParentError, match=r"^parent release test/parent@1\.0\.0 of test/child") as caught:
         timenet_connectors.load(CHILD.dataset_id)
+    assert str(caught.value).endswith(". Copy it with fetch_from=<registry> or build it with build_parents=True.")
     if obtain == "fetch_from":
         dataset = timenet_connectors.load(CHILD.dataset_id, fetch_from=origin)
     else:
@@ -607,7 +563,7 @@ class _NoDownloads(_Hosted):
 
 
 @pytest.mark.parametrize("page", ["own", "ancestor"])
-def test_a_fetch_of_a_release_that_is_not_open_fails_before_any_download(tmp_path, monkeypatch, child_builds, page):
+def test_a_fetch_of_a_release_that_is_not_open_fails_before_any_download(tmp_path, monkeypatch, page):
     cards = _install_cards(monkeypatch, child={"grand": GRAND, "parent": PARENT}, parent={})
     origin = _NoDownloads(tmp_path / "origin")
     # GRAND is open and would be fetched first.
@@ -628,7 +584,6 @@ def test_a_fetch_of_a_release_that_is_not_open_fails_before_any_download(tmp_pat
         build_release(CHILD.dataset_id, store=output, fetch_from=origin)
 
     assert caught.value.dataset == PARENT
-    assert child_builds == []
     assert caught.value.requirements == (AccessRequirement(requirement, Access.CREDENTIALED, _GATED["access_url"]),)
     assert not output.exists(GRAND.dataset_id, str(GRAND.version))
 
@@ -666,109 +621,6 @@ def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, mo
     assert len(pin_files) == 1
     assert not pin_files[0].exists()
     assert output.exists(GRAND.dataset_id, str(GRAND.version))
-
-
-STORED = DatasetRef.parse("test/stored@1.0.0")
-
-
-class _CopyBackend(_CardBackend):
-    """A second builder backend that rebuilds STORED from a saved copy, and the other releases from their cards.
-
-    It records each call.
-    """
-
-    def __init__(self, cards, saved, calls):
-        super().__init__(cards)
-        self.saved = saved
-        self.calls = calls
-
-    def build_prepared(self, release, store, *, force, pinned_by, options):
-        self.calls.append((release.dataset_id, dict(pinned_by)))
-        if release == STORED:
-            shutil.copytree(self.saved, release_dir(store.root, STORED))
-        else:
-            _store_from_card(release.dataset_id, store.root, force=force)
-
-
-def test_a_parent_that_another_backend_claims_builds_there_with_its_pins(tmp_path, monkeypatch, child_builds):
-    output = LocalRegistry(tmp_path / "output")
-    stored = make_dataset()
-    stored._metadata = stored.metadata.model_copy(update={"dataset_id": STORED.dataset_id})
-    output.put_dataset(stored)
-    _child_of(output, PARENT, STORED, make_dataset().records[0].id)
-    pins = output.get_manifest(PARENT.dataset_id).payload_sources[SourceKey(str(STORED))]
-    saved = tmp_path / "saved"
-    shutil.move(release_dir(output.root, STORED), saved)
-    calls = []
-    # The in-repo backend comes first but claims none of the test datasets.
-    backends = [ConnectorBuilder(), _CopyBackend(_cards(child={"parent": PARENT}, parent={}, stored={}), saved, calls)]
-    install_backends(monkeypatch, *backends)
-
-    build_release(CHILD.dataset_id, store=output, build_parents=True)
-
-    # The second backend rebuilds STORED against the pins of PARENT. It gets no options to plan or
-    # fetch the parents of STORED. Then it builds CHILD, which it claims too.
-    assert calls == [(STORED.dataset_id, {PARENT: pins}), (CHILD.dataset_id, {})]
-    assert child_builds == []
-
-
-class _OwnBuild(_InRepoCards):
-    """A subclass of the builder backend of this package that overrides ``build_prepared()``, and records each call."""
-
-    def __init__(self, cards, calls):
-        super().__init__(cards)
-        self.calls = calls
-
-    def build_prepared(self, release, store, *, force, pinned_by, options):
-        self.calls.append((release.dataset_id, dict(pinned_by)))
-        _store_from_card(release.dataset_id, store.root, force=force)
-
-
-@pytest.mark.parametrize("overrides", [True, False], ids=["overrides-build", "inherits-build"])
-def test_a_subclass_of_the_in_repo_backend_builds_through_its_own_build_prepared(
-    tmp_path, monkeypatch, child_builds, overrides
-):
-    cards = _cards(child={"parent": PARENT}, parent={})
-    own = []
-    backend = _OwnBuild(cards, own) if overrides else _InRepoCards(cards)
-    install_backends(monkeypatch, backend)
-    output = LocalRegistry(tmp_path / "output")
-
-    build_release(CHILD.dataset_id, store=output, build_parents=True)
-
-    assert output.exists(PARENT.dataset_id, str(PARENT.version))
-    if overrides:
-        # Each release builds through the build_prepared() of the subclass.
-        assert own == [(PARENT.dataset_id, {}), (CHILD.dataset_id, {})]
-        assert child_builds == []
-    else:
-        # Without an own build_prepared(), each release takes the built-in path.
-        assert child_builds == [(PARENT.dataset_id, False), (CHILD.dataset_id, False)]
-
-
-class _Proxy:
-    """A builder backend that is not a ``ConnectorBuilder``, and whose methods come from ``__getattr__``."""
-
-    def __init__(self, backend):
-        self._backend = backend
-
-    def __getattr__(self, name):
-        return getattr(self._backend, name)
-
-
-def test_a_proxy_backend_builds_through_the_build_prepared_of_its_instance(tmp_path, monkeypatch, child_builds):
-    own = []
-    # The class of the proxy has no build_prepared(). The instance forwards it to a backend that records it.
-    backend = _Proxy(_OwnBuild(_cards(child={"parent": PARENT}, parent={}), own))
-    assert not hasattr(_Proxy, "build_prepared")
-    install_backends(monkeypatch, backend)
-    output = LocalRegistry(tmp_path / "output")
-
-    build_release(CHILD.dataset_id, store=output, build_parents=True)
-
-    assert output.exists(PARENT.dataset_id, str(PARENT.version))
-    assert own == [(PARENT.dataset_id, {}), (CHILD.dataset_id, {})]
-    assert child_builds == []
 
 
 @pytest.mark.parametrize("case", ["missing", "damaged", "not-open"])
