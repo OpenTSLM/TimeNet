@@ -116,15 +116,21 @@ _PAGE_C = AccessRequirement(_C, Access.RESTRICTED, "https://c.example")
         ),
         (
             TimeNetVersionConflictError(_A, "registry here", "registry there"),
-            {"release": _A, "registry": "registry here", "source": "registry there", "needed_by": None},
+            {
+                "release": _A,
+                "registry": "registry here",
+                "source": "registry there",
+                "needed_by": None,
+                "difference": "files",
+            },
             "registry here already holds org/a@1.0.0 with other files than registry there. "
-            "A published version cannot change, so other files need a new version.",
+            "A published version cannot change, so a changed release needs a new version.",
         ),
         (
-            TimeNetVersionConflictError(_A, "registry here", "registry there", _B),
-            {"release": _A, "needed_by": _B},
-            "registry here already holds org/a@1.0.0, a payload source of org/b@2.0.0, with other files than "
-            "registry there. A published version cannot change, so other files need a new version.",
+            TimeNetVersionConflictError(_A, "registry here", "registry there", _B, "card"),
+            {"release": _A, "needed_by": _B, "difference": "card"},
+            "registry here already holds org/a@1.0.0, a payload source of org/b@2.0.0, with another card than "
+            "registry there. A published version cannot change, so a changed release needs a new version.",
         ),
     ],
 )

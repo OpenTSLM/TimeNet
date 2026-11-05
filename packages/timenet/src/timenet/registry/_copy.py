@@ -1,25 +1,19 @@
 """Copy releases and their payload sources between registries.
 
 A payload source is a release whose data files another release reads.
-A copy rejects an existing version with different files.
+Manifests must match for existing releases, except for their build environments.
 """
 
 from pathlib import Path
 import tempfile
 
-from timenet.errors import (
-    TimeFFormatError,
-    TimeNetDatasetNotFoundError,
-    TimeNetMissingParentError,
-    TimeNetVersionConflictError,
-)
-from timenet.manifest import Manifest
+from timenet.errors import TimeFFormatError, TimeNetMissingParentError, TimeNetVersionConflictError
+from timenet.manifest import Manifest, same_release
 from timenet.progress import ProgressCallback, StepFinished, StepStarted
 from timenet.registry._paths import release_dir
 from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import check_pins, prepare_local_copy, validate_manifest_reference
 from timenet.registry.local import LocalRegistry
-from timenet.registry.shared import complete_copy
 from timenet.registry.writable import WritableRegistry
 from timenet.types.access import require_open_access
 from timenet.types.references import DatasetRef
@@ -44,7 +38,7 @@ def copy_release(
         progress: Callback for ``StepStarted`` and ``StepFinished`` events for each copied or repaired release.
 
     Raises:
-        TimeNetVersionConflictError: If ``dest`` holds the release or a payload source with different files.
+        TimeNetVersionConflictError: If ``dest`` holds the release or a payload source with other files or another card.
         TimeNetAccessError: If a release lacks open access where the source or destination requires it.
         TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
         TimeNetMissingParentError: If ``source`` lacks a payload source and ``dest`` lacks a complete copy.
@@ -91,7 +85,7 @@ def _copy_one(
         # sources, which dest may hold already, are not downloaded. The download checks each file by size
         # and checksum.
         directory = release_dir(staging, reference)
-        source.download_release(reference.dataset_id, str(reference.version), directory, manifest=manifest)
+        source.download_release(reference, directory, manifest=manifest)
     dest.put_release(directory)
 
 
@@ -176,18 +170,13 @@ def _payload_source_manifest(
     Raises:
         TimeNetMissingParentError: If ``source`` lacks the payload source and ``dest`` lacks a complete copy.
     """
-    try:
-        manifest = source.get_manifest(reference.dataset_id, str(reference.version))
-    except TimeNetDatasetNotFoundError as error:
-        try:
-            held = dest.get_manifest(reference.dataset_id, str(reference.version))
-        except TimeNetDatasetNotFoundError:
-            held = None
-        if held is None or not _complete(reference, held, dest):
-            raise TimeNetMissingParentError(reference, needed_by, str(source), payload_source=True) from error
-        manifest = held
-    validate_manifest_reference(manifest, reference)
-    return manifest
+    manifest = source.find_manifest(reference)
+    if manifest is not None:
+        return manifest
+    held = dest.find_manifest(reference)
+    if held is None or not _complete(reference, held, dest):
+        raise TimeNetMissingParentError(reference, needed_by, str(source), payload_source=True)
+    return held
 
 
 def _needs_copy(
@@ -210,16 +199,16 @@ def _needs_copy(
         ``True`` if ``dest`` lacks the release or its local copy has a missing or resized file.
 
     Raises:
-        TimeNetVersionConflictError: If ``dest`` holds the same version with different file records.
+        TimeNetVersionConflictError: If ``dest`` holds the same version with other files or another card.
     """
-    try:
-        held = dest.get_manifest(reference.dataset_id, str(reference.version))
-    except TimeNetDatasetNotFoundError:
+    held = dest.find_manifest(reference)
+    if held is None:
         return True
-    if _file_records(held) != _file_records(manifest):
-        needed_by = None if reference == requested else requested
-        raise TimeNetVersionConflictError(reference, str(dest), str(source), needed_by)
-    return not _complete(reference, manifest, dest)
+    files_differ = _file_records(held) != _file_records(manifest)
+    if not files_differ and same_release(held, manifest):
+        return not _complete(reference, manifest, dest)
+    needed_by = None if reference == requested else requested
+    raise TimeNetVersionConflictError(reference, str(dest), str(source), needed_by, "files" if files_differ else "card")
 
 
 def _complete(reference: DatasetRef, manifest: Manifest, dest: WritableRegistry) -> bool:
@@ -236,7 +225,7 @@ def _complete(reference: DatasetRef, manifest: Manifest, dest: WritableRegistry)
     Returns:
         ``True`` for a complete local copy or any release in a non-local registry.
     """
-    return not isinstance(dest, LocalRegistry) or complete_copy(release_dir(dest.root, reference), manifest)
+    return not isinstance(dest, LocalRegistry) or dest.damage(reference, manifest) is None
 
 
 def _file_records(manifest: Manifest) -> frozenset[tuple[str, int, str]]:

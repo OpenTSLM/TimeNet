@@ -196,17 +196,33 @@ def test_copy_release_does_nothing_for_the_same_release(source, dest, monkeypatc
     assert events == []
 
 
-def test_copy_release_ignores_manifest_fields_other_than_the_file_records(source, tmp_path):
+def _rewrite_child_manifest(dest: LocalRegistry, **update) -> Path:
+    """Rewrite the manifest of the child in ``dest`` with ``update``; return the manifest file."""
+    path = dest.root / child_ref.dataset_id / str(child_ref.version) / "manifest.json"
+    path.write_text(dest.get_manifest(*child).model_copy(update=update).to_json())
+    return path
+
+
+def test_copy_release_refuses_a_release_with_the_same_files_and_another_card(source, tmp_path):
     dest = LocalRegistry(tmp_path / "dest")
     copy_release(child_ref, source, dest)
-    manifest = dest.get_manifest(*child)
-    renamed = manifest.model_copy(update={"metadata": manifest.metadata.model_copy(update={"name": "Another name"})})
-    (dest.root / child_ref.dataset_id / str(child_ref.version) / "manifest.json").write_text(renamed.to_json())
+    card = dest.get_manifest(*child).metadata.model_copy(update={"description": "Another description"})
+    path = _rewrite_child_manifest(dest, metadata=card)
+    before = path.read_bytes()
     # A fresh registry: the rewrite can keep the mtime of the first write, so a cached manifest could stay.
+    with pytest.raises(TimeNetVersionConflictError, match="another card than") as raised:
+        copy_release(child_ref, source, LocalRegistry(dest.root))
+    assert raised.value.difference == "card"
+    assert path.read_bytes() == before
+
+
+def test_copy_release_ignores_the_build_environment(source, tmp_path):
+    dest = LocalRegistry(tmp_path / "dest")
+    copy_release(child_ref, source, dest)
+    _rewrite_child_manifest(dest, build_env={"python": "0.0.0"})
     events: list[ProgressEvent] = []
     copy_release(child_ref, source, LocalRegistry(dest.root), progress=events.append)
     assert events == []
-    assert LocalRegistry(dest.root).get_manifest(*child).metadata.name == "Another name"
 
 
 def test_copy_release_refuses_another_build_of_the_version(source, dest):
@@ -217,6 +233,7 @@ def test_copy_release_refuses_another_build_of_the_version(source, dest):
         copy_release(child_ref, source, dest)
     assert (raised.value.release, raised.value.needed_by) == (child_ref, None)
     assert (raised.value.registry, raised.value.source) == (str(dest), str(source))
+    assert raised.value.difference == "files"  # the card differs too, but the files come first
     assert dest.get_manifest(*child) == before
     assert not dest.exists(*parent)  # nothing is copied, not even the payload source
 
@@ -384,9 +401,9 @@ def test_copy_release_between_remote_registries_downloads_only_the_releases_that
     downloads: list[DatasetRef] = []
     download = remote_source.download_release
 
-    def counting(dataset_id, version, *args, **kwargs):
-        downloads.append(DatasetRef.parse(f"{dataset_id}@{version}"))
-        return download(dataset_id, version, *args, **kwargs)
+    def counting(reference, *args, **kwargs):
+        downloads.append(reference)
+        return download(reference, *args, **kwargs)
 
     monkeypatch.setattr(remote_source, "download_release", counting)
     copy_release(child_ref, remote_source, dest)
@@ -409,6 +426,30 @@ def test_copy_release_removes_its_download_after_an_error(tmp_path, monkeypatch)
     with pytest.raises(RuntimeError, match="upload failed"):
         copy_release(child_ref, remote_source, dest)
     assert list(downloads.iterdir()) == []
+
+
+@pytest.mark.parametrize("remote", [False, True], ids=["local", "remote"])
+def test_a_forced_download_keeps_the_old_copy_if_the_final_rename_fails(remote, tmp_path, monkeypatch):
+    if remote:
+        registry, root = _remote(tmp_path, "source")
+    else:
+        root = tmp_path / "source"
+        registry = LocalRegistry(root)
+    _write_parent_and_child(root)
+    manifest = registry.get_manifest(*parent)
+    directory = tmp_path / "copy" / parent_ref.dataset_id / str(parent_ref.version)
+    registry.download_release(parent_ref, directory, manifest=manifest)
+    rename = Path.replace
+
+    def replace(self, target):
+        if ".tmp-" in self.name:
+            raise OSError("rename failed")
+        return rename(self, target)
+
+    monkeypatch.setattr(Path, "replace", replace)
+    with pytest.raises(OSError, match="rename failed"):
+        registry.download_release(parent_ref, directory, force=True, manifest=manifest)
+    assert complete_copy(directory, manifest)
 
 
 @pytest.mark.parametrize("credentialed", [child_ref, parent_ref], ids=["release", "payload-source"])

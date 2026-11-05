@@ -11,13 +11,14 @@ from collections.abc import Callable
 from pathlib import Path
 import shutil
 from typing import BinaryIO, TypeVar
-import uuid
 
-from timenet.errors import TimeFValidationError, TimeNetFileError
+from timenet._fs import staged_directory
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetFileError
 from timenet.format.checksums import file_checksum
+from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import FilePart, Manifest
 from timenet.registry._paths import safe_version_path, split_release_dir
-from timenet.registry.dependencies import prepare_local_copy
+from timenet.registry.dependencies import prepare_local_copy, validate_manifest_reference
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetMetadata, Domain, License, Task
@@ -69,6 +70,25 @@ class BaseRegistry(ABC):
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
+
+    def find_manifest(self, release: DatasetRef) -> Manifest | None:
+        """Return the manifest of a release, or ``None`` if this registry does not hold it.
+
+        Args:
+            release: The exact release.
+
+        Returns:
+            The manifest, or ``None``.
+
+        Raises:
+            TimeFFormatError: If the stored manifest names another release.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by validate_manifest_reference
+        try:
+            manifest = self.get_manifest(release.dataset_id, str(release.version))
+        except TimeNetDatasetNotFoundError:
+            return None
+        validate_manifest_reference(manifest, release)
+        return manifest
 
     @abstractmethod
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
@@ -148,10 +168,9 @@ class BaseRegistry(ABC):
             progress_cb=progress_cb,
         )
 
-    def download_release(  # ruff: ignore[too-many-arguments]
+    def download_release(
         self,
-        dataset_id: str,
-        version: str,
+        reference: DatasetRef,
         directory: str | Path,
         *,
         force: bool = False,
@@ -164,8 +183,7 @@ class BaseRegistry(ABC):
         Replace ``directory`` only after every downloaded file matches its manifest record.
 
         Args:
-            dataset_id: The dataset ID.
-            version: The exact version string.
+            reference: The exact release.
             directory: The local release directory, ``<root>/<dataset_id>/<version>``.
             force: Download again even if a complete copy exists.
             manifest: The release's manifest, or ``None`` to fetch it from this registry.
@@ -174,31 +192,19 @@ class BaseRegistry(ABC):
         Raises:
             TimeNetFileError: If a downloaded file's size or checksum differs from its manifest record.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_staged_file
+        dataset_id, version = reference.dataset_id, str(reference.version)
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
         target = Path(directory)
         if complete_copy(target, manifest) and not force:
             return  # already downloaded and current
-        parent = target.parent
-        parent.mkdir(parents=True, exist_ok=True)
-        # Each download stages into a unique dir and removes it in the finally below. A hard kill
-        # (SIGKILL/power loss) can leave one behind, but do NOT sweep sibling <version>.tmp-* dirs here:
-        # a concurrent download of the same version has a live staging dir with the same prefix, and
-        # sweeping it would break that download mid-write. A rare orphaned dir is the lesser evil.
-        staging = parent / f"{target.name}.tmp-{uuid.uuid4().hex}"
-        release = DatasetRef.parse(f"{dataset_id}@{version}")
-        try:
+        with staged_directory(target) as staging:
             for part in manifest.files.all_files():
                 self._stage_file(dataset_id, version, part.path, staging)
-                self._check_staged_file(staging / part.path, part, release)
+                self._check_staged_file(staging / part.path, part, reference)
                 if progress_cb is not None:
                     progress_cb(part.size)
-            (staging / "manifest.json").write_text(manifest.to_json())
-            if target.exists():
-                shutil.rmtree(target)
-            staging.replace(target)
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
+            (staging / MANIFEST_FILE).write_text(manifest.to_json())
 
     def _check_staged_file(self, path: Path, part: FilePart, release: DatasetRef) -> None:
         """Compare one downloaded file with its manifest record, first by size, then by checksum.

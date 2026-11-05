@@ -374,14 +374,7 @@ def _download_dataset_version(  # ruff: ignore[too-many-arguments]
     validate_manifest_reference(manifest, reference)
     if before_fetch is not None:
         before_fetch(manifest)
-    registry.download_release(
-        reference.dataset_id,
-        str(reference.version),
-        directory,
-        force=True,
-        manifest=manifest,
-        progress_cb=progress_cb,
-    )
+    registry.download_release(reference, directory, force=True, manifest=manifest, progress_cb=progress_cb)
     return manifest
 
 
