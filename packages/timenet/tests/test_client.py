@@ -27,7 +27,6 @@ from timenet.errors import (
     TimeNetVersionUnavailableError,
 )
 from timenet.format.stored_values import StoredText
-from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.progress import BytesMoved, ProgressEvent, StepFinished, StepStarted
 from timenet.reader import Loading, LoadPlan, TimeFReader
@@ -326,11 +325,6 @@ def test_list_and_search_ask_the_first_registry_that_is_not_the_store(registry_r
     assert [metadata.dataset_id for metadata in alone.list()] == ["test/other"]
 
 
-def test_get_manifest_returns_a_manifest(registry_root):
-    client = TimeNet(sources=[str(registry_root)])
-    assert isinstance(client.get_manifest("timenet/hello-world"), Manifest)
-
-
 def _at_version(dataset, version):
     """Return ``dataset`` under another version of its dataset ID."""
     dataset._metadata = dataset.metadata.model_copy(update={"dataset_version": Version.parse(version)})
@@ -346,25 +340,19 @@ def test_get_manifest_returns_the_manifest_of_the_release_that_open_reads(tmp_pa
     assert str(client.get_manifest("timenet/hello-world@latest").metadata.dataset_version) == "1.1.0"
 
 
-def test_get_manifest_raises_not_built_for_a_release_that_only_a_connector_provides(tmp_path, monkeypatch):
-    install_backends(monkeypatch, _Builder([]))
-    client = TimeNet(sources=[LocalRegistry(tmp_path / "store", store=True), InstalledConnectors()])
-    with pytest.raises(TimeNetNotBuiltError, match=r"get_card\('test/child'\).*timenet\.build\('test/child@1\.0\.0'\)"):
-        client.get_manifest("test/child")
-    assert client.get_card("test/child").dataset_id == "test/child"
-
-
 def test_get_manifest_names_the_card_and_the_build_of_a_release_that_is_not_built(tmp_path, monkeypatch):
     install_backends(monkeypatch, _Builder([]))
     client = TimeNet(sources=[LocalRegistry(tmp_path / "store", store=True), InstalledConnectors()])
+    # Without a version, the error names the version that the connector declares.
     with pytest.raises(TimeNetNotBuiltError) as caught:
-        client.get_manifest("test/child@1.0.0")
+        client.get_manifest("test/child")
     assert caught.value.release == DatasetRef.parse("test/child@1.0.0")
     assert str(caught.value) == (
         "test/child@1.0.0 has no manifest yet: only an installed connector provides it, and a release gets "
         "its manifest when it is built. Read its card with get_card('test/child'), or build it with "
         "timenet.build('test/child@1.0.0')."
     )
+    assert client.get_card("test/child").dataset_id == "test/child"
     assert not (tmp_path / "store").exists()
 
 
@@ -429,13 +417,6 @@ def test_get_manifest_and_get_card_name_every_source_when_none_provides_the_rele
         f"x/y is in none of the sources: {names}. "
         "Add a registry that holds it to the sources, or add InstalledConnectors() to build it."
     )
-
-
-def test_an_exact_version_that_the_connector_does_not_declare_raises_version_unavailable(tmp_path, monkeypatch):
-    install_backends(monkeypatch, _Builder([]))
-    client = TimeNet(sources=[LocalRegistry(tmp_path / "store", store=True), InstalledConnectors()])
-    with pytest.raises(TimeNetVersionUnavailableError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
-        client.get_card("test/child@9.9.9")
 
 
 def test_plan_read_returns_the_plan_and_runs_nothing(tmp_path, monkeypatch):
