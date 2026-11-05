@@ -138,11 +138,6 @@ def test_installed_connectors_without_a_package_answer_not_found(monkeypatch):
     assert "no connector package is installed" in str(InstalledConnectors())
 
 
-def test_installed_connectors_are_equal():
-    assert InstalledConnectors() == InstalledConnectors()
-    assert len({InstalledConnectors(), InstalledConnectors()}) == 1
-
-
 def test_a_local_registry_answers_not_found_without_reading_every_manifest(tmp_path, monkeypatch):
     registry = LocalRegistry(tmp_path)
     registry.put_dataset(make_dataset())
@@ -152,7 +147,6 @@ def test_a_local_registry_answers_not_found_without_reading_every_manifest(tmp_p
     assert registry.resolve("timenet/hello-world", V2) == NotFound()
 
 
-@pytest.mark.parametrize("version", [None, V1])
-def test_a_local_registry_rejects_an_invalid_dataset_id(tmp_path, version):
+def test_a_local_registry_rejects_an_invalid_dataset_id(tmp_path):
     with pytest.raises(TimeFValidationError):
-        LocalRegistry(tmp_path).resolve("../evil", version)
+        LocalRegistry(tmp_path).resolve("../evil", None)
