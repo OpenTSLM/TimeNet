@@ -19,7 +19,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.connectors import BaseConnector
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 
 
 TRaw = TypeVar("TRaw")
@@ -106,7 +106,7 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             The parsed header.
 
         Raises:
-            TimeFFormatError: If the header is malformed: an unparseable gain, a signal line with no
+            TimeNetConnectorError: If the header is malformed: an unparseable gain, a signal line with no
                 signal name, or fewer signal lines than the record declares.
         """
         text = Path(f"{record_base}.hea").read_text(encoding="utf-8")
@@ -119,9 +119,9 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             raw_format = fields[1]  # <fmt>[x<spf>][:<skew>]
             match = _GAIN_RE.match(fields[2])
             if match is None:
-                raise TimeFFormatError(f"{record_base}.hea: cannot parse the gain field {fields[2]!r}")
+                raise TimeNetConnectorError(f"{record_base}.hea: cannot parse the gain field {fields[2]!r}")
             if len(fields) <= _DESCRIPTION_FIELD:
-                raise TimeFFormatError(f"{record_base}.hea: signal line names no signal: {line!r}")
+                raise TimeNetConnectorError(f"{record_base}.hea: signal line names no signal: {line!r}")
             gain = float(match["gain"])
             dat_names.append(fields[0])
             raw_formats.append(raw_format)
@@ -133,7 +133,9 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             # The signal description can hold spaces, so keep all of it.
             sig_name.append(" ".join(fields[_DESCRIPTION_FIELD:]))
         if len(sig_name) != n_sig:
-            raise TimeFFormatError(f"{record_base}.hea declares {n_sig} signals but has {len(sig_name)} signal lines")
+            raise TimeNetConnectorError(
+                f"{record_base}.hea declares {n_sig} signals but has {len(sig_name)} signal lines"
+            )
         # The direct reader interleaves one .dat as (-1, n_sig) int16, so it is valid only when every
         # signal is plainly "16" (no "16x2" frames, no "16:5" skew) and they share a single file. Any
         # other shape (multi-.dat, samples-per-frame > 1, skew, byte offset) routes to wfdb instead of

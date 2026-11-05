@@ -7,7 +7,7 @@ import pytest
 
 from timenet.dataset import TimeFDataset
 from timenet.engine import store_dataset
-from timenet.errors import TimeFFormatError, TimeNetDownloadError
+from timenet.errors import TimeNetConnectorError, TimeNetDownloadError
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.types import (
@@ -178,17 +178,17 @@ def test_the_subject_id_names_the_study_and_the_number():
 
 
 def test_a_name_that_does_not_fit_the_shape_raises():
-    with pytest.raises(TimeFFormatError, match="names no subject"):
+    with pytest.raises(TimeNetConnectorError, match="names no subject"):
         _parse_recording_number(_STUDY, "SCXXXXX0", Path("SCXXXXX0-PSG.edf"))
 
 
 def test_a_study_this_release_does_not_hold_raises():
-    with pytest.raises(TimeFFormatError, match="not a study of this release"):
+    with pytest.raises(TimeNetConnectorError, match="not a study of this release"):
         _parse_recording_number("sleep-apnea", "SC4901E0", Path("SC4901E0-PSG.edf"))
 
 
 def test_a_name_stating_a_third_night_raises():
-    with pytest.raises(TimeFFormatError, match="states night 3"):
+    with pytest.raises(TimeNetConnectorError, match="states night 3"):
         _parse_recording_number(_STUDY, "SC4903E0", Path("SC4903E0-PSG.edf"))
 
 
@@ -288,7 +288,7 @@ def test_a_second_build_asks_the_same_questions(release, monkeypatch):
 
 def test_a_recording_with_no_row_raises(release, monkeypatch):
     rows = [_TABLE_ROWS[0], _TABLE_ROWS[1]]  # the second night has no row
-    with pytest.raises(TimeFFormatError, match="SC4902E0"):
+    with pytest.raises(TimeNetConnectorError, match="SC4902E0"):
         _convert(release, monkeypatch, rows=rows)
 
 
@@ -384,7 +384,7 @@ def test_a_scoring_that_cannot_be_expanded_fails_the_write(release, monkeypatch,
     )
     record.signals[0].annotate(ragged)
     dataset.derive_schema()
-    with pytest.raises(TimeFFormatError, match=str(record.metadata["recording_id"])):
+    with pytest.raises(TimeNetConnectorError, match=str(record.metadata["recording_id"])):
         store_dataset(dataset, tmp_path / "out")
 
 
@@ -404,7 +404,7 @@ def test_a_recording_missing_a_scoring_signal_fails_the_build(tmp_path: Path, mo
     study_dir = tmp_path / _STUDY
     study_dir.mkdir()
     _write_recording(study_dir, "SC4901E0", signals=_SIGNALS[:3])
-    with pytest.raises(TimeFFormatError, match="does not hold the signals"):
+    with pytest.raises(TimeNetConnectorError, match="does not hold the signals"):
         _convert(tmp_path, monkeypatch)
 
 

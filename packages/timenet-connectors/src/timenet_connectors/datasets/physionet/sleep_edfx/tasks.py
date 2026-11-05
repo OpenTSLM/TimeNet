@@ -15,7 +15,7 @@ No task carries a prompt. The release states no question in words.
 from collections.abc import Iterator, Sequence
 
 from timenet.dataset import Record
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet.types import (
     US_PER_S,
     Annotation,
@@ -90,17 +90,19 @@ def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation])
         One task for each epoch, in the order the entries state them.
 
     Raises:
-        TimeFFormatError: If an entry states no span, states a label the release does not
+        TimeNetConnectorError: If an entry states no span, states a label the release does not
             write, or does not divide into whole epochs. Each message names the recording and
             the value that is wrong.
     """
     for stage in span_annotations:
         label = read_value(stage.value)
         if stage.span is None:
-            raise TimeFFormatError(f"{recording_id}: a scored entry of {label!r} states no span, so it holds no epoch")
+            raise TimeNetConnectorError(
+                f"{recording_id}: a scored entry of {label!r} states no span, so it holds no epoch"
+            )
 
         if not isinstance(label, str) or label not in STAGE_LABELS:
-            raise TimeFFormatError(
+            raise TimeNetConnectorError(
                 f"{recording_id}: the scored entry at {stage.span.start_us} us states {label!r}, "
                 f"which is not a label this release writes"
             )
@@ -110,13 +112,13 @@ def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation])
         # The onset and the duration fail for different reasons. One message for both names
         # the wrong number and sends a reader the wrong way.
         if start % EPOCH_MICROSECONDS:
-            raise TimeFFormatError(
+            raise TimeNetConnectorError(
                 f"{recording_id}: a scored entry starts at {start} us, which is not a boundary of "
                 f"the {EPOCH_MICROSECONDS} us epoch"
             )
 
         if length % EPOCH_MICROSECONDS:
-            raise TimeFFormatError(
+            raise TimeNetConnectorError(
                 f"{recording_id}: a scored entry lasts {length} us, which is not a whole number of "
                 f"{EPOCH_MICROSECONDS} us epochs"
             )
@@ -154,13 +156,13 @@ def build_record_tasks(
         The whole-record tasks of that recording, in a stable order.
 
     Raises:
-        TimeFFormatError: If a fact this asks about is missing, stated twice, or states a value
+        TimeNetConnectorError: If a fact this asks about is missing, stated twice, or states a value
             the release does not write.
     """
     stated: dict[str, object] = {}
     for one in non_span_annotations:
         if one.key in stated:
-            raise TimeFFormatError(f"{recording_id}: states {one.key!r} twice, so it has no one answer for it")
+            raise TimeNetConnectorError(f"{recording_id}: states {one.key!r} twice, so it has no one answer for it")
 
         stated[one.key] = read_value(one.value)
 
@@ -233,14 +235,14 @@ def _whole_years(recording_id: str, stated: dict[str, object]) -> float:
         The age in whole years.
 
     Raises:
-        TimeFFormatError: If no age is stated, or the value is not a whole number.
+        TimeNetConnectorError: If no age is stated, or the value is not a whole number.
     """
     if AnnotationKey.AGE not in stated:
-        raise TimeFFormatError(f"{recording_id}: states no age, so it cannot be asked for one")
+        raise TimeNetConnectorError(f"{recording_id}: states no age, so it cannot be asked for one")
 
     age = stated[AnnotationKey.AGE]
     if not isinstance(age, int) or isinstance(age, bool):
-        raise TimeFFormatError(f"{recording_id}: states an age of {age!r}, which is not a whole number of years")
+        raise TimeNetConnectorError(f"{recording_id}: states an age of {age!r}, which is not a whole number of years")
 
     return float(age)
 
@@ -258,14 +260,14 @@ def _one_of(recording_id: str, stated: dict[str, object], key: AnnotationKey, pe
         The value.
 
     Raises:
-        TimeFFormatError: If the key is absent, or its value is outside the set.
+        TimeNetConnectorError: If the key is absent, or its value is outside the set.
     """
     if key not in stated:
-        raise TimeFFormatError(f"{recording_id}: states no {key}, so it cannot be asked for one")
+        raise TimeNetConnectorError(f"{recording_id}: states no {key}, so it cannot be asked for one")
 
     value = stated[key]
     if value not in permitted:
-        raise TimeFFormatError(f"{recording_id}: states a {key} of {value!r}, which the release does not write")
+        raise TimeNetConnectorError(f"{recording_id}: states a {key} of {value!r}, which the release does not write")
 
     return str(value)
 
@@ -287,7 +289,7 @@ def iter_tasks(records: Sequence[Record]) -> Iterator[Task]:
         The epoch tasks of each recording, then its whole-record tasks.
 
     Raises:
-        TimeFFormatError: If a scoring cannot be expanded into whole epochs. The message names
+        TimeNetConnectorError: If a scoring cannot be expanded into whole epochs. The message names
             the recording, because a task is one of hundreds of thousands.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by build_epoch_tasks, not directly here)
     for record in records:

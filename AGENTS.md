@@ -108,6 +108,11 @@ run every `gh stack` command non-interactively (always pass branch names to `ini
   `TimeFValidationError` for a violated TimeF invariant or bad caller input, `TimeFFormatError`
   for a corrupt or unsupported on-disk artifact. `TimeFValidationError` subclasses `ValueError`,
   so existing `except ValueError` handlers keep working.
+- Connector code is different: if the source data, a download, or a parent is not what the
+  connector expects, raise `TimeNetConnectorError`. Do not raise `TimeFValidationError` or
+  `TimeFFormatError` for bad source data. TimeNet raises those for its own checks. The
+  "Conventions for every connector" section of `docs/connectors.md` lists the other rules that
+  connectors share.
 
 ## Docstrings
 - Write Google-style docstrings; ruff enforces them via `D` (pydocstyle) and `DOC`

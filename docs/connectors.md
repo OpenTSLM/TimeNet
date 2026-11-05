@@ -63,7 +63,32 @@ dataclass, or an S3 key. The connector is generic over `TRaw`:
 `class MyConnector(BaseConnector[MyRawRef])`.
 
 If an assumption about your source data, downloads, or parents does not hold, raise
-`TimeNetConnectorError` from `timenet.errors`.
+`TimeNetConnectorError` from `timenet.errors`. The next section gives the details.
+
+---
+
+## Conventions for every connector
+
+Published releases keep what a connector writes. A later change to a key or a value needs a new
+dataset version. Users also filter and join datasets by shared keys. Every connector therefore
+follows the rules in this section.
+
+### Errors
+
+If the source data, a download, or a parent is not what the connector expects, raise
+`TimeNetConnectorError` from `timenet.errors`. The message names the place, such as the file and the
+row, or the record. Do not raise `ValueError`, `TimeFValidationError`, or `TimeFFormatError` for bad
+source data. TimeNet raises those errors for its own checks.
+
+Do not repair a bad value. For example, do not cut `"3.7"` down to `3`, do not fill an empty cell
+with a default, and do not skip a row that does not parse. Raise the error, so that the source can
+be corrected or the connector can be changed on purpose.
+
+The test `packages/timenet-connectors/tests/test_connector_conventions.py` reads the code under
+`datasets/`, `bases/`, and `sources/`, and fails on `raise ValueError` and `raise TimeFFormatError`.
+It is a limited guard. It does not see `raise TimeFValidationError`, an error that a library raises,
+or code in other folders. For example, `time_axes.py`, `download/`, and `splitting/` still raise
+TimeNet errors. Review the error types that your connector lets through.
 
 ---
 

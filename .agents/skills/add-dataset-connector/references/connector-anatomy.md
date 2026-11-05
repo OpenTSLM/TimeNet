@@ -7,6 +7,7 @@ this branch. Anchor files:
 - Bases: `packages/timenet-connectors/src/timenet_connectors/bases/{huggingface,physionet}.py`
 - Discovery: `packages/timenet-connectors/src/timenet_connectors/discovery.py`
 - Build CLI: `packages/timenet-connectors/src/timenet_connectors/builder/cli.py`
+- Shared rules: the "Conventions for every connector" section of `docs/connectors.md`
 - Worked examples: the Hub example below, and the `timenet/hello_world` and `physionet/ptb_xl` connectors
 
 ## The `BaseConnector` contract
@@ -139,6 +140,8 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   you add it. Sources, axes, and annotations have no id. Put upstream identifiers (a recording
   name, an `ecg_id`) in `Record.metadata` or in an annotation, for example
   `metadata={"ecg_id": 17}`. A span takes Signal objects in `time_series`, not ids.
+- If a source value is missing or malformed, raise `TimeNetConnectorError` with the file and the
+  row. Do not repair it, default it, or skip it.
 - Keep a Python reference to any annotation or task you reference later and pass that object. When
   you look objects up by an upstream key, keep a local dict keyed by that key, not by a derived id
   string.

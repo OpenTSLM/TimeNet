@@ -2,7 +2,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources.parquet import iter_parquet_rows
 
 
@@ -21,5 +21,5 @@ def test_iter_parquet_rows_reads_only_the_named_columns(tmp_path):
 def test_iter_parquet_rows_rejects_a_column_the_file_does_not_have(tmp_path):
     path = tmp_path / "rows.parquet"
     pq.write_table(pa.table({"a": [1]}), path)
-    with pytest.raises(TimeFFormatError, match=r"no column \['nope'\]"):
+    with pytest.raises(TimeNetConnectorError, match=r"no column \['nope'\]"):
         list(iter_parquet_rows(path, columns=["a", "nope"]))

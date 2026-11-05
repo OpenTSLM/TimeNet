@@ -2,7 +2,7 @@ from pathlib import Path
 
 import pytest
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 
 
@@ -26,19 +26,19 @@ def test_read_header_defaults_an_unspecified_gain_to_the_wfdb_200(tmp_path):
 
 def test_read_header_rejects_fewer_signal_lines_than_declared(tmp_path):
     rec = _write_hea(tmp_path, "rec 12 250 100\nrec.dat 16 200(0)/mV 16 0 0 0 0 II\n")
-    with pytest.raises(TimeFFormatError, match="declares 12 signals"):
+    with pytest.raises(TimeNetConnectorError, match="declares 12 signals"):
         BasePhysioNetConnector._read_header(rec)
 
 
 def test_read_header_rejects_a_signal_line_without_a_signal_name(tmp_path):
     rec = _write_hea(tmp_path, "rec 1 250 100\nrec.dat 16 200(0)/mV 16 0 0 0\n")
-    with pytest.raises(TimeFFormatError, match="names no signal"):
+    with pytest.raises(TimeNetConnectorError, match="names no signal"):
         BasePhysioNetConnector._read_header(rec)
 
 
 def test_read_header_rejects_an_unparseable_gain(tmp_path):
     rec = _write_hea(tmp_path, "rec 1 250 100\nrec.dat 16 bad/mV 16 0 0 0 0 II\n")
-    with pytest.raises(TimeFFormatError, match="cannot parse the gain"):
+    with pytest.raises(TimeNetConnectorError, match="cannot parse the gain"):
         BasePhysioNetConnector._read_header(rec)
 
 

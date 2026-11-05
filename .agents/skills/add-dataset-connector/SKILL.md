@@ -15,7 +15,8 @@ Reuse a base connector wherever the source allows: `BaseHuggingFaceConnector` fo
 neither fits.
 
 Read `references/connector-anatomy.md` for the contract, the base-connector APIs, the task types, the
-folder layout, and a fully worked example before implementing.
+folder layout, and a fully worked example before implementing. Every connector also follows the
+"Conventions for every connector" section of `docs/connectors.md`.
 
 ## Workflow
 
@@ -89,6 +90,9 @@ local, with no network. Use `Signal.from_values` when `convert` already holds th
 JSON list in a table row. Use `Signal.from_loader` when the values stay in a file that a reader can
 open for one signal (WFDB, EDF, a large array). See the worked example in
 `references/connector-anatomy.md`.
+
+Check every source value that you read. If a value is missing or malformed, raise
+`TimeNetConnectorError` with the file and the row. Do not repair it, default it, or skip it.
 
 You cannot pass ids. Records, signals, and tasks get a read-only int `id` when you add them to the
 dataset. Sources, axes, and annotations have no id. Put upstream identifiers in `Record.metadata`

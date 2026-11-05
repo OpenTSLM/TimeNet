@@ -28,7 +28,7 @@ import pyarrow.parquet as pq
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.json import JsonValue
 from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, Split, Task, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
@@ -294,7 +294,7 @@ def _values_digest(series: Iterable[Sequence[float]]) -> bytes:
 
 def _series_values(value: Any) -> list[float]:
     if not isinstance(value, list) or not value or not all(_is_finite(item) for item in value):
-        raise ValueError("a series is a nonempty JSON list of finite numbers")
+        raise TimeNetConnectorError("a series is a nonempty JSON list of finite numbers")
     return [float(item) for item in value]
 
 
@@ -309,13 +309,13 @@ def _input_series(task: _Task, text: str) -> list[list[float]]:
         The input series, as floats.
 
     Raises:
-        ValueError: If a comparison's ``input_ts`` doesn't hold two series, or a series isn't finite numbers.
+        TimeNetConnectorError: If a comparison's ``input_ts`` doesn't hold two series, or a series isn't finite numbers.
     """
     value = json.loads(text)
     if task is not _Task.COMPARISON:
         return [_series_values(value)]
     if not isinstance(value, list) or len(value) != _COMPARISON_SERIES:
-        raise ValueError(f"a comparison input_ts holds {_COMPARISON_SERIES} series")
+        raise TimeNetConnectorError(f"a comparison input_ts holds {_COMPARISON_SERIES} series")
     return [_series_values(series) for series in value]
 
 
@@ -341,7 +341,7 @@ def _input_contexts(task: _Task, text: Mapping[str, str]) -> _Contexts:
         The annotations of the row's first input Record.
 
     Raises:
-        ValueError: If a published list isn't a JSON list of texts, a comparison's doesn't hold two, or
+        TimeNetConnectorError: If a published list isn't a JSON list of texts, a comparison's doesn't hold two, or
             the three lists differ in length.
     """
     if task is not _Task.COMPARISON and task not in _PRINTING_TASKS:
@@ -351,13 +351,13 @@ def _input_contexts(task: _Task, text: Mapping[str, str]) -> _Contexts:
     for key in _CONTEXT_KEYS:
         entries = json.loads(text[key])
         if not isinstance(entries, list) or not entries or not all(isinstance(entry, str) for entry in entries):
-            raise ValueError(f"a {task} row's {key} is a JSON list of {expected}")
+            raise TimeNetConnectorError(f"a {task} row's {key} is a JSON list of {expected}")
         if task is _Task.COMPARISON and len(entries) != _COMPARISON_SERIES:
-            raise ValueError(f"a {task} row's {key} is a JSON list of {expected}")
+            raise TimeNetConnectorError(f"a {task} row's {key} is a JSON list of {expected}")
         lists[key] = tuple(entries)
     lengths = {key: len(entries) for key, entries in lists.items()}
     if len(set(lengths.values())) != 1:
-        raise ValueError(f"a {task} row's context lists differ in length: {lengths}")
+        raise TimeNetConnectorError(f"a {task} row's context lists differ in length: {lengths}")
     return _Contexts({_PUBLISHED_LISTS[key]: entries for key, entries in lists.items()})
 
 
@@ -368,7 +368,7 @@ def _question_letters(question: str, lines: list[tuple[str, str]]) -> tuple[_Que
         The format and its letters, in order.
 
     Raises:
-        ValueError: If a multiple-choice question doesn't offer A to D in order.
+        TimeNetConnectorError: If a multiple-choice question doesn't offer A to D in order.
     """
     if "\n\nPatches:\n" in question:
         return _QuestionFormat.PUZZLING, _LETTERS
@@ -376,7 +376,7 @@ def _question_letters(question: str, lines: list[tuple[str, str]]) -> tuple[_Que
         return _QuestionFormat.TRUE_OR_FALSE, _TRUE_OR_FALSE_LETTERS
     letters = tuple(letter for letter, _ in lines)
     if not _MIN_CHOICES <= len(letters) <= len(_LETTERS) or letters != _LETTERS[: len(letters)]:
-        raise ValueError(f"a multiple-choice question offers A to D in order, got {letters}")
+        raise TimeNetConnectorError(f"a multiple-choice question offers A to D in order, got {letters}")
     return _QuestionFormat.MULTIPLE_CHOICE, letters
 
 
@@ -384,14 +384,14 @@ def _check_answer(question_format: _QuestionFormat, answer: str, letters: tuple[
     """Check that the answer is one of the letters, or for a puzzle an order of all of them.
 
     Raises:
-        ValueError: If the answer doesn't fit.
+        TimeNetConnectorError: If the answer doesn't fit.
     """
     if question_format is _QuestionFormat.PUZZLING:
         fits = sorted(answer.split(",")) == sorted(letters)
     else:
         fits = answer in letters
     if not fits:
-        raise ValueError(f"the answer {answer!r} does not fit the question's letters {letters}")
+        raise TimeNetConnectorError(f"the answer {answer!r} does not fit the question's letters {letters}")
 
 
 def _has_another_right_answer(
@@ -420,7 +420,7 @@ def _read_question(task: _Task, question: str, answer: str, printed: list[_Print
         The format, the choice texts of a multiple-choice question whose choices are text, and the ambiguity.
 
     Raises:
-        ValueError: If a multiple-choice question doesn't offer A to D in order, the answer is not one of the
+        TimeNetConnectorError: If a multiple-choice question doesn't offer A to D in order, the answer is not one of the
             question's letters or an order of all four patches, or the printed series don't match the letters.
     """
     lines = re.findall(r"^([A-Z]): (.*)$", question.partition("\n\nChoices:\n")[2], re.MULTILINE)
@@ -429,7 +429,7 @@ def _read_question(task: _Task, question: str, answer: str, printed: list[_Print
     expected_labels = [None] if question_format is _QuestionFormat.TRUE_OR_FALSE else list(letters)
     labels = [item.label for item in printed]
     if task in _PRINTING_TASKS and labels != expected_labels:
-        raise ValueError(f"a {task} question prints series labelled {expected_labels}, got {labels}")
+        raise TimeNetConnectorError(f"a {task} question prints series labelled {expected_labels}, got {labels}")
     choices: dict[str, str] = {}
     if question_format is _QuestionFormat.MULTIPLE_CHOICE and task not in _PRINTING_TASKS:
         choices = dict(lines)
@@ -487,20 +487,20 @@ def _validate_row(values: Mapping[str, Any], split: _SplitFile, index: int) -> _
         The row.
 
     Raises:
-        TimeFValidationError: If the row is malformed, with its file and row.
-    """  # ruff: ignore[docstring-missing-exception] - the ValueErrors are caught and re-raised as TimeFValidationError
+        TimeNetConnectorError: If the row is malformed, with its file and row.
+    """
     try:
         text: dict[str, str] = {}
         for column in _READ_COLUMNS:
             if not isinstance(values[column], str) or not values[column].strip():
-                raise ValueError(f"{column} is nonblank text")
+                raise TimeNetConnectorError(f"{column} is nonblank text")
             text[column] = values[column]
         question = text["question"]
         if text["task"] not in set(_Task):
-            raise ValueError(f"unknown task {text['task']!r}")
+            raise TimeNetConnectorError(f"unknown task {text['task']!r}")
         task = _Task(text["task"])
         if text["question_type"] not in _QUESTION_TYPES.values():
-            raise ValueError(f"unknown question_type {text['question_type']!r}")
+            raise TimeNetConnectorError(f"unknown question_type {text['question_type']!r}")
         inputs, printed = _input_series(task, text["input_ts"]), _printed_series(task, question)
         all_series = [*inputs, *(item.values for item in printed)]
         reading = _read_question(task, question, text["answer"], printed)
@@ -525,8 +525,8 @@ def _validate_row(values: Mapping[str, Any], split: _SplitFile, index: int) -> _
             has_ambiguous_answer=reading.ambiguous,
             has_wrong_target=_contradicts_zero_input(task, reading.question_format, text["answer"], inputs, printed),
         )
-    except (ValueError, KeyError, IndexError, RecursionError) as exc:
-        raise TimeFValidationError(f"{split.filename} row {index}: {exc}") from exc
+    except (TimeNetConnectorError, ValueError, KeyError, IndexError, RecursionError) as exc:
+        raise TimeNetConnectorError(f"{split.filename} row {index}: {exc}") from exc
 
 
 def _transform(task: _Task, question: str) -> str | None:
@@ -536,13 +536,13 @@ def _transform(task: _Task, question: str) -> str | None:
         The transform, ``None`` for any other task.
 
     Raises:
-        ValueError: If a data transformation question names no known transform.
+        TimeNetConnectorError: If a data transformation question names no known transform.
     """
     if task is not _Task.DATA_TRANSFORMATION:
         return None
     match = _TRANSFORM.search(question)
     if match is None:
-        raise ValueError("a data transformation question names a known transform")
+        raise TimeNetConnectorError("a data transformation question names a known transform")
     return match[1]
 
 
@@ -553,13 +553,13 @@ def _read_rows(path: Path, split: _SplitFile) -> Iterator[_Row]:
         Each row.
 
     Raises:
-        TimeFFormatError: If the file can't be read as parquet.
+        TimeNetConnectorError: If the file can't be read as parquet.
     """
     try:
         for index, values in enumerate(iter_parquet_rows(path, columns=_READ_COLUMNS)):
             yield _validate_row(values, split, index)
     except (OSError, pa.ArrowException) as exc:
-        raise TimeFFormatError(f"{path}: {exc}") from exc
+        raise TimeNetConnectorError(f"{path}: {exc}") from exc
 
 
 def _find_issues(rows: list[_Row]) -> dict[_RowKey, frozenset[SourceIssue]]:
@@ -617,7 +617,7 @@ class _SeriesLoader:
         try:
             table = pq.read_table(self._paths[split], columns=_SERIES_COLUMNS).combine_chunks()
         except (OSError, pa.ArrowException) as exc:
-            raise TimeFFormatError(f"{self._paths[split]}: {exc}") from exc
+            raise TimeNetConnectorError(f"{self._paths[split]}: {exc}") from exc
         input_ts, question = (table.column(name).chunk(0) for name in _SERIES_COLUMNS)
         return input_ts, question
 
@@ -627,13 +627,15 @@ class _SeriesLoader:
             printed = _printed_series(task, str(question[index].as_py()))
             series = [*_input_series(task, str(input_ts[index].as_py())), *(item.values for item in printed)]
             return _ParsedSeries(series, _values_digest(series))
-        except (ValueError, IndexError) as exc:
-            raise TimeFFormatError(f"{split.filename} row {index}: {exc}; the file changed since conversion") from exc
+        except (TimeNetConnectorError, ValueError, IndexError) as exc:
+            raise TimeNetConnectorError(
+                f"{split.filename} row {index}: {exc}; the file changed since conversion"
+            ) from exc
 
     def __call__(self, row: _Row, position: int) -> pa.Array:
         parsed = self._series(row.split, row.index, row.task)
         if tuple(len(values) for values in parsed.series) != row.lengths or parsed.digest != row.values_digest:
-            raise TimeFFormatError(
+            raise TimeNetConnectorError(
                 f"{row.file} row {row.index}: the series differ from the converted row; the file changed"
             )
         return pa.array(parsed.series[position], type=pa.float64())
@@ -747,11 +749,11 @@ class TSAQAConnector(BaseHuggingFaceConnector):
             A dataset with the provenance annotations, the Records, and a stream of every task.
 
         Raises:
-            TimeFValidationError: If a split file is missing, or a row is malformed.
+            TimeNetConnectorError: If a split file is missing, or a row is malformed.
         """
         paths = {ref.part: ref.path for ref in raw_refs}
         if paths.keys() != _SPLITS.keys():
-            raise TimeFValidationError(
+            raise TimeNetConnectorError(
                 f"TSAQA needs all its split files, missing {sorted(split.value for split in _SplitFile if split not in paths)}"
             )
         rows: list[_Row] = []
