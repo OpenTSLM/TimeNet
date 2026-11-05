@@ -132,8 +132,8 @@ class BaseRegistry(ABC):
     def resolve(self, dataset_id: str, version: str | None) -> Found | NotFound | NotServed:
         """Say whether this registry serves a release, and at which version.
 
-        A registry that is not local serves the files of a release only if its effective access is
-        open: the strictest access of its card and of the cards in its lineage. It lists any other
+        A remote registry serves the files of a release only if its effective access is open: the
+        strictest access of its card and of the cards in its lineage. It lists any other
         release, with its card and its manifest, but it does not serve its files.
         :class:`~timenet.registry.LocalRegistry` serves every release that it holds.
 
