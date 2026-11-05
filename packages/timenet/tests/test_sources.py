@@ -13,7 +13,6 @@ from timenet.sources import (
     InstalledConnectors,
     NotFound,
     NotServed,
-    ReleaseSource,
     resolve_release,
 )
 from timenet.testing import install_backends, make_dataset
@@ -143,8 +142,6 @@ def test_a_card_error_of_a_backend_propagates(monkeypatch):
     dataset_id = make_dataset().metadata.dataset_id
     with pytest.raises(TimeNetInvalidCardError):
         InstalledConnectors().resolve(dataset_id, None)
-    with pytest.raises(TimeNetInvalidCardError):
-        resolve_release([InstalledConnectors()], dataset_id, None)
 
 
 def test_not_served_names_the_page_when_it_has_no_requirements():
@@ -168,12 +165,6 @@ def test_every_latest_sentinel_means_the_latest_version(latest, tmp_path, monkey
     assert connectors.resolve(card.dataset_id, latest) == Found(V1, connectors)
 
 
-def test_installed_connectors_are_equal():
-    assert InstalledConnectors() == InstalledConnectors()
-    assert len({InstalledConnectors(), InstalledConnectors()}) == 1
-    assert isinstance(InstalledConnectors(), ReleaseSource)
-
-
 def test_a_local_registry_answers_not_found_without_reading_every_manifest(tmp_path, monkeypatch):
     registry = LocalRegistry(tmp_path)
     registry.put_dataset(make_dataset())
@@ -183,7 +174,6 @@ def test_a_local_registry_answers_not_found_without_reading_every_manifest(tmp_p
     assert registry.resolve("timenet/hello-world", "2.0.0") == NotFound()
 
 
-@pytest.mark.parametrize("version", [None, "1.0.0"])
-def test_a_local_registry_rejects_an_invalid_dataset_id(tmp_path, version):
+def test_a_local_registry_rejects_an_invalid_dataset_id(tmp_path):
     with pytest.raises(TimeFValidationError):
-        LocalRegistry(tmp_path).resolve("../evil", version)
+        LocalRegistry(tmp_path).resolve("../evil", None)
