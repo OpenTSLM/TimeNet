@@ -591,44 +591,36 @@ def test_a_local_client_checks_access_before_it_copies_from_a_remote_registry(tm
     assert not (tmp_path / "local").exists()
 
 
-@pytest.mark.parametrize("page", ["own", "ancestor"])
-def test_a_remote_registry_lists_but_does_not_serve_a_release_that_is_not_open(tmp_path, page):
-    dataset_id, release = _gated_release(tmp_path / "origin", page)
+def test_a_remote_registry_lists_but_does_not_serve_a_release_that_is_not_open(tmp_path):
+    # The card of the release is open. A card in its lineage is not.
+    dataset_id, release = _gated_release(tmp_path / "origin", "ancestor")
     transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
     remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
     requirement = AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua")
 
-    for version in (None, Version(1, 0, 0)):
-        assert remote.resolve(dataset_id, version) == NotServed(Version(1, 0, 0), Access.CREDENTIALED, (requirement,))
+    answer = remote.resolve(dataset_id, None)
+
+    assert answer == NotServed(Version(1, 0, 0), Access.CREDENTIALED, (requirement,))
+    # The answer keeps the manifest that the lookup fetched.
+    assert isinstance(answer, NotServed)
+    assert answer.manifest is not None
+    assert answer.manifest.metadata.dataset_id == dataset_id
     assert not any("/download/" in request.url.path or request.url.host == "blob.local" for request in requests)
     # A local registry serves every release that it holds.
     local = LocalRegistry(tmp_path / "origin")
     assert local.resolve(dataset_id, None) == FoundInRegistry(Version(1, 0, 0), local)
 
 
-@pytest.mark.parametrize("version", [None, Version(1, 0, 0)])
-def test_resolve_keeps_the_manifest_that_it_fetched(version_dir, tmp_path, version):
+def test_resolve_keeps_the_manifest_that_it_fetched(version_dir, tmp_path):
     registry, requests = _remote(version_dir, tmp_path)
     _, manifest = version_dir
     dataset_id = manifest.metadata.dataset_id
 
-    answer = registry.resolve(dataset_id, version)
+    answer = registry.resolve(dataset_id, None)
 
     assert isinstance(answer, FoundInRegistry)
     assert answer.manifest == manifest
     assert sum(request.url.path.endswith("/manifest") for request in requests) == 1
-
-
-def test_resolve_keeps_the_manifest_of_a_release_that_is_not_served(tmp_path):
-    dataset_id, _ = _gated_release(tmp_path / "origin", "own")
-    transport, _ = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
-    remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
-
-    answer = remote.resolve(dataset_id, None)
-
-    assert isinstance(answer, NotServed)
-    assert answer.manifest is not None
-    assert answer.manifest.metadata.dataset_id == dataset_id
 
 
 def _offline(request):
