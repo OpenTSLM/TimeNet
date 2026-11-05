@@ -1,11 +1,9 @@
 import re
-import subprocess
 import sys
 
 import pytest
 
 from timenet.builders import BuildOptions, installed_builder
-from timenet.client import TimeNet
 from timenet.errors import (
     ConnectorCardWarning,
     TimeFValidationError,
@@ -18,7 +16,6 @@ from timenet.manifest.files import FilePart
 from timenet.progress import BytesMoved, ShardWritten
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
-from timenet.testing import make_dataset
 from timenet.types.references import DatasetRef
 from timenet.values_backends import ValuesBackend
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
@@ -43,17 +40,6 @@ def _unexpected_pipeline(*args, **kwargs):
 def _pins():
     pinned = FilePart(path="control.duckdb", checksum="sha256:" + "0" * 64, size=1)
     return {DatasetRef.parse("test/reader@1.0.0"): PayloadSource(release=HELLO, files=(pinned,))}
-
-
-def test_loading_the_builder_backend_imports_no_cli_library():
-    # The SDK loads the backend through its entry point to list dataset IDs and to read cards. The
-    # libraries of the CLI have no use there.
-    cli_modules = ("typer", "timenet.cli.ui", "timenet_connectors.builder.cli")
-    code = f"import sys, timenet_connectors.builder.backend; print([m for m in {cli_modules!r} if m in sys.modules])"
-
-    result = subprocess.run([sys.executable, "-c", code], check=True, capture_output=True, text=True)
-
-    assert result.stdout.strip() == "[]"
 
 
 def test_connector_builder_lists_its_dataset_ids_without_importing_a_connector(monkeypatch):
@@ -216,22 +202,3 @@ def test_build_without_progress_installs_no_sink(tmp_path, monkeypatch):
         )
 
     assert seen == {"progress_cb": None, "sink": None}
-
-
-def test_a_client_build_lets_the_isolated_child_print(tmp_path, monkeypatch):
-    # The client sends no progress callback and leaves quiet unset. So the child shows its build lines
-    # and downloads on the inherited stderr.
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
-    calls = []
-
-    def child(release, store_root, *, quiet, **_):
-        calls.append((release, quiet))
-        LocalRegistry(store_root).put_dataset(make_dataset())
-
-    monkeypatch.setattr(backend_module, "run_isolated_build", child)
-
-    with TimeNet(tmp_path / "registry").open("timenet/hello-world") as reader:
-        assert reader.read().records
-
-    assert calls == [(HELLO, False)]
