@@ -6,6 +6,7 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
+from timenet.errors import TimeNetVersionUnavailableError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
@@ -87,6 +88,23 @@ def test_build_isolates_when_the_flag_overrides_the_setting(monkeypatch, tmp_pat
 
     assert result.exit_code == 0
     assert called["isolated"] is True
+
+
+def test_build_takes_an_exact_release_and_refuses_another_version(monkeypatch, tmp_path):
+    built = []
+
+    def _fake_isolated(dataset_id, root, **kwargs):
+        built.append(dataset_id)
+        return Path(root) / "timenet/hello-world/1.0.0"
+
+    monkeypatch.setattr(cli_module, "run_isolated", _fake_isolated)
+    result = runner.invoke(app, ["build", "timenet/hello-world@1.0.0", "--out", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert built == ["timenet/hello-world"]
+    result = runner.invoke(app, ["build", "timenet/hello-world@9.9.9", "--out", str(tmp_path)])
+    assert isinstance(result.exception, TimeNetVersionUnavailableError)
+    assert built == ["timenet/hello-world"]
 
 
 def test_build_rejects_an_unknown_id_without_importing_anything(monkeypatch, tmp_path):

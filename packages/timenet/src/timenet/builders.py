@@ -8,13 +8,13 @@ package plug in the same way the first-party one does.
 
 from collections.abc import Iterable, Mapping
 from dataclasses import dataclass
-from importlib.metadata import EntryPoint, entry_points
+from importlib.metadata import entry_points
 from pathlib import Path
 from typing import TYPE_CHECKING, Protocol
 
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
 from timenet.progress import ProgressCallback
-from timenet.types import DatasetMetadata
+from timenet.types import DatasetMetadata, Version
 from timenet.types.references import DatasetRef
 
 
@@ -166,46 +166,67 @@ class BuilderBackend(Protocol):
         ...
 
 
-def find_builder(dataset_id: str) -> BuilderBackend | None:
-    """Find the first registered backend that lists the dataset ID.
+@dataclass(frozen=True)
+class Claim:
+    """A dataset's build backend and connector card.
+
+    Attributes:
+        backend: The installed backend that builds the dataset.
+        card: The dataset's connector card.
+    """
+
+    backend: BuilderBackend
+    card: DatasetMetadata
+
+    @property
+    def release(self) -> DatasetRef:
+        """The release that the card declares."""
+        return DatasetRef(dataset_id=self.card.dataset_id, version=self.card.dataset_version)
+
+
+def claim(dataset_id: str) -> Claim | None:
+    """Find the first registered backend that lists a dataset, and read its card.
 
     Args:
         dataset_id: The dataset ID.
 
     Returns:
-        The backend, or ``None`` if no backend lists the dataset ID.
+        The claim, or ``None`` if no backend lists the dataset or the backend has no card for it.
 
     Raises:
-        TimeFValidationError: If a registered backend does not implement ``dataset_ids()``.
-        TimeNetInvalidCardError: If a connector card cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _claim and the backend
-    claim = _claim(dataset_id)
-    return None if claim is None else claim[1]
-
-
-def _claim(dataset_id: str) -> tuple[EntryPoint, BuilderBackend] | None:
-    """Find the first entry point and backend that list the dataset ID.
-
-    Args:
-        dataset_id: The dataset ID.
-
-    Returns:
-        The entry point and backend, or ``None`` if no backend lists the dataset ID.
-
-    Raises:
-        TimeFValidationError: If a registered backend does not implement ``dataset_ids()``.
-        TimeNetInvalidCardError: If a connector card cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - the card error is raised by the backend
+        TimeNetInvalidCardError: If the dataset's card cannot be read.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
     for entry in entry_points(group=ENTRY_POINT_GROUP):
         backend = entry.load()()
-        dataset_ids = getattr(backend, "dataset_ids", None)
-        if not callable(dataset_ids):
-            raise TimeFValidationError(
-                f"the builder backend of entry point {entry.name!r} ({entry.value}) must implement dataset_ids()"
-            )
-        if dataset_id in dataset_ids():
-            return entry, backend
+        if dataset_id in backend.dataset_ids():
+            card = backend.card(dataset_id)
+            return None if card is None else Claim(backend, card)
     return None
+
+
+def declared(dataset_id: str, version: Version | str | None = None) -> Claim:
+    """Find a dataset's build backend and check its version.
+
+    Args:
+        dataset_id: The dataset ID.
+        version: The version to build, or ``None`` for the version that the card declares.
+
+    Returns:
+        The claim, whose ``release`` is the release to build.
+
+    Raises:
+        TimeNetDatasetNotFoundError: If no installed connector builds the dataset.
+        TimeNetVersionUnavailableError: If the connector builds another version.
+        TimeNetInvalidCardError: If the dataset's card cannot be read.
+    """  # ruff: ignore[docstring-extraneous-exception] - the card error is raised by the backend
+    found = claim(dataset_id)
+    if found is None:
+        raise TimeNetDatasetNotFoundError(f"no installed connector builds {dataset_id!r}")
+    if version is not None:
+        wanted = DatasetRef(dataset_id=dataset_id, version=version)
+        if wanted.version != found.card.dataset_version:
+            raise TimeNetVersionUnavailableError(wanted, found.card.dataset_version)
+    return found
 
 
 def find_card(dataset_id: str) -> DatasetMetadata | None:
@@ -218,30 +239,7 @@ def find_card(dataset_id: str) -> DatasetMetadata | None:
         The card, or ``None`` if no backend lists the dataset or the backend has no card.
 
     Raises:
-        TimeFValidationError: If a registered backend does not implement ``dataset_ids()``.
-        TimeNetInvalidCardError: If a connector card cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _claim and the backend
-    claim = _claim(dataset_id)
-    return None if claim is None else claim[1].card(dataset_id)
-
-
-def exact_builder(reference: DatasetRef) -> BuilderBackend | None:
-    """Find a backend whose card matches the requested dataset version.
-
-    Check only the first registered backend that lists the dataset ID.
-
-    Args:
-        reference: The dataset ID and version to build.
-
-    Returns:
-        The backend, or ``None`` if no backend lists the dataset or its card is absent or has another version.
-
-    Raises:
-        TimeFValidationError: If a registered backend does not implement ``dataset_ids()``.
-        TimeNetInvalidCardError: If a connector card cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _claim and the backend
-    claim = _claim(reference.dataset_id)
-    if claim is None:
-        return None
-    card = claim[1].card(reference.dataset_id)
-    return claim[1] if card is not None and card.dataset_version == reference.version else None
+        TimeNetInvalidCardError: If the card cannot be read.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
+    found = claim(dataset_id)
+    return None if found is None else found.card

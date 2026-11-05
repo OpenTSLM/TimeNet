@@ -18,11 +18,8 @@ class ConnectorBuilder:
         """List this package's dataset IDs without importing connectors.
 
         Returns:
-            The sorted dataset IDs.
-
-        Raises:
-            TimeNetInvalidCardError: If a card is unreadable, is not a YAML mapping, or lacks ``dataset_id``.
-        """  # ruff: ignore[docstring-extraneous-exception] - raised by known_ids
+            The sorted dataset IDs. A card that cannot be read is skipped with a warning.
+        """
         return known_ids()
 
     def knows(self, dataset_id: str) -> bool:  # ruff: ignore[no-self-use] (BuilderBackend protocol method)

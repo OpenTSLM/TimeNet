@@ -7,6 +7,7 @@ from pydantic import ValidationError
 import pytest
 
 from timenet import client as client_module
+from timenet.builders import Claim
 from timenet.client import TimeNet
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
@@ -89,6 +90,11 @@ class _Builder:
         return root / dataset_id / self.VERSION
 
 
+def _claims(builder, card=None):
+    """Return a stand-in for ``claim`` that answers every dataset with ``builder``, and with ``card`` or its card."""
+    return lambda dataset_id: Claim(builder, card or builder.card(dataset_id))
+
+
 def test_a_local_child_copies_its_missing_payload_source_from_fetch_from(tmp_path):
     origin, reference = _child_of_the_demo(tmp_path / "origin")
     cache = tmp_path / "cache"
@@ -115,7 +121,7 @@ def test_a_missing_version_is_copied_from_fetch_from_before_it_is_built(tmp_path
     if in_fetch_from:
         _child_of_the_demo(origin.root)
     calls = []
-    monkeypatch.setattr(client_module, "find_builder", lambda dataset_id: _Builder(calls))
+    monkeypatch.setattr(client_module, "claim", _claims(_Builder(calls)))
 
     with TimeNet(tmp_path / "local").open("test/child", fetch_from=origin) as reader:
         assert reader.read().records
@@ -230,7 +236,7 @@ def test_a_damaged_release_is_repaired_from_fetch_from_and_never_built_over(tmp_
     control.write_bytes(b"cut short")
     calls = []
     install_backends(monkeypatch, _Builder(calls))
-    monkeypatch.setattr(client_module, "find_builder", lambda dataset_id: _Builder(calls))
+    monkeypatch.setattr(client_module, "claim", _claims(_Builder(calls)))
 
     with pytest.raises(TimeNetFileError) as caught:
         TimeNet(registry).open("test/child")
@@ -259,7 +265,7 @@ def test_a_corrupted_copy_from_fetch_from_names_the_transfer_without_the_repair_
 
 def test_a_remote_client_takes_no_fetch_from_and_never_builds(tmp_path, monkeypatch):
     calls = []
-    monkeypatch.setattr(client_module, "find_builder", lambda dataset_id: _Builder(calls))
+    monkeypatch.setattr(client_module, "claim", _claims(_Builder(calls)))
     remote = RemoteRegistry(
         "http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)), cache_dir=tmp_path
     )
@@ -558,7 +564,7 @@ def test_load_names_the_buildable_version_when_a_pin_cannot_be_built(registry_ro
             return Path(root) / dataset_id / "1.0.0"
 
     builder = _Builder()
-    monkeypatch.setattr(client_module, "find_builder", lambda dataset_id: builder)
+    monkeypatch.setattr(client_module, "claim", _claims(builder, make_dataset().metadata))
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
 
     with pytest.raises(TimeNetDatasetNotFoundError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
@@ -586,7 +592,7 @@ def test_load_accepts_the_latest_sentinels_after_a_build(tmp_path, monkeypatch, 
 
     empty_root = tmp_path / "reg"
     empty_root.mkdir()
-    monkeypatch.setattr(client_module, "find_builder", lambda dataset_id: _Builder())
+    monkeypatch.setattr(client_module, "claim", _claims(_Builder(), make_dataset().metadata))
     client = TimeNet(empty_root, storage_path=tmp_path / "store")
 
     assert str(client.load("timenet/hello-world", pin).metadata.dataset_version) == "1.0.0"
@@ -613,7 +619,7 @@ def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, m
     if entry_point == "open_torch":
         pytest.importorskip("torch")
     builder = _Builder()
-    monkeypatch.setattr(client_module, "find_builder", lambda dataset_id: builder)
+    monkeypatch.setattr(client_module, "claim", _claims(builder, make_dataset().metadata))
     client = TimeNet(registry_root, storage_path=tmp_path / "store")
 
     # The hint names the keywords that could obtain the release, in a sentence of its own.

@@ -23,7 +23,7 @@ from rich.progress import (
 )
 import typer
 
-from timenet.builders import BuilderBackend, find_builder, find_card
+from timenet.builders import BuilderBackend, claim, declared, find_card
 from timenet.cache import human_bytes
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console
@@ -46,7 +46,7 @@ from timenet.registry import (
     open_registry,
     open_writable_registry,
 )
-from timenet.types.references import DatasetRef
+from timenet.types.references import DatasetRef, split_ref
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.builder.env import run_isolated
 from timenet_connectors.discovery import known_ids, resolve
@@ -88,7 +88,7 @@ def _resolve_target(out: str | None) -> WritableRegistry | Path:
 @app.command()
 # ruff: ignore[too-many-arguments, too-many-positional-arguments] (a typer command: one parameter per option)
 def build(
-    dataset_id: str,
+    release: str = typer.Argument(..., metavar="DATASET_ID[@VERSION]"),
     out: str | None = typer.Option(
         None,
         "--out",
@@ -141,16 +141,20 @@ def build(
 
     Raises:
         BadParameter: If ``dataset_id`` has no known connector.
+        TimeNetVersionUnavailableError: If the connector cannot build the requested version.
         TimeNetMissingParentError: If a parent is missing. The hint of the error names the flags.
         TimeNetFileError: If a copy of a parent in the output is damaged, or a fetched file does not
             match its manifest record. The hint of the error names the flags.
         TimeNetAccessError: If the output is remote and gets a release without access declared
             ``open``.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by declared and the build
     # known_ids() imports no connector. So an unknown id fails before any environment exists.
+    dataset_id, version = split_ref(release)
     known = known_ids()
     if dataset_id not in known:
         raise typer.BadParameter(f"no connector for {dataset_id!r}; known: {', '.join(known) or '(none)'}")
+    if version is not None:
+        declared(dataset_id, version)
     forwarded = out if out is not None else settings().registry
     if forwarded is None:
         forwarded = str(settings().registry_path)
@@ -219,9 +223,9 @@ def build_one(  # ruff: ignore[too-many-arguments]
     isolated = settings(isolation=override).isolation == "on"
 
     def build_parent(step: Step) -> object:
-        builder = find_builder(step.release.dataset_id)
-        if builder is not None and not _in_repo(builder):
-            return _build_with(builder, step, target)
+        found = claim(step.release.dataset_id)
+        if found is not None and not _in_repo(found.backend):
+            return _build_with(found.backend, step, target)
         # Each parent builds like the dataset itself. An isolated child makes the plan again. The
         # child finds every parent in the output, so it only opens the parents.
         return _build(

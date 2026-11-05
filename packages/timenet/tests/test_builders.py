@@ -1,10 +1,7 @@
-from types import SimpleNamespace
-
 import pytest
 
-from timenet import builders
-from timenet.builders import exact_builder, find_builder, find_card
-from timenet.errors import TimeFValidationError
+from timenet.builders import claim, declared
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
 from timenet.testing import install_backends, make_dataset
 from timenet.types.references import DatasetRef
 
@@ -24,46 +21,27 @@ class _Backend:
         raise AssertionError(f"the lookup does not build {release}")
 
 
-def test_find_builder_returns_none_when_nothing_claims_the_id(monkeypatch):
-    install_backends(monkeypatch, _Backend("a/b"))
-    assert find_builder("x/y") is None
-
-
-def test_find_builder_returns_the_first_backend_whose_dataset_ids_hold_the_id(monkeypatch):
-    wanted = _Backend("a/c", "x/y")
-    install_backends(monkeypatch, _Backend("a/b"), wanted, _Backend("x/y"))
-    assert find_builder("x/y") is wanted
-
-
-def test_find_builder_names_the_entry_point_of_a_backend_without_dataset_ids(monkeypatch):
-    class _NoIds:
-        def knows(self, dataset_id):
-            return True
-
-    # install_backends() gives entry points without a name, so this test makes its own.
-    entry = SimpleNamespace(name="old", value="old_package:Builder", load=lambda: _NoIds)
-    monkeypatch.setattr(builders, "entry_points", lambda group: [entry])
-    with pytest.raises(TimeFValidationError, match=r"'old' \(old_package:Builder\) must implement dataset_ids\(\)"):
-        find_builder("x/y")
-
-
-def test_find_builder_returns_none_with_no_registered_backends(monkeypatch):
-    monkeypatch.setattr(builders, "entry_points", lambda group: [])
-    assert find_builder("x/y") is None
-
-
-def test_find_card_returns_the_card_of_the_backend_that_claims_the_id(monkeypatch):
+def test_claim_returns_the_first_backend_whose_dataset_ids_hold_the_id(monkeypatch):
     card = make_dataset().metadata
-    backends = [_Backend("a/b"), _Backend(card.dataset_id, card=card)]
-    install_backends(monkeypatch, *backends)
-    assert find_card(card.dataset_id) is card
-    assert find_card("x/y") is None
+    wanted = _Backend("a/c", card.dataset_id, card=card)
+    install_backends(monkeypatch, _Backend("a/b"), wanted, _Backend(card.dataset_id, card=card))
+    found = claim(card.dataset_id)
+    assert found is not None
+    assert (found.backend, found.card) == (wanted, card)
+    assert claim("x/y") is None
 
 
-def test_exact_builder_returns_the_backend_only_for_the_version_of_its_card(monkeypatch):
+def test_declared_returns_the_release_of_the_card_and_refuses_another_version(monkeypatch):
     card = make_dataset().metadata
-    backend = _Backend(card.dataset_id, card=card)
-    install_backends(monkeypatch, backend)
-    assert exact_builder(DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)) is backend
-    assert exact_builder(DatasetRef.parse(f"{card.dataset_id}@2.0.0")) is None
-    assert exact_builder(DatasetRef.parse("x/y@1.0.0")) is None
+    install_backends(monkeypatch, _Backend(card.dataset_id, card=card))
+    release = DatasetRef(dataset_id=card.dataset_id, version=card.dataset_version)
+    assert declared(card.dataset_id).release == release
+    assert declared(card.dataset_id, card.dataset_version).release == release
+    with pytest.raises(TimeNetVersionUnavailableError) as raised:
+        declared(card.dataset_id, "2.0.0")
+    assert (raised.value.release, raised.value.declared) == (
+        DatasetRef.parse(f"{card.dataset_id}@2.0.0"),
+        card.dataset_version,
+    )
+    with pytest.raises(TimeNetDatasetNotFoundError, match="no installed connector builds 'x/y'"):
+        declared("x/y")
