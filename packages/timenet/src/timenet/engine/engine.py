@@ -5,7 +5,7 @@ from contextlib import ExitStack
 from pathlib import Path
 import shutil
 
-from timenet.config import settings
+from timenet.config import is_cache_folder, make_cache_folder, settings
 from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
 from timenet.dataset.composition import _record_parent
@@ -48,7 +48,7 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     Args:
         connector: The connector to build.
         root: Output root. This function writes the dataset to ``<root>/<dataset_id>/<version>/``.
-        cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
+        cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/downloads/<dataset_id>``).
         keep_cache: Keep the cache directory instead of removing it once the dataset is stored.
             Conversion is the only stage that needs the raw sources, so removing them frees disk
             after a successful build. The sources re-download on the next run.
@@ -75,7 +75,7 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
         return version_dir
     _check_composes(connector, metadata)
 
-    cache = cache_dir if cache_dir is not None else settings().cache_dir / metadata.dataset_id
+    cache = cache_dir if cache_dir is not None else _downloads_dir(metadata.dataset_id)
     cache.mkdir(parents=True, exist_ok=True)
 
     # Open the declared parents before downloading, so a missing parent fails before any raw I/O.
@@ -95,9 +95,39 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
         )
     # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
     # delete it.
-    if not keep_cache and cache_dir is None and cache.is_dir():
-        shutil.rmtree(cache)
+    if not keep_cache and cache_dir is None:
+        _remove_downloads(cache)
     return version_dir
+
+
+def _downloads_dir(dataset_id: str) -> Path:
+    """Return the default folder of the raw downloads of a dataset, ``<TIMENET_CACHE>/downloads/<dataset_id>``.
+
+    The call creates the ``downloads`` folder with its ``CACHEDIR.TAG`` marker file if the folder does
+    not exist yet. It does not create the folder of the dataset.
+
+    Args:
+        dataset_id: The dataset ID.
+
+    Returns:
+        The folder of the dataset in the downloads folder.
+    """
+    downloads = settings().downloads_dir
+    make_cache_folder(downloads)
+    return downloads / dataset_id
+
+
+def _remove_downloads(folder: Path) -> None:
+    """Delete the raw downloads of a dataset, but only if the downloads folder is TimeNet's.
+
+    A ``downloads`` folder without TimeNet's ``CACHEDIR.TAG`` file can hold files of the user, for
+    example ``~/Downloads`` on a volume that ignores case, so it keeps ``folder``.
+
+    Args:
+        folder: The folder of the dataset in the downloads folder.
+    """
+    if folder.is_dir() and is_cache_folder(settings().downloads_dir):
+        shutil.rmtree(folder)
 
 
 def open_parents(metadata: DatasetMetadata, registry: LocalRegistry) -> BuildContext:

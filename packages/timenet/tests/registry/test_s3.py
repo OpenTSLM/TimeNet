@@ -47,7 +47,7 @@ def s3_root(monkeypatch):
 @pytest.mark.parametrize("entry_point", ["open", "load"])
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
 def test_put_dataset_and_remote_load_round_trip(s3_root, tmp_path, backend, entry_point):
-    registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
+    registry = S3Registry(s3_root, store=tmp_path / "cache")
     reference = registry.put_dataset(make_dataset(), values_backend=backend)
     assert reference == DatasetRef.parse(f"{make_dataset().metadata.dataset_id}@1.0.0")
     client = TimeNet(sources=[registry])
@@ -68,7 +68,7 @@ def test_put_dataset_checks_payload_sources_against_the_bucket(s3_root, tmp_path
     local = LocalRegistry(tmp_path / "local")
     local.put_dataset(make_dataset())
     # moto keeps one bucket state per process, so this test uses a prefix no other test writes.
-    registry = S3Registry("s3://tn-test/payload-sources", cache_dir=tmp_path / "cache")
+    registry = S3Registry("s3://tn-test/payload-sources", store=tmp_path / "cache")
     with TimeFReader(open_local_version(local.root / "timenet/hello-world/1.0.0")) as reader:
         parent = reader.read()
         child = TimeFDataset.from_parts(
@@ -91,7 +91,7 @@ def test_put_dataset_checks_payload_sources_against_the_bucket(s3_root, tmp_path
 def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
     # Keys sit under <prefix>/datasets/... so the bucket matches the hosted registry's layout and can
     # hold other top-level prefixes beside the datasets.
-    registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
+    registry = S3Registry(s3_root, store=tmp_path / "cache")
     registry.put_dataset(make_dataset())
     keys = [obj["Key"] for obj in boto3.client("s3").list_objects_v2(Bucket="tn-test")["Contents"]]
     assert keys  # something was stored
@@ -99,7 +99,7 @@ def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
 
 
 def test_download_then_load_serves_from_cache(s3_root, tmp_path):
-    registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
+    registry = S3Registry(s3_root, store=tmp_path / "cache")
     dataset_id = make_dataset().metadata.dataset_id
     registry.put_dataset(make_dataset())
     # The store is the cache directory of the registry, so the registry reuses each download.
@@ -108,7 +108,7 @@ def test_download_then_load_serves_from_cache(s3_root, tmp_path):
     assert path == tmp_path / "cache" / dataset_id / "1.0.0"
     assert (path / "manifest.json").exists()
     handle = registry.open_release(DatasetRef.parse(f"{dataset_id}@1.0.0"))
-    assert isinstance(handle.filesystem, pafs.LocalFileSystem)  # cache-first: no S3 reads
+    assert isinstance(handle.filesystem, pafs.LocalFileSystem)  # the files come from the store, not S3
     assert_datasets_equal(make_dataset(), client.load(dataset_id))
 
 
@@ -116,7 +116,7 @@ def test_get_bytes_reraises_non_404_client_errors(tmp_path, monkeypatch):
     # A missing object returns None, but any other S3 error (auth, throttling) must surface, not hide.
     import botocore.exceptions  # ruff: ignore[import-outside-top-level]
 
-    registry = S3Registry("s3://tn-test/registry", cache_dir=tmp_path)
+    registry = S3Registry("s3://tn-test/registry", store=tmp_path)
     denied = botocore.exceptions.ClientError({"Error": {"Code": "AccessDenied", "Message": "no"}}, "GetObject")
 
     class _Denying:
@@ -129,7 +129,7 @@ def test_get_bytes_reraises_non_404_client_errors(tmp_path, monkeypatch):
 
 
 def test_list_and_search_are_unsupported(tmp_path):
-    registry = S3Registry("s3://tn-test/registry", cache_dir=tmp_path)
+    registry = S3Registry("s3://tn-test/registry", store=tmp_path)
     with pytest.raises(NotImplementedError):
         registry.list_datasets()
     with pytest.raises(NotImplementedError):
@@ -138,4 +138,4 @@ def test_list_and_search_are_unsupported(tmp_path):
 
 def test_rejects_a_non_s3_uri(tmp_path):
     with pytest.raises(TimeNetRegistryError, match="s3://"):
-        S3Registry("https://not-s3", cache_dir=tmp_path)
+        S3Registry("https://not-s3", store=tmp_path)

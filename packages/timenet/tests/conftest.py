@@ -2,6 +2,7 @@
 
 Registers Hypothesis profiles so the example count can be tuned per environment via the
 ``HYPOTHESIS_PROFILE`` environment variable (``dev`` for a fast edit loop, ``ci`` for the full run).
+Also gives the tests a fake home folder, and a way to skip on a volume that tells case apart.
 """
 
 import os
@@ -9,6 +10,7 @@ from pathlib import Path
 import sys
 
 from hypothesis import HealthCheck, settings
+import pytest
 
 
 # Make the test helpers of this directory (e.g. ``_demo_child``) importable by name under pytest's
@@ -24,3 +26,23 @@ settings.register_profile(
     suppress_health_check=[HealthCheck.too_slow],
 )
 settings.load_profile(os.environ.get("HYPOTHESIS_PROFILE", "ci"))
+
+
+@pytest.fixture
+def home(monkeypatch, tmp_path):
+    """Point ``HOME`` and ``Path.home()`` at an empty folder, so that no test looks at the real home."""
+    home = tmp_path / "home"
+    home.mkdir()
+    monkeypatch.setenv("HOME", str(home))
+    monkeypatch.setattr(Path, "home", staticmethod(lambda: home))
+    assert Path("~").expanduser() == Path.home() == home
+    return home
+
+
+@pytest.fixture
+def ignores_case(tmp_path_factory):
+    """Skip the test unless the volume of the temporary folders ignores the case of names, as on macOS."""
+    folder = tmp_path_factory.mktemp("case")
+    (folder / "Probe").mkdir()
+    if not (folder / "probe").exists():
+        pytest.skip("the volume of the temporary folders tells names apart by case")

@@ -540,8 +540,7 @@ def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch)
 @pytest.mark.parametrize("obtain", ["fetch_from", "build_parents"])
 def test_load_obtains_a_missing_parent_before_it_builds_and_reads(tmp_path, monkeypatch, obtain):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "out"))
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "out"))
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _prepared_builds(calls))
     origin = LocalRegistry(tmp_path / "origin")
@@ -570,8 +569,7 @@ def test_load_copies_a_missing_payload_source_through_fetch_from(tmp_path, monke
     _parent_without_its_source(out)
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("TIMENET_REGISTRY", str(out.root))
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(out.root))
 
     dataset = timenet_connectors.load(PARENT.dataset_id, fetch_from=origin)
 
@@ -646,7 +644,6 @@ def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, mo
 def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     out = LocalRegistry(tmp_path / "out")
     if case == "damaged":
         out.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))
@@ -685,15 +682,15 @@ def _remote_out(tmp_path, monkeypatch, cards) -> tuple[_Hosted, LocalRegistry, l
     """Make the ``--out`` of the CLI a registry that is not local, and record each isolated build.
 
     Returns:
-        The registry that ``--out`` names, the default local registry, and the list of the builds.
+        The registry that ``--out`` names, the store, and the list of the builds.
     """
     remote = _Hosted(tmp_path / "hosted")
     monkeypatch.setattr(cli_module, "_resolve_target", lambda target: remote)
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _prepared_builds(calls))
-    return remote, LocalRegistry(tmp_path / "home/registry"), calls
+    return remote, LocalRegistry(tmp_path / "store"), calls
 
 
 def test_build_to_a_remote_out_refuses_a_credentialed_release_before_any_download(tmp_path, monkeypatch):
@@ -916,7 +913,6 @@ def test_the_hint_names_only_the_options_that_the_build_did_not_use(tmp_path, mo
     # No registry holds the parent, and no installed connector builds it.
     cards = _install_cards(monkeypatch, child={"parent": PARENT})
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     fetch_from = None if used == "build-parents" else str(tmp_path / "origin")
     build_parents = used != "fetch-from"
     out = tmp_path / "out"

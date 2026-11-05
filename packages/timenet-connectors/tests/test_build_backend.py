@@ -112,7 +112,6 @@ def test_build_in_process_round_trips_the_connector_default_zarr_backend(tmp_pat
     connector_cls = backend_module.resolve("timenet/hello-world")
     monkeypatch.setattr(connector_cls, "values_backend", ValuesBackend.ZARR)
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     store = LocalRegistry(tmp_path / "registry")
 
     ConnectorBuilder().build(HELLO, store, force=False, pinned_by={}, options=BuildOptions())

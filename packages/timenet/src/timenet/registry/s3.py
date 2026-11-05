@@ -4,9 +4,9 @@ An ``s3://<bucket>/<prefix>`` root holds datasets under ``datasets/<dataset_id>/
 matches the hosted registry's bucket layout. The manifest's relative file paths do not change. Only
 the key prefix differs from a :class:`~timenet.registry.LocalRegistry`. Credentials, region, and an
 optional endpoint override come from boto3's default session (``AWS_*`` vars, ``AWS_PROFILE``,
-``AWS_ENDPOINT_URL``). Opening a version reads remote payloads on demand. Complete cached releases
-are reused. The backend has no catalog, so listing and search are unsupported. Use it to publish and
-to fetch by an explicit ``org/name@version``.
+``AWS_ENDPOINT_URL``). Opening a version reads remote payloads on demand. Complete releases in the
+optional ``store`` directory are reused. The backend has no catalog, so listing and search are
+unsupported. Use it to publish and to fetch by an explicit ``org/name@version``.
 
 boto3 is optional. Install the ``timenet[s3]`` extra to use this backend.
 """
@@ -19,7 +19,6 @@ import uuid
 
 import pyarrow.fs as pafs
 
-from timenet.config import settings
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, parse_manifest
@@ -40,12 +39,12 @@ class S3Registry(LazyReadRegistry):
 
     _staging_prefix = "timenet-s3-"
 
-    def __init__(self, uri: str, *, cache_dir: str | Path | None = None) -> None:
-        """Open an S3-backed registry.
+    def __init__(self, uri: str, *, store: str | Path | None = None) -> None:
+        """Configure an S3 registry.
 
         Args:
-            uri: The bucket or prefix root, for example ``s3://my-bucket/registry``.
-            cache_dir: Where downloads are cached; defaults to the configured storage directory.
+            uri: The bucket or prefix URL, such as ``s3://my-bucket/registry``.
+            store: The store directory whose copies of the same releases this registry reads, or ``None`` for none.
 
         Raises:
             TimeNetRegistryError: If ``uri`` is not an ``s3://bucket[/prefix]`` URL.
@@ -55,15 +54,15 @@ class S3Registry(LazyReadRegistry):
             raise TimeNetRegistryError(f"S3 registry URI must be s3://bucket[/prefix], got {uri!r}")
         self._bucket = parsed.netloc
         self._prefix = parsed.path.strip("/")
-        self._cache_dir = Path(cache_dir) if cache_dir is not None else settings().storage_dir
+        self._store = None if store is None else Path(store)
 
     def __str__(self) -> str:
         return f"S3 registry {self._display_root()}"
 
     @property
-    def local_root(self) -> Path:
-        """The directory that holds complete local releases."""
-        return self._cache_dir
+    def local_root(self) -> Path | None:
+        """The store directory whose copies of the same releases this registry reads, or ``None``."""
+        return self._store
 
     def list_datasets(self) -> list[DatasetMetadata]:
         """Unsupported: the S3 backend has no catalog.
