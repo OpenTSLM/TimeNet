@@ -31,6 +31,18 @@ def test_installed_builder_returns_the_first_backend_whose_dataset_ids_hold_the_
     assert installed_builder("x/y") is None
 
 
+def test_installed_builder_reads_no_backend_after_the_first_that_lists_the_id(monkeypatch):
+    class _Unread(_Backend):
+        def dataset_ids(self):
+            raise AssertionError("the lookup reads no backend after the match")
+
+    card = make_dataset().metadata
+    install_backends(monkeypatch, _Backend(card.dataset_id, card=card), _Unread())
+    found = installed_builder(card.dataset_id)
+    assert found is not None
+    assert found.card == card
+
+
 def test_declared_returns_the_release_of_the_card_and_refuses_another_version(monkeypatch):
     card = make_dataset().metadata
     install_backends(monkeypatch, _Backend(card.dataset_id, card=card))

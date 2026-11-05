@@ -6,9 +6,9 @@ SDK's whole knowledge of building to one protocol and one lookup, and lets a thi
 package plug in the same way the first-party one does.
 """
 
-from collections.abc import Iterable, Mapping
+from collections.abc import Iterable, Iterator, Mapping
 from dataclasses import dataclass
-from importlib.metadata import entry_points
+from importlib.metadata import EntryPoint, entry_points
 from typing import TYPE_CHECKING, Literal, Protocol
 
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
@@ -123,6 +123,38 @@ class InstalledBuilder:
         return DatasetRef(dataset_id=self.card.dataset_id, version=self.card.dataset_version)
 
 
+@dataclass(frozen=True)
+class ConnectorClaim:
+    """A dataset ID and the installed backend that owns it.
+
+    Attributes:
+        dataset_id: The dataset ID.
+        backend: The first backend that lists the ID.
+        entry: The entry point that registers the backend.
+    """
+
+    dataset_id: str
+    backend: BuilderBackend
+    entry: EntryPoint
+
+
+def claims() -> Iterator[ConnectorClaim]:
+    """Yield each dataset ID of the installed backends once, owned by the first backend that lists it.
+
+    The walk loads each backend only when it reaches its entry point.
+
+    Yields:
+        One claim per dataset ID, in the order of the entry points.
+    """
+    seen: set[str] = set()
+    for entry in entry_points(group=ENTRY_POINT_GROUP):
+        backend = entry.load()()
+        for dataset_id in backend.dataset_ids():
+            if dataset_id not in seen:
+                seen.add(dataset_id)
+                yield ConnectorClaim(dataset_id, backend, entry)
+
+
 def installed_builder(dataset_id: str) -> InstalledBuilder | None:
     """Find the first registered backend that lists a dataset, and read its card.
 
@@ -135,12 +167,11 @@ def installed_builder(dataset_id: str) -> InstalledBuilder | None:
     Raises:
         TimeNetInvalidCardError: If the dataset's card cannot be read.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
-    for entry in entry_points(group=ENTRY_POINT_GROUP):
-        backend = entry.load()()
-        if dataset_id in backend.dataset_ids():
-            card = backend.card(dataset_id)
-            return None if card is None else InstalledBuilder(backend, card)
-    return None
+    claim = next((claim for claim in claims() if claim.dataset_id == dataset_id), None)
+    if claim is None:
+        return None
+    card = claim.backend.card(dataset_id)
+    return None if card is None else InstalledBuilder(claim.backend, card)
 
 
 def declared(dataset_id: str, version: Version | str | None = None) -> InstalledBuilder:

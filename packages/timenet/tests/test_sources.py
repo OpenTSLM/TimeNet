@@ -3,7 +3,9 @@ from pathlib import Path
 import pytest
 
 from timenet.errors import (
+    ConnectorCardWarning,
     TimeFValidationError,
+    TimeNetInvalidCardError,
     TimeNetRegistryError,
 )
 from timenet.registry import LocalRegistry
@@ -53,6 +55,23 @@ class _Backend:
 
     def card(self, dataset_id):
         return self._card if dataset_id == self._card.dataset_id else None
+
+
+class _Cards:
+    """A backend with a connector for each card."""
+
+    def __init__(self, *cards):
+        self.cards = {card.dataset_id: card for card in cards}
+
+    def dataset_ids(self):
+        return list(self.cards)
+
+    def card(self, dataset_id):
+        return self.cards.get(dataset_id)
+
+
+def _card(dataset_id, name="Hello World"):
+    return make_dataset().metadata.model_copy(update={"dataset_id": dataset_id, "name": name})
 
 
 def _fail(*args, **kwargs):
@@ -134,6 +153,46 @@ def test_installed_connectors_answer_not_found_for_another_version(monkeypatch):
 def test_installed_connectors_without_a_package_answer_not_found():
     assert InstalledConnectors().resolve("timenet/hello-world", None) == NotFound()
     assert "no connector package is installed" in str(InstalledConnectors())
+
+
+def test_installed_connectors_list_their_cards(monkeypatch):
+    first = _Cards(_card("z/last"), _card("a/first", "First"))
+    second = _Cards(_card("a/first", "Second"), _card("m/middle"))
+    install_backends(monkeypatch, first, second)
+    # Sorted by dataset ID. The first entry point wins for an ID that two claim, as it does for a build.
+    assert [(card.dataset_id, card.name) for card in InstalledConnectors().list_datasets()] == [
+        ("a/first", "First"),
+        ("m/middle", "Hello World"),
+        ("z/last", "Hello World"),
+    ]
+    monkeypatch.setattr(builders, "entry_points", lambda group: [])
+    assert InstalledConnectors().list_datasets() == []
+
+
+def test_installed_connectors_leave_out_a_card_that_cannot_be_read(monkeypatch):
+    class Broken(_Cards):
+        def card(self, dataset_id):
+            raise TimeNetInvalidCardError("the card cannot be read")
+
+    # The second backend claims the dataset too, but the first entry point wins, as it does for a build.
+    install_backends(monkeypatch, Broken(_card("a/broken")), _Cards(_card("a/broken"), _card("b/kept")))
+    with pytest.warns(
+        ConnectorCardWarning, match=r"^a/broken: the card of its installed connector cannot be read"
+    ) as caught:
+        cards = InstalledConnectors().list_datasets()
+    assert [card.dataset_id for card in cards] == ["b/kept"]
+    # The warning points at the caller of list_datasets().
+    assert [warning.filename for warning in caught] == [__file__]
+
+
+def test_an_error_of_the_dataset_ids_of_a_backend_propagates_from_the_cards(monkeypatch):
+    class Broken(_Cards):
+        def dataset_ids(self):
+            raise TimeNetInvalidCardError("the cards cannot be listed")
+
+    install_backends(monkeypatch, Broken())
+    with pytest.raises(TimeNetInvalidCardError, match="cannot be listed"):
+        InstalledConnectors().list_datasets()
 
 
 def test_a_local_registry_answers_not_found_without_reading_every_manifest(tmp_path, monkeypatch):

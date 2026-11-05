@@ -14,11 +14,15 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.engine import open_parents, run_pipeline
 from timenet.errors import (
+    CatalogWarning,
+    ConnectorCardWarning,
     TimeFValidationError,
     TimeNetAccessError,
     TimeNetDatasetNotFoundError,
     TimeNetFileError,
+    TimeNetInvalidCardError,
     TimeNetMissingParentError,
+    TimeNetNoCatalogError,
     TimeNetNotBuiltError,
     TimeNetRegistryError,
     TimeNetVersionConflictError,
@@ -31,7 +35,7 @@ from timenet.reader import Loading, LoadPlan, TimeFReader
 from timenet.registry import TIMENET_REGISTRY_URL, LocalRegistry, RemoteRegistry, open_local_version
 from timenet.sources import InstalledConnectors
 from timenet.testing import assert_datasets_equal, install_backends, make_dataset
-from timenet.types import Access, Annotation, DatasetMetadata, License, Version
+from timenet.types import Access, Annotation, AnswerTask, DatasetMetadata, Domain, License, Version
 from timenet.types.access import AccessRequirement
 from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias
@@ -309,18 +313,170 @@ def test_installed_connectors_need_a_local_registry_that_is_not_read_only(tmp_pa
     )
 
 
-def test_list_and_search_ask_the_first_registry_that_is_not_the_store(registry_root, tmp_path):
-    store = LocalRegistry(tmp_path / "store")
-    other = make_dataset()
-    other._metadata = other.metadata.model_copy(update={"dataset_id": "test/other"})
-    store.put_dataset(other)
-    client = TimeNet(sources=[store, str(registry_root), InstalledConnectors()])
+class _CardsBackend:
+    """A builder backend with a connector for each dataset ID of ``versions``, at its version.
 
-    assert [metadata.dataset_id for metadata in client.list()] == ["timenet/hello-world"]
-    assert [metadata.dataset_id for metadata in client.search(query="hello")] == ["timenet/hello-world"]
-    # Without such a registry, they ask the store.
-    alone = TimeNet(sources=[store, InstalledConnectors()])
-    assert [metadata.dataset_id for metadata in alone.list()] == ["test/other"]
+    Each card is the card of the demo dataset, with ``update`` applied.
+    """
+
+    def __init__(self, versions, **update):
+        self.versions = versions
+        self.update = update
+
+    def dataset_ids(self):
+        return list(self.versions)
+
+    def card(self, dataset_id):
+        if dataset_id not in self.versions:
+            return None
+        return make_dataset(dataset_id=dataset_id, dataset_version=self.versions[dataset_id], **self.update).metadata
+
+
+def _rows(rows):
+    return [(row.dataset_id, str(row.dataset_version)) for row in rows]
+
+
+def test_list_merges_every_source_at_the_highest_version(tmp_path, monkeypatch):
+    store, remote = LocalRegistry(tmp_path / "store"), LocalRegistry(tmp_path / "remote")
+    store.put_dataset(make_dataset(dataset_id="a/one", dataset_version="1.0.0"))
+    remote.put_dataset(make_dataset(dataset_id="a/one", dataset_version="1.1.0"))
+    remote.put_dataset(make_dataset(dataset_id="b/two", dataset_version="1.0.0"))
+    install_backends(monkeypatch, _CardsBackend({"a/one": "2.0.0", "c/three": "1.0.0"}))
+    rows = TimeNet(sources=[store, remote, InstalledConnectors()]).list()
+    assert [(row.dataset_id, str(row.dataset_version)) for row in rows] == [
+        ("a/one", "2.0.0"),
+        ("b/two", "1.0.0"),
+        ("c/three", "1.0.0"),
+    ]
+
+
+def test_list_keeps_the_row_of_the_earlier_source_for_the_same_version(tmp_path):
+    first, second = LocalRegistry(tmp_path / "first"), LocalRegistry(tmp_path / "second")
+    for registry in (first, second):
+        registry.put_dataset(make_dataset(dataset_id="a/one", dataset_version="1.0.0", name=registry.root.name))
+    assert [row.name for row in TimeNet(sources=[second, first]).list()] == ["second"]
+    assert [row.name for row in TimeNet(sources=[first, second]).search(query="demo")] == ["first"]
+
+
+class _WithoutCatalog(LocalRegistry):
+    """A local registry without a catalog, as an S3 registry is."""
+
+    has_catalog = False
+
+    def list_datasets(self):
+        raise NotImplementedError("no catalog")
+
+
+def test_list_leaves_out_a_registry_without_a_catalog_with_a_warning(tmp_path, registry_root):
+    hidden = _WithoutCatalog(tmp_path / "hidden")
+    hidden.put_dataset(make_dataset(dataset_id="a/hidden", dataset_version="1.0.0"))
+    client = TimeNet(sources=[hidden, str(registry_root)])
+    message = f"^local registry {re.escape(str(hidden.root))} has no catalog, so the list leaves it out\\.$"
+    with pytest.warns(CatalogWarning, match=message):
+        assert _rows(client.list()) == [("timenet/hello-world", "1.0.0")]
+    with pytest.warns(CatalogWarning, match=message):
+        assert _rows(client.search(query="hello")) == [("timenet/hello-world", "1.0.0")]
+
+
+def test_list_and_search_raise_if_no_source_has_a_catalog(tmp_path):
+    client = TimeNet(sources=[_WithoutCatalog(tmp_path / "hidden")])
+    message = f"^none of the sources has a catalog: local registry {re.escape(str(tmp_path / 'hidden'))}$"
+    with pytest.raises(TimeNetNoCatalogError, match=message):
+        client.list()
+    with pytest.raises(TimeNetNoCatalogError, match=message):
+        client.search()
+
+
+def test_list_and_search_pass_on_a_not_implemented_error_of_a_source_with_a_catalog(tmp_path):
+    class _Broken(_WithoutCatalog):
+        has_catalog = True
+
+    client = TimeNet(sources=[_Broken(tmp_path / "broken")])
+    with pytest.raises(NotImplementedError, match=r"^no catalog$"):
+        client.list()
+    with pytest.raises(NotImplementedError, match=r"^no catalog$"):
+        client.search()
+
+
+class _BrokenCard(_CardsBackend):
+    def card(self, dataset_id):
+        if dataset_id == "b/broken":
+            raise TimeNetInvalidCardError("the card has no name")
+        return super().card(dataset_id)
+
+
+def test_list_leaves_out_a_broken_connector_card_with_a_warning(tmp_path, monkeypatch):
+    install_backends(monkeypatch, _BrokenCard({"a/one": "1.0.0", "b/broken": "1.0.0"}))
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "store"), InstalledConnectors()])
+
+    with pytest.warns(ConnectorCardWarning, match="cannot be read") as caught:
+        rows = client.list()
+
+    assert _rows(rows) == [("a/one", "1.0.0")]
+    assert [str(warning.message) for warning in caught] == [
+        "b/broken: the card of its installed connector cannot be read, so the listing leaves it out: "
+        "the card has no name"
+    ]
+    # The warning points at the caller of list().
+    assert [warning.filename for warning in caught] == [__file__]
+
+
+class _Reversed(LocalRegistry):
+    """A local registry whose catalog lists the datasets in reverse order of their IDs."""
+
+    def list_datasets(self):
+        return super().list_datasets()[::-1]
+
+
+def test_search_returns_the_first_matches_by_dataset_id_at_their_highest_version(tmp_path):
+    first, second = _Reversed(tmp_path / "first"), LocalRegistry(tmp_path / "second")
+    for dataset_id in ("a/one", "b/two", "c/three"):
+        first.put_dataset(make_dataset(dataset_id=dataset_id, dataset_version="1.0.0"))
+    second.put_dataset(make_dataset(dataset_id="b/two", dataset_version="2.0.0"))
+    second.put_dataset(make_dataset(dataset_id="d/four", dataset_version="1.0.0"))
+    client = TimeNet(sources=[first, second])
+    # The merge sorts the rows by dataset ID, so the limit keeps the first two.
+    assert _rows(client.search(query="hello", limit=2)) == [("a/one", "1.0.0"), ("b/two", "2.0.0")]
+    assert client.search(query="hello", limit=0) == []
+
+
+class _CountingReads(LocalRegistry):
+    """A local registry that records each manifest that it reads outside its listing."""
+
+    def __init__(self, root, reads):
+        super().__init__(root)
+        self.reads = reads
+
+    def list_datasets(self):
+        return LocalRegistry(self.root).list_datasets()
+
+    def get_manifest(self, dataset_id, version=None):
+        self.reads.append(f"{dataset_id}@{version}")
+        return super().get_manifest(dataset_id, version)
+
+
+def test_search_reads_the_schemas_of_the_merged_rows_only_up_to_the_limit(tmp_path):
+    reads = []
+    first, second = _CountingReads(tmp_path / "first", reads), _CountingReads(tmp_path / "second", reads)
+    first.put_dataset(make_dataset(dataset_id="a/one", domains=(Domain.CARDIOLOGY,)))
+    first.put_dataset(make_dataset(dataset_id="c/three"))
+    second.put_dataset(make_dataset(dataset_id="b/two"))
+    second.put_dataset(make_dataset(dataset_id="d/four"))
+    reads.clear()
+    rows = TimeNet(sources=[first, second]).search(domain=Domain.GENERAL, task=AnswerTask, limit=1)
+    assert _rows(rows) == [("b/two", "1.0.0")]
+    # a/one fails the domain filter, and b/two is the first match of both registries.
+    assert reads == ["b/two@1.0.0"]
+
+
+def test_search_matches_a_connector_card_by_its_card_only(tmp_path, monkeypatch):
+    install_backends(monkeypatch, _CardsBackend({"a/one": "1.0.0", "c/three": "1.0.0"}))
+    store = LocalRegistry(tmp_path / "store")
+    store.put_dataset(make_dataset(dataset_id="b/two"))
+    client = TimeNet(sources=[store, InstalledConnectors()])
+    assert _rows(client.search(dataset_id=["b/two", "c/three"])) == [("b/two", "1.0.0"), ("c/three", "1.0.0")]
+    # A connector card has no manifest, so a schema filter leaves it out.
+    assert _rows(client.search(task=AnswerTask)) == [("b/two", "1.0.0")]
 
 
 def test_get_manifest_returns_the_manifest_of_the_release_that_open_reads(tmp_path):

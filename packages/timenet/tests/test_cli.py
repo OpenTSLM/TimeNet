@@ -17,6 +17,7 @@ from timenet.dataset import TimeFDataset
 from timenet.errors import (
     TimeFValidationError,
     TimeNetDatasetNotFoundError,
+    TimeNetInvalidCardError,
     TimeNetMissingParentError,
     TimeNetRegistryError,
 )
@@ -157,10 +158,33 @@ def test_the_local_commands_take_the_local_registry_flag(tmp_path):
     assert stored_releases(LocalRegistry(store)) == []
 
 
-def test_search_no_match(registry_root):
-    result = runner.invoke(app, ["search", "--remote-registry", str(registry_root), "--domain", "cardiology"])
+def _flags(tmp_path, remote, *, auto_build=False):
+    """Return the flags of a list of sources: an empty store, ``remote``, and the connectors or not."""
+    build = "--auto-build" if auto_build else "--no-auto-build"
+    return ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(remote), build]
+
+
+def _first_cells(output):
+    """Return the first cell of each body row of the table in ``output``."""
+    return [row[0] for row in _table_cells(output)]
+
+
+def test_list(registry_root, tmp_path):
+    result = runner.invoke(app, ["list", *_flags(tmp_path, registry_root)])
     assert result.exit_code == 0, result.output
-    assert click.unstyle(result.output) == "No datasets match.\n"
+    assert _first_cells(result.stdout) == ["timenet/hello-world"]
+
+
+def test_search_by_domain(registry_root, tmp_path):
+    result = runner.invoke(app, ["search", "--domain", "general", *_flags(tmp_path, registry_root)])
+    assert result.exit_code == 0, result.output
+    assert _first_cells(result.stdout) == ["timenet/hello-world"]
+
+
+def test_search_no_match(registry_root, tmp_path):
+    result = runner.invoke(app, ["search", "--domain", "cardiology", *_flags(tmp_path, registry_root)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "No datasets match.\n"
 
 
 class _Backend:
@@ -178,6 +202,24 @@ class _Backend:
                 "citation": "A citation.",
             }
         )
+
+
+def test_list_shows_a_warning_as_a_line_without_a_file_and_a_line_number(tmp_path, monkeypatch):
+    class _Broken(_Backend):
+        def card(self, dataset_id):
+            raise TimeNetInvalidCardError("the card cannot be read")
+
+    install_backends(monkeypatch, _Broken())
+    monkeypatch.setattr(_cli_module.ui, "rich", Console(stderr=True, width=1000))
+    flags = ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(tmp_path / "empty"), "--auto-build"]
+
+    result = runner.invoke(app, ["list", *flags])
+
+    assert result.exit_code == 0, result.output
+    assert click.unstyle(result.stderr).splitlines() == [
+        "⚠️ test/gated: the card of its installed connector cannot be read, so the listing leaves it out: "
+        "the card cannot be read"
+    ]
 
 
 def test_info_shows_the_card_of_a_dataset_that_only_a_connector_has(tmp_path, monkeypatch):
@@ -244,6 +286,20 @@ def test_info_of_a_dataset_that_only_a_connector_has_reads_its_card_once(tmp_pat
     assert result.exit_code == 0, result.output
     # Each resolution of the release reads the card, so one read means one resolution.
     assert reads == ["test/gated"]
+
+
+def test_list_shows_the_card_of_a_dataset_that_only_a_connector_has(registry_root, tmp_path, monkeypatch):
+    install_backends(monkeypatch, _Backend())
+
+    result = runner.invoke(app, ["list", *_flags(tmp_path, registry_root, auto_build=True)])
+
+    assert result.exit_code == 0, result.output
+    assert _first_cells(result.stdout) == ["test/gated", "timenet/hello-world"]
+    result = runner.invoke(app, ["search", "--query", "hello", *_flags(tmp_path, registry_root, auto_build=True)])
+    assert _first_cells(result.stdout) == ["test/gated", "timenet/hello-world"]
+    # Without the connectors in the list, only the registry answers.
+    result = runner.invoke(app, ["list", *_flags(tmp_path, registry_root)])
+    assert _first_cells(result.stdout) == ["timenet/hello-world"]
 
 
 def _write(root, dataset):
@@ -454,8 +510,8 @@ def test_an_empty_flag_is_an_error(tmp_path, monkeypatch, argv):
     assert f"must not be empty (also as {argv[-2]})" in str(result.exception)
 
 
-def test_search_rejects_unknown_filter_value(registry_root):
-    assert runner.invoke(app, ["search", "--remote-registry", str(registry_root), "--domain", "bogus"]).exit_code == 2
+def test_search_rejects_unknown_filter_value(registry_root, tmp_path):
+    assert runner.invoke(app, ["search", "--domain", "bogus", *_flags(tmp_path, registry_root)]).exit_code == 2
     # The error message is a Rich-rendered panel, so assert it on the raising helper directly.
     with pytest.raises(typer.BadParameter, match="invalid --domain"):
         _enum_list(["bogus"], Domain, "--domain", [d.value for d in Domain])

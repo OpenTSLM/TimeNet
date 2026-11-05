@@ -31,6 +31,10 @@ class TimeNetRegistryError(TimeNetError):
     """TimeNet could not load or reach a registry, or the registry could not serve a request."""
 
 
+class TimeNetNoCatalogError(TimeNetRegistryError):
+    """No source of a dataset listing has a catalog."""
+
+
 class TimeNetDatasetNotFoundError(TimeNetError):
     """A requested dataset id or version is not present in a registry or on disk."""
 
@@ -220,6 +224,10 @@ class TimeNetWarning(UserWarning):
 
 class ConnectorCardWarning(TimeNetWarning):
     """An unreadable or invalid connector card excludes its dataset from listings."""
+
+
+class CatalogWarning(TimeNetWarning):
+    """A dataset listing skips a source without a catalog."""
 
 
 class SpanOutsideWindowWarning(TimeNetWarning):
