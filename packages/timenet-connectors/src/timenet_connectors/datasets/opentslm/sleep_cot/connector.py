@@ -82,13 +82,13 @@ def _parse_window(row: Mapping[str, str], *, location: str) -> np.ndarray:
 
 
 def _parse_subject_id(row: Mapping[str, str], *, location: str) -> str:
-    """Give the subject id that the recording name of a row states, such as ``sleep-cassette-10``.
+    """Get the subject ID from a row's Sleep-EDF recording name.
 
     Returns:
-        The subject id.
+        The subject ID, such as ``sleep-cassette-10``.
 
     Raises:
-        TimeNetConnectorError: If the id cell is not a Sleep-EDF recording name.
+        TimeNetConnectorError: If the ID cell is not a Sleep-EDF recording name.
     """
     match = _RECORDING_NAME.fullmatch(row["id"])
     if match is None:
@@ -98,14 +98,14 @@ def _parse_subject_id(row: Mapping[str, str], *, location: str) -> str:
 
 @dataclass(frozen=True)
 class SleepCotRow:
-    """One window of the release: the recording, the EEG values, the stage, and the two GPT-4o texts."""
+    """A recording, EEG values, sleep stage, prompt, and rationale for one window."""
 
     recording_id: str
     subject_id: str
     eeg: np.ndarray
     label: str
     generation_prompt: str
-    """The prompt that GPT-4o got to write the rationale. It names the correct stage."""
+    """The prompt used to generate the rationale, including the correct sleep stage."""
     rationale: str
 
     @classmethod
@@ -125,10 +125,10 @@ class SleepCotRow:
         )
 
     def create_record(self) -> Record:
-        """Create the Record of the window, with its recording name and its subject.
+        """Create a record for the window with its recording name and subject.
 
         Returns:
-            The Record, not yet added to a dataset.
+            The new record.
         """
         signal = Signal.from_values(self.eeg, spec=EEG, name="EEG Fpz-Cz", time_axis=SAMPLED_AT_50_HZ)
         return Record(
@@ -138,10 +138,10 @@ class SleepCotRow:
         )
 
     def create_classification_task(self, record: Record, *, split: Split) -> ClassificationTask:
-        """Create the task that asks for the sleep stage of the window.
+        """Create a sleep stage classification task for the window.
 
         Returns:
-            The task, not yet added to a dataset.
+            The new task.
         """
         generation_prompt = Annotation(
             key="rationale_generation_prompt",
@@ -178,7 +178,7 @@ def read_rows(path: Path) -> list[SleepCotRow]:
 
 
 class FrozenSplits(BaseModel):
-    """The validation and test rows of OpenTSLM's split, as row positions from 0 in file order.
+    """Validation and test row positions, starting at zero in file order.
 
     The connector reads the split from splits.json.
     """
@@ -186,7 +186,7 @@ class FrozenSplits(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True)
 
     source_sha256: str
-    """The SHA-256 digest of the release CSV that the split was made from."""
+    """SHA-256 digest of the release CSV used to create the split."""
     validation: tuple[NonNegativeInt, ...]
     test: tuple[NonNegativeInt, ...]
 
@@ -206,14 +206,13 @@ class FrozenSplits(BaseModel):
             raise TimeNetConnectorError(f"{path.name} does not hold a valid split: {exc}") from exc
 
     def assign_split_to_each_row(self, n_rows: int) -> list[Split]:
-        """Give the split of each row of the pinned release, in file order.
+        """Assign a split to each row of the pinned release, in file order.
 
         Returns:
-            The split of each row. A row that the file does not name is a train row.
+            The split for each row; rows absent from the file belong to the train split.
 
         Raises:
-            TimeNetConnectorError: If the split was made from another CSV than the pinned one, or
-                names a row outside the release or a row twice.
+            TimeNetConnectorError: If the CSV digest differs or a row position is invalid or repeated.
         """
         if self.source_sha256 != SLEEP_COT_SHA256:
             raise TimeNetConnectorError(
@@ -230,7 +229,7 @@ class FrozenSplits(BaseModel):
 
 @dataclass(frozen=True)
 class SleepCotRelease:
-    """The files the connector converts: the release CSV and the frozen split of its rows."""
+    """Paths to the release CSV and its saved row split."""
 
     csv_path: Path
     splits_path: Path
@@ -240,13 +239,13 @@ class SleepCotConnector(BaseConnector[SleepCotRelease]):
     """Connector for the SleepEDF-CoT release of OpenTSLM."""
 
     async def download_async(self, cache_dir: Path) -> list[SleepCotRelease]:  # ruff: ignore[no-self-use]
-        """Download the release CSV once.
+        """Download the release CSV.
 
         Args:
-            cache_dir: The directory that holds the downloaded file.
+            cache_dir: Directory for the downloaded file.
 
         Returns:
-            The CSV file, with the splits.json beside this module.
+            The release CSV and saved split paths.
         """
         artifact = Artifact(SLEEP_COT_URL, cache_dir / "sleep_cot.csv", sha256=SLEEP_COT_SHA256)
         (csv_path,) = await download_files([artifact])
