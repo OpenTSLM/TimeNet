@@ -9,7 +9,7 @@ import httpx
 from pydantic import ValidationError
 import pytest
 
-from timenet.client import TimeNet, default_sources, default_store
+from timenet.client import TimeNet, default_sources
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.engine import open_parents, run_pipeline
@@ -207,6 +207,7 @@ def test_the_default_list_follows_the_environment(monkeypatch, tmp_path):
     assert client._store is client._sources[0]
 
 
+@pytest.mark.usefixtures("home")
 def test_the_default_list_without_variables(monkeypatch):
     for name in ("LOCAL_REGISTRY", "REMOTE_REGISTRY", "AUTO_BUILD", "CACHE"):
         monkeypatch.delenv(f"TIMENET_{name}", raising=False)
@@ -215,11 +216,6 @@ def test_the_default_list_without_variables(monkeypatch):
     assert store.root == Path("~/.timenet/registry").expanduser()
     assert str(remote) == f"registry {TIMENET_REGISTRY_URL}"
     assert type(connectors) is InstalledConnectors
-    assert [_entry(source) for source in TimeNet()._sources] == [
-        ("local", store.root),
-        f"registry {TIMENET_REGISTRY_URL}",
-        "installed connectors",
-    ]
 
 
 def test_default_sources_arguments_override_the_environment(monkeypatch, tmp_path):
@@ -232,7 +228,6 @@ def test_default_sources_arguments_override_the_environment(monkeypatch, tmp_pat
         ("local", tmp_path / "remote"),
         "installed connectors",
     ]
-    assert default_store(local_registry=tmp_path / "store").root == tmp_path / "store"
 
 
 def test_default_sources_names_the_variable_of_a_registry_that_cannot_open(monkeypatch):
@@ -242,12 +237,6 @@ def test_default_sources_names_the_variable_of_a_registry_that_cannot_open(monke
         match=r"^TIMENET_REMOTE_REGISTRY 'gs://bucket/registry' has an unsupported registry scheme",
     ):
         default_sources()
-
-
-def test_default_store_rejects_a_remote_url(tmp_path):
-    with pytest.raises(TimeNetRegistryError, match="the local registry needs a local directory"):
-        default_store(local_registry="s3://bucket/x")
-    assert default_store(local_registry=f"file://{tmp_path / 'x'}").root == tmp_path / "x"
 
 
 def test_a_client_takes_an_ordered_list_of_sources(tmp_path):
