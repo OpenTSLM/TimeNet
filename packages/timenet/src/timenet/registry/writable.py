@@ -13,9 +13,9 @@ from pathlib import Path
 import pyarrow.fs as pafs
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE
-from timenet.manifest import Manifest, PayloadSource
+from timenet.manifest import Manifest, PayloadSource, read_manifest
 from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import check_file_sizes
 from timenet.registry.version import DatasetVersion
@@ -83,12 +83,8 @@ class WritableRegistry(BaseRegistry, ABC):
         Raises:
             TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
             TimeNetFileError: If a listed file is missing or its size differs from the manifest.
-        """  # ruff: ignore[docstring-extraneous-exception] - raised by check_file_sizes
-        manifest_path = directory / MANIFEST_FILE
-        try:
-            manifest = Manifest.model_validate_json(manifest_path.read_text())
-        except (OSError, ValueError) as error:
-            raise TimeFFormatError(f"cannot read the release manifest {manifest_path}: {error}") from error
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by read_manifest and check_file_sizes
+        manifest = read_manifest(directory / MANIFEST_FILE)
         reference = DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
         version = DatasetVersion(manifest, pafs.LocalFileSystem(), str(directory))
         check_file_sizes(version, manifest.files.all_files(), owner=str(reference))

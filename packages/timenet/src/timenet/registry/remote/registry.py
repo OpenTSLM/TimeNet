@@ -5,9 +5,7 @@ searches the catalog, fetches manifests, streams files, downloads versions, and 
 Artifact bytes never pass through the API. The service hands back presigned URLs.
 """
 
-from collections.abc import Callable, Mapping
 from pathlib import Path
-import shutil
 import tempfile
 from typing import BinaryIO, cast
 
@@ -15,11 +13,9 @@ import httpx
 import pyarrow.fs as pafs
 
 from timenet.config import settings
-from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetRegistryError
 from timenet.format.constants import MANIFEST_FILE
-from timenet.manifest import Manifest, PayloadSource
-from timenet.registry._paths import release_dir
+from timenet.manifest import Manifest, parse_manifest
 from timenet.registry.lazy_read import LazyReadRegistry
 from timenet.registry.remote._download import ProgressCallback, download_version_files
 from timenet.registry.remote._http import RegistryHttpClient
@@ -33,7 +29,6 @@ from timenet.registry.remote.models import (
 from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetMetadata
 from timenet.types.references import DatasetRef, is_latest
-from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class RemoteRegistry(LazyReadRegistry):
@@ -93,10 +88,11 @@ class RemoteRegistry(LazyReadRegistry):
 
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
-        """  # ruff: ignore[docstring-extraneous-exception] (raised by the HTTP client on 404, not directly here)
+            TimeFFormatError: If the served manifest is not valid.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the HTTP client and parse_manifest
         resolved = self._resolve_latest(dataset_id) if is_latest(version) else version
         text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
-        return Manifest.model_validate_json(text)
+        return parse_manifest(text, f"the manifest of {dataset_id}@{resolved} in {self}")
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.
@@ -159,55 +155,6 @@ class RemoteRegistry(LazyReadRegistry):
         download_version_files(
             self._http, manifest, dataset_id, version, Path(dest_dir), force=force, progress_cb=progress_cb
         )
-
-    def put_dataset(
-        self,
-        dataset: TimeFDataset,
-        *,
-        force: bool = False,
-        values_backend: str = "parquet",
-        progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-        pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-    ) -> DatasetRef:
-        """Write a dataset locally and publish it to the remote registry.
-
-        If the version already exists, return its reference unless ``force`` is set.
-
-        Args:
-            dataset: The dataset to write.
-            force: Publish even if the version already exists.
-            values_backend: Storage format for values (``"parquet"`` or ``"zarr"``).
-            progress_cb: Optional callback for write progress.
-            pinned_by: Releases that already read this release's files, with the pins that the new files must match.
-
-        Returns:
-            A reference to the stored release.
-
-        Raises:
-            TimeNetRegistryError: If the service omits a listed file or requests a file that the write did not produce.
-        """  # ruff: ignore[docstring-extraneous-exception] - raised by put_release
-        if dataset.schema is None:
-            dataset.derive_schema()
-        dataset_id = dataset.metadata.dataset_id
-        version = str(dataset.metadata.dataset_version)
-        reference = DatasetRef.parse(f"{dataset_id}@{version}")
-        if not force and self.exists(dataset_id, version):
-            return reference
-        staging_root = Path(tempfile.mkdtemp(prefix="timenet-publish-"))
-        try:
-            # The writer stages locally but checks every payload source against this registry.
-            with TimeFWriter(
-                staging_root,
-                dataset,
-                values_backend=values_backend,
-                progress_cb=progress_cb,
-                registry=self,
-                pinned_by=pinned_by,
-            ) as writer:
-                writer.write()
-            return self.put_release(release_dir(staging_root, reference))
-        finally:
-            shutil.rmtree(staging_root, ignore_errors=True)
 
     def put_release(self, from_directory: Path) -> DatasetRef:
         """Publish a release directory to the remote registry.

@@ -23,7 +23,7 @@ from timenet.errors import (
     TimeNetMissingParentError,
 )
 from timenet.format.constants import MANIFEST_FILE
-from timenet.manifest import FilePart, Manifest, PayloadSource
+from timenet.manifest import FilePart, Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
@@ -63,7 +63,7 @@ def open_local_version(path: str | Path, *, sources_root: str | Path | None = No
     manifest_path = directory / MANIFEST_FILE
     if not manifest_path.is_file():
         raise FileNotFoundError(f"no manifest at {manifest_path}")
-    manifest = Manifest.model_validate_json(manifest_path.read_text())
+    manifest = read_manifest(manifest_path)
     if not manifest.payload_sources:
         return open_local_release(directory, manifest, sources_root=None)
     if sources_root is None:
@@ -101,9 +101,7 @@ def open_local_release(directory: Path, manifest: Manifest, *, sources_root: Pat
         source_manifest = source_dir / MANIFEST_FILE
         if not source_manifest.is_file():
             raise TimeNetDatasetNotFoundError(f"no manifest at {source_manifest}")
-        return DatasetVersion(
-            Manifest.model_validate_json(source_manifest.read_text()), version.filesystem, str(source_dir)
-        )
+        return DatasetVersion(read_manifest(source_manifest), version.filesystem, str(source_dir))
 
     return attach_payload_sources(version, open_source, searched=str(root))
 
@@ -315,9 +313,7 @@ def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-argument
     if manifest is not None:
         validate_manifest_reference(manifest, reference)
     if not force and (directory / MANIFEST_FILE).is_file():
-        local = (
-            manifest if manifest is not None else Manifest.model_validate_json((directory / MANIFEST_FILE).read_text())
-        )
+        local = manifest if manifest is not None else read_manifest(directory / MANIFEST_FILE)
         validate_manifest_reference(local, reference)
         try:
             check_file_sizes(
@@ -352,7 +348,7 @@ def _load_complete_local_manifest(
     if not manifest_path.is_file():
         return None
     if manifest is None:
-        manifest = Manifest.model_validate_json(manifest_path.read_text())
+        manifest = read_manifest(manifest_path)
     validate_manifest_reference(manifest, reference)
     return manifest if complete_copy(directory, manifest) else None
 
