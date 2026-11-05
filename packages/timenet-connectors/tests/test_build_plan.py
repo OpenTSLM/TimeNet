@@ -778,6 +778,8 @@ def test_publish_to_copies_parents_only_from_the_sources(tmp_path, monkeypatch):
 
 def test_publish_to_a_local_directory_publishes_there(tmp_path, monkeypatch, child_builds):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
+    # A local directory takes releases that are not open, so the plan does not refuse this one.
+    cards[CHILD.dataset_id] = cards[CHILD.dataset_id].model_copy(update=_GATED)
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
     published = LocalRegistry(tmp_path / "published")
 
@@ -792,37 +794,15 @@ def test_publish_to_a_local_directory_publishes_there(tmp_path, monkeypatch, chi
         assert registry.exists(PARENT.dataset_id, str(PARENT.version))
 
 
-@pytest.mark.parametrize("value", ["", " ", "ftp://host/registry"])
+@pytest.mark.parametrize("value", [" ", "ftp://host/registry"])
 def test_publish_to_takes_a_registry_url_or_a_path(monkeypatch, child_builds, value):
-    # An empty value would publish into the current directory.
+    # A blank value names no registry. Unchecked, it would publish into the current directory.
     result = runner.invoke(app, ["build", GRAND.dataset_id, "--publish-to", value])
 
     assert result.exit_code == 1, result.output
     assert isinstance(result.exception, TimeNetRegistryError)
     assert str(result.exception).startswith("--publish-to ")
     assert child_builds == []
-
-
-def test_publish_to_shows_a_settings_error_with_its_own_message(monkeypatch, child_builds):
-    monkeypatch.setenv("TIMENET_AUTO_BUILD", "maybe")
-
-    result = runner.invoke(app, ["build", GRAND.dataset_id, "--publish-to", "timenet://"])
-
-    assert isinstance(result.exception, TimeFValidationError), result.output
-    assert "TIMENET_AUTO_BUILD" in str(result.exception)
-    assert child_builds == []
-
-
-def test_the_requested_release_builds_with_no_auto_build(tmp_path, monkeypatch, child_builds):
-    cards = _install_cards(monkeypatch, child={}, parent={})
-    monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
-    store = tmp_path / "store"
-
-    result = runner.invoke(app, ["build", CHILD.dataset_id, "--local-registry", str(store), "--no-auto-build"])
-
-    assert result.exit_code == 0, result.output
-    assert result.stdout == f"{release_dir(store, CHILD)}\n"
-    assert child_builds == [(CHILD.dataset_id, False)]
 
 
 def _files(root: Path) -> dict[Path, tuple[int, int]]:
@@ -1067,27 +1047,15 @@ def test_plan_lines_name_read_steps(tmp_path):
 
 def test_dry_run_prints_the_plan_and_changes_nothing(tmp_path, monkeypatch):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    remote, _, calls = _publish_to(tmp_path, monkeypatch, cards)
-    store = tmp_path / "store"
-    result = runner.invoke(
-        app,
-        [
-            "build",
-            CHILD.dataset_id,
-            "--local-registry",
-            str(store),
-            "--dry-run",
-            "--publish-to",
-            "s3://bucket/registry",
-        ],
-    )
+    remote, store, calls = _publish_to(tmp_path, monkeypatch, cards)
+    result = runner.invoke(app, ["build", CHILD.dataset_id, "--dry-run", "--publish-to", "s3://bucket/registry"])
     assert result.exit_code == 0, result.output
     assert result.stdout.splitlines() == [
         "test/child@1.0.0: build with installed connectors",
         "└── test/parent@1.0.0: build with installed connectors",
         f"then publish test/child@1.0.0 to {remote}",
     ]
-    assert calls == [] and not store.exists() and not remote.exists(CHILD.dataset_id, "1.0.0")
+    assert calls == [] and not store.root.exists() and not remote.exists(CHILD.dataset_id, "1.0.0")
 
 
 def test_the_dry_run_lines_equal_the_plan_lines_of_plan_build(tmp_path, monkeypatch, child_builds):

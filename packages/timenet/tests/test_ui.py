@@ -55,11 +55,13 @@ def test_quiet_suppresses_status_but_not_errors(console, capsys):
     console.quiet = True
     console.status("📥", "downloading")
     console.success("done")
+    console.detail("a plan line")
     console.warn("heads up")
     console.error("boom")
     captured = capsys.readouterr()
     assert "downloading" not in captured.err
     assert "done" not in captured.err
+    assert "a plan line" not in captured.err
     assert "heads up" in captured.err  # warnings/errors ignore quiet
     assert "boom" in captured.err
 
@@ -137,9 +139,3 @@ def test_detail_prints_the_line_as_it_is(console, capsys):
     captured = capsys.readouterr()
     assert captured.out == ""
     assert captured.err == f"{line}\n"
-
-
-def test_quiet_suppresses_detail(console, capsys):
-    console.quiet = True
-    console.detail("test/child@1.0.0: build with installed connectors")
-    assert capsys.readouterr().err == ""

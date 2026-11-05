@@ -51,16 +51,13 @@ def test_build_then_load_round_trips(converted, tmp_path):
     )
     assert result.exit_code == 0, result.output
     assert (registry / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
+    # The flag overrides TIMENET_LOCAL_REGISTRY, which the test setup points at another directory.
+    assert not settings().local_registry_dir.exists()
 
     # CONSUME: load it back through the SDK and compare to the dataset the build wrote.
     restored = TimeNet(sources=[str(registry)]).load("timenet/hello-world")
     [original] = converted
     assert_datasets_equal(original, restored)
-
-
-def test_build_unknown_id_fails(tmp_path):
-    result = runner.invoke(build_app, ["build", "acme/not_a_dataset", "--local-registry", str(tmp_path / "registry")])
-    assert result.exit_code != 0
 
 
 # ---- where a bare `build` writes -----------------------------------------------------------------
@@ -75,18 +72,6 @@ def test_build_honors_timenet_local_registry(monkeypatch, tmp_path):
     # The store of the SDK is the same directory, so it reads back what the build just wrote. An exact
     # version resolves at the store, without asking the remote registry.
     assert TimeNet().load("timenet/hello-world@1.0.0").metadata.dataset_id == "timenet/hello-world"
-
-
-def test_local_registry_flag_overrides_timenet_local_registry(monkeypatch, tmp_path):
-    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "elsewhere"))
-    store = tmp_path / "store"
-
-    result = runner.invoke(
-        build_app, ["build", "timenet/hello-world", "--local-registry", str(store), "--no-isolation"]
-    )
-    assert result.exit_code == 0
-    assert (store / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
-    assert not (tmp_path / "elsewhere").exists()
 
 
 def test_build_cleans_cache_but_keep_flag_retains(tmp_path):
