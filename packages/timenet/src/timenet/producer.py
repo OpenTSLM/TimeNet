@@ -7,6 +7,7 @@ The default local and remote registries come from ``TIMENET_LOCAL_REGISTRY`` and
 from collections.abc import Sequence
 from pathlib import Path
 
+from timenet._hints import Facts, explain
 from timenet.builders import BuildOptions
 from timenet.client import as_release_sources, default_local_registry, default_sources
 from timenet.config import check_local_registry
@@ -66,10 +67,11 @@ def build(  # ruff: ignore[too-many-arguments]
         TimeNetBuildError: If a build fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the coordinator and local_registry_path
     target, parents = _build_inputs(local_registry, parents_from)
-    plan = plan_release_build(
-        dataset_id, store=target, parents_from=parents, force=force, open_access_only=open_access_only
-    )
-    run_plan(plan, target, options=BuildOptions(keep_cache=keep_cache, progress=progress))
+    with explain(Facts([target, *parents], target, request="build", wanted=dataset_id), "sdk"):
+        plan = plan_release_build(
+            dataset_id, store=target, parents_from=parents, force=force, open_access_only=open_access_only
+        )
+        run_plan(plan, target, options=BuildOptions(keep_cache=keep_cache, progress=progress))
     return plan
 
 
@@ -104,9 +106,10 @@ def plan_build(
         TimeNetAccessError: If ``open_access_only`` is set and the plan needs a release without open access.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the coordinator and local_registry_path
     target, parents = _build_inputs(local_registry, parents_from)
-    return plan_release_build(
-        dataset_id, store=target, parents_from=parents, force=force, open_access_only=open_access_only
-    )
+    with explain(Facts([target, *parents], target, request="build", wanted=dataset_id), "sdk"):
+        return plan_release_build(
+            dataset_id, store=target, parents_from=parents, force=force, open_access_only=open_access_only
+        )
 
 
 def publish(
@@ -138,19 +141,23 @@ def publish(
         TimeNetMissingParentError: If a required payload source is missing from ``source`` and incomplete in ``dest``.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by open_registry and copy_release
     target = open_registry(dest, label="dest") if isinstance(dest, (str, Path)) else dest
+    store: LocalRegistry | None = None
+    origin: BaseRegistry
     if source is None:
-        origin = default_local_registry()
+        store = origin = default_local_registry()
     else:
         origin = open_registry(source, label="source") if isinstance(source, (str, Path)) else source
     bare_id, version = split_ref(dataset_id)
-    answer = resolve_release([origin], bare_id, version)
-    if isinstance(answer, NotServed):
-        raise answer.access_error(bare_id)
-    if isinstance(answer, NotFound):
-        wanted = bare_id if version is None else f"{bare_id}@{version}"
-        raise TimeNetDatasetNotFoundError(f"{wanted} is not in {origin}.")
-    release = DatasetRef(dataset_id=bare_id, version=answer.version)
-    copy_release(release, origin, target, progress=progress)
+    wanted = bare_id if version is None else f"{bare_id}@{version}"
+    # Only the default local registry gets the hints that copy or build a release into it.
+    with explain(Facts([origin], store, request="publish", dest=target, wanted=wanted), "sdk"):
+        answer = resolve_release([origin], bare_id, version)
+        if isinstance(answer, NotServed):
+            raise answer.access_error(bare_id)
+        if isinstance(answer, NotFound):
+            raise TimeNetDatasetNotFoundError(f"{wanted} is not in {origin}.")
+        release = DatasetRef(dataset_id=bare_id, version=answer.version)
+        copy_release(release, origin, target, progress=progress)
     return release
 
 
