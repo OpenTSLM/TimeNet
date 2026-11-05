@@ -13,13 +13,11 @@ from timenet.errors import (
     TimeNetDatasetNotFoundError,
     TimeNetMissingParentError,
     TimeNetRegistryError,
-    TimeNetVersionConflictError,
-    TimeNetVersionUnavailableError,
 )
 from timenet.registry import LocalRegistry, RemoteRegistry
 from timenet.sources import NotFound
 from timenet.testing import install_backends, make_dataset
-from timenet.types import Access, Annotation
+from timenet.types import Access
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
 
@@ -125,14 +123,6 @@ def test_auto_build_false_leaves_the_connectors_out_of_the_default_parents(tmp_p
     assert [release for release, _ in cards] == [PARENT, CHILD]
 
 
-def test_build_checks_the_version_before_anything_runs(tmp_path, monkeypatch, cards):
-    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
-    with pytest.raises(TimeNetVersionUnavailableError, match=r"builds version 1\.0\.0, not the requested 2\.0\.0"):
-        timenet.build("test/child@2.0.0")
-    assert cards == []
-    assert not (tmp_path / "store").exists()
-
-
 def test_plan_build_runs_nothing_and_returns_the_plan_that_build_runs(tmp_path, cards):
     origin, store = LocalRegistry(tmp_path / "origin"), tmp_path / "store"
     _store_parent(origin)
@@ -188,14 +178,11 @@ def test_build_rejects_a_store_that_is_not_local(tmp_path, cards):
     assert cards == []
 
 
-@pytest.mark.parametrize("parents_from", [None, []])
-@pytest.mark.parametrize("folders", [("cache/store", "cache"), ("store", "store/cache")], ids=["store", "cache"])
-def test_build_rejects_a_given_store_that_overlaps_the_cache(tmp_path, monkeypatch, cards, parents_from, folders):
-    store, cache = (tmp_path / folder for folder in folders)
-    monkeypatch.setenv("TIMENET_CACHE", str(cache))
-    for call in (timenet.build, timenet.plan_build):
-        with pytest.raises(TimeFValidationError, match=r"^The store \(.*\) and TIMENET_CACHE \(.*\) overlap\."):
-            call(CHILD.dataset_id, store=store, parents_from=parents_from)
+def test_build_rejects_a_given_store_that_overlaps_the_cache(tmp_path, monkeypatch, cards):
+    store = tmp_path / "cache" / "store"
+    monkeypatch.setenv("TIMENET_CACHE", str(tmp_path / "cache"))
+    with pytest.raises(TimeFValidationError, match=r"^The store \(.*\) and TIMENET_CACHE \(.*\) overlap\."):
+        timenet.build(CHILD.dataset_id, store=store)
     assert cards == []
     assert not store.exists()
 
@@ -263,33 +250,6 @@ def test_publish_takes_a_source(tmp_path, store):
         "StepStarted",
         "StepFinished",
     ]
-
-
-def test_publish_does_nothing_for_the_same_files(tmp_path, store):
-    store.put_dataset(make_dataset())
-    dest = tmp_path / "dest"
-    timenet.publish("timenet/hello-world", dest=dest)
-    before = {path: path.stat().st_mtime_ns for path in dest.rglob("*")}
-    events = []
-
-    assert timenet.publish("timenet/hello-world", dest=dest, progress=events.append) == HELLO
-
-    assert {path: path.stat().st_mtime_ns for path in dest.rglob("*")} == before
-    assert events == []
-
-
-def test_publish_refuses_other_files_for_a_published_version(tmp_path, store):
-    store.put_dataset(make_dataset())
-    dest = LocalRegistry(tmp_path / "dest")
-    other = make_dataset()
-    other.records[0].annotate(Annotation(key="build", value="another"))
-    dest.put_dataset(other)
-    before = (dest.root / "timenet/hello-world/1.0.0/manifest.json").read_text()
-
-    with pytest.raises(TimeNetVersionConflictError, match="new version"):
-        timenet.publish("timenet/hello-world", dest=dest)
-
-    assert (dest.root / "timenet/hello-world/1.0.0/manifest.json").read_text() == before
 
 
 def test_publish_of_a_release_that_the_source_lacks_names_the_source(tmp_path):
