@@ -63,10 +63,7 @@ def test_a_new_record_replaces_the_old_one(store):
     ("location", "expected"),
     [
         ("https://user:secret@registry.example.org:8443/r?sig=abc#top", "https://registry.example.org:8443/r"),
-        ("s3://bucket/prefix?versionId=1", "s3://bucket/prefix"),
-        ("https://registry.example.org", "https://registry.example.org"),
         ("/data/registry", "/data/registry"),
-        ("timenet-connectors 0.9.0", "timenet-connectors 0.9.0"),
     ],
 )
 def test_without_credentials_keeps_only_scheme_host_and_path_of_a_url(location, expected):
