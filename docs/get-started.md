@@ -44,16 +44,17 @@ Use `pipx install timenet-connectors` if you use pipx for command-line tools.
 
 ## Build the example dataset
 
-Build the offline `timenet/hello-world` dataset into a local registry:
+Build the offline `timenet/hello-world` dataset:
 
 ```bash
-timenet-build build timenet/hello-world --out .timenet-registry
+timenet-build build timenet/hello-world
 ```
 
-The command needs no network access. It writes this version:
+The command needs no network access. It writes this version into the store, the local registry
+where the client reads (see [Settings](client.md#settings)):
 
 ```text
-.timenet-registry/timenet/hello-world/1.0.0/
+~/.timenet/registry/timenet/hello-world/1.0.0/
 ├── manifest.json
 ├── control.duckdb
 └── time_series/
@@ -61,15 +62,16 @@ The command needs no network access. It writes this version:
 
 ## Load the dataset
 
-Pass the same registry path to the client:
+The default client reads the store first. An exact version that the store holds needs no network
+access:
 
 ```python
 import pandas as pd
 
-from timenet.client import TimeNet
+import timenet
 
-client = TimeNet(".timenet-registry")
-dataset = client.load("timenet/hello-world")
+client = timenet.TimeNet()
+dataset = client.load("timenet/hello-world@1.0.0")
 dataset.describe()
 
 signal = dataset.records[0].signals[0]

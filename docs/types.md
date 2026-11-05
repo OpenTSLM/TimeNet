@@ -264,24 +264,38 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeNetError` | Base class for TimeNet failures. |
 | `TimeNetRegistryError` | A registry cannot complete an operation. |
 | `TimeNetDatasetNotFoundError` | A dataset ID or version does not exist. |
+| `TimeNetVersionUnavailableError` | The installed connector of a dataset builds another version than the requested one. A `TimeNetDatasetNotFoundError` and a `TimeFValidationError`. |
+| `TimeNetVersionConflictError` | A registry already holds a release with other files or another card than a copy that would go there. For a publish, the hint asks for a new version. For a copy into the store, the hint names the release folder in the store to delete. |
 | `TimeFValidationError` | Input violates a TimeF invariant. |
 | `TimeFNullValuesError` | Values contain nulls that NumPy cannot hold. A `TimeFValidationError`. |
 | `TimeFNotFoundError` | An ID, parent alias, or parent release names nothing in the dataset, or the stored object has another kind. A `TimeFValidationError` and a `LookupError`. |
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
 | `TimeNetFileError` | A file of a release is missing, or does not match its manifest record. A `TimeFFormatError`. |
+| `TimeNetManifestError` | A stored manifest is not a valid manifest. `where` names the file or the place in a registry, and `detail` names the first problem. A `TimeFFormatError`. |
 | `TimeFReaderError` | A reader could not complete a read, e.g. its connection was closed while the read ran. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
 | `TimeNetConnectorError` | A connector found that an assumption about its source data, a download, or a parent does not hold. `TimeNetDownloadError` is a `TimeNetConnectorError`. |
+| `TimeNetBuildError` | A build failed: the connector build, or the environment that it needs. |
+| `TimeNetIsolationError` | An isolated build cannot make its environment, for example because `uv` is missing. A `TimeNetBuildError`. |
+
+Every `TimeNetError` has a `hint`: what you can do about the error, or `None`. A front end sets it
+in its own words. The front ends are the SDK client, `timenet.build()`, `plan_build()`, `publish()`
+and both CLIs. The SDK names calls and arguments, and a CLI names commands and flags. `str()` puts
+the hint after the message, as a sentence of its own. A message states facts only.
 
 Pydantic `ValidationError` reports field and schema errors in a dataset card. The error includes the
 native field location and details.
 
-Manifest parsing uses the same error for invalid JSON and invalid fields.
+`Manifest.model_validate_json()` uses the same error for invalid JSON and invalid fields. A registry
+that reads a stored manifest raises `TimeNetManifestError` instead.
 
 `TimeFValidationError` also subclasses `ValueError`. Existing input-validation handlers can catch it
 without losing the TimeNet-specific error type.
 
 `SpanOutsideWindowWarning` reports a span outside a Signal window when the caller has chosen warning
 behavior. It derives from `TimeNetWarning` and `UserWarning`.
+
+`ConnectorCardWarning` reports a connector card that cannot be read. The list of installed
+connectors leaves its dataset out, so the card fails only its own dataset.
 
 See the [API reference for `timenet.types`](api/types.md) for all symbols.

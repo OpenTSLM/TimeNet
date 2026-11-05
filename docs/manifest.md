@@ -78,6 +78,11 @@ Direct construction and parsing with an unsupported `timef_format_version` raise
 and `counts` default to empty. Unknown fields are rejected. A malformed block raises Pydantic's
 `ValidationError` with its native field locations and error details.
 
+Registries read a stored manifest with `read_manifest(path)` or `parse_manifest(text, where)` from
+`timenet.manifest`. A manifest that is not valid raises `TimeNetManifestError`, a `TimeFFormatError`
+with `where` and `detail`. Its message names the file and the first error. A file that cannot be
+read raises a plain `TimeFFormatError`.
+
 ### Serialization notes
 
 - Known units serialize to their pint names (`"hertz"`, `"millivolt"`, `"dimensionless"`). An
@@ -125,7 +130,7 @@ packed text and time-offset files that this release stores itself.
 A build needs the parent releases. A read needs only the payload sources. `TimeNet.open()`,
 `TimeNet.load()`, `TimeNet.open_torch()`, and `TimeFReader.open()` resolve the payload sources
 before the first read. A read never opens the catalog of a parent. `download()` copies the release
-and its payload sources. See [Payload sources](registry.md#payload-sources).
+and its payload sources into the store. See [Payload sources](registry.md#payload-sources).
 
 ---
 

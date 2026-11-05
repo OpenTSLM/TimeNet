@@ -12,8 +12,10 @@ A connector is the unit of dataset integration. Each dataset has one connector c
 fetches raw data and converts it into a [`TimeFDataset`](timef-dataset.md). A connector has no
 knowledge of the registry, the engine, or other connectors. A child connector reads its parent
 releases only through the readers that the engine passes to it. The consumer SDK never imports
-connector code. On a local registry, `TimeNet.load` builds a missing dataset through the
-`timenet.builders` entry point. Pass `auto_build=False` to turn this off.
+connector code. If the [sources](client.md#choose-the-sources) of a client include
+`InstalledConnectors()`, `TimeNet.load` builds a missing dataset through the `timenet.builders`
+entry point. To turn this off, leave `InstalledConnectors()` out of the list, or set
+`TIMENET_AUTO_BUILD=false` for the default list.
 
 `BaseConnector` is the connector contract in the `timenet` package. Concrete connectors ship in
 `timenet-connectors`, beside their [dataset cards](manifest.md).
@@ -224,13 +226,15 @@ a connector that you did not check.
 
 Credentials come from the environment. For the HuggingFace Hub, a token is read from `HF_TOKEN`
 automatically (needed only for gated or private sources). Downloaded source files cache under
-`<TIMENET_CACHE>` (see [client local state](client.md#local-state)).
+`<TIMENET_CACHE>/downloads/<dataset_id>`, by default in `~/.cache/timenet` (see
+[Settings](client.md#settings)).
 
 A credentialed dataset (a PhysioNet DUA-gated one, for example) declares `access: credentialed`
 and an `access_url` on its card. TimeNet never hosts such data, so it is build-your-own: get access
 at the `access_url`, set the provider credential in the environment (the way `HF_TOKEN` already
-works), and run `timenet-build build <id>` yourself. An `open`, `load`, or `download` of a
-credentialed dataset from a hosted registry raises `TimeNetAccessError` instead of serving bytes.
+works), and run `timenet-build build <id>` yourself. If no other source of the client provides a
+credentialed dataset, an `open`, `load`, or `download` from a hosted registry raises
+`TimeNetAccessError` instead of serving bytes.
 The error names each `access_url` that the dataset needs, with the release that sets it. A child
 dataset can need the access pages of its ancestors.
 
@@ -306,10 +310,12 @@ timenet-build build chengsenwang/tsqa               # live, from the Hub
 timenet-build build chengsenwang/tsqa --keep-cache  # keep the raw sources
 ```
 
-A successful build removes the dataset's raw download cache, at `<TIMENET_CACHE>/<dataset_id>`. Only
-`convert` reads the sources, and they are often several times the size of the dataset they produce.
-To keep them, pass `--keep-cache`, or `keep_cache=True` to `timenet_connectors.build()`. This helps
-while you write a connector for a large source, because each rebuild downloads the source again.
+A successful build removes the raw downloads of the dataset, at
+`<TIMENET_CACHE>/downloads/<dataset_id>`, if the `downloads` folder holds TimeNet's `CACHEDIR.TAG`
+file. Only `convert` reads the sources, and they are often several times the size of the dataset
+they produce. To keep them, pass `--keep-cache`, or `keep_cache=True` to `timenet.build()`. This
+helps while you write a connector for a large source, because each rebuild downloads the source
+again.
 
 Keeping `download` and `convert` apart makes a connector testable offline. `convert` takes raw
 references and does not touch the network. A test can therefore pass small local inputs or synthetic
@@ -334,7 +340,7 @@ The connector of a child overrides `compose(raw_refs, context)`. The default `co
 `convert(raw_refs)`. If the card declares parents and the connector does not override `compose`,
 the build raises before it opens a parent or downloads anything.
 
-Before the connector runs, the build prepares each parent release in the output registry, as
+Before the connector runs, the build prepares each parent release in the store, as
 [Prepare parent releases](build.md#prepare-parent-releases) describes. The engine then opens each
 parent as a `TimeFReader` and passes the readers in a `BuildContext`, by parent alias. The connector
 copies objects into the child with `dataset.import_from()`:
