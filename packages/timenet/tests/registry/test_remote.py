@@ -8,11 +8,13 @@ import numpy as np
 from pydantic import ValidationError
 import pytest
 
+from timenet import provenance
 from timenet.client import TimeNet
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import (
     TimeFFormatError,
     TimeNetAccessError,
+    TimeNetBuildError,
     TimeNetDatasetNotFoundError,
     TimeNetFileError,
     TimeNetRegistryError,
@@ -520,3 +522,45 @@ def test_a_local_client_checks_access_before_it_copies_from_a_remote_registry(tm
     assert caught.value.requirements == (AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua"),)
     assert not any("/download/" in request.url.path or request.url.host == "blob.local" for request in requests)
     assert not (tmp_path / "local").exists()
+
+
+def _credentialed(dataset: TimeFDataset) -> TimeFDataset:
+    dataset._metadata = dataset.metadata.model_copy(
+        update={"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
+    )
+    return dataset
+
+
+@pytest.fixture
+def publish_fake(tmp_path, monkeypatch):
+    """A remote registry over the publish fake, whose writer must not run."""
+    monkeypatch.setattr(TimeFWriter, "write", lambda self: pytest.fail("wrote the release"))
+    transport, state = build_publish_fake(token="tok_rw")
+    return RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path), state
+
+
+def test_store_refuses_a_release_that_is_not_open_before_writing(publish_fake):
+    registry, state = publish_fake
+    with pytest.raises(TimeNetAccessError, match="credentialed"):
+        registry.store(_credentialed(make_dataset()))
+    assert state["manifest"] is None
+
+
+def test_store_refuses_untraceable_code_before_writing(publish_fake, monkeypatch):
+    registry, state = publish_fake
+    monkeypatch.setattr(provenance, "_read_git", lambda: {"timenet": {"sha": "a" * 40, "local_changes": True}})
+    with pytest.raises(TimeNetBuildError, match="Uncommitted changes"):
+        registry.store(make_dataset())
+    assert state["manifest"] is None
+
+
+def test_store_refuses_code_that_changed_while_the_release_was_written(tmp_path, monkeypatch):
+    reads = iter([{"timenet": {"sha": "a" * 40, "local_changes": False}}])
+    later = {"timenet": {"sha": "b" * 40, "local_changes": False}}
+    monkeypatch.setattr(provenance, "_read_git", lambda: next(reads, later))
+    transport, state = build_publish_fake(token="tok_rw")
+    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path)
+
+    with pytest.raises(TimeNetBuildError, match="changed while the build ran"):
+        registry.store(make_dataset())
+    assert state["manifest"] is None

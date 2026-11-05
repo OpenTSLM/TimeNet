@@ -157,6 +157,10 @@ A `WritableRegistry` adds one write method to the read contract. As a result,
 | `store(dataset, *, force=False, values_backend="parquet", progress_cb=None)` | Compile a dataset and publish it; returns the stored version. Derives the schema first if absent, skips an already-committed version unless `force`, and checks every payload source in this registry. `values_backend` picks the values plane format: `"parquet"` or `"zarr"`. |
 | `exists(dataset_id, version)` | Whether a committed version already exists (shared implementation). |
 
+`S3Registry` and `RemoteRegistry` serve their releases to others. Their `store` accepts only a
+release whose access, with its lineage, is `open`, and only TimeNet code that is committed, as
+[Traceable builds](build.md#traceable-builds) describes. `LocalRegistry` accepts any release.
+
 `LocalRegistry` implements `store` by streaming the dataset through a [`TimeFWriter`](timef-writer.md),
 which stages under `<version>.tmp-*` and publishes with a single atomic rename. With `force`, the old
 version stays in place until the new one is complete. A replace is not isolated from readers that

@@ -47,7 +47,8 @@ The output selector accepts:
 - `timenet://` for the hosted TimeNet registry.
 
 Remote publishing needs the credentials required by that registry. For example, the hosted API can
-use `TIMENET_TOKEN`.
+use `TIMENET_TOKEN`. It also needs TimeNet code that is committed, as
+[Traceable builds](../build.md#traceable-builds) describes.
 
 ## Output
 

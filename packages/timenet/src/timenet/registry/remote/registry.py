@@ -14,6 +14,7 @@ from typing import BinaryIO, cast
 import httpx
 import pyarrow.fs as pafs
 
+from timenet import provenance
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetRegistryError
@@ -31,6 +32,7 @@ from timenet.registry.remote.models import (
 )
 from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetMetadata
+from timenet.types.access import require_open_access
 from timenet.types.references import DatasetRef, is_latest
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
@@ -159,6 +161,7 @@ class RemoteRegistry(LazyReadRegistry):
             self._http, manifest, dataset_id, version, Path(dest_dir), force=force, progress_cb=progress_cb
         )
 
+    @provenance.git_snapshot()
     def store(
         self,
         dataset: TimeFDataset,
@@ -187,6 +190,9 @@ class RemoteRegistry(LazyReadRegistry):
 
         Raises:
             TimeNetRegistryError: If the service requests a file that was not produced locally.
+        TimeNetAccessError: If the release, with its lineage, is not open. Nothing is written.
+        TimeNetBuildError: If the TimeNet code cannot be traced to a commit, or changed while the
+            release was written. Nothing is uploaded.
         """
         if dataset.schema is None:
             dataset.derive_schema()
@@ -194,6 +200,9 @@ class RemoteRegistry(LazyReadRegistry):
         version = str(dataset.metadata.dataset_version)
         if not force and self.exists(dataset_id, version):
             return version
+        # This registry serves its releases to others, so it holds only open and traceable ones.
+        require_open_access(dataset.metadata, dataset.lineage.values())
+        provenance.require_traceable()
         staging_root = Path(tempfile.mkdtemp(prefix="timenet-publish-"))
         try:
             # The writer stages locally but checks every payload source against this registry.
@@ -209,6 +218,7 @@ class RemoteRegistry(LazyReadRegistry):
             version_dir = release_dir(staging_root, DatasetRef.parse(f"{dataset_id}@{version}"))
             manifest_bytes = (version_dir / "manifest.json").read_bytes()
             manifest = Manifest.model_validate_json(manifest_bytes.decode())
+            provenance.require_unchanged(manifest.build_env)
             declared = {part.path for part in manifest.files.all_files()}
             publish_endpoint = f"/datasets/{dataset_id}/{version}/publish"
             publish = PublishResponseModel.model_validate_json(

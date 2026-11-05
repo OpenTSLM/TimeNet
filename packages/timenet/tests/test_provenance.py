@@ -8,8 +8,10 @@ import sys
 
 import pytest
 
+from timenet import provenance
 from timenet.errors import TimeNetBuildError
-from timenet.provenance import build_env, git_sources
+from timenet.manifest import GitSource
+from timenet.provenance import UnknownCommit, build_env, git_snapshot, git_sources, require_traceable, require_unchanged
 
 
 def test_build_env_records_the_running_python():
@@ -162,3 +164,48 @@ def test_a_wheel_with_invalid_build_info_fails(installed, build_info):
     installed(build_info=build_info)
     with pytest.raises(TimeNetBuildError, match=r"_build_info\.json"):
         git_sources()
+
+
+_CLEAN: GitSource = {"sha": "a" * 40, "local_changes": False}
+
+
+@pytest.mark.parametrize(
+    ("commit", "message"),
+    [
+        (
+            {"sha": "a" * 40, "local_changes": True},
+            r"Uncommitted changes in the package directory of timenet at aaaaaaaaaaaa\. Commit them first",
+        ),
+        (UnknownCommit("git is not on PATH"), r"No known git commit for timenet \(git is not on PATH\)"),
+    ],
+)
+def test_an_untraceable_build_is_refused_with_the_reason(monkeypatch, commit, message):
+    monkeypatch.setattr(provenance, "_read_git", lambda: {"timenet": commit, "timenet-connectors": _CLEAN})
+    with pytest.raises(TimeNetBuildError, match=message):
+        require_traceable()
+
+
+@pytest.mark.real_git
+def test_a_distribution_that_is_not_installed_needs_no_commit(installed):
+    # Only timenet is installed. The build needs no commit for timenet-connectors.
+    installed(build_info=json.dumps(_CLEAN))
+    require_traceable()
+
+
+def test_a_snapshot_answers_every_lookup_inside_it_from_one_read(monkeypatch):
+    reads = iter([{"timenet": _CLEAN}, {"timenet": {"sha": "b" * 40, "local_changes": False}}])
+    monkeypatch.setattr(provenance, "_read_git", lambda: next(reads))
+
+    with git_snapshot():
+        with git_snapshot():
+            assert git_sources() == {"timenet": _CLEAN}
+        assert build_env()["git"] == {"timenet": _CLEAN}
+    # Outside the snapshot, a lookup reads git again.
+    assert git_sources()["timenet"]["sha"] == "b" * 40
+
+
+def test_an_upload_is_refused_if_the_code_changed_since_the_manifest_was_written(monkeypatch):
+    monkeypatch.setattr(provenance, "_read_git", lambda: {"timenet": {"sha": "b" * 40, "local_changes": False}})
+    with pytest.raises(TimeNetBuildError, match="changed while the build ran"):
+        require_unchanged({"git": {"timenet": _CLEAN}})
+    require_unchanged({"git": {"timenet": {"sha": "b" * 40, "local_changes": False}}})

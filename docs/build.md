@@ -114,17 +114,27 @@ The error names the release and its effective access level, which is the stricte
 card and of the cards in its lineage. It also names each `access_url` that a user needs, with the
 release that sets it. For a card, this is the `access_url` of the card.
 
-### Traceable builds
+## Traceable builds
 
-A release in a registry that is not local outlives the machine that built it, so its manifest must
-name the exact code that built it. Before it downloads anything, `publish_pipeline()` raises
-`TimeNetBuildError` if an installed `timenet` or `timenet-connectors` distribution has no known git
-commit, or has uncommitted changes in its package directory. There is no override. Commit the
-changes first, or build to a local directory, which records the state and does not refuse.
+A release in a registry that is not local outlives the machine that built it. Its manifest must
+name the exact code that built it, so a publish to such a registry needs a known git commit for
+each installed `timenet` and `timenet-connectors` distribution, and no uncommitted changes in their
+package directories. The [manifest](manifest.md) describes where each install finds its commit.
+There is no override. Commit the changes first, or build to a local directory, which records the
+state and does not refuse.
 
-A local checkout reads the commit from git. A wheel reads it from the `_build_info.json` file that
-`scripts/write_build_info.py` writes before `uv build`. `make build` and the publish workflow run
-the script.
+The rule applies to every way of publishing:
+
+- `timenet-build build --out <remote>` refuses before uv builds the isolated environment.
+- `publish_pipeline()` refuses before it downloads anything.
+- `S3Registry.store()` and `RemoteRegistry.store()` refuse before they write the release.
+
+A build reads git once, when it starts, and records that state in the manifest. Before the upload,
+the registry reads git again. If the code changed while the build ran, for example because you
+switched branches, the registry raises `TimeNetBuildError` and uploads nothing. Build again.
+
+The check does not make sure that the commit exists on GitHub. Push the commit before you publish,
+so that other people can find the code that a manifest names.
 
 ## Prepare parent releases
 

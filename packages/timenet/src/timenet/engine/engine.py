@@ -26,6 +26,7 @@ from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
+@provenance.git_snapshot()
 def run_pipeline(  # ruff: ignore[too-many-arguments]
     connector: BaseConnector,
     root: Path,
@@ -48,7 +49,8 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     ``root``; the engine never fetches or builds them. A card that declares parents needs a
     connector that overrides ``compose``; otherwise the build raises before it opens a parent or
     downloads anything. The engine only writes local files. Publishing to a remote registry is a
-    separate step.
+    separate step. The manifest records the commit of the TimeNet code as it was when the build
+    started.
 
     Args:
         connector: The connector to build.
@@ -108,6 +110,7 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     return version_dir
 
 
+@provenance.git_snapshot()
 def publish_pipeline(  # ruff: ignore[too-many-arguments]
     connector: BaseConnector,
     registry: WritableRegistry,
@@ -129,6 +132,8 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
     A registry other than a local one holds open releases only, so a card that is not open fails
     before any download. The composed dataset can be a child whose card says open while a parent is
     not open. So the engine checks the dataset again with its lineage before the write.
+    Such a registry also needs the TimeNet code to be traceable to a commit, which the engine checks
+    before any download. The registry checks both again when it stores the release.
 
     Args:
         connector: The connector to build.
@@ -153,7 +158,7 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
             its lineage, is not open.
         TimeNetBuildError: If the registry is not local, and an installed TimeNet distribution has
             local changes or no known git commit. Nothing is downloaded then.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, require_open_access, and require_traceable_build
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, require_open_access, and require_traceable
     resolved_backend = _resolve_values_backend(connector, values_backend)
     metadata = connector.metadata()
     dataset_id = metadata.dataset_id
@@ -162,7 +167,7 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
         return version
     if not isinstance(registry, LocalRegistry):
         require_open_access(metadata)
-        provenance.require_traceable_build()
+        provenance.require_traceable()
     _check_composes(connector, metadata)
 
     cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id

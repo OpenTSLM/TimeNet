@@ -110,14 +110,6 @@ def test_run_pipeline_writes_the_requested_values_backend(tmp_path):
     assert manifest.values_backend == "zarr"
 
 
-@pytest.fixture
-def traceable_build(monkeypatch):
-    """Report every TimeNet distribution as committed, whatever the state of this checkout."""
-    clean = {"sha": "a" * 40, "local_changes": False}
-    monkeypatch.setattr(provenance, "git_sources", lambda: dict.fromkeys(provenance.TIMENET_DISTRIBUTIONS, clean))
-
-
-@pytest.mark.usefixtures("traceable_build")
 def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tmp_path):
     class _Registry:
         def __init__(self) -> None:
@@ -524,7 +516,6 @@ class _HostedRegistry:
         pytest.fail("wrote a child whose parent is credentialed")
 
 
-@pytest.mark.usefixtures("traceable_build")
 def test_publish_pipeline_refuses_an_open_child_of_a_credentialed_parent_before_the_write(tmp_path):
     _store_credentialed_parent(tmp_path)
     registry = cast(WritableRegistry, _HostedRegistry(tmp_path))
@@ -542,19 +533,46 @@ def test_publish_pipeline_refuses_an_open_child_of_a_credentialed_parent_before_
     )
 
 
-def test_publish_pipeline_refuses_a_build_with_local_changes_before_downloading(tmp_path, monkeypatch):
-    dirty = {"sha": "a" * 40, "local_changes": True}
-    monkeypatch.setattr(provenance, "git_sources", lambda: {"timenet": dirty})
-    monkeypatch.setattr(_DemoConnector, "download", lambda self, cache_dir: pytest.fail("downloaded"))
-    remote = RemoteRegistry(
-        "http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)), cache_dir=tmp_path
-    )
+def _git_states(monkeypatch, *states):
+    """Make each git read return the next state, and the last one from then on."""
+    reads = iter(states)
+    last = states[-1]
+    monkeypatch.setattr(provenance, "_read_git", lambda: next(reads, last))
 
-    with pytest.raises(TimeNetBuildError, match="timenet has uncommitted changes"):
+
+def _no_upload(request: httpx.Request) -> httpx.Response:
+    if request.method != "GET":
+        pytest.fail(f"uploaded: {request.method} {request.url}")
+    return httpx.Response(404)
+
+
+def test_publish_pipeline_refuses_a_build_with_local_changes_before_downloading(tmp_path, monkeypatch):
+    _git_states(monkeypatch, {"timenet": {"sha": "a" * 40, "local_changes": True}})
+    monkeypatch.setattr(_DemoConnector, "download", lambda self, cache_dir: pytest.fail("downloaded"))
+    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(_no_upload), cache_dir=tmp_path)
+
+    with pytest.raises(TimeNetBuildError, match="Uncommitted changes in the package directory of timenet"):
         publish_pipeline(_DemoConnector(), remote, cache_dir=tmp_path / "cache")
 
-    # A local registry is the user's own, so a build with local changes may go there.
-    monkeypatch.undo()
-    monkeypatch.setattr(provenance, "git_sources", lambda: {"timenet": dirty})
+
+def test_a_local_build_with_local_changes_records_them(tmp_path, monkeypatch):
+    dirty = {"sha": "a" * 40, "local_changes": True}
+    _git_states(monkeypatch, {"timenet": dirty})
+
     publish_pipeline(_DemoConnector(), LocalRegistry(tmp_path / "local"), cache_dir=tmp_path / "cache")
-    assert LocalRegistry(tmp_path / "local").exists(_PARENT.dataset_id, str(_PARENT.version))
+
+    manifest = Manifest.model_validate_json(next((tmp_path / "local").rglob("manifest.json")).read_text())
+    assert manifest.build_env["git"] == {"timenet": dirty}
+
+
+def test_publish_pipeline_refuses_code_that_changed_while_the_build_ran(tmp_path, monkeypatch):
+    # The build starts on one commit, and the code is on another one by the time of the upload.
+    _git_states(
+        monkeypatch,
+        {"timenet": {"sha": "a" * 40, "local_changes": False}},
+        {"timenet": {"sha": "b" * 40, "local_changes": False}},
+    )
+    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(_no_upload), cache_dir=tmp_path)
+
+    with pytest.raises(TimeNetBuildError, match="changed while the build ran"):
+        publish_pipeline(_DemoConnector(), remote, cache_dir=tmp_path / "cache")

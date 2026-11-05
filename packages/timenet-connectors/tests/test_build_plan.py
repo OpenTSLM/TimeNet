@@ -5,7 +5,7 @@ import numpy as np
 import pytest
 from typer.testing import CliRunner
 
-from timenet import builders
+from timenet import builders, provenance
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.engine import open_parents, run_pipeline
@@ -13,6 +13,7 @@ from timenet.errors import (
     TimeFFormatError,
     TimeFValidationError,
     TimeNetAccessError,
+    TimeNetBuildError,
     TimeNetDatasetNotFoundError,
     TimeNetFileError,
     TimeNetInvalidCardError,
@@ -404,6 +405,16 @@ class _Hosted(WritableRegistry):
 
 
 _GATED = {"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"}
+
+
+def test_an_isolated_build_to_a_remote_output_refuses_untraceable_code_before_uv_runs(tmp_path, monkeypatch):
+    _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
+    monkeypatch.setattr(cli_module, "_resolve_target", lambda output: _Hosted(tmp_path / "hosted"))
+    monkeypatch.setattr(cli_module, "run_isolated", lambda *args, **kwargs: pytest.fail("started an isolated build"))
+    monkeypatch.setattr(provenance, "_read_git", lambda: {"timenet": {"sha": "a" * 40, "local_changes": True}})
+
+    with pytest.raises(TimeNetBuildError, match="Uncommitted changes"):
+        cli_module.build_one(PARENT.dataset_id, "timenet://", isolation=True)
 
 
 @pytest.mark.parametrize("gated", ["child-card", "held-parent", "parent-card"])

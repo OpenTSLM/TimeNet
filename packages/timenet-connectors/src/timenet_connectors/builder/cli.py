@@ -23,6 +23,7 @@ from rich.progress import (
 )
 import typer
 
+from timenet import provenance
 from timenet.builders import BuilderBackend, find_builder, find_card
 from timenet.cache import human_bytes
 from timenet.cli.runner import run_cli
@@ -400,8 +401,16 @@ def _build(  # ruff: ignore[too-many-arguments]
 
     Returns:
         The committed version directory for a local output, or the published version.
-    """
+
+    Raises:
+        TimeNetBuildError: If an isolated build publishes to a remote output and the TimeNet code
+            cannot be traced to a commit. This check comes before uv builds the environment.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by provenance.require_traceable
     pinned_by = pinned_by or None
+    if isolated and not isinstance(target, Path):
+        # The child refuses an untraceable publish too, but only after uv built its environment.
+        # The parent installs the same TimeNet code, so it can refuse first.
+        provenance.require_traceable()
     if isolated:
         # The child is this same CLI and inherits stderr, so it is the only narrator: it prints the
         # status lines and the richer download and shard progress. This branch stays quiet and only
