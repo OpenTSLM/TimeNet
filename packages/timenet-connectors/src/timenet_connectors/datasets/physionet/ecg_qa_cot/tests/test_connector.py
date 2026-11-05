@@ -318,11 +318,11 @@ def test_records_and_tasks_carry_their_split(tmp_path, records_dir):
 def test_question_metadata_is_deduped_dataset_annotations(tmp_path, records_dir):
     with _composed(tmp_path, records_dir) as dataset:
         keys = {ann.key for ann in dataset.annotations}
-        assert {"question_type", "template_id", "answer_options", "clinical_context"} <= keys
-        # template 0 appears in two rows but is attached once
-        template_values = [ann.value for ann in dataset.annotations if ann.key == "template_id"]
-        # Annotation values are a union with no order; template IDs are ints.
-        assert sorted(cast("list[int]", template_values)) == [0, 1]
+        assert {"question_type", "answer_options", "clinical_context"} <= keys
+        assert "template_id" not in keys
+        tasks = list(dataset.iter_tasks())
+        assert sorted(cast("int", task.metadata["template_id"]) for task in tasks) == [0, 0, 1]
+        assert all("template_id" not in {ann.key for ann in task.input_annotations} for task in tasks)
 
 
 def test_task_annotation_refs_all_resolve_to_registered(tmp_path, records_dir):
@@ -337,7 +337,7 @@ def test_answer_options_come_from_template(tmp_path, records_dir):
     with _composed(tmp_path, records_dir) as dataset:
         for task in dataset.iter_tasks():
             by_key = {ann.key: ann.value for ann in task.input_annotations}
-            options[by_key["template_id"]] = by_key.get("answer_options")
+            options[task.metadata["template_id"]] = by_key.get("answer_options")
     assert options[0] == ["yes", "no", "not sure"]  # template 0 in the fixture answers CSV
 
 
@@ -427,7 +427,7 @@ def test_compose_round_trips_through_the_writer(tmp_path, records_dir):
     assert len(restored.tasks) == 3  # streamed to disk and back
     assert {ann.key for ann in restored.annotations} >= {
         "question_type",
-        "template_id",
         "answer_options",
         "clinical_context",
     }
+    assert {task.metadata["template_id"] for task in restored.iter_tasks()} == {0, 1}
