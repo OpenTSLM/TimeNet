@@ -253,14 +253,9 @@ downloads use `httpx` and `aiofiles`, both base dependencies. They stream to dis
 atomically, through a `.part` temporary file. S3 downloads use boto3 and stay synchronous. boto3
 already parallelizes the transfer of a single object. Both backends skip an existing destination.
 
-Both backends check the `sha256` value. HTTP hashes the bytes while it streams them, and S3 reads the
-`.part` file once more after the transfer. If the value does not match, the download raises
-`TimeFFormatError` and leaves nothing behind. A cached file with a pin counts as cached only while its
-bytes match the pin, so a stale file or a changed pin downloads again. `ensure_archive` puts the pin
-into the cache key of its extraction, for the same effect.
-
 Pin every source file outside the Hub. Use a versioned or commit-pinned URL, never a moving branch
-such as `master`, and pass its `sha256`. `ensure_archive` also takes a `filename` override, for URLs
+such as `master`, and pass its `sha256`. A mismatch raises `TimeFFormatError`. A cached file is used
+again only while it matches its pin. `ensure_archive` also takes a `filename` override, for URLs
 whose path has no usable name, for example a trailing slash or a `/download` suffix. Call these
 helpers from `download_async`:
 

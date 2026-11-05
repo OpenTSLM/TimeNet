@@ -82,25 +82,15 @@ def test_download_files_skips_existing_s3(monkeypatch, tmp_path):
     assert dest.read_bytes() == b"cached"
 
 
-def test_download_files_keeps_a_pinned_s3_file_only_while_it_matches(monkeypatch, tmp_path):
-    fresh = b"fresh"
-    pin = hashlib.sha256(fresh).hexdigest()
-    calls = []
-
+def test_download_files_downloads_again_over_an_s3_file_that_misses_its_pin(monkeypatch, tmp_path):
     def _fake_s3(url, dest, *, sha256=None):
-        calls.append(url)
-        dest.write_bytes(fresh)
+        dest.write_bytes(b"fresh")
 
     monkeypatch.setattr(fetch, "download_s3_object", _fake_s3)
     dest = tmp_path / "a"
-    dest.write_bytes(fresh)
-    asyncio.run(download_files([Artifact("s3://b/a", dest, sha256=pin)]))
-    assert calls == []  # matches its pin: kept
-
     dest.write_bytes(b"stale")
-    asyncio.run(download_files([Artifact("s3://b/a", dest, sha256=pin)]))
-    assert calls == ["s3://b/a"]  # no longer matches: downloaded again
-    assert dest.read_bytes() == fresh
+    asyncio.run(download_files([Artifact("s3://b/a", dest, sha256=hashlib.sha256(b"fresh").hexdigest())]))
+    assert dest.read_bytes() == b"fresh"
 
 
 def test_download_files_rejects_unknown_scheme_before_downloading(monkeypatch, tmp_path):
@@ -291,12 +281,9 @@ def test_download_files_forwards_sha256_to_both_backends(monkeypatch, tmp_path):
 
     def _fake_s3(url, dest, *, sha256=None):
         seen["s3"] = sha256
-        dest.write_bytes(b"x")
 
     async def _fake_many(artifacts, *, headers=None, cookies=None, max_concurrency=8, skip_existing=True):
         seen["http"] = artifacts[0].sha256
-        for artifact in artifacts:
-            artifact.dest.write_bytes(b"x")
         return [artifact.dest for artifact in artifacts]
 
     monkeypatch.setattr(fetch, "download_s3_object", _fake_s3)

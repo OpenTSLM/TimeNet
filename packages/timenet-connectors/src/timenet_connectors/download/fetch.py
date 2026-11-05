@@ -68,26 +68,23 @@ async def download_files(
     max_concurrency: int = _DEFAULT_MAX_CONCURRENCY,
     skip_existing: bool = True,
 ) -> list[Path]:
-    """Download a list of artifacts, mixing ``s3://`` and ``http(s)://`` freely.
+    """Download files from S3 and HTTP URLs.
 
-    HTTP entries download concurrently (bounded by ``max_concurrency``, sharing one connection pool). S3
-    entries download one at a time, since boto3 blocks the event loop but parallelizes each transfer
-    itself. Batch ``headers`` and ``cookies`` apply to every HTTP request, under each artifact's own
-    (ignored for S3). The function validates every scheme up front, so an unsupported one fails before
-    any download starts.
+    S3 downloads block the event loop and run one at a time, while HTTP downloads run concurrently.
+    The function checks all URL schemes before starting any download.
 
     Args:
-        artifacts: The artifacts to download. A single file is a one-element list.
-        headers: Headers applied to every HTTP request, under each artifact's own.
-        cookies: Cookies applied to every HTTP request, under each artifact's own.
+        artifacts: The files to download, with their URLs and destination paths.
+        headers: Default HTTP headers that each artifact's headers override.
+        cookies: Default HTTP cookies that each artifact's cookies override.
         max_concurrency: Maximum number of concurrent HTTP downloads.
-        skip_existing: Skip any artifact whose destination is cached (see :func:`is_cached`).
+        skip_existing: Skip existing files if they match ``sha256`` or have no expected hash.
 
     Returns:
         The destination paths, in input order.
 
     Raises:
-        TimeFValidationError: If any URL is neither an ``s3://`` nor an ``http(s)://`` URL.
+        TimeFValidationError: If a URL uses a scheme other than ``s3://``, ``http://``, or ``https://``.
     """
     items = [replace(artifact, dest=Path(artifact.dest)) for artifact in artifacts]
     for artifact in items:
@@ -113,26 +110,21 @@ async def ensure_archive(  # ruff: ignore[too-many-arguments]
     cookies: Mapping[str, str] | None = None,
     sha256: str | None = None,
 ) -> Path:
-    """Download a zip archive (``s3://`` or ``http(s)://``) and extract it into ``target`` once.
+    """Download a zip archive and extract it into ``target``.
 
-    Idempotent: the function writes a marker file under ``target``, keyed by the archive URL and the
-    ``sha256`` pin, after a successful extraction. A re-run then reuses the extracted contents and
-    skips the download. A changed pin misses the marker and downloads the archive again.
-
-    A successful extraction then deletes the archive, because the marker alone makes the next run
-    cheap. A failed one keeps it, so the next run extracts it again instead of downloading it again.
+    A marker file lets later calls reuse an extraction with the same URL, filename, and SHA-256 hash.
+    The function deletes the archive after extraction succeeds and keeps it if extraction fails.
 
     Args:
         url: The archive URL, ``s3://`` or ``http(s)://``.
-        target: Directory into which the function downloads the archive and extracts its contents.
-        filename: Overrides the cached archive name, for URLs whose path has no usable filename (a
-            trailing slash or a ``/download`` suffix).
-        headers: Request headers for an HTTP download (ignored for S3).
-        cookies: Request cookies for an HTTP download (ignored for S3).
-        sha256: Optional hex digest the downloaded archive must match.
+        target: The directory for the archive and its extracted contents.
+        filename: An optional archive filename to use instead of the name derived from the URL.
+        headers: Request headers for HTTP downloads only.
+        cookies: Request cookies for HTTP downloads only.
+        sha256: An optional SHA-256 hash in hexadecimal that the archive must match.
 
     Returns:
-        ``target`` (the extraction root).
+        The extraction directory, ``target``.
     """
     target = Path(target)
     name = filename or _safe_filename(url)

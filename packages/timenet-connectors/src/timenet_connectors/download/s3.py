@@ -61,23 +61,18 @@ def _s3_client() -> Any:
 
 
 def download_s3_object(s3_url: str, dest: Path, *, sha256: str | None = None) -> None:
-    """Download an ``s3://bucket/key`` object to ``dest``, creating parent directories.
+    """Download an S3 object to ``dest``.
 
-    Writes atomically. The bytes land in a ``.part`` temp file, and a rename moves it into place
-    only on success. So an interrupted download never leaves a truncated file that a later
-    ``skip_existing`` check would trust.
-
-    boto3 does not hand over the bytes as they arrive, so a set ``sha256`` is checked by reading the
-    temp file once more after the transfer.
+    The function creates missing parent directories and replaces the destination only after success.
 
     Args:
         s3_url: The object URL, ``s3://<bucket>/<key>``.
         dest: The local destination path.
-        sha256: Optional hex digest the downloaded bytes must match.
+        sha256: An optional SHA-256 hash in hexadecimal that the downloaded file must match.
 
     Raises:
-        TimeFValidationError: If ``s3_url`` is not an ``s3://`` URL carrying both a bucket and a key.
-        TimeFFormatError: If ``sha256`` is set and does not match the downloaded bytes.
+        TimeFValidationError: If the URL uses a scheme other than ``s3://`` or lacks a bucket or key.
+        TimeFFormatError: If the downloaded file does not match the supplied SHA-256 hash.
     """
     parsed = urlparse(s3_url)
     bucket, key = parsed.netloc, parsed.path.lstrip("/")
