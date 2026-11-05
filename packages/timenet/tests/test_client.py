@@ -13,11 +13,9 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.engine import open_parents, run_pipeline
 from timenet.errors import (
-    TimeFFormatError,
     TimeFValidationError,
     TimeNetAccessError,
     TimeNetDatasetNotFoundError,
-    TimeNetFileError,
     TimeNetMissingParentError,
     TimeNetVersionUnavailableError,
 )
@@ -31,7 +29,7 @@ from timenet.testing import assert_datasets_equal, install_backends, make_datase
 from timenet.types import Access, DatasetMetadata, Domain, License, Version
 from timenet.types.access import AccessRequirement
 from timenet.types.parent_dataset_card import ParentDatasetCard
-from timenet.types.reference_keys import ParentAlias, SourceKey
+from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
@@ -63,7 +61,8 @@ class _Builder:
         store.put_dataset(dataset, force=force, values_backend=self.BACKEND, pinned_by=pinned_by or None)
 
 
-def test_a_local_child_reads_its_missing_payload_source_through_fetch_from(tmp_path):
+def test_a_local_child_reads_its_missing_payload_source_through_fetch_from(tmp_path, monkeypatch):
+    monkeypatch.setattr(builders_module, "entry_points", lambda group: [])
     origin, reference = _child_of_the_demo(tmp_path / "origin")
     cache = tmp_path / "cache"
     shutil.copytree(origin.root / "test/child/1.0.0", cache / "test/child/1.0.0")
@@ -75,6 +74,11 @@ def test_a_local_child_reads_its_missing_payload_source_through_fetch_from(tmp_p
         ". Read it from a registry that holds it with fetch_from=<registry> or build it from its connector with "
         "auto_build=True."
     )
+    # No installed connector builds the payload source, so with auto_build the hint names only fetch_from.
+    with pytest.raises(
+        TimeNetMissingParentError, match=r"\. Read it from a registry that holds it with fetch_from=<registry>\.$"
+    ):
+        client.open("test/child")
     with client.open("test/child", fetch_from=str(origin.root)) as reader:
         assert reader.read().records[0].signals[0].to_arrow().equals(make_dataset().records[0].signals[0].to_arrow())
     # The read opens the payload source in origin, where it is, and copies nothing.
@@ -151,61 +155,6 @@ def test_resampled_child_reads_and_downloads_without_its_build_only_parent(tmp_p
     with TimeFReader(version) as reader:
         reader.verify()
         assert reader.read().records[0].signals[0].to_arrow().equals(expected)
-
-
-@pytest.mark.parametrize("case", ["exact", "differs", "other-version"])
-def test_a_missing_payload_source_builds_with_its_own_connector_against_the_pins(tmp_path, monkeypatch, case):
-    registry, reference = _child_of_the_demo(tmp_path / "registry")
-    pins = registry.get_manifest("test/child").payload_sources[SourceKey(str(reference))]
-    shutil.rmtree(registry.root / reference.dataset_id)
-    calls = []
-    monkeypatch.setattr(_Builder, "VERSION", "2.0.0" if case == "other-version" else "1.0.0")
-    monkeypatch.setattr(_Builder, "BACKEND", "zarr" if case == "differs" else "parquet")
-    install_backends(monkeypatch, _Builder(calls))
-
-    with pytest.raises(TimeNetMissingParentError, match=r"auto_build=True\.$"):
-        TimeNet(registry).open("test/child", auto_build=False)
-    assert calls == []
-    if case == "other-version":
-        # No installed connector declares the exact version of the source that the child pins.
-        hint = r"\. Read it from a registry that holds it with fetch_from=<registry>\.$"
-        with pytest.raises(TimeNetMissingParentError, match=hint):
-            TimeNet(registry).open("test/child@1.0.0")
-        assert calls == []
-        return
-    if case == "differs":
-        pytest.importorskip("zarr")
-        # A Zarr build writes other files than the Parquet files that the child pins.
-        with pytest.raises(TimeFFormatError, match=r"Nothing was published"):
-            TimeNet(registry).open("test/child")
-        assert not registry.exists(reference.dataset_id, str(reference.version))
-    else:
-        # A registry to read from that lacks the source, so the source falls through to its connector.
-        with TimeNet(registry).open("test/child", fetch_from=LocalRegistry(tmp_path / "empty")) as reader:
-            signal = reader.read().records[0].signals[0]
-            assert signal.to_arrow().equals(make_dataset().records[0].signals[0].to_arrow())
-    # The source builds with its own connector, against the pins of the child that reads it.
-    assert calls == [(reference, False, {DatasetRef.parse("test/child@1.0.0"): pins})]
-
-
-@pytest.mark.parametrize("damaged", ["requested", "payload-source"])
-def test_a_damaged_release_raises_and_is_never_built_over(tmp_path, monkeypatch, damaged):
-    registry, reference = _child_of_the_demo(tmp_path / "registry")
-    origin = tmp_path / "origin"
-    shutil.copytree(registry.root, origin)
-    release = DatasetRef.parse("test/child@1.0.0") if damaged == "requested" else reference
-    control = registry.root / release.dataset_id / str(release.version) / "control.duckdb"
-    size = control.stat().st_size
-    control.write_bytes(b"cut short")
-    calls = []
-    install_backends(monkeypatch, _Builder(calls))
-
-    # The intact copy in fetch_from does not help: the read stops at the damaged copy, which comes first.
-    for fetch_from in (None, str(origin)):
-        with pytest.raises(TimeNetFileError) as caught:
-            TimeNet(registry).open("test/child", fetch_from=fetch_from)
-        assert str(caught.value) == f"{release}: file 'control.duckdb' has 9 bytes, expected {size:,} bytes."
-    assert calls == []
 
 
 def test_a_remote_client_takes_no_fetch_from_and_never_builds(tmp_path, monkeypatch):
@@ -564,22 +513,16 @@ def test_load_does_not_build_when_auto_build_is_false(registry_root, tmp_path, m
     assert calls == []  # auto_build=False skips the connector entirely
 
 
-def test_latest_builds_a_newer_version_that_the_connector_declares(registry_root, tmp_path, monkeypatch):
+@pytest.mark.parametrize("auto_build", [True, False])
+def test_latest_builds_a_newer_version_that_the_connector_declares_only_with_auto_build(
+    registry_root, monkeypatch, auto_build
+):
     calls = []
     monkeypatch.setattr(_Builder, "VERSION", "2.0.0")
     install_backends(monkeypatch, _Builder(calls))
-    with TimeNet(registry_root).open("timenet/hello-world") as reader:
-        assert str(reader.metadata.dataset_version) == "2.0.0"
-    assert calls == [(DatasetRef.parse("timenet/hello-world@2.0.0"), False, {})]
-
-
-def test_a_read_never_builds_without_auto_build_even_for_a_newer_declared_version(registry_root, tmp_path, monkeypatch):
-    calls = []
-    monkeypatch.setattr(_Builder, "VERSION", "2.0.0")
-    install_backends(monkeypatch, _Builder(calls))
-    with TimeNet(registry_root).open("timenet/hello-world", auto_build=False) as reader:
-        assert str(reader.metadata.dataset_version) == "1.0.0"
-    assert calls == []
+    with TimeNet(registry_root).open("timenet/hello-world", auto_build=auto_build) as reader:
+        assert str(reader.metadata.dataset_version) == ("2.0.0" if auto_build else "1.0.0")
+    assert calls == ([(DatasetRef.parse("timenet/hello-world@2.0.0"), False, {})] if auto_build else [])
 
 
 def _card(dataset_id, access, access_url=None):

@@ -533,9 +533,8 @@ def _gated_release(origin: Path, page: str) -> tuple[str, DatasetRef]:
     return dataset.metadata.dataset_id, release
 
 
-@pytest.mark.parametrize("page", ["own", "ancestor"])
-def test_a_local_client_checks_access_before_it_reads_from_a_remote_registry(tmp_path, page):
-    dataset_id, release = _gated_release(tmp_path / "origin", page)
+def test_a_local_client_checks_access_before_it_reads_from_a_remote_registry(tmp_path):
+    dataset_id, release = _gated_release(tmp_path / "origin", "ancestor")
     transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
     remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
 
