@@ -246,8 +246,8 @@ def _build_to(  # ruff: ignore[too-many-arguments]
     plan = plan_release_build(
         dataset_id,
         store=store,
-        # Glue: maps --fetch-from and --build-parents onto a list of sources, until the flags of the
-        # defaults replace them.
+        # TODO(adrian): Remove temporary glue which maps --fetch-from and --build-parents onto a
+        # list of sources until the flags of the defaults replace them.
         parents_from=[
             *([fetch_from] if fetch_from is not None else []),
             *([InstalledConnectors()] if build_parents else []),
