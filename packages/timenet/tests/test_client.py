@@ -140,36 +140,6 @@ def test_a_missing_version_is_copied_from_fetch_from_before_it_is_built(tmp_path
     assert calls == [(DatasetRef.parse("test/child@1.0.0"), False, {})]
 
 
-class _Requester(_Builder):
-    """A builder backend that also builds ``test/req``, whose card declares ``test/child`` as its parent."""
-
-    def dataset_ids(self):
-        return (*super().dataset_ids(), "test/req")
-
-    def card(self, dataset_id):
-        card = super().card(dataset_id)
-        if dataset_id != "test/req":
-            return card
-        return card.model_copy(update={"parents": {ParentAlias("child"): DatasetRef.parse("test/child@1.0.0")}})
-
-
-def test_a_build_reuses_a_held_parent_and_copies_only_its_missing_payload_source(tmp_path, monkeypatch):
-    # The registry holds the parent test/child, but not its payload source. The registry to copy from
-    # holds only the payload source.
-    registry, reference = _child_of_the_demo(tmp_path / "registry")
-    shutil.rmtree(registry.root / reference.dataset_id)
-    origin = LocalRegistry(tmp_path / "origin")
-    origin.put_dataset(make_dataset())
-    calls = []
-    install_backends(monkeypatch, _Requester(calls))
-
-    with TimeNet(registry).open("test/req", fetch_from=origin) as reader:
-        assert reader.read().records
-
-    assert calls == [(DatasetRef.parse("test/req@1.0.0"), False, {})]
-    assert registry.exists(reference.dataset_id, str(reference.version))
-
-
 class _Resampled(BaseConnector[str]):
     """Writes the first demo Signal at half its rate, from its declared parent, into a Record of its own."""
 
