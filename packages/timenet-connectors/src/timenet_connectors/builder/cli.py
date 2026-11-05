@@ -63,7 +63,8 @@ def _resolve_target(out: str | None) -> WritableRegistry | Path:
     Raises:
         TimeNetRegistryError: If ``out`` is blank or cannot be opened as a registry.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by open_registry
-    # Glue: the store of the default list, until the build CLI takes the flags of the defaults.
+    # TODO(adrian): Remove temporary glue which maps a missing --out onto the store of the
+    # default list until the build CLI takes the flags of the defaults.
     if out is None:
         return settings().local_registry_dir
     try:
@@ -238,7 +239,8 @@ def _build_to(  # ruff: ignore[too-many-arguments]
         console.success(f"Nothing to do: '{release.dataset_id}' {release.version} is already in the remote --out")
         return str(release.version)
     else:
-        # Glue: the store of the default list, until --publish-to replaces a remote --out.
+        # TODO(adrian): Remove temporary glue which maps a remote --out onto a build into the
+        # store of the default list until --publish-to replaces a remote --out.
         store, remote = LocalRegistry(settings().local_registry_dir), target
         # A build into the remote registry found the parents there. So without --fetch-from, the build
         # copies a missing parent from the remote registry into the local one.
