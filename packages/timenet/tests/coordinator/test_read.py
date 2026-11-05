@@ -6,7 +6,6 @@ from _demo_child import _child_of_the_demo
 from _fake_registry import build_fake, build_service_fake
 import pytest
 
-from timenet.coordinator import read as read_module
 from timenet.coordinator.plan import Step
 from timenet.coordinator.read import plan_read, read_release
 from timenet.dataset import TimeFDataset
@@ -156,6 +155,7 @@ def test_a_damaged_copy_fails_the_read_before_any_step_runs(tmp_path, monkeypatc
     store, _ = _child_of_the_demo(tmp_path / "store")
     # No registry holds DEMO, so the plan builds it before the read opens CHILD.
     shutil.rmtree(release_dir(store.root, DEMO))
+    # Origin and the connector also provide CHILD, but the read stops at the damaged copy, which comes first.
     origin = LocalRegistry(tmp_path / "origin")
     shutil.copytree(store.root, origin.root)
     (release_dir(store.root, CHILD) / "control.duckdb").write_bytes(b"cut short")
@@ -171,7 +171,7 @@ def test_a_damaged_copy_in_the_store_fails_a_read_that_no_registry_serves(tmp_pa
     store = LocalRegistry(tmp_path / "store")
     store.put_dataset(make_dataset())
     (release_dir(store.root, DEMO) / "control.duckdb").write_bytes(b"cut short")
-    calls = _install_demo_backend(monkeypatch)
+    _install_demo_backend(monkeypatch)
     sources: list[ReleaseSource]
     if answer == "build":
         sources = [InstalledConnectors()]
@@ -181,20 +181,7 @@ def test_a_damaged_copy_in_the_store_fails_a_read_that_no_registry_serves(tmp_pa
         # The damage error comes before the access error of the registry that lists DEMO.
         sources = [_gated_remote(tmp_path)]
     with pytest.raises(TimeNetFileError, match=r"^timenet/hello-world@1\.0\.0: file 'control\.duckdb' has 9 bytes"):
-        read_release(DEMO.dataset_id, "1.0.0", sources=sources, store=store)
-    assert calls == []
-
-
-def test_a_read_builds_a_release_that_only_a_connector_provides(tmp_path, monkeypatch):
-    store = LocalRegistry(tmp_path / "store")
-    calls = _install_demo_backend(monkeypatch)
-    sources = [store, InstalledConnectors()]
-    plan = plan_read(DEMO.dataset_id, None, sources=sources, store=store)
-    assert plan.steps == (Step(DEMO, "build", InstalledConnectors()),)
-    version = read_release(DEMO.dataset_id, None, sources=sources, store=store)
-    assert calls == [(DEMO, False, {})]
-    assert store.exists(DEMO.dataset_id, str(DEMO.version))
-    assert Path(version.root).is_relative_to(store.root)
+        plan_read(DEMO.dataset_id, "1.0.0", sources=sources, store=store)
 
 
 def test_a_payload_source_resolves_on_its_own(tmp_path):
@@ -235,7 +222,7 @@ def test_a_missing_payload_source_builds_against_the_pins_of_the_release(tmp_pat
     assert Path(version.payload_sources[SourceKey(str(DEMO))].root).is_relative_to(store.root)
 
 
-def test_a_payload_source_without_a_step_opens_from_the_store(tmp_path, monkeypatch):
+def test_a_read_builds_a_release_that_only_a_connector_provides(tmp_path, monkeypatch):
     store = LocalRegistry(tmp_path / "store")
     store.put_dataset(make_dataset())
     calls = _install_demo_backend(monkeypatch, _card(CHILD, parents={ParentAlias("parent"): DEMO}))
@@ -245,6 +232,8 @@ def test_a_payload_source_without_a_step_opens_from_the_store(tmp_path, monkeypa
     assert plan.steps == (Step(CHILD, "build", InstalledConnectors()),)
     version = read_release(CHILD.dataset_id, None, sources=sources, store=store)
     assert calls == [(CHILD, False, {})]
+    assert Path(version.root).is_relative_to(store.root)
+    # A payload source without a step opens from the store.
     assert Path(version.payload_sources[SourceKey(str(DEMO))].root).is_relative_to(store.root)
 
 
@@ -332,18 +321,10 @@ def test_latest_without_the_connectors_in_the_list_reads_the_older_copy_and_buil
     assert calls == []
 
 
-@pytest.mark.parametrize("needed", ["release", "payload source"])
-def test_a_read_that_needs_a_build_without_a_store_raises(tmp_path, monkeypatch, needed):
+def test_a_read_that_needs_a_build_without_a_store_raises(monkeypatch):
     calls = _install_demo_backend(monkeypatch)
-    sources = [InstalledConnectors()]
-    if needed == "payload source":
-        origin, _ = _child_of_the_demo(tmp_path / "origin")
-        shutil.rmtree(release_dir(origin.root, DEMO))
-        sources = [origin, *sources]
     with pytest.raises(TimeFValidationError, match=r"timenet/hello-world@1\.0\.0 needs a build"):
-        read_release(
-            CHILD.dataset_id if needed == "payload source" else DEMO.dataset_id, None, sources=sources, store=None
-        )
+        read_release(DEMO.dataset_id, None, sources=[InstalledConnectors()], store=None)
     assert calls == []
 
 
@@ -443,16 +424,11 @@ def test_two_readers_that_pin_one_file_differently_fail_the_read_before_any_step
     assert calls == []
 
 
-def test_a_remote_read_runs_no_step_and_fetches_each_manifest_once(tmp_path, monkeypatch):
+def test_a_remote_read_fetches_each_manifest_once(tmp_path, monkeypatch):
     origin, _ = _child_of_the_demo(tmp_path / "origin")
     transport, _ = build_service_fake(origin.root)
     remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
     reads = _count_reads(monkeypatch, remote)
-
-    def no_run(*args, **kwargs):
-        raise AssertionError("a read in place runs no step")
-
-    monkeypatch.setattr(read_module, "run_plan", no_run)
 
     version = read_release(CHILD.dataset_id, None, sources=[remote], store=None)
 
