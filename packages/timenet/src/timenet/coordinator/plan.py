@@ -150,7 +150,7 @@ class _Graph:
             return
         answer = self.resolve(reference)
         entry = answer.entry if isinstance(answer, Found) else None
-        if isinstance(entry, BaseRegistry) and not _is_output(entry, self.output):
+        if isinstance(entry, BaseRegistry) and not _is_same_registry(entry, self.output):
             self.copy(reference, role, entry)
         elif damage is not None:
             # A copy from another registry repairs a damaged copy. Nothing else replaces it.
@@ -159,9 +159,9 @@ class _Graph:
             self.build(reference, role, entry)
         elif isinstance(answer, NotServed):
             raise answer.access_error(reference.dataset_id)
-        elif entry is None or _is_output(entry, self.output):
+        elif entry is None or _is_same_registry(entry, self.output):
             raise TimeNetMissingParentError(
-                reference, needed_by, self.searched(reference), payload_source=role == "payload-source"
+                reference, needed_by, self.describe_searched_sources(reference), payload_source=role == "payload-source"
             )
         else:
             raise TimeFValidationError(
@@ -331,7 +331,7 @@ class _Graph:
         damage = self.damage[reference]
         return (manifest, None) if damage is None else (None, damage)
 
-    def searched(self, reference: DatasetRef) -> str:
+    def describe_searched_sources(self, reference: DatasetRef) -> str:
         """Name the output and each source, for the message of a missing release.
 
         Args:
@@ -395,7 +395,7 @@ class _Graph:
             path = " -> ".join(str(reference) for reference in (*cycle, cycle[0]))
             raise TimeFValidationError(f"dataset parent cycle: {path}") from error
 
-    def steps(self) -> list[Step]:
+    def create_ordered_steps(self) -> list[Step]:
         """Make one step for each release that the plan copies or builds, in the order of :meth:`order`.
 
         Returns:
@@ -474,7 +474,7 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
         TimeNetDatasetNotFoundError: If no installed connector builds the dataset.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by declared
     # The output is never a source for itself.
-    parents_from = [source for source in parents_from if not _is_output(source, output)]
+    parents_from = [source for source in parents_from if not _is_same_registry(source, output)]
     card = declared(dataset_id).card
     open_only = open_access_only
     if open_only:
@@ -504,10 +504,10 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
         for source in sources:
             graph.visit(source.release, root, source)
     graph.check_copied_pins()
-    return root, graph.steps()
+    return root, graph.create_ordered_steps()
 
 
-def _is_output(source: ReleaseSource, output: LocalRegistry) -> bool:
+def _is_same_registry(source: ReleaseSource, output: LocalRegistry) -> bool:
     """Return whether a source is the output, or a local registry over the directory of a local output.
 
     Args:
