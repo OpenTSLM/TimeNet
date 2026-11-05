@@ -152,6 +152,27 @@ def test_get_manifest_names_the_path_of_a_cut_manifest(registry_root):
         LocalRegistry(registry_root).get_manifest("timenet/hello-world", "1.0.0")
 
 
+def test_find_manifest_answers_none_for_an_absent_release_and_refuses_a_misplaced_one(registry_root):
+    registry = LocalRegistry(registry_root)
+    assert registry.find_manifest(DatasetRef.parse("timenet/hello-world@9.0.0")) is None
+    misplaced = registry_root / "timenet/hello-world/2.0.0"
+    misplaced.mkdir()
+    (misplaced / "manifest.json").write_bytes((registry_root / "timenet/hello-world/1.0.0/manifest.json").read_bytes())
+    with pytest.raises(TimeFFormatError, match="declares a different dataset ID or version"):
+        registry.find_manifest(DatasetRef.parse("timenet/hello-world@2.0.0"))
+
+
+def test_damage_names_the_missing_file_of_a_stored_release(registry_root):
+    registry = LocalRegistry(registry_root)
+    release = DatasetRef.parse("timenet/hello-world@1.0.0")
+    assert registry.damage(release) is None
+    part = registry.get_manifest(release.dataset_id, "1.0.0").files.control[0]
+    (registry_root / "timenet/hello-world/1.0.0" / part.path).unlink()
+    damage = registry.damage(release)
+    assert damage is not None
+    assert (damage.release, damage.path) == (release, part.path)
+
+
 def test_latest_version_ignores_staging_dirs(registry_root):
     # A crashed build can leave a `<version>.tmp-<uuid>` sibling (briefly holding a manifest.json).
     stale = registry_root / "demo/ecg" / "2.0.0.tmp-deadbeef"

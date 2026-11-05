@@ -130,10 +130,9 @@ class RemoteRegistry(LazyReadRegistry):
         filesystem = RegistryFileSystem(self._base_url, files, token=self._http.token, transport=self._http.transport)
         return DatasetVersion(manifest, pafs.PyFileSystem(pafs.FSSpecHandler(filesystem)), root)
 
-    def download_release(  # ruff: ignore[too-many-arguments]
+    def download_release(
         self,
-        dataset_id: str,
-        version: str,
+        reference: DatasetRef,
         directory: str | Path,
         *,
         force: bool = False,
@@ -143,13 +142,13 @@ class RemoteRegistry(LazyReadRegistry):
         """Download one release's files to a local directory.
 
         Args:
-            dataset_id: The dataset ID, as ``org/name``.
-            version: The exact version string.
+            reference: The exact release.
             directory: The local release directory, ``<root>/<dataset_id>/<version>``.
             force: Download again even if a complete copy exists.
             manifest: The release's manifest, or ``None`` to fetch it from this registry.
             progress_cb: Callback that receives each downloaded chunk's byte count, or ``None``.
         """
+        dataset_id, version = reference.dataset_id, str(reference.version)
         if manifest is None:
             manifest = self.get_manifest(dataset_id, version)
         download_version_files(

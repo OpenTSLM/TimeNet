@@ -11,13 +11,12 @@ import asyncio
 from collections.abc import Coroutine
 import hashlib
 from pathlib import Path
-import shutil
 import threading
 from typing import Any
-import uuid
 
 import httpx
 
+from timenet._fs import staged_directory
 from timenet.errors import TimeNetFileError
 from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
@@ -67,21 +66,9 @@ def download_version_files(  # ruff: ignore[too-many-arguments]
     if complete_copy(dest_dir, manifest) and not force:
         return dest_dir
     files = list(manifest.files.all_files())
-    parent = dest_dir.parent
-    parent.mkdir(parents=True, exist_ok=True)
-    # Each download stages into a unique dir and removes it in the finally below. A hard kill
-    # (SIGKILL/power loss) can leave one behind, but do NOT sweep sibling <version>.tmp-* dirs here: a
-    # concurrent download of the same version has a live staging dir with the same prefix, and sweeping
-    # it would break that download mid-write. A rare orphaned dir is the lesser evil.
-    staging = parent / f"{dest_dir.name}.tmp-{uuid.uuid4().hex}"
-    try:
+    with staged_directory(dest_dir) as staging:
         _run(_download_all(http, dataset_id, version, files, staging, max_concurrency, progress_cb))
         (staging / "manifest.json").write_text(manifest.to_json())  # already parsed; no extra round trip
-        if dest_dir.exists():
-            shutil.rmtree(dest_dir)
-        staging.replace(dest_dir)
-    finally:
-        shutil.rmtree(staging, ignore_errors=True)
     return dest_dir
 
 

@@ -106,6 +106,19 @@ class Manifest(TimeFModel):
         return validated.model_dump_json(indent=2, by_alias=True)
 
 
+def same_release(a: Manifest, b: Manifest) -> bool:
+    """Compare two manifests, ignoring their build environments.
+
+    Args:
+        a: One manifest.
+        b: The other manifest.
+
+    Returns:
+        Whether the manifests are equal apart from ``build_env``.
+    """
+    return a.model_copy(update={"build_env": {}}) == b.model_copy(update={"build_env": {}})
+
+
 def parse_manifest(text: str | bytes, where: str) -> Manifest:
     """Parse the JSON text of a stored manifest.
 
