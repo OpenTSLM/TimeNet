@@ -56,7 +56,8 @@ def build(  # ruff: ignore[too-many-arguments]
     from timenet.sources import InstalledConnectors  # ruff: ignore[import-outside-top-level]
 
     release = declared(dataset_id).release
-    # Glue: the store of the default list, until timenet.build() replaces this function.
+    # TODO(adrian): Remove temporary glue which maps a missing out onto the local registry of the default
+    # list until timenet.build() replaces this function.
     root = Path(out).expanduser() if out is not None else settings().local_registry_dir
     source = open_registry(fetch_from) if isinstance(fetch_from, str) else fetch_from
     store = LocalRegistry(root)
