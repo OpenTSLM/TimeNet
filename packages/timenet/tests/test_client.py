@@ -440,10 +440,12 @@ def test_search_filters_connector_cards_like_registry_rows(tmp_path, monkeypatch
         client.search(dataset_id=both),
     ]
     assert [[row.dataset_id for row in rows] for rows in matching] == [both] * len(matching)
+    # Each filter that matches neither row drops both, the card as well as the registry row.
     assert client.search(query="nothing") == []
     assert client.search(domain=Domain.CARDIOLOGY) == []
     assert client.search(tag=["demo", "other"]) == []
-    assert [row.dataset_id for row in client.search(dataset_id="c/three")] == ["c/three"]
+    assert client.search(license=License.MIT) == []
+    assert client.search(dataset_id="x/y") == []
 
 
 def test_search_rejects_a_negative_limit(registry_root):
