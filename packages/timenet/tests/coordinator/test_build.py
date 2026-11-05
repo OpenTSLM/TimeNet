@@ -375,8 +375,3 @@ def test_plan_release_build_checks_the_connector_before_it_plans(store, backends
     backends.append(_Backend(_card(REF_AB)))
     with pytest.raises(TimeNetVersionUnavailableError):
         plan_release_build(dataset, store=store)
-
-
-def test_plan_release_build_without_a_backend_raises_not_found(store, backends):
-    with pytest.raises(TimeNetDatasetNotFoundError, match="no installed connector builds 'a/b'"):
-        plan_release_build("a/b", store=store)

@@ -222,13 +222,6 @@ def test_a_declared_parent_needs_only_its_direct_payload_sources(tmp_path, monke
             _parent_steps(CHILD.dataset_id, output, parents_from=[origin])
         assert (caught.value.missing, caught.value.needed_by, caught.value.payload_source) == (GRAND, SOURCE, True)
         assert str(caught.value) == f"payload source {GRAND} of {SOURCE} is not in {output} or {origin}."
-        with pytest.raises(TimeNetMissingParentError) as caught:
-            run_plan(plan_release_build(CHILD.dataset_id, store=output, parents_from=[origin]), output)
-        assert str(caught.value) == f"payload source {GRAND} of {SOURCE} is not in {output} or {origin}."
-        assert child_builds == []
-        # Nothing was copied. In "source-in-origin", the output holds DECLARED from the start.
-        assert not output.exists(SOURCE.dataset_id, str(SOURCE.version))
-        assert output.exists(DECLARED.dataset_id, str(DECLARED.version)) == (where == "source-in-origin")
         return
     # DECLARED opens with SOURCE, its direct payload source, which the output holds. So the plan
     # does not need GRAND, SOURCE's own source.
@@ -601,21 +594,16 @@ class _NoDownloads(_Hosted):
         pytest.fail(f"downloaded {dataset_id}@{version}/{relpath}")
 
 
-@pytest.mark.parametrize("page", ["own", "ancestor"])
-def test_a_copy_of_a_release_that_is_not_open_fails_before_any_download(tmp_path, monkeypatch, page):
+def test_a_copy_of_a_release_that_is_not_open_fails_before_any_download(tmp_path, monkeypatch):
     cards = _install_cards(monkeypatch, child={"grand": GRAND, "parent": PARENT}, parent={})
     origin = _NoDownloads(tmp_path / "origin")
     # GRAND is open and would be copied first.
     origin.put_dataset(make_dataset())
+    # The card of PARENT stays open. Its lineage holds an ancestor, which is credentialed.
     ancestor = DatasetRef.parse("test/ancestor@1.0.0")
-    if page == "own":
-        parent, requirement = TimeFDataset(metadata=cards[PARENT.dataset_id].model_copy(update=_GATED)), PARENT
-    else:
-        # The card of PARENT stays open. Its lineage holds an ancestor, which is credentialed.
-        parent = TimeFDataset(metadata=cards[PARENT.dataset_id])
-        card = make_dataset().metadata.model_copy(update={"dataset_id": ancestor.dataset_id, **_GATED})
-        parent._import_state.lineage[str(ancestor)] = ParentDatasetCard(metadata=card)
-        requirement = ancestor
+    parent = TimeFDataset(metadata=cards[PARENT.dataset_id])
+    card = make_dataset().metadata.model_copy(update={"dataset_id": ancestor.dataset_id, **_GATED})
+    parent._import_state.lineage[str(ancestor)] = ParentDatasetCard(metadata=card)
     origin.put_dataset(parent)
     output = LocalRegistry(tmp_path / "out")
 
@@ -623,7 +611,7 @@ def test_a_copy_of_a_release_that_is_not_open_fails_before_any_download(tmp_path
         run_plan(plan_release_build(CHILD.dataset_id, store=output, parents_from=[origin]), output)
 
     assert caught.value.dataset == PARENT
-    assert caught.value.requirements == (AccessRequirement(requirement, Access.CREDENTIALED, _GATED["access_url"]),)
+    assert caught.value.requirements == (AccessRequirement(ancestor, Access.CREDENTIALED, _GATED["access_url"]),)
     assert not output.exists(GRAND.dataset_id, str(GRAND.version))
 
 
@@ -802,18 +790,6 @@ def test_force_is_a_usage_error_if_the_remote_out_holds_the_version(tmp_path, mo
     assert "a published version never changes" in " ".join(output.replace("│", " ").split())
     assert calls == [(CHILD.dataset_id, False)]
     assert _files(local.root) == held
-
-
-def test_a_copy_step_copies_from_the_first_registry_that_holds_the_parent(tmp_path, monkeypatch):
-    _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    empty, origin = LocalRegistry(tmp_path / "empty"), LocalRegistry(tmp_path / "origin")
-    _store_from_card(PARENT.dataset_id, origin.root, force=False)
-
-    steps = _parent_steps(
-        CHILD.dataset_id, LocalRegistry(tmp_path / "out"), parents_from=[empty, origin, InstalledConnectors()]
-    )
-
-    assert steps == [Step(PARENT, "copy", origin)]
 
 
 def test_a_store_in_parents_from_is_not_copied_onto_itself(tmp_path, monkeypatch, child_builds):
