@@ -3,10 +3,12 @@
 Each record is one PTB-XL recording: 12 leads at 500 Hz in millivolts. Every chain-of-thought row is
 an :class:`~timenet.types.AnswerTask` on that recording. Its ``prompt`` is the question, ``targets``
 is the short evaluation answer, and ``rationale`` is the reasoning target. So a recording carries many
-QA tasks. There is no record per question. The connector stores per-question metadata (question type,
-template, answer options, clinical context) once, as value-deduped annotations that the tasks
-reference. Each recording carries its dataset split, and the patient's sex and age from PTB-XL. The ~230k
-tasks stream to disk, so they never all live in memory.
+QA tasks. There is no record per question. The connector stores the question type, the answer options,
+and the clinical context once, as value-deduped annotations that the tasks reference as their input.
+The task metadata stores the question template ID for provenance. The question text already expresses
+the template, so the ID is excluded from the input annotations. Each recording carries its dataset
+split and the patient's sex and age from PTB-XL. The ~230k tasks stream to disk, so they never all
+live in memory.
 
 The connector imports the recordings and their patient metadata from the pinned PTB-XL TimeF
 parent. The per-template answer options come from the ``Jwoo5/ecg-qa`` GitHub repo. The precomputed
@@ -203,7 +205,6 @@ class _TaskAnnotations:
     """The dataset annotations the QA tasks reference, one lookup per annotation key."""
 
     question_type: dict[str, Annotation]
-    template_id: dict[int, Annotation]
     answer_options: dict[int, Annotation]
     """Keyed by template id. A template with no answer options has no entry."""
     clinical_context: dict[int, Annotation]
@@ -361,7 +362,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         Args:
             dataset: The dataset the annotations attach to.
             question_types: The distinct question types.
-            template_ids: The distinct template ids.
+            template_ids: The distinct template ids, which select the answer options.
             contexts: Each recording's clinical context, keyed by PTB-XL ECG ID.
             answers: Per-template answer options.
 
@@ -372,10 +373,8 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             question_type: dataset.annotate(Annotation(key="question_type", value=question_type))
             for question_type in sorted(question_types)
         }
-        template_id_annotations: dict[int, Annotation] = {}
         answer_options_annotations: dict[int, Annotation] = {}
         for template_id in sorted(template_ids):
-            template_id_annotations[template_id] = dataset.annotate(Annotation(key="template_id", value=template_id))
             options = answers.get(template_id)
             if options:
                 answer_options_annotations[template_id] = dataset.annotate(
@@ -387,7 +386,6 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         }
         return _TaskAnnotations(
             question_type=question_type_annotations,
-            template_id=template_id_annotations,
             answer_options=answer_options_annotations,
             clinical_context={ecg_id: context_annotations[context] for ecg_id, context in contexts.items()},
         )
@@ -410,10 +408,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         """
         for split, csv_path in source.cot_csvs:
             for row in _iter_cot_rows(csv_path):
-                input_annotations = [
-                    annotations.question_type[row.question_type],
-                    annotations.template_id[row.template_id],
-                ]
+                input_annotations = [annotations.question_type[row.question_type]]
                 if (options := annotations.answer_options.get(row.template_id)) is not None:
                     input_annotations.append(options)
                 input_annotations.append(annotations.clinical_context[row.ecg_id])
@@ -424,6 +419,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
                     rationale=row.rationale,
                     input_annotations=tuple(input_annotations),
                     split=split,
+                    metadata={"template_id": row.template_id},
                 )
 
 
