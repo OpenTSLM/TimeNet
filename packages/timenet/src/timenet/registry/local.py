@@ -7,7 +7,7 @@ from typing import BinaryIO
 
 import pyarrow.fs as pafs
 
-from timenet._fs import same_directory, staged_directory
+from timenet._fs import delete_and_measure, same_directory, staged_directory
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetFileError
 from timenet.format.constants import MANIFEST_FILE
@@ -49,11 +49,6 @@ class LocalRegistry(WritableRegistry):
         return self._root
 
     @property
-    def local_root(self) -> Path:
-        """The directory that holds complete local releases."""
-        return self._root
-
-    @property
     def requires_open_access(self) -> bool:
         """Whether local releases must declare open access.
 
@@ -65,30 +60,58 @@ class LocalRegistry(WritableRegistry):
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
 
-        Search at any depth. This finds both flat (``hello_world``) and namespaced (``org/name``)
-        layouts. A dataset id is the path from the root to a version directory's parent.
-
         Returns:
             One :class:`~timenet.types.DatasetMetadata` per dataset.
         """
+        latest: dict[str, Version] = {}
+        for release in self.releases():
+            # The releases come sorted by version, so the last one of a dataset is its latest.
+            latest[release.dataset_id] = release.version
+        return [self.get_manifest(dataset_id, str(version)).metadata for dataset_id, version in latest.items()]
+
+    def releases(self) -> list[DatasetRef]:
+        """List the committed releases at any depth below the root.
+
+        A release is a ``<dataset_id>/<version>/manifest.json`` outside hidden folders and unfinished writes.
+
+        Returns:
+            The releases, sorted by dataset ID and version.
+        """
         if not self._root.is_dir():
             return []
-        latest_versions: dict[str, str] = {}
+        found: list[DatasetRef] = []
         for manifest_path in self._root.rglob(MANIFEST_FILE):
-            version_dir = manifest_path.parent
-            parts = version_dir.relative_to(self._root).parts
-            if any(part.startswith(".") or ".tmp-" in part for part in parts):
+            parts = manifest_path.parent.relative_to(self._root).parts
+            # A release needs a dataset ID before its version, so a manifest at the root or one level below is none.
+            if not parts[:-1] or any(part.startswith(".") or ".tmp-" in part for part in parts):
                 continue
-            dataset_id = "/".join(parts[:-1])
-            version = parts[-1]
-            if not dataset_id or not _is_version(version):
-                continue
-            current = latest_versions.get(dataset_id)
-            if current is None or Version.parse(version) > Version.parse(current):
-                latest_versions[dataset_id] = version
-        return [
-            self.get_manifest(dataset_id, version).metadata for dataset_id, version in sorted(latest_versions.items())
-        ]
+            try:
+                found.append(DatasetRef.parse(f"{'/'.join(parts[:-1])}@{parts[-1]}"))
+            except TimeFValidationError:
+                continue  # for example a directory whose name is not a version
+        return sorted(found, key=lambda release: (release.dataset_id, release.version))
+
+    def remove_release(self, release: DatasetRef) -> int:
+        """Delete a release and the dataset folders that this leaves empty.
+
+        Args:
+            release: The release to delete.
+
+        Returns:
+            The bytes freed.
+
+        Raises:
+            TimeNetRegistryError: If the registry is read-only.
+            OSError: If the release folder cannot be removed completely.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by check_writable and delete_and_measure)
+        self.check_writable(f"a removal of {release}")
+        directory = release_dir(self._root, release)
+        freed = delete_and_measure(directory)
+        parent = directory.parent
+        while self._root in parent.parents and not any(parent.iterdir()):
+            parent.rmdir()
+            parent = parent.parent
+        return freed
 
     def get_manifest(self, dataset_id: str, version: str | None = None) -> Manifest:
         """Return a dataset's manifest (latest version if unspecified).

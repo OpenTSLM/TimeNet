@@ -17,11 +17,8 @@ def _unexpected_resolve(*args, **kwargs):
     raise AssertionError(f"resolve should not have run: {args} {kwargs}")
 
 
-def test_build_then_load_round_trip(monkeypatch, tmp_path):
-    # timenet_connectors.build/load anchor on the same registry, so a build here loads back. The
-    # consumer default is the hosted service, so point both at a local registry for this round trip.
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path))
-    monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "registry"))
+def test_build_then_load_round_trip(monkeypatch):
+    # timenet_connectors.build/load anchor on the store of the default list, so a build here loads back.
     # In-process, so the round trip stays in this interpreter instead of shelling out to uv.
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
     monkeypatch.setattr(backend_module, "run_isolated_build", _unexpected_isolation)

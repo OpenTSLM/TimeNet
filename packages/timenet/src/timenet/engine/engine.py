@@ -5,7 +5,8 @@ from contextlib import ExitStack
 from pathlib import Path
 import shutil
 
-from timenet.config import settings
+from timenet.cache import _check_cache_deletion
+from timenet.config import is_cache_folder, make_cache_folder, settings
 from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
 from timenet.dataset.composition import _record_parent
@@ -48,7 +49,7 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     Args:
         connector: The connector to build.
         root: Output root. This function writes the dataset to ``<root>/<dataset_id>/<version>/``.
-        cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/<dataset_id>``).
+        cache_dir: Directory for downloaded artifacts (defaults to ``<TIMENET_CACHE>/downloads/<dataset_id>``).
         keep_cache: Keep the cache directory instead of removing it once the dataset is stored.
             Conversion is the only stage that needs the raw sources, so removing them frees disk
             after a successful build. The sources re-download on the next run.
@@ -63,8 +64,10 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     Raises:
         TimeFValidationError: If the card declares parents and the connector does not override
             ``compose``, or the dataset that ``compose`` returns has another card than the one that
-            the engine read. The build then stores no release.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes and _compose
+            the engine read. The build then stores no release. Also before any download, if
+            ``root`` and the raw downloads that the build removes overlap, or the cache is the home
+            folder or a folder above it.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose and the cache check
     values_backend = _check_values_backend(connector)
     # Read only the connector's dataset.yaml card, a tiny local file, not the dataset itself. This lets
     # us resolve the version directory and skip the expensive download and convert when it exists.
@@ -75,7 +78,19 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
         return version_dir
     _check_composes(connector, metadata)
 
-    cache = cache_dir if cache_dir is not None else settings().cache_dir / metadata.dataset_id
+    # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
+    # delete it.
+    downloads = None
+    if cache_dir is None:
+        cfg = settings()
+        downloads = cfg.downloads_dir
+        make_cache_folder(downloads)
+        cache = downloads / metadata.dataset_id
+        if not keep_cache and is_cache_folder(downloads):
+            # The build removes these downloads at the end, so it checks them before the first download.
+            _check_cache_deletion(cfg.cache_dir, [cache], local_registry=root)
+    else:
+        cache = cache_dir
     cache.mkdir(parents=True, exist_ok=True)
 
     # Open the declared parents before downloading, so a missing parent fails before any raw I/O.
@@ -93,11 +108,20 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
             replace=force,
             pinned_by=pinned_by,
         )
-    # Only clean a cache that we created. A caller-supplied cache_dir is user-owned. We must never
-    # delete it.
-    if not keep_cache and cache_dir is None and cache.is_dir():
-        shutil.rmtree(cache)
+    if not keep_cache and downloads is not None:
+        _remove_downloads(downloads, cache)
     return version_dir
+
+
+def _remove_downloads(downloads: Path, folder: Path) -> None:
+    """Remove dataset downloads when the download cache has TimeNet's marker.
+
+    Args:
+        downloads: The download cache folder.
+        folder: The dataset directory in ``downloads``.
+    """
+    if folder.is_dir() and is_cache_folder(downloads):
+        shutil.rmtree(folder)
 
 
 def open_parents(metadata: DatasetMetadata, registry: LocalRegistry) -> BuildContext:

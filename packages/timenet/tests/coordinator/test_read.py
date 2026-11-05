@@ -127,7 +127,7 @@ def _gated_remote(tmp_path) -> RemoteRegistry:
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(_demo(make_dataset().metadata.model_copy(update=_GATED)))
     transport, _ = build_fake(release_dir(origin.root, DEMO))
-    return RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
+    return RemoteRegistry("http://api.local", transport=transport)
 
 
 def _offline(request):
@@ -305,7 +305,7 @@ def test_a_read_without_a_version_stops_at_the_first_source_that_serves_it(tmp_p
     store = LocalRegistry(tmp_path / "store")
     store.put_dataset(make_dataset())
     # A later registry cannot be reached, and the installed connector builds a newer version.
-    down = RemoteRegistry("http://down.local", transport=httpx.MockTransport(_offline), cache_dir=tmp_path / "c")
+    down = RemoteRegistry("http://down.local", transport=httpx.MockTransport(_offline))
     calls = _install_demo_backend(monkeypatch, _card(DatasetRef.parse(f"{DEMO.dataset_id}@2.0.0")))
 
     version = read_release(DEMO.dataset_id, None, sources=[store, down, InstalledConnectors()], store=store)
@@ -451,7 +451,7 @@ def test_two_readers_that_pin_one_file_differently_fail_the_read_before_any_step
 def test_a_remote_read_fetches_each_manifest_once(tmp_path, monkeypatch):
     origin, _ = _child_of_the_demo(tmp_path / "origin")
     transport, _ = build_service_fake(origin.root)
-    remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
+    remote = RemoteRegistry("http://api.local", transport=transport)
     reads = _count_reads(monkeypatch, remote)
 
     version = read_release(CHILD.dataset_id, None, sources=[remote], store=None)
@@ -556,7 +556,7 @@ def test_a_read_of_the_latest_version_asks_each_source_once(tmp_path, monkeypatc
     for name, dataset in (("first", make_dataset()), ("second", _demo(_card(newer)))):
         LocalRegistry(tmp_path / name).put_dataset(dataset)
         transport, _ = build_service_fake(tmp_path / name)
-        registries.append(RemoteRegistry(f"http://{name}.local", transport=transport, cache_dir=tmp_path / f"{name}-c"))
+        registries.append(RemoteRegistry(f"http://{name}.local", transport=transport))
     reads = _count_reads(monkeypatch, registries[0])
 
     version = read_release(DEMO.dataset_id, "latest", sources=registries, store=None)

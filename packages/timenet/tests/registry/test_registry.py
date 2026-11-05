@@ -113,7 +113,7 @@ def test_local_registry_path_expands_user(monkeypatch, tmp_path):
     "uri", ["timenet://", "timenet://hello/world", "http://reg.example", "https://reg.example", "s3://bucket/reg"]
 )
 def test_local_registry_path_rejects_remote(uri):
-    with pytest.raises(TimeNetRegistryError, match="remote"):
+    with pytest.raises(TimeNetRegistryError, match="is remote; the local registry needs a local directory"):
         local_registry_path(uri)
 
 
@@ -351,3 +351,11 @@ def test_a_read_only_registry_refuses_put_dataset_and_a_copy_into_it(tmp_path):
     with pytest.raises(TimeNetRegistryError, match=refused + r"a copy of timenet/hello-world@1\.0\.0\."):
         copy_release(release, origin, registry)
     assert not registry.root.exists()
+
+
+def test_a_read_only_registry_refuses_to_remove_a_release(tmp_path):
+    release = LocalRegistry(tmp_path).put_dataset(make_dataset())
+    registry = LocalRegistry(tmp_path, read_only=True)
+    with pytest.raises(TimeNetRegistryError, match=r"refuses a removal of timenet/hello-world@1\.0\.0\. "):
+        registry.remove_release(release)
+    assert registry.exists(release.dataset_id, str(release.version))

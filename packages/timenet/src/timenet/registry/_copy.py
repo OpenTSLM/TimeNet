@@ -102,7 +102,7 @@ def _copy_one(  # ruff: ignore[too-many-arguments]
     # A local registry is a folder that the copy reads or writes directly.
     if isinstance(dest, LocalRegistry):
         report = None if progress is None else _bytes_of(reference, manifest, progress)
-        directory = release_dir(dest.local_root, reference)
+        directory = release_dir(dest.root, reference)
         source.download_release(reference, directory, force=force, manifest=manifest, progress_cb=report)
         return
     if isinstance(source, LocalRegistry):

@@ -8,12 +8,13 @@ from rich.console import Console
 import typer
 from typer.testing import CliRunner
 
-from timenet.cache import cached_datasets, raw_cache_size
+from timenet.cache import human_bytes, stored_releases
 from timenet.cli.app import _enum_list, app
+from timenet.config import make_cache_folder
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetDatasetNotFoundError
+from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
 from timenet.reader import TimeFReader
-from timenet.registry import open_local_version
+from timenet.registry import LocalRegistry, open_local_version
 from timenet.testing import make_dataset
 from timenet.types import Access, Domain
 from timenet.types.reference_keys import ParentAlias
@@ -36,48 +37,101 @@ def registry_root(tmp_path):
     return tmp_path / "reg"
 
 
+def _downloads_size(cache):
+    """Return the size of the raw downloads and the marker file in ``<cache>/downloads``."""
+    return sum(path.stat().st_size for path in (cache / "downloads").rglob("*") if path.is_file())
+
+
 @pytest.fixture
-def home(tmp_path, monkeypatch):
-    for var in ("TIMENET_STORAGE", "TIMENET_CACHE", "TIMENET_REGISTRY"):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    dataset = make_dataset()
-    dataset.derive_schema()
-    with TimeFWriter(tmp_path / "home" / "registry", dataset) as writer:
-        writer.write()
-    return tmp_path / "home"
+def state(tmp_path, monkeypatch):
+    """Put a release in the store and 10 bytes of raw downloads in the cache. Returns both paths."""
+    store, cache = tmp_path / "store", tmp_path / "cache"
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(store))
+    monkeypatch.setenv("TIMENET_CACHE", str(cache))
+    LocalRegistry(store).put_dataset(make_dataset())
+    make_cache_folder(cache / "downloads")
+    raw = cache / "downloads/timenet/hello-world/raw.bin"
+    raw.parent.mkdir(parents=True)
+    raw.write_bytes(b"x" * 10)
+    return store, cache
 
 
-def test_cache_info_lists_datasets(home):
-    assert runner.invoke(app, ["cache", "info"]).exit_code == 0
-    assert any(d.dataset_id == "timenet/hello-world" for d in cached_datasets())
+def test_local_info_and_local_cache_info_show_the_paths_and_sizes(state):
+    store, cache = state
+    result = runner.invoke(app, ["local", "info"])
+    assert result.exit_code == 0, result.output
+    [release] = stored_releases(LocalRegistry(store))
+    cache_line = f"Cache {cache}: {human_bytes(_downloads_size(cache))}"
+    assert click.unstyle(result.stdout).splitlines() == [
+        cache_line,
+        f"Local registry {store}: 1 release, {human_bytes(release.size_bytes)}",
+    ]
+    result = runner.invoke(app, ["local", "cache", "info"])
+    assert result.exit_code == 0, result.output
+    assert click.unstyle(result.stdout) == f"{cache_line}\n"
 
 
-def test_cache_info_empty(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "empty"))
-    assert runner.invoke(app, ["cache", "info"]).exit_code == 0
-    assert cached_datasets() == []
-
-
-def test_cache_info_reports_raw_cache_size(home):
-    cache_dir = home / "cache"
-    cache_dir.mkdir(parents=True, exist_ok=True)
-    (cache_dir / "blob").write_bytes(b"x" * 10)
-    assert runner.invoke(app, ["cache", "info"]).exit_code == 0
-    assert raw_cache_size() == 10
-
-
-def test_cache_clear_needs_confirmation(home):
-    result = runner.invoke(app, ["cache", "clear"], input="n\n")
+@pytest.mark.parametrize(
+    ("command", "prompt"),
+    [
+        (["local", "clear"], "Delete the cache in {cache} and every release in {store}?"),
+        (["local", "cache", "clear"], "Delete the raw source files and control databases in {cache}?"),
+    ],
+)
+def test_each_clear_asks_first_and_names_the_paths(state, command, prompt):
+    store, cache = state
+    result = runner.invoke(app, command, input="n\n")
     assert result.exit_code != 0  # aborted
-    assert (home / "registry").exists()
+    assert f"{prompt.format(cache=cache, store=store)} [y/N]" in result.output
+    assert (cache / "downloads").exists()
+    assert LocalRegistry(store).exists("timenet/hello-world", "1.0.0")
 
 
-def test_cache_clear_all_removes_everything(home):
-    result = runner.invoke(app, ["cache", "clear", "--all", "--yes"])
-    assert result.exit_code == 0
-    assert "Freed" in result.stdout
-    assert not (home / "registry").exists()
+def test_local_cache_clear_keeps_the_local_registry(state):
+    store, cache = state
+    size = human_bytes(_downloads_size(cache))
+    result = runner.invoke(app, ["local", "cache", "clear"], input="y\n")
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[-1] == f"Freed {size} from 1 location(s)."
+    assert not (cache / "downloads").exists()
+    assert LocalRegistry(store).exists("timenet/hello-world", "1.0.0")
+
+
+def test_local_cache_clear_warns_about_a_folder_without_the_marker_and_keeps_it(state):
+    _, cache = state
+    (cache / "control").mkdir()
+    (cache / "control/notes.txt").write_text("not from TimeNet")
+    result = runner.invoke(app, ["local", "cache", "clear", "--yes"])
+    assert result.exit_code == 0, result.output
+    # The console wraps a long line, also in a path, so the check ignores whitespace.
+    expected = f"Kept {cache / 'control'}: it has no CACHEDIR.TAG from TimeNet"
+    assert "".join(expected.split()) in "".join(result.stderr.split())
+    assert result.stdout.splitlines()[-1].endswith("from 1 location(s).")
+    assert (cache / "control/notes.txt").exists()
+
+
+def test_local_clear_deletes_the_cache_and_every_release_but_no_other_file(state):
+    store, cache = state
+    (store / "notes.txt").write_text("kept")
+    [release] = stored_releases(LocalRegistry(store))
+    size = human_bytes(_downloads_size(cache) + release.size_bytes)
+    result = runner.invoke(app, ["local", "clear", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert result.stdout.splitlines()[-1] == f"Freed {size} from 2 location(s)."
+    assert stored_releases(LocalRegistry(store)) == []
+    assert not (cache / "downloads").exists()
+    assert [path.name for path in store.iterdir()] == ["notes.txt"]
+
+
+def test_local_clear_deletes_no_release_when_the_cache_check_fails(state, monkeypatch):
+    _, cache = state
+    # The local registry lies in the downloads folder that the clear deletes.
+    inside = LocalRegistry(cache / "downloads" / "store")
+    inside.put_dataset(make_dataset())
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(inside.root))
+    result = runner.invoke(app, ["local", "clear", "--yes"])
+    assert isinstance(result.exception, TimeFValidationError)
+    assert inside.exists("timenet/hello-world", "1.0.0")
 
 
 def test_list(registry_root):
@@ -155,8 +209,7 @@ def test_info_lists_the_access_page_of_each_release_that_sets_one(tmp_path):
 def test_download_command_copies_into_the_store_and_then_has_nothing_to_do(registry_root, tmp_path, monkeypatch):
     # The last line names a long path, so the console must not wrap it.
     monkeypatch.setattr(_cli_module.ui, "rich", Console(stderr=True, width=1000))
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "store"))
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
     command = ["download", "timenet/hello-world", "--registry", str(registry_root)]
     target = tmp_path / "store" / "timenet/hello-world" / "1.0.0"
 
@@ -177,8 +230,7 @@ def test_download_command_copies_into_the_store_and_then_has_nothing_to_do(regis
 
 
 def test_download_command_with_force_copies_a_held_release_again(registry_root, tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "store"))
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
     command = ["download", "timenet/hello-world", "--registry", str(registry_root)]
     assert runner.invoke(app, command).exit_code == 0
 

@@ -4,11 +4,12 @@ import shutil
 from types import SimpleNamespace
 
 from _demo_child import _child_of_the_demo
+from _fake_registry import build_service_fake
 import httpx
 from pydantic import ValidationError
 import pytest
 
-from timenet.client import TimeNet, default_sources
+from timenet.client import TimeNet, default_sources, default_store
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.engine import open_parents, run_pipeline
@@ -159,7 +160,6 @@ def test_a_damaged_build_in_the_store_names_the_build_that_replaces_it(tmp_path,
     empty = RemoteRegistry(
         "http://api.local",
         transport=httpx.MockTransport(lambda request: httpx.Response(404)),
-        cache_dir=tmp_path / "cache",
     )
     client = TimeNet(sources=[store, empty, InstalledConnectors()])
     client.load("timenet/hello-world@1.0.0")  # the build puts the release into the store
@@ -171,12 +171,6 @@ def test_a_damaged_build_in_the_store_names_the_build_that_replaces_it(tmp_path,
         client.open("timenet/hello-world@1.0.0")
     assert caught.value.hint == hint
     assert len(calls) == 1  # nothing builds over the damaged copy
-
-
-@pytest.fixture(autouse=True)
-def _clean_env(monkeypatch):
-    for var in ("TIMENET_HOME", "TIMENET_STORAGE", "TIMENET_CACHE", "TIMENET_REGISTRY"):
-        monkeypatch.delenv(var, raising=False)
 
 
 @pytest.fixture
@@ -197,41 +191,63 @@ def _entry(source):
     return str(source)
 
 
-@pytest.mark.parametrize("registry", [None, "https://registry.example.test", "local"])
-def test_the_default_list_follows_timenet_registry(tmp_path, monkeypatch, registry):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    store = ("local", tmp_path / "home" / "registry")
-    if registry == "local":
-        monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "elsewhere"))
-        expected = [("local", tmp_path / "elsewhere"), "installed connectors"]
-    elif registry is not None:
-        monkeypatch.setenv("TIMENET_REGISTRY", registry)
-        expected = [store, f"registry {registry}", "installed connectors"]
-    else:
-        expected = [store, f"registry {TIMENET_REGISTRY_URL}", "installed connectors"]
+def test_the_default_list_follows_the_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
+    monkeypatch.setenv("TIMENET_REMOTE_REGISTRY", str(tmp_path / "remote"))
+    monkeypatch.setenv("TIMENET_AUTO_BUILD", "false")
+    store, remote = default_sources()
+    assert isinstance(store, LocalRegistry) and isinstance(remote, LocalRegistry)
+    assert (store.root, remote.root) == (tmp_path / "store", tmp_path / "remote")
+    # TimeNet() uses the same list.
     client = TimeNet()
-
-    assert [_entry(source) for source in client._sources] == expected
-    assert client._store is client._sources[0]
-    # The argument comes before $TIMENET_REGISTRY, and adds a remote to a local $TIMENET_REGISTRY.
-    with_remote = [_entry(source) for source in default_sources(remote_registry="https://other.example.test")]
-    assert with_remote == [expected[0], "registry https://other.example.test", "installed connectors"]
-
-
-def test_timenet_registry_env_selects_a_local_registry(tmp_path, monkeypatch):
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "home" / "registry"))
-    dataset = make_dataset()
-    dataset.derive_schema()
-    with TimeFWriter(tmp_path / "home" / "registry", dataset) as writer:
-        writer.write()
-    client = TimeNet()  # the store comes from $TIMENET_REGISTRY
     assert [_entry(source) for source in client._sources] == [
-        ("local", tmp_path / "home" / "registry"),
+        ("local", tmp_path / "store"),
+        ("local", tmp_path / "remote"),
+    ]
+    assert client._store is client._sources[0]
+
+
+def test_the_default_list_without_variables(monkeypatch):
+    for name in ("LOCAL_REGISTRY", "REMOTE_REGISTRY", "AUTO_BUILD", "CACHE"):
+        monkeypatch.delenv(f"TIMENET_{name}", raising=False)
+    store, remote, connectors = default_sources()
+    assert isinstance(store, LocalRegistry) and isinstance(remote, RemoteRegistry)
+    assert store.root == Path("~/.timenet/registry").expanduser()
+    assert str(remote) == f"registry {TIMENET_REGISTRY_URL}"
+    assert type(connectors) is InstalledConnectors
+    assert [_entry(source) for source in TimeNet()._sources] == [
+        ("local", store.root),
+        f"registry {TIMENET_REGISTRY_URL}",
         "installed connectors",
     ]
-    assert {m.dataset_id for m in client.list()} == {"timenet/hello-world"}
-    assert client.download("timenet/hello-world") == tmp_path / "home" / "registry" / "timenet/hello-world" / "1.0.0"
+
+
+def test_default_sources_arguments_override_the_environment(monkeypatch, tmp_path):
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "env-store"))
+    monkeypatch.setenv("TIMENET_REMOTE_REGISTRY", str(tmp_path / "env-remote"))
+    monkeypatch.setenv("TIMENET_AUTO_BUILD", "false")
+    sources = default_sources(local_registry=tmp_path / "store", remote_registry=tmp_path / "remote", auto_build=True)
+    assert [_entry(source) for source in sources] == [
+        ("local", tmp_path / "store"),
+        ("local", tmp_path / "remote"),
+        "installed connectors",
+    ]
+    assert default_store(local_registry=tmp_path / "store").root == tmp_path / "store"
+
+
+def test_default_sources_names_the_variable_of_a_registry_that_cannot_open(monkeypatch):
+    monkeypatch.setenv("TIMENET_REMOTE_REGISTRY", "gs://bucket/registry")
+    with pytest.raises(
+        TimeNetRegistryError,
+        match=r"^TIMENET_REMOTE_REGISTRY 'gs://bucket/registry' has an unsupported registry scheme",
+    ):
+        default_sources()
+
+
+def test_default_store_rejects_a_remote_url(tmp_path):
+    with pytest.raises(TimeNetRegistryError, match="the local registry needs a local directory"):
+        default_store(local_registry="s3://bucket/x")
+    assert default_store(local_registry=f"file://{tmp_path / 'x'}").root == tmp_path / "x"
 
 
 def test_a_client_takes_an_ordered_list_of_sources(tmp_path):
@@ -440,10 +456,9 @@ def test_download_counts_a_registry_over_the_directory_of_the_store_as_the_store
     if case == "damaged":
         (directory / "control.duckdb").write_bytes(b"cut short")
     before = {path: path.read_bytes() for path in directory.rglob("*") if path.is_file()}
-    # As for `TIMENET_REGISTRY=./reg timenet download timenet/hello-world --registry ./reg`: the
+    # As for `TIMENET_LOCAL_REGISTRY=./reg timenet download timenet/hello-world --registry ./reg`: the
     # registry after the store reads the directory of the store, so it cannot replace its copy.
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.setenv("TIMENET_REGISTRY", str(root))
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(root))
     client = TimeNet(sources=default_sources(remote_registry=root))
 
     if case == "force":
@@ -541,13 +556,15 @@ def test_download_repairs_a_damaged_store_copy(tmp_path):
 
 
 def test_download_returns_a_complete_store_copy_at_once(registry_root, tmp_path):
-    client = TimeNet(sources=[LocalRegistry(tmp_path / "store"), str(registry_root)])
+    transport, requests = build_service_fake(registry_root)
+    remote = RemoteRegistry("http://api.local", transport=transport)
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "store"), remote])
     first = client.download("timenet/hello-world")
-    # The store copy is complete, so the next download needs no registry.
-    shutil.rmtree(registry_root)
+    requests.clear()
+    # The store copy is complete, so the next download asks the remote registry nothing.
     events: list[ProgressEvent] = []
     assert client.download("timenet/hello-world", progress=events.append) == first
-    assert events == []  # nothing is copied again
+    assert (events, requests) == ([], [])
 
 
 def test_download_with_force_copies_again(registry_root, tmp_path):
@@ -830,11 +847,7 @@ def _hosted(tmp_path, metadata, lineage=()):
         def get_manifest(self, dataset_id, version=None):
             return SimpleNamespace(metadata=metadata, lineage=lineage)
 
-    return _Hosted(
-        "http://api.local",
-        transport=httpx.MockTransport(lambda request: httpx.Response(404)),
-        cache_dir=tmp_path / "cache",
-    )
+    return _Hosted("http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)))
 
 
 def test_load_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):

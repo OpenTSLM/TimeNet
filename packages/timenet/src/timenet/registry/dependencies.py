@@ -25,7 +25,6 @@ from timenet.errors import (
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import FilePart, Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
-from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
 from timenet.types.access import Access, effective_access
 from timenet.types.reference_keys import SourceKey
@@ -322,33 +321,6 @@ def prepare_local_copy(  # ruff: ignore[too-many-arguments]
     return attach_payload_sources(version, lambda ref: open_complete(ref, requested=False), searched=lambda: str(root))
 
 
-def open_cached_or_remote_release(
-    root: Path, reference: DatasetRef, open_remote_version: Callable[[DatasetRef], DatasetVersion]
-) -> DatasetVersion:
-    """Open a complete cached release or fall back to remote storage.
-
-    Payload sources remain unattached.
-
-    Args:
-        root: The cache directory to check before opening remote files.
-        reference: The exact dataset ID and version to open.
-        open_remote_version: Open one remote release without its payload sources.
-
-    Returns:
-        A handle to the complete cached copy, or a remote handle if the cache is incomplete.
-
-    Raises:
-        TimeFFormatError: If the manifest declares a different release.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by validate_manifest_reference
-    directory = release_dir(root, reference)
-    cached = _load_complete_local_manifest(directory, reference)
-    if cached is not None:
-        return DatasetVersion(cached, pafs.LocalFileSystem(), str(directory))
-    version = open_remote_version(reference)
-    validate_manifest_reference(version.manifest, reference)
-    return version
-
-
 def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-arguments]
     directory: Path,
     reference: DatasetRef,
@@ -389,26 +361,6 @@ def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-argument
     if fetch_from is not None:
         return _download_dataset_version(directory, reference, fetch_from, manifest=manifest, progress_cb=progress_cb)
     raise TimeNetDatasetNotFoundError(f"complete release {reference} is missing at {directory}")
-
-
-def _load_complete_local_manifest(
-    directory: Path,
-    reference: DatasetRef,
-    *,
-    manifest: Manifest | None = None,
-) -> Manifest | None:
-    """Load and validate a local release, returning None if files are missing or incomplete.
-
-    Returns:
-        The manifest if it exists and every listed file has the recorded size, otherwise ``None``.
-    """
-    manifest_path = directory / MANIFEST_FILE
-    if not manifest_path.is_file():
-        return None
-    if manifest is None:
-        manifest = read_manifest(manifest_path)
-    validate_manifest_reference(manifest, reference)
-    return manifest if complete_copy(directory, manifest) else None
 
 
 def _download_dataset_version(

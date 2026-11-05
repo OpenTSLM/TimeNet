@@ -3,6 +3,7 @@ from pathlib import Path
 import pickle
 from unittest.mock import AsyncMock, call
 
+from _demo_child import _child_of_the_demo
 from _fake_registry import build_fake, build_publish_fake, range_server, read_file, registry_server
 import httpx
 import numpy as np
@@ -46,7 +47,7 @@ def version_dir(tmp_path) -> tuple[Path, Manifest]:
 def _remote(version_dir, tmp_path, **kw):
     directory, _ = version_dir
     transport, requests = build_fake(directory, token=kw.pop("token", None))
-    registry = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache", **kw)
+    registry = RemoteRegistry("http://api.local", transport=transport, **kw)
     return registry, requests
 
 
@@ -68,7 +69,7 @@ def test_list_datasets_rejects_malformed_payload_with_field_path(tmp_path):
         assert request.url.path == "/api/v1/datasets"
         return httpx.Response(200, json={"datasets": [{"dataset_id": 3}]})
 
-    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=tmp_path)
+    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler))
     with pytest.raises(ValidationError, match=r"datasets\.0\.dataset_id"):
         registry.list_datasets()
 
@@ -77,7 +78,6 @@ def test_list_datasets_exposes_pydantic_json_errors(tmp_path):
     registry = RemoteRegistry(
         "http://api.local",
         transport=httpx.MockTransport(lambda _request: httpx.Response(200, content=b"not json")),
-        cache_dir=tmp_path,
     )
     with pytest.raises(ValidationError, match="Invalid JSON"):
         registry.list_datasets()
@@ -104,7 +104,6 @@ def test_list_datasets_preserves_optional_license_and_access_fields(tmp_path):
     registry = RemoteRegistry(
         "http://api.local",
         transport=httpx.MockTransport(handler),
-        cache_dir=tmp_path,
     )
     metadata = registry.list_datasets()[0]
     assert metadata.license is License.OTHER
@@ -161,7 +160,6 @@ def test_list_datasets_fetches_pinned_manifest_for_incomplete_summary(
     registry = RemoteRegistry(
         "http://api.local",
         transport=httpx.MockTransport(handler),
-        cache_dir=tmp_path,
     )
     assert registry.list_datasets() == [expected]
     assert paths == [
@@ -310,7 +308,7 @@ def test_a_remote_download_whose_size_differs_from_its_record_names_both_sizes(v
 def test_load_full_round_trips(version_dir, tmp_path, entry_point):
     directory, manifest = version_dir
     with registry_server(directory) as server:
-        registry = RemoteRegistry(server.url, cache_dir=tmp_path / "cache")
+        registry = RemoteRegistry(server.url)
         client = TimeNet(sources=[registry])
         if entry_point == "open":
             with client.open(manifest.metadata.dataset_id) as reader:
@@ -335,7 +333,7 @@ def test_load_full_round_trips_after_pickling_and_url_expiry(version_dir, tmp_pa
         return read_file(directory, request)
 
     with registry_server(directory, serve_file=single_use_download if expire_urls else None) as server:
-        registry = RemoteRegistry(server.url, cache_dir=tmp_path / "cache")
+        registry = RemoteRegistry(server.url)
         client = TimeNet(sources=[registry])
         with client.open(manifest.metadata.dataset_id) as reader:
             # A worker must reopen its own clients, including after the main process has read values.
@@ -369,7 +367,7 @@ def test_small_signal_read_fetches_ranges_and_keeps_registry_token_private(tmp_p
         return httpx.Response(200, content=(directory / request.url.path.lstrip("/")).read_bytes())
 
     with registry_server(directory, serve_file=serve_file) as server:
-        remote = RemoteRegistry(server.url, token="private-token", cache_dir=tmp_path / "cache")
+        remote = RemoteRegistry(server.url, token="private-token")
         with TimeNet(sources=[remote]).open(dataset.metadata.dataset_id, "1.0.0") as reader:
             assert all(response.request.url.path.startswith("/api/v1/") for response in server.responses)
             if not support_ranges:
@@ -394,7 +392,7 @@ def test_small_signal_read_fetches_ranges_and_keeps_registry_token_private(tmp_p
 
 def test_put_dataset_publishes_uploads_and_finalizes(tmp_path):
     transport, state = build_publish_fake(token="tok_rw")
-    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path)
+    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport)
     dataset = make_dataset()
     assert registry.put_dataset(dataset) == DatasetRef.parse(f"{dataset.metadata.dataset_id}@1.0.0")
     assert state["finalized"] is True
@@ -404,7 +402,7 @@ def test_put_dataset_publishes_uploads_and_finalizes(tmp_path):
 
 def test_put_dataset_refuses_force_and_uploads_nothing(tmp_path):
     transport, state = build_publish_fake(token="tok_rw")
-    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path)
+    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport)
     with pytest.raises(TimeFValidationError, match="never writes a published version again"):
         registry.put_dataset(make_dataset(), force=True)
     assert state["manifest"] is None
@@ -415,7 +413,7 @@ def test_put_dataset_refuses_a_payload_source_the_service_does_not_hold_before_p
     local = LocalRegistry(tmp_path / "local")
     local.put_dataset(make_dataset())
     transport, state = build_publish_fake(token="tok_rw")
-    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport, cache_dir=tmp_path / "cache")
+    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=transport)
     with TimeFReader(open_local_version(local.root / "timenet/hello-world/1.0.0")) as reader:
         parent = reader.read()
         child = TimeFDataset.from_parts(
@@ -446,9 +444,7 @@ def test_put_dataset_rejects_a_publish_list_that_drops_a_manifest_file(tmp_path)
             return httpx.Response(200, json={"files": []})
         return httpx.Response(200, json={})
 
-    registry = RemoteRegistry(
-        "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
-    )
+    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=httpx.MockTransport(handler))
     with pytest.raises(TimeNetRegistryError, match="disagrees with the manifest"):
         registry.put_dataset(make_dataset())
 
@@ -462,9 +458,7 @@ def test_put_dataset_rejects_unsafe_publish_paths(tmp_path):
             return httpx.Response(200, json={"files": ["../escape"]})
         return httpx.Response(200, json={})
 
-    registry = RemoteRegistry(
-        "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
-    )
+    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=httpx.MockTransport(handler))
     with pytest.raises(ValidationError, match="stay within the dataset root"):
         registry.put_dataset(make_dataset())
 
@@ -482,9 +476,7 @@ def test_put_dataset_rejects_malformed_upload_grant(tmp_path):
             return httpx.Response(200, json={"url": "not-a-url", "headers": []})
         return httpx.Response(200, json={})
 
-    registry = RemoteRegistry(
-        "http://api.local", token="tok_rw", transport=httpx.MockTransport(handler), cache_dir=tmp_path
-    )
+    registry = RemoteRegistry("http://api.local", token="tok_rw", transport=httpx.MockTransport(handler))
     with pytest.raises(ValidationError, match="headers"):
         registry.put_dataset(make_dataset())
 
@@ -494,25 +486,39 @@ def test_latest_detail_rejects_non_string_version(tmp_path):
         assert request.url.path == "/api/v1/datasets/demo/example"
         return httpx.Response(200, json={"version": 3})
 
-    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=tmp_path)
+    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler))
     with pytest.raises(ValidationError, match="version"):
         registry.get_manifest("demo/example")
 
 
-def test_a_registry_url_in_the_sources_caches_under_the_storage_directory(tmp_path, monkeypatch):
-    # A remote registry that the sources name by URL reuses the complete copies under the storage
-    # directory.
-    monkeypatch.setenv("TIMENET_STORAGE", str(tmp_path / "store"))
-    (registry,) = TimeNet(sources=["https://registry.example.test"])._sources
-    assert isinstance(registry, RemoteRegistry)
-    assert registry._cache_dir == tmp_path / "store"
-
-
 def test_put_dataset_without_write_token_is_rejected(tmp_path):
     transport, _ = build_publish_fake(token="tok_rw")
-    registry = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path)  # anonymous
+    registry = RemoteRegistry("http://api.local", transport=transport)  # anonymous
     with pytest.raises(TimeNetRegistryError):
         registry.put_dataset(make_dataset())
+
+
+def _remote_over(root: Path, blob_url: str, requests: list[str]) -> RemoteRegistry:
+    """Serve the releases under ``root`` through the registry API, with the files at ``blob_url``.
+
+    Each request path goes into ``requests``.
+    """
+
+    def handler(request):
+        path = request.url.path
+        requests.append(path)
+        if request.url.host == "127.0.0.1":
+            return httpx.Response(200, content=(root / path.lstrip("/")).read_bytes())
+        relative = path.removeprefix("/api/v1/datasets/")
+        if relative.endswith("/manifest"):
+            return httpx.Response(
+                200, content=(root / relative.removesuffix("manifest") / "manifest.json").read_bytes()
+            )
+        if "/download/" in relative:
+            return httpx.Response(307, headers={"location": blob_url + "/" + relative.replace("/download/", "/")})
+        return httpx.Response(404)
+
+    return RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler))
 
 
 @pytest.mark.parametrize("backend", ["parquet", "zarr"])
@@ -535,35 +541,22 @@ def test_child_streams_physical_sources_and_downloads_for_offline_reads(tmp_path
         expected = parent.records[0].signals[0].to_arrow()
         signal_id = imported.records[parent.records[0].id].signals[0].id
         local.put_dataset(child)
-    requests = []
-
-    def handler(request):
-        path = request.url.path
-        requests.append(path)
-        if request.url.host == "127.0.0.1":
-            return httpx.Response(200, content=(origin / path.lstrip("/")).read_bytes())
-        relative = path.removeprefix("/api/v1/datasets/")
-        if relative.endswith("/manifest"):
-            return httpx.Response(
-                200, content=(origin / relative.removesuffix("manifest") / "manifest.json").read_bytes()
-            )
-        if "/download/" in relative:
-            return httpx.Response(307, headers={"location": blob_url + "/" + relative.replace("/download/", "/")})
-        return httpx.Response(404)
-
+    requests: list[str] = []
     cache = tmp_path / "cache"
-    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=cache)
     with range_server(origin) as blob_url:
+        remote = _remote_over(origin, blob_url, requests)
         with TimeNet(sources=[remote]).open("test/child", "1.0.0") as reader:
             assert all("/download/" not in path for path in requests)
             assert reader.get(Signal, signal_id).to_arrow().equals(expected)
             assert any(parent_id + "/1.0.0/download/" in path for path in requests)
             assert not any(parent_id + "/1.0.0/download/control.duckdb" in path for path in requests)
-            assert not (cache / parent_id / "1.0.0").exists()
         copy_release(DatasetRef.parse("test/child@1.0.0"), remote, LocalRegistry(cache))
-    with TimeNet(sources=[remote]).open("test/child", "1.0.0") as reader:
-        assert reader.get(Signal, signal_id).to_arrow().equals(expected)
     assert not any("test/build-only" in path for path in requests)
+    requests.clear()
+    # The local registry holds the child and its payload source, so the read asks the remote registry nothing.
+    with TimeNet(sources=[LocalRegistry(cache), remote]).open("test/child", "1.0.0") as reader:
+        assert reader.get(Signal, signal_id).to_arrow().equals(expected)
+    assert requests == []
     assert (cache / parent_id / "1.0.0/control.duckdb").exists()
     with TimeFReader(open_local_version(cache / "test/child/1.0.0")) as reader:
         reader.verify()
@@ -575,6 +568,21 @@ def test_child_streams_physical_sources_and_downloads_for_offline_reads(tmp_path
     remote.download_release(parent, cache / parent_id / "1.0.0", manifest=manifest)
     assert (cache / parent_id / "1.0.0/control.duckdb").is_file()
     assert requests == prepared_requests
+
+
+def test_a_remote_read_takes_a_payload_source_that_the_local_registry_holds_from_it(tmp_path):
+    origin, demo = _child_of_the_demo(tmp_path / "origin")
+    store = LocalRegistry(tmp_path / "store")
+    store.put_dataset(make_dataset())
+    requests: list[str] = []
+    with range_server(origin.root) as blob_url:
+        remote = _remote_over(origin.root, blob_url, requests)
+        with TimeNet(sources=[store, remote]).open("test/child", "1.0.0") as reader:
+            signal = reader.read().records[0].signals[0]
+            assert signal.to_arrow().equals(make_dataset().records[0].signals[0].to_arrow())
+    # The child comes from the remote registry, and the files of its payload source from the local registry.
+    assert any("test/child/1.0.0/download/" in path for path in requests)
+    assert not [path for path in requests if demo.dataset_id in path]
 
 
 def _gated_release(origin: Path, page: str) -> tuple[str, DatasetRef]:
@@ -599,7 +607,7 @@ def _gated_release(origin: Path, page: str) -> tuple[str, DatasetRef]:
 def test_a_read_or_a_download_checks_access_before_it_reads_from_a_remote_registry(tmp_path, entry_point):
     dataset_id, release = _gated_release(tmp_path / "origin", "ancestor")
     transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
-    remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
+    remote = RemoteRegistry("http://api.local", transport=transport)
     client = TimeNet(sources=[LocalRegistry(tmp_path / "local"), remote])
 
     with pytest.raises(TimeNetAccessError) as caught:
@@ -618,7 +626,7 @@ def test_a_remote_registry_lists_but_does_not_serve_a_release_that_is_not_open(t
     # The card of the release is open. A card in its lineage is not.
     dataset_id, release = _gated_release(tmp_path / "origin", "ancestor")
     transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
-    remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
+    remote = RemoteRegistry("http://api.local", transport=transport)
     requirement = AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua")
 
     answer = remote.resolve(dataset_id, None)
@@ -651,7 +659,7 @@ def _offline(request):
 
 
 def test_an_unreachable_registry_raises_a_registry_error_that_names_it(tmp_path):
-    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(_offline), cache_dir=tmp_path)
+    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(_offline))
 
     with pytest.raises(TimeNetRegistryError, match=r"^cannot reach http://api\.local: the network is down$"):
         remote.resolve("timenet/hello-world", None)
