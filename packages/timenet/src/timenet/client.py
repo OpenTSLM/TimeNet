@@ -1,18 +1,23 @@
 """Find, inspect, download, and read datasets with :class:`TimeNet`.
 
-A client checks sources in order and builds releases from installed connectors into its local registry.
+A client reads releases through an ordered list of sources, by default :func:`default_sources`, and
+builds a release that only ``InstalledConnectors()`` provides into its store. ``download`` copies a
+release into the store, ``get_manifest``, ``get_card`` and ``plan_read`` describe one without a copy
+or a build, and ``list`` and ``search`` merge the rows of every source.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
 # ``list[str]`` resolved to the builtin type, not to the method.
 from __future__ import annotations
 
-from collections.abc import Generator, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
 from contextlib import contextmanager
+from functools import partial
 import os
 from pathlib import Path
 import shlex
-from typing import TYPE_CHECKING, TypeAlias, TypeVar
+import sys
+from typing import TYPE_CHECKING, Protocol, TypeAlias, TypeVar, runtime_checkable
 
 from timenet.builders import BuildOptions, declared
 from timenet.config import check_local_registry, settings
@@ -59,6 +64,35 @@ if TYPE_CHECKING:
 T = TypeVar("T")
 _Metadatas: TypeAlias = list[DatasetMetadata]
 _OrList: TypeAlias = T | list[T] | None
+
+
+@runtime_checkable
+class _Catalog(Protocol):
+    """A source that lists its datasets itself, such as a registry."""
+
+    def list_datasets(self) -> _Metadatas:
+        """Return one row per dataset."""
+        ...
+
+
+@runtime_checkable
+class _Search(Protocol):
+    """A source that searches its datasets itself, such as a registry."""
+
+    def search(  # ruff: ignore[too-many-arguments]
+        self,
+        *,
+        query: str | list[str] | None = None,
+        domain: Domain | list[Domain] | None = None,
+        task: type[Task] | list[type[Task]] | None = None,
+        license: License | list[License] | None = None,
+        time_series_spec: str | list[str] | None = None,
+        dataset_id: str | list[str] | None = None,
+        tag: str | list[str] | None = None,
+        limit: int = 100,
+    ) -> _Metadatas:
+        """Return the rows that match the filters of :meth:`~timenet.registry.BaseRegistry.search`."""
+        ...
 
 
 def default_local_registry(*, local_registry: str | Path | None = None) -> LocalRegistry:
@@ -217,14 +251,23 @@ class TimeNet:
             )
 
     def list(self) -> _Metadatas:
-        """Return metadata for every dataset in the selected registry.
+        """Return one row per dataset across the sources, connector cards included, at the highest version.
 
-        The client uses the first registry other than the local registry, or the local registry if it is the only one.
+        A row can show a higher version than :meth:`open` reads, because a registry can list a version
+        that it does not serve. An error of a source, for example a registry that cannot be reached,
+        stops the call.
 
         Returns:
-            One :class:`~timenet.types.DatasetMetadata` per dataset.
-        """
-        return self._catalog().list_datasets()
+            One :class:`~timenet.types.DatasetMetadata` per dataset, sorted by dataset ID.
+
+        Raises:
+            TimeNetInvalidCardError: If an installed backend cannot list its dataset IDs.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by the backend)
+        rows: list[_Metadatas] = []
+        for source in self._sources:
+            if isinstance(source, _Catalog):
+                rows.append(_unless_without_catalog(source.list_datasets))
+        return _merged(rows)
 
     def get_manifest(self, dataset_id: str, version: str | None = None) -> Manifest:
         """Return the manifest of the release that :meth:`open` reads, without a copy or a build.
@@ -296,9 +339,10 @@ class TimeNet:
         tag: _OrList[str] = None,
         limit: int = 100,
     ) -> _Metadatas:
-        """Search the selected registry for datasets that match the filters.
+        """Search every source, connector cards included, and keep one row per dataset at the highest version.
 
-        The client uses the first registry other than the local registry, or the local registry if it is the only one.
+        A connector card never matches ``task`` or ``time_series_spec``, because it has no schema. An
+        error of a source, for example a registry that cannot be reached, stops the call.
 
         Args:
             query: Free text terms for the name, description, and tags.
@@ -308,21 +352,33 @@ class TimeNet:
             time_series_spec: Match all of these ``spec_type`` values.
             dataset_id: Match only these IDs.
             tag: Match all of these tags.
-            limit: The maximum number of results.
+            limit: The maximum number of results, after the merge.
 
         Returns:
-            The matching dataset metadata.
-        """
-        return self._catalog().search(
-            query=query,
-            domain=domain,
-            task=task,
-            license=license,
-            time_series_spec=time_series_spec,
-            dataset_id=dataset_id,
-            tag=tag,
-            limit=limit,
-        )
+            The matching dataset metadata, sorted by dataset ID.
+
+        Raises:
+            TimeFValidationError: If ``limit`` is negative.
+            TimeNetInvalidCardError: If an installed backend cannot list its dataset IDs.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by the backend)
+        if limit < 0:
+            raise TimeFValidationError(f"limit must be 0 or more, got {limit}")
+        rows: list[_Metadatas] = []
+        for source in self._sources:
+            if isinstance(source, _Search):
+                search = partial(
+                    source.search,
+                    query=query,
+                    domain=domain,
+                    task=task,
+                    license=license,
+                    time_series_spec=time_series_spec,
+                    dataset_id=dataset_id,
+                    tag=tag,
+                    limit=sys.maxsize,
+                )
+                rows.append(_unless_without_catalog(search))
+        return _merged(rows)[:limit]
 
     def download(
         self,
@@ -500,24 +556,6 @@ class TimeNet:
         with self._hints(dataset_id):
             return plan_read(dataset_id, version, sources=self._sources, store=self._store)
 
-    def _catalog(self) -> BaseRegistry:
-        """Choose the registry to browse.
-
-        Returns:
-            The first registry other than the local registry, or the local registry if it is the only one.
-
-        Raises:
-            TimeFValidationError: If the sources contain no registry.
-        """
-        # TODO(adrian): Remove temporary glue which maps these methods onto one registry until
-        # list() and search() ask every source. This registry gives the results of the client of
-        # one registry, from before the list of sources.
-        registries = [source for source in self._sources if isinstance(source, BaseRegistry)]
-        registry = next((registry for registry in registries if registry is not self._store), self._store)
-        if registry is None:
-            raise TimeFValidationError("list() and search() need a registry in the sources")
-        return registry
-
     @contextmanager
     def _hints(self, dataset_id: str) -> Generator[None]:
         """Add recovery hints to errors raised inside the block.
@@ -628,6 +666,39 @@ class TimeNet:
         from timenet.torch import TimeFTorchDataset  # ruff: ignore[import-outside-top-level]
 
         return TimeFTorchDataset.from_reader(self.open(dataset_id, version), load=load)
+
+
+def _unless_without_catalog(ask: Callable[[], _Metadatas]) -> _Metadatas:
+    """Return the rows of a registry, or no row if the registry has no catalog.
+
+    Args:
+        ask: The call of ``list_datasets()`` or ``search()`` of the registry.
+
+    Returns:
+        The rows, or an empty list if the call raises ``NotImplementedError``, as for an S3 registry.
+    """
+    try:
+        return ask()
+    except NotImplementedError:
+        return []
+
+
+def _merged(rows: Iterable[_Metadatas]) -> _Metadatas:
+    """Keep one row per dataset at the highest version, from the earliest source that lists it.
+
+    Args:
+        rows: The rows of each source, in the order of the sources.
+
+    Returns:
+        The rows, sorted by dataset ID.
+    """
+    kept: dict[str, DatasetMetadata] = {}
+    for listing in rows:
+        for row in listing:
+            held = kept.get(row.dataset_id)
+            if held is None or row.dataset_version > held.dataset_version:
+                kept[row.dataset_id] = row
+    return [kept[dataset_id] for dataset_id in sorted(kept)]
 
 
 def _not_provided_hint(sources: Sequence[ReleaseSource]) -> str:
