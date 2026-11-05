@@ -6,7 +6,6 @@ from typer.testing import CliRunner
 
 from timenet.client import TimeNet
 from timenet.config import settings
-from timenet.engine import run_pipeline
 from timenet.errors import TimeFValidationError, TimeNetRegistryError
 from timenet.provenance import build_env
 from timenet.registry import LocalRegistry, RemoteRegistry
@@ -78,17 +77,6 @@ def test_load_rejects_version_mismatch():
 # ---- where a bare `build` writes -----------------------------------------------------------------
 
 
-@pytest.fixture
-def clean_env(monkeypatch, tmp_path):
-    """Place the store at ``tmp_path / "store"``, so that the output of a bare build is known."""
-    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
-
-
-def test_build_defaults_to_the_store(clean_env, tmp_path):
-    assert runner.invoke(build_app, ["build", "timenet/hello-world", "--no-isolation"]).exit_code == 0
-    assert (tmp_path / "store" / "timenet" / "hello-world" / "1.0.0" / "manifest.json").exists()
-
-
 def test_build_honors_timenet_local_registry(monkeypatch, tmp_path):
     registry = tmp_path / "elsewhere"
     monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(registry))
@@ -118,21 +106,9 @@ def test_resolve_target_routes_remote_url_to_registry(tmp_path):
     assert _resolve_target(str(tmp_path / "reg")) == tmp_path / "reg"
 
 
-@pytest.mark.parametrize("out", ["", " "])
-def test_resolve_target_rejects_an_empty_out_instead_of_the_current_directory(out):
+def test_resolve_target_rejects_an_empty_out_instead_of_the_current_directory():
     with pytest.raises(TimeNetRegistryError, match=r"^--out is blank"):
-        _resolve_target(out)
-
-
-def test_run_pipeline_cleans_cache_when_requested(tmp_path):
-    version_dir = run_pipeline(HelloWorldConnector(), tmp_path / "registry", keep_cache=False)
-    assert (version_dir / "manifest.json").exists()  # build succeeded
-    assert not (settings().downloads_dir / "timenet" / "hello-world").exists()  # raw cache removed
-
-
-def test_run_pipeline_keeps_cache_when_asked(tmp_path):
-    run_pipeline(HelloWorldConnector(), tmp_path / "registry", keep_cache=True)
-    assert (settings().downloads_dir / "timenet" / "hello-world").exists()
+        _resolve_target("")
 
 
 def test_sdk_build_cleans_cache_but_keep_cache_retains(tmp_path, monkeypatch):

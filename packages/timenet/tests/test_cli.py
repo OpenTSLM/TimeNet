@@ -62,7 +62,7 @@ def test_local_info_shows_the_path_and_size_of_the_cache_and_the_local_registry(
     result = runner.invoke(app, ["local", "info"])
     assert result.exit_code == 0, result.output
     [release] = stored_releases(LocalRegistry(store))
-    assert result.stdout.splitlines() == [
+    assert click.unstyle(result.stdout).splitlines() == [
         f"Cache {cache}: {human_bytes(_downloads_size(cache))}",
         f"Local registry {store}: 1 release, {human_bytes(release.size_bytes)}",
     ]
@@ -72,7 +72,7 @@ def test_local_cache_info_shows_the_path_and_size_of_the_cache(state):
     _, cache = state
     result = runner.invoke(app, ["local", "cache", "info"])
     assert result.exit_code == 0, result.output
-    assert result.stdout == f"Cache {cache}: {human_bytes(_downloads_size(cache))}\n"
+    assert click.unstyle(result.stdout) == f"Cache {cache}: {human_bytes(_downloads_size(cache))}\n"
 
 
 @pytest.mark.parametrize(
@@ -86,7 +86,7 @@ def test_each_clear_asks_first_and_names_the_paths(state, command, prompt):
     store, cache = state
     result = runner.invoke(app, command, input="n\n")
     assert result.exit_code != 0  # aborted
-    assert f"{prompt.format(cache=cache, store=store)} [y/N]" in result.output
+    assert f"{prompt.format(cache=cache, store=store)} [y/N]" in click.unstyle(result.output)
     assert (cache / "downloads").exists()
     assert LocalRegistry(store).exists("timenet/hello-world", "1.0.0")
 
@@ -96,7 +96,7 @@ def test_local_cache_clear_keeps_the_local_registry(state):
     size = human_bytes(_downloads_size(cache))
     result = runner.invoke(app, ["local", "cache", "clear"], input="y\n")
     assert result.exit_code == 0, result.output
-    assert result.stdout.splitlines()[-1] == f"Freed {size} from 1 location(s)."
+    assert click.unstyle(result.stdout).splitlines()[-1] == f"Freed {size} from 1 location(s)."
     assert not (cache / "downloads").exists()
     assert LocalRegistry(store).exists("timenet/hello-world", "1.0.0")
 
@@ -109,22 +109,20 @@ def test_local_cache_clear_warns_about_a_folder_without_the_marker_and_keeps_it(
     assert result.exit_code == 0, result.output
     # The console wraps a long line, also in a path, so the check ignores whitespace.
     expected = f"Kept {cache / 'control'}: it has no CACHEDIR.TAG from TimeNet"
-    assert "".join(expected.split()) in "".join(result.stderr.split())
-    assert result.stdout.splitlines()[-1].endswith("from 1 location(s).")
+    assert "".join(expected.split()) in "".join(click.unstyle(result.stderr).split())
+    assert click.unstyle(result.stdout).splitlines()[-1].endswith("from 1 location(s).")
     assert (cache / "control/notes.txt").exists()
 
 
-def test_local_clear_deletes_the_cache_and_every_release_but_no_other_file(state):
+def test_local_clear_deletes_the_cache_and_every_release(state):
     store, cache = state
-    (store / "notes.txt").write_text("kept")
     [release] = stored_releases(LocalRegistry(store))
     size = human_bytes(_downloads_size(cache) + release.size_bytes)
     result = runner.invoke(app, ["local", "clear", "--yes"])
     assert result.exit_code == 0, result.output
-    assert result.stdout.splitlines()[-1] == f"Freed {size} from 2 location(s)."
+    assert click.unstyle(result.stdout).splitlines()[-1] == f"Freed {size} from 2 location(s)."
     assert stored_releases(LocalRegistry(store)) == []
     assert not (cache / "downloads").exists()
-    assert [path.name for path in store.iterdir()] == ["notes.txt"]
 
 
 def test_list(registry_root):

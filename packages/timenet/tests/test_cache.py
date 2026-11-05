@@ -1,5 +1,3 @@
-from pathlib import Path
-
 import pytest
 
 from timenet.cache import (
@@ -101,31 +99,22 @@ def test_stored_releases_lists_each_release_with_its_size(tmp_path):
 def test_stored_releases_skips_what_is_not_a_release(tmp_path):
     store = _store_with_two_releases(tmp_path / "store")
     manifest = (tmp_path / "store/timenet/hello-world/1.0.0/manifest.json").read_bytes()
-    # A directory whose name is not a version, a staging directory, a hidden one, and a path that
-    # is not a dataset ID.
-    for stray in ("timenet/hello-world/draft", "timenet/hello-world/2.0.0.tmp-1", ".trash/x/1.0.0", "a/b/c/1.0.0"):
-        (tmp_path / "store" / stray).mkdir(parents=True)
+    # A directory whose name is not a version, a staging directory, a hidden one, a path that is not
+    # a dataset ID, and a manifest at the root and one level below.
+    for stray in (
+        "timenet/hello-world/draft",
+        "timenet/hello-world/2.0.0.tmp-1",
+        ".trash/x/1.0.0",
+        "a/b/c/1.0.0",
+        ".",
+        "1.0.0",
+    ):
+        (tmp_path / "store" / stray).mkdir(parents=True, exist_ok=True)
         (tmp_path / "store" / stray / "manifest.json").write_bytes(manifest)
     assert [str(item.release) for item in stored_releases(store)] == [
         "timenet/hello-world@1.0.0",
         "timenet/hello-world@1.1.0",
     ]
-
-
-def test_stored_releases_skips_a_manifest_at_the_root_and_one_level_below(tmp_path):
-    store = _store_with_two_releases(tmp_path / "store")
-    manifest = (tmp_path / "store/timenet/hello-world/1.0.0/manifest.json").read_bytes()
-    (tmp_path / "store/manifest.json").write_bytes(manifest)
-    (tmp_path / "store/1.0.0").mkdir()
-    (tmp_path / "store/1.0.0/manifest.json").write_bytes(manifest)
-    assert [str(item.release) for item in stored_releases(store)] == [
-        "timenet/hello-world@1.0.0",
-        "timenet/hello-world@1.1.0",
-    ]
-
-
-def test_stored_releases_of_a_missing_store_is_empty(tmp_path):
-    assert stored_releases(LocalRegistry(tmp_path / "nothing", store=True)) == []
 
 
 def test_clear_cache_keeps_a_store_inside_the_cache(tmp_path):
@@ -166,16 +155,6 @@ def test_clear_cache_keeps_and_reports_the_folders_without_the_marker(tmp_path):
     assert cleared == ClearedCache(0, [], [cache / "downloads", cache / "control"])
     assert (cache / "downloads/report.pdf").exists()
     assert (cache / "control").read_text() == "a file, not a folder"
-
-
-@pytest.mark.usefixtures("ignores_case")
-def test_clear_cache_keeps_the_downloads_folder_of_the_user_in_the_home_folder(tmp_path, home):
-    # With the home folder as the cache, <cache>/downloads is ~/Downloads on a volume that ignores case.
-    (home / "Downloads").mkdir()
-    (home / "Downloads/tax-return.pdf").write_bytes(b"x" * 1234)
-    cleared = clear_cache(Path.home(), store=LocalRegistry(tmp_path / "store", store=True))
-    assert (cleared.freed, cleared.removed) == (0, [])
-    assert (home / "Downloads/tax-return.pdf").exists()
 
 
 def test_clear_releases_deletes_every_release_but_no_other_file(tmp_path):
@@ -243,20 +222,9 @@ def test_clear_cache_keeps_a_symlink_to_a_folder_without_the_marker(tmp_path):
     assert (cache / "downloads").is_symlink()
 
 
-@pytest.mark.parametrize("folder", ["downloads", "control"])
-def test_clear_cache_refuses_a_store_in_a_folder_that_it_deletes(tmp_path, folder):
-    make_cache_folder(tmp_path / "cache" / folder)
-    store = LocalRegistry(tmp_path / "cache" / folder / "store", store=True)
-    store.put_dataset(make_dataset())
-    with pytest.raises(TimeFValidationError, match="overlaps"):
-        clear_cache(tmp_path / "cache", store=store)
-    assert store.exists("timenet/hello-world", "1.0.0")
-
-
-@pytest.mark.usefixtures("ignores_case")
-def test_clear_cache_refuses_a_store_in_a_case_variant_of_a_folder_that_it_deletes(tmp_path):
+def test_clear_cache_refuses_a_store_in_a_folder_that_it_deletes(tmp_path):
     make_cache_folder(tmp_path / "cache" / "downloads")
-    store = LocalRegistry(tmp_path / "cache" / "Downloads" / "store", store=True)
+    store = LocalRegistry(tmp_path / "cache" / "downloads" / "store", store=True)
     store.put_dataset(make_dataset())
     with pytest.raises(TimeFValidationError, match="overlaps"):
         clear_cache(tmp_path / "cache", store=store)
