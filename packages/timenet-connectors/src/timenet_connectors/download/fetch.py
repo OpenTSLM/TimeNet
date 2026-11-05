@@ -21,7 +21,7 @@ from urllib.parse import urlsplit
 import zipfile
 
 from timenet.errors import TimeFValidationError
-from timenet_connectors.download.http import Artifact, download_http_many
+from timenet_connectors.download.http import Artifact, download_http_many, is_cached
 from timenet_connectors.download.s3 import download_s3_object
 
 
@@ -81,7 +81,7 @@ async def download_files(
         headers: Headers applied to every HTTP request, under each artifact's own.
         cookies: Cookies applied to every HTTP request, under each artifact's own.
         max_concurrency: Maximum number of concurrent HTTP downloads.
-        skip_existing: Skip any artifact whose destination already exists.
+        skip_existing: Skip any artifact whose destination is cached (see :func:`is_cached`).
 
     Returns:
         The destination paths, in input order.
@@ -94,7 +94,7 @@ async def download_files(
         if not _is_s3(artifact.url) and not _is_http(artifact.url):
             raise TimeFValidationError(f"unsupported download URL scheme: {artifact.url!r}")
     for artifact in items:
-        if _is_s3(artifact.url) and not (skip_existing and artifact.dest.exists()):
+        if _is_s3(artifact.url) and not (skip_existing and is_cached(artifact)):
             download_s3_object(artifact.url, artifact.dest, sha256=artifact.sha256)
     http = [artifact for artifact in items if _is_http(artifact.url)]
     if http:

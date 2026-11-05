@@ -233,6 +233,27 @@ def test_download_http_rejects_a_sha256_mismatch(tmp_path, monkeypatch):
     assert not (tmp_path / "f.part").exists()
 
 
+def test_pinned_cached_file_is_kept_only_while_it_matches(tmp_path, monkeypatch):
+    fresh = b"fresh"
+    pin = hashlib.sha256(fresh).hexdigest()
+    hits = []
+
+    def handler(request):
+        hits.append(request.url.path)
+        return httpx.Response(200, content=fresh)
+
+    _patch_transport(monkeypatch, _transport(handler))
+    dest = tmp_path / "f"
+    dest.write_bytes(fresh)
+    asyncio.run(download_http("http://host/f", dest, sha256=pin))
+    assert hits == []  # matches its pin: kept
+
+    dest.write_bytes(b"stale")
+    asyncio.run(download_http("http://host/f", dest, sha256=pin))
+    assert hits == ["/f"]  # no longer matches: downloaded again
+    assert dest.read_bytes() == fresh
+
+
 def test_cleans_up_part_file_on_mid_stream_failure(tmp_path, monkeypatch):
     def handler(request):
         async def broken():

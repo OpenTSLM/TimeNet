@@ -1,6 +1,7 @@
 """Tests for the high-level, scheme-dispatching download helpers."""
 
 import asyncio
+import hashlib
 import io
 import zipfile
 
@@ -79,6 +80,27 @@ def test_download_files_skips_existing_s3(monkeypatch, tmp_path):
     monkeypatch.setattr(fetch, "download_s3_object", _boom)
     asyncio.run(download_files([Artifact("s3://b/a", dest)]))
     assert dest.read_bytes() == b"cached"
+
+
+def test_download_files_keeps_a_pinned_s3_file_only_while_it_matches(monkeypatch, tmp_path):
+    fresh = b"fresh"
+    pin = hashlib.sha256(fresh).hexdigest()
+    calls = []
+
+    def _fake_s3(url, dest, *, sha256=None):
+        calls.append(url)
+        dest.write_bytes(fresh)
+
+    monkeypatch.setattr(fetch, "download_s3_object", _fake_s3)
+    dest = tmp_path / "a"
+    dest.write_bytes(fresh)
+    asyncio.run(download_files([Artifact("s3://b/a", dest, sha256=pin)]))
+    assert calls == []  # matches its pin: kept
+
+    dest.write_bytes(b"stale")
+    asyncio.run(download_files([Artifact("s3://b/a", dest, sha256=pin)]))
+    assert calls == ["s3://b/a"]  # no longer matches: downloaded again
+    assert dest.read_bytes() == fresh
 
 
 def test_download_files_rejects_unknown_scheme_before_downloading(monkeypatch, tmp_path):

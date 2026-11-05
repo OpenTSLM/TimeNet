@@ -43,6 +43,26 @@ class Artifact:
     sha256: str | None = None
 
 
+def is_cached(artifact: Artifact) -> bool:
+    """Return whether ``artifact.dest`` already holds the artifact, so its download can be skipped.
+
+    A destination without a ``sha256`` pin counts as cached once it exists. A pinned one counts only
+    while its bytes still match the pin, so a stale file or a changed pin downloads again.
+
+    Args:
+        artifact: The artifact to look up.
+
+    Returns:
+        Whether the download can be skipped.
+    """
+    if not artifact.dest.exists():
+        return False
+    if artifact.sha256 is None:
+        return True
+    with artifact.dest.open("rb") as handle:
+        return hashlib.file_digest(handle, "sha256").hexdigest() == artifact.sha256.lower()
+
+
 async def download_http(  # ruff: ignore[too-many-arguments]
     url: str,
     dest: str | Path,
@@ -62,7 +82,7 @@ async def download_http(  # ruff: ignore[too-many-arguments]
         dest: The destination file path.
         headers: Request headers, such as an auth token.
         cookies: Request cookies, such as an auth token.
-        skip_existing: Return without downloading if ``dest`` already exists.
+        skip_existing: Return without downloading if ``dest`` is cached (see :func:`is_cached`).
         sha256: Optional hex digest the downloaded bytes must match.
 
     Returns:
@@ -93,7 +113,7 @@ async def download_http_many(
         headers: Headers applied to every request, under each artifact's own headers.
         cookies: Cookies applied to every request, under each artifact's own cookies.
         max_concurrency: Maximum number of downloads running at once.
-        skip_existing: Skip any artifact whose destination already exists.
+        skip_existing: Skip any artifact whose destination is cached (see :func:`is_cached`).
 
     Returns:
         The destination paths, in input order.
@@ -129,13 +149,13 @@ async def _download_one(
         artifact: The artifact to download.
         batch_headers: Headers applied to every request, under the artifact's own.
         batch_cookies: Cookies applied to every request, under the artifact's own.
-        skip_existing: Return early if the destination already exists.
+        skip_existing: Return early if the destination is cached (see :func:`is_cached`).
 
     Raises:
         TimeFFormatError: If the artifact's ``sha256`` is set and does not match the downloaded bytes.
     """
     dest = artifact.dest
-    if skip_existing and dest.exists():
+    if skip_existing and is_cached(artifact):
         return
     dest.parent.mkdir(parents=True, exist_ok=True)
     part = dest.parent / f"{dest.name}.part"

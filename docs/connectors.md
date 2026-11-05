@@ -255,9 +255,9 @@ already parallelizes the transfer of a single object. Both backends skip an exis
 
 Both backends check the `sha256` value. HTTP hashes the bytes while it streams them, and S3 reads the
 `.part` file once more after the transfer. If the value does not match, the download raises
-`TimeFFormatError` and leaves nothing behind. The check runs only on a new download, not on a cached
-file. `ensure_archive` puts the pin into its cache key, so a changed pin downloads the archive again.
-For a file from `download_files`, put the pin into the destination name for the same effect.
+`TimeFFormatError` and leaves nothing behind. A cached file with a pin counts as cached only while its
+bytes match the pin, so a stale file or a changed pin downloads again. `ensure_archive` puts the pin
+into the cache key of its extraction, for the same effect.
 
 Pin every source file outside the Hub. Use a versioned or commit-pinned URL, never a moving branch
 such as `master`, and pass its `sha256`. `ensure_archive` also takes a `filename` override, for URLs

@@ -43,7 +43,7 @@ from timenet_connectors.download import Artifact, download_files, ensure_archive
 
 
 # The per-template answer options (the multiple-choice candidates), keyed by template_id. The URL
-# names a commit of the ECG-QA repository, not a branch, so the file cannot change under it.
+# names a specific commit of the ECG-QA repository, so the file cannot change under it.
 ECG_QA_TEMPLATE_ANSWERS_URL = (
     "https://raw.githubusercontent.com/Jwoo5/ecg-qa/73386bb61b10d525c1e7c428bf5adee6140de750"
     "/ecgqa/ptbxl/answers_for_each_template.csv"
@@ -275,8 +275,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         Returns:
             A single-element list holding the :class:`EcgQaCotSource` handle.
         """
-        # A cached file is not checked again. The pin in the name makes a changed pin download again.
-        answers_path = cache_dir / f"answers_for_each_template-{ECG_QA_TEMPLATE_ANSWERS_SHA256[:8]}.csv"
+        answers_path = cache_dir / "answers_for_each_template.csv"
         # The two HTTP artifacts download concurrently.
         _, cot_root = await asyncio.gather(
             download_files(
