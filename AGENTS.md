@@ -124,4 +124,7 @@ run every `gh stack` command non-interactively (always pass branch names to `ini
   appropriate TimeNet exception on data issues so the user can explicitly correct their data.
 - Don't delete user-owned files unless explicitly asked.
 - Match the existing style instead of reformatting adjacent code.
+- Lay out connector code as the "Connector layout" section of `docs/connectors.md` describes. Keep
+  source checks in dedicated helper functions. For larger connectors, put these functions in
+  `source.py`. Keep the methods of the connector class short, and do not nest comprehensions.
 - Add type hints; both packages ship `py.typed`, so `ty` must stay green.

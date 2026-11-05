@@ -198,7 +198,161 @@ The system finds connectors lazily, by dataset id. There is no central registry 
 concrete connector lives under `timenet_connectors/datasets/<org>/<name>/`. Use lowercase Python
 package names. The package's `__init__.py` exposes `CONNECTOR`. Put `dataset.yaml` and an optional
 `requirements.txt` beside it. The build tool imports only the requested connector package. Reusable
-bases live under `timenet_connectors/bases/`.
+bases live under `timenet_connectors/bases/`. The next section describes the modules inside the
+connector package.
+
+## Connector layout
+
+This section gives the default layout for connector code, so a reader finds the main flow in the
+same place in each connector. The layout keeps three steps apart: read the source, build the
+records, and build the tasks. Use it for a new connector. If another split reads more clearly for
+one connector, use it and say why in the pull request. The responsibilities matter more than the
+file names.
+
+### A small connector
+
+If a connector has fewer than about 250 lines, keep all of its code in `connector.py`. The number is
+a guide, not a limit. Do not split one class or one closely related group of functions across files
+only to stay under it. Put the code in this order, from top to bottom:
+
+1. The constants, labels, and annotation keys.
+2. The code that reads the source into typed rows.
+3. The code that builds the records.
+4. The code that builds the tasks.
+5. The connector class.
+
+The rules for a larger connector also apply inside this one file.
+
+### A larger connector
+
+If a connector has more lines, split it into these modules:
+
+```
+datasets/<org>/<name>/
+  __init__.py       # re-exports CONNECTOR
+  connector.py      # the connector class only: metadata, download, convert or compose
+  source.py         # reads the raw files into typed rows and checks every source value
+  records.py        # builds the records from the typed rows
+  tasks.py          # builds the tasks from the records and the typed rows
+  labels.py         # enums, label sets, annotation keys, and specs
+  dataset.yaml
+  requirements.txt  # optional
+  tests/
+```
+
+If the dataset has no tasks, leave out `tasks.py`. If the connector has no fixed values, leave out
+`labels.py`.
+
+The imports between these modules go in one direction:
+
+- `source.py` does not import `records.py` or `tasks.py`.
+- `records.py` can import `source.py`.
+- `tasks.py` can import `source.py` and `records.py`.
+- Every module can import `labels.py`.
+
+Keep connector class methods short. Use helper functions to read and check source data, build
+records, and build tasks. A reader then sees the whole flow in a few lines.
+
+### Source checks
+
+The source checks live in `source.py`. In a small connector, the same helper functions live in
+`connector.py`, and the rules in this section apply to them in the same way.
+
+`source.py` turns each raw row into a typed row, for example a frozen dataclass. It checks each
+value when it builds the row. If a value is not what the connector expects, it raises
+`TimeNetConnectorError` with an error message that identifies the file and the row.
+
+Record and task builders use checked, typed rows. Keep source checks in `source.py`, and let its
+errors propagate. Each time the source is read, these checks run again.
+
+A typed row holds small values only. Large values, such as signal arrays, stay in the source files.
+The function that reads a large value also lives in `source.py`. It runs later, when the writer
+loads the value, so it checks the values that it reads. For example, it checks the shape and the
+data type. The rules for missing and non-finite values are separate:
+
+- A missing value becomes null if the spec is nullable. If the spec is not nullable, a missing
+  value raises `TimeNetConnectorError`. Never fill a missing value.
+- If the source documents NaN as a missing value, treat it as one. Otherwise a NaN raises
+  `TimeNetConnectorError`.
+- Every value that is present must be finite. Infinity raises `TimeNetConnectorError`, also when
+  the spec is nullable.
+
+`records.py` only passes this function to `Signal.from_loader`. All code that reads the source is
+then in `source.py`.
+
+### Where to put each kind of code
+
+| Code | Module |
+| --- | --- |
+| Facts about the source release, such as URLs, the revision, checksums, and expected counts | `source.py`, as constants next to the code that checks them. A fact that a base class reads from the connector class, such as `SOURCE_REVISION` for `BaseHuggingFaceConnector`, stays on the class. |
+| Checks on one row | `source.py`, when it builds the typed row |
+| Checks across rows, such as duplicates or contradictions | `source.py`, in a full scan of the source before `convert` builds records. Keep only the information needed for these checks, such as record keys. |
+| Splits, folds, and classes that the source defines | `labels.py` if they are fixed values, `source.py` if the connector reads them from a file |
+| Dataset annotations used by a task stream | `records.py`, in one function that `convert` calls before it sets the stream |
+| Helpers for the users of the dataset | A module of their own, exported from `__init__.py` |
+
+### The flow in `convert`
+
+If the connector builds a list of tasks, `convert` reads like this:
+
+```python
+def convert(self, raw_refs: list[Path]) -> TimeFDataset:
+    dataset = TimeFDataset(metadata=self.metadata())
+    rows = tuple(iter_rows(raw_refs))  # source.py
+    records = add_records(dataset, rows)  # records.py
+    dataset.add_tasks(tasks=build_tasks(rows, records))  # tasks.py
+    return dataset
+```
+
+`add_records` and `build_tasks` both read `rows`, so `rows` must be a tuple or a list. A generator
+gives its rows to `add_records` only, and `build_tasks` then builds no tasks.
+
+Task streams avoid keeping all tasks in memory. They must also avoid keeping all source rows in
+memory. Read the source again each time the stream function is called:
+
+```python
+def convert(self, raw_refs: list[Path]) -> TimeFDataset:
+    dataset = TimeFDataset(metadata=self.metadata())
+    summary = check_rows(raw_refs)  # source.py: a full scan for the checks across rows
+    records = add_records(dataset, iter_rows(raw_refs))  # records.py
+    shared = add_stream_annotations(dataset, summary)  # records.py
+    dataset.set_task_stream([AnswerTask], lambda: iter_tasks(raw_refs, records, shared))  # tasks.py
+    return dataset
+```
+
+The task stream function can be called more than once, including by tests or later writes. Each
+call must return a new iterator that rereads the source through `iter_rows` in `source.py`. The
+stream keeps only the references, the records, and the shared annotations in memory.
+
+Sometimes the loader of each record already holds its checked row, so the rows stay in memory
+anyway. Then a reread saves no memory, and the stream can reuse the checked rows. Say so in a
+comment next to `set_task_stream`.
+
+Run all checks across rows in `check_rows`, before you call `set_task_stream`. The task stream
+reads rows as needed instead of storing them all in a list. `check_rows`, `add_records`, and each
+call of the stream read the source separately. Each pass checks its own rows again, but the checks
+across rows run only once. Changes between reads can go undetected. TimeNet does not yet have a
+shared helper to check that the source stayed unchanged.
+
+The writer reads the dataset annotations before it reads the stream. Add every dataset annotation
+used by the stream before you call `set_task_stream`.
+
+The engine opens the parent releases and passes them to `compose` through `context.parents`. See
+[Compose a child dataset](#compose-a-child-dataset). Use `source.py` to read the child's source
+data, `records.py` to import and update parent records with `import_from`, and `tasks.py` to build
+tasks from the typed rows and imported records.
+
+### Tests
+
+The tests in `tests/` follow the same split. Test `source.py` with bad source values, and make sure
+that each one raises `TimeNetConnectorError`. Test the whole connector on a small fixture with a few
+rows in the same format as the source files.
+
+### Style
+
+- Do not nest comprehensions. Use a loop or a named helper function.
+- Use comments to explain reasons that are not clear from the code. Use plain words.
+- Keep docstrings short. Say what a function returns and raises, not how it works line by line.
 
 ## Dependencies and credentials
 

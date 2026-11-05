@@ -77,8 +77,17 @@ Create `packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>
   installs it into the environment that the build runs in. The lazy import keeps `--no-isolation`
   usable while you write the connector.
 
-Add the org namespace `__init__.py` if the org is new. Keep `download` I/O-only and `convert` CPU-only
-with lazy value loaders (never materialize arrays in `convert`). See the worked example in
+Lay out the code as the "Connector layout" section of `docs/connectors.md` describes. If the
+connector has fewer than about 250 lines, keep it in `connector.py`. If it has more, split it into
+`connector.py`, `source.py`, `records.py`, `tasks.py`, and `labels.py`. `tasks.py` and `labels.py`
+are optional. Keep source checks in dedicated helper functions. For larger connectors, put these
+functions in `source.py`. Keep the methods of the connector class short, and use helper functions
+to read and check source data, build records, and build tasks.
+
+Add the org namespace `__init__.py` if the org is new. Keep `download` I/O-only and `convert`
+local, with no network. Use `Signal.from_values` when `convert` already holds the values, such as a
+JSON list in a table row. Use `Signal.from_loader` when the values stay in a file that a reader can
+open for one signal (WFDB, EDF, a large array). See the worked example in
 `references/connector-anatomy.md`.
 
 You cannot pass ids. Records, signals, and tasks get a read-only int `id` when you add them to the

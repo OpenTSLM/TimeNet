@@ -7,7 +7,7 @@ this branch. Anchor files:
 - Bases: `packages/timenet-connectors/src/timenet_connectors/bases/{huggingface,physionet}.py`
 - Discovery: `packages/timenet-connectors/src/timenet_connectors/discovery.py`
 - Build CLI: `packages/timenet-connectors/src/timenet_connectors/builder/cli.py`
-- Worked examples: the `chengsenwang/tsqa`, `physionet/ecg_qa_cot`, and `timenet/hello_world` connectors
+- Worked examples: the Hub example below, and the `timenet/hello_world` and `physionet/ptb_xl` connectors
 
 ## The `BaseConnector` contract
 
@@ -21,8 +21,8 @@ this branch. Anchor files:
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
-- `store(...)` (concrete): derives the schema if missing and streams the dataset through `TimeFWriter`.
-  Most connectors never override it.
+- The engine, not the connector, derives the schema and writes the release. There is no `store`
+  method to call or override.
 
 Connectors take **no constructor arguments** (configuration comes from the environment). End with a
 module-level `CONNECTOR = <YourClass>`.
@@ -39,6 +39,10 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   requirements.txt # the libraries this connector needs, installed into the
                    # environment its build runs in (optional)
 ```
+
+A connector of more than about 250 lines also has `source.py` and `records.py` beside
+`connector.py`, and optionally `tasks.py` and `labels.py`. The "Connector layout" section of
+`docs/connectors.md` gives the rules for these modules.
 
 `discovery.resolve(dataset_id)` imports only the one module and reads its `CONNECTOR`.
 `discovery._module_name` maps the id to the module path: org lowercased, leaf hyphens to underscores, so
@@ -91,8 +95,8 @@ To read the Hub's parquet conversion instead of the original files, pin the comm
 records through `wfdb`, which the base imports lazily so that `--no-isolation` stays usable while you
 write the connector:
 - `_read_header(record_base)`: WFDB header (`fs`, `sig_len`, `sig_name`), no signal decode.
-- `_lead_loader(record_base, lead_idx) -> Callable[[], pa.Array]`: lazy float32 loader for one lead's
-  physical signal.
+- `_lead_loader(record_base, header, lead_idx) -> Callable[[], pa.Array]`: lazy float32 loader for
+  one lead's physical signal.
 
 The base does not fetch the archive. Call `ensure_archive` / `download_files` from
 `timenet_connectors.download`. The connector's `requirements.txt` then declares `wfdb` plus whatever
@@ -109,7 +113,8 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   arbitrary time offset per point, use
   `Signal.from_irregular(values, *, time_offsets_us, spec, name)` instead. It derives the axis
   from the stream. Use `Signal.from_loader(..., loader=<Callable[[], pa.Array]>, n_values=...)`
-  only for lazy sources (files, remote shards).
+  when the values stay in a file that a reader can open for one signal (WFDB, EDF, a large array),
+  so that `convert` does not keep every signal in memory.
 - `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_value=ureg.<unit>, data_source=...)`.
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
@@ -164,18 +169,29 @@ the bounds of every `Span` the task carries.
 
 ## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
 
+This example is a small connector, so all its code is in `connector.py`, in the order that the
+"Connector layout" section of `docs/connectors.md` gives: constants, checked rows, records,
+tasks, and the connector class. Like the real TSQA connector, it splits the rows with a
+`StratifiedSplitter` that keeps every question about the same series in one split.
+
 `connector.py`:
 
 ```python
+from collections.abc import Iterator, Mapping
+from dataclasses import dataclass
 import json
-from collections.abc import Mapping
+import math
+from pathlib import Path
 from typing import ClassVar
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
+from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
+from timenet.types.splits import Split
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.sources.parquet import iter_parquet_rows
+from timenet_connectors.splitting import Splitter, StratifiedSplitter
 
 
 _SPEC = TimeSeriesSpec(
@@ -183,6 +199,113 @@ _SPEC = TimeSeriesSpec(
     name="TSQA Series",
     unit_value=ureg.dimensionless,
 )
+
+
+@dataclass(frozen=True)
+class _Row:
+    """One checked row of the source."""
+
+    channels: tuple[tuple[float, ...], ...]
+    task: str
+    question: str
+    answer: str
+    label: str | None
+
+
+def _read_rows(path: Path) -> Iterator[_Row]:
+    """Yield one checked row for each row of a parquet file.
+
+    Yields:
+        The checked row. A bad cell raises ``TimeNetConnectorError`` with the file and the row.
+    """
+    for number, cells in enumerate(iter_parquet_rows(path), start=1):
+        where = f"{path.name} row {number}"
+        yield _Row(
+            channels=_channels(cells, where),
+            task=_text(cells, "Task", where),
+            question=_text(cells, "Question", where),
+            answer=_text(cells, "Answer", where),
+            label=_text(cells, "Label", where) if cells.get("Label") is not None else None,
+        )
+
+
+def _text(cells: Mapping[str, object], column: str, where: str) -> str:
+    """Return a nonblank text cell.
+
+    Returns:
+        The text.
+
+    Raises:
+        TimeNetConnectorError: If the cell is missing, not text, or blank.
+    """
+    value = cells.get(column)
+    if not isinstance(value, str) or not value.strip():
+        raise TimeNetConnectorError(f"{where}: {column} is not a nonblank string")
+    return value
+
+
+def _channels(cells: Mapping[str, object], where: str) -> tuple[tuple[float, ...], ...]:
+    """Parse the Series cell: a flat list is one channel, a list of lists is several.
+
+    Returns:
+        The values of each channel.
+
+    Raises:
+        TimeNetConnectorError: If the cell is not JSON or a channel is not a nonempty list of
+            finite numbers.
+    """
+    try:
+        series = json.loads(_text(cells, "Series", where))
+    except json.JSONDecodeError as error:
+        raise TimeNetConnectorError(f"{where}: Series is not JSON: {error}") from error
+    if not isinstance(series, list) or not series:
+        raise TimeNetConnectorError(f"{where}: Series is not a nonempty list")
+    channels = series if isinstance(series[0], list) else [series]
+    for channel in channels:
+        if not isinstance(channel, list) or not channel or not all(map(_is_finite_number, channel)):
+            raise TimeNetConnectorError(f"{where}: a Series channel is not a nonempty list of finite numbers")
+    return tuple(tuple(float(value) for value in channel) for channel in channels)
+
+
+def _is_finite_number(value: object) -> bool:
+    """Return whether a value is a finite int or float, and not a bool."""
+    return isinstance(value, int | float) and not isinstance(value, bool) and math.isfinite(value)
+
+
+def _category(row: _Row) -> str:
+    """Return the question category, which the splitter balances across the splits."""
+    return row.task
+
+
+def _series_key(row: _Row) -> tuple[tuple[float, ...], ...]:
+    """Return the series, so that the splitter keeps every question about it in one split."""
+    return row.channels
+
+
+def _add_record(dataset: TimeFDataset, row: _Row) -> Record:
+    """Add the record of one row: one signal per channel, the task name, and the label if any.
+
+    Returns:
+        The added record.
+    """
+    signals = tuple(
+        Signal.from_values(values, spec=_SPEC, name=f"c{index}", time_axis=OrdinalAxis())
+        for index, values in enumerate(row.channels)
+    )
+    record = dataset.add_record(record=Record(sources=(Source(name="TSQA series", signals=signals),)))
+    record.annotate(Annotation(key="task", value=row.task))
+    if row.label:
+        record.annotate(Annotation(key="label", value=row.label))
+    return record
+
+
+def _task(row: _Row, record: Record, split: Split) -> AnswerTask:
+    """Build the question-and-answer task of one row.
+
+    Returns:
+        The task.
+    """
+    return AnswerTask(inputs=(record,), prompt=row.question, targets=(row.answer,), split=split)
 
 
 class TSQAConnector(BaseHuggingFaceConnector):
@@ -193,41 +316,31 @@ class TSQAConnector(BaseHuggingFaceConnector):
     SOURCE_REVISION = "22518209e3ee6302be4b4957f2692b3e8de849c3"
     SOURCE_FILES: ClassVar[Mapping[str, str]] = {"train": "default/train/0000.parquet"}
 
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
-        """Build one record per row: the parsed series plus its question-and-answer task.
+    def __init__(self) -> None:
+        super().__init__()
+        self.splitter: Splitter[_Row] = StratifiedSplitter(
+            train_folds=8,
+            validation_folds=1,
+            test_folds=1,
+            stratify_by=_category,
+            group_by=_series_key,
+            seed=42,
+        )
 
-        Args:
-            raw_refs: The parquet files from :meth:`download`.
+    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
+        """Build one record and one question-and-answer task for each row, in its split.
 
         Returns:
-            The populated :class:`~timenet.dataset.TimeFDataset`.
+            The populated dataset.
         """
-        dataset = TimeFDataset(metadata=self.metadata())
+        rows: list[_Row] = []
         for ref in raw_refs:
-            for row in iter_parquet_rows(ref.path):
-                series = json.loads(row["Series"])
-                signals = series if series and isinstance(series[0], list) else [series]
-                time_series = tuple(
-                    Signal.from_values(
-                        values,
-                        spec=_SPEC,
-                        name=f"c{signal}",
-                        time_axis=OrdinalAxis(),
-                    )
-                    for signal, values in enumerate(signals)
-                )
-                record = Record(sources=(Source(name="TSQA series", signals=time_series),))
-                dataset.add_record(record=record)
-                record.annotate(Annotation(key="task", value=row["Task"]))
-                if row.get("Label"):
-                    record.annotate(Annotation(key="label", value=row["Label"]))
-                dataset.add_task(
-                    task=AnswerTask(
-                        inputs=(record,),
-                        prompt=row["Question"],
-                        targets=(row["Answer"],),
-                    )
-                )
+            rows.extend(_read_rows(ref.path))
+        dataset = TimeFDataset(metadata=self.metadata())
+        for split, rows_in_split in self.splitter.split(rows).items():
+            for row in rows_in_split:
+                record = _add_record(dataset, row)
+                dataset.add_task(task=_task(row, record, split))
         return dataset
 
 
@@ -243,20 +356,17 @@ from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
 )
 ```
 
-## PhysioNet notes: `physionet/ecg_qa_cot`
+## PhysioNet notes: `physionet/ptb_xl` and `physionet/ecg_qa_cot`
 
-Subclasses `BasePhysioNetConnector[EcgQaCotSource]` where `EcgQaCotSource` is a frozen dataclass
-that holds the paths of the fetched files. `download_async` calls `ensure_archive` / `download_files`
-and returns one `EcgQaCotSource`. `convert` builds one record per recording and keeps the records in
-a local dict keyed by the PTB-XL `ecg_id`. It stores the `ecg_id` and the PTB-XL `patient_id` in
-`Record.metadata`, and attaches whole-record `split`, `sex`, and `age` annotations. The sex and age
-come from `ptbxl_database.csv`. Per-question metadata (question_type, template_id, answer_options,
-clinical_context) are value-deduped dataset annotations that the tasks reference. The connector
-builds the clinical context from `ptbxl_database.csv`. It streams one
-`AnswerTask(inputs=(record,), prompt=..., rationale=<CoT>, targets=(<label>,))` per question.
-`_leads_for` reads the WFDB header for `fs`/`sig_len`/`sig_name` and builds one lazy `Signal` per
-lead. All tasks for a recording point at its one record. Records do not share a series. See its
-`connector.py` for the full pattern.
+`physionet/ptb_xl` subclasses `BasePhysioNetConnector`. Its `download_async` fetches the files, and
+`convert` builds one record per row of `ptbxl_database.csv`. For each record, `convert` reads the
+WFDB header with `_read_header` and builds one lazy `Signal` per lead with
+`Signal.from_loader(..., loader=self._lead_loader(base, header, position))`. The record keeps the
+upstream `ecg_id` in `Record.metadata` and the patient in a `subject_ids` annotation.
+
+`physionet/ecg_qa_cot` declares PTB-XL as a parent in its card and implements `compose` instead of
+`convert`. It imports the PTB-XL records and adds the questions as tasks. `docs/connectors.md`
+describes this in "Compose a child dataset".
 
 ## Fixture-based test pattern
 
