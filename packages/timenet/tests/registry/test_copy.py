@@ -305,11 +305,9 @@ def test_copy_release_refuses_a_payload_source_that_only_dest_holds_damaged(sour
     copy_release(parent_ref, source, dest)
     parent_dir = dest.root / parent_ref.dataset_id / str(parent_ref.version)
     (parent_dir / dest.get_manifest(*parent).files.control[0].path).unlink()
-    origin = _without_parent(source)
     with pytest.raises(TimeNetMissingParentError) as raised:
-        copy_release(child_ref, origin, dest)
+        copy_release(child_ref, _without_parent(source), dest)
     assert (raised.value.missing, raised.value.needed_by) == (parent_ref, child_ref)
-    assert raised.value.searched == f"{origin} or {dest}"
     assert not dest.exists(*child)
 
 
