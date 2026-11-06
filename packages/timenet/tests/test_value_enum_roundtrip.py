@@ -175,7 +175,7 @@ def test_category_codes_follow_the_spec_order(tmp_path):
     version_dir = _write(tmp_path, _dataset(["deep", "awake", "rem", "deep"]))
     with TimeFReader(open_local_version(version_dir)) as reader:
         series = reader.read().records[0].signals[0]
-    assert series.to_category_codes().to_pylist() == [2, 0, 3, 2]
+    assert series.spec.codebook.codes_of(series.to_arrow()).to_pylist() == [2, 0, 3, 2]
 
 
 def test_category_codes_reject_a_label_outside_the_categories():
@@ -186,7 +186,7 @@ def test_category_codes_reject_a_label_outside_the_categories():
         name="stage", spec=_spec(), time_axis=RegularAxis.from_rate_hz(1), n_values=2, loader=lambda: stored
     )
     with pytest.raises(TimeFValidationError, match="outside its categories"):
-        series.to_category_codes()
+        series.spec.codebook.codes_of(series.to_arrow())
 
 
 def test_enum_read_range_returns_labels(tmp_path):

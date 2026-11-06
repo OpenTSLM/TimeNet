@@ -1,9 +1,12 @@
 """Measurement modality descriptors used by Signals."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Iterable
+from dataclasses import dataclass
 from typing import Annotated, Any, Self, cast
 
 import pint
+import pyarrow as pa
+import pyarrow.compute as pc
 from pydantic import (
     PlainSerializer,
     PlainValidator,
@@ -13,6 +16,7 @@ from pydantic import (
     model_validator,
 )
 
+from timenet.errors import TimeFValidationError
 from timenet.types._model import TimeFModel
 from timenet.types.modalities import InputModality
 from timenet.types.units import normalize_unit, ureg
@@ -84,6 +88,75 @@ Unit = Annotated[pint.Unit, *unit_metadata(validator=_to_required_unit, nullable
 """A required Pint unit represented by its canonical string on the wire."""
 
 
+@dataclass(frozen=True)
+class Codebook:
+    """The categories of an enum spec, in code order.
+
+    A code is the zero-based position of a category in :attr:`labels`. ``ordered`` says whether a
+    later category is a larger amount than an earlier one.
+    """
+
+    labels: tuple[str, ...]
+    ordered: bool
+
+    def check_labels(self, values: Iterable[object], *, nullable: bool) -> None:
+        """Reject a value that is not a category.
+
+        Args:
+            values: The labels to check, for example the distinct labels of a dictionary array.
+            nullable: Whether ``None`` is allowed.
+
+        Raises:
+            TimeFValidationError: If a value is not in :attr:`labels`.
+        """
+        allowed = set(self.labels)
+        unknown = {value for value in values if value not in allowed and not (value is None and nullable)}
+        if unknown:
+            raise TimeFValidationError(
+                f"enum series has values outside its categories ({list(self.labels)!r}): {sorted(unknown, key=str)}"
+            )
+
+    def codes_of(self, labels: pa.Array) -> pa.Array:
+        """Map labels to their codes.
+
+        Args:
+            labels: A string array, or a dictionary array of strings. A null stays null.
+
+        Returns:
+            An int32 array with the code of each label.
+
+        Raises:
+            TimeFValidationError: If a label is not in :attr:`labels`.
+        """
+        # index_in finds each label's position in the categories using C code.
+        # This avoids a Python lookup for every value.
+        value_type = labels.type.value_type if pa.types.is_dictionary(labels.type) else labels.type
+        categories = pa.array(self.labels, type=value_type)
+        codes = pc.index_in(labels, value_set=categories)  # ty: ignore[unresolved-attribute]
+        if codes.null_count != labels.null_count:
+            raise TimeFValidationError(f"enum series has values outside its categories ({list(self.labels)!r})")
+        return codes.cast(pa.int32())
+
+    def labels_of(self, codes: pa.Array) -> pa.DictionaryArray:
+        """Map codes back to labels.
+
+        Args:
+            codes: An integer array. A null stays null.
+
+        Returns:
+            A dictionary array whose dictionary is :attr:`labels` and whose indices are the codes.
+
+        Raises:
+            TimeFValidationError: If a code is not a position in :attr:`labels`.
+        """
+        try:
+            return pa.DictionaryArray.from_arrays(codes.cast(pa.int32()), pa.array(self.labels, type=pa.string()))
+        except pa.ArrowException as exc:
+            raise TimeFValidationError(
+                f"enum series has a code outside its {len(self.labels)} categories ({list(self.labels)!r})"
+            ) from exc
+
+
 #: Spec types the Zarr backend cannot encode as its own array path segment.
 _RESERVED_SPEC_TYPES = frozenset({".", "..", "_irregular", "_time_offsets", "_validity"})
 
@@ -124,6 +197,17 @@ class TimeSeriesSpec(TimeFModel):
     """Whether a whole timestep can be missing. An Arrow bit marks whether each timestep is present."""
     modality: InputModality = InputModality.TIME_SERIES
     """Semantic input kind. Set IMAGE, AUDIO, or TEXT for Signals that carry those kinds of data."""
+
+    @property
+    def codebook(self) -> Codebook:
+        """The categories of an enum spec, with their order.
+
+        Raises:
+            TimeFValidationError: If the dtype is not ``"enum"``.
+        """
+        if self.dtype != "enum":
+            raise TimeFValidationError(f"spec {self.spec_type!r} holds {self.dtype} values, so it has no codebook")
+        return Codebook(labels=self.categories, ordered=self.ordered)
 
     @model_validator(mode="after")
     def _valid_contract(self) -> Self:
