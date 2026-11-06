@@ -14,7 +14,7 @@ from collections import defaultdict
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from functools import lru_cache, partial
+from functools import lru_cache
 import hashlib
 import itertools
 import json
@@ -26,11 +26,12 @@ from typing import Any, ClassVar, NamedTuple, TypeVar
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
+from timenet.dataset import Record, Signal, SignalChannel, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.json import JsonValue
 from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, Split, Task, TimeSeriesSpec
+from timenet.types.shared_loading import SharedChannelLoader
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.sources.parquet import iter_parquet_rows
 
@@ -591,11 +592,13 @@ def _find_issues(rows: list[_Row]) -> dict[_RowKey, frozenset[SourceIssue]]:
     return issues
 
 
-class _ParsedSeries(NamedTuple):
-    """A row's series as read from its file, with their digest."""
+class _SeriesRead(NamedTuple):
+    """A row's location, parsing mode, and expected values for a lazy read."""
 
-    series: list[list[float]]
-    """The series in Record order: the inputs, then the printed series."""
+    split: _SplitFile
+    index: int
+    task: _Task
+    lengths: tuple[int, ...]
     digest: bytes
 
 
@@ -611,7 +614,7 @@ class _SeriesLoader:
         self._paths = paths
         self._columns = lru_cache(maxsize=1)(self._read_columns)
         # A row's Records load one after another, so one parsed row suffices.
-        self._series = lru_cache(maxsize=1)(self._parse)
+        self._shared_channels = SharedChannelLoader(self._read_series)
 
     def _read_columns(self, split: _SplitFile) -> tuple[pa.StringArray, pa.StringArray]:
         try:
@@ -621,22 +624,39 @@ class _SeriesLoader:
         input_ts, question = (table.column(name).chunk(0) for name in _SERIES_COLUMNS)
         return input_ts, question
 
-    def _parse(self, split: _SplitFile, index: int, task: _Task) -> _ParsedSeries:
-        input_ts, question = self._columns(split)
+    def _read_series(self, request: _SeriesRead) -> tuple[pa.Array, ...]:
+        input_ts, question = self._columns(request.split)
+        context = f"{request.split.filename} row {request.index}"
         try:
-            printed = _printed_series(task, str(question[index].as_py()))
-            series = [*_input_series(task, str(input_ts[index].as_py())), *(item.values for item in printed)]
-            return _ParsedSeries(series, _values_digest(series))
+            printed = _printed_series(request.task, str(question[request.index].as_py()))
+            series = [
+                *_input_series(request.task, str(input_ts[request.index].as_py())),
+                *(item.values for item in printed),
+            ]
         except (ValueError, IndexError) as exc:
-            raise TimeFFormatError(f"{split.filename} row {index}: {exc}; the file changed since conversion") from exc
+            raise TimeFFormatError(f"{context}: {exc}; the file changed since conversion") from exc
+        if tuple(len(values) for values in series) != request.lengths or _values_digest(series) != request.digest:
+            raise TimeFFormatError(f"{context}: the series differ from the converted row; the file changed")
+        return tuple(pa.array(values, type=pa.float64()) for values in series)
 
-    def __call__(self, row: _Row, position: int) -> pa.Array:
-        parsed = self._series(row.split, row.index, row.task)
-        if tuple(len(values) for values in parsed.series) != row.lengths or parsed.digest != row.values_digest:
-            raise TimeFFormatError(
-                f"{row.file} row {row.index}: the series differ from the converted row; the file changed"
-            )
-        return pa.array(parsed.series[position], type=pa.float64())
+    def signals(self, row: _Row) -> tuple[Signal, ...]:
+        """Return the row's signals in source order without reading values."""
+        request = _SeriesRead(row.split, row.index, row.task, row.lengths, row.values_digest)
+        return Signal.from_shared_loader(
+            loader=self._shared_channels,
+            recording_key=request,
+            channels=tuple(
+                SignalChannel(
+                    name="series",
+                    spec=_SERIES_SPEC
+                    if position < row.n_inputs or row.transform is None
+                    else _TRANSFORM_SPECS[row.transform],
+                    time_axis=_AXIS,
+                    n_values=length,
+                )
+                for position, length in enumerate(row.lengths)
+            ),
+        )
 
 
 def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
@@ -647,15 +667,7 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
     """
     roles = (*_INPUT_ROLES[: row.n_inputs], *row.printed_roles)
     records = []
-    for position, (role, length) in enumerate(zip(roles, row.lengths, strict=True)):
-        is_input = position < row.n_inputs
-        signal = Signal.from_loader(
-            name="series",
-            spec=_SERIES_SPEC if is_input or row.transform is None else _TRANSFORM_SPECS[row.transform],
-            time_axis=_AXIS,
-            n_values=length,
-            loader=partial(loader, row, position),
-        )
+    for position, (role, signal) in enumerate(zip(roles, loader.signals(row), strict=True)):
         metadata: dict[str, JsonValue] = {"file": row.file, "row": row.index, "role": str(role)}
         record = Record(sources=(Source(name="series", signals=(signal,)),), metadata=metadata)
         if position == 0:
