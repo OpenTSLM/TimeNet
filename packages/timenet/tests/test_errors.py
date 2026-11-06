@@ -14,6 +14,7 @@ from timenet.errors import (
     TimeNetError,
     TimeNetFileError,
     TimeNetMissingParentError,
+    TimeNetNotBuiltError,
     TimeNetRegistryError,
     TimeNetVersionConflictError,
     TimeNetVersionUnavailableError,
@@ -164,3 +165,9 @@ def test_an_error_with_facts_ends_with_the_hint_of_its_front_end(error, facts, m
     assert all(isinstance(restored, kind) for kind in caught_as)
     # The message ends with a period, and the hint follows as its own sentence.
     assert str(restored) == f"{message} Do this instead."
+
+
+def test_a_not_built_error_keeps_its_release_and_message_through_pickle():
+    error = TimeNetNotBuiltError(_A, "org/a@1.0.0 has no manifest yet.")
+    restored = pickle.loads(pickle.dumps(error))
+    assert (restored.release, str(restored)) == (_A, "org/a@1.0.0 has no manifest yet.")

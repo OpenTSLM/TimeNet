@@ -34,6 +34,25 @@ class TimeNetDatasetNotFoundError(TimeNetError):
     """A requested dataset id or version is not present in a registry or on disk."""
 
 
+class TimeNetNotBuiltError(TimeNetDatasetNotFoundError):
+    """Only an installed connector provides a release, so it has no manifest yet.
+
+    Build the release to create its manifest, or read the connector's card for metadata.
+
+    Attributes:
+        release: The unbuilt release.
+        message: The error message.
+    """
+
+    def __init__(self, release: "DatasetRef", message: str) -> None:
+        super().__init__(release, message)
+        self.release = release
+        self.message = message
+
+    def __str__(self) -> str:
+        return self.message
+
+
 class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
     """A required parent release or payload source is missing.
 
