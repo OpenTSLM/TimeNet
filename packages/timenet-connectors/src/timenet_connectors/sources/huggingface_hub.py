@@ -11,6 +11,7 @@ datasets work with no extra wiring.
 
 import asyncio
 from collections.abc import Sequence
+from fnmatch import fnmatchcase
 from pathlib import Path
 import threading
 from typing import Any
@@ -22,6 +23,11 @@ from timenet_connectors.download.progress import DownloadProgress, current_sink
 # The Hub gives this name to the snapshot bar that counts file bytes, from huggingface_hub 1.1 on. Its other
 # bars count finished files or, from 1.28, compressed network bytes.
 _FILE_BYTES_BAR = "huggingface_hub.snapshot_download"
+
+_MISSING_HUB_CLIENT = (
+    "downloading from the Hugging Face Hub needs huggingface_hub, declared in the connector's "
+    "requirements.txt. Run the build without --no-isolation, or install it yourself"
+)
 
 
 async def download_hub_files(repo: str, filenames: Sequence[str], *, revision: str, cache_dir: Path) -> list[Path]:
@@ -45,10 +51,7 @@ async def download_hub_files(repo: str, filenames: Sequence[str], *, revision: s
         from huggingface_hub import snapshot_download  # ruff: ignore[import-outside-top-level]
         from huggingface_hub.utils import tqdm  # ruff: ignore[import-outside-top-level]
     except ImportError as exc:
-        raise ImportError(
-            "downloading from the Hugging Face Hub needs huggingface_hub, declared in the connector's "
-            "requirements.txt. Run the build without --no-isolation, or install it yourself"
-        ) from exc
+        raise ImportError(_MISSING_HUB_CLIENT) from exc
 
     sink = current_sink()
     key = f"{repo}@{revision[:7]}"
@@ -92,3 +95,30 @@ async def download_hub_files(repo: str, filenames: Sequence[str], *, revision: s
     if missing:
         raise TimeNetDownloadError(f"{repo}@{revision} has no {', '.join(missing)}")
     return paths
+
+
+async def hub_snapshot(repo: str, revision: str, cache_dir: Path, patterns: tuple[str, ...]) -> Path:
+    """Download files that match the patterns from a pinned dataset revision.
+
+    Returns:
+        The local snapshot directory.
+
+    Raises:
+        ImportError: If ``huggingface_hub``, declared in the connector's requirements, is missing.
+        TimeNetDownloadError: If the revision cannot be listed or no files match.
+    """
+    try:
+        # Optional connector dependency.
+        from huggingface_hub import list_repo_files  # ruff: ignore[import-outside-top-level]
+    except ImportError as exc:
+        raise ImportError(_MISSING_HUB_CLIENT) from exc
+
+    try:
+        names = await asyncio.to_thread(list_repo_files, repo, repo_type="dataset", revision=revision)
+    except Exception as exc:
+        raise TimeNetDownloadError(f"Could not list {repo}@{revision}: {exc}") from exc
+    selected = [name for name in names if any(fnmatchcase(name, pattern) for pattern in patterns)]
+    if not selected:
+        raise TimeNetDownloadError(f"{repo}@{revision} has no files matching {patterns}")
+    paths = await download_hub_files(repo, selected, revision=revision, cache_dir=cache_dir)
+    return paths[0].parents[len(Path(selected[0]).parts) - 1]
