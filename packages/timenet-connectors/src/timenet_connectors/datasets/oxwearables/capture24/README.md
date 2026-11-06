@@ -93,23 +93,20 @@ window but does not restrict access to the rest of the Record.
 
 Sequence models can use one participant's ordered tasks from one scheme. The authors' RNN uses
 eight consecutive windows; their HMM uses the participant's whole sequence. Compare these models
-separately from models restricted to one window: neighboring windows share a class in more than
-99.9% of pairs, since labels come from photos taken every 20–40 seconds and from sleep diaries.
+separately from models restricted to one window, because they use context outside that window.
 
 ## Validation and limitations
 
-A full build from the cached extracted release passed stored-file verification on 2026-11-06,
-before the shared CSV-helper extraction. It produced:
+A full build from the cached extracted release passed stored-file verification on
+2026-11-06. It produced:
 
 - 151 Records, 159 Sources, and 477 signals: 143 Records with one Source and eight with two.
 - 934,762 windows, yielding 1,869,524 classification tasks across the two schemes.
 
-The build took 13 minutes 50 seconds with 2.20 GiB peak resident memory. See
-[verification details](VERIFICATION.md) for the method and limits. Synthetic tests separately
-check conversion rules and the storage round-trip.
+See the [build record](BUILD_RECORD.md) for the method, measurements, and limits. Stored-file
+verification checks integrity, not agreement with the authors' benchmark. A full build of the
+current revision and a comparison of every window's participant, time, and target against the
+authors' implementation remain outstanding. Synthetic tests check conversion rules and the
+storage round-trip.
 
-The paper reports 922,199 windows and the upstream datasheet reports 939,017. The authors'
-`make_windows` at `f861b44` keeps 934,762.
-
-Some calibrated acceleration values reach or exceed the device's configured ±8 g range. The
-connector preserves them rather than clipping them.
+The connector does not clip acceleration to the device's configured range.

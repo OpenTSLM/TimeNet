@@ -157,12 +157,21 @@ def test_a_file_in_place_of_the_directory_fails(tmp_path):
         Capture24Connector().convert([root / "metadata.csv"])
 
 
-def test_window_across_a_short_gap_fails(tmp_path):
+@pytest.mark.parametrize("label", [SIT, ""], ids=["labeled", "unlabeled"])
+def test_window_across_a_short_gap_is_rejected_only_when_labeled(tmp_path, label):
     # A 15 ms step is a gap, yet the first 10 s bin still holds 1000 samples, 500 on each side of it.
     root = release(tmp_path)
-    rows = [(index * 10_000, SIT) for index in range(500)]
-    rows += [(4_990_000 + 15_000 + index * 10_000, SIT) for index in range(500)]
+    rows = [(index * 10_000, label) for index in range(500)]
+    rows += [(4_990_000 + 15_000 + index * 10_000, label) for index in range(500)]
     write_recording(root / "P001.csv.gz", rows)
+    if not label:
+        dataset = Capture24Connector().convert([root])
+        record = next(record for record in dataset.records if pid_of(record) == "P001")
+        assert len(record.sources) == 2
+        tasks = list(dataset.iter_tasks())
+        assert tasks  # Other participants still produce tasks.
+        assert all(pid_of(task.inputs[0]) != "P001" for task in tasks)
+        return
     with pytest.raises(
         TimeNetConnectorError, match=r"P001\.csv\.gz:2: the window that starts here holds 1000 samples across a gap"
     ) as error:
