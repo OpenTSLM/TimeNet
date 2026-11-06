@@ -636,6 +636,8 @@ def _hosted(client, metadata, lineage=()):
     """Serve one manifest from a registry that is not local, so the build-your-own gate applies."""
 
     class _Hosted:
+        requires_open_access = True
+
         def get_manifest(self, dataset_id, version=None):
             return SimpleNamespace(metadata=metadata, lineage=lineage)
 

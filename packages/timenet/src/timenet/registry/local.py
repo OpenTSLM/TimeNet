@@ -4,15 +4,16 @@ from collections.abc import Callable, Mapping
 from pathlib import Path
 import shutil
 from typing import BinaryIO
-import uuid
 
-from timenet._fs import publish_directory
+import pyarrow.fs as pafs
+
+from timenet._fs import staged_directory
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError
+from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError, TimeNetFileError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
-from timenet.registry.dependencies import open_local_release
+from timenet.registry.dependencies import check_file_sizes, open_local_release
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata, Version
@@ -47,6 +48,15 @@ class LocalRegistry(WritableRegistry):
     def local_root(self) -> Path:
         """The directory that holds complete local releases."""
         return self._root
+
+    @property
+    def requires_open_access(self) -> bool:
+        """Whether local releases must declare open access.
+
+        Returns:
+            ``False``, since a local registry accepts any access level.
+        """
+        return False
 
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.
@@ -204,18 +214,31 @@ class LocalRegistry(WritableRegistry):
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release and publish_directory
         manifest = self._read_release(from_directory)
         reference = DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
-        final = release_dir(self._root, reference)
-        final.parent.mkdir(parents=True, exist_ok=True)
-        staging = final.with_name(f"{final.name}.tmp-{uuid.uuid4().hex}")
-        try:
+        with staged_directory(release_dir(self._root, reference)) as staging:
             for relpath in (*sorted({part.path for part in manifest.files.all_files()}), MANIFEST_FILE):
                 target = staging / relpath
                 target.parent.mkdir(parents=True, exist_ok=True)
                 shutil.copy2(from_directory / relpath, target)
-            publish_directory(staging, final)
-        finally:
-            shutil.rmtree(staging, ignore_errors=True)
         return reference
+
+    def damage(self, release: DatasetRef, manifest: Manifest | None = None) -> TimeNetFileError | None:
+        """Return the first missing or resized file of a stored release, or ``None`` for a complete copy.
+
+        Args:
+            release: The exact release.
+            manifest: Its manifest, or ``None`` to read the stored one.
+
+        Returns:
+            The error that names the file, or ``None``.
+        """
+        if manifest is None:
+            manifest = self.get_manifest(release.dataset_id, str(release.version))
+        version = DatasetVersion(manifest, pafs.LocalFileSystem(), str(release_dir(self._root, release)))
+        try:
+            check_file_sizes(version, manifest.files.all_files(), owner=str(release))
+        except TimeNetFileError as error:
+            return error
+        return None
 
     def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
         """Open a committed version as a local, random-access handle.

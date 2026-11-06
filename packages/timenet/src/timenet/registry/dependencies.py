@@ -135,7 +135,7 @@ def attach_payload_sources(
         try:
             source = open_source(pinned.release)
         except TimeNetDatasetNotFoundError as error:
-            raise TimeNetMissingParentError(pinned.release, release, True, searched) from error
+            raise TimeNetMissingParentError(pinned.release, release, searched, payload_source=True) from error
         validate_manifest_reference(source.manifest, pinned.release)
         check_pins(release, pinned, source.manifest)
         check_file_sizes(source, pinned.files, owner=f"payload source {pinned.release} of {release}")
@@ -362,24 +362,19 @@ def _download_dataset_version(  # ruff: ignore[too-many-arguments]
     progress_cb: Callable[[int], None] | None,
     before_fetch: Callable[[Manifest], object] | None = None,
 ) -> Manifest:
-    """Fetch one complete release, checking its identity before downloading its files.
+    """Check a release's identity and download its files.
+
+    Run ``before_fetch`` after checking the manifest and before downloading files.
 
     Returns:
-        The manifest after the registry has verified and stored the downloaded files.
+        The manifest of the downloaded and verified release.
     """
     if manifest is None:
         manifest = registry.get_manifest(reference.dataset_id, str(reference.version))
     validate_manifest_reference(manifest, reference)
     if before_fetch is not None:
         before_fetch(manifest)
-    registry._download_release(
-        reference.dataset_id,
-        str(reference.version),
-        directory,
-        force=True,
-        manifest=manifest,
-        progress_cb=progress_cb,
-    )
+    registry.download_release(reference, directory, force=True, manifest=manifest, progress_cb=progress_cb)
     return manifest
 
 

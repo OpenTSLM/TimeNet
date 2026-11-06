@@ -13,7 +13,6 @@ from pathlib import Path
 import pyarrow.fs as pafs
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, PayloadSource, read_manifest
 from timenet.registry.base import BaseRegistry
@@ -91,7 +90,7 @@ class WritableRegistry(BaseRegistry, ABC):
         return manifest
 
     def exists(self, dataset_id: str, version: str) -> bool:
-        """Return whether a committed version already exists in this registry.
+        """Check whether this registry holds a dataset version.
 
         Args:
             dataset_id: The dataset id.
@@ -100,8 +99,4 @@ class WritableRegistry(BaseRegistry, ABC):
         Returns:
             ``True`` if the version has a committed manifest, else ``False``.
         """
-        try:
-            self.get_manifest(dataset_id, version)
-        except TimeNetDatasetNotFoundError:
-            return False
-        return True
+        return self.find_manifest(DatasetRef.parse(f"{dataset_id}@{version}")) is not None
