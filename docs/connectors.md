@@ -394,3 +394,25 @@ that split keeps them. A child with a split of its own removes them and adds its
 ---
 
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
+
+### Small CSV tables
+
+Use `timenet_connectors.sources.csv.read_csv_table` for strict metadata tables. It requires exactly
+specified columns (in any order), preserves cell text, and rejects blank rows, empty or missing
+cells, duplicate headers, extra fields, and malformed CSV. It returns `CsvRow` objects with
+`line` (the physical starting line, including quoted multiline fields) and `values`.
+A valid header with no data rows is allowed. The helper materializes the table; use a streaming
+or columnar reader for large recordings.
+
+```python
+from timenet_connectors.sources.csv import check_unique, read_csv_table
+
+rows = read_csv_table(path, columns=("pid", "age", "sex"))
+check_unique(
+    path, ((row.line, row.values["pid"]) for row in rows), name="pid"
+)
+```
+
+Both helpers raise `TimeNetConnectorError` for bad source data. Duplicate diagnostics identify the
+repeated value's line and its first occurrence. Field parsing and dataset-specific rules remain
+with the caller.
