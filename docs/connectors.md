@@ -391,6 +391,36 @@ An import copies every annotation of the parent objects. The child decides which
 publishes. For example, a parent can carry an official split as annotations. A child that follows
 that split keeps them. A child with a split of its own removes them and adds its own.
 
+## Shared channel loading
+
+When one source read decodes multiple channels, create one
+`timenet_connectors.sources.channels.SharedChannelLoader` per conversion and share it across
+Records. Its reader validates the source and returns a sequence of Arrow arrays in channel order.
+Channel lengths and types are preserved; no values are filled or cast.
+
+```python
+from timenet_connectors.sources.channels import SharedChannelLoader
+
+shared = SharedChannelLoader(read_channels, max_records=1)
+# For each recording and channel:
+loader = shared.channel(recording_key, channel_index)
+# Pass loader to Signal.from_loader(..., loader=loader).
+```
+
+The key must identify the source and all decoding options. Source validation and detection of
+changed files remain the reader's responsibility. Segment slicing also remains with the caller.
+
+The cache defaults to one recording. On a miss, it releases the least recently used entry before
+reading its replacement, even if that read fails. Failed reads are retried on the next request;
+the original exception propagates unchanged. Requests are serialized, so simultaneous channel
+loads share a decode while the recording remains cached. The reader must not call back into the
+same helper.
+
+The limit counts recordings, not bytes. Arrays retained by callers can outlive eviction.
+`shared.clear()` releases cached entries without invalidating existing loader callbacks.
+Invalid configuration, channel indices, or reader return values raise `TimeFValidationError`.
+For formats that cheaply read channels independently, keep separate loaders instead.
+
 ## Small CSV tables
 
 Use `timenet_connectors.sources.csv.read_csv_table` for strict metadata tables. It requires exactly
