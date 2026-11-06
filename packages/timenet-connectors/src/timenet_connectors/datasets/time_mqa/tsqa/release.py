@@ -1,11 +1,8 @@
-"""The parts of the TSQA release that every task family shares: its files, rows, and printed series.
+"""Read TSQA release files, question-and-answer rows, and printed series.
 
-Each CSV row of the release is one question-and-answer pair. The ``QA_list`` cell writes the pair
-as ``"question": "<text>", "answer": "<text>"``, with both texts as they are. A quote or a line
-break in a text therefore does not make the cell valid JSON, and this module reads the cell with
-its own pattern. A question prints each time series as a list of decimal numbers in square
-brackets. This module finds the printed series, builds their Records, and writes the prompt with a
-placeholder in place of each series.
+A ``QA_list`` cell holds ``"question": "<text>", "answer": "<text>"`` with both texts as they are.
+A quote or a line break in a text makes the cell invalid JSON, so this module reads it with its
+own pattern. A question prints each series as a bracketed list of decimal numbers.
 """
 
 from collections.abc import Iterator, Mapping, Sequence
@@ -26,7 +23,7 @@ from timenet_connectors.bases.huggingface import HubFileRef
 
 HF_REPO = "Time-MQA/TSQA"
 SOURCE_REVISION = "a7f9e95667b695d2647b9eff92bb6a38b5183a34"
-"""The commit of the Hub repo that the connector reads."""
+"""The pinned Hub repository commit."""
 
 # The release states no unit and no sampling rate for a printed series.
 SERIES = TimeSeriesSpec(spec_type="series", name="Series", unit_value=None, dtype="float64")
@@ -35,24 +32,24 @@ SERIES_WITH_GAPS = TimeSeriesSpec(
     spec_type="series_with_gaps", name="Series with gaps", unit_value=None, dtype="float64", nullable=True
 )
 GAP_MARKER = "'X'"
-"""How an imputation question prints a missing value."""
+"""The marker for a missing value in an imputation question."""
 
 
 @unique
 class TaskFamily(StrEnum):
-    """The task families of the release, each named as the ``task_type`` column writes it."""
+    """The release task families, named by their ``task_type`` values."""
 
     ANOMALY_DETECTION = "anomaly detection"
     CLASSIFICATION = "classification"
     FORECASTING = "forecasting"
     IMPUTATION = "imputation"
     OPEN_ENDED_QA = "open-ended QA"
-    """The open-ended file writes a free task type for each question, such as ``trend analysis``."""
+    """Open-ended questions use free-text task types, such as ``trend analysis``."""
 
 
 @unique
 class ReleasePart(StrEnum):
-    """The CSV files of the release, named as the parts of the connector."""
+    """The CSV file parts of the release."""
 
     ANOMALY_DETECTION = "anomaly_detection"
     CLASSIFICATION = "classification"
@@ -62,7 +59,7 @@ class ReleasePart(StrEnum):
 
     @property
     def filename(self) -> str:
-        """The path of the file in the Hub repo."""
+        """The file path in the Hub repository."""
         return _FILENAMES[self]
 
     @property
@@ -72,17 +69,17 @@ class ReleasePart(StrEnum):
 
     @property
     def families(self) -> frozenset[TaskFamily]:
-        """The task families that the rows of the file belong to."""
+        """The task families in the file."""
         return _FAMILIES[self]
 
     def family_of_task_type(self, task_type: str) -> TaskFamily:
-        """Return the family of a row of this file from its ``task_type`` cell.
+        """Return the task family for a ``task_type`` value in this file.
 
         Returns:
-            The family.
+            The task family.
 
         Raises:
-            TimeNetConnectorError: If the file holds no rows of the task type.
+            TimeNetConnectorError: If the task type is invalid for this file.
         """
         if self is ReleasePart.OPEN_ENDED_QA:
             return TaskFamily.OPEN_ENDED_QA
@@ -113,7 +110,7 @@ _FAMILIES: Mapping[ReleasePart, frozenset[TaskFamily]] = {
 _COLUMNS = ("application_domain", "task_type", "QA_list")
 _COLUMNS_WITH_QUESTION_FORMAT = ("application_domain", "task_type", "question_format", "QA_list")
 SOURCE_FILES: Mapping[str, str] = {part.value: part.filename for part in ReleasePart}
-"""The file of each part, for the Hub download."""
+"""The Hub file path for each release part."""
 
 # The cell writes the two texts as they are, so the question runs up to the one separator.
 _QUESTION_AND_ANSWER = re.compile(r'"question": "(?P<question>.*?)", "answer": "(?P<answer>.*)"', re.DOTALL)
@@ -123,24 +120,24 @@ _DECIMAL_NUMBER = re.compile(r"-?\d+(?:\.\d+)?(?:[eE][-+]?\d+)?")
 
 @dataclass(frozen=True)
 class PrintedSeries:
-    """A series that a text prints as a bracketed list of decimal numbers."""
+    """A series represented as a bracketed list of decimal numbers in text."""
 
     start: int
     end: int
-    """The character span of the list in the text, brackets included."""
+    """The character span of the list in the text, including brackets."""
     values: tuple[float | None, ...]
-    """The printed values; None where the text prints the gap marker."""
+    """The values, with None for each gap marker."""
 
     @property
     def has_gaps(self) -> bool:
-        """Whether the text prints the gap marker in place of at least one value."""
+        """Whether the series contains a gap marker."""
         return any(value is None for value in self.values)
 
     def create_record(self, metadata: JsonMapping) -> Record:
-        """Create the Record of the series: one float64 Signal on an ordinal axis, nullable if the series has gaps.
+        """Create a record with one float64 signal on an ordinal axis, nullable if the series has gaps.
 
         Returns:
-            The Record, not yet added to a dataset.
+            The record, which is not yet in a dataset.
         """
         spec = SERIES_WITH_GAPS if self.has_gaps else SERIES
         signal = Signal.from_values(self.values, spec=spec, name="series", time_axis=OrdinalAxis())
@@ -148,10 +145,10 @@ class PrintedSeries:
 
 
 def find_printed_series(text: str, *, with_gaps: bool = False) -> tuple[PrintedSeries, ...]:
-    """Find each bracketed list of decimal numbers in a text, in text order.
+    """Find nonempty bracketed lists of decimal numbers in text order.
 
-    A bracketed list counts only if it is nonempty and each item is a decimal number or, with gaps,
-    the gap marker. Any other bracketed text, such as ``[?, ?, ?]`` or a citation, stays text.
+    When ``with_gaps`` is true, a list can also contain gap markers. Other bracketed text, such as
+    ``[?, ?, ?]`` or a citation, stays text.
 
     Returns:
         The printed series.
@@ -168,7 +165,7 @@ def find_printed_series(text: str, *, with_gaps: bool = False) -> tuple[PrintedS
 
 
 def replace_printed_series_with_placeholders(text: str, series: Sequence[PrintedSeries]) -> str:
-    """Return the text with ``<series N>`` in place of each of the series, numbered from 1 in text order.
+    """Replace each supplied series with ``<series N>``, numbered from 1 in sequence order.
 
     Returns:
         The text with placeholders.
@@ -185,24 +182,24 @@ def replace_printed_series_with_placeholders(text: str, series: Sequence[Printed
 
 @dataclass(frozen=True)
 class ReleaseRow:
-    """One question-and-answer row of a release file, as the file writes it."""
+    """A question-and-answer row from a release file."""
 
     part: ReleasePart
     number: int
-    """The data row number in the file, counted from 1."""
+    """The data row number in the file, starting at 1."""
     application_domain: str
     task_type: str
     question: str
     answer: str
     question_format: str | None = None
-    """The format that the open-ended file names for the question; None for the other files."""
+    """The question format for an open-ended row, or None for other rows."""
 
     @property
     def family(self) -> TaskFamily:
         """The task family of the row.
 
         Raises:
-            TimeNetConnectorError: If the file holds no rows of the row's task type.
+            TimeNetConnectorError: If the task type is invalid for the file.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by family_of_task_type
         try:
             return self.part.family_of_task_type(self.task_type)
@@ -210,15 +207,15 @@ class ReleaseRow:
             raise self.malformed(str(exc)) from exc
 
     def malformed(self, message: str) -> TimeNetConnectorError:
-        """Return the error for a malformed row, with the file and the data row in its message.
+        """Create an error with the file name and data row number.
 
         Returns:
-            The error, for the caller to raise.
+            The error.
         """
         return TimeNetConnectorError(f"{Path(self.part.filename).name} data row {self.number}: {message}")
 
     def task_metadata(self) -> JsonMapping:
-        """Return the provenance of the row for its task: the file, the row, and the release columns.
+        """Return the file, row number, and release columns as task metadata.
 
         Returns:
             The metadata.
@@ -234,7 +231,7 @@ class ReleaseRow:
         return metadata
 
     def record_metadata(self, role: str) -> JsonMapping:
-        """Return the provenance of a Record of the row: the file, the row, and the role of the Record.
+        """Return the file, row number, and record role as metadata.
 
         Returns:
             The metadata.
@@ -242,24 +239,24 @@ class ReleaseRow:
         return {"file": self.part.value, "row": self.number, "role": role}
 
     def only_printed_series_of_question(self, *, with_gaps: bool = False) -> PrintedSeries:
-        """Return the one series that the question prints.
+        """Return the single series in the question.
 
         Returns:
             The printed series.
 
         Raises:
-            TimeNetConnectorError: If the question prints no series or more than one.
+            TimeNetConnectorError: If the question does not contain exactly one series.
         """  # ruff: ignore[docstring-extraneous-exception] - raised through malformed()
         return self._only_printed_series("question", self.question, with_gaps=with_gaps)
 
     def only_printed_series_of_answer(self) -> PrintedSeries:
-        """Return the one series that the answer prints.
+        """Return the single series in the answer.
 
         Returns:
             The printed series.
 
         Raises:
-            TimeNetConnectorError: If the answer prints no series or more than one.
+            TimeNetConnectorError: If the answer does not contain exactly one series.
         """  # ruff: ignore[docstring-extraneous-exception] - raised through malformed()
         return self._only_printed_series("answer", self.answer, with_gaps=False)
 
@@ -270,7 +267,7 @@ class ReleaseRow:
         return series[0]
 
     def question_with_series_placeholders(self, series: Sequence[PrintedSeries]) -> str:
-        """Return the question with ``<series N>`` in place of each of the series.
+        """Replace each supplied series in the question with a ``<series N>`` placeholder.
 
         Returns:
             The prompt.
@@ -278,13 +275,13 @@ class ReleaseRow:
         return replace_printed_series_with_placeholders(self.question, series)
 
     def match_of_answer_template(self, template: re.Pattern[str]) -> re.Match[str]:
-        """Return the match of the whole answer against the template of its family.
+        """Match the whole answer against a pattern.
 
         Returns:
             The match.
 
         Raises:
-            TimeNetConnectorError: If the answer does not follow the template.
+            TimeNetConnectorError: If the answer does not match the pattern.
         """  # ruff: ignore[docstring-extraneous-exception] - raised through malformed()
         match = template.fullmatch(self.answer)
         if match is None:
@@ -292,13 +289,13 @@ class ReleaseRow:
         return match
 
     def label_of_answer(self, template: re.Pattern[str], label_set: LabelSet) -> str:
-        """Return the label that the answer names in the ``label`` group of the template.
+        """Return the answer label from the pattern's ``label`` group.
 
         Returns:
             The label.
 
         Raises:
-            TimeNetConnectorError: If the answer does not follow the template or names no label of the set.
+            TimeNetConnectorError: If the answer does not match the pattern or the label is not in the set.
         """  # ruff: ignore[docstring-extraneous-exception] - raised through malformed()
         label = self.match_of_answer_template(template)["label"]
         if label not in label_set.names:
@@ -307,10 +304,10 @@ class ReleaseRow:
 
 
 class TaskRow(Protocol):
-    """A row of one task family, parsed and ready to add its Records and task to a dataset."""
+    """A parsed row that can add its records and task to a dataset."""
 
     def add_records_and_task_to(self, dataset: TimeFDataset) -> Task:
-        """Add the Records of the row and then its task to the dataset.
+        """Add the row's records and task to the dataset.
 
         Returns:
             The added task.
@@ -320,32 +317,28 @@ class TaskRow(Protocol):
 
 @dataclass(frozen=True)
 class ReleaseFile:
-    """One CSV file of the release, downloaded from the pinned revision."""
+    """A release CSV file downloaded from the pinned revision."""
 
     part: ReleasePart
     path: Path
 
     @classmethod
     def from_hub_file_ref(cls, ref: HubFileRef) -> Self:
-        """Return the file of a downloaded part.
+        """Create a release file from a downloaded file reference.
 
         Returns:
-            The file.
+            The release file.
         """
         return cls(part=ReleasePart(ref.part), path=ref.path)
 
     def read_rows(self) -> Iterator[ReleaseRow]:
-        """Read the question-and-answer rows of the file, in file order.
-
-        A row with an empty ``QA_list`` cell holds no question, so this method skips it. The
-        open-ended file has 16 such rows.
+        """Read question-and-answer rows in file order, skipping empty ``QA_list`` cells.
 
         Yields:
             Each row.
 
         Raises:
-            TimeNetConnectorError: If the header is not the expected one, or a ``QA_list`` cell does not
-                have the question-and-answer form. The message names the file and the data row.
+            TimeNetConnectorError: If the header or a nonempty ``QA_list`` cell has an invalid format.
         """
         with self.path.open(newline="", encoding="utf-8") as stream:
             reader = csv.DictReader(stream)

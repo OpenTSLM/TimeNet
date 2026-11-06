@@ -1,9 +1,4 @@
-"""A row whose answer is free text: one AnswerTask, with a Record for each list the question prints.
-
-The Time-MMD forecasting questions and the open-ended questions share this shape. Their question
-is free text that may print any number of series, and their answer is text that the dataset keeps
-as released.
-"""
+"""Parse free-text answers and create answer tasks with their series."""
 
 from dataclasses import dataclass
 from typing import Self
@@ -15,7 +10,7 @@ from timenet_connectors.datasets.time_mqa.tsqa.release import PrintedSeries, Rel
 
 @dataclass(frozen=True)
 class FreeAnswerRow:
-    """A row with a free-text answer and the series its question prints."""
+    """A row with a free-text answer and the series in its question."""
 
     row: ReleaseRow
     series: tuple[PrintedSeries, ...]
@@ -30,7 +25,7 @@ class FreeAnswerRow:
         return cls(row=row, series=find_printed_series(row.question))
 
     def add_records_and_task_to(self, dataset: TimeFDataset) -> AnswerTask:
-        """Add a Record for each list the question prints, and the task that asks the question about them.
+        """Add a record for each series in the question and add the answer task.
 
         Returns:
             The added task.

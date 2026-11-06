@@ -1,10 +1,4 @@
-"""The imputation family: a printed series with gaps, and the same series complete.
-
-Each imputation question prints a series with the gap marker in place of 4 to 12 values and asks
-for the series with the gaps filled; the answer prints the complete series. Each row becomes two
-Records, the series with gaps as a nullable Signal and the complete series, and one TSEditingTask
-whose target is the complete Record.
-"""
+"""Parse questions about missing series values and create editing tasks."""
 
 from dataclasses import dataclass
 import re
@@ -22,7 +16,7 @@ _IMPUTED = re.compile(
 
 @dataclass(frozen=True)
 class ImputationRow:
-    """An imputation row: the printed series with gaps and the complete series of the answer."""
+    """An imputation row with a series that has gaps and a complete series."""
 
     row: ReleaseRow
     with_gaps: PrintedSeries
@@ -36,9 +30,7 @@ class ImputationRow:
             The parsed row.
 
         Raises:
-            TimeNetConnectorError: If the question does not print one series with gaps, the answer does
-                not print the complete series, or the complete series differs from the question's series
-                outside the gaps.
+            TimeNetConnectorError: If either series is invalid or the answer changes values outside the gaps.
         """  # ruff: ignore[docstring-extraneous-exception] - raised through the ReleaseRow methods
         with_gaps = row.only_printed_series_of_question(with_gaps=True)
         if not with_gaps.has_gaps:
@@ -50,7 +42,7 @@ class ImputationRow:
         return cls(row=row, with_gaps=with_gaps, complete=complete)
 
     def add_records_and_task_to(self, dataset: TimeFDataset) -> TSEditingTask:
-        """Add the Record with gaps and the complete Record, and the task that asks to fill the gaps.
+        """Add the incomplete and complete records and the editing task to the dataset.
 
         Returns:
             The added task.
@@ -68,7 +60,7 @@ class ImputationRow:
 
 
 def _fills_the_gaps_of(with_gaps: PrintedSeries, complete: PrintedSeries) -> bool:
-    """Return whether the complete series has the length of the series with gaps and its values outside the gaps."""
+    """Return whether the complete series fills the gaps without changing other values."""
     if len(complete.values) != len(with_gaps.values):
         return False
     return all(known is None or known == value for known, value in zip(with_gaps.values, complete.values, strict=True))

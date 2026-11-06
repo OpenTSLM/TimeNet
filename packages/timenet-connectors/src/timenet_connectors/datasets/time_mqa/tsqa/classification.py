@@ -1,11 +1,9 @@
-"""The classification family: one accelerometer window, and the activity or gait state it shows.
+"""Parse accelerometer questions and create activity or gait classification tasks.
 
-The classification file mixes two source datasets, each with a fixed question text. A WISDM
-question prints 10 timestamps of a phone accelerometer at 20 Hz as 30 values, the X, Y, and Z
-values of each timestamp in turn, and asks for one of six activities. A Daphnet question prints
-one timestamp of three body-worn accelerometers at 64 Hz as 9 values, and asks whether the gait
-froze. Each row becomes one Record, with one Signal per axis as the question text lays them out,
-and one ClassificationTask whose target is the label of the answer.
+The classification file mixes two source datasets with fixed question texts. A WISDM question
+prints 10 timestamps of a phone accelerometer as 30 values, the X, Y, and Z values of each
+timestamp in turn. A Daphnet question prints one timestamp of three body-worn accelerometers as 9
+values. Each row becomes one record with one signal per axis and one classification task.
 """
 
 from dataclasses import dataclass
@@ -56,33 +54,33 @@ BODY_ACCELERATION = TimeSeriesSpec(
 
 @dataclass(frozen=True)
 class AccelerometerSource:
-    """One source dataset of the classification file, and how its question prints a window."""
+    """A classification source and the format of its accelerometer data."""
 
     name: str
     question_start: str
-    """The first sentence of the question, fixed for every row of the source."""
+    """The first sentence of every question from the source."""
     answer: re.Pattern[str]
-    """The template of the answer, with the label in its ``label`` group."""
+    """The answer pattern, with the label in its ``label`` group."""
     label_set: LabelSet
     spec: TimeSeriesSpec
     time_axis: RegularAxis
     axes: tuple[str, ...]
-    """The name of the Signal of each axis, in the order the question prints them for one timestep."""
+    """Signal names in the order the question lists the axes at each timestep."""
     timesteps: int
 
     @property
     def n_values(self) -> int:
-        """The number of values that the question prints: all axes of each timestep in turn."""
+        """The total number of axis values in the question."""
         return len(self.axes) * self.timesteps
 
     def create_record(self, series: PrintedSeries, metadata: JsonMapping) -> Record:
-        """Create the Record of a window, with one Signal per axis.
+        """Create a record with one signal per axis from values ordered by timestep.
 
-        The question prints the axes of one timestep in turn, so the values of an axis are every
-        ``len(axes)``-th printed value.
+        The question prints the axes of one timestep in turn, so each axis takes every
+        ``len(axes)``-th value.
 
         Returns:
-            The Record, not yet added to a dataset.
+            The record, which is not yet in a dataset.
         """
         signals = tuple(
             Signal.from_values(
@@ -122,7 +120,7 @@ SOURCES = (WISDM, DAPHNET)
 
 @dataclass(frozen=True)
 class ClassificationRow:
-    """A row of the classification file: its source, its printed window, and the label of its answer."""
+    """A classification row with its source, series, and answer label."""
 
     row: ReleaseRow
     source: AccelerometerSource
@@ -131,14 +129,13 @@ class ClassificationRow:
 
     @classmethod
     def from_release_row(cls, row: ReleaseRow) -> Self:
-        """Parse a row of the classification file.
+        """Parse a classification row.
 
         Returns:
             The parsed row.
 
         Raises:
-            TimeNetConnectorError: If the question starts like neither source, does not print one
-                series of the length of the source, or the answer does not name a label of the source.
+            TimeNetConnectorError: If the source, series length, or answer label is invalid.
         """  # ruff: ignore[docstring-extraneous-exception] - raised through the ReleaseRow methods
         source = _source_of_question(row)
         series = row.only_printed_series_of_question()
@@ -147,7 +144,7 @@ class ClassificationRow:
         return cls(row=row, source=source, series=series, label=row.label_of_answer(source.answer, source.label_set))
 
     def add_records_and_task_to(self, dataset: TimeFDataset) -> ClassificationTask:
-        """Add the Record of the window and the task that asks for its activity or gait state.
+        """Add the accelerometer record and classification task to the dataset.
 
         Returns:
             The added task.
@@ -165,13 +162,13 @@ class ClassificationRow:
 
 
 def _source_of_question(row: ReleaseRow) -> AccelerometerSource:
-    """Return the source dataset whose fixed text starts the question of the row.
+    """Find the source dataset from the start of the question.
 
     Returns:
         The source.
 
     Raises:
-        TimeNetConnectorError: If the question starts like neither source.
+        TimeNetConnectorError: If the question does not match a source.
     """  # ruff: ignore[docstring-extraneous-exception] - raised through malformed()
     for source in SOURCES:
         if row.question.startswith(source.question_start):
