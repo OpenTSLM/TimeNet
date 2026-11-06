@@ -7,7 +7,7 @@ this branch. Anchor files:
 - Bases: `packages/timenet-connectors/src/timenet_connectors/bases/{huggingface,physionet}.py`
 - Discovery: `packages/timenet-connectors/src/timenet_connectors/discovery.py`
 - Build CLI: `packages/timenet-connectors/src/timenet_connectors/builder/cli.py`
-- Worked examples: the `chengsenwang/tsqa`, `physionet/ecg_qa_cot`, and `timenet/hello_world` connectors
+- Implementations: see [Connector examples](#connector-examples) below.
 
 ## The `BaseConnector` contract
 
@@ -100,8 +100,8 @@ write the connector:
 
 The base does not fetch the archive. Call `ensure_archive` / `download_files` from
 `timenet_connectors.download`. The connector's `requirements.txt` then declares `wfdb` plus whatever
-its download path needs. `physionet/ecg_qa_cot` pulls PTB-XL from `s3://physionet-open/`, which goes
-through boto3, so it names `boto3` too.
+its download path needs. ECG-QA instead composes the reviewed PTB-XL parent release; see its
+`compose` implementation.
 
 ## Building the dataset in `convert`
 
@@ -144,7 +144,7 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
 - Use `dataset.annotate_shared(annotation)` when several tasks need the same dataset annotation. See
   "Shared dataset annotations" in `docs/timef-dataset.md`.
 
-## Task types (`timenet.types.tasks`)
+## Task types (`timenet.types`)
 
 The task **class** is the type tag (used by `search(task=...)`); the instance carries the payload.
 
@@ -168,101 +168,15 @@ filling `target`. Every other task needs exactly one of `target` or `target_anno
 points at stored annotations instead of copying them into the task row); `add_task` enforces that, plus
 the bounds of every `Span` the task carries.
 
-## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
+## Connector examples
 
-`connector.py`:
+Follow `docs/connectors.md` for the layout and source-validation guidance. Refer to maintained
+implementations rather than copying a standalone example:
 
-```python
-import json
-from collections.abc import Mapping
-from typing import ClassVar
-
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import OrdinalAxis
-from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
-from timenet_connectors.sources.parquet import iter_parquet_rows
-
-
-_SPEC = TimeSeriesSpec(
-    spec_type="tsqa_series",
-    name="TSQA Series",
-    unit_value=ureg.dimensionless,
-)
-
-
-class TSQAConnector(BaseHuggingFaceConnector):
-    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
-
-    HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
-    # The commit refs/convert/parquet pointed to: the Hub's parquet conversion of the CSV.
-    SOURCE_REVISION = "22518209e3ee6302be4b4957f2692b3e8de849c3"
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {"train": "default/train/0000.parquet"}
-
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
-        """Build one record per row: the parsed series plus its question-and-answer task.
-
-        Args:
-            raw_refs: The parquet files from :meth:`download`.
-
-        Returns:
-            The populated :class:`~timenet.dataset.TimeFDataset`.
-        """
-        dataset = TimeFDataset(metadata=self.metadata())
-        for ref in raw_refs:
-            for row in iter_parquet_rows(ref.path):
-                series = json.loads(row["Series"])
-                signals = series if series and isinstance(series[0], list) else [series]
-                time_series = tuple(
-                    Signal.from_values(
-                        values,
-                        spec=_SPEC,
-                        name=f"c{signal}",
-                        time_axis=OrdinalAxis(),
-                    )
-                    for signal, values in enumerate(signals)
-                )
-                record = Record(sources=(Source(name="TSQA series", signals=time_series),))
-                dataset.add_record(record=record)
-                record.annotate(Annotation(key="task", value=row["Task"]))
-                if row.get("Label"):
-                    record.annotate(Annotation(key="label", value=row["Label"]))
-                dataset.add_task(
-                    task=AnswerTask(
-                        inputs=(record,),
-                        prompt=row["Question"],
-                        targets=(row["Answer"],),
-                    )
-                )
-        return dataset
-
-
-CONNECTOR = TSQAConnector
-```
-
-`__init__.py`:
-
-```python
-from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
-    CONNECTOR as CONNECTOR,
-    TSQAConnector as TSQAConnector,
-)
-```
-
-## PhysioNet notes: `physionet/ecg_qa_cot`
-
-Subclasses `BasePhysioNetConnector[EcgQaCotSource]` where `EcgQaCotSource` is a frozen dataclass
-that holds the paths of the fetched files. `download_async` calls `ensure_archive` / `download_files`
-and returns one `EcgQaCotSource`. `convert` builds one record per recording and keeps the records in
-a local dict keyed by the PTB-XL `ecg_id`. It stores the `ecg_id` and the PTB-XL `patient_id` in
-`Record.metadata`, and attaches whole-record `split`, `sex`, and `age` annotations. The sex and age
-come from `ptbxl_database.csv`. Per-question metadata (question_type, template_id, answer_options,
-clinical_context) are value-deduped dataset annotations that the tasks reference. The connector
-builds the clinical context from `ptbxl_database.csv`. It streams one
-`AnswerTask(inputs=(record,), prompt=..., rationale=<CoT>, targets=(<label>,))` per question.
-`_leads_for` reads the WFDB header for `fs`/`sig_len`/`sig_name` and builds one lazy `Signal` per
-lead. All tasks for a recording point at its one record. Records do not share a series. See its
-`connector.py` for the full pattern.
+- `chengsenwang/tsqa`: a small Hugging Face connector.
+- `physionet/ecg_qa_cot`: composition from parent records, with streamed tasks.
+- `physionet/sleep_edfx`: source tables, recording metadata, and task builders.
+- `tsaqa/tsaqa_benchmark`: validated rows and shared lazy channel loading.
 
 ## Fixture-based test pattern
 

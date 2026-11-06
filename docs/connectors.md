@@ -231,6 +231,23 @@ package names. The package's `__init__.py` exposes `CONNECTOR`. Put `dataset.yam
 `requirements.txt` beside it. The build tool imports only the requested connector package. Reusable
 bases live under `timenet_connectors/bases/`.
 
+### Organizing connector code
+
+Keep `convert` or `compose` readable as the main flow: read and validate the source, build
+records, then create tasks. Start in `connector.py`; split larger connectors into `source.py`,
+`records.py`, and `tasks.py` when that makes them easier to follow. Put shared labels and specs
+in `labels.py`. Source readers should not depend on record or task builders.
+
+ECG-QA, Sleep-EDFx, and TSAQA show this layout. Small connectors can remain in one module.
+Use names such as `build_record` for helpers shared between modules; reserve leading underscores
+for helpers used only within their defining module.
+Use eager signals when the complete conversion fits comfortably in memory, and lazy loaders
+otherwise. Test source errors and a fixture round trip with `assert_round_trips`.
+
+Task-stream factories must produce a fresh, repeatable iterator. Keep source-specific checks
+with the reader, including checks needed when files are read again. Use `annotate_shared` for
+annotations registered while streaming; see the next section.
+
 ### Annotations created during task streaming
 
 A stream can attach dataset annotations while it produces tasks, and its tasks can refer to them.
