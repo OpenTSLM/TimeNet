@@ -11,11 +11,12 @@ from pathlib import Path
 
 import typer
 
+from timenet import plan_build
 from timenet.builders import BuildOptions, declared
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console, progress_renderer
 from timenet.config import settings
-from timenet.coordinator.build import plan_release_build, run_plan
+from timenet.coordinator.build import run_plan
 from timenet.errors import (
     TimeNetAccessError,
     TimeNetFileError,
@@ -206,13 +207,13 @@ def _build_to(  # ruff: ignore[too-many-arguments]
 ) -> str:
     """Build a release for a local or remote output.
 
-    Remote outputs receive a copy of a build in the local store. If the output already holds the release and
-    ``force`` is not set, nothing runs and a status line says so.
+    Remote registries receive a copy from the local store.
+    The build skips an existing release unless ``force`` is set.
 
     Args:
         dataset_id: The dataset ID.
         target: The local output directory or remote registry.
-        fetch_from: The registry to copy missing parents from, or ``None`` to use the remote output if present.
+        fetch_from: The registry for missing parents, or ``None`` to use the remote output if present.
         build_parents: Build missing parents with installed connectors.
         force: Rebuild an existing local release.
         options: Options for each build.
@@ -244,7 +245,7 @@ def _build_to(  # ruff: ignore[too-many-arguments]
         fetch_from = fetch_from if fetch_from is not None else remote
     # A remote registry holds only open releases. So for a remote output, the build refuses another
     # release before any download, as a build into that registry would.
-    plan = plan_release_build(
+    plan = plan_build(
         dataset_id,
         store=store,
         # TODO(adrian): Remove temporary glue which maps --fetch-from and --build-parents onto a

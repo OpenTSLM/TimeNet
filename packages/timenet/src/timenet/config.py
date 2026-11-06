@@ -132,16 +132,16 @@ def settings(**overrides: Any) -> TimeNetSettings:
 
 
 def _load(values: dict[str, Any]) -> TimeNetSettings:
-    """Validate settings with the supplied values overriding the environment.
+    """Load and validate settings with explicit values taking priority over environment variables.
 
     Args:
-        values: Setting overrides with ``None`` values already removed.
+        values: Setting overrides with no ``None`` values.
 
     Returns:
         The validated settings.
 
     Raises:
-        TimeFValidationError: If values are invalid, the cache includes the home directory, or store and cache overlap.
+        TimeFValidationError: If a value is invalid or the cache overlaps the store or contains the home folder.
         TimeNetRegistryError: If the local registry names a remote registry.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by local_registry_dir)
     try:
@@ -155,12 +155,38 @@ def _load(values: dict[str, Any]) -> TimeNetSettings:
             "and control folders of the cache, so give TIMENET_CACHE a folder of its own, for example "
             f"{TimeNetSettings.model_fields['cache'].default}."
         )
+    _check_apart(store, cache, "TIMENET_LOCAL_REGISTRY")
+    return cfg
+
+
+def check_store(store: Path) -> None:
+    """Check that a store directory and ``TIMENET_CACHE`` do not overlap.
+
+    Args:
+        store: The store directory.
+
+    Raises:
+        TimeFValidationError: If the store and cache are the same directory or one contains the other.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by _check_apart)
+    _check_apart(store.expanduser(), settings().cache_dir, "The store")
+
+
+def _check_apart(store: Path, cache: Path, name: str) -> None:
+    """Check that the store and cache directories are separate.
+
+    Args:
+        store: The store directory.
+        cache: The cache directory.
+        name: The store label to show in errors.
+
+    Raises:
+        TimeFValidationError: If the directories are the same or one contains the other.
+    """
     if lies_in(store, cache) or lies_in(cache, store):
         raise TimeFValidationError(
-            f"TIMENET_LOCAL_REGISTRY ({store}) and TIMENET_CACHE ({cache}) overlap. The store holds builds, "
+            f"{name} ({store}) and TIMENET_CACHE ({cache}) overlap. The store holds builds, "
             "and TimeNet deletes files in the cache, so one folder must not be the other or lie in it."
         )
-    return cfg
 
 
 def _sentence(item: ErrorDetails) -> str:
