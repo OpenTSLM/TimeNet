@@ -2,7 +2,7 @@
 
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.connector import (
     CONNECTOR as CONNECTOR,
-    SourceIssue as SourceIssue,
     TSAQAConnector as TSAQAConnector,
-    without_source_issues as without_source_issues,
 )
+from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.issues import without_source_issues as without_source_issues
+from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.labels import SourceIssue as SourceIssue

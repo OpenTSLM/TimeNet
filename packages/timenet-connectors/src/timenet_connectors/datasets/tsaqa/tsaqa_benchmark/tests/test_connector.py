@@ -15,10 +15,10 @@ from timenet.json import JsonValue
 from timenet.testing import assert_round_trips
 from timenet.types import AnswerTask, ClassificationTask, Split
 from timenet_connectors.bases.huggingface import HubFileRef
-from timenet_connectors.datasets.tsaqa.tsaqa_benchmark import connector
-from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.connector import (
+from timenet_connectors.datasets.tsaqa.tsaqa_benchmark import (
     SourceIssue,
     TSAQAConnector,
+    source,
     without_source_issues,
 )
 
@@ -258,13 +258,13 @@ def test_a_puzzle_is_ambiguous_only_when_two_patches_are_equal(tmp_path, patches
 
 def test_reading_the_records_in_order_reads_each_split_file_once(monkeypatch):
     reads = Counter()
-    read = connector.pq.read_table
+    read = source.pq.read_table
 
     def counted(path, *args, **kwargs):
         reads[path.name] += 1
         return read(path, *args, **kwargs)
 
-    monkeypatch.setattr(connector.pq, "read_table", counted)
+    monkeypatch.setattr(source.pq, "read_table", counted)
     dataset = _FixtureConnector().convert(_refs())
     for record in dataset.records:
         record.signals[0].to_numpy()
@@ -273,14 +273,14 @@ def test_reading_the_records_in_order_reads_each_split_file_once(monkeypatch):
 
 def test_a_rows_series_share_one_parse(monkeypatch):
     dataset = _FixtureConnector().convert(_refs())
-    parse = connector._input_series
+    parse = source._input_series
     calls = []
 
     def counted(task, text):
         calls.append((task, text))
         return parse(task, text)
 
-    monkeypatch.setattr(connector, "_input_series", counted)
+    monkeypatch.setattr(source, "_input_series", counted)
     rows = set()
     for record in dataset.records:
         rows.add((record.metadata["file"], record.metadata["row"]))
