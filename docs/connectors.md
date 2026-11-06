@@ -453,6 +453,13 @@ Use `PublishedStrEnum[YourEnum]` for published string enum values. Enable
 
 See the [source-helper API reference](api/sources.md) for validation and parsing rules.
 
+## JSONL rows
+
+Use `iter_jsonl_rows` from `timenet_connectors.sources.jsonl` with a `SourceRow` model.
+Each result provides the typed value, file/line/byte location, and original bytes.
+`read_jsonl_row` validates a lazy reread through the same path. Blank lines and duplicate
+keys are errors; keep dataset-specific rules and content-change checks in the connector.
+
 ## Validate decoded fields and samples
 
 Use `SourceRow` models and `validate_row` to validate decoded metadata and
