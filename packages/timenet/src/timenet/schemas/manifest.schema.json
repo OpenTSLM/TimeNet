@@ -500,7 +500,7 @@
       "type": "object"
     },
     "MissingReason": {
-      "description": "Why a connector expects whole timesteps of a modality to be missing.\n\nA connector chooses one reason per spec. A consumer reads the reason to decide whether it can\nfill the missing timesteps, cut them off, or must leave the series out.",
+      "description": "Reasons why whole timesteps of a modality can be missing.",
       "enum": [
         "sensor_gap",
         "not_recorded",
@@ -514,7 +514,7 @@
     },
     "MissingValues": {
       "additionalProperties": false,
-      "description": "Why the timesteps of a modality can be missing, and the largest share a series may miss.\n\nA spec without this record allows no missing timestep. With it, a series may miss up to\n``max_fraction`` of its timesteps, and a consumer reads :attr:`reason` to decide how to treat\nthem. A series stores a missing timestep as an Arrow null.",
+      "description": "The reason for missing timesteps and the maximum fraction allowed in a series.\n\nA spec without this record allows no missing timesteps. An Arrow null marks a missing timestep.",
       "properties": {
         "reason": {
           "$ref": "#/$defs/MissingReason"

@@ -1223,11 +1223,11 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         return indexed
 
     def _select_list(self, table: str, fields: tuple[str, ...]) -> str:
-        """Return the columns of a row type as a ``SELECT`` list.
+        """Create a ``SELECT`` list for the columns of a row type.
 
-        A release written before a column was added to the control schema does not have that
-        column. For such a column, listed in :data:`LEGACY_ABSENT_COLUMNS`, the list reads NULL, so
-        the row builder can apply the older meaning. Any other absent column fails in DuckDB.
+        A release written before a column was added lacks it. Such a column, listed in
+        :data:`LEGACY_ABSENT_COLUMNS`, is selected as NULL so the row builder applies the older
+        meaning. Any other absent column fails in DuckDB.
 
         Args:
             table: The table to read.
@@ -2164,17 +2164,15 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
 
     @staticmethod
     def _missing_values_from_row(row: _SignalRow) -> MissingValues | None:
-        """Reconstruct a spec's missing-value record from its ``signals`` row.
+        """Rebuild a spec's missing-value record from its ``signals`` row.
 
-        A release written before TimeF recorded why values are missing has only the ``nullable``
-        flag. Its specs that allow missing timesteps get the ``unspecified`` reason.
+        Legacy nullable specs receive the ``unspecified`` reason.
 
         Returns:
-            The record, or ``None`` if the spec allows no missing timestep.
+            The missing-value record, or ``None`` if the spec allows no missing timesteps.
 
         Raises:
-            TimeFFormatError: If the stored reason is unknown, the record has no max_fraction, or
-                the record disagrees with ``nullable``.
+            TimeFFormatError: If the reason is unknown, ``max_fraction`` is absent, or the record conflicts with ``nullable``.
         """
         if row.missing_reason is None:
             if row.missing_max_fraction is not None or row.missing_description is not None:
