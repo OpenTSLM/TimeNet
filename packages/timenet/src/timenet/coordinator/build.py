@@ -59,16 +59,18 @@ def plan_release_build(  # ruff: ignore[too-many-arguments]
 
 
 def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None = None) -> None:
-    """Run a plan's copy and build steps in order.
+    """Run the copy and build steps of a plan in order.
+
+    Skip read steps.
 
     Args:
-        plan: The steps to run in dependency order.
+        plan: The steps to run.
         store: The local registry to copy and build into.
-        options: Build settings, including the progress callback for copies and builds.
+        options: Build settings, including the progress callback.
 
     Raises:
-        TimeNetVersionConflictError: If ``store`` holds different files for a copied release.
-        TimeFFormatError: If a build fails to reproduce pinned files.
+        TimeNetVersionConflictError: If a copied release conflicts with the files in ``store``.
+        TimeFFormatError: If a build changes files pinned by other releases.
         TimeNetBuildError: If a build fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the copy and the backends
     options = options or BuildOptions()
@@ -76,7 +78,7 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
         if step.action == "copy":
             # The planner gives each copy step a registry as its entry.
             copy_release(step.release, cast("BaseRegistry", step.entry), store, progress=options.progress)
-        else:
+        elif step.action == "build":
             _build(step, store, options=options)
 
 

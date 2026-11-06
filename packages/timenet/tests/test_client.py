@@ -1,7 +1,7 @@
-from pathlib import Path
 import shutil
 from types import SimpleNamespace
 
+from _demo_child import _child_of_the_demo
 import httpx
 from pydantic import ValidationError
 import pytest
@@ -33,27 +33,6 @@ from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias, SourceKey
 from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
-
-
-def _child_of_the_demo(root: Path) -> tuple[LocalRegistry, DatasetRef]:
-    """Store the demo dataset and ``test/child``, which reads one of its Records, in a local registry.
-
-    Returns:
-        The registry, and the demo release, which is the payload source of the child.
-    """
-    parent = make_dataset()
-    registry = LocalRegistry(root)
-    registry.put_dataset(parent)
-    reference = DatasetRef(dataset_id=parent.metadata.dataset_id, version=parent.metadata.dataset_version)
-    child = TimeFDataset(
-        metadata=parent.metadata.model_copy(
-            update={"dataset_id": "test/child", "parents": {ParentAlias("parent"): reference}}
-        )
-    )
-    with TimeNet(registry).open(parent.metadata.dataset_id) as reader:
-        child.import_from(reader, alias=ParentAlias("parent"), records=[parent.records[0].id])
-    registry.put_dataset(child)
-    return registry, reference
 
 
 class _Builder:
@@ -441,7 +420,7 @@ def test_load_round_trips_with_every_value_loaded_and_its_reader_closed(tmp_path
 
 
 def test_load_reads_in_place_without_downloading(registry_root, tmp_path):
-    # load() reads through the registry's open_version handle, not download-then-read, so it must not
+    # load() reads the release where it is, not download-then-read, so it must not
     # write a copy into local storage the way download() does.
     storage = tmp_path / "store"
     client = TimeNet(registry_root, storage_path=storage)

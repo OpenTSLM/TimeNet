@@ -22,7 +22,7 @@ from timenet.errors import (
     TimeNetMissingParentError,
 )
 from timenet.reader import TimeFReader
-from timenet.registry import LocalRegistry, WritableRegistry
+from timenet.registry import LocalRegistry, WritableRegistry, open_local_version
 from timenet.registry._paths import release_dir
 from timenet.sources import InstalledConnectors
 from timenet.testing import install_backends, make_dataset
@@ -181,7 +181,7 @@ def _child_of(registry: LocalRegistry, reference: DatasetRef, parent: DatasetRef
         update={"dataset_id": reference.dataset_id, "parents": {ParentAlias("parent"): parent}}
     )
     child = TimeFDataset(metadata=metadata)
-    with TimeFReader(registry.open_version(parent.dataset_id, str(parent.version))) as reader:
+    with TimeFReader(open_local_version(release_dir(registry.root, parent))) as reader:
         child.import_from(reader, records=[record_id])
         own = Signal.from_values(
             np.arange(16, dtype=np.float32), spec=_SPEC, name="own", time_axis=RegularAxis.from_rate_hz(16)
@@ -433,8 +433,8 @@ class _Hosted(WritableRegistry):
     def open_file(self, dataset_id, version, relpath):
         return self._local.open_file(dataset_id, version, relpath)
 
-    def open_version(self, dataset_id, version=None):
-        return self._local.open_version(dataset_id, version)
+    def open_release(self, reference, **options):
+        return self._local.open_release(reference, **options)
 
     def put_dataset(self, dataset, **options):
         return self._local.put_dataset(dataset, **options)

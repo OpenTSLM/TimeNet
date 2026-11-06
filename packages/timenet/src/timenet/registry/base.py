@@ -2,7 +2,7 @@
 
 A registry serves compiled TimeF versions. It does not run connector code. Concrete backends
 must implement the four data-access methods: :meth:`list_datasets`, :meth:`get_manifest`,
-:meth:`open_file`, and :meth:`open_version`. :meth:`BaseRegistry.search` is shared. It filters
+:meth:`open_file`, and :meth:`open_release`. :meth:`BaseRegistry.search` is shared. It filters
 the output of :meth:`list_datasets` and uses :meth:`get_manifest` for the type filters.
 """
 
@@ -35,7 +35,11 @@ ProgressCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
-    """A registry that provides TimeF dataset metadata, manifests, and files."""
+    """A searchable source of TimeF datasets, manifests, and files.
+
+    :meth:`open_release` and :meth:`download_release` handle one release without its payload
+    sources. :func:`~timenet.registry.copy_release` copies a release with its payload sources.
+    """
 
     def __str__(self) -> str:
         return type(self).__name__
@@ -109,24 +113,23 @@ class BaseRegistry(ABC):
         """
 
     @abstractmethod
-    def open_version(self, dataset_id: str, version: str | None = None) -> DatasetVersion:
-        """Open a committed dataset version as a random-access handle.
+    def open_release(self, reference: DatasetRef, *, manifest: Manifest | None = None) -> DatasetVersion:
+        """Open an exact release without attaching its payload sources.
 
-        The returned :class:`~timenet.registry.version.DatasetVersion` object bundles the parsed
-        manifest with a handle to the files of the version. The handle is rooted in a filesystem.
-        A reader built from this object does not re-open the registry. It also does not re-read
-        ``manifest.json``. The filesystem of the handle MUST serve range reads. The reader uses it
-        to read Parquet footers and value slices out of order.
+        Opening reads metadata only. Attach payload sources with
+        :func:`~timenet.registry.dependencies.attach_payload_sources`.
 
         Args:
-            dataset_id: The dataset id.
-            version: The version string, or ``None`` for the latest version.
+            reference: The dataset ID and exact version to open.
+            manifest: A manifest already read from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle to the manifest and files of the committed version.
+            A handle to the release's manifest and files.
 
         Raises:
-            TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
+            TimeNetDatasetNotFoundError: If the registry lacks the release.
+            TimeFFormatError: If the manifest declares a different release.
+            TimeNetFileError: If a local file is missing or has an incorrect size.
         """
 
     def resolve(self, dataset_id: str, version: str | None) -> Found | NotFound | NotServed:
