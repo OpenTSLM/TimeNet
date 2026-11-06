@@ -94,11 +94,7 @@ _RESERVED_SPEC_TYPES = frozenset({".", "..", "_irregular", "_time_offsets", "_va
 
 @unique
 class MissingReason(Enum):
-    """Why a connector expects whole timesteps of a modality to be missing.
-
-    A connector chooses one reason per spec. A consumer reads the reason to decide whether it can
-    fill the missing timesteps, cut them off, or must leave the series out.
-    """
+    """Reasons why whole timesteps of a modality can be missing."""
 
     SENSOR_GAP = "sensor_gap"
     """The device recorded nothing for a while, for example because it lost contact with the body."""
@@ -111,49 +107,41 @@ class MissingReason(Enum):
     REDACTED = "redacted"
     """The source removed the value on purpose, for example to protect a person's privacy."""
     UNSPECIFIED = "unspecified"
-    """The release was written before TimeF recorded a reason, so a reader gives it this one.
+    """The release does not record a reason for missing timesteps.
 
-    The writer rejects a new series that has missing timesteps under this reason. A connector must
-    choose one of the other reasons.
+    New series with missing timesteps must use another reason.
     """
 
 
 class MissingValues(TimeFModel):
-    """Why the timesteps of a modality can be missing, and the largest share a series may miss.
+    """The reason for missing timesteps and the maximum fraction allowed in a series.
 
-    A spec without this record allows no missing timestep. With it, a series may miss up to
-    ``max_fraction`` of its timesteps, and a consumer reads :attr:`reason` to decide how to treat
-    them. A series stores a missing timestep as an Arrow null.
+    A spec without this record allows no missing timesteps. An Arrow null marks a missing timestep.
     """
 
     reason: MissingReason
     """Why timesteps are missing."""
     description: NonEmptyString | None = None
-    """What a missing timestep means in this source, for a reader who does not know the source, or ``None``."""
+    """An explanation of missing timesteps in the source, or ``None``."""
     max_fraction: Annotated[StrictFloat, Field(gt=0, le=1)]
-    """The largest share of a series' timesteps that the connector expects to be missing.
+    """The maximum fraction of timesteps that a series can have missing.
 
-    The writer rejects a series whose share of missing timesteps is larger. ``1.0`` allows a
+    The writer rejects a series with a larger fraction of missing timesteps. ``1.0`` allows a
     series that misses almost every timestep.
     """
 
     @classmethod
     def unspecified(cls) -> Self:
-        """Return the record that a reader gives a release written before TimeF recorded a reason.
+        """Create a missing-value record for a legacy release.
 
         Returns:
-            A record with the :attr:`MissingReason.UNSPECIFIED` reason that allows any share of
-            missing timesteps.
+            A record with reason :attr:`MissingReason.UNSPECIFIED` that allows any fraction of missing timesteps.
         """
         return cls(reason=MissingReason.UNSPECIFIED, max_fraction=1.0)
 
 
 def _add_legacy_nullable_to_schema(schema: dict[str, Any]) -> None:
-    """Keep the ``nullable`` flag of older manifests in the JSON Schema of a spec.
-
-    Manifests of format version 1 wrote ``nullable`` before TimeF recorded why values are missing.
-    :meth:`TimeSeriesSpec.upgrade_legacy_nullable` turns it into :attr:`TimeSeriesSpec.missing`.
-    """
+    """Keep the legacy ``nullable`` flag in the JSON schema of a spec."""
     schema["properties"]["nullable"] = {
         "type": "boolean",
         "deprecated": True,
@@ -183,12 +171,7 @@ class TimeSeriesSpec(TimeFModel):
     dimension_names: tuple[NonEmptyString, ...] = ()
     """Optional names for the dimensions in :attr:`value_shape`."""
     missing: MissingValues | None = None
-    """Why whole timesteps can be missing, and how many at most, or ``None`` if none can be.
-
-    A series stores a missing timestep as an Arrow null. The writer rejects a null when this is
-    ``None``, and it rejects a series whose share of nulls is above
-    :attr:`MissingValues.max_fraction`.
-    """
+    """The reason and maximum fraction for missing timesteps, or ``None`` if none are allowed."""
     modality: InputModality = InputModality.TIME_SERIES
     """Semantic input kind. Set IMAGE, AUDIO, or TEXT for Signals that carry those kinds of data."""
 
@@ -196,28 +179,23 @@ class TimeSeriesSpec(TimeFModel):
 
     @property
     def nullable(self) -> bool:
-        """Whether a whole timestep can be missing: ``True`` when :attr:`missing` is set.
-
-        The storage backends use it to decide whether a series stores a validity array.
-        """
+        """Whether a whole timestep can be missing. This is true when :attr:`missing` is set."""
         return self.missing is not None
 
     @staticmethod
     def upgrade_legacy_nullable(data: Mapping[str, Any]) -> dict[str, Any]:
-        """Turn the ``nullable`` flag of an older manifest into the ``missing`` record.
+        """Convert a legacy ``nullable`` flag to a ``missing`` record.
 
-        Manifests of format version 1 wrote ``nullable`` before TimeF recorded why values are
-        missing. ``true`` becomes :meth:`MissingValues.unspecified` and ``false`` becomes ``None``.
-        A manifest that writes ``missing`` keeps it. Then ``nullable`` must agree with it.
+        If ``missing`` is present, ``nullable`` must agree with it.
 
         Args:
-            data: The fields of one spec as a manifest stores them.
+            data: The fields of one spec from a manifest.
 
         Returns:
-            The fields without ``nullable``, ready to validate.
+            The fields without ``nullable``.
 
         Raises:
-            ValueError: If ``nullable`` is not a bool, or if it disagrees with ``missing``.
+            ValueError: If ``nullable`` is not a bool or disagrees with ``missing``.
         """
         fields = dict(data)
         if "nullable" not in fields:
@@ -233,17 +211,15 @@ class TimeSeriesSpec(TimeFModel):
         return fields
 
     def check_nulls_within_missing_contract(self, null_count: int, n_values: int, *, series: str) -> None:
-        """Reject missing timesteps that :attr:`missing` does not allow.
+        """Check whether the spec allows the missing timesteps.
 
         Args:
             null_count: The number of missing timesteps in the series.
             n_values: The number of timesteps in the series.
-            series: How an error names the series, for example ``"series 'ecg'"``.
+            series: The series name to use in an error message.
 
         Raises:
-            TimeFValidationError: If the series has a missing timestep and the spec allows none or
-                gives the ``unspecified`` reason. Also if the share of missing timesteps is above
-                :attr:`MissingValues.max_fraction`.
+            TimeFValidationError: If missing timesteps are disallowed, unspecified, or exceed ``max_fraction``.
         """
         if not null_count:
             return

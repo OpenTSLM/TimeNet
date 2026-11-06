@@ -228,9 +228,10 @@ SIGNALS = Table(
         ForeignKey("axis_id", "axes", "axis_id"),
     ),
 )
-"""``nullable`` is true exactly when the ``missing_*`` columns hold the spec's
-:class:`~timenet.types.specs.MissingValues` record. The Zarr backend reads it to find the validity
-arrays. A release written before the record existed has only ``nullable``."""
+"""The ``nullable`` flag is true when the ``missing_*`` columns hold a missing-value record.
+
+The Zarr backend reads the flag to find the validity arrays. Older releases have only the flag.
+"""
 
 LEGACY_ABSENT_COLUMNS: dict[str, frozenset[str]] = {
     SIGNALS.name: frozenset({"missing_reason", "missing_description", "missing_max_fraction"}),

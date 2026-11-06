@@ -72,8 +72,7 @@ def _arrow_from_values(
         Values converted to the spec's dtype, with a separate bit that marks whether each timestep is present.
 
     Raises:
-        TimeFValidationError: If the spec's missing-value record does not allow the null values, or
-            an enum value is outside the spec's categories.
+        TimeFValidationError: If the spec rejects the null values or an enum value.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by check_nulls_within_missing_contract)
     arrow_type = pa.string() if spec.dtype in {"str", "enum"} else pa.from_numpy_dtype(np.dtype(spec.dtype))
     if isinstance(values, pa.Array):
@@ -109,9 +108,7 @@ def _in_memory(
         A :class:`~timenet.types.handles.NumpyArray` or an :class:`~timenet.types.handles.ArrowArray`.
 
     Raises:
-        TimeFValidationError: If NumPy values do not have the spec's per-timestep shape, the spec's
-            missing-value record does not allow the null values, or an enum value is outside the
-            categories.
+        TimeFValidationError: If the shape, null values, or enum values violate the spec.
     """
     if isinstance(values, pa.Array) and not validate_arrow:
         return ArrowArray(values)
@@ -453,9 +450,8 @@ class Signal(SupportsAnnotate):
         does not read the values immediately.
 
         Args:
-            values: The signal values to convert to the spec's dtype. Text and enum specs take
-                strings. Python ``None`` marks a missing timestep when ``spec.missing`` allows one.
-            spec: The series' measurement-modality spec.
+            values: Values in the spec's dtype. Text and enum values are strings; ``None`` marks a missing timestep.
+            spec: The signal's measurement spec.
             name: The signal name.
             time_axis: Where the values sit in time.
 
@@ -489,8 +485,7 @@ class Signal(SupportsAnnotate):
         buffers as read-only.
 
         Args:
-            values: The signal values to convert to the spec's dtype. Text and enum specs take
-                strings. Python ``None`` marks a missing timestep when ``spec.missing`` allows one.
+            values: Values in the spec's dtype. Text and enum values are strings; ``None`` marks a missing timestep.
             time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
             spec: The series' measurement-modality spec.
             name: The signal name.
@@ -557,10 +552,7 @@ class Signal(SupportsAnnotate):
             The series' values with shape ``(n_steps, *spec.value_shape)``.
 
         Raises:
-            TimeFNullValuesError: If a timestep is missing or only partially present. Use
-                :meth:`to_arrow` to preserve missingness. A spec that allows missing timesteps
-                reads as NumPy when the series has none, and NaN and infinity values are present
-                values.
+            TimeFNullValuesError: If a timestep is missing or partially present. Use :meth:`to_arrow` for nulls.
         """
         try:
             return self._values.read_numpy()

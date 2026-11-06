@@ -199,10 +199,10 @@ class DatasetSchema(TimeFModel):
     @field_validator("time_series_specs", mode="before")
     @classmethod
     def _upgrade_legacy_specs(cls, specs: Any) -> Any:
-        """Read the ``nullable`` flag that manifests wrote before ``missing`` existed.
+        """Convert legacy ``nullable`` flags to missing-value records.
 
         Returns:
-            The specs, with each stored spec's ``nullable`` flag turned into its ``missing`` record.
+            The specs with their ``nullable`` flags converted to ``missing`` records.
         """
         if not isinstance(specs, (list, tuple)):
             return specs

@@ -395,16 +395,11 @@ class TimeFWriter:
             ts: The series to read.
 
         Returns:
-            The validated values in the spec's canonical Arrow representation.
-
-            The method accepts ``NaN``, ``+Infinity``, and ``-Infinity`` as floating-point values.
-            They are distinct from missing values. The spec's missing-value record controls Arrow
-            nulls only.
+            The validated values in the spec's Arrow representation. ``NaN`` and infinities are
+            present values, not missing ones.
 
         Raises:
-            TimeFValidationError: If the array disagrees with the spec's dtype or shape, has null
-                values that the spec's missing-value record does not allow, has partial tensor
-                nulls, or its length disagrees with ``n_values``.
+            TimeFValidationError: If the dtype, shape, nulls, or length violate the series' spec.
         """
         values = ts.to_arrow()
         if ts.spec.dtype == "enum":
