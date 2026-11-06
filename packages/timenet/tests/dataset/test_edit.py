@@ -374,8 +374,11 @@ def test_an_edit_holds_copies_with_metadata_of_their_own(edit):
         assert holder.annotations == original.annotations
         assert not {id(item) for item in holder.annotations} & {id(item) for item in original.annotations}
         for annotation in holder.annotations:
-            _change(annotation.metadata)
-            _change(annotation.occurrence_metadata)
+            # Annotation metadata cannot change at all, so no copy can change the original.
+            with pytest.raises(TypeError, match="cannot change"):
+                _change(annotation.metadata)
+            with pytest.raises(TypeError, match="cannot change"):
+                _change(annotation.occurrence_metadata)
     # The Signal copy has the ID of the original and reads its stored values.
     assert record.signals[0].id == a.signals[0].id
     assert record.signals[0]._values is a.signals[0]._values

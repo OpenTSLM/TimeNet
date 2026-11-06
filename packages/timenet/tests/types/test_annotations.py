@@ -1,16 +1,19 @@
 from dataclasses import dataclass, replace
+import json
 import math
 import pickle
 from typing import Literal
 
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 import pytest
 
 from timenet.errors import TimeFValidationError
+from timenet.json import JsonMapping
 from timenet.types import (
     Annotation,
     AnnotationDescriptor,
     AnnotationType,
+    TextListHandle,
     TimeInterval,
     TimePoint,
     annotation_type_of,
@@ -223,3 +226,65 @@ def test_value_type_of_rejects_maps_and_non_string_lists():
 def test_value_type_of_rejects_unsupported_type():
     with pytest.raises(TimeFValidationError, match="unsupported annotation value type"):
         value_type_of(object())
+
+
+def test_metadata_is_a_copy_that_cannot_change():
+    rater: dict[str, JsonValue] = {"name": "a"}
+    scores: list[JsonValue] = [1, 2]
+    run: list[JsonValue] = [1]
+    annotation = Annotation(
+        key="k", value=1, metadata={"rater": rater, "scores": scores}, occurrence_metadata={"run": run}
+    )
+    rater["name"] = "b"
+    scores.append(3)
+    run.append(2)
+    assert annotation.metadata == {"rater": {"name": "a"}, "scores": [1, 2]}
+    assert annotation.occurrence_metadata == {"run": [1]}
+    frozen_rater, frozen_scores = annotation.metadata["rater"], annotation.metadata["scores"]
+    frozen_run = annotation.occurrence_metadata["run"]
+    assert isinstance(frozen_rater, dict) and isinstance(frozen_scores, list) and isinstance(frozen_run, list)
+    changes = [
+        lambda: annotation.metadata.update(added=True),
+        lambda: annotation.metadata.pop("rater"),
+        lambda: frozen_rater.__setitem__("name", "c"),
+        lambda: frozen_scores.append(3),
+        frozen_scores.reverse,
+        frozen_run.clear,
+    ]
+    for change in changes:
+        with pytest.raises(TypeError, match="cannot change"):
+            change()
+    assert annotation.metadata == {"rater": {"name": "a"}, "scores": [1, 2]}
+
+
+def test_a_text_list_does_not_follow_the_callers_list_or_a_read():
+    labels = ["a", "b"]
+    annotation = Annotation(key="labels", value=labels)
+    labels.append("c")
+    value = annotation.value
+    assert isinstance(value, TextListHandle)
+    value.read().append("d")
+    assert value.read() == ["a", "b"]
+
+
+def test_frozen_metadata_writes_the_same_json():
+    metadata: JsonMapping = {"b": [1, {"c": None}], "a": "x"}
+    annotation = Annotation(key="k", value=1, metadata=metadata)
+    assert json.dumps(annotation.metadata, sort_keys=True) == json.dumps(metadata, sort_keys=True)
+    assert annotation.metadata == metadata
+
+
+def test_replace_freezes_the_new_metadata():
+    copy = replace(Annotation(key="k", value=1), metadata={"a": [1]})
+    items = copy.metadata["a"]
+    assert isinstance(items, list)
+    with pytest.raises(TypeError, match="cannot change"):
+        items.append(2)
+
+
+def test_pickle_keeps_frozen_metadata():
+    annotation = Annotation(key="k", value=["a"], metadata={"a": [1]}, occurrence_metadata={"b": {"c": 1}})
+    restored = pickle.loads(pickle.dumps(annotation))
+    assert restored == annotation
+    with pytest.raises(TypeError, match="cannot change"):
+        restored.metadata["new"] = 1
