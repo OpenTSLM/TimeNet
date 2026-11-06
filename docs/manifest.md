@@ -61,8 +61,10 @@ The values locator is backend-neutral. One schema covers both scalar and multidi
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
 separate format version.
 
-A spec records its `nullable` flag. Parquet stores nullability in Arrow validity bitmaps. Zarr stores
-it in validity arrays next to the values.
+A spec records its `missing` record: why timesteps can be missing, and the largest share a series
+may miss. Parquet stores the missing timesteps in Arrow validity bitmaps. Zarr stores them in
+validity arrays next to the values. Older manifests store a `nullable` flag instead, which a reader
+turns into a `missing` record with the reason `unspecified`.
 
 Direct construction and parsing with an unsupported `timef_format_version` raise Pydantic's
 `ValidationError`.

@@ -13,6 +13,9 @@ Fixed-shape fields are typed columns, so SQL can filter them. Only the free-form
 dictionaries are JSON. The database has no persisted constraints. The writer keeps
 :data:`Table.unique` and :data:`Table.foreign_keys` while it streams rows, and
 :func:`timenet.format.control_audit.audit_control_database` checks them again.
+
+A column added to version 1 after releases were written is listed in :data:`LEGACY_ABSENT_COLUMNS`.
+The reader reads NULL for it from a release that predates it and applies the older meaning.
 """
 
 from dataclasses import dataclass
@@ -212,6 +215,9 @@ SIGNALS = Table(
         _required("value_shape", ColumnType.BIGINT_LIST),
         _required("dimension_names", ColumnType.VARCHAR_LIST),
         _required("nullable", ColumnType.BOOLEAN),
+        Column("missing_reason", ColumnType.VARCHAR),
+        Column("missing_description", ColumnType.VARCHAR),
+        Column("missing_max_fraction", ColumnType.DOUBLE),
         _key("n_values"),
         _required("metadata", ColumnType.JSON),
         _required("modality"),
@@ -222,6 +228,14 @@ SIGNALS = Table(
         ForeignKey("axis_id", "axes", "axis_id"),
     ),
 )
+"""``nullable`` is true exactly when the ``missing_*`` columns hold the spec's
+:class:`~timenet.types.specs.MissingValues` record. The Zarr backend reads it to find the validity
+arrays. A release written before the record existed has only ``nullable``."""
+
+LEGACY_ABSENT_COLUMNS: dict[str, frozenset[str]] = {
+    SIGNALS.name: frozenset({"missing_reason", "missing_description", "missing_max_fraction"}),
+}
+"""Columns by table that releases written before the column was added do not have."""
 
 SIGNAL_CHUNKS = Table(
     "signal_chunks",

@@ -72,9 +72,9 @@ def _arrow_from_values(
         Values converted to the spec's dtype, with a separate bit that marks whether each timestep is present.
 
     Raises:
-        TimeFValidationError: If a non-nullable spec receives a null value, or an enum value is
-            outside the spec's categories.
-    """
+        TimeFValidationError: If the spec's missing-value record does not allow the null values, or
+            an enum value is outside the spec's categories.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by check_nulls_within_missing_contract)
     arrow_type = pa.string() if spec.dtype in {"str", "enum"} else pa.from_numpy_dtype(np.dtype(spec.dtype))
     if isinstance(values, pa.Array):
         array = values.cast(arrow_type)
@@ -84,8 +84,7 @@ def _arrow_from_values(
     else:
         # pa.array preserves None as a null. The null count below avoids a separate scan.
         array = pa.array(values, type=arrow_type)
-    if array.null_count and not spec.nullable:
-        raise TimeFValidationError(f"series for {spec.spec_type!r} has null values but nullable=False")
+    spec.check_nulls_within_missing_contract(array.null_count, len(array), series="series")
     if spec.dtype == "enum":
         # Encode the labels first. The dictionary stores each distinct label once.
         # Compare these labels with the allowed categories, without creating an object for every value.
@@ -110,8 +109,9 @@ def _in_memory(
         A :class:`~timenet.types.handles.NumpyArray` or an :class:`~timenet.types.handles.ArrowArray`.
 
     Raises:
-        TimeFValidationError: If NumPy values do not have the spec's per-timestep shape, a
-            non-nullable spec receives a null value, or an enum value is outside the categories.
+        TimeFValidationError: If NumPy values do not have the spec's per-timestep shape, the spec's
+            missing-value record does not allow the null values, or an enum value is outside the
+            categories.
     """
     if isinstance(values, pa.Array) and not validate_arrow:
         return ArrowArray(values)
@@ -454,7 +454,7 @@ class Signal(SupportsAnnotate):
 
         Args:
             values: The signal values to convert to the spec's dtype. Text and enum specs take
-                strings. Python ``None`` marks a missing timestep when ``spec.nullable`` is true.
+                strings. Python ``None`` marks a missing timestep when ``spec.missing`` allows one.
             spec: The series' measurement-modality spec.
             name: The signal name.
             time_axis: Where the values sit in time.
@@ -490,7 +490,7 @@ class Signal(SupportsAnnotate):
 
         Args:
             values: The signal values to convert to the spec's dtype. Text and enum specs take
-                strings. Python ``None`` marks a missing timestep when ``spec.nullable`` is true.
+                strings. Python ``None`` marks a missing timestep when ``spec.missing`` allows one.
             time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
             spec: The series' measurement-modality spec.
             name: The signal name.
@@ -558,8 +558,9 @@ class Signal(SupportsAnnotate):
 
         Raises:
             TimeFNullValuesError: If a timestep is missing or only partially present. Use
-                :meth:`to_arrow` to preserve missingness. A nullable spec without actual nulls
-                remains supported, as do NaN and infinity values.
+                :meth:`to_arrow` to preserve missingness. A spec that allows missing timesteps
+                reads as NumPy when the series has none, and NaN and infinity values are present
+                values.
         """
         try:
             return self._values.read_numpy()

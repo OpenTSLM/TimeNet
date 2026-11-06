@@ -1,3 +1,5 @@
+import json
+
 import numpy as np
 import pyarrow as pa
 from pydantic import ValidationError
@@ -6,10 +8,12 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFValidationError
+from timenet.format.checksums import file_checksum
+from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
-from timenet.types import DatasetMetadata, License, TimeSeriesSpec, Version, ureg
+from timenet.types import DatasetMetadata, License, MissingReason, MissingValues, TimeSeriesSpec, Version, ureg
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 from timenet.values_backends.zarr.reader import ZarrValuesReader
 from timenet.writer import TimeFWriter
@@ -26,10 +30,21 @@ def _spec(dtype="float32", **kwargs):
     return TimeSeriesSpec(spec_type="x", name="X", unit_value=ureg.dimensionless, dtype=dtype, **kwargs)
 
 
-@pytest.mark.parametrize("nullable", [1, 0, None, "true", np.bool_(True)])
-def test_nullable_requires_a_real_bool(nullable):
+_MISSING = MissingValues(reason=MissingReason.SENSOR_GAP, max_fraction=1.0)
+
+
+@pytest.mark.parametrize("max_fraction", [0.0, 1.5, "0.5", None])
+def test_missing_values_need_a_max_fraction_between_zero_and_one(max_fraction):
+    with pytest.raises(ValidationError, match="max_fraction"):
+        MissingValues(reason=MissingReason.SENSOR_GAP, max_fraction=max_fraction)
+
+
+def test_nullable_is_true_exactly_when_the_spec_has_a_missing_record():
+    assert not _spec().nullable
+    assert _spec(missing=_MISSING).nullable
+    # The flag is derived. A connector states a reason instead of setting it.
     with pytest.raises(ValidationError, match="nullable"):
-        _spec(nullable=nullable)
+        _spec(nullable=True)
 
 
 @pytest.mark.parametrize("irregular", [False, True])
@@ -44,7 +59,7 @@ def test_nullable_requires_a_real_bool(nullable):
     ],
 )
 def test_scalar_constructors_preserve_nulls_and_declared_dtype(irregular, dtype, observations, categories):
-    spec = _spec(dtype, categories=categories, nullable=True)
+    spec = _spec(dtype, categories=categories, missing=_MISSING)
     if irregular:
         series = Signal.from_irregular(observations, time_offsets_us=[0, 2, 4], spec=spec, name="x")
     else:
@@ -86,7 +101,7 @@ def _lazy_series(spec, array):
 
 @pytest.mark.parametrize("dtype", ["float32", "int16", "bool", "str", "enum"])
 def test_writer_checks_nullability_before_numpy_conversion(tmp_path, dtype):
-    spec = _spec(dtype, categories=("a",) if dtype == "enum" else (), nullable=True)
+    spec = _spec(dtype, categories=("a",) if dtype == "enum" else (), missing=_MISSING)
     arrow_type = pa.string() if dtype in {"str", "enum"} else pa.from_numpy_dtype(np.dtype(dtype))
     array = pa.array([None], type=arrow_type)
     if dtype == "enum":
@@ -94,14 +109,33 @@ def test_writer_checks_nullability_before_numpy_conversion(tmp_path, dtype):
     writer = TimeFWriter(tmp_path, make_dataset())
     assert writer._read_and_validate(_lazy_series(spec, array)).equals(array)
     with pytest.raises(TimeFValidationError, match="null"):
-        writer._read_and_validate(_lazy_series(spec.model_copy(update={"nullable": False}), array))
+        writer._read_and_validate(_lazy_series(spec.model_copy(update={"missing": None}), array))
+
+
+def test_series_with_more_nulls_than_max_fraction_are_rejected(tmp_path):
+    spec = _spec(missing=MissingValues(reason=MissingReason.SENSOR_GAP, max_fraction=0.25))
+    # One null in four values is exactly the bound. Two are above it.
+    Signal.from_values([1.0, None, 3.0, 4.0], spec=spec, name="x", time_axis=OrdinalAxis())
+    with pytest.raises(TimeFValidationError, match=r"missing 2 of 4 values \(50.0%\), more than the max_fraction 0.25"):
+        Signal.from_values([1.0, None, None, 4.0], spec=spec, name="x", time_axis=OrdinalAxis())
+    array = pa.array([1.0, None, None, 4.0], type=pa.float32())
+    with pytest.raises(TimeFValidationError, match=r"more than the max_fraction 0\.25"):
+        TimeFWriter(tmp_path, make_dataset())._read_and_validate(_lazy_series(spec, array))
+
+
+def test_the_unspecified_reason_rejects_a_new_series_with_nulls():
+    spec = _spec(missing=MissingValues.unspecified())
+    with pytest.raises(TimeFValidationError, match="gives no reason"):
+        Signal.from_values([1.0, None], spec=spec, name="x", time_axis=OrdinalAxis())
+    # Without nulls the series is fine, so a release read back can be written again.
+    Signal.from_values([1.0, 2.0], spec=spec, name="x", time_axis=OrdinalAxis())
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
 def test_float_accepts_nonfinite_observations(tmp_path, value):
     # NaN and infinity are present values, not missing measurements.
     # The nullable flag controls Arrow nulls only.
-    series = Signal.from_values([None, value], spec=_spec(nullable=True), name="x", time_axis=OrdinalAxis())
+    series = _lazy_series(_spec(missing=_MISSING), pa.array([None, value], type=pa.float32()))
     validated = TimeFWriter(tmp_path, make_dataset())._read_and_validate(series)
 
     assert validated.null_count == 1
@@ -116,7 +150,7 @@ def test_nonfinite_values_are_allowed_when_not_nullable(tmp_path):
 
 
 def test_nullable_enum_still_rejects_unknown_observations(tmp_path):
-    spec = _spec("enum", categories=("a",), nullable=True)
+    spec = _spec("enum", categories=("a",), missing=_MISSING)
     array = pa.array([None, "unknown"]).dictionary_encode()
     with pytest.raises(TimeFValidationError, match="categories"):
         TimeFWriter(tmp_path, make_dataset())._read_and_validate(_lazy_series(spec, array))
@@ -127,7 +161,7 @@ def test_nullable_enum_still_rejects_unknown_observations(tmp_path):
     [("float32", [[1.0, 2.0], None, [3.0, 4.0]]), ("bool", [[True, False], None, [False, True]])],
 )
 def test_torch_rejects_missing_tensor_timesteps_while_storage_preserves_them(tmp_path, dtype, observations):
-    spec = _spec(dtype, value_shape=(2,), nullable=True)
+    spec = _spec(dtype, value_shape=(2,), missing=_MISSING)
     value_type = pa.from_numpy_dtype(np.dtype(dtype))
     storage = pa.array(observations, type=pa.list_(value_type, 2))
     array = pa.ExtensionArray.from_storage(pa.fixed_shape_tensor(value_type, (2,)), storage)
@@ -140,7 +174,7 @@ def test_torch_rejects_missing_tensor_timesteps_while_storage_preserves_them(tmp
 
 
 def test_writer_accepts_all_null_tensor(tmp_path):
-    spec = _spec(value_shape=(2,), nullable=True)
+    spec = _spec(value_shape=(2,), missing=_MISSING)
     storage = pa.array([None], type=pa.list_(pa.float32(), 2))
     array = pa.ExtensionArray.from_storage(pa.fixed_shape_tensor(pa.float32(), (2,)), storage)
     series = _lazy_series(spec, array)
@@ -149,7 +183,7 @@ def test_writer_accepts_all_null_tensor(tmp_path):
 
 @pytest.mark.parametrize("dtype", ["float32", "int16"])
 def test_writer_rejects_partial_tensor_nulls(tmp_path, dtype):
-    spec = _spec(dtype, value_shape=(2,), nullable=True)
+    spec = _spec(dtype, value_shape=(2,), missing=_MISSING)
     value_type = pa.from_numpy_dtype(np.dtype(dtype))
     storage = pa.array([[1, None]], type=pa.list_(value_type, 2))
     array = pa.ExtensionArray.from_storage(pa.fixed_shape_tensor(value_type, (2,)), storage)
@@ -193,7 +227,7 @@ def _write_read(tmp_path, series, *, values_backend, leading_series=None, **writ
     ],
 )
 def test_nullable_scalar_round_trips(tmp_path, values_backend, dtype, observations, categories):
-    spec = _spec(dtype, categories=categories, nullable=True)
+    spec = _spec(dtype, categories=categories, missing=_MISSING)
     series = Signal.from_values(observations, spec=spec, name="x", time_axis=OrdinalAxis())
     restored = _write_read(tmp_path, series, values_backend=values_backend)
 
@@ -213,7 +247,7 @@ def test_nullable_tensor_round_trips_whole_timesteps(tmp_path):
     )
     tensor = pa.FixedShapeTensorArray.from_storage(pa.fixed_shape_tensor(pa.float32(), [3]), storage)
     series = Signal.from_loader(
-        spec=_spec(value_shape=(3,), nullable=True),
+        spec=_spec(value_shape=(3,), missing=_MISSING),
         name="camera",
         time_axis=OrdinalAxis(),
         loader=lambda: tensor,
@@ -228,6 +262,41 @@ def test_nullable_tensor_round_trips_whole_timesteps(tmp_path):
     np.testing.assert_array_equal(back.to_numpy_ndarray()[0], frames[0])
 
 
+def test_a_release_written_before_the_missing_record_reads_as_unspecified(tmp_path):
+    # Older releases store only the nullable flag: in the manifest's schema, and as the signals
+    # table's nullable column without the missing_* columns.
+    whole = Signal.from_values(
+        [1.0, 2.0, 3.0], spec=_spec().model_copy(update={"spec_type": "w"}), name="w", time_axis=OrdinalAxis()
+    )
+    gappy = Signal.from_values([1.0, None, 3.0], spec=_spec(missing=_MISSING), name="x", time_axis=OrdinalAxis())
+    _write_read(tmp_path, gappy, values_backend="zarr", leading_series=whole)
+    version_dir = tmp_path / "timenet/nullable/1.0.0"
+    with connect_control(version_dir / "control.duckdb") as connection:
+        for column in ("missing_reason", "missing_description", "missing_max_fraction"):
+            connection.execute(f"ALTER TABLE signals DROP COLUMN {column}")
+    manifest_path = version_dir / "manifest.json"
+    manifest = json.loads(manifest_path.read_text())
+    for spec in manifest["schema"]["time_series_specs"]:
+        spec["nullable"] = spec.pop("missing") is not None
+    control = version_dir / "control.duckdb"
+    manifest["files"]["control"] = [
+        {"path": "control.duckdb", "checksum": file_checksum(control), "size": control.stat().st_size}
+    ]
+    manifest_path.write_text(json.dumps(manifest))
+
+    version = open_local_version(version_dir)
+    assert [spec.missing for spec in version.manifest.dataset_schema.time_series_specs] == [
+        None,
+        MissingValues.unspecified(),
+    ]
+    with TimeFReader(version) as reader:
+        restored_whole, restored_gappy = reader.read().records[0].signals
+    assert restored_whole.spec.missing is None
+    assert restored_gappy.spec.missing == MissingValues.unspecified()
+    assert restored_gappy.spec.nullable
+    assert restored_gappy.to_arrow().to_pylist() == [1.0, None, 3.0]
+
+
 def test_nonnullable_zarr_writes_no_validity_array(tmp_path):
     # Non-nullable datasets must not write validity arrays.
     series = Signal.from_values([1.0, 2.0, 3.0], spec=_spec(), name="x", time_axis=OrdinalAxis())
@@ -239,7 +308,7 @@ def test_nonnullable_zarr_writes_no_validity_array(tmp_path):
 
 
 def test_torch_rejects_missing_timesteps_in_nullable_signals():
-    series = Signal.from_values([1.0, None, 3.0], spec=_spec(nullable=True), name="x", time_axis=OrdinalAxis())
+    series = Signal.from_values([1.0, None, 3.0], spec=_spec(missing=_MISSING), name="x", time_axis=OrdinalAxis())
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
             dataset_id="timenet/nullable",
@@ -278,7 +347,7 @@ def test_torch_returns_an_all_true_mask_for_a_series_that_cannot_be_null():
 @pytest.mark.parametrize("tensor", [False, True])
 def test_zarr_nullable_ranges_preserve_nulls_and_bound_validity_reads(tmp_path, monkeypatch, irregular, tensor):
     observations = [0.0, None, 2.0, None, 4.0, 5.0, None, 7.0]
-    spec = _spec(nullable=True, value_shape=(2,) if tensor else ())
+    spec = _spec(missing=_MISSING, value_shape=(2,) if tensor else ())
     if tensor:
         storage = pa.array(
             [None if value is None else [value, value] for value in observations],
@@ -332,7 +401,7 @@ def test_zarr_nullable_ranges_preserve_nulls_and_bound_validity_reads(tmp_path, 
 
 
 def test_zarr_nullable_range_combines_noncontiguous_runs_in_order(tmp_path, monkeypatch):
-    spec = _spec(nullable=True)
+    spec = _spec(missing=_MISSING)
     series = Signal.from_values(
         [9.0, 0.0, None, 99.0, 99.0, None, 0.0, 7.0], spec=spec, name="x", time_axis=OrdinalAxis()
     )
@@ -363,7 +432,7 @@ def test_zarr_nullable_range_combines_noncontiguous_runs_in_order(tmp_path, monk
 
 @pytest.mark.parametrize("tensor", [False, True])
 def test_to_numpy_rejects_actual_nulls(tensor):
-    spec = _spec(nullable=True, value_shape=(2,) if tensor else ())
+    spec = _spec(missing=_MISSING, value_shape=(2,) if tensor else ())
     if tensor:
         storage = pa.array([[0.0, 1.0], None], type=pa.list_(pa.float32(), 2))
         array = pa.ExtensionArray.from_storage(pa.fixed_shape_tensor(pa.float32(), (2,)), storage)
@@ -375,7 +444,7 @@ def test_to_numpy_rejects_actual_nulls(tensor):
 
 def test_to_numpy_allows_nullable_without_nulls_and_preserves_special_floats():
     observations = np.array([0.0, np.nan, np.inf, -np.inf], dtype=np.float32)
-    series = Signal.from_values(observations, spec=_spec(nullable=True), name="x", time_axis=OrdinalAxis())
+    series = Signal.from_values(observations, spec=_spec(missing=_MISSING), name="x", time_axis=OrdinalAxis())
     np.testing.assert_array_equal(series.to_numpy(), observations)
 
 
@@ -407,7 +476,7 @@ def test_torch_default_batches_mixed_nullable_series(batch_size, missing):
     dataset = TimeFDataset(metadata=make_dataset().metadata)
     for _ in range(2):
         nullable = Signal.from_values(
-            [0.0, None if missing else 1.0], spec=_spec(nullable=True), name="nullable", time_axis=OrdinalAxis()
+            [0.0, None if missing else 1.0], spec=_spec(missing=_MISSING), name="nullable", time_axis=OrdinalAxis()
         )
         present = Signal.from_values([0.0, 1.0], spec=_spec(), name="present", time_axis=OrdinalAxis())
         dataset.add_record(record=Record(sources=(Source(name="Source", signals=(nullable, present)),)))
@@ -425,7 +494,7 @@ def test_torch_default_batches_mixed_nullable_series(batch_size, missing):
 @pytest.mark.parametrize("nullable", [False, True])
 def test_torch_enum_direct_loader_rejects_unknown_labels(nullable):
     series = _loader_series(
-        _spec("enum", categories=("a", "b"), nullable=nullable),
+        _spec("enum", categories=("a", "b"), missing=_MISSING if nullable else None),
         pa.array(["a", "unknown"]).dictionary_encode(),
     )
     dataset = TimeFDataset(metadata=make_dataset().metadata)
@@ -437,7 +506,7 @@ def test_torch_enum_direct_loader_rejects_unknown_labels(nullable):
 @pytest.mark.parametrize("nullable", [False, True])
 def test_torch_enum_direct_loader_rejects_nulls(nullable):
     series = _loader_series(
-        _spec("enum", categories=("a", "b"), nullable=nullable),
+        _spec("enum", categories=("a", "b"), missing=_MISSING if nullable else None),
         pa.array(["a", None, "b"]).dictionary_encode(),
     )
     dataset = TimeFDataset(metadata=make_dataset().metadata)
@@ -448,7 +517,7 @@ def test_torch_enum_direct_loader_rejects_nulls(nullable):
 
 def test_torch_nullable_enum_preserves_category_zero_without_nulls():
     series = _loader_series(
-        _spec("enum", categories=("a", "b"), nullable=True), pa.array(["a", "b"]).dictionary_encode()
+        _spec("enum", categories=("a", "b"), missing=_MISSING), pa.array(["a", "b"]).dictionary_encode()
     )
     dataset = TimeFDataset(metadata=make_dataset().metadata)
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
@@ -479,7 +548,7 @@ def test_bool_constructors_use_numeric_truth_conversion(irregular, container, ob
 )
 def test_bool_constructors_preserve_none_separately_from_false(irregular, container, nullable, observations, expected):
     values = container(observations)
-    spec = _spec("bool", nullable=nullable)
+    spec = _spec("bool", missing=_MISSING if nullable else None)
 
     def construct():
         if irregular:

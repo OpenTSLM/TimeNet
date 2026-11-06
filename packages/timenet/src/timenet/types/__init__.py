@@ -27,7 +27,7 @@ from timenet.types.spans import (
     TimePoint,
     TimeSpan,
 )
-from timenet.types.specs import TimeSeriesSpec
+from timenet.types.specs import MissingReason, MissingValues, TimeSeriesSpec
 from timenet.types.splits import Split, parse_split
 from timenet.types.tasks import (
     TASKS,
@@ -72,6 +72,8 @@ __all__ = [
     "LazyTextList",
     "License",
     "LocalizationMode",
+    "MissingReason",
+    "MissingValues",
     "ObjectKind",
     "ScalarPredictionTask",
     "Span",

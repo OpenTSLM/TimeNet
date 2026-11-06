@@ -499,6 +499,53 @@
       "title": "ManifestFiles",
       "type": "object"
     },
+    "MissingReason": {
+      "description": "Why a connector expects whole timesteps of a modality to be missing.\n\nA connector chooses one reason per spec. A consumer reads the reason to decide whether it can\nfill the missing timesteps, cut them off, or must leave the series out.",
+      "enum": [
+        "sensor_gap",
+        "not_recorded",
+        "alignment_padding",
+        "not_applicable",
+        "redacted",
+        "unspecified"
+      ],
+      "title": "MissingReason",
+      "type": "string"
+    },
+    "MissingValues": {
+      "additionalProperties": false,
+      "description": "Why the timesteps of a modality can be missing, and the largest share a series may miss.\n\nA spec without this record allows no missing timestep. With it, a series may miss up to\n``max_fraction`` of its timesteps, and a consumer reads :attr:`reason` to decide how to treat\nthem. A series stores a missing timestep as an Arrow null.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/MissingReason"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
+        "max_fraction": {
+          "exclusiveMinimum": 0,
+          "maximum": 1,
+          "title": "Max Fraction",
+          "type": "number"
+        }
+      },
+      "required": [
+        "reason",
+        "max_fraction"
+      ],
+      "title": "MissingValues",
+      "type": "object"
+    },
     "ParentDatasetCard": {
       "additionalProperties": false,
       "description": "A copy of the card for a parent dataset used by a build.\n\nA child manifest stores these cards in ``parent_cards``, indexed by parent alias.\nThe card records the parent's exact release, license, citation, and access requirements.\nReaders can inspect this information without opening the parent dataset.",
@@ -606,14 +653,25 @@
           "title": "Dimension Names",
           "type": "array"
         },
-        "nullable": {
-          "default": false,
-          "title": "Nullable",
-          "type": "boolean"
+        "missing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MissingValues"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "modality": {
           "$ref": "#/$defs/InputModality",
           "default": "time_series"
+        },
+        "nullable": {
+          "deprecated": true,
+          "description": "Older flag. A reader turns true into missing with the reason 'unspecified'.",
+          "type": "boolean"
         }
       },
       "required": [
