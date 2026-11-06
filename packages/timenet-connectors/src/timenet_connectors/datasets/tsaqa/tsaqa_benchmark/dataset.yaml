@@ -14,6 +14,7 @@ description: >-
   question are Records of their own.
 license: MIT
 source_url: https://huggingface.co/datasets/TSAQA/TSAQA-Benchmark
+source_revision: 883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd
 citation: >-
   Jing et al. TSAQA: Time Series Analysis Question And Answering Benchmark.
   https://arxiv.org/abs/2601.23204
