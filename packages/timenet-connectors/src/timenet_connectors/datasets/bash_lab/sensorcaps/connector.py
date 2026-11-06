@@ -11,17 +11,19 @@ from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
 from functools import partial
 import json
-from typing import Annotated, ClassVar
+from typing import ClassVar
 
 import pyarrow as pa
-from pydantic import Field, FiniteFloat, JsonValue, Strict, TypeAdapter, ValidationError
+from pydantic import JsonValue
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.types import AnswerTask, Split, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.sources.channels import SharedChannelLoader
+from timenet_connectors.sources.fields import as_list
+from timenet_connectors.sources.signals import numeric_signal
 
 
 DECLARED_SAMPLING_RATE_HZ = 10
@@ -70,8 +72,6 @@ _PAMAP2_CHANNELS = (
     ),
 )
 _ROLES = ("system", "user", "assistant")
-_XYZValues = Annotated[list[Annotated[FiniteFloat, Strict()]], Field(min_length=3, max_length=3)]
-_SENSOR_VALUES = TypeAdapter(Annotated[list[_XYZValues], Field(min_length=1)])
 
 
 @dataclass(frozen=True)
@@ -99,7 +99,7 @@ class _ParsedRow:
     values: tuple[list[list[float]], list[list[float]]]
 
 
-def _sensor_values(text: str, name: str) -> list[list[float]]:
+def _sensor_values(text: str, spec: TimeSeriesSpec) -> list[list[float]]:
     """Decode and validate one time-major numeric xyz array.
 
     Returns:
@@ -108,11 +108,19 @@ def _sensor_values(text: str, name: str) -> list[list[float]]:
     Raises:
         TimeFValidationError: If the decoded values are empty, ragged, or nonnumeric.
     """
+    name = spec.name
     try:
         # Finite published values do not imply complete raw measurements: PAMAP2's
         # missing readings appear to have been zero-filled before upstream resampling.
-        return _SENSOR_VALUES.validate_json(text)
-    except ValidationError as exc:
+        rows = as_list(json.loads(text), name, nonempty=True)
+        result = []
+        for index, row in enumerate(rows):
+            values = numeric_signal(row, f"{name}[{index}]", spec=spec, n_values=len(_AXES), casting="float_rounding")
+            result.append(values.to_pylist())
+        return result
+    except TimeNetConnectorError as exc:
+        raise TimeFValidationError(str(exc)) from exc
+    except ValueError as exc:
         raise TimeFValidationError(f"{name}: {exc}") from exc
 
 
@@ -180,8 +188,8 @@ def _section_values(sections: dict[str, str]) -> tuple[list[list[float]], list[l
     for heading in ("Accelerometer", "Gyroscope"):
         if heading not in sections:
             raise TimeFValidationError(f"missing {heading} section")
-    accelerometer = _sensor_values(sections["Accelerometer"], "Accelerometer")
-    gyroscope = _sensor_values(sections["Gyroscope"], "Gyroscope")
+    accelerometer = _sensor_values(sections["Accelerometer"], _SPECS[0])
+    gyroscope = _sensor_values(sections["Gyroscope"], _SPECS[1])
     if len(accelerometer) != len(gyroscope):
         raise TimeFValidationError("Accelerometer and Gyroscope lengths differ")
     if len(accelerometer) != _EXPORTED_SAMPLES:

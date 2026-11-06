@@ -18,7 +18,6 @@ from functools import lru_cache
 import hashlib
 import itertools
 import json
-import math
 from pathlib import Path
 import re
 from typing import Any, ClassVar, NamedTuple, TypeVar
@@ -33,6 +32,7 @@ from timenet.json import JsonValue
 from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, Split, Task, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.sources.channels import SharedChannelLoader
+from timenet_connectors.sources.fields import numbers
 from timenet_connectors.sources.parquet import iter_parquet_rows
 
 
@@ -294,13 +294,7 @@ def _values_digest(series: Iterable[Sequence[float]]) -> bytes:
 
 
 def _series_values(value: Any) -> list[float]:
-    if not isinstance(value, list) or not value or not all(_is_finite(item) for item in value):
-        raise TimeNetConnectorError("a series is a nonempty JSON list of finite numbers")
-    return [float(item) for item in value]
-
-
-def _is_finite(item: Any) -> bool:
-    return isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item)
+    return numbers(value, "series").tolist()
 
 
 def _input_series(task: _Task, text: str) -> list[list[float]]:

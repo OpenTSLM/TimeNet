@@ -244,15 +244,15 @@ def test_pipeline_preserves_source_semantics_after_source_removal(monkeypatch, t
 @pytest.mark.parametrize(
     ("sensor", "pattern"),
     [
-        ("[]", "at least 1 item"),
-        ("{}", "valid array"),
-        ("[[1,2,3], [4,5]]", "at least 3 items"),
-        ("[[1,2,3,4]]", "at most 3 items"),
-        ('[[1,2,"3"], [4,5,6]]', "valid number"),
-        ("[[true,2,3]]", "valid number"),
+        ("[]", "nonempty list"),
+        ("{}", "nonempty list"),
+        ("[[1,2,3], [4,5]]", "expected 3 samples"),
+        ("[[1,2,3,4]]", "expected 3 samples"),
+        ('[[1,2,"3"], [4,5,6]]', "finite number"),
+        ("[[true,2,3]]", "finite number"),
         ("[[NaN,2,3], [4,5,6]]", "finite number"),
         ("[[Infinity,2,3]]", "finite number"),
-        ("not json", "Invalid JSON"),
+        ("not json", "Expecting value"),
         ("[[1,2,3]]", "lengths differ"),
     ],
 )

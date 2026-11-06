@@ -40,6 +40,7 @@ from timenet.types import (
 )
 from timenet.types.reference_keys import ParentAlias
 from timenet_connectors.download import Artifact, download_files, ensure_archive, find_dir_containing
+from timenet_connectors.sources.fields import error_context, parse_whole_number
 
 
 # The per-template answer options (the multiple-choice candidates), keyed by template_id. The URL
@@ -86,18 +87,6 @@ class EcgQaCotSource:
 
     answers_path: Path
     cot_csvs: tuple[tuple[Split, Path], ...]  # (split, csv_path) for train / validation / test
-
-
-def _parse_int(cell: str) -> int:
-    """Parse a whole number that a source CSV writes as a float, such as ``"56.0"``.
-
-    Args:
-        cell: The CSV cell.
-
-    Returns:
-        The integer value.
-    """
-    return int(float(cell))
 
 
 def _parse_ecg_id(raw: str) -> int:
@@ -152,7 +141,9 @@ def _ptbxl_recording(ecg_id: int, record: Record) -> _PtbxlRecording:
         raise TimeNetConnectorError(f"PTB-XL ecg_id {ecg_id}: sex is empty")
     if sex not in _SEXES:
         raise TimeNetConnectorError(f"PTB-XL ecg_id {ecg_id}: sex {sex!r} is not male or female")
-    return _PtbxlRecording(patient_id=_parse_int(patients[0]), age=age, sex=sex, annotations=values)
+    return _PtbxlRecording(
+        patient_id=parse_whole_number(patients[0], "patient_id"), age=age, sex=sex, annotations=values
+    )
 
 
 def _text(values: Mapping[str, object], key: str) -> str:
@@ -227,9 +218,12 @@ def _load_template_answers(path: Path) -> dict[int, tuple[str, ...]]:
     """
     answers: dict[int, tuple[str, ...]] = {}
     with path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            classes = ast.literal_eval(row["classes"])
-            answers[_parse_int(row["template_id"])] = tuple(str(option) for option in classes)
+        for index, row in enumerate(csv.DictReader(handle), start=1):
+            with error_context(f"{path} row {index}"):
+                classes = ast.literal_eval(row["classes"])
+                answers[parse_whole_number(row["template_id"], "template_id")] = tuple(
+                    str(option) for option in classes
+                )
     return answers
 
 
@@ -243,15 +237,17 @@ def _iter_cot_rows(csv_path: Path) -> Iterator[_CotRow]:
         Each parsed row. Rationale and clinical-context fields span multiple physical lines.
     """
     with csv_path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            yield _CotRow(
-                ecg_id=_parse_ecg_id(row["ecg_id"]),
-                template_id=_parse_int(row["template_id"]),
-                question_type=row["question_type"],
-                question=row["question"],
-                answer=row["answer"],
-                rationale=row["rationale"],
-            )
+        for index, row in enumerate(csv.DictReader(handle), start=1):
+            with error_context(f"{csv_path} row {index}"):
+                parsed = _CotRow(
+                    ecg_id=_parse_ecg_id(row["ecg_id"]),
+                    template_id=parse_whole_number(row["template_id"], "template_id"),
+                    question_type=row["question_type"],
+                    question=row["question"],
+                    answer=row["answer"],
+                    rationale=row["rationale"],
+                )
+            yield parsed  # ruff: ignore[unnecessary-assign-before-yield] - leave source context before yielding
 
 
 class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
