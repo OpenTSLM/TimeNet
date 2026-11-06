@@ -4,7 +4,7 @@ import struct
 
 import pytest
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet_connectors.bases import excel
 
 
@@ -17,7 +17,7 @@ _ROW = 7
 def test_a_file_that_is_not_a_workbook_raises_and_names_it(tmp_path: Path):
     path = tmp_path / "subjects.xls"
     path.write_text("this is not a workbook", encoding="utf-8")
-    with pytest.raises(TimeFFormatError, match=r"subjects\.xls"):
+    with pytest.raises(TimeNetConnectorError, match=r"subjects\.xls"):
         excel.read_table_rows(path)
 
 
@@ -41,18 +41,18 @@ def test_a_whole_number_decodes():
 
 
 def test_a_fraction_is_no_whole_number_and_raises():
-    with pytest.raises(TimeFFormatError, match=r"subjects\.xls row 7: age holds 44\.5"):
+    with pytest.raises(TimeNetConnectorError, match=r"subjects\.xls row 7: age holds 44\.5"):
         excel.decode_whole_number(44.5, "age", _WORKBOOK, _ROW)
 
 
 def test_a_bool_is_no_whole_number_and_raises():
     # A bool is an int in Python, so the decoder has to turn it down by name.
-    with pytest.raises(TimeFFormatError, match=r"subjects\.xls row 7: age holds True"):
+    with pytest.raises(TimeNetConnectorError, match=r"subjects\.xls row 7: age holds True"):
         excel.decode_whole_number(True, "age", _WORKBOOK, _ROW)
 
 
 def test_text_is_no_whole_number_and_raises():
-    with pytest.raises(TimeFFormatError, match=r"subjects\.xls row 7: age holds '44'"):
+    with pytest.raises(TimeNetConnectorError, match=r"subjects\.xls row 7: age holds '44'"):
         excel.decode_whole_number("44", "age", _WORKBOOK, _ROW)
 
 
@@ -69,20 +69,20 @@ def test_a_day_fraction_reads_to_the_second():
 
 
 def test_a_whole_day_is_no_time_of_day_and_raises():
-    with pytest.raises(TimeFFormatError, match=r"subjects\.xls row 7: the cell holds 1\.0"):
+    with pytest.raises(TimeNetConnectorError, match=r"subjects\.xls row 7: the cell holds 1\.0"):
         excel.decode_day_fraction_as_time(1.0, _WORKBOOK, _ROW)
 
 
 def test_more_than_a_day_raises():
-    with pytest.raises(TimeFFormatError, match=r"subjects\.xls row 7: the cell holds 1\.5"):
+    with pytest.raises(TimeNetConnectorError, match=r"subjects\.xls row 7: the cell holds 1\.5"):
         excel.decode_day_fraction_as_time(1.5, _WORKBOOK, _ROW)
 
 
 def test_a_negative_day_fraction_raises():
-    with pytest.raises(TimeFFormatError, match=r"subjects\.xls row 7: the cell holds -0\.25"):
+    with pytest.raises(TimeNetConnectorError, match=r"subjects\.xls row 7: the cell holds -0\.25"):
         excel.decode_day_fraction_as_time(-0.25, _WORKBOOK, _ROW)
 
 
 def test_a_cell_holding_text_is_no_day_fraction_and_raises():
-    with pytest.raises(TimeFFormatError, match=r"subjects\.xls row 7: the cell holds '01:05:00'"):
+    with pytest.raises(TimeNetConnectorError, match=r"subjects\.xls row 7: the cell holds '01:05:00'"):
         excel.decode_day_fraction_as_time("01:05:00", _WORKBOOK, _ROW)

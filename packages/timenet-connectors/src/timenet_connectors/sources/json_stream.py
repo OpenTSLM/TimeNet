@@ -14,7 +14,8 @@ from pathlib import Path
 import re
 from typing import Any, BinaryIO, Self
 
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeNetConnectorError
+from timenet_connectors.sources._json import distinct_fields
 
 
 _CHUNK_SIZE = 65536
@@ -26,23 +27,6 @@ _NOT_NUMBER = re.compile(r"[^-+.0-9eE]")
 # ever changes, test_a_string_split_across_reads_decodes_whole fails.
 _EDGE = 16
 _UNTERMINATED = "Unterminated string"
-
-
-def _distinct_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """Reject repeated fields instead of silently overwriting source data.
-
-    Returns:
-        The decoded object in source order.
-
-    Raises:
-        TimeFValidationError: If an object repeats a field name.
-    """
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise TimeFValidationError(f"duplicate key {key!r}")
-        result[key] = value
-    return result
 
 
 class JsonCursor:
@@ -61,7 +45,7 @@ class JsonCursor:
         # The file's byte at the handle's start, so offsets name bytes in the file even when the
         # handle holds only part of it.
         self.offset = offset
-        self.decoder = json.JSONDecoder(object_pairs_hook=_distinct_fields)
+        self.decoder = json.JSONDecoder(object_pairs_hook=distinct_fields)
         self.utf8 = codecs.getincrementaldecoder("utf-8")()
 
     @classmethod
@@ -100,7 +84,7 @@ class JsonCursor:
             False at the end of the file.
 
         Raises:
-            TimeFValidationError: If the bytes are not valid UTF-8.
+            TimeNetConnectorError: If the bytes are not valid UTF-8.
         """
         data = self.handle.read(size)
         try:
@@ -110,7 +94,7 @@ class JsonCursor:
             # The decoder reports a position in its pending bytes followed by this read's, and those
             # pending bytes follow the ones decoded into the buffer.
             byte = self.offset + self._byte_length(len(self.buffer)) + exc.start
-            raise TimeFValidationError(f"invalid UTF-8 at byte {byte}: {exc.reason}") from exc
+            raise TimeNetConnectorError(f"invalid UTF-8 at byte {byte}: {exc.reason}") from exc
         if not data:
             return False
         self.buffer = self.buffer[self.position :] + text
@@ -136,20 +120,20 @@ class JsonCursor:
         """Consume one expected structural character.
 
         Raises:
-            TimeFValidationError: If the next character is different.
+            TimeNetConnectorError: If the next character is different.
         """
         if self.peek() != token:
-            raise TimeFValidationError(f"expected {token!r} at byte {self.offset}")
+            raise TimeNetConnectorError(f"expected {token!r} at byte {self.offset}")
         self.consume(1)
 
     def expect_end(self) -> None:
         """Check that nothing but whitespace follows the document.
 
         Raises:
-            TimeFValidationError: If content follows the document.
+            TimeNetConnectorError: If content follows the document.
         """
         if self.peek():
-            raise TimeFValidationError("unexpected content after the JSON document")
+            raise TimeNetConnectorError("unexpected content after the JSON document")
 
     def value(self) -> tuple[Any, int, int]:
         """Decode the next complete value.
@@ -158,7 +142,7 @@ class JsonCursor:
             The value, and its UTF-8 byte offset and length.
 
         Raises:
-            TimeFValidationError: If the value is not valid UTF-8 or JSON, with the error's byte
+            TimeNetConnectorError: If the value is not valid UTF-8 or JSON, with the error's byte
                 offset in the message, or repeats a field.
         """
         self.peek()
@@ -171,10 +155,10 @@ class JsonCursor:
                 value, end = self.decoder.raw_decode(self.buffer, self.position)
             except json.JSONDecodeError as exc:
                 error = exc
-            except (ValueError, RecursionError) as exc:
+            except (TimeNetConnectorError, ValueError, RecursionError) as exc:
                 # A repeated key from the object hook, an integer too long to convert, or nesting
                 # too deep.
-                raise TimeFValidationError(f"{exc} in the value at byte {start}") from exc
+                raise TimeNetConnectorError(f"{exc} in the value at byte {start}") from exc
             else:
                 error = None
             if error is None:
@@ -194,7 +178,7 @@ class JsonCursor:
                     byte = self.offset + self._byte_length(error.pos)
                     # Some messages, such as "Unterminated string starting at", already end in "at".
                     message = error.msg.removesuffix(" at")
-                    raise TimeFValidationError(f"{message} at byte {byte}") from error
+                    raise TimeNetConnectorError(f"{message} at byte {byte}") from error
                 self.consume(end - self.position)
                 return value, start, self.offset - start
             size *= 2
@@ -209,7 +193,7 @@ class JsonCursor:
             Distinct string keys, with the cursor positioned after each colon.
 
         Raises:
-            TimeFValidationError: If object syntax or keys are invalid.
+            TimeNetConnectorError: If object syntax or keys are invalid.
         """
         self.expect("{")
         seen: set[str] = set()
@@ -219,10 +203,10 @@ class JsonCursor:
         while True:
             # Check before decoding, so a non-string key fails without reading it whole.
             if self.peek() != '"':
-                raise TimeFValidationError(f"expected a string key at byte {self.offset}")
+                raise TimeNetConnectorError(f"expected a string key at byte {self.offset}")
             key, key_offset, _ = self.value()
             if key in seen:
-                raise TimeFValidationError(f"duplicate key {key!r} at byte {key_offset}")
+                raise TimeNetConnectorError(f"duplicate key {key!r} at byte {key_offset}")
             seen.add(key)
             self.expect(":")
             yield key
@@ -239,7 +223,7 @@ def iter_object(path: Path) -> Iterator[tuple[str, Any, int, int]]:
         Each key, its decoded value, and the value's UTF-8 byte offset and length.
 
     Raises:
-        TimeFValidationError: If the document is not one object with distinct string keys, with the
+        TimeNetConnectorError: If the document is not one object with distinct string keys, with the
             file and key in the message.
     """
     context = str(path)
@@ -250,8 +234,8 @@ def iter_object(path: Path) -> Iterator[tuple[str, Any, int, int]]:
                 yield key, *cursor.value()
                 context = str(path)
             cursor.expect_end()
-    except TimeFValidationError as exc:
-        raise TimeFValidationError(f"{context}: {exc}") from exc
+    except (OSError, TimeNetConnectorError) as exc:
+        raise TimeNetConnectorError(f"{context}: {exc}") from exc
 
 
 def read_entry(path: Path, offset: int, length: int) -> Any:
@@ -268,7 +252,7 @@ def read_entry(path: Path, offset: int, length: int) -> Any:
         The decoded value.
 
     Raises:
-        TimeFFormatError: If the range cannot be read, ends early, or does not decode as one value
+        TimeNetConnectorError: If the range cannot be read, ends early, or does not decode as one value
             with distinct fields, as happens when the file changed since the traversal.
     """
     context = f"{path} (bytes {offset}-{offset + length})"
@@ -277,9 +261,9 @@ def read_entry(path: Path, offset: int, length: int) -> Any:
             handle.seek(offset)
             data = handle.read(length)
     except OSError as exc:
-        raise TimeFFormatError(f"{context}: {exc}") from exc
+        raise TimeNetConnectorError(f"{context}: {exc}") from exc
     if len(data) != length:
-        raise TimeFFormatError(f"{context}: the file ends after {len(data)} bytes of the range")
+        raise TimeNetConnectorError(f"{context}: the file ends after {len(data)} bytes of the range")
     cursor = JsonCursor(io.BytesIO(data), offset)
     try:
         # Buffer the whole range up front, so the value decodes in one pass. An empty range reads
@@ -287,6 +271,6 @@ def read_entry(path: Path, offset: int, length: int) -> Any:
         cursor.read(length)
         value, _, _ = cursor.value()
         cursor.expect_end()
-    except TimeFValidationError as exc:
-        raise TimeFFormatError(f"{context}: {exc}") from exc
+    except TimeNetConnectorError as exc:
+        raise TimeNetConnectorError(f"{context}: {exc}") from exc
     return value

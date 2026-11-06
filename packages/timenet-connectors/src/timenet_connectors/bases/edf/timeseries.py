@@ -11,7 +11,7 @@ import pyarrow as pa
 
 from timenet.dataset import Signal
 from timenet.dataset.axis import RegularAxis
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet.types import TimeSeriesSpec
 from timenet_connectors.bases.edf import reader
 
@@ -33,14 +33,16 @@ def build(
         One time series for each signal, in the order of the header.
 
     Raises:
-        TimeFFormatError: If the header names a signal that the spec table does not hold.
+        TimeNetConnectorError: If the header names a signal that the spec table does not hold.
     """
     header = file.header
     series = []
     for index, signal in enumerate(header.signals):
         spec = specs.get(signal)
         if spec is None:
-            raise TimeFFormatError(f"{file.path}: the header names a signal this release does not record: {signal!r}")
+            raise TimeNetConnectorError(
+                f"{file.path}: the header names a signal this release does not record: {signal!r}"
+            )
 
         samples_per_record = header.samples_per_record[index]
         series.append(

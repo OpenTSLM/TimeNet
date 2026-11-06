@@ -228,7 +228,7 @@ set. It is not necessary for a consumer to know the origin of a record.
 short file then looks like a whole one.
 
 **Decision.** The reader catches the warning that the library gives for a short file, and raises
-`TimeFFormatError`. A repair with no error hides a changed release.
+`TimeNetConnectorError`. A repair with no error hides a changed release.
 
 **Consequence.** A build stops on a truncated file. It writes no short recording that says nothing
 about its own length. A consumer never receives a record whose signals end early with no warning.
