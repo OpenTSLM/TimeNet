@@ -63,8 +63,7 @@ separate format version.
 
 A spec records its `missing` record: why timesteps can be missing, and the largest share a series
 may miss. Parquet stores the missing timesteps in Arrow validity bitmaps. Zarr stores them in
-validity arrays next to the values. Older manifests store a `nullable` flag instead, which a reader
-turns into a `missing` record with the reason `unspecified`.
+validity arrays next to the values.
 
 Direct construction and parsing with an unsupported `timef_format_version` raise Pydantic's
 `ValidationError`.

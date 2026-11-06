@@ -143,7 +143,6 @@ glucose = TimeSeriesSpec(
 | `alignment_padding` | The source aligned several series to one time grid, and this series covers only part of it. |
 | `not_applicable` | The quantity has no meaning at the timestep. |
 | `redacted` | The source removed the value on purpose. |
-| `unspecified` | The release was written before TimeF recorded a reason. Only a reader gives this reason. |
 
 Pass `None` for a missing timestep. Arrow stores missingness in a validity bitmap. This keeps a
 missing value distinct from a valid floating-point NaN. The writer rejects a null when the spec has
@@ -157,10 +156,6 @@ handle missing data before tensor conversion.
 
 Missingness applies to the complete timestep. TimeF rejects a partially missing multidimensional
 value.
-
-Manifests written before this record existed store a `nullable` flag instead. A reader turns
-`nullable: true` into a `missing` record with the reason `unspecified`, which allows any share of
-missing timesteps.
 
 ## Spans
 

@@ -107,8 +107,7 @@ compress well in DuckDB. `categories` and `dimension_names` are `VARCHAR[]` and 
 it between the Signals that use it.
 
 The three `missing_*` columns hold the spec's `MissingValues` record, and `nullable` is true exactly
-when they do. A release written before the record existed has only `nullable`. The reader reads
-NULL for the absent columns and gives such a spec the reason `unspecified`.
+when they do.
 
 Regular axes store a rational microsecond period and origin. Ordinal axes need only their type.
 Irregular axes store their endpoints in `axes` and their ordered microsecond time offsets in
