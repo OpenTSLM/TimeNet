@@ -82,6 +82,17 @@ prompt, write a function that builds the Task, as
 
 ---
 
+## People in a record
+
+Use `timenet_connectors.demographics` for subject identifiers, sex, and age annotations so
+consumers can interpret them consistently across datasets. Preserve the source's level of detail:
+keep an age band as an age band rather than inventing an exact age. Changes to stored annotations
+require a new dataset version.
+
+See the [demographics API reference](api/demographics.md) for builders and value conventions.
+
+---
+
 ## Assigning dataset splits
 
 Use `timenet_connectors.splitting` during conversion to assign source samples to partitions.

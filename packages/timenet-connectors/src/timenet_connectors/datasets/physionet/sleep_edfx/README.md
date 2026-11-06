@@ -218,8 +218,9 @@ value.
 **Decision.** The connector decodes each subject table with its own map before it builds an
 annotation. A record never carries a raw code.
 
-**Consequence.** `sex` reads `F` or `M` on every record of both studies, and the sex task draws
-from a two-member label set. It is not necessary for a consumer to know the origin of a record.
+**Consequence.** `sex` reads `female` or `male` on every record of both studies, the values of the
+shared `timenet_connectors.demographics.Sex`. The sex task draws from the shared `SEXES` label
+set. It is not necessary for a consumer to know the origin of a record.
 
 ### The connector does not repair a truncated file — **Handled**
 
