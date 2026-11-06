@@ -42,6 +42,6 @@ def validate_row(values: object, model: type[RowT], *, location: str) -> RowT:
         TimeNetConnectorError: If a field violates the model's contract.
     """
     try:
-        return model.model_validate(values, strict=True)
+        return model.model_validate(values)
     except ValidationError as exc:
         raise TimeNetConnectorError(row_error_message(exc, location)) from exc

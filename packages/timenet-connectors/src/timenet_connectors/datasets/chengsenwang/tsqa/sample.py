@@ -1,8 +1,25 @@
 """Parsed TSQA rows and the keys used for dataset splitting."""
 
 from dataclasses import dataclass
-import json
-from typing import Any
+from typing import Annotated, Any, cast
+
+from pydantic import Field, Json
+
+from timenet_connectors.sources.rows import NonBlankText, SourceRow, validate_row
+
+
+_NumericSeries = Annotated[list[int | float], Field(min_length=1)]
+
+
+class _TSQARow(SourceRow):
+    """Published TSQA columns; series may be flat or multichannel JSON."""
+
+    task: NonBlankText = Field(alias="Task")
+    question: NonBlankText = Field(alias="Question")
+    answer: NonBlankText = Field(alias="Answer")
+    label: str | None = Field(default=None, alias="Label")
+    size: int | None = Field(default=None, alias="Size")
+    series: Json[_NumericSeries | Annotated[list[_NumericSeries], Field(min_length=1)]] = Field(alias="Series")
 
 
 @dataclass(frozen=True)
@@ -22,13 +39,14 @@ class TSQASample:
         Returns:
             A sample whose numeric signal values also serve as its grouping key.
         """
-        series = json.loads(row["Series"])
-        channels = series if series and isinstance(series[0], list) else [series]
+        parsed = validate_row(row, _TSQARow, location="TSQA row")
+        series = parsed.series
+        channels = cast("list[list[int | float]]", series if isinstance(series[0], list) else [series])
         return cls(
-            category=row["Task"],
-            question=row["Question"],
-            answer=row["Answer"],
-            label=row.get("Label"),
+            category=parsed.task,
+            question=parsed.question,
+            answer=parsed.answer,
+            label=parsed.label,
             signals=tuple(tuple(float(value) for value in channel) for channel in channels),
         )
 
