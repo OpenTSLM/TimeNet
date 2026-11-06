@@ -19,6 +19,16 @@ description: >-
   environmental sensors, ECG, cloud monitoring, web servers, machine sensors, and traffic. Each
   question becomes a classification task whose target is the released label, "Normal Point" or
   "Anomaly Point". The file repeats 1,146 question-and-answer pairs.
+
+  The classification file has 37,000 questions about human activity, half from WISDM and half from
+  Daphnet. A WISDM question prints 10 timestamps of a phone accelerometer at 20 Hz as 30 values, the
+  X, Y, and Z values of each timestamp in turn, and asks for one of six activities. A Daphnet
+  question prints one timestamp of accelerometers on the ankle, thigh, and hip at 64 Hz as 9 values,
+  and asks whether the gait froze. The dataset gives each window one Signal per axis, as the
+  question text lays the values out, with a regular axis at the stated rate. The WISDM values are in
+  meters per second squared, because the question states that 10 represents 1g; the Daphnet values
+  are in milli-g, as the question states. Each question becomes a classification task whose target
+  is the released label. The file repeats 38 question-and-answer pairs.
 license: Apache-2.0
 source_url: https://huggingface.co/datasets/Time-MQA/TSQA
 citation: >-

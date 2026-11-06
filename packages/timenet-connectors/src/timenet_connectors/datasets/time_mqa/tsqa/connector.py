@@ -11,6 +11,7 @@ from typing import ClassVar
 from timenet.dataset import TimeFDataset
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.datasets.time_mqa.tsqa.anomaly_detection import AnomalyDetectionRow
+from timenet_connectors.datasets.time_mqa.tsqa.classification import ClassificationRow
 from timenet_connectors.datasets.time_mqa.tsqa.release import (
     HF_REPO,
     SOURCE_FILES,
@@ -24,6 +25,7 @@ from timenet_connectors.datasets.time_mqa.tsqa.release import (
 
 _PARSERS: Mapping[TaskFamily, Callable[[ReleaseRow], TaskRow]] = {
     TaskFamily.ANOMALY_DETECTION: AnomalyDetectionRow.from_release_row,
+    TaskFamily.CLASSIFICATION: ClassificationRow.from_release_row,
 }
 """The parser of each task family."""
 
