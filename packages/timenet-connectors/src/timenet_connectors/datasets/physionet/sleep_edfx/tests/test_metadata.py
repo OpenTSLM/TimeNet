@@ -4,8 +4,8 @@ import pytest
 
 from timenet.errors import TimeFValidationError
 from timenet.types import US_PER_S
-from timenet_connectors.datasets.physionet.sleep_edfx import metadata
-from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
+from timenet_connectors.datasets.physionet.sleep_edfx import records as metadata
+from timenet_connectors.datasets.physionet.sleep_edfx.labels import AnnotationKey
 from timenet_connectors.demographics import Sex
 
 

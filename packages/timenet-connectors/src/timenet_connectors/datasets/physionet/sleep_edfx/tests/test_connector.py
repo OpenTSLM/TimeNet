@@ -19,15 +19,15 @@ from timenet.types import (
     read_value,
 )
 from timenet_connectors.bases import excel
-from timenet_connectors.datasets.physionet.sleep_edfx import tables, tasks
-from timenet_connectors.datasets.physionet.sleep_edfx.connector import (
-    SleepEdfxConnector,
+from timenet_connectors.datasets.physionet.sleep_edfx import labels, source
+from timenet_connectors.datasets.physionet.sleep_edfx.connector import SleepEdfxConnector
+from timenet_connectors.datasets.physionet.sleep_edfx.labels import AnnotationKey
+from timenet_connectors.datasets.physionet.sleep_edfx.source import (
     SleepEdfxSource,
-    _find_hypnogram,
-    _parse_recording_number,
-    _parse_subject_id,
+    find_hypnogram,
+    parse_recording_number,
+    parse_subject_id,
 )
-from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 
 
 # This is a synthetic release of two cassette recordings. These tests write it, and it holds no
@@ -119,7 +119,7 @@ def release(tmp_path_factory) -> Path:
 
 
 def _convert(
-    release: Path, monkeypatch, rows=None, study: str = _STUDY, table: str = tables.CASSETTE_TABLE_NAME
+    release: Path, monkeypatch, rows=None, study: str = _STUDY, table: str = source.CASSETTE_TABLE_NAME
 ) -> TimeFDataset:
     # This line replaces the function that reads the .xls subject table. The code that follows
     # takes rows, so this build needs no .xls file.
@@ -165,37 +165,37 @@ def _asked(task) -> tuple[str, ...]:
 
 
 def test_a_recording_name_states_a_subject_number_and_a_night():
-    assert _parse_recording_number(_STUDY, "SC4902E0", Path("SC4902E0-PSG.edf")) == (90, 2)
+    assert parse_recording_number(_STUDY, "SC4902E0", Path("SC4902E0-PSG.edf")) == (90, 2)
 
 
 def test_a_telemetry_recording_name_states_its_own_numbers():
-    assert _parse_recording_number("sleep-telemetry", "ST7911J0", Path("ST7911J0-PSG.edf")) == (91, 1)
+    assert parse_recording_number("sleep-telemetry", "ST7911J0", Path("ST7911J0-PSG.edf")) == (91, 1)
 
 
 def test_the_subject_id_names_the_study_and_the_number():
-    assert _parse_subject_id(_STUDY, "SC4931E0", Path("SC4931E0-PSG.edf")) == "sleep-cassette-93"
+    assert parse_subject_id(_STUDY, "SC4931E0", Path("SC4931E0-PSG.edf")) == "sleep-cassette-93"
 
 
 def test_a_name_that_does_not_fit_the_shape_raises():
     with pytest.raises(TimeNetConnectorError, match="names no subject"):
-        _parse_recording_number(_STUDY, "SCXXXXX0", Path("SCXXXXX0-PSG.edf"))
+        parse_recording_number(_STUDY, "SCXXXXX0", Path("SCXXXXX0-PSG.edf"))
 
 
 def test_a_study_this_release_does_not_hold_raises():
     with pytest.raises(TimeNetConnectorError, match="not a study of this release"):
-        _parse_recording_number("sleep-apnea", "SC4901E0", Path("SC4901E0-PSG.edf"))
+        parse_recording_number("sleep-apnea", "SC4901E0", Path("SC4901E0-PSG.edf"))
 
 
 def test_a_name_stating_a_third_night_raises():
     with pytest.raises(TimeNetConnectorError, match="states night 3"):
-        _parse_recording_number(_STUDY, "SC4903E0", Path("SC4903E0-PSG.edf"))
+        parse_recording_number(_STUDY, "SC4903E0", Path("SC4903E0-PSG.edf"))
 
 
 def test_a_recording_with_no_scoring_beside_it_raises(tmp_path: Path):
     psg = tmp_path / "SC4901E0-PSG.edf"
     psg.touch()
     with pytest.raises(TimeNetDownloadError, match="found none"):
-        _find_hypnogram(psg)
+        find_hypnogram(psg)
 
 
 def test_a_recording_with_two_scorings_raises(tmp_path: Path):
@@ -204,7 +204,7 @@ def test_a_recording_with_two_scorings_raises(tmp_path: Path):
     (tmp_path / "SC4901EC-Hypnogram.edf").touch()
     (tmp_path / "SC4901ED-Hypnogram.edf").touch()
     with pytest.raises(TimeNetDownloadError, match=r"SC4901EC-Hypnogram\.edf, SC4901ED-Hypnogram\.edf"):
-        _find_hypnogram(psg)
+        find_hypnogram(psg)
 
 
 def test_one_record_for_each_recording(release, monkeypatch):
@@ -348,7 +348,7 @@ def test_every_classification_task_shares_one_of_the_label_sets(release, monkeyp
     dataset = _convert(release, monkeypatch)
     used = {id(one.label_set) for one in _streamed(dataset) if isinstance(one, ClassificationTask)}
     # The fixture holds cassette recordings only, so no task asks for a telemetry condition.
-    assert used == {id(tasks.SLEEP_STAGES), id(tasks.SEXES)}
+    assert used == {id(labels.SLEEP_STAGES), id(labels.SEXES)}
 
 
 def test_an_epoch_task_covers_each_scored_epoch(release, monkeypatch):
@@ -412,7 +412,7 @@ def test_a_telemetry_record_carries_the_condition_of_its_night(tmp_path: Path, m
         monkeypatch,
         rows=_TELEMETRY_ROWS,
         study=_TELEMETRY_STUDY,
-        table=tables.TELEMETRY_TABLE_NAME,
+        table=source.TELEMETRY_TABLE_NAME,
     )
     conditions = _annotations(dataset, "ST7911J0", AnnotationKey.CONDITION)
     assert [one.value for one in conditions] == ["placebo"]
