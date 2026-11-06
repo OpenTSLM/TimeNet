@@ -1,0 +1,3 @@
+# Downloads the pinned CSV files from the Hub. 1.1 is the first version whose snapshot_download
+# reports file bytes to tqdm_class.
+huggingface_hub>=1.1
