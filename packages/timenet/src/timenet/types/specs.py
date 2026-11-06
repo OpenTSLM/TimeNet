@@ -89,7 +89,7 @@ Unit = Annotated[pint.Unit, *unit_metadata(validator=_to_required_unit, nullable
 
 
 @dataclass(frozen=True)
-class Codebook:
+class EnumSpecCodebook:
     """The categories of an enum spec, in code order.
 
     A code is the zero-based position of a category in :attr:`labels`. ``ordered`` says whether a
@@ -199,7 +199,7 @@ class TimeSeriesSpec(TimeFModel):
     """Semantic input kind. Set IMAGE, AUDIO, or TEXT for Signals that carry those kinds of data."""
 
     @property
-    def codebook(self) -> Codebook:
+    def codebook(self) -> EnumSpecCodebook:
         """The categories of an enum spec, with their order.
 
         Raises:
@@ -207,7 +207,7 @@ class TimeSeriesSpec(TimeFModel):
         """
         if self.dtype != "enum":
             raise TimeFValidationError(f"spec {self.spec_type!r} holds {self.dtype} values, so it has no codebook")
-        return Codebook(labels=self.categories, ordered=self.ordered)
+        return EnumSpecCodebook(labels=self.categories, ordered=self.ordered)
 
     @model_validator(mode="after")
     def _valid_contract(self) -> Self:

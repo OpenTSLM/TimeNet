@@ -27,7 +27,7 @@ from timenet.types.spans import (
     TimePoint,
     TimeSpan,
 )
-from timenet.types.specs import Codebook, TimeSeriesSpec
+from timenet.types.specs import EnumSpecCodebook, TimeSeriesSpec
 from timenet.types.splits import Split, parse_split
 from timenet.types.tasks import (
     TASKS,
@@ -59,11 +59,11 @@ __all__ = [
     "AnswerTask",
     "ArrayHandle",
     "ClassificationTask",
-    "Codebook",
     "DatasetMetadata",
     "DatasetSchema",
     "Domain",
     "EntityId",
+    "EnumSpecCodebook",
     "ForecastingTask",
     "InputModality",
     "Label",
