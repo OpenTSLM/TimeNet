@@ -21,7 +21,7 @@ from timenet.manifest import BuildEnvironment, GitSource
 
 TIMENET_DISTRIBUTIONS = ("timenet", "timenet-connectors")
 """The distributions whose git commit a build records. Each one that is installed must have a known
-commit and no local changes before a build publishes to a registry that is not local."""
+commit and no local changes before a build publishes to a remote registry."""
 
 BUILD_INFO_FILE = "_build_info.json"
 """The commit record that ``scripts/build_dists.py`` writes into each package of a wheel."""
@@ -64,7 +64,7 @@ def git_snapshot() -> Generator[None]:
 def require_traceable() -> None:
     """Refuse to publish a build whose TimeNet code cannot be traced to a commit.
 
-    A release in a registry that is not local outlives the machine that built it, so its manifest
+    A release in a remote registry outlives the machine that built it, so its manifest
     must name the exact code. Each installed TimeNet distribution needs a known commit and no local
     changes. Inside :func:`git_snapshot`, the check uses the snapshot.
 
@@ -78,7 +78,7 @@ def require_traceable() -> None:
 def require_unchanged(recorded: BuildEnvironment) -> None:
     """Refuse to upload a manifest that does not name the TimeNet code installed now.
 
-    A registry that is not local calls this after the write and before the upload. The check reads
+    A remote registry calls this after the write and before the upload. The check reads
     git again, outside any snapshot. If the code changed while the build ran, the manifest names a
     state that no longer exists, and nothing is uploaded.
 
@@ -163,21 +163,13 @@ def local_source_path(dist: Distribution) -> Path | None:
 
 
 def _lookup() -> dict[str, GitSource | UnknownCommit]:
-    """Return the active snapshot, or read git if no snapshot is active.
-
-    Returns:
-        The commit or the reason it is unknown, keyed by installed distribution.
-    """
+    """Return the active snapshot, or read git if no snapshot is active."""
     snapshot = _SNAPSHOT.get()
     return snapshot if snapshot is not None else _read_git()
 
 
 def _refuse_untraceable(commits: dict[str, GitSource | UnknownCommit]) -> None:
-    """Raise if a distribution in ``commits`` has no known commit or has local changes.
-
-    Raises:
-        TimeNetBuildError: If a distribution cannot be traced to a commit.
-    """
+    """Raise ``TimeNetBuildError`` if a distribution in ``commits`` has no known commit or has local changes."""
     unknown = [f"{name} ({commit.reason})" for name, commit in commits.items() if isinstance(commit, UnknownCommit)]
     changed = [
         f"{name} at {commit['sha'][:12]}"
@@ -186,7 +178,7 @@ def _refuse_untraceable(commits: dict[str, GitSource | UnknownCommit]) -> None:
     ]
     if not unknown and not changed:
         return
-    parts = ["refusing to publish to a registry that is not local, because its manifest must name the exact code"]
+    parts = ["refusing to publish to a remote registry, because its manifest must name the exact code"]
     if changed:
         parts.append(f"Uncommitted changes in the package directory of {', '.join(changed)}. Commit them first")
     if unknown:

@@ -156,7 +156,7 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
             the engine read. Nothing is published then.
         TimeNetAccessError: If the registry is not local, and the card, or the composed dataset with
             its lineage, is not open.
-        TimeNetBuildError: If the registry is not local, and an installed TimeNet distribution has
+        TimeNetBuildError: If the registry is remote, and an installed TimeNet distribution has
             local changes or no known git commit. Nothing is downloaded then.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, require_open_access, and require_traceable
     resolved_backend = _resolve_values_backend(connector, values_backend)

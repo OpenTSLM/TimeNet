@@ -116,9 +116,9 @@ release that sets it. For a card, this is the `access_url` of the card.
 
 ## Traceable builds
 
-A release in a registry that is not local outlives the machine that built it. Its manifest must
-name the exact code that built it, so a publish to such a registry needs a known git commit for
-each installed `timenet` and `timenet-connectors` distribution, and no uncommitted changes in their
+A release in a remote registry outlives the machine that built it. Its manifest must name the
+exact code that built it, so a publish to such a registry needs a known git commit for each
+installed `timenet` and `timenet-connectors` distribution, and no uncommitted changes in their
 package directories. The [manifest](manifest.md) describes where each install finds its commit.
 There is no override. Commit the changes first, or build to a local directory, which records the
 state and does not refuse.
