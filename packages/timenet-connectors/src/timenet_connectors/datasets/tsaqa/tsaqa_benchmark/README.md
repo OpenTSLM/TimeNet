@@ -420,7 +420,12 @@ multiple-choice question offers A to D in order, the answer fits the question's 
 or patch of a data transformation or temporal relationship question prints one series, and every
 series is a nonempty list of finite numbers. The series values stay in the files until they are
 written, and the connector rereads a file when the writer comes back to it. A reread fails if the
-lengths or the values of a row's series differ from the build. Everything is in `connector.py`.
+lengths or the values of a row's series differ from the build.
+
+The code follows the connector layout in `docs/connectors.md`. `source.py` reads and checks the
+rows and rereads their series, `records.py` builds the Records, `tasks.py` builds the tasks, and
+`labels.py` holds the fixed values. `issues.py` holds `without_source_issues`. `connector.py` holds
+only the connector class.
 
 The tests read a small fixture release, real rows of the pinned release with all their columns
 (`tests/README.md` names each one).
