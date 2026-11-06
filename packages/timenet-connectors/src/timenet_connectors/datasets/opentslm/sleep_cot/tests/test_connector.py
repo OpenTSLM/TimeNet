@@ -17,7 +17,7 @@ from timenet_connectors.datasets.opentslm.sleep_cot.connector import (
     SLEEP_COT_SHA256,
     SLEEP_STAGE,
     SleepCotConnector,
-    SleepCotRelease,
+    SleepCotReader,
 )
 
 
@@ -62,7 +62,7 @@ def _write_release(
     validation: list[int] = _VALIDATION_POSITIONS,
     test: list[int] = _TEST_POSITIONS,
     source_sha256: str = SLEEP_COT_SHA256,
-) -> SleepCotRelease:
+) -> SleepCotReader:
     csv_path = directory / "sleep_cot.csv"
     with csv_path.open("w", newline="", encoding="utf-8") as stream:
         writer = csv.DictWriter(stream, fieldnames=COLUMNS)
@@ -71,7 +71,7 @@ def _write_release(
     splits_path = directory / "splits.json"
     splits = {"source_sha256": source_sha256, "validation": validation, "test": test}
     splits_path.write_text(json.dumps(splits), encoding="utf-8")
-    return SleepCotRelease(csv_path=csv_path, splits_path=splits_path)
+    return SleepCotReader(csv_path=csv_path, splits_path=splits_path)
 
 
 def test_each_window_becomes_a_record_and_a_classification_task(tmp_path):
@@ -90,20 +90,17 @@ def test_each_window_becomes_a_record_and_a_classification_task(tmp_path):
         assert task.targets is not None
         assert read_value(task.targets[0]) == row["label"]
         assert read_value(task.rationale) == row["rationale"]
-        # The generation prompt names the answer. It is task provenance and never a model input.
+        # The generation prompt of the release names the answer, so the dataset does not keep it.
         assert task.prompt is None
-        assert task.input_annotations == ()
-        (annotation,) = task.annotations
-        assert annotation.key == "rationale_generation_prompt"
-        assert read_value(annotation.value) == row["prompt"]
+        assert task.annotations == ()
 
 
 @pytest.mark.parametrize(
     ("splits", "message"),
     [
         ({"source_sha256": "0" * 64}, "the split was made from the CSV 0+, not from the pinned"),
-        ({"test": [1]}, "the split names row 1 twice"),
-        ({"test": [len(_ROWS)]}, f"names row {len(_ROWS)} twice or outside the {len(_ROWS)} rows"),
+        ({"test": [1]}, r"rows \[1\] are named more than once"),
+        ({"test": [len(_ROWS)]}, rf"names rows \[{len(_ROWS)}\], past the {len(_ROWS)} rows"),
     ],
     ids=["another release CSV", "a row in two splits", "a row past the end"],
 )
@@ -118,8 +115,9 @@ def test_a_split_file_that_does_not_fit_the_release_raises(tmp_path, splits, mes
         ({"time_series": json.dumps([_window(0.0)[0][:-1]])}, _WINDOW_ERROR),
         ({"time_series": json.dumps([[None, *_window(0.0)[0][1:]]])}, _WINDOW_ERROR),
         ({"id": "sc4102"}, "id 'sc4102' is not a Sleep-EDF recording name"),
+        ({"label": "N5"}, "label 'N5' is not one of"),
     ],
-    ids=["one value too few", "a null value", "a cut recording name"],
+    ids=["one value too few", "a null value", "a cut recording name", "an unknown label"],
 )
 def test_a_malformed_row_raises_with_its_location(tmp_path, change, message):
     rows = [*_ROWS[:2], _ROWS[2] | change]

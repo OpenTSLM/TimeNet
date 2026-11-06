@@ -13,9 +13,8 @@ description: >-
   windows of one recording are in every split. Each record states the Sleep-EDF recording name in
   lower case, and the subject in the form of the physionet/sleep-edfx dataset. GPT-4o
   (gpt-4o-2024-08-06, temperature 0.3, seed 42) wrote each rationale from a plot of the window,
-  the correct stage, and one dissimilar stage. Each task keeps that prompt as its
-  rationale_generation_prompt annotation. In 3 windows, the rationale concludes with the
-  dissimilar stage. In 4 more, it ends without the "Answer:" form. The dataset keeps these
+  the correct stage, and one dissimilar stage. The dataset does not keep that prompt, because it
+  names the correct stage. In 3 windows, the rationale concludes with the dissimilar stage. In 4 more, it ends without the "Answer:" form. The dataset keeps these
   windows as released.
 
   Sleep experts assigned a stage to each original EEG window. The released CSV gives a different
@@ -31,7 +30,7 @@ description: >-
   prompts and generated explanations under MIT.
 license: ODC-By-1.0
 license_url: https://opendatacommons.org/licenses/by/1-0/
-source_url: https://github.com/OpenTSLM/OpenTSLM
+source_url: https://polybox.ethz.ch/index.php/s/ZryWSdCFJZ9JR3R
 citation: >-
   Langer, P., et al. (2025). OpenTSLM: Time-Series Language Models for Reasoning over Multivariate
   Medical Text- and Time-Series Data. https://doi.org/10.48550/arXiv.2510.02410. EEG from Sleep-EDF:

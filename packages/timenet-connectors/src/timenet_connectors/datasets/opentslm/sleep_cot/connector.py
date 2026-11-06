@@ -5,10 +5,11 @@ recording, at 50 Hz, so each window has 1500 values. Each row becomes one Record
 ClassificationTask. The target is the sleep stage. The rationale is the GPT-4o text that leads to
 the stage.
 
-GPT-4o prompts used to generate the rationales are attached to the tasks as annotations.
+The release also holds the GPT-4o prompt that produced each rationale. The connector does not
+keep it, because the prompt names the correct stage and the OpenTSLM paper documents it.
 """
 
-from collections.abc import Mapping
+from collections import Counter
 import csv
 from dataclasses import dataclass
 import json
@@ -17,7 +18,7 @@ import re
 from typing import Self
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, NonNegativeInt, ValidationError
+from pydantic import BaseModel, ConfigDict, NonNegativeInt, ValidationError, model_validator
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -58,7 +59,7 @@ _RECORDING_NAME = re.compile(r"(?P<study>sc4|st7)(?P<subject>[0-9]{2})[0-9][a-z]
 _STUDIES = {"sc4": "sleep-cassette", "st7": "sleep-telemetry"}
 
 
-def _parse_window(row: Mapping[str, str], *, location: str) -> np.ndarray:
+def _parse_window(row: dict[str, str]) -> np.ndarray:
     """Parse the time_series cell of a row, one list of numbers inside a list, into float64 values.
 
     The cells are Python list literals of floats. JSON reads them to the same values, and faster
@@ -70,7 +71,7 @@ def _parse_window(row: Mapping[str, str], *, location: str) -> np.ndarray:
     Raises:
         TimeNetConnectorError: If the cell does not hold one list of 1500 finite numbers.
     """
-    message = f"{location}: time_series must hold one list of {SAMPLES_PER_WINDOW} finite numbers"
+    message = f"time_series must hold one list of {SAMPLES_PER_WINDOW} finite numbers"
     try:
         values = np.array(json.loads(row["time_series"]), dtype=np.float64)
     except (TypeError, ValueError) as exc:
@@ -81,7 +82,7 @@ def _parse_window(row: Mapping[str, str], *, location: str) -> np.ndarray:
     return values[0]
 
 
-def _parse_subject_id(row: Mapping[str, str], *, location: str) -> str:
+def _parse_subject_id(row: dict[str, str]) -> str:
     """Get the subject ID from a row's Sleep-EDF recording name.
 
     Returns:
@@ -92,35 +93,37 @@ def _parse_subject_id(row: Mapping[str, str], *, location: str) -> str:
     """
     match = _RECORDING_NAME.fullmatch(row["id"])
     if match is None:
-        raise TimeNetConnectorError(f"{location}: id {row['id']!r} is not a Sleep-EDF recording name")
+        raise TimeNetConnectorError(f"id {row['id']!r} is not a Sleep-EDF recording name")
     return f"{_STUDIES[match['study']]}-{match['subject']}"
 
 
 @dataclass(frozen=True)
 class SleepCotRow:
-    """A recording, EEG values, sleep stage, prompt, and rationale for one window."""
+    """A recording, EEG values, sleep stage, and rationale for one window."""
 
     recording_id: str
     subject_id: str
     eeg: np.ndarray
     label: str
-    generation_prompt: str
-    """The prompt used to generate the rationale, including the correct sleep stage."""
     rationale: str
 
     @classmethod
-    def from_csv_row(cls, row: Mapping[str, str], *, location: str) -> Self:
+    def from_csv_row(cls, row: dict[str, str]) -> Self:
         """Parse one data row of the release.
 
         Returns:
             The parsed row.
+
+        Raises:
+            TimeNetConnectorError: If the label is not a stage of the label set.
         """
+        if row["label"] not in SLEEP_STAGE.names:
+            raise TimeNetConnectorError(f"label {row['label']!r} is not one of {SLEEP_STAGE.names}")
         return cls(
             recording_id=row["id"],
-            subject_id=_parse_subject_id(row, location=location),
-            eeg=_parse_window(row, location=location),
+            subject_id=_parse_subject_id(row),
+            eeg=_parse_window(row),
             label=row["label"],
-            generation_prompt=row["prompt"],
             rationale=row["rationale"],
         )
 
@@ -131,11 +134,9 @@ class SleepCotRow:
             The new record.
         """
         signal = Signal.from_values(self.eeg, spec=EEG, name="EEG Fpz-Cz", time_axis=SAMPLED_AT_50_HZ)
-        return Record(
-            sources=(Source(name="EEG", signals=(signal,)),),
-            annotations=(Annotation(key="subject_ids", value=[self.subject_id]),),
-            metadata={"recording_id": self.recording_id},
-        )
+        source = Source(name="EEG", signals=(signal,))
+        subject = Annotation(key="subject_ids", value=[self.subject_id])
+        return Record(sources=(source,), annotations=(subject,), metadata={"recording_id": self.recording_id})
 
     def create_classification_task(self, record: Record, *, split: Split) -> ClassificationTask:
         """Create a sleep stage classification task for the window.
@@ -143,38 +144,13 @@ class SleepCotRow:
         Returns:
             The new task.
         """
-        generation_prompt = Annotation(
-            key="rationale_generation_prompt",
-            value=self.generation_prompt,
-            description="The GPT-4o prompt that produced the rationale. It names the correct stage.",
-        )
         return ClassificationTask(
             inputs=(record,),
             targets=(self.label,),
             label_set=SLEEP_STAGE,
             rationale=self.rationale,
             split=split,
-            annotations=(generation_prompt,),
         )
-
-
-def read_rows(path: Path) -> list[SleepCotRow]:
-    """Read every data row of the release, in file order.
-
-    Returns:
-        The parsed rows.
-
-    Raises:
-        TimeNetConnectorError: If the header is not the expected one.
-    """
-    with path.open(newline="", encoding="utf-8") as stream:
-        reader = csv.DictReader(stream)
-        if tuple(reader.fieldnames or ()) != COLUMNS:
-            raise TimeNetConnectorError(f"{path.name}: expected columns {COLUMNS}, got {reader.fieldnames}")
-        return [
-            SleepCotRow.from_csv_row(row, location=f"{path.name} data row {number}")
-            for number, row in enumerate(reader, start=1)
-        ]
 
 
 class FrozenSplits(BaseModel):
@@ -189,6 +165,18 @@ class FrozenSplits(BaseModel):
     """SHA-256 digest of the release CSV used to create the split."""
     validation: tuple[NonNegativeInt, ...]
     test: tuple[NonNegativeInt, ...]
+
+    @model_validator(mode="after")
+    def _each_row_in_one_split(self) -> Self:
+        repeated = sorted(position for position, count in Counter(self.positions).items() if count > 1)
+        if repeated:
+            raise ValueError(f"rows {repeated} are named more than once")
+        return self
+
+    @property
+    def positions(self) -> tuple[int, ...]:
+        """The validation and test positions together."""
+        return (*self.validation, *self.test)
 
     @classmethod
     def read_from_file(cls, path: Path) -> Self:
@@ -212,57 +200,87 @@ class FrozenSplits(BaseModel):
             The split for each row; rows absent from the file belong to the train split.
 
         Raises:
-            TimeNetConnectorError: If the CSV digest differs or a row position is invalid or repeated.
+            TimeNetConnectorError: If the CSV digest differs or a row position is past the last row.
         """
         if self.source_sha256 != SLEEP_COT_SHA256:
             raise TimeNetConnectorError(
                 f"the split was made from the CSV {self.source_sha256}, not from the pinned {SLEEP_COT_SHA256}"
             )
-        splits = [Split.TRAIN] * n_rows
-        for split, positions in ((Split.VALIDATION, self.validation), (Split.TEST, self.test)):
-            for position in positions:
-                if position >= n_rows or splits[position] is not Split.TRAIN:
-                    raise TimeNetConnectorError(f"the split names row {position} twice or outside the {n_rows} rows")
-                splits[position] = split
-        return splits
+        past_the_end = sorted(position for position in self.positions if position >= n_rows)
+        if past_the_end:
+            raise TimeNetConnectorError(f"the split names rows {past_the_end}, past the {n_rows} rows of the CSV")
+        split_by_position = dict.fromkeys(self.validation, Split.VALIDATION) | dict.fromkeys(self.test, Split.TEST)
+        return [split_by_position.get(position, Split.TRAIN) for position in range(n_rows)]
 
 
 @dataclass(frozen=True)
-class SleepCotRelease:
-    """Paths to the release CSV and its saved row split."""
+class SleepCotReader:
+    """Reader for the release CSV and the frozen split of its rows."""
 
     csv_path: Path
     splits_path: Path
 
+    def read_rows(self) -> list[SleepCotRow]:
+        """Read every data row of the release, in file order.
 
-class SleepCotConnector(BaseConnector[SleepCotRelease]):
+        Returns:
+            The parsed rows.
+
+        Raises:
+            TimeNetConnectorError: If the header is not the expected one, or a data row is malformed.
+                The message names the file and the data row.
+        """
+        rows = []
+        with self.csv_path.open(newline="", encoding="utf-8") as stream:
+            reader = csv.DictReader(stream)
+            if tuple(reader.fieldnames or ()) != COLUMNS:
+                raise TimeNetConnectorError(
+                    f"{self.csv_path.name}: expected columns {COLUMNS}, got {reader.fieldnames}"
+                )
+            for number, row in enumerate(reader, start=1):
+                try:
+                    rows.append(SleepCotRow.from_csv_row(row))
+                except TimeNetConnectorError as exc:
+                    raise TimeNetConnectorError(f"{self.csv_path.name} data row {number}: {exc}") from exc
+        return rows
+
+    def read_splits(self, n_rows: int) -> list[Split]:
+        """Read the split of each row from the splits file.
+
+        Returns:
+            The split for each of the n_rows rows, in file order.
+        """
+        return FrozenSplits.read_from_file(self.splits_path).assign_split_to_each_row(n_rows)
+
+
+class SleepCotConnector(BaseConnector[SleepCotReader]):
     """Connector for the SleepEDF-CoT release of OpenTSLM."""
 
-    async def download_async(self, cache_dir: Path) -> list[SleepCotRelease]:  # ruff: ignore[no-self-use]
+    async def download_async(self, cache_dir: Path) -> list[SleepCotReader]:  # ruff: ignore[no-self-use]
         """Download the release CSV.
 
         Args:
             cache_dir: Directory for the downloaded file.
 
         Returns:
-            The release CSV and saved split paths.
+            A reader for the release CSV and the frozen split of the connector.
         """
         artifact = Artifact(SLEEP_COT_URL, cache_dir / "sleep_cot.csv", sha256=SLEEP_COT_SHA256)
         (csv_path,) = await download_files([artifact])
-        return [SleepCotRelease(csv_path=csv_path, splits_path=SPLITS_PATH)]
+        return [SleepCotReader(csv_path=csv_path, splits_path=SPLITS_PATH)]
 
-    def convert(self, raw_refs: list[SleepCotRelease]) -> TimeFDataset:
+    def convert(self, raw_refs: list[SleepCotReader]) -> TimeFDataset:
         """Create one Record and one ClassificationTask for each window.
 
         Args:
-            raw_refs: The release files from :meth:`download_async`.
+            raw_refs: The reader from :meth:`download_async`.
 
         Returns:
             The populated dataset.
         """
-        (release,) = raw_refs
-        rows = read_rows(release.csv_path)
-        splits = FrozenSplits.read_from_file(release.splits_path).assign_split_to_each_row(len(rows))
+        (reader,) = raw_refs
+        rows = reader.read_rows()
+        splits = reader.read_splits(len(rows))
         dataset = TimeFDataset(metadata=self.metadata())
         for row, split in zip(rows, splits, strict=True):
             record = dataset.add_record(record=row.create_record())
