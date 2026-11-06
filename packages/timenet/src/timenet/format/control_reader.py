@@ -129,6 +129,8 @@ class _SignalRow(NamedTuple):
     unit: str | None
     dtype: str
     categories: list[str]
+    ordered: bool
+    description: str | None
     value_shape: list[int]
     dimension_names: list[str]
     nullable: bool
@@ -150,6 +152,8 @@ class _SignalRow(NamedTuple):
             self.unit,
             self.dtype,
             tuple(self.categories),
+            self.ordered,
+            self.description,
             tuple(self.value_shape),
             tuple(self.dimension_names),
             self.nullable,
@@ -2113,6 +2117,8 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             unit_value=None if row.unit is None else ureg.Unit(row.unit),
             dtype=cast("ValueDtype", row.dtype),
             categories=tuple(row.categories),
+            ordered=row.ordered,
+            description=row.description,
             value_shape=tuple(row.value_shape),
             dimension_names=tuple(row.dimension_names),
             nullable=row.nullable,

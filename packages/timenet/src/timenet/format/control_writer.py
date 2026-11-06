@@ -744,6 +744,8 @@ class DuckDBControlWriter:
                 "unit": None if spec.unit_value is None else str(spec.unit_value),
                 "dtype": spec.dtype,
                 "categories": list(spec.categories),
+                "ordered": spec.ordered,
+                "description": spec.description,
                 "value_shape": list(spec.value_shape),
                 "dimension_names": list(spec.dimension_names),
                 "nullable": spec.nullable,
