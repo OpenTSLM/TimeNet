@@ -33,9 +33,12 @@ _CACHE_TAG_LINES = (
 )
 """The cache marker text, starting with the standard cache tag signature."""
 
+_FLAGS = {"local_registry": "--local-registry", "remote_registry": "--remote-registry"}
+"""CLI flag names for the registry settings."""
+
 
 class TimeNetSettings(BaseSettings):
-    """TimeNet settings from arguments, ``TIMENET_*`` variables and an optional ``.env`` file."""
+    """TimeNet settings from arguments, ``TIMENET_*`` environment variables, and an optional ``.env`` file."""
 
     model_config = SettingsConfigDict(env_prefix="TIMENET_", env_file=".env", extra="ignore")
 
@@ -59,24 +62,25 @@ class TimeNetSettings(BaseSettings):
     @field_validator("local_registry", "remote_registry", "cache", mode="before")
     @classmethod
     def _not_empty(cls, value: Any, info: ValidationInfo) -> Any:
-        """Convert paths to strings and reject blank settings.
+        """Convert paths to strings and reject blank strings.
 
         Args:
-            value: The value to validate.
-            info: Validation metadata that includes the field name.
+            value: A setting value.
+            info: Details of the field to validate.
 
         Returns:
-            The value with any path converted to a string.
+            The value, with any path converted to a string.
 
         Raises:
-            TimeFValidationError: If the value is empty or contains only whitespace.
+            TimeFValidationError: If the string is empty or contains only whitespace.
         """
         if isinstance(value, os.PathLike):
             value = os.fspath(value)
         if isinstance(value, str) and not value.strip():
             name = str(info.field_name)
+            flag = f" (also as {_FLAGS[name]})" if name in _FLAGS else ""
             raise TimeFValidationError(
-                f"TIMENET_{name.upper()} must not be empty; give it a value, "
+                f"TIMENET_{name.upper()} must not be empty{flag}; give it a value, "
                 f"or leave it unset for {cls.model_fields[name].default}."
             )
         return value
