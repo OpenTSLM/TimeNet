@@ -1,6 +1,6 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
 from pathlib import Path
 import sys
 from types import MappingProxyType
@@ -34,6 +34,7 @@ from timenet.types import (
     read_value,
     value_type_of,
 )
+from timenet.types.annotations import AnnotationValueInput, annotation_batch
 from timenet.types.ids import IdCounters
 from timenet.types.load_plan import LoadPlan
 from timenet.types.parent_dataset_card import ParentDatasetCard
@@ -48,6 +49,51 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 TTask = TypeVar("TTask", bound=Task)
+
+
+def _check_dataset_annotation(annotation: Annotation) -> None:
+    """Raise if ``annotation`` cannot attach to a dataset.
+
+    Raises:
+        TimeFValidationError: If ``annotation`` is not an :class:`Annotation`, or it has a time
+            placement, which is ambiguous across records.
+    """
+    if not isinstance(annotation, Annotation):
+        raise TimeFValidationError(f"a dataset annotation must be an Annotation, got {type(annotation).__name__}")
+    if annotation.span is not None:
+        raise TimeFValidationError("dataset annotations cannot have a time span")
+
+
+class _SharedAnnotations:
+    """An index of a dataset's annotations by :attr:`~timenet.types.Annotation._sharing_key`.
+
+    The dataset appends to its annotation list in several places, and replaces the list on a read or
+    an import. On each lookup, the index adds the annotations appended since the last lookup. It
+    rebuilds itself if the list was replaced or became shorter. It keeps the first matching
+    occurrence. Annotation fields cannot change, so the cached keys stay valid.
+    """
+
+    def __init__(self) -> None:
+        self._annotations: list[Annotation] | None = None
+        self._indexed = 0
+        self._by_key: dict[Hashable, Annotation] = {}
+
+    def find(self, annotations: list[Annotation], annotation: Annotation) -> Annotation | None:
+        """Return the occurrence in ``annotations`` with the content of ``annotation``, if any.
+
+        Args:
+            annotations: The dataset's annotation list.
+            annotation: The annotation to look for.
+
+        Returns:
+            The first occurrence with equal content, or ``None``.
+        """
+        if annotations is not self._annotations or len(annotations) < self._indexed:
+            self._annotations, self._indexed, self._by_key = annotations, 0, {}
+        for one in annotations[self._indexed :]:
+            self._by_key.setdefault(one._sharing_key, one)
+        self._indexed = len(annotations)
+        return self._by_key.get(annotation._sharing_key)
 
 
 class _TaskValidationIndex:
@@ -120,6 +166,8 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         self._ids = IdCounters()
         self._streamed_task_base = 0
         self._annotations: list[Annotation] = []
+        self._shared = _SharedAnnotations()
+        """The index behind :meth:`annotate_shared`."""
         # An optional re-iterable task source. When set, tasks stream past the dataset instead of
         # accumulating in _tasks, so a dataset with millions of tasks over few records still fits.
         self._task_stream: Callable[[], Iterator[Task]] | None = None
@@ -401,12 +449,75 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
 
         Raises:
             TimeFValidationError: If the annotation has a time placement, which is ambiguous across records.
-        """
-        if annotation.span is not None:
-            raise TimeFValidationError("dataset annotations cannot have a time span")
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_dataset_annotation
+        _check_dataset_annotation(annotation)
         attached = annotation._new_occurrence()
         self._annotations.append(attached)
         return attached
+
+    def add_annotations(
+        self, annotations: Iterable[Annotation] | Mapping[str, AnnotationValueInput]
+    ) -> tuple[Annotation, ...]:
+        """Attach several static annotations to the dataset, after validating every one of them.
+
+        The method checks the whole batch first. If one annotation fails, it raises and leaves the
+        dataset unchanged::
+
+            dataset.add_annotations({"sampling_rate_hz": 50, "device": "wrist"})
+
+        Args:
+            annotations: The annotations to attach, or a mapping from each key to its value. Pass a
+                single annotation to :meth:`annotate`.
+
+        Returns:
+            The attached occurrences, in the order given.
+
+        Raises:
+            TimeFValidationError: If an annotation has a time placement, an item is not an
+                :class:`Annotation`, or a mapping has a key that is not text or a value that an
+                annotation does not accept.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by annotation_batch and _check_dataset_annotation
+        batch = annotation_batch(annotations)
+        for annotation in batch:
+            _check_dataset_annotation(annotation)
+        attached = tuple(annotation._new_occurrence() for annotation in batch)
+        self._annotations.extend(attached)
+        return attached
+
+    def annotate_shared(self, annotation: Annotation) -> Annotation:
+        """Return the dataset annotation with the same content, and attach it on the first call.
+
+        Use it for values that many tasks reference, such as a question type or a set of answer
+        options. The first call with some content attaches it, and every later call with equal
+        content returns that same occurrence::
+
+            for row in rows:
+                question_type = dataset.annotate_shared(Annotation(key="question_type", value=row.kind))
+                dataset.add_task(task=AnswerTask(..., input_annotations=(question_type,)))
+
+        A later call matches when the annotation has equal content (key, value, value type, unit,
+        description, and metadata) and equal occurrence fields (source, confidence, and occurrence
+        metadata). Text is compared by its value, so text loaded from a release can match the same
+        string supplied directly.
+        An annotation that the dataset already has through :meth:`annotate`,
+        :meth:`add_annotations`, an import, or a read also counts.
+
+        A task stream can call it too, also on every pass: the writer stores the annotations that
+        the stream attaches. A lazy text value is read once for the comparison, so its function
+        must return the same text on each call.
+
+        Args:
+            annotation: The annotation to find or attach.
+
+        Returns:
+            The dataset's occurrence with that content.
+
+        Raises:
+            TimeFValidationError: If the annotation has a time placement.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_dataset_annotation
+        _check_dataset_annotation(annotation)
+        found = self._shared.find(self._annotations, annotation)
+        return found if found is not None else self.annotate(annotation)
 
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
         """Provide tasks as a re-iterable stream instead of materializing them in the dataset.

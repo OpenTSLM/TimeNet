@@ -238,6 +238,27 @@ lead_i.annotate(
 )
 ```
 
+### Shared dataset annotations
+
+An occurrence is an annotation attached to a specific object. Many tasks can refer to one dataset
+annotation occurrence, such as a question type. `dataset.annotate_shared(annotation)` returns the first
+attached dataset annotation whose content, `source`, `confidence`, and `occurrence_metadata` match.
+If there is no match, it attaches the annotation and returns the new occurrence. Text is compared by
+its value, so text loaded from a release can match the same string supplied directly.
+
+```python
+question_type = dataset.annotate_shared(Annotation(key="question_type", value=row.kind))
+dataset.add_task(task=AnswerTask(inputs=(record,), targets=(row.answer,), input_annotations=(question_type,)))
+```
+
+Pass tasks the occurrence that `annotate()` or `shared()` returns. A new `Annotation` with equal
+content is not attached, and a second `annotate()` call adds another occurrence. A task stream can
+call `shared()` on every pass. A matching annotation reuses the same occurrence, and a new one is
+attached and included in the release.
+
+`dataset.add_annotations()` attaches several dataset annotations. It validates every annotation
+before it attaches any of them. It takes a list of annotations or a mapping of keys to values.
+
 ## Schema and persistence
 
 `derive_schema()` collects the time-series specifications, annotation descriptors, and concrete Task
