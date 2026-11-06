@@ -11,7 +11,7 @@ import pyarrow.parquet as pq
 from timenet.dataset import IrregularAxis, RegularAxis
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
-from timenet.types import InputModality, Split, read_value, read_values
+from timenet.types import InputModality, MissingReason, Split, read_value, read_values
 from timenet.writer import TimeFWriter
 from timenet_connectors.datasets.datadog.arfbench.connector import ARFBenchConnector, ARFBenchSource
 
@@ -41,15 +41,28 @@ def _facts(annotated):
     return {annotation.key: read_value(annotation.value) for annotation in annotated.annotations}
 
 
-def test_metrics_keep_every_rollup_per_tag_group_and_questions_get_two_tasks(tmp_path):
+def test_metrics_keep_every_rollup_per_tag_group_and_questions_get_two_tasks(tmp_path):  # ruff: ignore[too-many-statements] (one fixture covers every record shape)
     series_dir = tmp_path / "arfbench-ts-data"
     series_dir.mkdir()
-    # Metric 35997_0: two tag groups at 10 s, where dc:2 skips a step; at 60 s a third group appears,
-    # as it does in the wider windows of the release, and dc:1 has a null.
+    # Metric 35997_0: two tag groups at 10 s, where dc:2 skips a step. At 60 s a third group appears,
+    # as it does in the wider windows of the release, but only from the second grid step: its first
+    # step is grid padding. dc:1 has a null inside its window, and dc:4 is on the grid without a value.
     _series_file(
         series_dir / "35997_0_10.parquet", [(10, "dc:1", 2.0), (0, "dc:2", 5.0), (0, "dc:1", 1.0), (20, "dc:2", 6.0)]
     )
-    _series_file(series_dir / "35997_0_60.parquet", [(0, "dc:3", 9.0), (60, "dc:1", None), (0, "dc:1", 1.5)])
+    _series_file(
+        series_dir / "35997_0_60.parquet",
+        [
+            (0, "dc:3", None),
+            (60, "dc:3", 9.0),
+            (60, "dc:1", None),
+            (0, "dc:1", 1.5),
+            (120, "dc:1", 2.5),
+            (0, "dc:4", None),
+            (60, "dc:4", None),
+            (120, "dc:4", None),
+        ],
+    )
     # Metric 35997_1 has no tag grouping, so its label is empty, and only a 10 s file.
     _series_file(series_dir / "35997_1_10.parquet", [(30, "", 0.5), (40, "", 0.6)])
     chart_dir = tmp_path / "arfbench-images"
@@ -126,9 +139,15 @@ def test_metrics_keep_every_rollup_per_tag_group_and_questions_get_two_tasks(tmp
     assert [source.name for source in second.sources] == ["untagged"]
     dc1_10s, dc1_60s = first.sources[0].signals
     assert dc1_10s.to_arrow().to_pylist() == [1.0, 2.0]
-    assert dc1_60s.to_arrow().to_pylist() == [1.5, None]  # the release's null stays a missing timestep
+    # A null inside the observed window stays a missing timestep, and the spec says why.
+    assert dc1_60s.to_arrow().to_pylist() == [1.5, None, 2.5]
+    assert dc1_60s.spec.missing is not None and dc1_60s.spec.missing.reason is MissingReason.NOT_RECORDED
     assert isinstance(dc1_10s.time_axis, RegularAxis) and dc1_10s.time_axis.offset_us == 0
     assert isinstance(first.sources[1].signals[0].time_axis, IrregularAxis)  # dc:2 skips the 10 s step
+    # dc:3 starts at its first value, not at the grid's first step, and dc:4 has no value, so no source.
+    (dc3_60s,) = first.sources[2].signals
+    assert dc3_60s.to_arrow().to_pylist() == [9.0]
+    assert isinstance(dc3_60s.time_axis, RegularAxis) and dc3_60s.time_axis.offset_us == 60 * 1_000_000
     assert first.start_time.timestamp == START_US and second.start_time.timestamp == START_US + 30 * 1_000_000
     assert _facts(first) == {
         "metric_id": "35997_0",
@@ -167,7 +186,7 @@ def test_metrics_keep_every_rollup_per_tag_group_and_questions_get_two_tasks(tmp
     with TimeFReader(open_local_version(tmp_path / "built/datadog/arfbench/1.0.0")) as reader:
         back = {record.metadata["source_record_id"]: record for record in reader.iter_records()}
     assert [source.name for source in back["arfbench-35997_0"].sources] == ["dc:1", "dc:2", "dc:3"]
-    assert back["arfbench-35997_0"].sources[0].signals[1].to_arrow().to_pylist() == [1.5, None]
+    assert back["arfbench-35997_0"].sources[0].signals[1].to_arrow().to_pylist() == [1.5, None, 2.5]
     chart = back["arfbench-chart-35997_0"].signals[0]
     assert chart.spec.spec_type == "rgba_image_2x3"
     np.testing.assert_array_equal(chart.to_numpy()[0, 0, 0], [10, 20, 30, 42])

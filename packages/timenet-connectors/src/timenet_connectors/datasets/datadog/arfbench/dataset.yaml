@@ -8,7 +8,12 @@
 #
 # Each question creates a series task and a chart task in the test split.
 # Series tasks cite metric records; chart tasks use the released PNG images.
-# Values remain float64 with unspecified units. Null marks a missing timestep.
+# Values remain float64 with unspecified units.
+# A rollup file lists every tag group at every step of one time grid, with a null where the metric
+# reported nothing for the group. Each series is cut to the window in which its group has a value,
+# so grid steps before its first value and after its last one are not stored, and a group with no
+# value at a rollup has no series there. A null inside the window stays a missing timestep, with
+# the spec's missing-value reason `not_recorded`.
 # Series with missing steps use explicit time offsets.
 yaml_schema_version: 1
 dataset_id: datadog/arfbench
