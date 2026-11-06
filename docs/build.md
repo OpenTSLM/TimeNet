@@ -50,7 +50,8 @@ versions used for the build, and the git commit of `timenet` and `timenet-connec
 The engine runs these stages:
 
 1. Read and validate the connector's `dataset.yaml` card. If the output registry is not local, the
-   card must declare `access: open`.
+   card must declare `access: open`, and the TimeNet code must be traceable to a commit, as
+   [Traceable builds](#traceable-builds) describes.
 2. Open the parent releases that the card declares. The output registry must hold them, as
    [Prepare parent releases](#prepare-parent-releases) describes.
 3. Download raw artifacts into the build cache.
@@ -112,6 +113,15 @@ child declares `access: open` but its parent is credentialed, the second check r
 The error names the release and its effective access level, which is the strictest level of its
 card and of the cards in its lineage. It also names each `access_url` that a user needs, with the
 release that sets it. For a card, this is the `access_url` of the card.
+
+## Traceable builds
+
+TimeNet requires that a published dataset can be traced to the code that built it. Each build
+therefore records, in its [manifest](manifest.md), the git commit of the TimeNet packages it used.
+
+The manifest also records whether that code had uncommitted changes. A remote registry rejects a
+dataset that was built with uncommitted changes or with an unknown commit. You can still build it
+into a local registry.
 
 ## Prepare parent releases
 

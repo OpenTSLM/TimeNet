@@ -7,9 +7,11 @@ pytest.importorskip("moto")
 from moto.server import ThreadedMotoServer  # ruff: ignore[module-import-not-at-top-of-file]
 import pyarrow.fs as pafs  # ruff: ignore[module-import-not-at-top-of-file]
 
+from timenet import provenance  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.client import TimeNet  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.dataset import TimeFDataset  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.errors import (  # ruff: ignore[module-import-not-at-top-of-file]
+    TimeNetBuildError,
     TimeNetDatasetNotFoundError,
     TimeNetRegistryError,
 )
@@ -134,3 +136,15 @@ def test_list_and_search_are_unsupported(tmp_path):
 def test_rejects_a_non_s3_uri(tmp_path):
     with pytest.raises(TimeNetRegistryError, match="s3://"):
         S3Registry("https://not-s3", cache_dir=tmp_path)
+
+
+def test_store_refuses_code_that_changed_while_the_release_was_written(s3_root, tmp_path, monkeypatch):
+    reads = iter([{"timenet": {"sha": "a" * 40, "local_changes": False}}])
+    later = {"timenet": {"sha": "b" * 40, "local_changes": False}}
+    monkeypatch.setattr(provenance, "_read_git", lambda: next(reads, later))
+    # Moto keeps its buckets across tests, so use a prefix that no other test stores under.
+    registry = S3Registry(f"{s3_root}/changed-code", cache_dir=tmp_path / "cache")
+
+    with pytest.raises(TimeNetBuildError, match="changed while the build ran"):
+        registry.store(make_dataset())
+    assert not registry.exists(make_dataset().metadata.dataset_id, str(make_dataset().metadata.dataset_version))

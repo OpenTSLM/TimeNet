@@ -79,7 +79,8 @@ Each distribution records the commit of the code that runs:
   publish workflow run the script.
 
 A distribution whose commit is unknown is absent, for example a wheel that a plain `uv build`
-produced.
+produced. A publish to a remote registry needs a known commit with no local changes for each
+installed distribution. See [Traceable builds](build.md#traceable-builds).
 
 The values locator is backend-neutral. One schema covers both scalar and multidimensional specs. A
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
