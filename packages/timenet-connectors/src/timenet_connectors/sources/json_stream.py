@@ -12,7 +12,7 @@ import io
 import json
 from pathlib import Path
 import re
-from typing import Any, BinaryIO, Self
+from typing import BinaryIO, NamedTuple, Self, cast
 
 from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources._json import distinct_fields
@@ -135,7 +135,7 @@ class JsonCursor:
         if self.peek():
             raise TimeNetConnectorError("unexpected content after the JSON document")
 
-    def value(self) -> tuple[Any, int, int]:
+    def value(self) -> tuple[object, int, int]:
         """Decode the next complete value.
 
         Returns:
@@ -204,7 +204,9 @@ class JsonCursor:
             # Check before decoding, so a non-string key fails without reading it whole.
             if self.peek() != '"':
                 raise TimeNetConnectorError(f"expected a string key at byte {self.offset}")
-            key, key_offset, _ = self.value()
+            decoded_key, key_offset, _ = self.value()
+            # The opening quote above and successful JSON decoding guarantee a string.
+            key = cast(str, decoded_key)
             if key in seen:
                 raise TimeNetConnectorError(f"duplicate key {key!r} at byte {key_offset}")
             seen.add(key)
@@ -216,7 +218,16 @@ class JsonCursor:
             self.expect(",")
 
 
-def iter_object(path: Path) -> Iterator[tuple[str, Any, int, int]]:
+class JsonObjectEntry(NamedTuple):
+    """An object member with its unvalidated value and UTF-8 byte range."""
+
+    key: str
+    value: object
+    offset: int
+    length: int
+
+
+def iter_object(path: Path) -> Iterator[JsonObjectEntry]:
     """Traverse a document that is one object, without retaining decoded values.
 
     Yields:
@@ -231,14 +242,14 @@ def iter_object(path: Path) -> Iterator[tuple[str, Any, int, int]]:
         with JsonCursor.open(path) as cursor:
             for key in cursor.object_keys():
                 context = f"{path} (key {key})"
-                yield key, *cursor.value()
+                yield JsonObjectEntry(key, *cursor.value())
                 context = str(path)
             cursor.expect_end()
     except (OSError, TimeNetConnectorError) as exc:
         raise TimeNetConnectorError(f"{context}: {exc}") from exc
 
 
-def read_entry(path: Path, offset: int, length: int) -> Any:
+def read_entry(path: Path, offset: int, length: int) -> object:
     """Reread one value at the byte range a traversal recorded.
 
     Decodes with the traversal's own cursor, so a reread accepts exactly what the traversal did:

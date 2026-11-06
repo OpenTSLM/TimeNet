@@ -22,8 +22,8 @@ def test_entries_keep_byte_ranges_across_crlf_and_utf8(monkeypatch, tmp_path):
     entries = list(json_stream.iter_object(path))
 
     assert [(key, value) for key, value, _, _ in entries] == [("1", {"name": "Doña Ana"}), ("2", [1, 2.5]), ("3", {})]
-    for key, value, offset, length in entries:
-        assert json_stream.read_entry(path, offset, length) == value, key
+    for entry in entries:
+        assert json_stream.read_entry(path, entry.offset, entry.length) == entry.value, entry.key
 
 
 def test_a_number_split_across_reads_decodes_whole(monkeypatch, tmp_path):
