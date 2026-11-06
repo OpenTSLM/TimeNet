@@ -17,6 +17,11 @@ description: >-
   rationale_generation_prompt annotation. In 3 windows, the rationale concludes with the
   dissimilar stage. In 4 more, it ends without the "Answer:" form. The dataset keeps these
   windows as released.
+
+  Sleep experts assigned a stage to each original EEG window. The released CSV gives a different
+  stage for 197 windows: 173 train, 9 validation, and 15 test. For example, the expert score for
+  data row 840 is N3. Its CSV label and generated explanation say N2. The connector preserves
+  these source errors.
 license: MIT
 source_url: https://github.com/OpenTSLM/OpenTSLM
 citation: >-
