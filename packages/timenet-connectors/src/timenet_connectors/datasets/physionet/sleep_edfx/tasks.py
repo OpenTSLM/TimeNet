@@ -30,6 +30,7 @@ from timenet.types import (
 )
 from timenet.types.text import read_value
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey, Condition, Question
+from timenet_connectors.demographics import AGE_UNIT, SEXES
 
 
 # The epoch the release scores in, from the 1968 Rechtschaffen and Kales manual.
@@ -60,10 +61,6 @@ ASLEEP_LABELS = frozenset(STAGE_LABELS[1:6])
 
 # The sexes, after each sheet is decoded. The two sheets code the column with opposite
 # meanings, so a raw code never reaches a task.
-SEXES = LabelSet(
-    name=str(AnnotationKey.SEX),
-    labels=(Label(name="F", description="Female."), Label(name="M", description="Male.")),
-)
 SEX_LABELS = SEXES.names
 
 # The two nights of the telemetry study.
@@ -168,12 +165,12 @@ def build_record_tasks(
         # A float with a unit keeps the type a regression metric needs. As a string, a
         # one-year error reads as two unequal labels.
         targets=(_whole_years(recording_id, stated),),
-        unit="year",
+        unit=AGE_UNIT,
         target_name=Question.AGE,
     )
 
     yield ClassificationTask(
-        # The decoded letter, never the sheet's code. The two sheets code the column with
+        # The decoded sex, never the sheet's code. The two sheets code the column with
         # opposite meanings, so one code means two opposite things.
         targets=(_one_of(recording_id, stated, AnnotationKey.SEX, SEX_LABELS),),
         label_set=SEXES,
