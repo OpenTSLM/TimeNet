@@ -15,7 +15,7 @@ Reuse a base connector wherever the source allows: `BaseHuggingFaceConnector` fo
 neither fits.
 
 Read `references/connector-anatomy.md` for the contract, the base-connector APIs, the task types, the
-folder layout, and a fully worked example before implementing.
+folder layout, and links to maintained examples before implementing.
 
 ## Workflow
 
@@ -84,9 +84,10 @@ Create `packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>
   installs it into the environment that the build runs in. The lazy import keeps `--no-isolation`
   usable while you write the connector.
 
-Add the org namespace `__init__.py` if the org is new. Keep `download` I/O-only and `convert` CPU-only
-with lazy value loaders (never materialize arrays in `convert`). See the worked example in
-`references/connector-anatomy.md`.
+Follow `docs/connectors.md` for code organization, loading, and repeatable task streams.
+Keep small connectors in one module; use the linked implementations as examples.
+Add the org namespace `__init__.py` if the org is new. Keep downloads in `download`, and
+conversion local with no network access.
 
 You cannot pass ids. Records, signals, and tasks get a read-only int `id` when you add them to the
 dataset. Sources, axes, and annotations have no id. Put upstream identifiers in `Record.metadata`

@@ -129,4 +129,5 @@ run every `gh stack` command non-interactively (always pass branch names to `ini
   appropriate TimeNet exception on data issues so the user can explicitly correct their data.
 - Don't delete user-owned files unless explicitly asked.
 - Match the existing style instead of reformatting adjacent code.
+- For connector organization, follow the concise guidance in `docs/connectors.md`.
 - Add type hints; both packages ship `py.typed`, so `ty` must stay green.
