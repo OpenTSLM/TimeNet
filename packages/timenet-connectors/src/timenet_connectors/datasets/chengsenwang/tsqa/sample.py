@@ -1,14 +1,17 @@
 """Parsed TSQA rows and the keys used for dataset splitting."""
 
 from dataclasses import dataclass
-from typing import Annotated, Any, cast
+from typing import Annotated, Any
 
 from pydantic import Field, Json
 
+from timenet.types import TimeSeriesSpec
 from timenet_connectors.sources.rows import NonBlankText, SourceRow, validate_row
+from timenet_connectors.sources.signals import numeric_signal
 
 
 _NumericSeries = Annotated[list[int | float], Field(min_length=1)]
+_SPEC = TimeSeriesSpec(spec_type="series", name="Series", unit_value=None, dtype="float64")
 
 
 class _TSQARow(SourceRow):
@@ -41,13 +44,16 @@ class TSQASample:
         """
         parsed = validate_row(row, _TSQARow, location="TSQA row")
         series = parsed.series
-        channels = cast("list[list[int | float]]", series if isinstance(series[0], list) else [series])
+        channels = series if isinstance(series[0], list) else [series]
         return cls(
             category=parsed.task,
             question=parsed.question,
             answer=parsed.answer,
             label=parsed.label,
-            signals=tuple(tuple(float(value) for value in channel) for channel in channels),
+            signals=tuple(
+                tuple(numeric_signal(channel, f"Series[{index}]", spec=_SPEC).to_pylist())
+                for index, channel in enumerate(channels)
+            ),
         )
 
 
