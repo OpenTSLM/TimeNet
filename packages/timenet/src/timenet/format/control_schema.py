@@ -211,7 +211,6 @@ SIGNALS = Table(
         _required("categories", ColumnType.VARCHAR_LIST),
         _required("value_shape", ColumnType.BIGINT_LIST),
         _required("dimension_names", ColumnType.VARCHAR_LIST),
-        _required("nullable", ColumnType.BOOLEAN),
         Column("missing_reason", ColumnType.VARCHAR),
         Column("missing_description", ColumnType.VARCHAR),
         Column("missing_max_fraction", ColumnType.DOUBLE),
@@ -225,9 +224,10 @@ SIGNALS = Table(
         ForeignKey("axis_id", "axes", "axis_id"),
     ),
 )
-"""The ``nullable`` flag is true exactly when the ``missing_*`` columns hold a missing-value record.
+"""The ``missing_*`` columns hold a spec's missing-value record, or are all null when it has none.
 
-The Zarr backend reads the flag to find the validity arrays.
+A spec is nullable exactly when ``missing_reason`` is set. The Zarr backend reads that to find the
+validity arrays.
 """
 
 SIGNAL_CHUNKS = Table(

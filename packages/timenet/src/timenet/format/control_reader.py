@@ -132,7 +132,6 @@ class _SignalRow(NamedTuple):
     categories: list[str]
     value_shape: list[int]
     dimension_names: list[str]
-    nullable: bool
     missing_reason: str | None
     missing_description: str | None
     missing_max_fraction: float | None
@@ -156,7 +155,6 @@ class _SignalRow(NamedTuple):
             tuple(self.categories),
             tuple(self.value_shape),
             tuple(self.dimension_names),
-            self.nullable,
             self.missing_reason,
             self.missing_description,
             self.missing_max_fraction,
@@ -2130,20 +2128,13 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
     def _missing_values_from_row(row: _SignalRow) -> MissingValues | None:
         """Rebuild a spec's missing-value record from its ``signals`` row.
 
-        The ``nullable`` column is true exactly when the row stores a record.
-
         Returns:
-            The missing-value record, or ``None`` if the spec allows no missing timesteps.
+            The missing-value record, or ``None`` if the row stores no reason, which means that the
+            spec allows no missing timesteps.
 
         Raises:
-            TimeFFormatError: If ``nullable`` disagrees with the record, or the record is not a
-                valid ``MissingValues``.
+            TimeFFormatError: If the row stores a reason but not a valid ``MissingValues`` record.
         """
-        if (row.missing_reason is None) == row.nullable:
-            raise TimeFFormatError(
-                f"signal {row.signal_id!r} has nullable={row.nullable} but "
-                f"{'no' if row.missing_reason is None else 'a'} missing-value record"
-            )
         if row.missing_reason is None:
             return None
         try:
