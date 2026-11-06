@@ -1,9 +1,4 @@
-"""The anomaly detection family: one printed series, and whether it includes an anomaly.
-
-Each question describes the source of the series, prints the series, and asks whether it has
-anomalies. The answer names one of two labels. Each row becomes one Record and one
-ClassificationTask whose target is the label.
-"""
+"""Parse anomaly detection questions and create classification tasks."""
 
 from dataclasses import dataclass
 import re
@@ -27,7 +22,7 @@ _ANSWER = re.compile(r"Based on the given information, this time series includes
 
 @dataclass(frozen=True)
 class AnomalyDetectionRow:
-    """A row of the anomaly detection file: its printed series and the label of its answer."""
+    """An anomaly detection row with its series and answer label."""
 
     row: ReleaseRow
     series: PrintedSeries
@@ -35,14 +30,13 @@ class AnomalyDetectionRow:
 
     @classmethod
     def from_release_row(cls, row: ReleaseRow) -> Self:
-        """Parse a row of the anomaly detection file.
+        """Parse an anomaly detection row.
 
         Returns:
             The parsed row.
 
         Raises:
-            TimeNetConnectorError: If the question does not print one series, or the answer does not name
-                one of the two labels.
+            TimeNetConnectorError: If the question lacks one series or the answer has an invalid label.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by the ReleaseRow methods
         return cls(
             row=row,
@@ -51,7 +45,7 @@ class AnomalyDetectionRow:
         )
 
     def add_records_and_task_to(self, dataset: TimeFDataset) -> ClassificationTask:
-        """Add the Record of the series and the task that asks whether it includes an anomaly.
+        """Add the series record and anomaly classification task to the dataset.
 
         Returns:
             The added task.

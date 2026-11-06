@@ -1,9 +1,4 @@
-"""The connector of the TSQA dataset of Time-MQA.
-
-The connector downloads the CSV files of the release from the pinned Hub revision. It reads each
-row through the shared :mod:`.release` module and hands the row to the parser of its task family.
-Each family module parses the texts of its rows and builds their Records and tasks.
-"""
+"""Convert the TSQA dataset of Time-MQA into records and tasks."""
 
 from collections.abc import Callable, Mapping
 from typing import ClassVar
@@ -33,7 +28,7 @@ _PARSERS: Mapping[TaskFamily, Callable[[ReleaseRow], TaskRow]] = {
     TaskFamily.IMPUTATION: ImputationRow.from_release_row,
     TaskFamily.OPEN_ENDED_QA: FreeAnswerRow.from_release_row,
 }
-"""The parser of each task family."""
+"""The parser for each task family."""
 
 
 class TimeMqaConnector(BaseHuggingFaceConnector):
@@ -44,7 +39,7 @@ class TimeMqaConnector(BaseHuggingFaceConnector):
     SOURCE_FILES: ClassVar[Mapping[str, str]] = SOURCE_FILES
 
     def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
-        """Create the Records and the task of each question-and-answer row.
+        """Convert question-and-answer rows into records and tasks.
 
         Args:
             raw_refs: The downloaded files, one for each part.
