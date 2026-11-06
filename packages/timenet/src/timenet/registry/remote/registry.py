@@ -5,9 +5,7 @@ searches the catalog, fetches manifests, streams files, downloads versions, and 
 Artifact bytes never pass through the API. The service hands back presigned URLs.
 """
 
-from collections.abc import Callable, Mapping
 from pathlib import Path
-import shutil
 import tempfile
 from typing import BinaryIO, cast
 
@@ -15,10 +13,9 @@ import httpx
 import pyarrow.fs as pafs
 
 from timenet.config import settings
-from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetRegistryError
-from timenet.manifest import Manifest, PayloadSource
-from timenet.registry._paths import release_dir
+from timenet.format.constants import MANIFEST_FILE
+from timenet.manifest import Manifest, parse_manifest
 from timenet.registry.lazy_read import LazyReadRegistry
 from timenet.registry.remote._download import ProgressCallback, download_version_files
 from timenet.registry.remote._http import RegistryHttpClient
@@ -32,11 +29,10 @@ from timenet.registry.remote.models import (
 from timenet.registry.version import DatasetVersion
 from timenet.types import DatasetMetadata
 from timenet.types.references import DatasetRef, is_latest
-from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class RemoteRegistry(LazyReadRegistry):
-    """Serves datasets from the hosted TimeNet registry over HTTP(S)."""
+    """Read and publish datasets through the hosted TimeNet HTTP service."""
 
     def __init__(
         self,
@@ -92,10 +88,11 @@ class RemoteRegistry(LazyReadRegistry):
 
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
-        """  # ruff: ignore[docstring-extraneous-exception] (raised by the HTTP client on 404, not directly here)
+            TimeFFormatError: If the served manifest is not valid.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the HTTP client and parse_manifest
         resolved = self._resolve_latest(dataset_id) if is_latest(version) else version
         text = self._http.get_text(f"/datasets/{dataset_id}/{resolved}/manifest")
-        return Manifest.model_validate_json(text)
+        return parse_manifest(text, f"the manifest of {dataset_id}@{resolved} in {self}")
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.
@@ -159,78 +156,46 @@ class RemoteRegistry(LazyReadRegistry):
             self._http, manifest, dataset_id, version, Path(dest_dir), force=force, progress_cb=progress_cb
         )
 
-    def store(
-        self,
-        dataset: TimeFDataset,
-        *,
-        force: bool = False,
-        values_backend: str = "parquet",
-        progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-        pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-    ) -> str:
-        """Compile a dataset locally and publish it to the remote registry.
+    def put_release(self, from_directory: Path) -> DatasetRef:
+        """Publish a release directory to the remote registry.
 
-        Compiles to a temporary directory, then runs the service publish flow: POST the manifest, PUT
-        each declared file to its presigned URL, and finalize. An already-committed version is skipped
-        unless ``force``.
+        The directory must contain ``manifest.json`` and every file it lists.
 
         Args:
-            dataset: The populated dataset to store.
-            force: Publish even if the version is already committed.
-            values_backend: Storage backend for the values plane (``"parquet"`` or ``"zarr"``).
-            progress_cb: Optional writer progress callback.
-            pinned_by: The releases that already read files of this release, with their pins. The
-                writer publishes only if it reproduced each pinned file.
+            from_directory: The release directory.
 
         Returns:
-            The stored version string.
+            A reference to the published release.
 
         Raises:
-            TimeNetRegistryError: If the service requests a file that was not produced locally.
-        """
-        if dataset.schema is None:
-            dataset.derive_schema()
-        dataset_id = dataset.metadata.dataset_id
-        version = str(dataset.metadata.dataset_version)
-        if not force and self.exists(dataset_id, version):
-            return version
-        staging_root = Path(tempfile.mkdtemp(prefix="timenet-publish-"))
-        try:
-            # The writer stages locally but checks every payload source against this registry.
-            with TimeFWriter(
-                staging_root,
-                dataset,
-                values_backend=values_backend,
-                progress_cb=progress_cb,
-                registry=self,
-                pinned_by=pinned_by,
-            ) as writer:
-                writer.write()
-            version_dir = release_dir(staging_root, DatasetRef.parse(f"{dataset_id}@{version}"))
-            manifest_bytes = (version_dir / "manifest.json").read_bytes()
-            manifest = Manifest.model_validate_json(manifest_bytes.decode())
-            declared = {part.path for part in manifest.files.all_files()}
-            publish_endpoint = f"/datasets/{dataset_id}/{version}/publish"
-            publish = PublishResponseModel.model_validate_json(
-                self._http.post(publish_endpoint, content=manifest_bytes).content
+            TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
+            TimeNetFileError: If a listed file is missing or its size differs from the manifest.
+            TimeNetRegistryError: If the service skips a listed file or requests a missing file.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release
+        manifest = self._read_release(from_directory)
+        dataset_id = manifest.dataset_id
+        version = str(manifest.metadata.dataset_version)
+        manifest_bytes = (from_directory / MANIFEST_FILE).read_bytes()
+        declared = {part.path for part in manifest.files.all_files()}
+        publish_endpoint = f"/datasets/{dataset_id}/{version}/publish"
+        publish = PublishResponseModel.model_validate_json(
+            self._http.post(publish_endpoint, content=manifest_bytes).content
+        )
+        files = publish.files
+        # Cross-check the service's upload list against the manifest before uploading. A manifest file
+        # the service omits would publish an incomplete version; a requested file we did not produce is
+        # not ours to upload. Both fail loudly here instead of partway through the upload.
+        unrequested = sorted(declared - set(files))
+        missing = [relpath for relpath in files if not (from_directory / relpath).is_file()]
+        if unrequested or missing:
+            raise TimeNetRegistryError(
+                f"publish for {dataset_id}@{version} disagrees with the manifest: "
+                f"service did not request {unrequested}, requested files not produced locally {missing}"
             )
-            files = publish.files
-            # Cross-check the service's upload list against the manifest before uploading. A manifest file
-            # the service omits would publish an incomplete version; a requested file we did not produce is
-            # not ours to upload. Both fail loudly here instead of partway through the upload.
-            unrequested = sorted(declared - set(files))
-            missing = [relpath for relpath in files if not (version_dir / relpath).is_file()]
-            if unrequested or missing:
-                raise TimeNetRegistryError(
-                    f"publish for {dataset_id}@{version} disagrees with the manifest: "
-                    f"service did not request {unrequested}, requested files not produced locally {missing}"
-                )
-            for relpath in files:
-                self._upload_file(dataset_id, version, version_dir, relpath)
-            self._http.post(f"/datasets/{dataset_id}/{version}/finalize")
-        finally:
-            shutil.rmtree(staging_root, ignore_errors=True)
-        return version
+        for relpath in files:
+            self._upload_file(dataset_id, version, from_directory, relpath)
+        self._http.post(f"/datasets/{dataset_id}/{version}/finalize")
+        return DatasetRef(dataset_id=dataset_id, version=manifest.metadata.dataset_version)
 
     def _upload_file(self, dataset_id: str, version: str, version_dir: Path, relpath: str) -> None:
         """Fetch a presigned PUT URL for one file and upload its bytes.

@@ -23,7 +23,7 @@ from timenet.errors import (
     TimeNetMissingParentError,
 )
 from timenet.format.constants import MANIFEST_FILE
-from timenet.manifest import FilePart, Manifest, PayloadSource
+from timenet.manifest import FilePart, Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
@@ -63,7 +63,7 @@ def open_local_version(path: str | Path, *, sources_root: str | Path | None = No
     manifest_path = directory / MANIFEST_FILE
     if not manifest_path.is_file():
         raise FileNotFoundError(f"no manifest at {manifest_path}")
-    manifest = Manifest.model_validate_json(manifest_path.read_text())
+    manifest = read_manifest(manifest_path)
     if not manifest.payload_sources:
         return open_local_release(directory, manifest, sources_root=None)
     if sources_root is None:
@@ -77,15 +77,13 @@ def open_local_release(directory: Path, manifest: Manifest, *, sources_root: Pat
     Args:
         directory: The release directory.
         manifest: The release's manifest.
-        sources_root: The registry root that holds its payload sources. Only a release without
-            payload sources may omit it.
+        sources_root: The registry root of the payload sources, required if the release has any.
 
     Returns:
         A handle with each payload source opened and checked.
 
     Raises:
-        TimeNetFileError: If a file of the release or of a payload source is missing or has another
-            size than recorded.
+        TimeNetFileError: If a required file is missing or its size differs from its manifest record.
         TimeFFormatError: If a payload source differs from the files the release pins.
         TimeNetMissingParentError: If a payload source is not under ``sources_root``.
         TimeFValidationError: If the release has payload sources but no ``sources_root``.
@@ -103,9 +101,7 @@ def open_local_release(directory: Path, manifest: Manifest, *, sources_root: Pat
         source_manifest = source_dir / MANIFEST_FILE
         if not source_manifest.is_file():
             raise TimeNetDatasetNotFoundError(f"no manifest at {source_manifest}")
-        return DatasetVersion(
-            Manifest.model_validate_json(source_manifest.read_text()), version.filesystem, str(source_dir)
-        )
+        return DatasetVersion(read_manifest(source_manifest), version.filesystem, str(source_dir))
 
     return attach_payload_sources(version, open_source, searched=str(root))
 
@@ -311,17 +307,13 @@ def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-argument
 
     Raises:
         TimeNetDatasetNotFoundError: If the release is absent and this function cannot fetch it.
-        TimeNetFileError: If the local manifest is present but a file is missing or has another
-            size, and ``fetch_from`` is not given. Also if a fetched file does not match its
-            manifest record.
+        TimeNetFileError: If a local file is damaged and ``fetch_from`` is not given, or a fetched file does not match.
         TimeFFormatError: If a manifest identifies a different release.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     if manifest is not None:
         validate_manifest_reference(manifest, reference)
     if not force and (directory / MANIFEST_FILE).is_file():
-        local = (
-            manifest if manifest is not None else Manifest.model_validate_json((directory / MANIFEST_FILE).read_text())
-        )
+        local = manifest if manifest is not None else read_manifest(directory / MANIFEST_FILE)
         validate_manifest_reference(local, reference)
         try:
             check_file_sizes(
@@ -350,14 +342,13 @@ def _load_complete_local_manifest(
     """Load and validate a local release, returning None if files are missing or incomplete.
 
     Returns:
-        The manifest if all declared files exist with their expected sizes, otherwise None.
-        Invalid manifests raise an error instead of being treated as missing releases.
+        The manifest if it exists and every listed file has the recorded size, otherwise ``None``.
     """
     manifest_path = directory / MANIFEST_FILE
     if not manifest_path.is_file():
         return None
     if manifest is None:
-        manifest = Manifest.model_validate_json(manifest_path.read_text())
+        manifest = read_manifest(manifest_path)
     validate_manifest_reference(manifest, reference)
     return manifest if complete_copy(directory, manifest) else None
 

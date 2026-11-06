@@ -1,9 +1,11 @@
 from pathlib import Path
+import re
 
 from pydantic import ValidationError
 import pytest
 
 from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import (
     TIMENET_REGISTRY_URL,
@@ -20,6 +22,7 @@ from timenet.registry import (
 )
 from timenet.testing import make_dataset
 from timenet.types import Annotation, AnswerTask, Domain, License
+from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
 
@@ -142,6 +145,13 @@ def test_get_manifest_rejects_mismatched_id(registry_root):
         registry.get_manifest("wrong/place")
 
 
+def test_get_manifest_names_the_path_of_a_cut_manifest(registry_root):
+    path = registry_root / "timenet/hello-world/1.0.0/manifest.json"
+    path.write_text(path.read_text()[:100])
+    with pytest.raises(TimeFFormatError, match=f"{re.escape(str(path))} is not a valid manifest: Invalid JSON"):
+        LocalRegistry(registry_root).get_manifest("timenet/hello-world", "1.0.0")
+
+
 def test_latest_version_ignores_staging_dirs(registry_root):
     # A crashed build can leave a `<version>.tmp-<uuid>` sibling (briefly holding a manifest.json).
     stale = registry_root / "demo/ecg" / "2.0.0.tmp-deadbeef"
@@ -249,22 +259,22 @@ def test_search_negative_limit_rejected(registry_root):
         LocalRegistry(registry_root).search(limit=-1)
 
 
-# ---- store (write side) -----------------------------------------------------------------------
+# ---- put_dataset (write side) -----------------------------------------------------------------
 
 
-def test_store_derives_schema_if_absent(tmp_path):
+def test_put_dataset_derives_schema_if_absent(tmp_path):
     dataset = make_dataset()
     assert dataset.schema is None
-    LocalRegistry(tmp_path).store(dataset)
+    LocalRegistry(tmp_path).put_dataset(dataset)
     assert dataset.schema is not None
 
 
-def test_a_forced_store_replaces_the_committed_release(tmp_path):
+def test_a_forced_put_dataset_replaces_the_committed_release(tmp_path):
     registry = LocalRegistry(tmp_path)
-    registry.store(make_dataset())
+    registry.put_dataset(make_dataset())
     replacement = make_dataset()
     replacement.records[0].annotate(Annotation(key="replaced", value=1))
-    registry.store(replacement, force=True)
+    registry.put_dataset(replacement, force=True)
 
     version_dir = tmp_path / "timenet/hello-world/1.0.0"
     with TimeFReader(open_local_version(version_dir)) as reader:
@@ -273,9 +283,9 @@ def test_a_forced_store_replaces_the_committed_release(tmp_path):
     assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]
 
 
-def test_a_failed_forced_store_keeps_the_committed_release(tmp_path, monkeypatch):
+def test_a_failed_forced_put_dataset_keeps_the_committed_release(tmp_path, monkeypatch):
     registry = LocalRegistry(tmp_path)
-    registry.store(make_dataset())
+    registry.put_dataset(make_dataset())
     version_dir = tmp_path / "timenet/hello-world/1.0.0"
     before = (version_dir / "manifest.json").read_bytes()
 
@@ -284,9 +294,44 @@ def test_a_failed_forced_store_keeps_the_committed_release(tmp_path, monkeypatch
 
     monkeypatch.setattr(TimeFWriter, "write", fail)
     with pytest.raises(RuntimeError, match="write failed"):
-        registry.store(make_dataset(), force=True)
+        registry.put_dataset(make_dataset(), force=True)
     assert (version_dir / "manifest.json").read_bytes() == before
     assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]
+
+
+def _release_directory(root: Path, *, annotation: str | None = None) -> tuple[Path, Manifest]:
+    """Store timenet/hello-world 1.0.0 under ``root``; return its directory and manifest."""
+    dataset = make_dataset()
+    if annotation is not None:
+        dataset.records[0].annotate(Annotation(key=annotation, value=1))
+    source = LocalRegistry(root)
+    source.put_dataset(dataset)
+    return root / "timenet/hello-world/1.0.0", source.get_manifest("timenet/hello-world", "1.0.0")
+
+
+def test_put_release_replaces_a_committed_copy(tmp_path):
+    registry = LocalRegistry(tmp_path / "reg")
+    first, _ = _release_directory(tmp_path / "first")
+    registry.put_release(first)
+    directory, manifest = _release_directory(tmp_path / "second", annotation="replaced")
+    assert registry.put_release(directory) == DatasetRef.parse("timenet/hello-world@1.0.0")
+    # A fresh registry, so that no cached manifest of the first copy answers.
+    assert LocalRegistry(registry.root).get_manifest("timenet/hello-world", "1.0.0") == manifest
+    version_dir = registry.root / "timenet/hello-world/1.0.0"
+    assert [path.name for path in version_dir.parent.iterdir()] == ["1.0.0"]  # no .tmp-* or .old-* left
+
+
+@pytest.mark.parametrize("manifest_text", [None, "{not json"])
+def test_put_release_refuses_a_directory_without_a_readable_manifest(tmp_path, manifest_text):
+    directory, _ = _release_directory(tmp_path / "source")
+    if manifest_text is None:
+        (directory / "manifest.json").unlink()
+    else:
+        (directory / "manifest.json").write_text(manifest_text)
+    registry = LocalRegistry(tmp_path / "reg")
+    with pytest.raises(TimeFFormatError, match=re.escape(str(directory / "manifest.json"))):
+        registry.put_release(directory)
+    assert not registry.root.exists()
 
 
 # ---- s3 catalog -------------------------------------------------------------------------------

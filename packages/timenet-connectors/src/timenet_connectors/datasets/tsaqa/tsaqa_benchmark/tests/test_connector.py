@@ -125,7 +125,7 @@ def test_every_task_holds_its_published_row():
 def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     original = _FixtureConnector().convert(_refs())
     registry = LocalRegistry(tmp_path / "registry")
-    registry.store(original)
+    registry.put_dataset(original)
     published = _published()
     with TimeFReader(registry.open_version("tsaqa/tsaqa-benchmark", "1.0.0")) as reader:
         restored = reader.read()

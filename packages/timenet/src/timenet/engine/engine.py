@@ -113,26 +113,26 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
     force: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Build and publish a dataset to a writable registry.
+    """Run a connector and publish its dataset to a registry.
 
-    The build reuses an existing version unless ``force`` is true.
-    All declared parents must already exist in the registry.
+    If the version already exists, return it unless ``force`` is set. Remote and S3 registries
+    require ``access: open`` on the dataset card and its lineage.
 
     Args:
         connector: The connector to build.
-        registry: The local, remote, or S3 registry to publish to.
-        cache_dir: Download directory to keep, or ``None`` for ``<TIMENET_CACHE>/<dataset_id>``.
-        keep_cache: Keep the default download cache after publishing.
-        progress_cb: Optional writer progress callback.
-        force: Republish an existing version.
-        pinned_by: Releases that read this dataset's files, with file pins the build must match.
+        registry: The destination registry.
+        cache_dir: Download directory, or ``None`` for ``<TIMENET_CACHE>/<dataset_id>``.
+        keep_cache: Keep the default cache after publishing (a supplied ``cache_dir`` is always kept).
+        progress_cb: Optional callback for write progress.
+        force: Republish even if the version already exists.
+        pinned_by: Releases that already read this release's files, with the pins that the new files must match.
 
     Returns:
         The published version string.
 
     Raises:
-        TimeFValidationError: If a card with parents has no ``compose`` override, or ``compose`` changes the card.
-        TimeNetAccessError: If a release or ancestor lacks open access for a nonlocal registry.
+        TimeFValidationError: If declared parents lack a custom ``compose``, or ``compose`` changes the dataset card.
+        TimeNetAccessError: If a nonlocal publish includes a dataset or ancestor without open access.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, and require_open_access
     values_backend = _check_values_backend(connector)
     metadata = connector.metadata()
@@ -152,10 +152,9 @@ def publish_pipeline(  # ruff: ignore[too-many-arguments]
         if not isinstance(registry, LocalRegistry):
             require_open_access(dataset.metadata, dataset.lineage.values())
         dataset.derive_schema()
-        # Pass pins only when there are any, so a registry written against the earlier store()
-        # signature keeps working for every other build.
-        pinned = {"pinned_by": pinned_by} if pinned_by else {}
-        registry.store(dataset, force=force, values_backend=values_backend, progress_cb=progress_cb, **pinned)
+        registry.put_dataset(
+            dataset, force=force, values_backend=values_backend, progress_cb=progress_cb, pinned_by=pinned_by
+        )
     if not keep_cache and cache_dir is None and cache.is_dir():
         shutil.rmtree(cache)
     return version
