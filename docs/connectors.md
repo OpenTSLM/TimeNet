@@ -391,6 +391,17 @@ An import copies every annotation of the parent objects. The child decides which
 publishes. For example, a parent can carry an official split as annotations. A child that follows
 that split keeps them. A child with a split of its own removes them and adds its own.
 
+## Small CSV tables
+
+Declare metadata rows with `timenet_connectors.sources.rows.SourceRow` and Pydantic fields.
+Use `iter_csv_rows` from `sources.csv` for typed CSV rows with source locations and optional
+uniqueness checks. Use `validate_row` for already-decoded JSON or Parquet values. Keep
+source-specific constraints and missing-value rules in the connector's model.
+Use `PublishedStrEnum[YourEnum]` for published string enum values. Enable
+`skip_repeated_header` only for releases that embed exact header repeats among data rows.
+
+See the [source-helper API reference](api/sources.md) for validation and parsing rules.
+
 ---
 
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
