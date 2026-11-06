@@ -222,7 +222,6 @@ class _Key(StrEnum):
     DEATH = "death"
     FOLLOW_UP = "follow_up"
     NN_PREDICTED_AGE = "nn_predicted_age"
-    NORMAL_ECG = "normal_ecg"
 
 
 _SEX_NOTE = "The patient's sex, decoded from exams.csv's is_male."
@@ -235,18 +234,31 @@ _NN_PREDICTED_AGE_NOTE = (
     "exams.csv's nn_predicted_age: the age the authors' network predicts from the exam's trace (Lima et al. 2021), "
     "for the gap between ECG-age and age."
 )
-_NORMAL_ECG_NOTE = (
-    "exams.csv's normal_ecg: whether the exam is normal by its clinical report and by the Glasgow program's "
-    "measurements (Lima et al. 2021)."
+_NORMAL_ECG_LABEL = Label(
+    name=_Column.NORMAL_ECG.value,
+    description="Normal ECG.",
 )
+_ABNORMAL_UNSPECIFIED_LABEL = Label(
+    name="abnormal_unspecified",
+    description=("Abnormal ECG with none of the six listed abnormalities. The release does not name the finding."),
+)
+# normal_ecg uses the release's column of the same name. abnormal_unspecified means not marked normal,
+# with all six diagnosis columns false. These two labels extend the authors' six-label task and each
+# appears alone. See the README for the source definitions, counts, and limits of the published columns.
 ABNORMALITIES = LabelSet(
     name="abnormality",
-    labels=tuple(Label(name=abnormality.value, description=_DESCRIPTIONS[abnormality]) for abnormality in _Abnormality),
+    labels=(
+        *(Label(name=abnormality.value, description=_DESCRIPTIONS[abnormality]) for abnormality in _Abnormality),
+        _NORMAL_ECG_LABEL,
+        _ABNORMAL_UNSPECIFIED_LABEL,
+    ),
     multi_label=True,
 )
-"""The six abnormalities, in the authors' output order, that every abnormality task shares.
+"""The six abnormalities in the authors' output order, then ``normal_ecg`` and ``abnormal_unspecified``.
 
-A target holds every abnormality that the exam is labelled with, so an empty target means that none applies.
+Every abnormality task shares it. A target holds every abnormality that the exam is labelled with, only
+``normal_ecg`` for a normal exam, or only ``abnormal_unspecified`` for an exam that is neither. No target is
+empty.
 """
 
 
@@ -803,23 +815,32 @@ def _age_task(record: Record, row: _ExamRow) -> ScalarPredictionTask:
     return task
 
 
-def _abnormality_task(record: Record, row: _ExamRow) -> ClassificationTask:
-    """Return an exam's abnormality task, which Ribeiro et al. 2020 classify with one sigmoid per abnormality.
-
-    The target holds every abnormality the exam is labelled with, in the authors' output order, and is empty
-    when it has none. ``normal_ecg`` is a task annotation, never model input.
+def _abnormality_targets(row: _ExamRow) -> tuple[str, ...]:
+    """Return the labels of an exam's abnormality task.
 
     Returns:
-        The multi-label classification task.
+        Every abnormality the exam is labelled with, in the authors' output order. An exam marked normal has only
+        ``normal_ecg``; an exam with all seven columns false has only ``abnormal_unspecified``.
     """
-    task = ClassificationTask(
+    if row.normal_ecg:
+        return (_NORMAL_ECG_LABEL.name,)
+    if not row.abnormalities:
+        return (_ABNORMAL_UNSPECIFIED_LABEL.name,)
+    return tuple(abnormality.value for abnormality in row.abnormalities)
+
+
+def _abnormality_task(record: Record, row: _ExamRow) -> ClassificationTask:
+    """Return the connector's eight-label task extending Ribeiro et al. 2020's six diagnosis classes.
+
+    Returns:
+        The multi-label classification task, whose targets ``_abnormality_targets`` gives.
+    """
+    return ClassificationTask(
         inputs=(record,),
-        targets=tuple(abnormality.value for abnormality in row.abnormalities),
+        targets=_abnormality_targets(row),
         label_set=ABNORMALITIES,
         split=_ABNORMALITY_SPLIT,
     )
-    task.annotate(Annotation(key=_Key.NORMAL_ECG, value=row.normal_ecg, description=_NORMAL_ECG_NOTE))
-    return task
 
 
 class Code15Connector(BaseConnector[Path]):

@@ -17,11 +17,11 @@ from timenet_connectors.datasets.zenodo.code_15.connector import _centred_paddin
 
 _HEADER = "exam_id,age,is_male,nn_predicted_age,1dAVb,RBBB,LBBB,SB,ST,AF,patient_id,death,timey,normal_ecg,trace_file"
 # The fixture's exams, as exams.csv writes them, in an order the parts don't follow. Exam 30 has ST and AF,
-# which the CSV writes ST first and the authors' output order AF first.
+# which the CSV writes ST first and the authors' output order AF first. Exam 40 is neither normal nor labelled.
 _ROWS = {
     50: "50,30,False,33.5,True,False,False,False,False,False,8,False,0.0,False,exams_part1.hdf5",
     10: "10,61,True,58.25,False,False,False,False,False,False,7,,,True,exams_part0.hdf5",
-    40: "40,45,False,49.0,False,True,False,False,False,False,9,True,1.25,False,exams_part1.hdf5",
+    40: "40,45,False,49.0,False,False,False,False,False,False,9,True,1.25,False,exams_part1.hdf5",
     30: "30,60,True,71.75,False,False,False,False,True,True,7,False,3.5,False,exams_part0.hdf5",
     20: "20,30,False,28.0,False,False,False,False,False,False,8,,,True,exams_part0.hdf5",
 }
@@ -179,7 +179,8 @@ _EXPECTED: dict[str, Any] = {
             4001,
         ),
     },
-    # Every exam's age task, then every exam's abnormality task. Exam 30's AF comes before its ST.
+    # Every exam's age task, then every exam's abnormality task. Exam 30's AF comes before its ST. Exam 40
+    # is neither normal nor labelled.
     "tasks": [
         (
             "ScalarPredictionTask",
@@ -222,25 +223,25 @@ _EXPECTED: dict[str, Any] = {
             30,
             ("AF", "ST"),
             "train",
-            {"normal_ecg": (False, None)},
+            {},
             (None, None, connector.ABNORMALITIES),
             _NO_INPUT,
         ),
         (
             "ClassificationTask",
             10,
-            (),
+            ("normal_ecg",),
             "train",
-            {"normal_ecg": (True, None)},
+            {},
             (None, None, connector.ABNORMALITIES),
             _NO_INPUT,
         ),
         (
             "ClassificationTask",
             40,
-            ("RBBB",),
+            ("abnormal_unspecified",),
             "train",
-            {"normal_ecg": (False, None)},
+            {},
             (None, None, connector.ABNORMALITIES),
             _NO_INPUT,
         ),
@@ -249,7 +250,7 @@ _EXPECTED: dict[str, Any] = {
             50,
             ("1dAVb",),
             "train",
-            {"normal_ecg": (False, None)},
+            {},
             (None, None, connector.ABNORMALITIES),
             _NO_INPUT,
         ),
@@ -281,7 +282,7 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     original = Code15Connector().convert([_release(tmp_path)])
     registry = LocalRegistry(tmp_path / "registry")
     registry.store(original)
-    with TimeFReader(registry.open_version("zenodo/code-15", "1.0.0")) as reader:
+    with TimeFReader(registry.open_version("zenodo/code-15", "1.0.1")) as reader:
         restored = reader.read()
         assert _output(restored) == _EXPECTED
         _check_values(restored)
@@ -290,10 +291,32 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
         assert len(label_sets) == 1
 
 
-def test_the_abnormality_label_set_is_multi_label_in_the_authors_order():
+def test_the_abnormality_label_set_is_the_authors_six_then_normal_ecg_and_abnormal_unspecified():
     assert connector.ABNORMALITIES.multi_label
-    assert connector.ABNORMALITIES.names == ("1dAVb", "RBBB", "LBBB", "SB", "AF", "ST")
+    assert connector.ABNORMALITIES.names == (
+        "1dAVb",
+        "RBBB",
+        "LBBB",
+        "SB",
+        "AF",
+        "ST",
+        "normal_ecg",
+        "abnormal_unspecified",
+    )
     assert connector.ABNORMALITIES.labels[4].description == "Atrial fibrillation."
+
+
+@pytest.mark.parametrize(
+    ("row", "targets"),
+    [
+        (_ROWS[10], ("normal_ecg",)),
+        (_ROWS[30], ("AF", "ST")),
+        (_ROWS[40], ("abnormal_unspecified",)),
+    ],
+)
+def test_every_exam_has_a_non_empty_abnormality_target(row: str, targets: tuple[str, ...]):
+    fields: dict[str, str] = dict(zip(_HEADER.split(","), row.split(","), strict=True))
+    assert connector._abnormality_targets(connector._parse_row(fields)) == targets
 
 
 def test_the_published_trace_can_be_rebuilt_from_the_stored_values(tmp_path):

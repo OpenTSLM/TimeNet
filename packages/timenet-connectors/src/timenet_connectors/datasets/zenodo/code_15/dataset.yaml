@@ -3,20 +3,22 @@
 # The connector loads it via DatasetMetadata.from_yaml(); the builder compiles it plus the schema
 # derived from the data into manifest.json.
 #
-# Training convention: each exam has two tasks, as the authors define them. Its patient's age, which
-# Lima et al. 2021 predict, is split test, as they hold CODE-15% out. Its abnormalities among the
-# six of Ribeiro et al. 2020, a multi-label task, are split train, as they train on the CODE cohort.
+# Each exam has an age task and a connector-defined classification task.
+# The age task uses split test, following Lima et al.'s held-out CODE-15% cohort.
+# The classification task uses split train, following Ribeiro et al.'s CODE training data.
+# It extends their six labels with normal_ecg and abnormal_unspecified. See the README.
 # Signals are 12 leads at 400 Hz in millivolts: the published values halved, without the zero
 # padding. The README says how to rebuild the authors' 4096-sample input.
 yaml_schema_version: 1
 dataset_id: zenodo/code-15
-dataset_version: 1.0.0
+dataset_version: 1.0.1
 name: CODE-15%
 description: >-
   12-lead ECGs of the Telehealth Network of Minas Gerais, Brazil (2010-2016), at
-  400 Hz, with the patient's age and sex, six abnormality labels, and mortality
-  follow-up. The release has 345,779 exams from 233,770 patients; the dataset
-  holds the 345,109 whose trace isn't zero everywhere, from 233,480 patients.
+  400 Hz, with the patient's age and sex, six abnormality labels, normal and
+  unspecified-abnormal labels, and mortality follow-up. The release has
+  345,779 exams from 233,770 patients. The dataset holds the 345,109 whose
+  trace isn't zero everywhere, from 233,480 patients.
 license: CC-BY-4.0
 source_url: https://zenodo.org/records/4916206
 citation: >-

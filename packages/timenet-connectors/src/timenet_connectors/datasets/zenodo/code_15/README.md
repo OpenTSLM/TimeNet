@@ -3,13 +3,13 @@
 CODE-15% ([Zenodo record 4916206][zenodo], version 1.0.0, license CC BY 4.0) holds 12-lead ECGs
 of the Telehealth Network of Minas Gerais, Brazil, recorded from 2010 to 2016. The record lists
 345,779 exams from 233,770 patients. Each exam has the patient's age and sex, six abnormality
-labels, and, on at most one exam per patient, mortality follow-up.
+labels, a normal-ECG flag, and, on at most one exam per patient, mortality follow-up.
 
 The authors use the data in two papers and three code repositories:
 
 | Source | What the connector takes from it |
 | --- | --- |
-| [Lima et al. 2021][lima], [`ecg-age-prediction`][age] | The age task, its split, `nn_predicted_age`, the mortality fields |
+| [Lima et al. 2021][lima], [`ecg-age-prediction`][age] | The age task, its split, `nn_predicted_age`, the mortality fields, the study definition of a normal ECG |
 | [Ribeiro et al. 2020][ribeiro], [`automatic-ecg-diagnosis`][diag] | The six abnormalities, their order, their split |
 | [`ecg-preprocessing`][prep] | How the HDF5 files were made: the scale, the leads, the padding |
 
@@ -90,28 +90,56 @@ The age and the labels are the targets of the tasks, so the Record does not hold
 
 ### Tasks
 
-Each exam has the two tasks that the authors define. Neither has a prompt or a scope. The stream
-holds every exam's age task, then every exam's abnormality task.
+Each exam has an age task and a connector-defined classification task based on the authors' work.
+Neither has a prompt or a scope. The stream holds every exam's age task, then every exam's
+abnormality task.
 
 | | Age | Abnormalities |
 | --- | --- | --- |
 | Paper | Lima et al. 2021 | Ribeiro et al. 2020 |
 | Type | `ScalarPredictionTask` | `ClassificationTask`, multi-label |
-| Target | `age` as a float, unit `year`, name `age` | Each abnormality of the exam, in the authors' output order. Empty if none |
-| Task annotation | `nn_predicted_age`, in years | `normal_ecg` |
+| Target | `age` as a float, unit `year`, name `age` | Each abnormality of the exam, in the authors' output order, `normal_ecg` for a normal exam, or `abnormal_unspecified` if neither. Never empty |
+| Task annotation | `nn_predicted_age`, in years | None |
 | Split | `test` | `train` |
 
 The abnormality order is the output order of the authors' model: `1dAVb, RBBB, LBBB, SB, AF, ST`.
 `exams.csv` writes ST before AF.
 
-All abnormality tasks share one label set, `abnormality`. A label set is the closed set of labels
-that a classification target takes. It lists the six abnormalities in the order above and gives the
-full name of each, such as `AF`: "Atrial fibrillation.". The set is multi-label, so a target
-holds every abnormality that applies to the exam. An empty target means that none of the six applies.
-TimeNet makes sure that each target fits the set when it writes the dataset.
+All abnormality tasks share one label set, `abnormality`. It contains the six labels above,
+then `normal_ecg` and `abnormal_unspecified`. Each label has a clinical description, such as
+"Atrial fibrillation." for `AF`. A target contains every label assigned to the exam.
+
+`normal_ecg` means the release marks the exam normal. `abnormal_unspecified` means it does not
+mark the exam normal and all six diagnosis columns are false. This is a connector-defined label.
+It does not name a finding outside the six. These two labels extend the authors' six-label task.
+They each appear alone. Apply this rule when decoding predictions from independent model outputs.
+
+Lima et al. define a normal CODE ECG using the clinical report and Glasgow measurements within
+normal ranges (Methods, "Electrocardiographic and clinical definitions"). Zenodo describes the
+`normal_ecg` column as an automatic annotation. Neither source confirms that this column follows
+Lima's exact definition. We use the column as published. Of the release's 345,779 rows, 134,657
+are marked normal, 37,775 have at least one of the six diagnosis columns true, and 173,347 (50.1%)
+have all seven columns false. No row is both marked normal and has a diagnosis column true.
+These counts include the all-zero traces that the connector excludes.
+
+Ribeiro et al. accept diagnoses when the cardiologist report agrees with the Glasgow statements
+or Minnesota codes. They also use measurement thresholds, further acceptance rules, and manual
+review (published paper, Methods, "Training and validation set annotation"). Rejected diagnoses
+are treated as absent. For example, a heart rate below 100 does not support sinus tachycardia
+under their rule. Lima et al. also describe manual review of disagreements (Methods, "The CODE
+cohort"). Neither the release nor the READMEs identifies the exact procedure used for its six
+columns. CODE reports cover other findings, but the release does not say which finding an exam
+labelled `abnormal_unspecified` has.
+
+The published Ribeiro paper reports 2,322,513 records split into 98% training and 2% validation
+(Results). Table 1 lists 35,759, 63,528, 39,842, 37,949, 41,862, and 49,872 positive
+labels in the order above. These sum to 268,812. Even without overlap, at least 2,053,701 records
+have none of the six labels. This shows that such records were included in the combined training
+and validation data. Their use as negative targets is an inference from the classification task.
+Our task keeps them but adds two labels, so it does not reproduce the authors' model output.
 
 Task annotations are never model input. `nn_predicted_age` lets a user compute the gap between the
-ECG age and the age, and `normal_ecg` selects the normal-ECG group of Lima et al.
+ECG age and the age.
 
 **Split.** The release has no split, so each task takes the role that its paper gives CODE-15%.
 Lima et al. hold it out to test their age model ("15% hold-out ... referred to as CODE-15%"), so
