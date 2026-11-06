@@ -334,7 +334,6 @@ def test_a_pinned_source_is_rebuilt_in_staging_and_published_only_if_it_matches(
         else:
             _store_from_card(release.dataset_id, store_root, force=False)
 
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(backend_module, "run_isolated_build", child)
 
     if backend == ValuesBackend.PARQUET:
@@ -512,7 +511,6 @@ def child_builds(monkeypatch) -> list:
     Returns:
         The list that receives one ``(dataset_id, force)`` entry for each build.
     """
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _prepared_builds(calls))
     return calls
@@ -521,7 +519,6 @@ def child_builds(monkeypatch) -> list:
 def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch):
     cards = _install_cards(monkeypatch, child={"parent": PARENT, "grand": GRAND}, parent={})
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
     out = tmp_path / "out"
@@ -543,7 +540,6 @@ def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch)
 @pytest.mark.parametrize("obtain", ["fetch_from", "build_parents"])
 def test_load_obtains_a_missing_parent_before_it_builds_and_reads(tmp_path, monkeypatch, obtain):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "out"))
     calls = []
@@ -631,7 +627,6 @@ def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, mo
         result = runner.invoke(app, argv)
         return "", result.exit_code
 
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     monkeypatch.setattr(env_module, "_run_build", child)
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
     monkeypatch.setattr(backend_module, "run_pipeline", run_pipeline)
@@ -696,7 +691,6 @@ def _remote_out(tmp_path, monkeypatch, cards) -> tuple[_Hosted, LocalRegistry, l
     monkeypatch.setattr(cli_module, "_resolve_target", lambda target: remote)
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _prepared_builds(calls))
     return remote, LocalRegistry(tmp_path / "home/registry"), calls
