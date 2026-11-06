@@ -48,6 +48,13 @@ class Step:
 
 
 @dataclass(frozen=True)
+class Plan:
+    """The copy and build steps for a dataset, in execution order."""
+
+    steps: tuple[Step, ...]
+
+
+@dataclass(frozen=True)
 class _Release:
     """A required release, its dependencies, and its planned action."""
 
@@ -64,11 +71,13 @@ class _Release:
 
 @dataclass
 class _Graph:
-    """A graph of required releases and their dependencies."""
+    """The releases a build needs and the dependencies between them."""
 
     output: WritableRegistry
     fetch_from: BaseRegistry | None
     build_parents: bool
+    open_only: bool
+    """Whether each visited release and its lineage must declare ``access: open``."""
     searched: str
     """The registries that the plan looks in, for the message of a missing release."""
     releases: dict[DatasetRef, _Release] = field(default_factory=dict)
@@ -79,12 +88,14 @@ class _Graph:
     """For each payload source: each release that reads its files, with its pins on them."""
 
     def visit(self, reference: DatasetRef, needed_by: DatasetRef, pinned: PayloadSource | None = None) -> None:
-        """Add a release and its dependencies to the graph.
+        """Add a release and its required dependencies to the graph.
+
+        Use :meth:`order` to check the completed graph for cycles.
 
         Args:
             reference: The release to add.
             needed_by: The release that needs ``reference``.
-            pinned: The expected file records for a payload source, or ``None`` to open it as a parent.
+            pinned: File pins from ``needed_by``, or ``None`` to open ``reference`` as a parent.
         """
         opened = pinned is None
         if pinned is not None:
@@ -94,13 +105,13 @@ class _Graph:
         # release again with its payload sources.
         if found is not None and (found.opened or not opened):
             return
-        manifest, action = _locate(self.output, self.fetch_from, reference)
+        manifest, action = _locate(self.output, self.fetch_from, reference, open_only=self.open_only)
         if manifest is None:
             card = _card_to_build(
                 reference,
                 needed_by,
-                self.output,
                 build_parents=self.build_parents,
+                open_only=self.open_only,
                 pinned=not opened,
                 searched=self.searched,
             )
@@ -185,37 +196,39 @@ class _Graph:
         ]
 
 
-def plan_parents(
+def plan_parents(  # ruff: ignore[too-many-arguments]
     dataset_id: str,
     output: WritableRegistry,
     *,
     fetch_from: BaseRegistry | None = None,
     build_parents: bool = False,
     force_build: bool = False,
+    open_access_only: bool = False,
 ) -> list[Step]:
-    """Plan the parent releases needed to build a dataset.
+    """Plan the copy and build steps for a dataset's parents.
 
-    Each parent needs its payload sources as well. The plan copies missing releases from
-    ``fetch_from`` or builds them if ``build_parents`` is true.
+    Copy missing parents and their payload sources from ``fetch_from``, or build them if enabled.
+    Remote registries and ``open_access_only`` require open access for releases and their lineage.
 
     Args:
         dataset_id: The dataset to build.
-        output: The destination registry.
-        fetch_from: The registry to copy missing parents from, or ``None`` to copy nothing.
+        output: The registry that the build writes to.
+        fetch_from: The registry to copy missing parents from for a local output, or ``None``.
         build_parents: Build missing parents with their installed connectors.
-        force_build: Plan a rebuild's parents even if ``output`` holds the requested release.
+        force_build: Plan parents for a rebuild even if the requested release already exists.
+        open_access_only: Require ``access: open`` for each release, including the requested release.
 
     Returns:
-        The steps to copy or build parents, with dependencies first.
+        The copy and build steps, with dependencies first.
 
     Raises:
         LookupError: If no installed connector declares a card for ``dataset_id``.
-        TimeNetInvalidCardError: If reading an installed connector's card fails.
-        TimeFValidationError: If parents form a cycle, a connector version differs, or copying targets a remote output.
-        TimeNetMissingParentError: If a required release is missing and ``build_parents`` is false.
+        TimeNetInvalidCardError: If an installed connector's card cannot be read.
+        TimeFValidationError: If parents form a cycle, versions conflict, or a copy targets a remote output.
+        TimeNetMissingParentError: If a parent or payload source is missing and ``build_parents`` is false.
         TimeNetDatasetNotFoundError: If a parent is missing and no installed connector builds it.
-        TimeNetFileError: If a local parent copy is damaged and ``fetch_from`` has no replacement.
-        TimeNetAccessError: If a release or its lineage lacks open access required by a registry.
+        TimeNetFileError: If a local parent is damaged and no replacement is available.
+        TimeNetAccessError: If a release or its lineage lacks required open access.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers of the walk
     if fetch_from is not None and not isinstance(output, LocalRegistry):
         # A registry that is not local accepts a child only if it already holds the parents. A copy
@@ -226,6 +239,9 @@ def plan_parents(
     card = find_card(dataset_id)
     if card is None:
         raise LookupError(f"no installed connector declares a card for {dataset_id!r}")
+    open_only = open_access_only or output.requires_open_access
+    if open_only:
+        require_open_access(card)
     # For a dataset without parents, the plan does not read the output, so the build makes no extra request.
     if not card.parents:
         return []
@@ -233,10 +249,11 @@ def plan_parents(
     # If the output already holds the requested release, a reader needs only its payload sources to
     # open it. Its declared parents matter only to a rebuild.
     held = None if force_build else _manifest(output, root)
-    if held is None and output.requires_open_access:
-        require_open_access(card)
+    if held is not None and open_only:
+        # The installed card has no lineage, so the check above does not see an ancestor that is not open.
+        require_open_access(held.metadata, held.lineage)
     searched = str(output) if fetch_from is None else f"{output} or {fetch_from}"
-    graph = _Graph(output, fetch_from, build_parents=build_parents, searched=searched)
+    graph = _Graph(output, fetch_from, build_parents=build_parents, open_only=open_only, searched=searched)
     # The graph holds the requested release before the walk starts. So a release that depends on it
     # closes a cycle, and the walk does not look it up again.
     if held is None:
@@ -316,20 +333,21 @@ def _manifest(registry: BaseRegistry, reference: DatasetRef) -> Manifest | None:
 
 
 def _locate(
-    output: WritableRegistry, fetch_from: BaseRegistry | None, reference: DatasetRef
+    output: WritableRegistry, fetch_from: BaseRegistry | None, reference: DatasetRef, *, open_only: bool
 ) -> tuple[Manifest | None, Literal["copy"] | None]:
     # The damage is raised from a variable, the access error by require_open_access.
     # ruff: ignore[docstring-extraneous-exception]
-    """Find a release in ``output`` or ``fetch_from``.
+    """Find a release in the output or the source registry.
 
-    A local output copy is valid only if its files exist and match their recorded sizes.
+    A local copy is intact when all files exist at their recorded sizes.
+    Enforce open access for the release and its lineage when ``open_only`` or a copy requires it.
 
     Returns:
-        ``(manifest, None)`` from ``output``, ``(manifest, "copy")`` from ``fetch_from``, or ``(None, None)`` if absent.
+        The manifest and action (``None`` to reuse, ``"copy"`` to fetch), or ``(None, None)`` if absent.
 
     Raises:
-        TimeNetFileError: If a local copy is damaged and ``fetch_from`` has no replacement.
-        TimeNetAccessError: If a release or its lineage lacks open access required by a registry.
+        TimeNetFileError: If the local copy is damaged and the source registry lacks the release.
+        TimeNetAccessError: If the release or its lineage lacks required open access.
     """
     manifest = _manifest(output, reference)
     damage = None
@@ -344,14 +362,14 @@ def _locate(
         except TimeNetFileError as error:
             manifest, damage = None, error
     if manifest is not None:
-        if output.requires_open_access:
+        if open_only:
             require_open_access(manifest.metadata, manifest.lineage)
         return manifest, None
     fetched = None if fetch_from is None else _manifest(fetch_from, reference)
     if fetched is not None:
         # A registry that requires open access serves only releases whose cards declare access: open.
         # So the plan refuses another release before any download.
-        if fetch_from is not None and fetch_from.requires_open_access:
+        if open_only or (fetch_from is not None and fetch_from.requires_open_access):
             require_open_access(fetched.metadata, fetched.lineage)
         return fetched, "copy"
     if damage is not None:
@@ -362,25 +380,25 @@ def _locate(
 def _card_to_build(  # ruff: ignore[too-many-arguments]
     reference: DatasetRef,
     needed_by: DatasetRef,
-    output: WritableRegistry,
     *,
     build_parents: bool,
+    open_only: bool,
     pinned: bool,
     searched: str,
 ) -> DatasetMetadata:
-    """Find a dataset card for building a missing release.
+    """Find a connector card for building a missing release.
 
     Returns:
-        The installed connector's card for the exact release in ``reference``.
+        The connector card for the exact dataset ID and version in ``reference``.
 
     Raises:
         TimeNetMissingParentError: If ``build_parents`` is false.
-        TimeNetAccessError: If the card lacks open access and the output requires it.
+        TimeNetAccessError: If ``open_only`` is set and the card does not declare ``access: open``.
     """  # ruff: ignore[docstring-extraneous-exception] - the access error is raised by require_open_access
     if not build_parents:
         raise TimeNetMissingParentError(reference, needed_by, searched, payload_source=pinned)
     card = _exact_card(reference)
-    if output.requires_open_access:
+    if open_only:
         require_open_access(card)
     return card
 

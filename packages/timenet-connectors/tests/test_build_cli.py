@@ -6,6 +6,7 @@ import sys
 import pytest
 from typer.testing import CliRunner
 
+from timenet.errors import TimeNetVersionUnavailableError
 from timenet.manifest import Manifest
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
@@ -89,6 +90,23 @@ def test_build_isolates_when_the_flag_overrides_the_setting(monkeypatch, tmp_pat
     assert called["isolated"] is True
 
 
+def test_build_takes_an_exact_release_and_refuses_another_version(monkeypatch, tmp_path):
+    built = []
+
+    def _fake_isolated(dataset_id, root, **kwargs):
+        built.append(dataset_id)
+        return Path(root) / "timenet/hello-world/1.0.0"
+
+    monkeypatch.setattr(cli_module, "run_isolated", _fake_isolated)
+    result = runner.invoke(app, ["build", "timenet/hello-world@1.0.0", "--out", str(tmp_path)])
+
+    assert result.exit_code == 0
+    assert built == ["timenet/hello-world"]
+    result = runner.invoke(app, ["build", "timenet/hello-world@9.9.9", "--out", str(tmp_path)])
+    assert isinstance(result.exception, TimeNetVersionUnavailableError)
+    assert built == ["timenet/hello-world"]
+
+
 def test_build_rejects_an_unknown_id_without_importing_anything(monkeypatch, tmp_path):
     # A connector's dependencies live in its own environment, not this one, so importing one here
     # to answer "which ids exist?" would raise ModuleNotFoundError instead of the unknown-id error.
@@ -104,6 +122,15 @@ def test_build_rejects_an_unknown_id_without_importing_anything(monkeypatch, tmp
     assert "no connector for" in result.output
     connectors = [n for n in sys.modules if n.startswith(prefix) and n.count(".") >= 3]
     assert connectors == []
+
+
+def test_build_rejects_an_id_that_no_card_declares_and_names_the_known_ids(tmp_path):
+    # The module path of the connector accepts this spelling, but a dataset ID must match its card.
+    result = runner.invoke(app, ["build", "timenet/hello_world", "--out", str(tmp_path)])
+
+    assert result.exit_code == 2
+    assert "no connector for 'timenet/hello_world'" in result.output
+    assert "timenet/hello-world" in result.output
 
 
 def test_build_forwards_quiet_to_the_isolated_child(monkeypatch, tmp_path):

@@ -14,7 +14,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
-from timenet.builders import exact_builder, find_builder
+from timenet.builders import claim
 from timenet.config import settings
 from timenet.dataset import TimeFDataset
 from timenet.errors import (
@@ -401,7 +401,7 @@ def _prepare(
     Raises:
         TimeNetMissingParentError: If a payload source is missing and cannot be copied or built.
         TimeNetInvalidCardError: If a connector's dataset card cannot be read.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _obtain and exact_builder
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by _obtain and claim
     try:
         manifest = registry.get_manifest(dataset_id, version)
     except TimeNetDatasetNotFoundError as miss:
@@ -417,9 +417,10 @@ def _prepare(
             )
         except TimeNetMissingParentError as missing:
             source = missing.missing
-            builder = exact_builder(source) if auto_build and source not in built else None
-            if builder is None:
+            found = claim(source.dataset_id) if auto_build and source not in built else None
+            if found is None or found.release != source:
                 raise
+            builder = found.backend
             pins = next(pinned for pinned in manifest.payload_sources.values() if pinned.release == source)
             builder.build(
                 source.dataset_id,
@@ -443,27 +444,24 @@ def _obtain(  # ruff: ignore[too-many-arguments]
     """Find a version that the local registry lacks in ``fetch_from``, or build it.
 
     Returns:
-        The manifest of the version, from ``fetch_from`` or from the local registry after the
-        build. If the manifest comes from ``fetch_from``, the caller then copies the files of the
-        version.
+        The manifest from ``fetch_from`` or the local build.
 
     Raises:
-        TimeNetDatasetNotFoundError: If neither ``fetch_from`` nor a connector provides the version,
-            or if the connector declares another version. In the first case, the message names each
-            keyword that the call did not use and that can provide the version.
-        TimeNetInvalidCardError: If the card of the connector cannot be read.
+        TimeNetDatasetNotFoundError: If neither source provides the release or the connector declares another version.
+        TimeNetInvalidCardError: If the connector's card cannot be read.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by declared_version
     if fetch_from is not None:
         try:
             return fetch_from.get_manifest(dataset_id, version)
         except TimeNetDatasetNotFoundError:
             pass
-    builder = find_builder(dataset_id) if auto_build else None
-    if builder is None:
+    found = claim(dataset_id) if auto_build else None
+    if found is None:
         hint = _missing_hint(auto_build=auto_build, fetch_from=fetch_from)
         if hint is None:
             raise miss
         raise TimeNetDatasetNotFoundError(f"{miss}. {hint}") from miss
+    builder = found.backend
     # A connector produces one declared version. Reject a pin it cannot satisfy before the
     # build runs, so a wrong pin fails fast instead of after a full build. Sentinels are
     # not pins, so a fresh build satisfies them.

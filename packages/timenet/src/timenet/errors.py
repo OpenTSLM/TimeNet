@@ -19,6 +19,7 @@ from typing import TYPE_CHECKING, Literal
 if TYPE_CHECKING:
     from timenet.types.access import Access, AccessRequirement
     from timenet.types.references import DatasetRef
+    from timenet.types.version import Version
 
 
 class TimeNetError(Exception):
@@ -161,6 +162,30 @@ class TimeFNullValuesError(TimeFValidationError):
     """Values contain nulls where the requested form, such as a NumPy array, cannot hold them."""
 
 
+class TimeNetVersionUnavailableError(TimeNetDatasetNotFoundError, TimeFValidationError):
+    """The installed connector cannot build the requested dataset version.
+
+    Attributes:
+        release: The requested release.
+        declared: The version that the connector builds.
+        hint: Suggested next steps to append to the error message, or ``None``.
+    """
+
+    def __init__(self, release: "DatasetRef", declared: "Version") -> None:
+        super().__init__(release, declared)
+        self.release = release
+        self.declared = declared
+        self.hint: str | None = None
+
+    def __str__(self) -> str:
+        message = (
+            f"connector for {self.release.dataset_id!r} builds version {self.declared}, "
+            f"not the requested {self.release.version}. "
+            f"Ask for version {self.declared}, or leave out the version."
+        )
+        return message if self.hint is None else f"{message} {self.hint}"
+
+
 class TimeNetInvalidCardError(TimeNetError, ValueError):
     """A dataset card YAML is malformed or fails schema validation (raised while building)."""
 
@@ -171,6 +196,10 @@ class TimeNetBuildError(TimeNetError):
 
 class TimeNetWarning(UserWarning):
     """Base class for all TimeNet warnings."""
+
+
+class ConnectorCardWarning(TimeNetWarning):
+    """An unreadable or invalid connector card excludes its dataset from listings."""
 
 
 class SpanOutsideWindowWarning(TimeNetWarning):
