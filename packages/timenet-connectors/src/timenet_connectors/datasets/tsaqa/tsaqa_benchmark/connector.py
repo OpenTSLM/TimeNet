@@ -18,14 +18,13 @@ from functools import lru_cache
 import hashlib
 import itertools
 import json
-import math
 from pathlib import Path
 import re
 from typing import Any, ClassVar, NamedTuple, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from pydantic import field_validator
+from pydantic import Field, field_validator
 
 from timenet.dataset import Record, Signal, SignalChannel, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
@@ -36,6 +35,7 @@ from timenet.types.shared_loading import SharedChannelLoader
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.sources.parquet import iter_parquet_rows
 from timenet_connectors.sources.rows import NonBlankText, PublishedStrEnum, SourceRow, validate_row
+from timenet_connectors.sources.signals import numeric_signal
 
 
 @unique
@@ -317,14 +317,15 @@ def _values_digest(series: Iterable[Sequence[float]]) -> bytes:
     return digest.digest()
 
 
+class _SeriesRow(SourceRow):
+    """A decoded source series, before exact numerical conversion."""
+
+    series: list[int | float] = Field(min_length=1)
+
+
 def _series_values(value: Any) -> list[float]:
-    if not isinstance(value, list) or not value or not all(_is_finite(item) for item in value):
-        raise TimeNetConnectorError("a series is a nonempty JSON list of finite numbers")
-    return [float(item) for item in value]
-
-
-def _is_finite(item: Any) -> bool:
-    return isinstance(item, (int, float)) and not isinstance(item, bool) and math.isfinite(item)
+    parsed = validate_row({"series": value}, _SeriesRow, location="series")
+    return numeric_signal(parsed.series, "series", spec=_SERIES_SPEC).to_pylist()
 
 
 def _input_series(task: _Task, text: str) -> list[list[float]]:

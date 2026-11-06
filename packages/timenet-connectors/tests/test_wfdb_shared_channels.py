@@ -88,7 +88,7 @@ def test_rejects_a_decoded_shape_that_disagrees_with_the_header(tmp_path, monkey
         dat.write_bytes(dat.read_bytes()[:-4])
     else:
         monkeypatch.setattr(connector, "_wfdb", lambda: SimpleNamespace(rdsamp=lambda path: (np.zeros((2, 2)), {})))
-    with pytest.raises(TimeNetConnectorError, match=r"record: expected samples with shape \(3, 2\)"):
+    with pytest.raises(TimeNetConnectorError, match=r"record: waveforms: expected 3 samples, got 2"):
         connector._lead_loaders()(base, header, 0)()
 
 
