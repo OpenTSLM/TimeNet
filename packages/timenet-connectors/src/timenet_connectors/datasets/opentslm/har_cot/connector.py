@@ -4,8 +4,8 @@ Each CSV row of the OpenTSLM release is one 2.56-second window of a triaxial acc
 50 Hz, so each axis has 128 values. Each row becomes one Record and one ClassificationTask. The
 target is the activity label. The rationale is the GPT-4o text that leads to the label.
 
-The task also keeps the GPT-4o prompt that produced the rationale, as a task annotation. That
-prompt names the correct activity, so it is not an input annotation and a model does not see it.
+The release also holds the GPT-4o prompt that produced each rationale. The connector does not
+keep it, because the prompt names the correct activity and the OpenTSLM paper documents it.
 """
 
 from collections.abc import Iterator, Mapping
@@ -13,7 +13,7 @@ import csv
 from dataclasses import dataclass
 import json
 from pathlib import Path
-from typing import Self
+from typing import Literal, Self
 
 import numpy as np
 
@@ -21,7 +21,7 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetConnectorError
-from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
+from timenet.types import ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import ensure_archive
 
 
@@ -33,6 +33,7 @@ SPLIT_FILES: Mapping[Split, str] = {
     Split.TEST: "har_cot_test_cot.csv",
 }
 COLUMNS = ("x_axis", "y_axis", "z_axis", "label", "prompt", "rationale")
+AxisColumn = Literal["x_axis", "y_axis", "z_axis"]
 SAMPLES_PER_WINDOW = 128
 """2.56 seconds at 50 Hz."""
 
@@ -60,7 +61,7 @@ ACCELERATION = TimeSeriesSpec(
 SAMPLED_AT_50_HZ = RegularAxis.from_rate_hz(50)
 
 
-def _parse_axis(row: Mapping[str, str], column: str, *, location: str) -> np.ndarray:
+def _parse_axis(row: dict[str, str], column: AxisColumn) -> np.ndarray:
     """Parse one axis cell of a row into float64 values.
 
     The cells are Python list literals of floats. JSON reads them to the same values, and faster
@@ -72,7 +73,7 @@ def _parse_axis(row: Mapping[str, str], column: str, *, location: str) -> np.nda
     Raises:
         TimeNetConnectorError: If the cell does not hold 128 finite numbers.
     """
-    message = f"{location}: {column} must hold {SAMPLES_PER_WINDOW} finite numbers"
+    message = f"{column} must hold {SAMPLES_PER_WINDOW} finite numbers"
     try:
         values = np.array(json.loads(row[column]), dtype=np.float64)
     except (TypeError, ValueError) as exc:
@@ -83,36 +84,38 @@ def _parse_axis(row: Mapping[str, str], column: str, *, location: str) -> np.nda
     return values
 
 
-def _is_repeated_header(row: Mapping[str, str]) -> bool:
+def _is_repeated_header(row: dict[str, str]) -> bool:
     """Return whether a row repeats the header line, with each cell equal to its column name."""
     return all(row[column] == column for column in COLUMNS)
 
 
 @dataclass(frozen=True)
 class HarCotRow:
-    """One window of the release: three accelerometer axes, the label, and the two GPT-4o texts."""
+    """One window of the release: three accelerometer axes, the label, and the GPT-4o rationale."""
 
     x: np.ndarray
     y: np.ndarray
     z: np.ndarray
     label: str
-    generation_prompt: str
-    """The prompt that GPT-4o got to write the rationale. It names the correct activity."""
     rationale: str
 
     @classmethod
-    def from_csv_row(cls, row: Mapping[str, str], *, location: str) -> Self:
+    def from_csv_row(cls, row: dict[str, str]) -> Self:
         """Parse one data row of a split file.
 
         Returns:
             The parsed row.
+
+        Raises:
+            TimeNetConnectorError: If the label is not an activity of the label set.
         """
+        if row["label"] not in ACTIVITY.names:
+            raise TimeNetConnectorError(f"label {row['label']!r} is not one of {ACTIVITY.names}")
         return cls(
-            x=_parse_axis(row, "x_axis", location=location),
-            y=_parse_axis(row, "y_axis", location=location),
-            z=_parse_axis(row, "z_axis", location=location),
+            x=_parse_axis(row, "x_axis"),
+            y=_parse_axis(row, "y_axis"),
+            z=_parse_axis(row, "z_axis"),
             label=row["label"],
-            generation_prompt=row["prompt"],
             rationale=row["rationale"],
         )
 
@@ -135,18 +138,12 @@ class HarCotRow:
         Returns:
             The task, not yet added to a dataset.
         """
-        generation_prompt = Annotation(
-            key="rationale_generation_prompt",
-            value=self.generation_prompt,
-            description="The GPT-4o prompt that produced the rationale. It names the correct activity.",
-        )
         return ClassificationTask(
             inputs=(record,),
             targets=(self.label,),
             label_set=ACTIVITY,
             rationale=self.rationale,
             split=split,
-            annotations=(generation_prompt,),
         )
 
 
@@ -167,7 +164,8 @@ class HarCotSplitFile:
             Each parsed data row.
 
         Raises:
-            TimeNetConnectorError: If the header is not the expected one.
+            TimeNetConnectorError: If the header is not the expected one, or a data row is malformed.
+                The message names the file and the data row.
         """
         with self.path.open(newline="", encoding="utf-8") as stream:
             reader = csv.DictReader(stream)
@@ -175,7 +173,11 @@ class HarCotSplitFile:
                 raise TimeNetConnectorError(f"{self.path.name}: expected columns {COLUMNS}, got {reader.fieldnames}")
             data_rows = (row for row in reader if not _is_repeated_header(row))
             for number, row in enumerate(data_rows, start=1):
-                yield HarCotRow.from_csv_row(row, location=f"{self.path.name} data row {number}")
+                try:
+                    parsed = HarCotRow.from_csv_row(row)
+                except TimeNetConnectorError as exc:
+                    raise TimeNetConnectorError(f"{self.path.name} data row {number}: {exc}") from exc
+                yield parsed
 
 
 class HarCotConnector(BaseConnector[HarCotSplitFile]):

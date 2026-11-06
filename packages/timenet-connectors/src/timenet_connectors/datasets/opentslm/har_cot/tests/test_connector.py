@@ -28,6 +28,7 @@ _Y_AXIS_SHIFT = 1.0
 """The y axis starts above the x axis, so a swap of the two axes changes the values."""
 _Z_AXIS_SHIFT = 9.81
 """The z axis starts at gravity in m/s², as on an accelerometer at rest."""
+_AXIS_ERROR = f"x_axis must hold {SAMPLES_PER_WINDOW} finite numbers"
 
 
 def _window(start: float) -> list[float]:
@@ -84,25 +85,24 @@ def test_each_window_becomes_a_record_and_a_classification_task(tmp_path):
         assert task.targets is not None
         assert read_value(task.targets[0]) == row["label"]
         assert read_value(task.rationale) == row["rationale"]
-        # The generation prompt names the answer. It is task provenance and never a model input.
+        # The generation prompt of the release names the answer, so the dataset does not keep it.
         assert task.prompt is None
-        assert task.input_annotations == ()
-        (annotation,) = task.annotations
-        assert annotation.key == "rationale_generation_prompt"
-        assert read_value(annotation.value) == row["prompt"]
+        assert task.annotations == ()
 
 
 @pytest.mark.parametrize(
-    "x_axis",
-    [json.dumps(_window(0.0)[:-1]), json.dumps([None, *_window(0.0)[1:]])],
-    ids=["one value too few", "a null value"],
+    ("change", "message"),
+    [
+        ({"x_axis": json.dumps(_window(0.0)[:-1])}, _AXIS_ERROR),
+        ({"x_axis": json.dumps([None, *_window(0.0)[1:]])}, _AXIS_ERROR),
+        ({"label": "jogging"}, "label 'jogging' is not one of"),
+    ],
+    ids=["one value too few", "a null value", "an unknown label"],
 )
-def test_a_malformed_axis_raises_with_its_location(tmp_path, x_axis):
-    rows = [*_TEST_ROWS, _row("lying", "walking", start=6.0) | {"x_axis": x_axis}]
+def test_a_malformed_row_raises_with_its_location(tmp_path, change, message):
+    rows = [*_TEST_ROWS, _row("lying", "walking", start=6.0) | change]
     split_file = _write_split_file(tmp_path, Split.TEST, rows)
-    with pytest.raises(
-        TimeNetConnectorError, match=rf"test\.csv data row 3: x_axis must hold {SAMPLES_PER_WINDOW} finite numbers"
-    ):
+    with pytest.raises(TimeNetConnectorError, match=rf"test\.csv data row 3: {message}"):
         HarCotConnector().convert([split_file])
 
 

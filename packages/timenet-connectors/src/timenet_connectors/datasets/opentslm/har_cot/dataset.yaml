@@ -11,12 +11,12 @@ description: >-
   that all of them have. The release states no unit. The values are in meters per second squared,
   because a resting window has a magnitude of about 9.8. The release keeps no subject or source
   dataset of a window. GPT-4o (gpt-4o-2024-08-06, temperature 0.3, seed 42) wrote each rationale
-  from a plot of the window, the correct label, and one dissimilar label. Each task keeps that
-  prompt as its rationale_generation_prompt annotation. In 216 windows (158 train, 35 validation,
+  from a plot of the window, the correct label, and one dissimilar label. The dataset does not
+  keep that prompt, because it names the correct label. In 216 windows (158 train, 35 validation,
   23 test), the rationale concludes with the dissimilar label instead of the correct one. The
   dataset keeps these windows as released.
 license: MIT
-source_url: https://github.com/OpenTSLM/OpenTSLM
+source_url: https://polybox.ethz.ch/index.php/s/kD74GnMYxn3HBEM
 citation: >-
   Langer, P., et al. (2025). OpenTSLM: Time-Series Language Models for Reasoning over Multivariate
   Medical Text- and Time-Series Data. https://doi.org/10.48550/arXiv.2510.02410
