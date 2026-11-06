@@ -509,3 +509,41 @@ multiline row's starting line. Nonblank cell text is never trimmed.
 ---
 
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
+
+### Validate decoded fields and samples
+
+Use `timenet_connectors.sources.fields` for decoded JSON structure (`as_object`,
+`as_list`, `field`, `text`, `text_field`), strict numeric lists (`numbers`), and
+CSV integer cells (`parse_int`, `parse_whole_number`). These functions reject
+invalid values without trimming, filling, or repairing them. `numbers` retains
+its NumPy return type and defaults to a nonempty float64 list with exact casting.
+
+Use `sources.signals.numeric_signal` when samples must satisfy a `TimeSeriesSpec`:
+
+```python
+from timenet_connectors.sources.fields import error_context
+from timenet_connectors.sources.signals import numeric_signal
+
+with error_context(f"{path} row {row_index}"):
+    samples = numeric_signal(
+        decoded_values,
+        "lead II",
+        spec=ecg_spec,
+        n_values=expected_samples,
+        casting="float_rounding",
+    )
+```
+
+It returns an independent Arrow array for eager construction or a lazy loader.
+Exact casting is the default; `float_rounding` permits float-to-float rounding
+(including underflow), but never overflow or inexact integer conversion. Explicit
+nulls require a nullable spec. NaN and infinity are rejected. Only scalar numeric
+specs are supported initially. Empty arrays are allowed unless a declared sample
+count rules them out; source-specific nonempty requirements remain in the reader.
+
+For a decoded NumPy recording matrix, `check_channel_matrix` checks the explicit
+sample axis and channel/sample counts without scanning or rearranging values.
+Validate each channel separately, after source-specific calibration and before
+returning it to a shared cache. Keep unit conversion, timing, channel identity,
+source-change checks, and domain constraints in the reader. Avoid validating a
+list with both `numbers` and `numeric_signal` when one already covers the contract.
