@@ -12,7 +12,7 @@ from timenet.types import (
     TimePoint,
 )
 from timenet_connectors.datasets.physionet.sleep_edfx import tasks
-from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
+from timenet_connectors.datasets.physionet.sleep_edfx.labels import AnnotationKey
 
 
 _RECORDING_ID = "SC4901E0"
