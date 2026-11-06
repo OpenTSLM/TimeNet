@@ -294,6 +294,11 @@ def test_every_window_becomes_a_record_with_its_signals(converted):
                 else np.asarray(row[signal.name], dtype=np.float32)
             )
             np.testing.assert_array_equal(signal.to_numpy(), expected)
+            if signal.name == "sky_code":
+                # The codebook order is the amount of cloud, so a model may read the codes as numbers.
+                assert signal.spec.ordered
+                assert signal.spec.description is not None
+                assert "not amounts" in signal.spec.description
             assert _offsets(signal) == want_offsets
 
     # The event types are the event-type tasks' label set, so the dataset needs no annotation for them.

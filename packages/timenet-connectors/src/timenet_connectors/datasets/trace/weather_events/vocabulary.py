@@ -182,6 +182,13 @@ SKY_COVER_LABELS = (
     "partial obscuration",
 )
 SKY_COVER_CODEBOOK = pa.array(SKY_COVER_LABELS, type=pa.string())
+# What the codes mean, for a model that reads them. The order of the codebook is the amount of cloud
+# for codes 00-08 only, so the description says which codes are not amounts.
+SKY_COVER_DESCRIPTION = (
+    "Oktas are the eighths of the sky that cloud covers, from 0 oktas (clear) to 8 oktas "
+    "(overcast). Sky obscured and partial obscuration are not amounts of cloud: the sky could not "
+    "be seen, fully or in part."
+)
 
 
 @unique
@@ -259,5 +266,7 @@ _SPECS = {
         unit_value=ureg.dimensionless,
         dtype="enum",
         categories=SKY_COVER_LABELS,
+        ordered=True,
+        description=SKY_COVER_DESCRIPTION,
     ),
 }

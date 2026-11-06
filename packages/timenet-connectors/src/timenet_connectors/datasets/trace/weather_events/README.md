@@ -62,7 +62,9 @@ Source, `station`, with seven Signals on one time axis:
 
 The units come from the field table of the Hugging Face card. The `sky_code` values follow
 [NCEI's hourly coverage code table][ncei-sky]. Codes 00–08 count oktas (eighths of the sky that
-cloud covers), 09 means that the sky is obscured, and 10 means partial obscuration.
+cloud covers), 09 means that the sky is obscured, and 10 means partial obscuration. The spec is
+`ordered`, because the codebook order is the amount of cloud, and its `description` says that the
+last two codes are not amounts.
 
 [ncei-sky]: https://www.aos.wisc.edu/oldsco/stations/NCEI-hrly-doc_for_clds-BNA.txt
 
