@@ -23,10 +23,12 @@ records for the recording.
 import ast
 import asyncio
 from collections.abc import Iterator, Mapping
-import csv
 from dataclasses import dataclass
+from decimal import Decimal
 from pathlib import Path
-from typing import ClassVar
+from typing import Annotated, ClassVar
+
+from pydantic import Field
 
 from timenet.connectors import BaseConnector
 from timenet.connectors.context import BuildContext
@@ -40,6 +42,8 @@ from timenet.types import (
 )
 from timenet.types.reference_keys import ParentAlias
 from timenet_connectors.download import Artifact, download_files, ensure_archive, find_dir_containing
+from timenet_connectors.sources.csv import iter_csv_rows
+from timenet_connectors.sources.rows import NonBlankText, SourceRow, validate_row
 
 
 # The per-template answer options (the multiple-choice candidates), keyed by template_id. The URL
@@ -86,18 +90,6 @@ class EcgQaCotSource:
 
     answers_path: Path
     cot_csvs: tuple[tuple[Split, Path], ...]  # (split, csv_path) for train / validation / test
-
-
-def _parse_int(cell: str) -> int:
-    """Parse a whole number that a source CSV writes as a float, such as ``"56.0"``.
-
-    Args:
-        cell: The CSV cell.
-
-    Returns:
-        The integer value.
-    """
-    return int(float(cell))
 
 
 def _parse_ecg_id(raw: str) -> int:
@@ -152,7 +144,14 @@ def _ptbxl_recording(ecg_id: int, record: Record) -> _PtbxlRecording:
         raise TimeNetConnectorError(f"PTB-XL ecg_id {ecg_id}: sex is empty")
     if sex not in _SEXES:
         raise TimeNetConnectorError(f"PTB-XL ecg_id {ecg_id}: sex {sex!r} is not male or female")
-    return _PtbxlRecording(patient_id=_parse_int(patients[0]), age=age, sex=sex, annotations=values)
+    return _PtbxlRecording(
+        patient_id=int(
+            validate_row({"patient_id": patients[0]}, _PatientRow, location=f"PTB-XL ecg_id {ecg_id}").patient_id
+        ),
+        age=age,
+        sex=sex,
+        annotations=values,
+    )
 
 
 def _text(values: Mapping[str, object], key: str) -> str:
@@ -205,6 +204,41 @@ class _CotRow:
     rationale: str
 
 
+_WholeNumber = Annotated[Decimal, Field(strict=False, allow_inf_nan=False, max_digits=4300, decimal_places=0)]
+
+
+class _PatientRow(SourceRow):
+    """A PTB-XL subject identifier written as decimal text."""
+
+    patient_id: _WholeNumber
+
+
+class _TemplateRow(SourceRow):
+    """Published answer choices for one exact whole-number template ID."""
+
+    template_id: _WholeNumber
+    classes: NonBlankText
+    question_type: str = ""
+
+
+class _TemplateClasses(SourceRow):
+    """Decoded answer options, preserving the published strings and their order."""
+
+    classes: list[str]
+
+
+class _CotCsvRow(SourceRow):
+    """Published question columns, with verbatim optional clinical context."""
+
+    ecg_id: NonBlankText
+    template_id: _WholeNumber
+    question_type: NonBlankText
+    question: NonBlankText
+    answer: NonBlankText
+    rationale: str
+    clinical_context: str = ""
+
+
 def _load_template_answers(path: Path) -> dict[int, tuple[str, ...]]:
     """Load per-template answer options from ``answers_for_each_template.csv``.
 
@@ -213,12 +247,20 @@ def _load_template_answers(path: Path) -> dict[int, tuple[str, ...]]:
 
     Returns:
         A mapping of ``template_id`` to its ordered answer options.
+
+    Raises:
+        TimeNetConnectorError: If a classes cell is not a Python literal list of strings.
+            The error names the file, physical row line, and field.
     """
     answers: dict[int, tuple[str, ...]] = {}
-    with path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            classes = ast.literal_eval(row["classes"])
-            answers[_parse_int(row["template_id"])] = tuple(str(option) for option in classes)
+    for line, row in iter_csv_rows(path, _TemplateRow, unique="template_id"):
+        location = f"{path}:{line}"
+        try:
+            decoded = ast.literal_eval(row.classes)
+        except (SyntaxError, ValueError) as exc:
+            raise TimeNetConnectorError(f"{location}: classes: invalid Python literal") from exc
+        parsed = validate_row({"classes": decoded}, _TemplateClasses, location=location)
+        answers[int(row.template_id)] = tuple(parsed.classes)
     return answers
 
 
@@ -231,16 +273,15 @@ def _iter_cot_rows(csv_path: Path) -> Iterator[_CotRow]:
     Yields:
         Each parsed row. Rationale and clinical-context fields span multiple physical lines.
     """
-    with csv_path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            yield _CotRow(
-                ecg_id=_parse_ecg_id(row["ecg_id"]),
-                template_id=_parse_int(row["template_id"]),
-                question_type=row["question_type"],
-                question=row["question"],
-                answer=row["answer"],
-                rationale=row["rationale"],
-            )
+    for _line, row in iter_csv_rows(csv_path, _CotCsvRow):
+        yield _CotRow(
+            ecg_id=_parse_ecg_id(row.ecg_id),
+            template_id=int(row.template_id),
+            question_type=row.question_type,
+            question=row.question,
+            answer=row.answer,
+            rationale=row.rationale,
+        )
 
 
 class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):

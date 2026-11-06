@@ -28,7 +28,7 @@ _Y_AXIS_SHIFT = 1.0
 """The y axis starts above the x axis, so a swap of the two axes changes the values."""
 _Z_AXIS_SHIFT = 9.81
 """The z axis starts at gravity in m/s², as on an accelerometer at rest."""
-_AXIS_ERROR = f"x_axis must hold {SAMPLES_PER_WINDOW} finite numbers"
+_AXIS_ERROR = f"axis must hold {SAMPLES_PER_WINDOW} finite numbers"
 
 
 def _window(start: float) -> list[float]:
@@ -102,7 +102,7 @@ def test_each_window_becomes_a_record_and_a_classification_task(tmp_path):
 def test_a_malformed_row_raises_with_its_location(tmp_path, change, message):
     rows = [*_TEST_ROWS, _row("lying", "walking", start=6.0) | change]
     split_file = _write_split_file(tmp_path, Split.TEST, rows)
-    with pytest.raises(TimeNetConnectorError, match=rf"test\.csv data row 3: {message}"):
+    with pytest.raises(TimeNetConnectorError, match=rf"test\.csv:12: {next(iter(change))}: Value error, {message}"):
         HarCotConnector().convert([split_file])
 
 

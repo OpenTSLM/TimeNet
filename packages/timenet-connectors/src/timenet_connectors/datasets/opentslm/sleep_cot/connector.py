@@ -7,15 +7,23 @@ the stage.
 """
 
 from collections import Counter
-import csv
 from dataclasses import dataclass
 import json
 from pathlib import Path
 import re
-from typing import Self
+from typing import Annotated, Self
 
 import numpy as np
-from pydantic import BaseModel, ConfigDict, NonNegativeInt, ValidationError, model_validator
+from pydantic import (
+    BaseModel,
+    ConfigDict,
+    Field,
+    NonNegativeInt,
+    PlainValidator,
+    ValidationError,
+    field_validator,
+    model_validator,
+)
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import Record, Signal, Source, TimeFDataset
@@ -23,6 +31,8 @@ from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import Artifact, download_files
+from timenet_connectors.sources.csv import iter_csv_rows
+from timenet_connectors.sources.rows import SourceRow
 
 
 SLEEP_COT_URL = "https://polybox.ethz.ch/index.php/s/ZryWSdCFJZ9JR3R/download"
@@ -56,7 +66,7 @@ _RECORDING_NAME = re.compile(r"(?P<study>sc4|st7)(?P<subject>[0-9]{2})[0-9][a-z]
 _STUDIES = {"sc4": "sleep-cassette", "st7": "sleep-telemetry"}
 
 
-def _parse_window(row: dict[str, str]) -> np.ndarray:
+def _parse_window(cell: str) -> np.ndarray:
     """Parse the time_series cell of a row, one list of numbers inside a list, into float64 values.
 
     The cells are Python list literals of floats. JSON reads them to the same values, and faster
@@ -66,63 +76,46 @@ def _parse_window(row: dict[str, str]) -> np.ndarray:
         The values of the window.
 
     Raises:
-        TimeNetConnectorError: If the cell does not hold one list of 1500 finite numbers.
+        ValueError: If the cell does not hold one list of 1500 finite numbers.
     """
     message = f"time_series must hold one list of {SAMPLES_PER_WINDOW} finite numbers"
     try:
-        values = np.array(json.loads(row["time_series"]), dtype=np.float64)
+        values = np.array(json.loads(cell), dtype=np.float64)
     except (TypeError, ValueError) as exc:
-        raise TimeNetConnectorError(message) from exc
+        raise ValueError(message) from exc
     # NumPy turns a JSON null into NaN, so the finite check also rejects a missing value.
     if values.shape != (1, SAMPLES_PER_WINDOW) or not np.isfinite(values).all():
-        raise TimeNetConnectorError(message)
+        raise ValueError(message)
     return values[0]
 
 
-def _parse_subject_id(row: dict[str, str]) -> str:
-    """Get the subject ID from a row's Sleep-EDF recording name.
+class SleepCotRow(SourceRow):
+    """One published EEG window with its recording name and sleep stage."""
 
-    Returns:
-        The subject ID, such as ``sleep-cassette-10``.
-
-    Raises:
-        TimeNetConnectorError: If the ID cell is not a Sleep-EDF recording name.
-    """
-    match = _RECORDING_NAME.fullmatch(row["id"])
-    if match is None:
-        raise TimeNetConnectorError(f"id {row['id']!r} is not a Sleep-EDF recording name")
-    return f"{_STUDIES[match['study']]}-{match['subject']}"
-
-
-@dataclass(frozen=True)
-class SleepCotRow:
-    """A recording, EEG values, sleep stage, and rationale for one window."""
-
-    recording_id: str
-    subject_id: str
-    eeg: np.ndarray
+    recording_id: str = Field(alias="id")
+    eeg: Annotated[np.ndarray, PlainValidator(_parse_window)] = Field(alias="time_series")
     label: str
+    prompt: str
     rationale: str
 
+    @field_validator("recording_id")
     @classmethod
-    def from_csv_row(cls, row: dict[str, str]) -> Self:
-        """Parse one data row of the release.
+    def _recording_name(cls, value: str) -> str:
+        if _RECORDING_NAME.fullmatch(value) is None:
+            raise ValueError(f"id {value!r} is not a Sleep-EDF recording name")
+        return value
 
-        Returns:
-            The parsed row.
+    @field_validator("label")
+    @classmethod
+    def _known_stage(cls, value: str) -> str:
+        if value not in SLEEP_STAGE.names:
+            raise ValueError(f"label {value!r} is not one of {SLEEP_STAGE.names}")
+        return value
 
-        Raises:
-            TimeNetConnectorError: If the label is not a stage of the label set.
-        """
-        if row["label"] not in SLEEP_STAGE.names:
-            raise TimeNetConnectorError(f"label {row['label']!r} is not one of {SLEEP_STAGE.names}")
-        return cls(
-            recording_id=row["id"],
-            subject_id=_parse_subject_id(row),
-            eeg=_parse_window(row),
-            label=row["label"],
-            rationale=row["rationale"],
-        )
+    @property
+    def subject_id(self) -> str:
+        """The subject named by the validated recording ID."""
+        return f"{_STUDIES[self.recording_id[:3]]}-{self.recording_id[3:5]}"
 
     def create_record(self) -> Record:
         """Create a record for the window with its recording name and subject.
@@ -226,24 +219,8 @@ class SleepCotReader:
 
         Returns:
             The parsed rows.
-
-        Raises:
-            TimeNetConnectorError: If the header is not the expected one, or a data row is malformed.
-                The message names the file and the data row.
         """
-        rows = []
-        with self.csv_path.open(newline="", encoding="utf-8") as stream:
-            reader = csv.DictReader(stream)
-            if tuple(reader.fieldnames or ()) != COLUMNS:
-                raise TimeNetConnectorError(
-                    f"{self.csv_path.name}: expected columns {COLUMNS}, got {reader.fieldnames}"
-                )
-            for number, row in enumerate(reader, start=1):
-                try:
-                    rows.append(SleepCotRow.from_csv_row(row))
-                except TimeNetConnectorError as exc:
-                    raise TimeNetConnectorError(f"{self.csv_path.name} data row {number}: {exc}") from exc
-        return rows
+        return [row for _, row in iter_csv_rows(self.csv_path, SleepCotRow)]
 
     def read_splits(self, n_rows: int) -> list[Split]:
         """Read the split of each row from the splits file.

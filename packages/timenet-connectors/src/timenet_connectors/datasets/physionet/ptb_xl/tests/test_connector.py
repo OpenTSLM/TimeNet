@@ -101,14 +101,14 @@ def test_age_is_an_int_in_years(tmp_path, cell, years):
     ("cells", "reason"),
     [
         ({"sex": "2"}, "sex '2' is not 0 or 1"),
-        ({"age": "56.5"}, "age '56.5' is not a whole number"),
-        ({"age": "unknown"}, "age 'unknown' is not a whole number"),
+        ({"age": "56.5"}, "'56.5' is not a whole number"),
+        ({"age": "unknown"}, "'unknown' is not a whole number"),
         ({"age": "-1.0"}, "age -1 must be an integer of zero or more years"),
         ({"weight": "heavy"}, "could not convert string to float: 'heavy'"),
-        ({"patient_id": "p1"}, "patient_id 'p1' is not a whole number"),
-        ({"patient_id": "1.9"}, "patient_id '1.9' is not a whole number"),
+        ({"patient_id": "p1"}, "'p1' is not a whole number"),
+        ({"patient_id": "1.9"}, "'1.9' is not a whole number"),
         ({"strat_fold": "third"}, "invalid literal for int() with base 10: 'third'"),
-        ({"scp_codes": "{'NORM'"}, ""),
+        ({"scp_codes": "{'NORM'"}, "invalid finding likelihoods"),
         ({"filename_hr": "missing"}, "missing.hea"),
     ],
     ids=[
@@ -124,8 +124,8 @@ def test_age_is_an_int_in_years(tmp_path, cell, years):
         "waveform",
     ],
 )
-def test_a_malformed_row_raises_a_connector_error_that_names_the_row_and_the_ecg_id(tmp_path, cells, reason):
-    with pytest.raises(TimeNetConnectorError, match=r"invalid PTB-XL row 2 \(ecg_id 1\) in .*: .*" + re.escape(reason)):
+def test_a_malformed_row_names_its_file_line_and_field(tmp_path, cells, reason):
+    with pytest.raises(TimeNetConnectorError, match=r"ptbxl_database\.csv:2: .*" + re.escape(reason)):
         _annotations(tmp_path, **cells)
 
 
@@ -135,7 +135,9 @@ def test_a_recording_that_is_not_twelve_leads_at_500_hz_raises_a_connector_error
     wfdb.wrsamp(
         "record", fs=250, units=["mV"] * 12, sig_name=_LEADS, p_signal=values, fmt=["16"] * 12, write_dir=str(tmp_path)
     )
-    with pytest.raises(TimeNetConnectorError, match=r"row 2 \(ecg_id 1\) .*: PTB-XL requires twelve leads at 500 Hz"):
+    with pytest.raises(
+        TimeNetConnectorError, match=r"ptbxl_database\.csv:2: ecg_id 1: PTB-XL requires twelve leads at 500 Hz"
+    ):
         PtbXlConnector().convert([source])
 
 
@@ -177,14 +179,14 @@ def test_an_empty_required_cell_raises_and_names_its_column(tmp_path, column):
     for cell in ("", " \t ", "nan", "NaN"):
         with pytest.raises(
             TimeNetConnectorError,
-            match=rf"invalid PTB-XL row 2 \(ecg_id .*\) in .*: required column {column} is empty$",
+            match=rf"ptbxl_database\.csv:2: {column}: Value error, required column {column} is empty$",
         ):
             _annotations(tmp_path, **{column: cell})
 
 
-def test_empty_required_cells_raise_one_error_that_names_each_column(tmp_path):
+def test_empty_required_cells_name_the_first_invalid_field(tmp_path):
     with pytest.raises(
-        TimeNetConnectorError, match=r"invalid PTB-XL row 2 \(ecg_id 1\) in .*: required columns age, sex are empty$"
+        TimeNetConnectorError, match=r"ptbxl_database\.csv:2: age: Value error, required column age is empty$"
     ):
         _annotations(tmp_path, sex="", age="")
 
@@ -197,7 +199,7 @@ def test_a_repeated_ecg_id_raises_and_names_both_rows(tmp_path):
         # The repeat names a recording that does not exist. So the error comes before the recording is read.
         writer.writerow(_ROW | {"filename_hr": "missing"})
     with pytest.raises(
-        TimeNetConnectorError, match=r"invalid PTB-XL row 4 \(ecg_id 1\) in .*: ecg_id 1 repeats row 2$"
+        TimeNetConnectorError, match=r"ptbxl_database\.csv:4: ecg_id: duplicate 1; first listed on line 2$"
     ):
         PtbXlConnector().convert([source])
 
@@ -234,3 +236,9 @@ def test_convert_needs_no_wfdb_for_format16(tmp_path, monkeypatch):
     dataset = PtbXlConnector().convert([source])
     assert dataset.records
     assert len(dataset.records[0].signals[0].to_numpy())  # runs the direct loader, no wfdb
+
+
+@pytest.mark.parametrize("cell", ["['NORM']", "{1: 100.0}", "{'NORM': 'high'}", "{'NORM': True}"])
+def test_finding_likelihoods_require_named_numeric_values(tmp_path, cell):
+    with pytest.raises(TimeNetConnectorError, match=r"ptbxl_database\.csv:2: scp_codes(?:\.[^:]+)?:"):
+        _annotations(tmp_path, scp_codes=cell)

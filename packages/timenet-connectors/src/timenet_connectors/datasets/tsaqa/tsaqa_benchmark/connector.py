@@ -25,6 +25,7 @@ from typing import Any, ClassVar, NamedTuple, TypeVar
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pydantic import field_validator
 
 from timenet.dataset import Record, Signal, SignalChannel, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
@@ -34,6 +35,7 @@ from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, Lab
 from timenet.types.shared_loading import SharedChannelLoader
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.sources.parquet import iter_parquet_rows
+from timenet_connectors.sources.rows import NonBlankText, PublishedStrEnum, SourceRow, validate_row
 
 
 @unique
@@ -84,8 +86,30 @@ _CONTEXT_KEYS = ("meta_info", "domain", "dataset")
 """The published columns an input Record is annotated with, and its task gives the model as context."""
 _PUBLISHED_LISTS = {key: f"published_{key}" for key in _CONTEXT_KEYS}
 """The annotation key of each context column for a row that publishes the column as a list."""
-_READ_COLUMNS = ("task", "question_type", "input_ts", "question", "answer", *_CONTEXT_KEYS)
-"""The columns a conversion reads. The release's ninth, ``raw_ts``, holds the series before normalization."""
+
+
+class _PublishedRow(SourceRow):
+    """Fields used from a published TSAQA row; raw_ts is not read."""
+
+    task: PublishedStrEnum[_Task]
+    question_type: NonBlankText
+    input_ts: NonBlankText
+    question: NonBlankText
+    answer: NonBlankText
+    meta_info: NonBlankText
+    domain: NonBlankText
+    dataset: NonBlankText
+
+    @field_validator("question_type")
+    @classmethod
+    def _known_question_type(cls, value: str) -> str:
+        if value not in _QUESTION_TYPES.values():
+            raise ValueError(f"unknown question_type {value!r}")
+        return value
+
+
+_READ_COLUMNS = tuple(_PublishedRow.model_fields)
+
 _SERIES_COLUMNS = ["input_ts", "question"]
 _DIGEST_COLUMNS = ("task", "input_ts", "question")
 """The columns that make a row's question: the same question about the same series, whatever its
@@ -490,18 +514,11 @@ def _validate_row(values: Mapping[str, Any], split: _SplitFile, index: int) -> _
     Raises:
         TimeNetConnectorError: If the row is malformed, with its file and row.
     """
+    row = validate_row(values, _PublishedRow, location=f"{split.filename} row {index}")
     try:
-        text: dict[str, str] = {}
-        for column in _READ_COLUMNS:
-            if not isinstance(values[column], str) or not values[column].strip():
-                raise TimeNetConnectorError(f"{column} is nonblank text")
-            text[column] = values[column]
-        question = text["question"]
-        if text["task"] not in set(_Task):
-            raise TimeNetConnectorError(f"unknown task {text['task']!r}")
-        task = _Task(text["task"])
-        if text["question_type"] not in _QUESTION_TYPES.values():
-            raise TimeNetConnectorError(f"unknown question_type {text['question_type']!r}")
+        text = {column: getattr(row, column) for column in _READ_COLUMNS}
+        question = row.question
+        task = row.task
         inputs, printed = _input_series(task, text["input_ts"]), _printed_series(task, question)
         all_series = [*inputs, *(item.values for item in printed)]
         reading = _read_question(task, question, text["answer"], printed)
