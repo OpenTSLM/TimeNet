@@ -433,7 +433,7 @@ class Signal(SupportsAnnotate):
     @classmethod
     def from_values(
         cls,
-        values: np.ndarray | Sequence[bool | int | float | str | None],
+        values: np.ndarray | Sequence[bool | int | float | str | None] | pa.Array,
         *,
         spec: TimeSeriesSpec,
         name: str,

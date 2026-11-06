@@ -11,6 +11,7 @@ from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.connectors import BaseConnector
@@ -132,7 +133,40 @@ def _series_files(series_dir: Path) -> dict[str, dict[int, Path]]:
     return {metric: dict(sorted(intervals.items())) for metric, intervals in sorted(files.items())}
 
 
-def _read_rollup(path: Path) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
+@dataclass(frozen=True)
+class TagGroupSeries:
+    """One tag group's values at one rollup interval, cut to the window in which the group has a value."""
+
+    epochs_us: np.ndarray
+    """The timestamp of each grid step, in microseconds since the epoch."""
+    values: np.ndarray
+    """The metric value at each step. The value at a missing step is undefined."""
+    missing: np.ndarray
+    """Whether each step is missing: the metric reported nothing for the group at that step."""
+
+    def to_signal(self, *, interval_s: int, origin_us: int, name: str) -> Signal:
+        """Build the signal for this group at its rollup interval.
+
+        A group that holds every step of its grid gets a regular axis. A group that skips a step
+        keeps its own time offsets. A missing step stays an Arrow null, not a NaN.
+
+        Args:
+            interval_s: The rollup interval in seconds, which sets the grid period.
+            origin_us: The record's start, which the time offsets count from.
+            name: The signal name.
+
+        Returns:
+            The signal with missing values and a regular or irregular time axis.
+        """
+        offsets = offsets_from_origin(self.epochs_us, origin_us)
+        present = pa.array(self.values, mask=self.missing)
+        axis = axis_for_offsets(offsets, period_us=Fraction(interval_s * US_PER_S))
+        if isinstance(axis, IrregularAxis):
+            return Signal.from_irregular(present, time_offsets_us=offsets, spec=METRIC, name=name)
+        return Signal.from_values(present, spec=METRIC, name=name, time_axis=axis)
+
+
+def _read_rollup(path: Path) -> dict[str, TagGroupSeries]:
     """Read a series file and group its values by tag.
 
     The file lists every tag group at every step of one time grid, with a null where the metric
@@ -142,7 +176,7 @@ def _read_rollup(path: Path) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarr
     arbitrary.
 
     Returns:
-        Each tag label mapped to its timestamps in microseconds, values, and missing mask, in time order.
+        Each tag label mapped to its series, in time order.
     """
     table = pq.read_table(path, columns=["epoch", "group", "value"])
     table = table.sort_by([("group", "ascending"), ("epoch", "ascending")])
@@ -157,7 +191,7 @@ def _read_rollup(path: Path) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarr
         if not len(observed):
             continue
         first, last = start + int(observed[0]), start + int(observed[-1]) + 1
-        groups[str(labels[start])] = (epochs[first:last], values[first:last], missing[first:last])
+        groups[str(labels[start])] = TagGroupSeries(epochs[first:last], values[first:last], missing[first:last])
     return groups
 
 
@@ -176,16 +210,11 @@ def _metric_record(metric: str, files: Mapping[int, Path]) -> Record:
     """
     record_id = f"arfbench-{metric}"
     rollups = {interval_s: _read_rollup(path) for interval_s, path in files.items()}
-    origin_us = min(int(epochs[0]) for groups in rollups.values() for epochs, _, _ in groups.values())
+    origin_us = min(int(group.epochs_us[0]) for groups in rollups.values() for group in groups.values())
     sources = []
-    for _index, label in enumerate(sorted({label for groups in rollups.values() for label in groups})):
+    for label in sorted({label for groups in rollups.values() for label in groups}):
         signals = tuple(
-            _signal(
-                *groups[label],
-                interval_s=interval_s,
-                origin_us=origin_us,
-                name=f"{interval_s}s",
-            )
+            groups[label].to_signal(interval_s=interval_s, origin_us=origin_us, name=f"{interval_s}s")
             for interval_s, groups in rollups.items()
             if label in groups
         )
@@ -202,39 +231,6 @@ def _metric_record(metric: str, files: Mapping[int, Path]) -> Record:
         ]
     )
     return record
-
-
-def _signal(  # ruff: ignore[too-many-arguments] - the group's arrays, and what names the signal
-    epochs: np.ndarray,
-    values: np.ndarray,
-    missing: np.ndarray,
-    *,
-    interval_s: int,
-    origin_us: int,
-    name: str,
-) -> Signal:
-    """Build a signal for one tag group at one rollup interval.
-
-    A group that holds every step of its grid gets a regular axis. A group that skips a step keeps
-    its own time offsets. A null inside the window stays a missing value, not a NaN.
-
-    Returns:
-        The signal with missing values and a regular or irregular time axis.
-    """
-    offsets = offsets_from_origin(epochs, origin_us)
-    present = values
-    if missing.any():
-        present = values.astype(object)
-        present[missing] = None
-    axis = axis_for_offsets(offsets, period_us=Fraction(interval_s * US_PER_S))
-    if isinstance(axis, IrregularAxis):
-        return Signal.from_irregular(present, time_offsets_us=offsets, spec=METRIC, name=name)
-    return Signal.from_values(
-        present,
-        spec=METRIC,
-        name=name,
-        time_axis=axis,
-    )
 
 
 def _chart_record(path: Path) -> Record:
@@ -268,12 +264,12 @@ def _tasks(qa_csv: Path, metrics: Mapping[str, Record], charts: Mapping[str, Rec
         The metric task and chart task for each row, in table order.
     """
     with qa_csv.open(newline="", encoding="utf-8") as handle:
-        for _index, row in enumerate(csv.DictReader(handle)):
+        for row in csv.DictReader(handle):
             cited = [part.strip() for part in row["query_group"].split(",")]
             chart_names = [*(["-".join(cited)] if len(cited) > 1 else []), *cited]
-            for _kind, inputs, modality in (
-                ("series", [metrics[metric] for metric in cited], InputModality.TIME_SERIES),
-                ("chart", [charts[name] for name in chart_names], InputModality.IMAGE),
+            for inputs, modality in (
+                ([metrics[metric] for metric in cited], InputModality.TIME_SERIES),
+                ([charts[name] for name in chart_names], InputModality.IMAGE),
             ):
                 task = AnswerTask(
                     inputs=tuple(inputs),
