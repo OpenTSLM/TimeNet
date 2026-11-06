@@ -28,7 +28,7 @@ from timenet.cache import human_bytes
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console
 from timenet.config import settings
-from timenet.coordinator.plan import ParentStep, prepare_parents
+from timenet.coordinator.plan import Step, prepare_parents
 from timenet.engine import publish_pipeline, run_pipeline
 from timenet.errors import (
     TimeFValidationError,
@@ -195,21 +195,21 @@ def build_one(  # ruff: ignore[too-many-arguments]
     narrate: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Prepare a dataset's parent releases, then build the dataset.
+    """Prepare a dataset's parents, then build or reuse its release.
 
-    A missing parent that ``fetch_from`` or ``build_parents`` does not provide fails the build before any download.
-    The build reuses an existing version unless ``force`` is true.
+    The build fails before downloading if it cannot copy or build a missing parent.
+    A new release must match every file record in ``pinned_by`` before publication.
 
     Args:
-        dataset_id: The dataset id.
-        output: The output directory or a ``timenet://``, ``http(s)://``, or ``s3://`` registry URL.
+        dataset_id: The dataset ID.
+        output: A local directory or a ``timenet://``, ``http(s)://``, or ``s3://`` registry URL.
         fetch_from: The registry, or its URI, to copy missing parent releases from.
         build_parents: Build missing parent releases from their installed connectors.
         force: Rebuild an existing version.
         keep_cache: Keep the raw download cache after building.
-        isolation: Use isolation if true, this interpreter if false, or ``TIMENET_ISOLATION`` if ``None``.
+        isolation: Use a separate environment if true, this interpreter if false, or ``TIMENET_ISOLATION`` if ``None``.
         narrate: Print status and download progress when isolation is off.
-        pinned_by: Releases that read this dataset's files, with file pins the build must match.
+        pinned_by: The expected file records for this release, grouped by the releases that read them.
 
     Returns:
         The committed version directory for a local output, or the published version.
@@ -219,14 +219,14 @@ def build_one(  # ruff: ignore[too-many-arguments]
     override = None if isolation is None else ("on" if isolation else "off")
     isolated = settings(isolation=override).isolation == "on"
 
-    def build_parent(step: ParentStep) -> object:
-        builder = find_builder(step.reference.dataset_id)
+    def build_parent(step: Step) -> object:
+        builder = find_builder(step.release.dataset_id)
         if builder is not None and not _in_repo(builder):
             return _build_with(builder, step, target)
         # Each parent builds like the dataset itself. An isolated child makes the plan again. The
         # child finds every parent in the output, so it only opens the parents.
         return _build(
-            step.reference.dataset_id,
+            step.release.dataset_id,
             target,
             output,
             isolated=isolated,
@@ -282,25 +282,23 @@ def _in_repo(builder: BuilderBackend) -> bool:
     return isinstance(builder, ConnectorBuilder) and type(builder).build is ConnectorBuilder.build
 
 
-def _build_with(builder: BuilderBackend, step: ParentStep, target: WritableRegistry | Path) -> Path:
-    """Build a parent through the builder backend that claims it, with the pins of its step.
+def _build_with(builder: BuilderBackend, step: Step, target: WritableRegistry | Path) -> Path:
+    """Build a parent release with its file pins through the given backend.
 
-    The plan already prepared the parents of this parent. So the backend gets no options for
-    parents.
+    ``target`` must already hold the parents of ``step.release``.
 
     Returns:
         The committed version directory.
 
     Raises:
-        TimeFValidationError: If the output is not local. A builder backend builds into a local
-            directory.
+        TimeFValidationError: If ``target`` is not a local ``Path``.
     """
     if not isinstance(target, Path):
         raise TimeFValidationError(
-            f"parent release {step.reference} builds through another builder backend, which writes to a "
+            f"parent release {step.release} builds through another builder backend, which writes to a "
             "local directory; build it into a local output and publish it first"
         )
-    return builder.build(step.reference.dataset_id, target, pinned_by=step.pinned_by or None)
+    return builder.build(step.release.dataset_id, target, pinned_by=step.pinned_by or None)
 
 
 def _committed(dataset_id: str, target: WritableRegistry | Path, registry: WritableRegistry) -> str | None:
