@@ -1,4 +1,3 @@
-from collections import Counter
 from datetime import UTC, datetime, time
 
 import pytest
@@ -7,6 +6,7 @@ from timenet.errors import TimeFValidationError
 from timenet.types import US_PER_S
 from timenet_connectors.datasets.physionet.sleep_edfx import metadata
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
+from timenet_connectors.demographics import Sex
 
 
 # An invented recording id. It keeps the shape of a real id: three study characters, two subject
@@ -16,46 +16,29 @@ from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
 _RECORDING_ID = "SC4901E0"
 
 
-def test_one_value_gives_one_instance():
-    metadata_annotation = metadata.MetadataAnnotation()
-    assert metadata_annotation.get_annotation(AnnotationKey.SEX, "F") is metadata_annotation.get_annotation(
-        AnnotationKey.SEX, "F"
+def test_two_builds_of_one_value_are_equal():
+    assert metadata.build_closed_set(AnnotationKey.SEX, "female") == metadata.build_closed_set(
+        AnnotationKey.SEX, "female"
     )
 
 
-def test_two_builds_of_one_value_state_the_same_thing():
-    first = metadata.MetadataAnnotation().get_annotation(AnnotationKey.SEX, "F")
-    second = metadata.MetadataAnnotation().get_annotation(AnnotationKey.SEX, "F")
-    assert (first.key, first.value, first.description) == (second.key, second.value, second.description)
-
-
-def test_a_shared_annotation_carries_its_key_and_value():
-    metadata_annotation = metadata.MetadataAnnotation()
+def test_a_closed_set_annotation_carries_its_key_and_value():
     built = (
-        metadata_annotation.get_annotation(AnnotationKey.STUDY, "sleep-cassette"),
-        metadata_annotation.get_annotation(AnnotationKey.NIGHT, 1),
-        metadata_annotation.get_annotation(AnnotationKey.SEX, "M"),
-        metadata_annotation.get_annotation(AnnotationKey.CONDITION, "placebo"),
+        metadata.build_closed_set(AnnotationKey.STUDY, "sleep-cassette"),
+        metadata.build_closed_set(AnnotationKey.NIGHT, 1),
+        metadata.build_closed_set(AnnotationKey.SEX, "male"),
+        metadata.build_closed_set(AnnotationKey.CONDITION, "placebo"),
     )
     assert tuple((one.key, one.value) for one in built) == (
         ("study", "sleep-cassette"),
         ("night", 1),
-        ("sex", "M"),
+        ("sex", "male"),
         ("condition", "placebo"),
     )
 
 
-def test_a_shared_annotation_carries_no_span():
-    assert metadata.MetadataAnnotation().get_annotation(AnnotationKey.STUDY, "sleep-cassette").span is None
-
-
-def test_the_counts_state_how_many_distinct_annotations_were_built():
-    metadata_annotation = metadata.MetadataAnnotation()
-    for sex in ("F", "M", "F", "F"):
-        metadata_annotation.get_annotation(AnnotationKey.SEX, sex)
-    metadata_annotation.get_annotation(AnnotationKey.STUDY, "sleep-cassette")
-    built = Counter(key for key, _ in metadata_annotation._built)
-    assert built == {"sex": 2, "study": 1}
+def test_a_closed_set_annotation_carries_no_span():
+    assert metadata.build_closed_set(AnnotationKey.STUDY, "sleep-cassette").span is None
 
 
 def test_age_carries_its_value_and_the_unit():
@@ -81,22 +64,24 @@ def test_a_start_moment_that_names_a_zone_raises():
 
 
 def test_two_readings_that_agree_give_no_note():
-    assert metadata.build_demographics_note("X F X Female_44yr", 44, "F") is None
+    assert metadata.build_demographics_note("X F X Female_44yr", 44, Sex.FEMALE) is None
 
 
 def test_a_header_with_no_second_reading_gives_no_note():
-    assert metadata.build_demographics_note("X X X X", 44, "F") is None
+    assert metadata.build_demographics_note("X X X X", 44, Sex.FEMALE) is None
 
 
 def test_a_sex_that_disagrees_is_recorded():
-    note = metadata.build_demographics_note("X M X Male_44yr", 44, "F")
+    note = metadata.build_demographics_note("X M X Male_44yr", 44, Sex.FEMALE)
     assert note is not None
     assert note.key == "demographics_note"
-    assert "F" in str(note.value)
+    text = str(note.value)
+    assert "the EDF header states sex male" in text
+    assert "The subject table states sex female" in text
 
 
 def test_a_note_gives_both_readings():
-    note = metadata.build_demographics_note("X M X Male_57yr", 58, "F")
+    note = metadata.build_demographics_note("X M X Male_57yr", 58, Sex.FEMALE)
     assert note is not None
     assert "57" in str(note.value)
     assert "58" in str(note.value)
