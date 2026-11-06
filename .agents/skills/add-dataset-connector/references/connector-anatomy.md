@@ -137,6 +137,8 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
 - Keep a Python reference to any annotation or task you reference later and pass that object. When
   you look objects up by an upstream key, keep a local dict keyed by that key, not by a derived id
   string.
+- Use `dataset.annotate_shared(annotation)` when several tasks need the same dataset annotation. See
+  "Shared dataset annotations" in `docs/timef-dataset.md`.
 
 ## Task types (`timenet.types.tasks`)
 

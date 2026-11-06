@@ -15,6 +15,7 @@ manifest.
 from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
+from functools import cached_property
 import json
 from typing import Annotated, Any, NoReturn, Protocol, cast, final
 
@@ -229,6 +230,39 @@ class Annotation:
             content = value
         metadata = json.dumps(self.metadata, sort_keys=True)
         return (self.key, value_type_of(value), content, self.unit, self.description, metadata)
+
+    @cached_property
+    def _sharing_key(self) -> tuple[Hashable, ...]:
+        """A cached key that matches annotations by every stored field except the span.
+
+        Two annotations with equal keys store the same content and the same occurrence fields. Text
+        is compared by its value, so a handle from a release matches the same string from a
+        connector. The value type is part of the key, as in :attr:`_content_key`, and a float
+        compares by its bits. The annotation cannot change, so the key is computed once. A lazy text
+        handle is then read once, which is why its function must return the same text on each call.
+        """
+        value = self.value
+        content: Hashable
+        if isinstance(value, TextHandle):
+            content = value.read()
+        elif isinstance(value, TextListHandle):
+            content = tuple(value.read())
+        elif isinstance(value, float):
+            content = float.hex(value)
+        else:
+            content = value
+        confidence = None if self.confidence is None else float.hex(float(self.confidence))
+        return (
+            self.key,
+            value_type_of(value),
+            content,
+            self.unit,
+            self.description,
+            json.dumps(self.metadata, sort_keys=True),
+            self.source,
+            confidence,
+            json.dumps(self.occurrence_metadata, sort_keys=True),
+        )
 
     @property
     def name(self) -> str:
