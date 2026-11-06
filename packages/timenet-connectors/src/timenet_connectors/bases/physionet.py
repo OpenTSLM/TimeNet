@@ -10,7 +10,6 @@ a build that never reaches the fallback needs nothing extra.
 
 from abc import ABC
 from collections.abc import Callable
-import functools
 from pathlib import Path
 import re
 from typing import Any, NamedTuple, TypeVar
@@ -19,7 +18,8 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.connectors import BaseConnector
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeNetConnectorError
+from timenet_connectors.sources.channels import SharedChannelLoader
 
 
 TRaw = TypeVar("TRaw")
@@ -50,12 +50,8 @@ class WfdbHeader(NamedTuple):
     False routes to ``wfdb``, which handles the parts the direct reader does not."""
 
 
-@functools.lru_cache(maxsize=4)
 def _read_dat16(dat_path: str, n_sig: int) -> np.ndarray:
-    """Read a whole format-16 ``.dat`` once and return raw int16 samples, shape ``(n_frames, n_sig)``.
-
-    Cached so the leads of one record (written contiguously after the writer's source-grouped sort) read
-    the file once rather than once per lead.
+    """Read a format-16 ``.dat`` as raw int16 samples, shape ``(n_frames, n_sig)``.
 
     Args:
         dat_path: The ``.dat`` file path.
@@ -65,6 +61,17 @@ def _read_dat16(dat_path: str, n_sig: int) -> np.ndarray:
         The raw samples, one column per signal.
     """
     return np.fromfile(dat_path, dtype="<i2").reshape(-1, n_sig)
+
+
+class _WfdbRead(NamedTuple):
+    """A recording and the header fields that determine its decoded channel values."""
+
+    base: Path
+    length: int
+    dat_names: tuple[str, ...]
+    gains: tuple[float, ...]
+    baselines: tuple[int, ...]
+    direct: bool
 
 
 class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
@@ -150,36 +157,45 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             direct_read=direct_read,
         )
 
-    def _lead_loader(self, record_base: Path, header: WfdbHeader, lead_idx: int) -> Callable[[], pa.Array]:
-        """Build a lazy loader for one lead's samples as a float32 Arrow array in physical units.
+    def _lead_loaders(self) -> Callable[[Path, WfdbHeader, int], Callable[[], pa.Array]]:
+        """Create a lead-loader factory with a cache shared by one conversion.
 
-        For a standard format-16 record the ``.dat`` is read directly with NumPy — all leads of a record
-        read the file once through the cache — and converted with the header's gain and baseline. Any
-        record the direct path does not cover (``header.direct_read`` is false) falls back to
-        ``wfdb.rdsamp``.
-
-        Args:
-            record_base: The record path without the ``.dat`` and ``.hea`` extensions.
-            header: The record's parsed header.
-            lead_idx: The zero-based lead index within the record.
+        Call this once before building records. Call the returned factory with the record path,
+        its header, and a zero-based lead index to get a lazy ``Signal.from_loader`` callback.
+        Both the direct format-16 reader and the WFDB fallback decode all leads together. The cache
+        retains only the most recently read recording, in float32 physical units.
 
         Returns:
-            A no-argument loader that returns the lead's physical signal.
+            A factory for lazy lead loaders, sharing one recording cache.
         """
-        if not header.direct_read:
 
-            def load_wfdb() -> pa.Array:
-                signal, _ = self._wfdb().rdsamp(str(record_base), channels=[lead_idx])
-                return pa.array(signal[:, 0].astype("float32"))
+        def read(request: _WfdbRead) -> tuple[pa.Array, ...]:
+            n_sig = len(request.gains)
+            try:
+                if request.direct:
+                    samples = _read_dat16(str(request.base.parent / request.dat_names[0]), n_sig)
+                else:
+                    samples, _ = self._wfdb().rdsamp(str(request.base))
+                if samples.shape != (request.length, n_sig):
+                    raise TimeNetConnectorError(
+                        f"{request.base}: expected samples with shape {(request.length, n_sig)}, got {samples.shape}"
+                    )
+                channels = []
+                for index in range(n_sig):
+                    values = samples[:, index].astype("float32")
+                    if request.direct:
+                        values = (values - request.baselines[index]) / request.gains[index]
+                    channels.append(pa.array(values))
+                return tuple(channels)
+            except (OSError, ValueError) as error:
+                raise TimeNetConnectorError(f"{request.base}: cannot read WFDB samples: {error}") from error
 
-            return load_wfdb
+        shared = SharedChannelLoader(read)
 
-        dat_path = str(record_base.parent / header.dat_names[lead_idx])
-        n_sig = len(header.sig_name)
-        gain, baseline = header.gains[lead_idx], header.baselines[lead_idx]
+        def channel(record_base: Path, header: WfdbHeader, lead_idx: int) -> Callable[[], pa.Array]:
+            request = _WfdbRead(
+                record_base, header.sig_len, header.dat_names, header.gains, header.baselines, header.direct_read
+            )
+            return shared.channel(request, lead_idx)
 
-        def load() -> pa.Array:
-            raw = _read_dat16(dat_path, n_sig)[:, lead_idx].astype("float32")
-            return pa.array((raw - baseline) / gain)
-
-        return load
+        return channel

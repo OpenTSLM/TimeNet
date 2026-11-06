@@ -131,6 +131,7 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
                 ``ecg_id``. For a repeated ``ecg_id``, the message also names the earlier row.
         """
         dataset = TimeFDataset(metadata=self.metadata())
+        lead_loader = self._lead_loaders()
         source = raw_refs[0]
         # The CSV row where each ecg_id first appears.
         first_rows: dict[int, int] = {}
@@ -152,7 +153,7 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
                             spec=_ECG,
                             name=name,
                             time_axis=axis,
-                            loader=self._lead_loader(base, header, position),
+                            loader=lead_loader(base, header, position),
                             n_values=int(header.sig_len),
                         )
                         for position, name in enumerate(header.sig_name)
