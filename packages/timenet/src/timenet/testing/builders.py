@@ -220,20 +220,21 @@ def assert_datasets_equal(expected: TimeFDataset, actual: TimeFDataset) -> None:
     matched by its id, and every task matched by its id. It compares each series' fields and its
     materialized values. A span holds Signal objects, so it compares task scopes by the ids of their
     Signals. For a dataset with a task stream, it reads the stream using the ids assigned during writing,
-    and compares those tasks. If any compared field differs, it raises ``AssertionError``.
+    and compares those tasks. It reads both task lists first, because reading a stream can add dataset
+    annotations. If any compared field differs, it raises ``AssertionError``.
 
     Args:
         expected: The reference dataset.
         actual: The dataset to check against it.
     """
+    # A task stream can attach dataset annotations, so read both streams before the annotations.
+    expected_tasks, actual_tasks = _tasks_to_compare(expected), _tasks_to_compare(actual)
     assert expected.metadata == actual.metadata, "metadata differs"
     assert dict(expected.parent_cards) == dict(actual.parent_cards), "parent cards differ"
     assert dict(expected.lineage) == dict(actual.lineage), "lineage differs"
     assert _occurrences(expected.annotations) == _occurrences(actual.annotations), "dataset annotations differ"
     _assert_records_equal(expected.records, actual.records)
-    _assert_tasks_equal(
-        _tasks_to_compare(expected), _tasks_to_compare(actual), expected_dataset=expected, actual_dataset=actual
-    )
+    _assert_tasks_equal(expected_tasks, actual_tasks, expected_dataset=expected, actual_dataset=actual)
 
 
 def _tasks_to_compare(dataset: TimeFDataset) -> Sequence[Task]:

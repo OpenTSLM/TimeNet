@@ -224,6 +224,13 @@ package names. The package's `__init__.py` exposes `CONNECTOR`. Put `dataset.yam
 `requirements.txt` beside it. The build tool imports only the requested connector package. Reusable
 bases live under `timenet_connectors/bases/`.
 
+### Annotations created during task streaming
+
+A stream can attach dataset annotations while it produces tasks, and its tasks can refer to them.
+Keep the occurrence that `annotate` returns, and pass that object to every task that uses the value,
+on every pass. A second `annotate` call adds another occurrence.
+
+
 ## Dependencies and credentials
 
 A connector declares the libraries its source needs in a `requirements.txt` beside its

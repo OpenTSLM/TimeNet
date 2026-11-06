@@ -57,8 +57,31 @@ class _TaskValidationIndex:
         self.records_by_id = dataset._records_by_id
         self.signals_by_id = dataset._signals_by_id
         self.signals_by_record_id = dataset._signals_by_record_id
-        self.dataset_annotations = {id(annotation) for annotation in dataset._annotations}
+        self._dataset = dataset
+        self._dataset_annotations: list[Annotation] = dataset._annotations
+        self._indexed = len(self._dataset_annotations)
+        self._dataset_identities = {id(annotation) for annotation in self._dataset_annotations}
         self._record_annotations: dict[int, set[int]] = {}
+
+    def is_dataset_annotation(self, annotation: Annotation) -> bool:
+        """Check whether this annotation instance is attached to the dataset.
+
+        A task stream can attach dataset annotations while it produces tasks. If the instance is not
+        in the index, the index adds the annotations attached since it was built, then checks again.
+
+        Returns:
+            Whether the dataset holds this occurrence.
+        """
+        identity = id(annotation)
+        if identity in self._dataset_identities:
+            return True
+        current = self._dataset._annotations
+        if current is not self._dataset_annotations or len(current) < self._indexed:
+            # The list was replaced, by a read or an import: index it again from the start.
+            self._dataset_annotations, self._indexed, self._dataset_identities = current, 0, set()
+        self._dataset_identities.update(id(one) for one in current[self._indexed :])
+        self._indexed = len(current)
+        return identity in self._dataset_identities
 
     def annotations_for(self, record: Record) -> set[int]:
         """Return the identities of the occurrences attached anywhere in one Record hierarchy."""
@@ -397,7 +420,9 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
                 Every yielded task must be one of these types.
             source: A callable returning a fresh iterator over the tasks each time it is called. The
                 writer calls it more than once (a peek for id storage, then the write), so it must
-                re-read its source rather than exhaust a one-shot generator.
+                re-read its source rather than exhaust a one-shot generator. It can attach dataset
+                annotations with :meth:`annotate` while it runs, for its tasks to refer to. The
+                writer stores them after the dataset annotations attached before.
 
         Raises:
             TimeFValidationError: If tasks were already added with :meth:`add_task`. A dataset either
@@ -824,8 +849,8 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         for field_name in ("input_annotations", "target_annotations"):
             for annotation in getattr(task, field_name):
                 identity = id(annotation)
-                if identity not in index.dataset_annotations and not any(
-                    identity in known for known in record_occurrences
+                if not any(identity in known for known in record_occurrences) and not index.is_dataset_annotation(
+                    annotation
                 ):
                     raise TimeFValidationError(
                         f"{type(task).__name__} {field_name} refers to an occurrence of annotation "
