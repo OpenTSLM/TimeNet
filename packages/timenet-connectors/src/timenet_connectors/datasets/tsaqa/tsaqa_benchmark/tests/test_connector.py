@@ -10,7 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.json import JsonValue
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
@@ -358,7 +358,7 @@ def test_a_reread_that_no_longer_matches_its_row_fails(tmp_path, position, rewri
         for record in dataset.records
         if (record.metadata["file"], record.metadata["row"]) == ("train.parquet", position)
     )
-    with pytest.raises(TimeFFormatError, match=rf"train.parquet row {position}: the series differ"):
+    with pytest.raises(TimeNetConnectorError, match=rf"train.parquet row {position}: the series differ"):
         first.signals[0].to_numpy()
 
 
@@ -377,7 +377,7 @@ def test_a_reread_that_no_longer_matches_its_row_fails(tmp_path, position, rewri
 def test_malformed_rows_name_their_file_and_row(tmp_path, position, columns, message):
     shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
     _rewrite(tmp_path / "train.parquet", position, **columns)
-    with pytest.raises(TimeFValidationError, match=rf"train.parquet row {position}: .*{message}"):
+    with pytest.raises(TimeNetConnectorError, match=rf"train.parquet row {position}: .*{message}"):
         _FixtureConnector().convert(_refs(tmp_path))
 
 
@@ -405,7 +405,7 @@ def _position(tmp_path: Path, wanted) -> tuple[int, dict[str, Any]]:
 def test_a_true_or_false_question_without_its_final_newline_fails(tmp_path):
     position, row = _position(tmp_path, lambda row: row["task"] == "characterization" and "T: True." in row["question"])
     _rewrite(tmp_path / "train.parquet", position, question=row["question"].removesuffix("\n"))
-    with pytest.raises(TimeFValidationError, match=rf"train.parquet row {position}: .*offers A to D in order"):
+    with pytest.raises(TimeNetConnectorError, match=rf"train.parquet row {position}: .*offers A to D in order"):
         _FixtureConnector().convert(_refs(tmp_path))
 
 
@@ -416,20 +416,20 @@ def test_a_printed_series_that_loses_its_line_fails_naming_the_labels(tmp_path):
     # A trailing space makes the line something else than a printed series.
     question = re.sub(r"(\nB: \[[^\n]*\])", r"\1 ", row["question"])
     _rewrite(tmp_path / "train.parquet", position, question=question)
-    with pytest.raises(TimeFValidationError, match=rf"train.parquet row {position}: .*prints series labelled"):
+    with pytest.raises(TimeNetConnectorError, match=rf"train.parquet row {position}: .*prints series labelled"):
         _FixtureConnector().convert(_refs(tmp_path))
 
 
 def test_a_conversion_needs_every_split_file():
     refs = [ref for ref in _refs() if ref.part == "test"]
-    with pytest.raises(TimeFValidationError, match=r"missing \['train', 'val'\]"):
+    with pytest.raises(TimeNetConnectorError, match=r"missing \['train', 'val'\]"):
         _FixtureConnector().convert(refs)
 
 
-def test_a_file_that_is_not_parquet_fails_as_a_format_error(tmp_path):
+def test_a_file_that_is_not_parquet_fails_as_a_connector_error(tmp_path):
     shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
     (tmp_path / "test.parquet").write_text("not parquet")
-    with pytest.raises(TimeFFormatError, match=r"test\.parquet"):
+    with pytest.raises(TimeNetConnectorError, match=r"test\.parquet"):
         _FixtureConnector().convert(_refs(tmp_path))
 
 

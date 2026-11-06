@@ -9,7 +9,7 @@ span of the record as well.
 """
 
 from timenet.dataset import Signal
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, TimeInterval
 from timenet_connectors.bases.edf import reader
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
@@ -31,12 +31,12 @@ def _signals_of_annotation(recording_id: str, series: tuple[Signal, ...]) -> tup
         One signal for each scoring signal name, in that order.
 
     Raises:
-        TimeFFormatError: If the recording does not hold one of the scoring signals.
+        TimeNetConnectorError: If the recording does not hold one of the scoring signals.
     """
     by_signal = {one.name: one for one in series}
     missing = [signal for signal in _signal_names_for_annotations if signal not in by_signal]
     if missing:
-        raise TimeFFormatError(f"{recording_id}: does not hold the signals {missing}")
+        raise TimeNetConnectorError(f"{recording_id}: does not hold the signals {missing}")
 
     return tuple(by_signal[signal] for signal in _signal_names_for_annotations)
 

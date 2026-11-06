@@ -63,7 +63,23 @@ dataclass, or an S3 key. The connector is generic over `TRaw`:
 `class MyConnector(BaseConnector[MyRawRef])`.
 
 If an assumption about your source data, downloads, or parents does not hold, raise
-`TimeNetConnectorError` from `timenet.errors`.
+`TimeNetConnectorError` from `timenet.errors`. [Errors](#errors) gives the details.
+
+---
+
+## Errors
+
+Raise `TimeNetConnectorError` from `timenet.errors` for invalid source data or parent datasets.
+TimeNet keeps `TimeFValidationError` for invalid TimeF objects or arguments, and `TimeFFormatError`
+for damaged or unsupported TimeF files. Do not raise `ValueError` for source data either.
+
+The download helpers in `download/` do not follow this rule yet. A checksum mismatch still raises
+`TimeFFormatError`.
+
+`packages/timenet-connectors/tests/test_connector_conventions.py` fails on an explicit
+`raise ValueError` or `raise TimeFFormatError` in `datasets/`, `bases/`, and `sources/`. It does not
+detect exceptions that libraries raise, `TimeFValidationError`, or code in other files and
+directories, including `time_axes.py`, `download/`, and `splitting/`.
 
 ---
 

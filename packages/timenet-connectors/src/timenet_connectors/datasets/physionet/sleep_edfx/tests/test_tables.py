@@ -2,7 +2,7 @@ from datetime import time
 
 import pytest
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet_connectors.datasets.physionet.sleep_edfx import tables
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import Condition
 from timenet_connectors.demographics import Sex
@@ -64,30 +64,30 @@ def test_the_cassette_sheet_decodes_code_2_as_male():
 
 def test_a_sex_code_the_sheet_does_not_define_raises():
     rows = [_CASSETTE_ROWS[0], (90.0, 1.0, 44.0, 3.0, 0.5)]
-    with pytest.raises(TimeFFormatError, match=r"row 2.*code 3"):
+    with pytest.raises(TimeNetConnectorError, match=r"row 2.*code 3"):
         tables.parse_subject_table(tables.CASSETTE_SHEET, rows)
 
 
 def test_a_lights_off_cell_holding_text_raises():
     rows = [_CASSETTE_ROWS[0], (90.0, 1.0, 44.0, 1.0, "01:05:00")]
-    with pytest.raises(TimeFFormatError, match=r"SC-subjects\.xls.*'01:05:00'"):
+    with pytest.raises(TimeNetConnectorError, match=r"SC-subjects\.xls.*'01:05:00'"):
         tables.parse_subject_table(tables.CASSETTE_SHEET, rows)
 
 
 def test_a_lights_off_cell_outside_one_day_raises():
     rows = [_CASSETTE_ROWS[0], (90.0, 1.0, 44.0, 1.0, 1.5)]
-    with pytest.raises(TimeFFormatError, match=r"SC-subjects\.xls.*1\.5"):
+    with pytest.raises(TimeNetConnectorError, match=r"SC-subjects\.xls.*1\.5"):
         tables.parse_subject_table(tables.CASSETTE_SHEET, rows)
 
 
 def test_one_pair_of_subject_and_night_twice_raises():
     rows = [*_CASSETTE_ROWS, (90.0, 1.0, 44.0, 1.0, 0.5)]
-    with pytest.raises(TimeFFormatError, match="appears twice"):
+    with pytest.raises(TimeNetConnectorError, match="appears twice"):
         tables.parse_subject_table(tables.CASSETTE_SHEET, rows)
 
 
 def test_a_short_cassette_row_raises():
-    with pytest.raises(TimeFFormatError, match="columns"):
+    with pytest.raises(TimeNetConnectorError, match="columns"):
         tables.parse_subject_table(tables.CASSETTE_SHEET, [_CASSETTE_ROWS[0], (90.0, 1.0, 44.0)])
 
 
@@ -119,7 +119,7 @@ def test_the_condition_comes_from_the_column_the_night_number_sits_in():
 
 def test_a_night_number_that_matches_neither_column_raises():
     subject = tables.parse_subject_table(tables.TELEMETRY_SHEET, _TELEMETRY_ROWS)[91,]
-    with pytest.raises(TimeFFormatError, match="ST7911J0"):
+    with pytest.raises(TimeNetConnectorError, match="ST7911J0"):
         tables.find_night(subject, 3, "ST7911J0")
 
 
@@ -133,23 +133,23 @@ def test_a_night_number_that_matches_both_columns_raises():
             tables.SubjectNight(night=1, condition=Condition.TEMAZEPAM, lights_off=time(23, 30, 0)),
         ),
     )
-    with pytest.raises(TimeFFormatError, match="ST7951J0"):
+    with pytest.raises(TimeNetConnectorError, match="ST7951J0"):
         tables.find_night(subject, 1, "ST7951J0")
 
 
 def test_a_recording_with_no_row_raises_and_names_the_recording_and_the_table():
     table = tables.parse_subject_table(tables.CASSETTE_SHEET, _CASSETTE_ROWS)
-    with pytest.raises(TimeFFormatError, match=r"SC4991E0.*SC-subjects\.xls"):
+    with pytest.raises(TimeNetConnectorError, match=r"SC4991E0.*SC-subjects\.xls"):
         tables.find_subject_row(table, tables.CASSETTE_SHEET, 99, 1, "SC4991E0")
 
 
 def test_a_telemetry_subject_with_no_row_raises():
     table = tables.parse_subject_table(tables.TELEMETRY_SHEET, _TELEMETRY_ROWS)
-    with pytest.raises(TimeFFormatError, match=r"ST7991J0.*ST-subjects\.xls"):
+    with pytest.raises(TimeNetConnectorError, match=r"ST7991J0.*ST-subjects\.xls"):
         tables.find_subject_row(table, tables.TELEMETRY_SHEET, 99, 1, "ST7991J0")
 
 
 def test_a_subject_cell_holding_a_fraction_raises():
     rows = [_CASSETTE_ROWS[0], (90.5, 1.0, 44.0, 1.0, 0.5)]
-    with pytest.raises(TimeFFormatError, match="not a whole number"):
+    with pytest.raises(TimeNetConnectorError, match="not a whole number"):
         tables.parse_subject_table(tables.CASSETTE_SHEET, rows)

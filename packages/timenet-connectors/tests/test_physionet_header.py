@@ -2,8 +2,8 @@ from pathlib import Path
 
 import pytest
 
-from timenet.errors import TimeFFormatError
-from timenet_connectors.bases.physionet import BasePhysioNetConnector
+from timenet.errors import TimeNetConnectorError
+from timenet_connectors.bases.physionet import BasePhysioNetConnector, _read_dat16
 
 
 def _write_hea(tmp_path: Path, body: str) -> Path:
@@ -26,19 +26,19 @@ def test_read_header_defaults_an_unspecified_gain_to_the_wfdb_200(tmp_path):
 
 def test_read_header_rejects_fewer_signal_lines_than_declared(tmp_path):
     rec = _write_hea(tmp_path, "rec 12 250 100\nrec.dat 16 200(0)/mV 16 0 0 0 0 II\n")
-    with pytest.raises(TimeFFormatError, match="declares 12 signals"):
+    with pytest.raises(TimeNetConnectorError, match="declares 12 signals"):
         BasePhysioNetConnector._read_header(rec)
 
 
 def test_read_header_rejects_a_signal_line_without_a_signal_name(tmp_path):
     rec = _write_hea(tmp_path, "rec 1 250 100\nrec.dat 16 200(0)/mV 16 0 0 0\n")
-    with pytest.raises(TimeFFormatError, match="names no signal"):
+    with pytest.raises(TimeNetConnectorError, match="names no signal"):
         BasePhysioNetConnector._read_header(rec)
 
 
 def test_read_header_rejects_an_unparseable_gain(tmp_path):
     rec = _write_hea(tmp_path, "rec 1 250 100\nrec.dat 16 bad/mV 16 0 0 0 0 II\n")
-    with pytest.raises(TimeFFormatError, match="cannot parse the gain"):
+    with pytest.raises(TimeNetConnectorError, match="cannot parse the gain"):
         BasePhysioNetConnector._read_header(rec)
 
 
@@ -63,3 +63,61 @@ def test_read_header_falls_back_when_signals_span_multiple_dat_files(tmp_path):
         "multi 2 500 100\na.dat 16 1000(0)/mV 16 0 0 0 0 I\nb.dat 16 1000(0)/mV 16 0 0 0 0 II\n"
     )
     assert BasePhysioNetConnector._read_header(tmp_path / "multi").direct_read is False
+
+
+@pytest.mark.parametrize(
+    "body",
+    ["", "r x 500 10\n", "r 1 500 10\nr.dat 16\n"],
+    ids=["empty", "record-count-not-a-number", "short-signal-line"],
+)
+def test_read_header_raises_a_connector_error_for_a_truncated_header(tmp_path, body):
+    with pytest.raises(TimeNetConnectorError, match=r"rec\.hea: malformed header"):
+        BasePhysioNetConnector._read_header(_write_hea(tmp_path, body))
+
+
+def test_read_dat16_rejects_samples_that_do_not_split_into_the_signals(tmp_path):
+    dat = tmp_path / "rec.dat"
+    dat.write_bytes(b"\x00" * 6)
+    with pytest.raises(TimeNetConnectorError, match="3 samples do not split into 2 signals"):
+        _read_dat16(str(dat), 2)
+
+
+@pytest.mark.parametrize(
+    ("record_line", "message"),
+    [
+        ("rec 1 nan 100", "sampling frequency nan"),
+        ("rec 1 inf 100", "sampling frequency inf"),
+        ("rec 1 0 100", "sampling frequency 0.0"),
+        ("rec 1 250 -5", "must not be negative"),
+    ],
+)
+def test_read_header_rejects_impossible_record_values(tmp_path, record_line, message):
+    rec = _write_hea(tmp_path, f"{record_line}\nrec.dat 16 200(0)/mV 16 0 0 0 0 II\n")
+    with pytest.raises(TimeNetConnectorError, match=message):
+        BasePhysioNetConnector._read_header(rec)
+
+
+def test_read_header_rejects_a_gain_that_is_not_finite(tmp_path):
+    rec = _write_hea(tmp_path, "rec 1 250 100\nrec.dat 16 1e999(0)/mV 16 0 0 0 0 II\n")
+    with pytest.raises(TimeNetConnectorError, match="is not finite"):
+        BasePhysioNetConnector._read_header(rec)
+
+
+def test_read_header_rejects_text_that_is_not_utf8(tmp_path):
+    (tmp_path / "rec.hea").write_bytes(b"rec 1 250 100\nrec.dat 16 200(0)/mV 16 0 0 0 0 \xff\n")
+    with pytest.raises(TimeNetConnectorError, match=r"rec\.hea: malformed header"):
+        BasePhysioNetConnector._read_header(tmp_path / "rec")
+
+
+def test_read_dat16_rejects_a_trailing_odd_byte(tmp_path):
+    dat = tmp_path / "rec.dat"
+    dat.write_bytes(b"\x01\x00\x02")
+    with pytest.raises(TimeNetConnectorError, match="3 bytes is not a whole number"):
+        _read_dat16(str(dat), 1)
+
+
+def test_read_dat16_rejects_zero_signals(tmp_path):
+    dat = tmp_path / "rec.dat"
+    dat.write_bytes(b"\x00\x00")
+    with pytest.raises(TimeNetConnectorError, match="at least 1 signal"):
+        _read_dat16(str(dat), 0)
