@@ -13,12 +13,9 @@ from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import PayloadSource
 from timenet.reader import TimeFReader
-from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import prepare_local_copy
 from timenet.registry.local import LocalRegistry
-from timenet.registry.writable import WritableRegistry
 from timenet.types import DatasetMetadata
-from timenet.types.access import require_open_access
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
 from timenet.values_backends import SUPPORTED_VALUES_BACKENDS, ValuesBackend
@@ -103,73 +100,15 @@ def run_pipeline(  # ruff: ignore[too-many-arguments]
     return version_dir
 
 
-def publish_pipeline(  # ruff: ignore[too-many-arguments]
-    connector: BaseConnector,
-    registry: WritableRegistry,
-    *,
-    cache_dir: Path | None = None,
-    keep_cache: bool = False,
-    progress_cb: Callable[[WriteProgressEvent], None] | None = None,
-    force: bool = False,
-    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
-) -> str:
-    """Build and publish a dataset to a writable registry.
+def open_parents(metadata: DatasetMetadata, registry: LocalRegistry) -> BuildContext:
+    """Open readers for the dataset's declared parents in a local registry.
 
-    Reuse an existing version unless ``force`` is set.
-    The dataset card and lineage must declare open access if the registry requires it.
-
-    Args:
-        connector: The connector to build.
-        registry: The writable registry to publish to.
-        cache_dir: The download directory, or ``None`` for ``<TIMENET_CACHE>/<dataset_id>``.
-        keep_cache: Keep the default cache after publishing. A supplied ``cache_dir`` is always kept.
-        progress_cb: Callback for writer progress events, or ``None``.
-        force: Publish again even if the version already exists.
-        pinned_by: Releases that read this release's files, mapped to file records the build must match.
-
-    Returns:
-        The existing or newly published version string.
-
-    Raises:
-        TimeFValidationError: If a connector declares parents without overriding ``compose``, or changes its card.
-        TimeNetAccessError: If the card, dataset, or lineage lacks open access and the registry requires it.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_composes, _compose, and require_open_access
-    values_backend = _check_values_backend(connector)
-    metadata = connector.metadata()
-    dataset_id = metadata.dataset_id
-    version = str(metadata.dataset_version)
-    if not force and registry.exists(dataset_id, version):
-        return version
-    if registry.requires_open_access:
-        require_open_access(metadata)
-    _check_composes(connector, metadata)
-
-    cache = cache_dir if cache_dir is not None else settings().cache_dir / dataset_id
-    cache.mkdir(parents=True, exist_ok=True)
-
-    with open_parents(metadata, registry) as context:
-        dataset = _compose(connector, metadata, cache, context)
-        if registry.requires_open_access:
-            require_open_access(dataset.metadata, dataset.lineage.values())
-        dataset.derive_schema()
-        registry.put_dataset(
-            dataset, force=force, values_backend=values_backend, progress_cb=progress_cb, pinned_by=pinned_by
-        )
-    if not keep_cache and cache_dir is None and cache.is_dir():
-        shutil.rmtree(cache)
-    return version
-
-
-def open_parents(metadata: DatasetMetadata, registry: BaseRegistry) -> BuildContext:
-    """Open each declared parent of a card from the registry a build writes to.
-
-    A local registry must hold every parent complete, with its payload sources. A remote registry
-    resolves the payload source manifests upfront, and the readers read catalogs and payloads only
-    when the connector needs them. The engine never fetches or builds a parent here.
+    The registry must hold every parent complete, with its payload sources. The engine never fetches
+    or builds a parent here.
 
     Args:
         metadata: The child dataset card with exact parent references.
-        registry: The registry the child is written to.
+        registry: The local registry containing the parents.
 
     Returns:
         The opened readers, keyed by parent alias. Close the context after the write.
@@ -182,12 +121,7 @@ def open_parents(metadata: DatasetMetadata, registry: BaseRegistry) -> BuildCont
     # the stack lets the readers go, and the context closes them.
     with ExitStack() as stack:
         for alias, ref in metadata.parents.items():
-            version = (
-                prepare_local_copy(registry.root, ref)
-                if isinstance(registry, LocalRegistry)
-                else registry.open_version(ref.dataset_id, str(ref.version))
-            )
-            parents[alias] = stack.enter_context(TimeFReader(version))
+            parents[alias] = stack.enter_context(TimeFReader(prepare_local_copy(registry.root, ref)))
         stack.pop_all()
     return BuildContext(references=dict(metadata.parents), parents=parents)
 
