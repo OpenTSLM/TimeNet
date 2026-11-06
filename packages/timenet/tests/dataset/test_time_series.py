@@ -12,6 +12,8 @@ from timenet.errors import TimeFNullValuesError, TimeFValidationError
 from timenet.types import (
     Annotation,
     ArrayHandle,
+    MissingReason,
+    MissingValues,
     StepInterval,
     StepPoint,
     TimeInterval,
@@ -28,6 +30,9 @@ def _spec():
         name="ECG Lead",
         unit_value=ureg.millivolt,
     )
+
+
+_MISSING = MissingValues(reason=MissingReason.SENSOR_GAP, max_fraction=1.0)
 
 
 def _series(**overrides):
@@ -271,7 +276,7 @@ def test_from_irregular_converts_and_checks_arrow_values_against_the_spec():
     offsets = [0, 5, 9]
     signal = Signal.from_irregular(pa.array([1.0, 2.0, 3.0]), time_offsets_us=offsets, spec=_spec(), name="c")
     assert signal.to_arrow().type == pa.float32()
-    with pytest.raises(TimeFValidationError, match="nullable=False"):
+    with pytest.raises(TimeFValidationError, match="allows no missing timestep"):
         Signal.from_irregular(pa.array([1.0, None, 3.0]), time_offsets_us=offsets, spec=_spec(), name="c")
     spec = _spec().model_copy(update={"dtype": "enum", "categories": ("a", "b")})
     with pytest.raises(TimeFValidationError, match="outside its categories"):
@@ -379,7 +384,7 @@ def _no_arrow(*_args, **_kwargs):
 
 def _signal_from(source, *, irregular=False, nullable=False):
     """Build the same series from NumPy values, a list, or a loader callable."""
-    spec = _spec().model_copy(update={"dtype": "float32", "nullable": nullable})
+    spec = _spec().model_copy(update={"dtype": "float32", "missing": _MISSING if nullable else None})
     if source == "loader":
         return Signal.from_loader(
             spec=spec,
@@ -510,7 +515,7 @@ def test_reshaping_a_read_array_leaves_the_stored_values(dtype):
 def test_to_numpy_explains_a_partly_null_tensor_step_in_full_sentences():
     storage = pa.FixedSizeListArray.from_arrays(pa.array([1.0, None, 3.0, 4.0], type=pa.float32()), 2)
     tensor = pa.ExtensionArray.from_storage(pa.fixed_shape_tensor(pa.float32(), (2,)), storage)
-    spec = _spec().model_copy(update={"value_shape": (2,), "nullable": True})
+    spec = _spec().model_copy(update={"value_shape": (2,), "missing": _MISSING})
     ts = _series(spec=spec, n_values=2, loader=lambda: tensor)
     with pytest.raises(TimeFNullValuesError) as raised:
         ts.to_numpy()
@@ -523,7 +528,7 @@ def test_to_numpy_explains_a_partly_null_tensor_step_in_full_sentences():
 @pytest.mark.parametrize("nullable", [False, True])
 def test_to_numpy_points_null_values_to_arrow(nullable):
     ts = _series(
-        spec=_spec().model_copy(update={"nullable": nullable}),
+        spec=_spec().model_copy(update={"missing": _MISSING if nullable else None}),
         loader=lambda: pa.array([1.0, None, 3.0], type=pa.float32()),
     )
     with pytest.raises(TimeFNullValuesError, match=r"1 of 3 values are null.*Use to_arrow\(\)"):
@@ -544,7 +549,7 @@ def test_permuted_and_sliced_tensors_read_as_pyarrow_converts_them(sliced, nulla
     if sliced:
         tensor = tensor.slice(1, 2)
     expected = tensor.to_numpy_ndarray()
-    spec = _spec().model_copy(update={"value_shape": expected.shape[1:], "nullable": nullable})
+    spec = _spec().model_copy(update={"value_shape": expected.shape[1:], "missing": _MISSING if nullable else None})
     ts = Signal(name="c", data=tensor, spec=spec, time_axis=OrdinalAxis())
     np.testing.assert_array_equal(ts.to_numpy(), expected)
 
@@ -554,7 +559,7 @@ def test_boolean_tensors_read_as_numpy_with_their_value_shape(nullable):
     frames = np.array([[True, False], [False, False], [True, True]])
     storage = pa.FixedSizeListArray.from_arrays(pa.array(frames.ravel()), 2)
     tensor = pa.ExtensionArray.from_storage(pa.fixed_shape_tensor(pa.bool_(), (2,)), storage)
-    spec = _spec().model_copy(update={"dtype": "bool", "value_shape": (2,), "nullable": nullable})
+    spec = _spec().model_copy(update={"dtype": "bool", "value_shape": (2,), "missing": _MISSING if nullable else None})
     ts = Signal(name="c", data=tensor, spec=spec, time_axis=OrdinalAxis())
     np.testing.assert_array_equal(ts.to_numpy(), frames)
 

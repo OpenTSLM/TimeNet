@@ -108,8 +108,9 @@ with client.open_torch("timenet/hello-world") as view:
 ```
 
 The adapter preserves the Signal dtype and per-timestep shape. It raises `TimeFValidationError`
-when values contain nulls, even when `nullable=True`. Consumers must handle missing data before
-conversion to PyTorch. Each mask in `series_masks` contains only true values.
+when values contain nulls, even when the spec's `missing` record allows them. Consumers must
+handle missing data before conversion to PyTorch. Each mask in `series_masks` contains only true
+values.
 
 Tasks and annotations remain Python objects. Signal lengths can also vary. Supply a model-specific
 `transform` or `collate_fn` when the default PyTorch batching cannot combine them.

@@ -398,11 +398,13 @@ class TimeFWriter:
             The validated values in the spec's canonical Arrow representation.
 
             The method accepts ``NaN``, ``+Infinity``, and ``-Infinity`` as floating-point values.
-            They are distinct from missing values. The ``nullable`` flag controls Arrow nulls only.
+            They are distinct from missing values. The spec's missing-value record controls Arrow
+            nulls only.
 
         Raises:
-            TimeFValidationError: If the array disagrees with the spec's dtype, shape, or
-                nullability, has partial tensor nulls, or its length disagrees with ``n_values``.
+            TimeFValidationError: If the array disagrees with the spec's dtype or shape, has null
+                values that the spec's missing-value record does not allow, has partial tensor
+                nulls, or its length disagrees with ``n_values``.
         """
         values = ts.to_arrow()
         if ts.spec.dtype == "enum":
@@ -427,8 +429,8 @@ class TimeFWriter:
                 f"value_shape={ts.spec.value_shape} as Arrow, got "
                 f"{values.type if isinstance(values, pa.Array) else type(values)!r}"
             )
-        if values.null_count and not ts.spec.nullable:
-            raise TimeFValidationError(f"series {ts.id!r} has null values but nullable=False")
+        if values.null_count:
+            ts.spec.check_nulls_within_missing_contract(values.null_count, len(values), series=f"series {ts.id!r}")
         if isinstance(values, pa.FixedShapeTensorArray) and values.storage.flatten().null_count:
             raise TimeFValidationError(f"series {ts.id!r} may have nulls only for whole timesteps")
         if ts.spec.dtype == "enum":

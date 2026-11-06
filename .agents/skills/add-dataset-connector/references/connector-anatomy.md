@@ -113,6 +113,10 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
 - `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_value=ureg.<unit>, data_source=...)`.
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
+- A spec allows no missing timestep by default, so a `None` value fails the build. If the source
+  has gaps, say why on the spec and how large a share of a series they can take:
+  `missing=MissingValues(reason=MissingReason.SENSOR_GAP, max_fraction=0.2)`. Measure the source
+  first; the writer rejects a series with a larger share. Keep a null a null: never fill a gap.
 - Group signals under a `Source(name=..., signals=...)`. Then
   `dataset.add_record(record=Record(sources=(source,)))` registers the record and returns it. A
   windowed record says so through its axis: `RegularAxis.at_index(...)` moves the origin into the

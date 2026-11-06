@@ -4,7 +4,7 @@ import pint
 from pydantic import ValidationError
 import pytest
 
-from timenet.types import DatasetSchema, TimeSeriesSpec, ureg
+from timenet.types import DatasetSchema, MissingValues, TimeSeriesSpec, ureg
 from timenet.types.specs import Unit
 
 
@@ -19,6 +19,15 @@ def test_spec_construction_modality_only():
     assert spec.spec_type == "ecg_lead"
     assert spec.unit_value == ureg.millivolt
     assert not hasattr(spec, "signal")  # signal lives on Signal, not the spec
+
+
+def test_the_legacy_nullable_flag_becomes_a_missing_record():
+    assert TimeSeriesSpec.upgrade_legacy_nullable({"nullable": True}) == {"missing": MissingValues.unspecified()}
+    assert TimeSeriesSpec.upgrade_legacy_nullable({"nullable": False}) == {"missing": None}
+    recorded = {"reason": "sensor_gap", "max_fraction": 1.0}
+    assert TimeSeriesSpec.upgrade_legacy_nullable({"nullable": True, "missing": recorded}) == {"missing": recorded}
+    with pytest.raises(ValueError, match="nullable is false but missing"):
+        TimeSeriesSpec.upgrade_legacy_nullable({"nullable": False, "missing": recorded})
 
 
 def test_spec_frozen():

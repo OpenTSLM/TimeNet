@@ -23,7 +23,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
-from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX, TABLES
+from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX, LEGACY_ABSENT_COLUMNS, TABLES
 from timenet.format.duckdb import CATALOG_ERRORS, check_control_schema, connect_control
 from timenet.format.stored_array import ChunkLocation
 from timenet.format.stored_values import (
@@ -51,6 +51,8 @@ from timenet.types import (
     ArrayHandle,
     InputModality,
     LabelSet,
+    MissingReason,
+    MissingValues,
     Task,
     TaskType,
     TimeInterval,
@@ -132,6 +134,9 @@ class _SignalRow(NamedTuple):
     value_shape: list[int]
     dimension_names: list[str]
     nullable: bool
+    missing_reason: str | None
+    missing_description: str | None
+    missing_max_fraction: float | None
     n_values: int
     metadata: str
     modality: str
@@ -153,6 +158,9 @@ class _SignalRow(NamedTuple):
             tuple(self.value_shape),
             tuple(self.dimension_names),
             self.nullable,
+            self.missing_reason,
+            self.missing_description,
+            self.missing_max_fraction,
             self.modality,
         )
 
@@ -596,6 +604,8 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         self._known_record_ids: set[int] = set()
         # Chunk files and sources named by the chunk locations read so far, so equal names share one string.
         self._chunk_strings: dict[str, str] = {}
+        self._columns_by_table: dict[str, frozenset[str]] = {}
+        """The columns that this database has, by table, for the tables looked at so far."""
 
     def run(self, query: Callable[[duckdb.DuckDBPyConnection], _T]) -> _T:
         """Run one read through the connection, which opens again first if it was closed.
@@ -1201,7 +1211,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             TimeFFormatError: If an ID occurs more than once.
         """
         table, order_column, relation_column, kind = _HIERARCHY_TABLES[row_type]
-        columns = ", ".join(row_type._fields)
+        columns = self._select_list(table, row_type._fields)
         query = (
             # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
             f"SELECT {columns} FROM {table} WHERE ? OR {relation_column} IN (SELECT unnest(?)) ORDER BY {order_column}"
@@ -1211,6 +1221,39 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         if len(indexed) != len(rows):
             raise TimeFFormatError(f"control.duckdb contains duplicate {kind.value.lower()} IDs")
         return indexed
+
+    def _select_list(self, table: str, fields: tuple[str, ...]) -> str:
+        """Return the columns of a row type as a ``SELECT`` list.
+
+        A release written before a column was added to the control schema does not have that
+        column. For such a column, listed in :data:`LEGACY_ABSENT_COLUMNS`, the list reads NULL, so
+        the row builder can apply the older meaning. Any other absent column fails in DuckDB.
+
+        Args:
+            table: The table to read.
+            fields: The columns in the row type's order.
+
+        Returns:
+            The comma-separated list for the ``SELECT`` clause.
+        """
+        legacy = LEGACY_ABSENT_COLUMNS.get(table, frozenset())
+        if not legacy & set(fields):
+            return ", ".join(fields)
+        present = self._table_columns(table)
+        return ", ".join(f"NULL AS {name}" if name in legacy and name not in present else name for name in fields)
+
+    def _table_columns(self, table: str) -> frozenset[str]:
+        """Return the columns that this database has in a table.
+
+        Returns:
+            The column names, read once per table and kept.
+        """
+        columns = self._columns_by_table.get(table)
+        if columns is None:
+            rows = self._query("SELECT column_name FROM information_schema.columns WHERE table_name = ?", [table])
+            columns = frozenset(row[0] for row in rows)
+            self._columns_by_table[table] = columns
+        return columns
 
     @staticmethod
     def _group_sources(
@@ -2099,7 +2142,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             The typed specification.
 
         Raises:
-            TimeFFormatError: If the stored Signal modality is invalid.
+            TimeFFormatError: If the stored Signal modality or missing-value record is invalid.
         """
         try:
             modality = InputModality(row.modality)
@@ -2115,9 +2158,44 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             categories=tuple(row.categories),
             value_shape=tuple(row.value_shape),
             dimension_names=tuple(row.dimension_names),
-            nullable=row.nullable,
+            missing=DuckDBControlReader._missing_values_from_row(row),
             modality=modality,
         )
+
+    @staticmethod
+    def _missing_values_from_row(row: _SignalRow) -> MissingValues | None:
+        """Reconstruct a spec's missing-value record from its ``signals`` row.
+
+        A release written before TimeF recorded why values are missing has only the ``nullable``
+        flag. Its specs that allow missing timesteps get the ``unspecified`` reason.
+
+        Returns:
+            The record, or ``None`` if the spec allows no missing timestep.
+
+        Raises:
+            TimeFFormatError: If the stored reason is unknown, the record has no max_fraction, or
+                the record disagrees with ``nullable``.
+        """
+        if row.missing_reason is None:
+            if row.missing_max_fraction is not None or row.missing_description is not None:
+                raise TimeFFormatError(f"signal {row.signal_id!r} stores a missing-value record without a reason")
+            return MissingValues.unspecified() if row.nullable else None
+        if not row.nullable:
+            raise TimeFFormatError(f"signal {row.signal_id!r} stores a missing-value record but is not nullable")
+        try:
+            reason = MissingReason(row.missing_reason)
+        except ValueError as exc:
+            raise TimeFFormatError(
+                f"invalid missing_reason {row.missing_reason!r} for signal {row.signal_id!r}"
+            ) from exc
+        if row.missing_max_fraction is None:
+            raise TimeFFormatError(f"signal {row.signal_id!r} stores a missing-value record without a max_fraction")
+        try:
+            return MissingValues(
+                reason=reason, description=row.missing_description, max_fraction=row.missing_max_fraction
+            )
+        except ValidationError as exc:
+            raise TimeFFormatError(f"invalid missing-value record for signal {row.signal_id!r}: {exc}") from exc
 
     def _check_owners(
         self,
