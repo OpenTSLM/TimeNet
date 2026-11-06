@@ -513,7 +513,7 @@
     },
     "MissingValues": {
       "additionalProperties": false,
-      "description": "The reason for missing timesteps and the maximum fraction allowed in a series.\n\nA spec without this record allows no missing timesteps. An Arrow null marks a missing timestep.",
+      "description": "The reason for missing timesteps in a series.\n\nA spec without this record allows no missing timesteps. An Arrow null marks a missing timestep.\nThe writer records how many timesteps each signal misses, which a reader gets as\n``Signal.null_count``, so a consumer decides for itself which share it accepts.",
       "properties": {
         "reason": {
           "$ref": "#/$defs/MissingReason"
@@ -530,17 +530,10 @@
           ],
           "default": null,
           "title": "Description"
-        },
-        "max_fraction": {
-          "exclusiveMinimum": 0,
-          "maximum": 1,
-          "title": "Max Fraction",
-          "type": "number"
         }
       },
       "required": [
-        "reason",
-        "max_fraction"
+        "reason"
       ],
       "title": "MissingValues",
       "type": "object"

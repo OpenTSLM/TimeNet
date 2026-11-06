@@ -134,8 +134,8 @@ class _SignalRow(NamedTuple):
     dimension_names: list[str]
     missing_reason: str | None
     missing_description: str | None
-    missing_max_fraction: float | None
     n_values: int
+    null_count: int | None
     metadata: str
     modality: str
 
@@ -157,7 +157,6 @@ class _SignalRow(NamedTuple):
             tuple(self.dimension_names),
             self.missing_reason,
             self.missing_description,
-            self.missing_max_fraction,
             self.modality,
         )
 
@@ -1107,6 +1106,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 spec=signal.spec,
                 time_axis=signal.axis,
                 n_values=row.n_values,
+                null_count=row.null_count,
                 loader=signal.values,
                 time_offsets_loader=signal.time_offsets,
                 annotations=annotations.get((ObjectKind.SIGNAL, row.signal_id), ()),
@@ -2142,7 +2142,6 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 {
                     "reason": row.missing_reason,
                     "description": row.missing_description,
-                    "max_fraction": row.missing_max_fraction,
                 }
             )
         except ValidationError as exc:

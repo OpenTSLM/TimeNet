@@ -98,7 +98,7 @@ def test_int16_series_stays_an_int16_tensor():
     assert item["series"][0].dtype == torch.int16
 
 
-@pytest.mark.parametrize("missing", [None, MissingValues(reason=MissingReason.SENSOR_GAP, max_fraction=1.0)])
+@pytest.mark.parametrize("missing", [None, MissingValues(reason=MissingReason.SENSOR_GAP)])
 def test_numpy_values_use_numpy_reads_without_arrow_conversion(monkeypatch, missing):
     dataset = _typed_dataset("float32", np.array([1.0, 0.0], dtype=np.float32), missing=missing)
 

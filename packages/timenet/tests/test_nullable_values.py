@@ -9,7 +9,16 @@ from timenet.errors import TimeFValidationError
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
-from timenet.types import DatasetMetadata, License, MissingReason, MissingValues, TimeSeriesSpec, Version, ureg
+from timenet.types import (
+    DatasetMetadata,
+    License,
+    MissingReason,
+    MissingValues,
+    StepInterval,
+    TimeSeriesSpec,
+    Version,
+    ureg,
+)
 from timenet.values_backends.types import ChunkDataIndex, StoredChunk
 from timenet.values_backends.zarr.reader import ZarrValuesReader
 from timenet.writer import TimeFWriter
@@ -26,13 +35,7 @@ def _spec(dtype="float32", **kwargs):
     return TimeSeriesSpec(spec_type="x", name="X", unit_value=ureg.dimensionless, dtype=dtype, **kwargs)
 
 
-_MISSING = MissingValues(reason=MissingReason.SENSOR_GAP, max_fraction=1.0)
-
-
-@pytest.mark.parametrize("max_fraction", [0.0, 1.5, "0.5", None])
-def test_missing_values_need_a_max_fraction_between_zero_and_one(max_fraction):
-    with pytest.raises(ValidationError, match="max_fraction"):
-        MissingValues(reason=MissingReason.SENSOR_GAP, max_fraction=max_fraction)
+_MISSING = MissingValues(reason=MissingReason.SENSOR_GAP)
 
 
 def test_nullable_is_true_exactly_when_the_spec_has_a_missing_record():
@@ -83,13 +86,15 @@ def test_nonnullable_constructors_reject_none(irregular, dtype):
             Signal.from_values([None], spec=spec, name="x", time_axis=OrdinalAxis())
 
 
-def _loader_series(spec, array):
-    return Signal.from_loader(spec=spec, name="x", time_axis=OrdinalAxis(), loader=lambda: array, n_values=len(array))
+def _loader_series(spec, array, null_count=None):
+    return Signal.from_loader(
+        spec=spec, name="x", time_axis=OrdinalAxis(), loader=lambda: array, n_values=len(array), null_count=null_count
+    )
 
 
-def _lazy_series(spec, array):
+def _lazy_series(spec, array, null_count=None):
     """Build a lazy series in a dataset, so the writer's messages can name its id."""
-    series = _loader_series(spec, array)
+    series = _loader_series(spec, array, null_count)
     dataset = TimeFDataset(metadata=make_dataset().metadata)
     dataset.add_record(record=Record(sources=(Source(name="Source", signals=(series,)),)))
     return series
@@ -108,15 +113,24 @@ def test_writer_checks_nullability_before_numpy_conversion(tmp_path, dtype):
         writer._read_and_validate(_lazy_series(spec.model_copy(update={"missing": None}), array))
 
 
-def test_series_with_more_nulls_than_max_fraction_are_rejected(tmp_path):
-    spec = _spec(missing=MissingValues(reason=MissingReason.SENSOR_GAP, max_fraction=0.25))
-    # One null in four values is exactly the bound. Two are above it.
-    Signal.from_values([1.0, None, 3.0, 4.0], spec=spec, name="x", time_axis=OrdinalAxis())
-    with pytest.raises(TimeFValidationError, match=r"missing 2 of 4 values \(50.0%\), more than the max_fraction 0.25"):
-        Signal.from_values([1.0, None, None, 4.0], spec=spec, name="x", time_axis=OrdinalAxis())
+def test_signals_know_their_null_count_or_the_writer_counts_it(tmp_path):
+    spec = _spec(missing=_MISSING)
+    in_memory = Signal.from_values([1.0, None, None, 4.0], spec=spec, name="x", time_axis=OrdinalAxis())
+    assert in_memory.null_count == 2
+    assert in_memory.slice(StepInterval(time_series=in_memory, start=0, stop=2)).null_count is None, (
+        "a window's count is unknown"
+    )
     array = pa.array([1.0, None, None, 4.0], type=pa.float32())
-    with pytest.raises(TimeFValidationError, match=r"more than the max_fraction 0\.25"):
-        TimeFWriter(tmp_path, make_dataset())._read_and_validate(_lazy_series(spec, array))
+    assert _loader_series(spec, array).null_count is None, "a lazy series need not state its count"
+    writer = TimeFWriter(tmp_path, make_dataset())
+    stated = _lazy_series(spec, array, null_count=1)
+    with pytest.raises(TimeFValidationError, match="states null_count=1 but its values hold 2 nulls"):
+        writer._read_and_validate(stated)
+    counted = _lazy_series(spec, array)
+    writer._read_and_validate(counted)
+    assert writer._null_counts[counted.id] == 2
+    with pytest.raises(TimeFValidationError, match="null_count must be an integer between 0 and n_values=4"):
+        _loader_series(spec, array, null_count=5)
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
@@ -133,7 +147,7 @@ def test_float_accepts_nonfinite_observations(tmp_path, value):
 
 def test_nonfinite_values_are_allowed_when_not_nullable(tmp_path):
     # Floating-point specs allow NaN and infinity, including non-nullable specs.
-    series = Signal.from_values([np.nan], spec=_spec(), name="x", time_axis=OrdinalAxis())
+    series = _lazy_series(_spec(), pa.array([np.nan], type=pa.float32()))
     TimeFWriter(tmp_path, make_dataset())._read_and_validate(series)
 
 
@@ -219,6 +233,7 @@ def test_nullable_scalar_round_trips(tmp_path, values_backend, dtype, observatio
     series = Signal.from_values(observations, spec=spec, name="x", time_axis=OrdinalAxis())
     restored = _write_read(tmp_path, series, values_backend=values_backend)
 
+    assert restored.null_count == 1, "the release records the signal's null count"
     values = restored.to_arrow()
     assert values.null_count == 1, "the missing timestep survived as a null"
     assert values.is_valid().to_pylist() == [True, False, True]

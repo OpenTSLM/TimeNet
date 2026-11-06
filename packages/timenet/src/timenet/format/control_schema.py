@@ -213,8 +213,8 @@ SIGNALS = Table(
         _required("dimension_names", ColumnType.VARCHAR_LIST),
         Column("missing_reason", ColumnType.VARCHAR),
         Column("missing_description", ColumnType.VARCHAR),
-        Column("missing_max_fraction", ColumnType.DOUBLE),
         _key("n_values"),
+        Column("null_count", ColumnType.BIGINT),
         _required("metadata", ColumnType.JSON),
         _required("modality"),
     ),
@@ -227,7 +227,9 @@ SIGNALS = Table(
 """The ``missing_*`` columns hold a spec's missing-value record, or are all null when it has none.
 
 A spec is nullable exactly when ``missing_reason`` is set. The Zarr backend reads that to find the
-validity arrays.
+validity arrays. ``null_count`` records how many of a signal's ``n_values`` timesteps are missing.
+The writer counts it for every signal whose values it stores. It is null only for a signal that was
+written without its values and did not state the count itself.
 """
 
 SIGNAL_CHUNKS = Table(

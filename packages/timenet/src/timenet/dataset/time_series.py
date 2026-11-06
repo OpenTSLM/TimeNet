@@ -83,7 +83,7 @@ def _arrow_from_values(
     else:
         # pa.array preserves None as a null. The null count below avoids a separate scan.
         array = pa.array(values, type=arrow_type)
-    spec.check_nulls_within_missing_contract(array.null_count, len(array), series="series")
+    spec.check_nulls_allowed(array.null_count, series="series")
     if spec.dtype == "enum":
         # Encode the labels first. The dictionary stores each distinct label once.
         # Compare these labels with the allowed categories, without creating an object for every value.
@@ -246,6 +246,14 @@ class Signal(SupportsAnnotate):
     ``n_values`` reports.
 
     """
+    null_count: int | None
+    """The number of missing timesteps, or ``None`` if the signal does not know it yet.
+
+    Values built in memory know their count, and so does a signal read from a release whose writer
+    stored its values. A signal built with :meth:`from_loader` knows it only if the caller states
+    it, and a slice does not know the count of its window. The writer reads every series it stores,
+    records the count in the release, and rejects a stated count that the values contradict.
+    """
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached directly to this signal."""
     metadata: JsonMapping = field(default_factory=dict)
@@ -270,6 +278,7 @@ class Signal(SupportsAnnotate):
             name=name,
             values=held,
             n_values=len(held.values),
+            null_count=held.values.null_count if isinstance(held, ArrowArray) else 0,
             annotations=annotations,
             metadata=metadata,
         )
@@ -283,6 +292,7 @@ class Signal(SupportsAnnotate):
         name: str,
         loader: ArrayHandle | Callable[[], pa.Array],
         n_values: int,
+        null_count: int | None = None,
         time_offsets_loader: ArrayHandle | Callable[[], pa.Array] | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
@@ -292,7 +302,8 @@ class Signal(SupportsAnnotate):
         ``loader`` and ``time_offsets_loader`` each take a value handle, which the signal keeps as it
         is, or a plain callable returning an Arrow array, which the signal calls on every read. A
         callable with its own ``read_steps()`` is rejected: subclass ``ArrayHandle`` to keep its range
-        reads.
+        reads. ``null_count`` states how many timesteps are missing, if the caller knows; the writer
+        finds out when it reads the values.
 
         Returns:
             A signal backed by ``loader`` without reading it.
@@ -304,6 +315,7 @@ class Signal(SupportsAnnotate):
             name=name,
             values=_array_handle(loader),
             n_values=n_values,
+            null_count=null_count,
             time_offsets=None if time_offsets_loader is None else _array_handle(time_offsets_loader),
             annotations=annotations,
             metadata=metadata,
@@ -318,6 +330,7 @@ class Signal(SupportsAnnotate):
         name: str,
         values: ArrayHandle,
         n_values: int,
+        null_count: int | None,
         time_offsets: ArrayHandle | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
@@ -331,6 +344,7 @@ class Signal(SupportsAnnotate):
         set_field(self, "_time_offsets", time_offsets)
         set_field(self, "_id", None)
         set_field(self, "n_values", n_values)
+        set_field(self, "null_count", null_count)
         set_field(self, "annotations", tuple(annotations))
         set_field(self, "metadata", {} if metadata is None else metadata)
         self.__post_init__()
@@ -368,9 +382,9 @@ class Signal(SupportsAnnotate):
         """Validate the intrinsic per-series invariants.
 
         Raises:
-            TimeFValidationError: If ``n_values`` is not a positive integer. Also if the time
-                offsets and the axis shape disagree about whether this series stores per-value time
-                offsets.
+            TimeFValidationError: If ``n_values`` is not a positive integer, or ``null_count`` is
+                set and not between 0 and ``n_values``. Also if the time offsets and the axis shape
+                disagree about whether this series stores per-value time offsets.
             ValueError: If ``signal`` is empty. The axis validates itself.
         """
         if not self.name:
@@ -378,6 +392,14 @@ class Signal(SupportsAnnotate):
         object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
         if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
             raise TimeFValidationError(f"Signal.n_values must be a positive integer, got {self.n_values!r}")
+        if self.null_count is not None and (
+            isinstance(self.null_count, bool)
+            or not isinstance(self.null_count, int)
+            or not 0 <= self.null_count <= self.n_values
+        ):
+            raise TimeFValidationError(
+                f"Signal.null_count must be an integer between 0 and n_values={self.n_values}, got {self.null_count!r}"
+            )
         irregular = isinstance(self.time_axis, IrregularAxis)
         if irregular and self._time_offsets is None:
             raise TimeFValidationError(
@@ -516,6 +538,7 @@ class Signal(SupportsAnnotate):
             loader=held,
             time_offsets_loader=NumpyArray(time_offsets),
             n_values=n_values,
+            null_count=held.values.null_count if isinstance(held, ArrowArray) else 0,
         )
 
     def time_offsets_us(self) -> np.ndarray:
@@ -735,8 +758,8 @@ class Signal(SupportsAnnotate):
         The span must hold at least one value. A step span must count on this series. A time span is
         placed by time only, so ask :meth:`is_selected_by` first when the scope matters. The slice
         keeps the name, spec, metadata, and place on the timeline, drops annotations, and reads no
-        values until it is read. The spec's ``missing.max_fraction`` is not checked on the window
-        until a writer stores it as a series of its own::
+        values until it is read. It does not know how many timesteps of the window are missing, so
+        its ``null_count`` is ``None``::
 
             if signal.overlaps_with(interval):
                 part = signal.slice(interval, clip=True)

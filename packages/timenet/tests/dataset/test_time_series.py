@@ -32,7 +32,7 @@ def _spec():
     )
 
 
-_MISSING = MissingValues(reason=MissingReason.SENSOR_GAP, max_fraction=1.0)
+_MISSING = MissingValues(reason=MissingReason.SENSOR_GAP)
 
 
 def _series(**overrides):

@@ -117,9 +117,8 @@ backend for multidimensional values.
 ### Missing values
 
 A spec allows no missing timestep unless the connector says why timesteps are missing. It does so
-with a `MissingValues` record: one `MissingReason`, an optional description for a reader who does
-not know the source, and `max_fraction`, the largest share of a series' timesteps that the
-connector expects to be missing.
+with a `MissingValues` record: one `MissingReason` and an optional description for a reader who
+does not know the source.
 
 ```python
 from timenet.types import MissingReason, MissingValues, TimeSeriesSpec
@@ -131,7 +130,6 @@ glucose = TimeSeriesSpec(
     missing=MissingValues(
         reason=MissingReason.SENSOR_GAP,
         description="The sensor lost contact with the skin.",
-        max_fraction=0.2,
     ),
 )
 ```
@@ -146,9 +144,10 @@ glucose = TimeSeriesSpec(
 
 Pass `None` for a missing timestep. Arrow stores missingness in a validity bitmap. This keeps a
 missing value distinct from a valid floating-point NaN. The writer rejects a null when the spec has
-no `missing` record, and it rejects a series whose share of nulls is above `max_fraction`. A
-consumer reads `spec.missing.reason` to decide whether it can fill the gaps, cut them off, or must
-leave the series out. `spec.nullable` is `True` exactly when the spec has a `missing` record.
+no `missing` record. It records how many timesteps each signal misses, and a reader gets that
+number as `Signal.null_count` without loading the values. A consumer reads `spec.missing.reason`
+and `Signal.null_count` to decide whether it can fill the gaps, cut them off, or must leave the
+series out. `spec.nullable` is `True` exactly when the spec has a `missing` record.
 
 `Signal.to_arrow()` preserves nulls. `Signal.to_numpy()` rejects an array that contains nulls.
 The PyTorch adapter also rejects actual nulls, even when the spec allows them. Consumers must

@@ -147,6 +147,7 @@ class TimeFWriter:
             from timenet.registry.local import LocalRegistry  # ruff: ignore[import-outside-top-level]
 
             registry = LocalRegistry(self._root)
+        self._null_counts: dict[EntityId, int] = {}
         self._storage_sources = StorageSources(
             DatasetRef(dataset_id=dataset.metadata.dataset_id, version=dataset.metadata.dataset_version), registry
         )
@@ -225,6 +226,7 @@ class TimeFWriter:
             self._dataset,
             placements,
             tasks=tasks,
+            null_counts=self._null_counts,
         )
         self._control_file = CONTROL_FILE
         self._counts = self._build_counts()
@@ -376,6 +378,9 @@ class TimeFWriter:
             location = values._location
             if signal.spec != values.spec or signal.n_values != sum(chunk.n_values for chunk in location.chunks):
                 raise TimeFValidationError(f"shared signal {signal.id!r} changed its storage shape")
+            if signal.null_count is None:
+                raise TimeFValidationError(f"shared signal {signal.id!r} does not know its null count")
+            self._null_counts[signal.id] = signal.null_count
             source = self._storage_sources.add(values.reader._version, location, nullable=values.spec.nullable)
             for chunk in location.chunks:
                 shared[signal.id, chunk.chunk_idx] = ChunkPlacement(
@@ -388,8 +393,8 @@ class TimeFWriter:
                 )
         return shared, owned
 
-    def _read_and_validate(self, ts: Signal) -> pa.Array:  # ruff: ignore[no-self-use]
-        """Read a series' values and enforce the per-series array contract.
+    def _read_and_validate(self, ts: Signal) -> pa.Array:
+        """Read a series' values, enforce the per-series array contract, and note its null count.
 
         Args:
             ts: The series to read.
@@ -399,7 +404,8 @@ class TimeFWriter:
             present values, not missing ones.
 
         Raises:
-            TimeFValidationError: If the dtype, shape, nulls, or length violate the series' spec.
+            TimeFValidationError: If the dtype, shape, nulls, or length violate the series' spec, or
+                the series states a null count that its values contradict.
         """
         values = ts.to_arrow()
         if ts.spec.dtype == "enum":
@@ -425,7 +431,12 @@ class TimeFWriter:
                 f"{values.type if isinstance(values, pa.Array) else type(values)!r}"
             )
         if values.null_count:
-            ts.spec.check_nulls_within_missing_contract(values.null_count, len(values), series=f"series {ts.id!r}")
+            ts.spec.check_nulls_allowed(values.null_count, series=f"series {ts.id!r}")
+        if ts.null_count is not None and ts.null_count != values.null_count:
+            raise TimeFValidationError(
+                f"series {ts.id!r} states null_count={ts.null_count} but its values hold {values.null_count} nulls"
+            )
+        self._null_counts[ts.id] = values.null_count
         if isinstance(values, pa.FixedShapeTensorArray) and values.storage.flatten().null_count:
             raise TimeFValidationError(f"series {ts.id!r} may have nulls only for whole timesteps")
         if ts.spec.dtype == "enum":

@@ -6,10 +6,8 @@ from typing import Annotated, Any, Self, cast
 
 import pint
 from pydantic import (
-    Field,
     PlainSerializer,
     PlainValidator,
-    StrictFloat,
     StrictStr,
     WithJsonSchema,
     model_validator,
@@ -108,26 +106,17 @@ class MissingReason(StrEnum):
 
 
 class MissingValues(TimeFModel):
-    """The reason for missing timesteps and the maximum fraction allowed in a series.
+    """The reason for missing timesteps in a series.
 
     A spec without this record allows no missing timesteps. An Arrow null marks a missing timestep.
+    The writer records how many timesteps each signal misses, which a reader gets as
+    ``Signal.null_count``, so a consumer decides for itself which share it accepts.
     """
 
     reason: MissingReason
     """Why timesteps are missing."""
     description: NonEmptyString | None = None
     """An explanation of missing timesteps in the source, or ``None``."""
-    max_fraction: Annotated[StrictFloat, Field(gt=0, le=1)]
-    """The maximum fraction of timesteps that a series can have missing.
-
-    The writer rejects a series with a larger fraction of missing timesteps. ``1.0`` allows a
-    series that misses almost every timestep.
-
-    The bound applies to each series as it is written. A window cut from a valid series with
-    :meth:`~timenet.dataset.Signal.slice` is a lazy view and is not checked again, but if a
-    dataset writes that window as a series of its own, the writer checks the window's fraction.
-    A dataset that cuts windows gives such a series a spec with a bound that fits the windows.
-    """
 
 
 class TimeSeriesSpec(TimeFModel):
@@ -161,30 +150,23 @@ class TimeSeriesSpec(TimeFModel):
         """Whether a whole timestep can be missing. This is true when :attr:`missing` is set."""
         return self.missing is not None
 
-    def check_nulls_within_missing_contract(self, null_count: int, n_values: int, *, series: str) -> None:
-        """Check whether the spec allows the missing timesteps.
+    def check_nulls_allowed(self, null_count: int, *, series: str) -> None:
+        """Check that the spec says why timesteps are missing, if the series has any.
 
         Args:
             null_count: The number of missing timesteps in the series.
-            n_values: The number of timesteps in the series.
             series: The series name to use in an error message.
 
         Raises:
-            TimeFValidationError: If missing timesteps are disallowed or exceed ``max_fraction``.
+            TimeFValidationError: If the series has missing timesteps but the spec has no
+                :attr:`missing` record.
         """
-        if null_count == 0:
+        if null_count == 0 or self.missing is not None:
             return
-        if self.missing is None:
-            raise TimeFValidationError(
-                f"{series} has {null_count} null values but its spec {self.spec_type!r} allows no missing "
-                "timestep. Set TimeSeriesSpec.missing to say why values are missing"
-            )
-        fraction = null_count / n_values
-        if fraction > self.missing.max_fraction:
-            raise TimeFValidationError(
-                f"{series} is missing {null_count} of {n_values} values ({fraction:.1%}), more than the "
-                f"max_fraction {self.missing.max_fraction} of its spec {self.spec_type!r}"
-            )
+        raise TimeFValidationError(
+            f"{series} has {null_count} null values but its spec {self.spec_type!r} allows no missing "
+            "timestep. Set TimeSeriesSpec.missing to say why values are missing"
+        )
 
     @model_validator(mode="after")
     def _valid_contract(self) -> Self:

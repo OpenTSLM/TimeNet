@@ -61,8 +61,8 @@ The values locator is backend-neutral. One schema covers both scalar and multidi
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a
 separate format version.
 
-A spec records its `missing` record: why timesteps can be missing, and the largest share a series
-may miss. Parquet stores the missing timesteps in Arrow validity bitmaps. Zarr stores them in
+A spec records its `missing` record: why timesteps can be missing. The control database records
+how many timesteps each signal misses. Parquet stores the missing timesteps in Arrow validity bitmaps. Zarr stores them in
 validity arrays next to the values.
 
 Direct construction and parsing with an unsupported `timef_format_version` raise Pydantic's

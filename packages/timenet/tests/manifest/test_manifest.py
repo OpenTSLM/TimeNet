@@ -154,7 +154,7 @@ def test_missing_values_round_trip_at_format_version_1():
         _manifest(),
         files=ManifestFiles(control=_CONTROL),
     )
-    missing = MissingValues(reason=MissingReason.SENSOR_GAP, description="The sensor lost contact.", max_fraction=0.2)
+    missing = MissingValues(reason=MissingReason.SENSOR_GAP, description="The sensor lost contact.")
     spec = _replace(base.dataset_schema.time_series_specs[0], missing=missing)
     manifest = Manifest(
         dataset_id=base.dataset_id,
@@ -165,7 +165,7 @@ def test_missing_values_round_trip_at_format_version_1():
     )
     assert manifest.timef_format_version == 1
     stored = manifest.to_dict()["schema"]["time_series_specs"][0]
-    assert stored["missing"] == {"reason": "sensor_gap", "description": "The sensor lost contact.", "max_fraction": 0.2}
+    assert stored["missing"] == {"reason": "sensor_gap", "description": "The sensor lost contact."}
     assert "nullable" not in stored
     assert Manifest.model_validate_json(manifest.to_json()) == manifest
     jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)

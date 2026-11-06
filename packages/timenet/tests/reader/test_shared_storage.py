@@ -282,7 +282,7 @@ def test_a_reused_nullable_zarr_signal_keeps_its_validity_arrays(tmp_path):
         spec_type="env",
         name="env",
         unit_value=ureg.dimensionless,
-        missing=MissingValues(reason=MissingReason.SENSOR_GAP, max_fraction=1.0),
+        missing=MissingValues(reason=MissingReason.SENSOR_GAP),
     )
     signal = Signal.from_values([1.0, None, 3.0], spec=spec, name="x", time_axis=RegularAxis.from_rate_hz(1))
     parent = _release("test/a", [Record(sources=(Source(name="env", signals=(signal,)),))])

@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 from collections import defaultdict
-from collections.abc import Container, Hashable, Iterable, Iterator
+from collections.abc import Container, Hashable, Iterable, Iterator, Mapping
 from itertools import count, islice
 import json
 from pathlib import Path
@@ -225,6 +225,7 @@ class DuckDBControlWriter:
         if self.path.exists():
             raise FileExistsError(f"control database already exists at {self.path}")
         self._storage_ids: defaultdict[str, Iterator[int]] = defaultdict(lambda: count(1))
+        self._null_counts: Mapping[int, int] = {}
 
     def write_hierarchy(
         self,
@@ -232,6 +233,7 @@ class DuckDBControlWriter:
         placements: dict[tuple[int, int], ChunkPlacement] | None = None,
         *,
         tasks: Iterable[Task] | None = None,
+        null_counts: Mapping[int, int] | None = None,
     ) -> dict[str, int]:
         """Write records, sources, signals, axes, and their annotations atomically.
 
@@ -239,6 +241,8 @@ class DuckDBControlWriter:
             dataset: The complete in-memory hierarchy.
             placements: Values-plane chunks keyed by ``(signal_id, chunk_index)``.
             tasks: A previously validated task stream, or ``None`` to use the dataset's tasks.
+            null_counts: The number of missing timesteps per signal id, counted by the writer that
+                read the values. A signal that is not listed stores its own ``null_count``.
 
         Returns:
             Counts keyed by concrete task type.
@@ -249,6 +253,7 @@ class DuckDBControlWriter:
                 match its axis offsets or value chunks.
         """
         self.path.parent.mkdir(parents=True, exist_ok=True)
+        self._null_counts = {} if null_counts is None else null_counts
         try:
             with connect_control(self.path) as connection:
                 create_control_schema(connection)
@@ -748,8 +753,8 @@ class DuckDBControlWriter:
                 "dimension_names": list(spec.dimension_names),
                 "missing_reason": None if spec.missing is None else spec.missing.reason.value,
                 "missing_description": None if spec.missing is None else spec.missing.description,
-                "missing_max_fraction": None if spec.missing is None else spec.missing.max_fraction,
                 "n_values": signal.n_values,
+                "null_count": self._null_counts.get(signal.id, signal.null_count),
                 "metadata": _json(signal.metadata),
                 "modality": spec.modality.value,
             }
