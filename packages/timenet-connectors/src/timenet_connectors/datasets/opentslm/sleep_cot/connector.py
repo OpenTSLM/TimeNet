@@ -4,9 +4,6 @@ Each CSV row of the OpenTSLM release is one 30-second window of the Fpz-Cz EEG f
 recording, at 50 Hz, so each window has 1500 values. Each row becomes one Record and one
 ClassificationTask. The target is the sleep stage. The rationale is the GPT-4o text that leads to
 the stage.
-
-The release also holds the GPT-4o prompt that produced each rationale. The connector does not
-keep it, because the prompt names the correct stage and the OpenTSLM paper documents it.
 """
 
 from collections import Counter
