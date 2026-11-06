@@ -57,7 +57,8 @@ Signals can reference the same immutable `TimeAxis`. See
 | `clocks` | Record start times, shared by records that use the same `TimeOrigin`. |
 | `sources` | Recursive [sources](data-model/sources.md#storage-and-read-back), linked to their record and parent source by ID. |
 | `signals` | Signal identity plus inline `TimeSeriesSpec` fields. |
-| `axes` | Regular, irregular, and ordinal axis definitions. |
+| `axes` | Regular, segmented regular, irregular, and ordinal axis definitions. |
+| `axis_runs` | Ordered finite runs belonging to segmented regular axes. |
 | `external_values` | Locations of large text, string lists, and irregular time offsets. |
 | `label_sets` | The label sets of classification tasks, one row per set. |
 | `tasks` | Concrete task type, typed scope columns, and subclass configuration columns. |
@@ -105,6 +106,15 @@ There is no separate specification table. The fields are small, typed, directly 
 compress well in DuckDB. `categories` and `dimension_names` are `VARCHAR[]` and `value_shape` is
 `BIGINT[]`. The reader reconstructs one `TimeSeriesSpec` object per distinct combination and shares
 it between the Signals that use it.
+
+New writes use control schema version 2. Readers accept versions 1 and 2; version 1 has no
+`axis_runs` table. Older readers reject version 2 rather than misinterpreting its axes.
+
+Segmented regular axes use `axis_type="segmented_regular"` and store their common rational period
+in `axes`. Each `axis_runs` row stores `axis_id`, zero-based `run_index`, `n_values`, `offset_us`,
+and `start_index`. Counts sum to each referencing Signal's length. Run origins preserve rational
+phase, and runs cannot overlap. Shared axes store these rows once. Storage chunk boundaries are
+independent of run boundaries; no per-sample timestamp payload is written.
 
 Regular axes store a rational microsecond period and origin. Ordinal axes need only their type.
 Irregular axes store their endpoints in `axes` and their ordered microsecond time offsets in

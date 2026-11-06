@@ -15,7 +15,7 @@ import numpy as np
 import pyarrow as pa
 from pydantic import ValidationError
 
-from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, TimeFDataset
+from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, SegmentedRegularAxis, Signal, TimeFDataset
 from timenet.dataset.axis import to_time_offsets_us
 from timenet.dataset.composition import ImportState
 from timenet.dataset.dataset import _TaskValidationIndex
@@ -196,6 +196,7 @@ class _HierarchyBatches:
         self.clocks = _TableBatch(connection, TABLES["clocks"])
         self.sources = _TableBatch(connection, TABLES["sources"])
         self.axes = _TableBatch(connection, TABLES["axes"])
+        self.axis_runs = _TableBatch(connection, TABLES["axis_runs"])
         self.signals = _TableBatch(connection, TABLES["signals"])
 
     def flush(self) -> None:
@@ -204,6 +205,7 @@ class _HierarchyBatches:
         self.clocks.flush()
         self.sources.flush()
         self.axes.flush()
+        self.axis_runs.flush()
         self.signals.flush()
 
 
@@ -763,6 +765,30 @@ class DuckDBControlWriter:
             TimeFValidationError: If an irregular signal has no time offsets.
         """
         axis = signal.time_axis
+        if isinstance(axis, SegmentedRegularAxis):
+            batches.axes.add(
+                {
+                    "axis_id": axis_id,
+                    "axis_type": str(axis.axis_type),
+                    "period_numerator_us": axis.period_us.numerator,
+                    "period_denominator": axis.period_us.denominator,
+                    "start_index": None,
+                    "offset_us": None,
+                    "first_us": None,
+                    "last_us": None,
+                }
+            )
+            for index, run in enumerate(axis.runs):
+                batches.axis_runs.add(
+                    {
+                        "axis_id": axis_id,
+                        "run_index": index,
+                        "n_values": run.n_values,
+                        "offset_us": run.axis.offset_us,
+                        "start_index": run.axis.start_index,
+                    }
+                )
+            return None
         if isinstance(axis, RegularAxis):
             batches.axes.add(
                 {

@@ -8,7 +8,14 @@ from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
 
-from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
+from timenet.dataset.axis import (
+    IrregularAxis,
+    OrdinalAxis,
+    RegularAxis,
+    SegmentedRegularAxis,
+    TimeAxis,
+    to_time_offsets_us,
+)
 from timenet.dataset.span_validation import check_span_within_window
 from timenet.errors import TimeFNullValuesError, TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
@@ -381,6 +388,8 @@ class Signal(SupportsAnnotate):
         object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
         if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
             raise TimeFValidationError(f"Signal.n_values must be a positive integer, got {self.n_values!r}")
+        if isinstance(self.time_axis, SegmentedRegularAxis) and self.n_values != self.time_axis.n_values:
+            raise TimeFValidationError("signal length must equal the segmented axis sample count")
         irregular = isinstance(self.time_axis, IrregularAxis)
         if irregular and self._time_offsets is None:
             raise TimeFValidationError(
@@ -418,7 +427,7 @@ class Signal(SupportsAnnotate):
             ``(first time_offset, one past the last)`` in microseconds, or ``None`` for an ordinal series.
         """
         axis = self.time_axis
-        if isinstance(axis, RegularAxis):
+        if isinstance(axis, RegularAxis | SegmentedRegularAxis):
             return (axis.time_offset_us(0), axis.time_offset_us(self.n_values))
         if isinstance(axis, IrregularAxis):
             # One microsecond past the last stored time offset. The axis states no cadence, so there is
@@ -427,6 +436,18 @@ class Signal(SupportsAnnotate):
         if isinstance(axis, OrdinalAxis):
             return None
         assert_never(axis)
+
+    def is_contiguous(self, interval: TimeInterval) -> bool:
+        """Return whether a declared cadence covers the entire interval without gaps.
+
+        Irregular and ordinal axes declare no continuous cadence and return False.
+        """
+        axis = self.time_axis
+        if isinstance(axis, SegmentedRegularAxis):
+            return axis.is_contiguous(interval.start_us, interval.end_us)
+        if isinstance(axis, RegularAxis):
+            return axis.time_offset_us(0) <= interval.start_us < interval.end_us <= axis.time_offset_us(self.n_values)
+        return False
 
     @property
     def is_ordinal(self) -> bool:
@@ -620,6 +641,10 @@ class Signal(SupportsAnnotate):
             return (span.start, span.stop)
         if not isinstance(span, TimeInterval):  # a point (TimePoint or StepPoint) names no range
             raise TimeFValidationError(f"step_range needs an interval span, not a point, got {span!r}")
+        if isinstance(self.time_axis, SegmentedRegularAxis):
+            window = (self.time_axis.time_offset_us(0), self.time_axis.time_offset_us(self.n_values))
+            if span.start_us < window[0] or span.end_us > window[1]:
+                raise TimeFValidationError("span runs past the segmented series")
         steps = self._steps_in_time_range(span.start_us, span.end_us)
         if steps.start < 0 or steps.stop > self.n_values:
             raise TimeFValidationError(
@@ -665,7 +690,7 @@ class Signal(SupportsAnnotate):
             TimeFValidationError: If the series is ordinal, which has no timeline.
         """
         axis = self.time_axis
-        if isinstance(axis, RegularAxis):
+        if isinstance(axis, RegularAxis | SegmentedRegularAxis):
             return _StepRange(axis.index_at_or_after(start_us), axis.index_at_or_after(end_us), None)
         if isinstance(axis, IrregularAxis):
             offsets = self.time_offsets_us()
@@ -768,6 +793,8 @@ class Signal(SupportsAnnotate):
         time_offsets: NumpyArray | None = None
         if isinstance(axis, RegularAxis):
             axis = axis.at_index(steps.start)
+        elif isinstance(axis, SegmentedRegularAxis):
+            axis = axis.slice(steps.start, steps.stop)
         elif isinstance(axis, IrregularAxis):
             # A step span does not read the offsets to locate itself.
             offsets = self.time_offsets_us() if steps.offsets is None else steps.offsets

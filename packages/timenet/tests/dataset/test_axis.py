@@ -9,6 +9,7 @@ from timenet.dataset.axis import (
     IrregularAxis,
     OrdinalAxis,
     RegularAxis,
+    SegmentedRegularAxis,
     time_offsets_from_datetimes,
     to_time_offsets_us,
 )
@@ -105,14 +106,19 @@ def test_an_ordinal_axis_offers_no_route_to_an_time_offset():
     assert not hasattr(axis, "index_at_or_after")
 
 
-def test_axis_types_are_the_three_shapes():
-    assert {t.value for t in AxisType} == {"regular", "irregular", "ordinal"}
+def test_axis_types_are_the_four_shapes():
+    assert {t.value for t in AxisType} == {"regular", "segmented_regular", "irregular", "ordinal"}
 
 
 def test_every_shape_declares_its_own_tag():
     # The discriminator lives on each shape rather than in a function that derives it by branching,
     # so a shape cannot be added without giving itself a tag: writer.py reads axis.axis_type directly.
-    assert {RegularAxis.axis_type, IrregularAxis.axis_type, OrdinalAxis.axis_type} == set(AxisType)
+    assert {
+        RegularAxis.axis_type,
+        SegmentedRegularAxis.axis_type,
+        IrregularAxis.axis_type,
+        OrdinalAxis.axis_type,
+    } == set(AxisType)
 
 
 def test_irregular_axis_takes_its_endpoints_from_the_stream():

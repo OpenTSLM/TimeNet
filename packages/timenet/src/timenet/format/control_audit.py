@@ -8,10 +8,12 @@ after each round trip, and tooling can run it on a published version.
 """
 
 from collections.abc import Iterable
+from fractions import Fraction
 from typing import NamedTuple
 
 import duckdb
 
+from timenet.dataset.axis import RegularAxis, RegularRun, SegmentedRegularAxis
 from timenet.errors import TimeFFormatError
 from timenet.format.annotation_value_kind import AnnotationValueKind
 from timenet.format.control_schema import (
@@ -26,6 +28,45 @@ from timenet.format.stored_values import PackedField, PackedValueKind
 from timenet.format.task_codec import ANNOTATION_FIELDS, RECORD_FIELDS, TaskRelationshipField
 from timenet.format.task_target_kind import SPAN_KINDS, TaskTargetKind
 from timenet.types import ObjectKind, TaskType
+
+
+def _audit_segmented_axes(connection: duckdb.DuckDBPyConnection) -> None:
+    """Validate finite runs and their signal lengths, without reading values.
+
+    Raises:
+        TimeFFormatError: If run timing, ordering, ownership or counts are invalid.
+    """
+    wrong_owner = connection.execute(
+        "SELECT axis_id FROM axis_runs JOIN axes USING (axis_id) WHERE axis_type <> 'segmented_regular' LIMIT 1"
+    ).fetchone()
+    if wrong_owner is not None:
+        raise TimeFFormatError(f"axis {wrong_owner[0]} has runs but is not segmented")
+    for axis_id, numerator, denominator in connection.execute(
+        "SELECT axis_id, period_numerator_us, period_denominator FROM axes WHERE axis_type = 'segmented_regular'"
+    ).fetchall():
+        rows = connection.execute(
+            "SELECT run_index, n_values, offset_us, start_index FROM axis_runs WHERE axis_id = ? ORDER BY run_index",
+            [axis_id],
+        ).fetchall()
+        try:
+            if [row[0] for row in rows] != list(range(len(rows))):
+                raise TimeFFormatError("invalid run order")
+            axis = SegmentedRegularAxis(
+                runs=tuple(
+                    RegularRun(
+                        axis=RegularAxis(
+                            period_us=Fraction(numerator, denominator), offset_us=offset, start_index=start
+                        ),
+                        n_values=n,
+                    )
+                    for _, n, offset, start in rows
+                )
+            )
+        except (ValueError, TypeError, ZeroDivisionError) as exc:
+            raise TimeFFormatError(f"invalid segmented axis {axis_id}: {exc}") from exc
+        lengths = connection.execute("SELECT n_values FROM signals WHERE axis_id = ?", [axis_id]).fetchall()
+        if not lengths or any(n != axis.n_values for (n,) in lengths):
+            raise TimeFFormatError(f"segmented axis {axis_id} run lengths differ from its Signals")
 
 
 def _sql_in(values: Iterable[str]) -> str:
@@ -336,6 +377,19 @@ def _audit_task_labels(connection: duckdb.DuckDBPyConnection) -> None:
             raise TimeFFormatError(f"classification task {task_id!r} {rule.problem}")
 
 
+def _audit_schema_tables(connection: duckdb.DuckDBPyConnection) -> None:
+    """Audit tables present in the declared schema version."""
+    version = check_control_schema(connection)
+    for table in CONTROL_TABLES:
+        if table.name == "axis_runs" and version == 1:
+            continue
+        _audit_unique_keys(connection, table)
+        _audit_foreign_keys(connection, table)
+
+    if version != 1:
+        _audit_segmented_axes(connection)
+
+
 def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chunks: bool = True) -> None:
     """Scan every control table and raise an error at the first broken rule.
 
@@ -351,9 +405,7 @@ def audit_control_database(connection: duckdb.DuckDBPyConnection, *, require_chu
             Also if an axis or chunk length differs from its Signal.
             Also if classification labels break a rule of their label set.
     """
-    for table in CONTROL_TABLES:
-        _audit_unique_keys(connection, table)
-        _audit_foreign_keys(connection, table)
+    _audit_schema_tables(connection)
 
     invalid = connection.execute(_DOMAIN_CHECKS).fetchone()
     if invalid is not None:

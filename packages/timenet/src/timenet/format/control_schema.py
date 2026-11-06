@@ -3,7 +3,7 @@
 The SQL table definitions and the writer's Arrow batch schemas come from :data:`CONTROL_TABLES`.
 The audit also uses it to examine keys and references. Define schema changes there.
 
-This is version 1 of the control schema. Every table except ``label_sets`` uses ids as keys.
+This is version 2 of the control schema. Every table except ``label_sets`` uses ids as keys.
 Records, Signals, and Tasks use the public ids that the caller sees. All other objects use the
 writer's storage ids.
 
@@ -196,6 +196,20 @@ AXES = Table(
     ),
     unique=(("axis_id",),),
 )
+
+AXIS_RUNS = Table(
+    "axis_runs",
+    (
+        _key("axis_id"),
+        _required("run_index", ColumnType.BIGINT),
+        _required("n_values", ColumnType.BIGINT),
+        _required("offset_us", ColumnType.BIGINT),
+        _required("start_index", ColumnType.BIGINT),
+    ),
+    unique=(("axis_id", "run_index"),),
+    foreign_keys=(ForeignKey("axis_id", "axes", "axis_id"),),
+)
+
 
 SIGNALS = Table(
     "signals",
@@ -434,6 +448,7 @@ CONTROL_TABLES: tuple[Table, ...] = (
     CLOCKS,
     SOURCES,
     AXES,
+    AXIS_RUNS,
     SIGNALS,
     SIGNAL_CHUNKS,
     ANNOTATION_CONTENTS,

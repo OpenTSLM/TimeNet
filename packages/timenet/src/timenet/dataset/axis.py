@@ -1,6 +1,6 @@
 """Define how a series places its values in time, or state that it does not place them.
 
-TimeF has three axis shapes, closed under :data:`TimeAxis`. :class:`RegularAxis` computes every time
+TimeF has four axis shapes, closed under :data:`TimeAxis`. :class:`RegularAxis` computes every time
 offset from a period and an origin. It stores nothing per value. :class:`IrregularAxis` covers the
 placements that no formula produces. Its shared control-plane object stores every time offset once.
 :class:`OrdinalAxis` records order only. It gives no route to a time offset, so a time question about
@@ -28,8 +28,9 @@ arithmetic exact, so placing a value and locating a time offset are inverse with
 A Fraction also reduces and validates itself.
 """
 
+from bisect import bisect_right
 from collections.abc import Sequence
-from dataclasses import dataclass, replace
+from dataclasses import dataclass, field, replace
 from datetime import datetime
 from enum import StrEnum, unique
 from fractions import Fraction
@@ -52,6 +53,8 @@ class AxisType(StrEnum):
 
     REGULAR = "regular"
     """Time offsets computed from a period and an origin."""
+    SEGMENTED_REGULAR = "segmented_regular"
+    """A fixed cadence interrupted by gaps."""
     IRREGULAR = "irregular"
     """One stored time offset per value."""
     ORDINAL = "ordinal"
@@ -181,6 +184,124 @@ class RegularAxis:
             The index within this series, which is negative if the time offset precedes its first value.
         """
         return math.ceil((time_offset_us - self.offset_us) / self.period_us) - self.start_index
+
+
+@dataclass(frozen=True, kw_only=True)
+class RegularRun:
+    """A finite uninterrupted run on an exact regular cadence."""
+
+    axis: RegularAxis
+    n_values: int
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.axis, RegularAxis):
+            raise TimeFValidationError("RegularRun.axis must be a RegularAxis")
+        if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
+            raise TimeFValidationError("RegularRun.n_values must be a positive integer")
+        check_int64("run count", self.n_values)
+        check_int64("run end", self.axis.time_offset_us(self.n_values))
+
+
+@dataclass(frozen=True, kw_only=True)
+class SegmentedRegularAxis:
+    """One sampling period across finite runs separated by gaps, with no synthetic samples.
+
+    Run axes retain their rational phase when sliced. Sample indices count stored values only.
+    Derived lookup tuples cost one entry per run and do not participate in axis identity.
+    """
+
+    axis_type: ClassVar[AxisType] = AxisType.SEGMENTED_REGULAR
+    runs: tuple[RegularRun, ...]
+    _starts: tuple[int, ...] = field(init=False, repr=False, compare=False)
+    _times: tuple[int, ...] = field(init=False, repr=False, compare=False)
+    n_values: int = field(init=False)
+
+    def __post_init__(self) -> None:
+        if not isinstance(self.runs, tuple) or not self.runs:
+            raise TimeFValidationError("SegmentedRegularAxis.runs must be a non-empty tuple")
+        starts, times = [], []
+        count = 0
+        previous_end = None
+        for run in self.runs:
+            if not isinstance(run, RegularRun):
+                raise TimeFValidationError("segmented axes require RegularRun entries")
+            if run.axis.period_us != self.runs[0].axis.period_us:
+                raise TimeFValidationError("segmented runs must share one period")
+            start = run.axis.time_offset_us(0)
+            if previous_end is not None and start < previous_end:
+                raise TimeFValidationError("segmented runs must be ordered and must not overlap")
+            starts.append(count)
+            times.append(start)
+            count += run.n_values
+            previous_end = run.axis.time_offset_us(run.n_values)
+        check_int64("segmented count", count)
+        object.__setattr__(self, "_starts", tuple(starts))
+        object.__setattr__(self, "_times", tuple(times))
+        object.__setattr__(self, "n_values", count)
+
+    @property
+    def period_us(self) -> Fraction:
+        """The exact common sampling period."""
+        return self.runs[0].axis.period_us
+
+    def time_offset_us(self, index: int) -> int:
+        """Return a stored sample's offset, or the exclusive end for ``n_values``.
+
+        Raises:
+            TimeFValidationError: If the index lies outside the finite axis.
+        """
+        if isinstance(index, bool) or not isinstance(index, int) or not 0 <= index <= self.n_values:
+            raise TimeFValidationError("sample index is outside the segmented axis")
+        position = bisect_right(self._starts, index) - 1
+        return self.runs[position].axis.time_offset_us(index - self._starts[position])
+
+    def index_at_or_after(self, time_offset_us: int) -> int:
+        """Return the lower-bound sample index, clamped to this finite axis.
+
+        An offset in a gap selects the first sample of the following run.
+        """
+        position = max(0, bisect_right(self._times, time_offset_us) - 1)
+        run = self.runs[position]
+        local = max(0, min(run.n_values, run.axis.index_at_or_after(time_offset_us)))
+        return self._starts[position] + local
+
+    def slice(self, start: int, stop: int) -> "RegularAxis | SegmentedRegularAxis":
+        """Trim runs to a non-empty sample range while preserving original time offsets.
+
+        Returns:
+            A regular axis for one surviving run, otherwise a segmented axis.
+
+        Raises:
+            TimeFValidationError: If the sample range is empty or out of bounds.
+        """
+        if not 0 <= start < stop <= self.n_values:
+            raise TimeFValidationError("invalid segmented sample range")
+        runs = []
+        first = bisect_right(self._starts, start) - 1
+        for position in range(first, len(self.runs)):
+            base, run = self._starts[position], self.runs[position]
+            if base >= stop:
+                break
+            lo, hi = max(start - base, 0), min(stop - base, run.n_values)
+            runs.append(RegularRun(axis=run.axis.at_index(lo), n_values=hi - lo))
+        return runs[0].axis if len(runs) == 1 else SegmentedRegularAxis(runs=tuple(runs))
+
+    def is_contiguous(self, start_us: int, end_us: int) -> bool:
+        """Return whether a non-empty time interval is covered without a gap.
+
+        Adjacent runs with no gap count as continuous even if represented separately.
+        """
+        if end_us <= start_us or start_us < self._times[0]:
+            return False
+        position = bisect_right(self._times, start_us) - 1
+        end = self.runs[position].axis.time_offset_us(self.runs[position].n_values)
+        while end < end_us and position + 1 < len(self.runs):
+            position += 1
+            if self._times[position] != end:
+                return False
+            run = self.runs[position]
+            end = run.axis.time_offset_us(run.n_values)
+        return start_us < end and end_us <= end
 
 
 def to_time_offsets_us(time_offsets_us: np.ndarray | Sequence[int], *, validate_order: bool = True) -> np.ndarray:
@@ -335,5 +456,5 @@ class OrdinalAxis:
     """The stored discriminator."""
 
 
-TimeAxis = RegularAxis | IrregularAxis | OrdinalAxis
+TimeAxis = RegularAxis | SegmentedRegularAxis | IrregularAxis | OrdinalAxis
 """Every shape a series' time axis can have."""

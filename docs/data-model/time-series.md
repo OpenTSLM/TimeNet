@@ -37,11 +37,12 @@ through that Source hierarchy.
 
 ## Choose an axis
 
-TimeNet provides three axis types:
+TimeNet provides four axis types:
 
 | Axis | Use it when | Position unit |
 | --- | --- | --- |
 | `RegularAxis` | Values have a fixed sampling rate. | Microseconds derived from the rate. |
+| `SegmentedRegularAxis` | One fixed sampling rate interrupted by gaps. | Computed within each run. |
 | `IrregularAxis` | The source stores one time offset per value. | Stored microseconds. |
 | `OrdinalAxis` | Values have an order but no clock. | Integer steps. |
 
@@ -50,6 +51,51 @@ A time offset is relative to the Record origin. It does not identify a calendar 
 Every timed Signal in the Record uses this common relative zero.
 
 Do not invent timestamps for an ordinal sequence or a recording with no wall-clock source.
+
+## Regular sampling interrupted by gaps
+
+Keep a recording as one Signal when acquisition pauses. A `SegmentedRegularAxis` holds finite
+`RegularRun` objects sharing one exact period. Values contain only observed samples; gaps consume
+no rows and are never filled.
+
+```python
+from timenet.dataset import RegularAxis, RegularRun, SegmentedRegularAxis
+
+axis = SegmentedRegularAxis(
+    runs=(
+        RegularRun(axis=RegularAxis.from_rate_hz(100), n_values=3),
+        RegularRun(
+            axis=RegularAxis.from_rate_hz(100, offset_us=50_000),
+            n_values=2,
+        ),
+    ),
+)
+# Sample times: 0, 10, 20, 50, 60 milliseconds.
+```
+
+The Signal must contain exactly the sum of the run counts. Runs must be ordered and must not
+overlap. Their `RegularAxis.start_index` retains rational phase when a run is sliced, including
+at rates such as 360 Hz. Adjacent runs are allowed and count as continuous coverage.
+
+`signal.slice(interval)` returns observed samples on both sides of a gap and retains their timing.
+A slice within one run becomes a regular axis. An interval wholly inside a gap contains no samples
+and raises `TimeFValidationError`. Sample-index slices count observed samples only.
+
+`signal.span_us` is the outer envelope, including gaps. Use `signal.is_contiguous(interval)` when
+a task requires uninterrupted coverage of the entire interval. This method returns false for
+irregular and ordinal signals, which do not declare a continuous cadence.
+
+Time lookup searches run metadata without materializing timestamps. For explicit offsets, call
+`axis.time_offset_us(index)` for the desired sample indices. `Signal.time_offsets_us()` continues
+to read stored offsets for irregular signals only.
+
+Connector code can opt into compact run detection using
+`axis_for_offsets(offsets, period_us=period, allow_segmented=True)` from
+`timenet_connectors.time_axes`. It preserves offsets exactly and uses irregular storage when
+runs would require more metadata. The default behavior is unchanged.
+
+Vector-valued signals can use this axis too. For example, acceleration can use `value_shape=(3,)`.
+Use the Zarr values backend for vectors; the Parquet backend currently supports scalar signals.
 
 ## Describe one timestep
 

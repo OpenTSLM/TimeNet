@@ -19,7 +19,18 @@ import duckdb
 import pyarrow as pa
 from pydantic import ValidationError
 
-from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Signal, Source, TimeAxis, TimeFDataset
+from timenet.dataset import (
+    IrregularAxis,
+    OrdinalAxis,
+    Record,
+    RegularAxis,
+    RegularRun,
+    SegmentedRegularAxis,
+    Signal,
+    Source,
+    TimeAxis,
+    TimeFDataset,
+)
 from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
@@ -2076,6 +2087,33 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                     period_us=Fraction(numerator, denominator), start_index=start_index, offset_us=offset
                 )
                 axes[axis_id] = regular
+            elif axis_type == "segmented_regular":
+                try:
+                    run_rows = self._query(
+                        "SELECT run_index, n_values, offset_us, start_index FROM axis_runs "
+                        "WHERE axis_id = ? ORDER BY run_index",
+                        [axis_id],
+                    )
+                    if [row[0] for row in run_rows] != list(range(len(run_rows))):
+                        raise TimeFFormatError(f"axis {axis_id!r} has invalid run order")
+                    segmented = SegmentedRegularAxis(
+                        runs=tuple(
+                            RegularRun(
+                                axis=RegularAxis(
+                                    period_us=Fraction(numerator, denominator),
+                                    offset_us=offset_us,
+                                    start_index=run_start,
+                                ),
+                                n_values=n,
+                            )
+                            for _, n, offset_us, run_start in run_rows
+                        )
+                    )
+                    if min_n_values != segmented.n_values or max_n_values != segmented.n_values:
+                        raise TimeFFormatError(f"axis {axis_id!r} run lengths differ from its Signals")
+                    axes[axis_id] = segmented
+                except (ValueError, TypeError, ZeroDivisionError) as exc:
+                    raise TimeFFormatError(f"invalid segmented axis {axis_id!r}: {exc}") from exc
             elif axis_type == "irregular":
                 if min_n_values is None or max_n_values is None:
                     raise TimeFFormatError(f"irregular axis {axis_id!r} has no Signals")
