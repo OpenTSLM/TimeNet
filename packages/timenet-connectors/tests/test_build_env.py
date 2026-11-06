@@ -58,7 +58,7 @@ def test_uv_command_passes_the_requirements_file():
 
 
 def test_uv_command_puts_the_child_argv_last():
-    argv = ["timenet-build", "build", "x/y", "--out", "/fake/reg"]
+    argv = ["timenet-build", "build", "x/y", "--local-registry", "/fake/reg"]
     assert uv_command(_spec(), argv)[-len(argv) :] == argv
 
 

@@ -245,14 +245,14 @@ def publish(
     ),
     local_registry: str | None = LOCAL_REGISTRY,
 ) -> None:
-    """Copy a release and its payload sources to a registry, and print the release to stdout.
+    """Copy a release and its payload sources to another registry.
 
-    The source defaults to the local store.
-    The copy skips identical releases and rejects releases with conflicting files.
+    Read from ``--source`` or the local store, and print the release to stdout.
+    Skip identical releases and fail if the destination has different files for the same version.
     \f
 
     Raises:
-        TimeNetDatasetNotFoundError: If the source lacks the release.
+        TimeNetDatasetNotFoundError: If the source does not contain the release.
     """  # ruff: ignore[escape-sequence-in-docstring] - the form feed ends the help text of the command
     store = default_store(local_registry=local_registry)
     origin = store if source is None else _source_registry(source, store)
@@ -267,10 +267,9 @@ def publish(
         bare_id, version = split_ref(dataset_id)
         wanted = bare_id if version is None else f"{bare_id}@{version}"
         # Repeat the store of --local-registry, so that each command of the hint uses it too.
-        path = shlex.quote(str(store.root))
-        out, flag = ("", "") if local_registry is None else (f" --out {path}", f" --local-registry {path}")
+        flag = "" if local_registry is None else f" --local-registry {shlex.quote(str(store.root))}"
         hint = (
-            f"Build it into the store with `timenet-build build {wanted}{out}`, "
+            f"Build it into the store with `timenet-build build {wanted}{flag}`, "
             f"or copy it there with `timenet download {wanted}{flag}`."
         )
         raise TimeNetDatasetNotFoundError(f"{str(error).rstrip('.')}. {hint}") from error
