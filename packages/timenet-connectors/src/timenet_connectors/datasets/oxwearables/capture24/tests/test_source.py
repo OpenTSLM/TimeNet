@@ -248,6 +248,24 @@ def test_blank_table_rows_are_rejected_at_their_line(tmp_path, table):
 
 
 @pytest.mark.parametrize(
+    ("table", "original", "replacement", "message"),
+    [
+        ("metadata.csv", "P001", " \t ", "no value for 'pid'"),
+        ("annotation-label-dictionary.csv", SLEEP, " \t ", "no value for 'annotation'"),
+        ("metadata.csv", "P001", '"P001"x', "',' expected after '\"'"),
+        ("annotation-label-dictionary.csv", SLEEP, '"sleep"x', "',' expected after '\"'"),
+    ],
+)
+def test_blank_values_and_malformed_quotes_name_the_table_line(tmp_path, table, original, replacement, message):
+    root = release(tmp_path)
+    path = root / table
+    path.write_text(path.read_text(encoding="utf-8").replace(original, replacement, 1), encoding="utf-8")
+    with pytest.raises(TimeNetConnectorError) as error:
+        Capture24Connector().convert([root])
+    assert str(error.value) == f"{path}:2: {message}"
+
+
+@pytest.mark.parametrize(
     ("table", "name", "value"),
     [("metadata.csv", "pid", "P001"), ("annotation-label-dictionary.csv", "raw label", SLEEP)],
 )
