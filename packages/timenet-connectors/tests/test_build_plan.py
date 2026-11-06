@@ -408,7 +408,7 @@ _GATED = {"access": Access.CREDENTIALED, "access_url": "https://example.org/dua"
 
 
 def test_an_isolated_build_to_a_remote_output_refuses_untraceable_code_before_uv_runs(tmp_path, monkeypatch):
-    _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
+    _install_cards(monkeypatch, parent={})
     monkeypatch.setattr(cli_module, "_resolve_target", lambda output: _Hosted(tmp_path / "hosted"))
     monkeypatch.setattr(cli_module, "run_isolated", lambda *args, **kwargs: pytest.fail("started an isolated build"))
     monkeypatch.setattr(provenance, "_read_git", lambda: {"timenet": {"sha": "a" * 40, "local_changes": True}})
