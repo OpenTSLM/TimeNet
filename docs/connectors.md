@@ -80,6 +80,12 @@ builder function, as [Reuse content](data-model/annotations.md#reuse-content) sh
 prompt, write a function that builds the Task, as
 [Built-in task types](data-model/tasks.md#built-in-task-types) shows.
 
+`Record.add_annotations` takes a list of `Annotation` objects, or a mapping of keys to plain values,
+such as `{"device": "wrist"}`. A mapping gives plain annotations, with no unit, description, or span.
+
+`dataset.add_annotations` attaches several dataset annotations and takes the same mapping.
+SensorCaps uses these batch methods for its dataset and record metadata.
+
 ---
 
 ## People in a record
