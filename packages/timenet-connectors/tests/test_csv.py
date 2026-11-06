@@ -1,3 +1,4 @@
+import csv
 from pathlib import Path
 
 import pytest
@@ -31,6 +32,8 @@ def test_invalid_headers_are_rejected(tmp_path, header):
         ("\n", "blank row"),
         ("002\n", "no value for 'value'"),
         ("002,\n", "no value for 'value'"),
+        ("002,  \t\n", "no value for 'value'"),
+        ('002,"b"c\n', "',' expected after '\"'"),
         (",text\n", "no value for 'id'"),
         ("002,text,extra\n", "more fields than the header names"),
     ],
@@ -49,7 +52,7 @@ def test_header_only_table_is_allowed(tmp_path):
     assert read_csv_table(path, columns=("id", "value")) == []
 
 
-@pytest.mark.parametrize("content", [None, b"\xff\xfe", b'id,value\n001,"unclosed\n'])
+@pytest.mark.parametrize("content", [None, b"\xff\xfe"])
 def test_read_errors_keep_the_path_and_cause(tmp_path, content):
     path = tmp_path / "table.csv"
     if content is not None:
@@ -70,3 +73,20 @@ def test_duplicates_identify_the_first_and_repeated_physical_lines():
 @pytest.mark.parametrize("values", [[], [(2, "001"), (3, "1")]])
 def test_unique_values_are_not_normalized(values):
     check_unique(Path("metadata.csv"), iter(values), name="id")
+
+
+@pytest.mark.parametrize(
+    ("content", "line"),
+    [
+        ('id,"value"x\n', 1),
+        ('id,value\n001,"unclosed\n', 2),
+        ('id,value\n001,"first\nsecond"x\n', 3),
+    ],
+)
+def test_csv_syntax_errors_report_the_failure_line_and_cause(tmp_path, content, line):
+    path = tmp_path / "table.csv"
+    path.write_text(content, encoding="utf-8")
+    with pytest.raises(TimeNetConnectorError) as error:
+        read_csv_table(path, columns=("id", "value"))
+    assert isinstance(error.value.__cause__, csv.Error)
+    assert str(error.value) == f"{path}:{line}: {error.value.__cause__}"

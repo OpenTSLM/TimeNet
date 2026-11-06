@@ -391,15 +391,11 @@ An import copies every annotation of the parent objects. The child decides which
 publishes. For example, a parent can carry an official split as annotations. A child that follows
 that split keeps them. A child with a split of its own removes them and adds its own.
 
----
-
-See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
-
-### Small CSV tables
+## Small CSV tables
 
 Use `timenet_connectors.sources.csv.read_csv_table` for strict metadata tables. It requires exactly
 specified columns (in any order), preserves cell text, and rejects blank rows, empty or missing
-cells, duplicate headers, extra fields, and malformed CSV. It returns `CsvRow` objects with
+cells (including whitespace-only values), duplicate headers, extra fields, and malformed CSV. It returns `CsvRow` objects with
 `line` (the physical starting line, including quoted multiline fields) and `values`.
 A valid header with no data rows is allowed. The helper materializes the table; use a streaming
 or columnar reader for large recordings.
@@ -416,3 +412,10 @@ check_unique(
 Both helpers raise `TimeNetConnectorError` for bad source data. Duplicate diagnostics identify the
 repeated value's line and its first occurrence. Field parsing and dataset-specific rules remain
 with the caller.
+
+CSV syntax errors report the physical line where parsing failed, which can differ from a
+multiline row's starting line. Nonblank cell text is never trimmed.
+
+---
+
+See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.

@@ -19,7 +19,8 @@ class CsvRow:
 def read_csv_table(path: Path, *, columns: Sequence[str]) -> list[CsvRow]:
     """Read a small CSV table, retaining each row's starting file line.
 
-    Columns may appear in any order. Blank rows, missing values and extra fields are errors.
+    Columns may appear in any order. Blank rows, empty or whitespace-only values, missing values
+    and extra fields are errors.
     Cell text is preserved; quoted fields may span lines. A header-only table is allowed.
     This helper materializes small metadata tables, not large signal recordings.
 
@@ -48,10 +49,12 @@ def read_csv_table(path: Path, *, columns: Sequence[str]) -> list[CsvRow]:
                     raise TimeNetConnectorError(f"{path}:{line}: more fields than the header names")
                 row = dict(zip(header, cells, strict=False))
                 for column in columns:
-                    if not row.get(column):
+                    if not (row.get(column) or "").strip():
                         raise TimeNetConnectorError(f"{path}:{line}: no value for {column!r}")
                 rows.append(CsvRow(line=line, values=row))
-    except (OSError, UnicodeDecodeError, csv.Error) as exc:
+    except csv.Error as exc:
+        raise TimeNetConnectorError(f"{path}:{reader.line_num}: {exc}") from exc
+    except (OSError, UnicodeDecodeError) as exc:
         raise TimeNetConnectorError(f"{path}: {exc}") from exc
     return rows
 
