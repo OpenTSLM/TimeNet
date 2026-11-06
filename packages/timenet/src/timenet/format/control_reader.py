@@ -51,7 +51,6 @@ from timenet.types import (
     ArrayHandle,
     InputModality,
     LabelSet,
-    MissingReason,
     MissingValues,
     Task,
     TaskType,
@@ -2166,34 +2165,27 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
     def _missing_values_from_row(row: _SignalRow) -> MissingValues | None:
         """Rebuild a spec's missing-value record from its ``signals`` row.
 
-        Legacy nullable specs receive the ``unspecified`` reason.
+        A release written before TimeF recorded a reason stores only the ``nullable`` flag. Its
+        specs that allow missing timesteps get the ``unspecified`` reason.
 
         Returns:
             The missing-value record, or ``None`` if the spec allows no missing timesteps.
 
         Raises:
-            TimeFFormatError: If the reason is unknown, ``max_fraction`` is absent, or the record conflicts with ``nullable``.
+            TimeFFormatError: If the stored record is not a valid ``MissingValues``.
         """
         if row.missing_reason is None:
-            if row.missing_max_fraction is not None or row.missing_description is not None:
-                raise TimeFFormatError(f"signal {row.signal_id!r} stores a missing-value record without a reason")
             return MissingValues.unspecified() if row.nullable else None
-        if not row.nullable:
-            raise TimeFFormatError(f"signal {row.signal_id!r} stores a missing-value record but is not nullable")
         try:
-            reason = MissingReason(row.missing_reason)
-        except ValueError as exc:
-            raise TimeFFormatError(
-                f"invalid missing_reason {row.missing_reason!r} for signal {row.signal_id!r}"
-            ) from exc
-        if row.missing_max_fraction is None:
-            raise TimeFFormatError(f"signal {row.signal_id!r} stores a missing-value record without a max_fraction")
-        try:
-            return MissingValues(
-                reason=reason, description=row.missing_description, max_fraction=row.missing_max_fraction
+            return MissingValues.model_validate(
+                {
+                    "reason": row.missing_reason,
+                    "description": row.missing_description,
+                    "max_fraction": row.missing_max_fraction,
+                }
             )
         except ValidationError as exc:
-            raise TimeFFormatError(f"invalid missing-value record for signal {row.signal_id!r}: {exc}") from exc
+            raise TimeFFormatError(f"signal {row.signal_id!r} stores an invalid missing-value record: {exc}") from exc
 
     def _check_owners(
         self,
