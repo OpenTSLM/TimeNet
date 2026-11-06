@@ -112,6 +112,10 @@ ignore = [
 [tool.ruff.lint.pydocstyle]
 convention = "google"
 
+[tool.ruff.lint.pydoclint]
+# A one-line docstring of a small helper does not need Returns or Raises sections.
+ignore-one-line-docstrings = true
+
 [tool.ruff.lint.flake8-bugbear]
 # Typer expects Option/Argument descriptors as parameter defaults.
 extend-immutable-calls = ["typer.Option", "typer.Argument"]

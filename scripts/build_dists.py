@@ -2,19 +2,9 @@
 # requires-python = ">=3.11"
 # dependencies = []
 # ///
-"""Build distributions with the git commit of each package recorded inside it.
+"""Run ``uv build`` with the git commit of each package recorded in its ``_build_info.json``.
 
-A wheel has no git directory, so ``timenet.provenance.git_sources`` reads the commit from the
-``_build_info.json`` that this script writes into each import package. ``local_changes`` covers the
-package directory only, the same scope that a local checkout records. The script then runs
-``uv build`` with the given arguments, and removes the files again even if the build fails. A
-later plain ``uv build`` therefore never ships an old record. ``make build`` and the publish
-workflow run this script.
-
-Usage::
-
-    uv run scripts/build_dists.py --all-packages
-    uv run scripts/build_dists.py --package timenet --out-dir dist
+Usage: ``uv run scripts/build_dists.py --all-packages`` (any ``uv build`` arguments work).
 """
 
 import json
@@ -35,14 +25,7 @@ BUILD_INFO_FILE = "_build_info.json"
 
 
 def executable(name: str) -> str:
-    """Return the absolute path of a command on ``PATH``.
-
-    Returns:
-        The path of the command.
-
-    Raises:
-        SystemExit: If the command is not on ``PATH``.
-    """
+    """Return the absolute path of a command on ``PATH``, or exit if it is missing."""
     path = shutil.which(name)
     if path is None:
         raise SystemExit(f"{name} is not on PATH")
@@ -50,14 +33,7 @@ def executable(name: str) -> str:
 
 
 def git(directory: Path, *args: str) -> str:
-    """Run one git command in ``directory`` and return its stripped stdout.
-
-    Returns:
-        The command's stdout without surrounding whitespace.
-
-    Raises:
-        SystemExit: If git fails, for example outside a git checkout.
-    """
+    """Run one git command in ``directory`` and return its stripped stdout, or exit if it fails."""
     result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
         [executable("git"), "-C", str(directory), *args], capture_output=True, text=True, check=False
     )
@@ -66,28 +42,38 @@ def git(directory: Path, *args: str) -> str:
     return result.stdout.strip()
 
 
+def state(directory: Path) -> tuple[str, str]:
+    """Return the commit of a package directory and its ``git status`` output."""
+    status = git(directory, "status", "--porcelain", "--untracked-files=all", "--", ".")
+    return git(directory, "rev-parse", "HEAD"), status
+
+
 def main(build_args: list[str]) -> int:
-    """Write ``_build_info.json`` into each import package, build, and remove the files.
-
-    Args:
-        build_args: The arguments for ``uv build``.
-
-    Returns:
-        The exit code of ``uv build``.
-    """
+    """Write the commit records, build, and remove the records again, also on failure."""
     written: list[Path] = []
+    before = {directory: state(directory) for directory in PACKAGES}
     try:
         for directory, module in PACKAGES.items():
-            sha = git(directory, "rev-parse", "HEAD")
-            status = git(directory, "status", "--porcelain", "--untracked-files=all", "--", ".")
+            sha, status = before[directory]
             info = {"sha": sha, "local_changes": bool(status)}
             target = directory / "src" / module / BUILD_INFO_FILE
-            target.write_text(json.dumps(info) + "\n", encoding="utf-8")
+            # Register the file before the write, so a write that fails halfway is removed too.
             written.append(target)
+            target.write_text(json.dumps(info) + "\n", encoding="utf-8")
             print(f"{target.relative_to(ROOT)}: {info}", file=sys.stderr)
         # uv run sets UV to its own executable.
         uv = os.environ.get("UV") or executable("uv")
-        return subprocess.run([uv, "build", *build_args], cwd=ROOT, check=False).returncode  # ruff: ignore[subprocess-without-shell-equals-true]
+        returncode = subprocess.run([uv, "build", *build_args], cwd=ROOT, check=False).returncode  # ruff: ignore[subprocess-without-shell-equals-true]
+        # A file that changed while uv built would ship under a record that does not describe it.
+        changed = [str(directory.relative_to(ROOT)) for directory in PACKAGES if state(directory) != before[directory]]
+        if changed:
+            print(
+                f"error: {', '.join(changed)} changed during the build, so the built artifacts do not "
+                "match their commit records. Build again.",
+                file=sys.stderr,
+            )
+            return 1
+        return returncode
     finally:
         for path in written:
             path.unlink(missing_ok=True)

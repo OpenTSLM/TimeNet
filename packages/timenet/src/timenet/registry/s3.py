@@ -253,7 +253,6 @@ class S3Registry(LazyReadRegistry):
         return boto3.client("s3")
 
     def _key(self, *parts: str) -> str:
-        # ruff: ignore[docstring-missing-returns]
         """Build a bucket-relative key: the prefix, then ``datasets/``, then the path parts."""
         segments = [self._prefix, _DATASETS_PREFIX, *parts]
         return "/".join(segment.strip("/") for segment in segments if segment)
