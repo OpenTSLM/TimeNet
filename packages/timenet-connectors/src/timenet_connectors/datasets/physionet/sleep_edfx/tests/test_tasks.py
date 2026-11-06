@@ -139,7 +139,7 @@ def _fact(key, value, at_s=None):
 _CASSETTE_FACTS = [
     _fact(AnnotationKey.STUDY, "sleep-cassette"),
     _fact(AnnotationKey.NIGHT, 1),
-    _fact(AnnotationKey.SEX, "F"),
+    _fact(AnnotationKey.SEX, "female"),
     _fact(AnnotationKey.AGE, 33),
 ]
 
@@ -168,16 +168,16 @@ def test_age_is_a_scalar_with_a_unit():
 def test_sex_carries_the_decoded_letter():
     built = list(tasks.build_record_tasks(_RECORDING_ID, _CASSETTE_FACTS, []))
     sex = _pick(built, ClassificationTask, tasks.SEXES)
-    assert sex.targets == ("F",)
+    assert sex.targets == ("female",)
     assert sex.scope is None
 
 
 def test_the_same_sheet_code_decodes_to_the_other_letter_elsewhere():
     # The two subject tables code sex with opposite meanings. The task takes the value that the
     # decoder gave.
-    telemetry = [_fact("sex", "M"), _fact("age", 40)]
+    telemetry = [_fact("sex", "male"), _fact("age", 40)]
     built = list(tasks.build_record_tasks(_RECORDING_ID, telemetry, []))
-    assert _pick(built, ClassificationTask, tasks.SEXES).targets == ("M",)
+    assert _pick(built, ClassificationTask, tasks.SEXES).targets == ("male",)
 
 
 def test_a_telemetry_night_carries_its_condition():
@@ -208,7 +208,7 @@ def test_provenance_becomes_no_task():
 
 def test_a_missing_age_raises_rather_than_dropping_the_question():
     with pytest.raises(TimeFFormatError, match="states no age"):
-        list(tasks.build_record_tasks(_RECORDING_ID, [_fact("sex", "F")], []))
+        list(tasks.build_record_tasks(_RECORDING_ID, [_fact("sex", "female")], []))
 
 
 def test_a_missing_sex_raises_rather_than_dropping_the_question():
@@ -217,7 +217,7 @@ def test_a_missing_sex_raises_rather_than_dropping_the_question():
 
 
 def test_an_age_that_is_not_a_whole_number_raises():
-    facts = [_fact("age", "thirty-three"), _fact("sex", "F")]
+    facts = [_fact("age", "thirty-three"), _fact("sex", "female")]
     with pytest.raises(TimeFFormatError, match="not a whole number of years"):
         list(tasks.build_record_tasks(_RECORDING_ID, facts, []))
 

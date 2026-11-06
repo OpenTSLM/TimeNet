@@ -8,8 +8,7 @@ import pytest
 from timenet.dataset import TimeFDataset
 from timenet.engine import store_dataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
-from timenet.reader import TimeFReader
-from timenet.registry import open_local_version
+from timenet.testing import assert_round_trips
 from timenet.types import (
     US_PER_S,
     Annotation,
@@ -239,7 +238,7 @@ def test_the_sex_of_two_records_is_one_annotation(release, monkeypatch):
     second = _annotations(dataset, "SC4902E0", "sex")[0]
     assert first == second
     assert first is not second
-    assert first.value == "F"
+    assert first.value == "female"
 
 
 def test_the_age_comes_from_the_table(release, monkeypatch):
@@ -264,7 +263,7 @@ def test_a_recording_that_disagrees_carries_a_note_and_keeps_the_table_value(rel
     dataset = _convert(release, monkeypatch)
     note = _annotations(dataset, "SC4902E0", "demographics_note")
     assert len(note) == 1
-    assert _annotations(dataset, "SC4902E0", "sex")[0].value == "F"
+    assert _annotations(dataset, "SC4902E0", "sex")[0].value == "female"
 
 
 def test_lights_off_is_placed_on_the_timeline_and_names_no_series(release, monkeypatch):
@@ -294,11 +293,7 @@ def test_a_recording_with_no_row_raises(release, monkeypatch):
 
 def test_convert_round_trips_through_the_writer(release, monkeypatch, tmp_path):
     dataset = _convert(release, monkeypatch)
-    dataset.derive_schema()
-    version_dir = store_dataset(dataset, tmp_path / "out")
-    with TimeFReader(open_local_version(version_dir)) as reader:
-        restored = reader.read()
-    assert {record.id for record in restored.records} == {record.id for record in dataset.records}
+    restored = assert_round_trips(dataset, tmp_path / "registry")
     assert _recording_ids(restored.records) == {"SC4901E0", "SC4902E0"}
     record = _record(restored.records, "SC4901E0")
     assert len(record.signals) == len(_SIGNALS)
