@@ -13,6 +13,7 @@ from timenet.format.control_audit import audit_control_database
 from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
+from timenet.testing import assert_round_trips
 from timenet.types import AnswerTask, InputModality, Split, TimeSeriesSpec, read_value
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.bash_lab.sensorcaps import SensorCapsConnector, connector as module
@@ -191,6 +192,9 @@ def test_conversion_preserves_source_semantics_and_reiterable_tasks(tmp_path):
     # Verify complete content on both passes, including row-to-record associations.
     for _ in range(2):
         _assert_records_and_tasks(dataset.records, list(dataset.iter_tasks()))
+
+    restored = assert_round_trips(dataset, tmp_path / "registry")
+    _assert_records_and_tasks(restored.records, restored.tasks)
 
 
 def test_channel_reads_reuse_rows_and_reread_offsets(monkeypatch, tmp_path):

@@ -8,10 +8,9 @@ import pytest
 import wfdb
 
 from timenet.errors import TimeNetConnectorError
-from timenet.reader import LoadPlan, TimeFReader
+from timenet.testing import assert_round_trips
 from timenet.types import Annotation
 from timenet.types.text import read_value
-from timenet.writer import TimeFWriter
 from timenet_connectors.datasets.physionet.ptb_xl.connector import PtbXlConnector, PtbXlSource
 
 
@@ -73,10 +72,7 @@ def test_taskless_clinical_records_round_trip(tmp_path):
     # Children find a recording by its upstream ecg_id, which the record's metadata carries.
     assert dataset.records[0].metadata == {"ecg_id": 1}
     assert {ann.key: ann.value for ann in dataset.records[0].annotations}["age"] == 56
-    with TimeFWriter(tmp_path / "out", dataset) as writer:
-        writer.write()
-    with TimeFReader.open(tmp_path / "out/physionet/ptb-xl/1.0.0") as reader:
-        restored = reader.read(load=LoadPlan.ALL_EAGER)
+    restored = assert_round_trips(dataset, tmp_path / "registry")
     assert restored.records[0].metadata == {"ecg_id": 1}
     # Sex and age keep their form and their descriptions in the stored release, which children import.
     by_key = {ann.key: ann for ann in restored.records[0].annotations}

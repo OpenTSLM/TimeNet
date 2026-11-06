@@ -10,6 +10,13 @@ from timenet.testing.builders import (
     make_dataset,
     sine_loader,
 )
+from timenet.testing.round_trip import assert_round_trips
 
 
-__all__ = ["CountingLoader", "assert_datasets_equal", "make_dataset", "sine_loader"]
+__all__ = [
+    "CountingLoader",
+    "assert_datasets_equal",
+    "assert_round_trips",
+    "make_dataset",
+    "sine_loader",
+]

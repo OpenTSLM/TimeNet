@@ -14,8 +14,8 @@ from timenet.connectors import BaseConnector
 from timenet.dataset import Record, TimeFDataset
 from timenet.engine import open_parents, store_dataset
 from timenet.errors import TimeNetConnectorError
-from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
+from timenet.testing import assert_round_trips
 from timenet.types import AnswerTask, ObjectKind, Split
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.text import read_value
@@ -412,10 +412,8 @@ def test_series_values_match_fixture_record(tmp_path, records_dir):
 def test_compose_round_trips_through_the_writer(tmp_path, records_dir):
     root = tmp_path / "out"
     with _composed(tmp_path / "src", records_dir, registry_root=root) as dataset:
-        dataset.derive_schema()
-        version_dir = store_dataset(dataset, root)
-    with TimeFReader(open_local_version(version_dir)) as reader:
-        restored = reader.read()
+        restored = assert_round_trips(dataset, root)
+        version_dir = root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
     assert {record.metadata["ecg_id"] for record in restored.records} == {1, 2}
     # The written records carry the sex and age of ECG-QA-CoT 1.1.0.
     restored_by_ecg = {record.metadata["ecg_id"]: record for record in restored.records}
