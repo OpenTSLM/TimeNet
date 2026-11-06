@@ -94,7 +94,9 @@ def test_a_time_mmd_question_becomes_an_answer_task_with_a_record_for_each_print
     assert prose.resolved_input_modalities == {InputModality.NO_INPUT, InputModality.TEXT}
     assert read_value(prose.prompt) == _PROSE_ROW["QA_list"].split('"question": "')[1].split('", "answer"')[0]
     assert prose.targets is not None
-    assert read_value(prose.targets[0]).startswith("Based on the provided textual information")
+    assert read_value(prose.targets[0]) == (
+        "Based on the provided textual information, I predict a moderate risk of severe influenza infections."
+    )
 
 
 @pytest.mark.parametrize(
