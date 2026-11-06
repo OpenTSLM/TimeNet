@@ -158,8 +158,9 @@ A `WritableRegistry` adds one write method to the read contract. As a result,
 | `exists(dataset_id, version)` | Whether a committed version already exists (shared implementation). |
 
 `S3Registry` and `RemoteRegistry` serve their releases to others. Their `store` accepts only a
-release whose access, with its lineage, is `open`, and only TimeNet code that is committed, as
-[Traceable builds](build.md#traceable-builds) describes. `LocalRegistry` accepts any release.
+release whose access, with its lineage, is `open`, and which was built with TimeNet code traceable
+to a commit, as [Traceable builds](build.md#traceable-builds) describes. `LocalRegistry` accepts
+any release.
 
 `LocalRegistry` implements `store` by streaming the dataset through a [`TimeFWriter`](timef-writer.md),
 which stages under `<version>.tmp-*` and publishes with a single atomic rename. With `force`, the old

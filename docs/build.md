@@ -116,25 +116,12 @@ release that sets it. For a card, this is the `access_url` of the card.
 
 ## Traceable builds
 
-A release in a remote registry outlives the machine that built it. Its manifest must name the
-exact code that built it, so a publish to such a registry needs a known git commit for each
-installed `timenet` and `timenet-connectors` distribution, and no uncommitted changes in their
-package directories. The [manifest](manifest.md) describes where each install finds its commit.
-There is no override. Commit the changes first, or build to a local directory, which records the
-state and does not refuse.
+TimeNet requires that a published dataset can be traced to the code that built it. Each build
+therefore records, in its [manifest](manifest.md), the git commit of the TimeNet packages it used.
 
-The rule applies to every way of publishing:
-
-- `timenet-build build --out <remote>` refuses before uv builds the isolated environment.
-- `publish_pipeline()` refuses before it downloads anything.
-- `S3Registry.store()` and `RemoteRegistry.store()` refuse before they write the release.
-
-A build reads git once, when it starts, and records that state in the manifest. Before the upload,
-the registry reads git again. If the code changed while the build ran, for example because you
-switched branches, the registry raises `TimeNetBuildError` and uploads nothing. Build again.
-
-The check does not make sure that the commit exists on GitHub. Push the commit before you publish,
-so that other people can find the code that a manifest names.
+The manifest also records whether that code had uncommitted changes. A remote registry rejects a
+dataset that was built with uncommitted changes or with an unknown commit. You can still build it
+into a local registry.
 
 ## Prepare parent releases
 
