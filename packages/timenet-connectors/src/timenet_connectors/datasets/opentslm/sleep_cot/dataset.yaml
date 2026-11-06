@@ -1,0 +1,48 @@
+# yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
+yaml_schema_version: 1
+dataset_id: opentslm/sleep-cot
+dataset_version: 1.0.0
+name: SleepEDF-CoT
+description: >-
+  9,294 windows of the Fpz-Cz EEG from six Sleep-EDF recordings (7,434 train, 930 validation,
+  930 test). Each window has one sleep stage and a chain-of-thought rationale. A window is 30
+  seconds at 50 Hz, with 1,500 values in volts. OpenTSLM took every second sample of the 100 Hz
+  original and converted microvolts to volts. The stages are W, N1, N2, N3, N4 and REM, as the
+  Rechtschaffen and Kales manual names them. The release has no split column, so the dataset gives
+  each window the split of OpenTSLM's loader: a stratified random split with scikit-learn, so the
+  windows of one recording are in every split. Each record states the Sleep-EDF recording name in
+  lower case, and the subject in the form of the physionet/sleep-edfx dataset. GPT-4o
+  (gpt-4o-2024-08-06, temperature 0.3, seed 42) wrote each rationale from a plot of the window,
+  the correct stage, and one dissimilar stage. The dataset does not keep that prompt, because it
+  names the correct stage. In 3 windows, the rationale concludes with the dissimilar stage. In 4 more, it ends without the "Answer:" form. The dataset keeps these
+  windows as released.
+
+  Sleep experts assigned a stage to each original EEG window. The released CSV gives a different
+  stage for 197 windows: 173 train, 9 validation, and 15 test. For example, the expert score for
+  data row 840 is N3. Its CSV label and generated explanation say N2. The connector preserves
+  these source errors.
+
+  The paper scores five stages by treating both N3 and N4 as N3 in predictions and expected
+  answers. The connector keeps the six released labels.
+
+  The EEG and expert scores come from the Sleep-EDF Database at
+  https://physionet.org/content/sleep-edf/1.0.0/, under ODC-By-1.0. OpenTSLM provides the added
+  prompts and generated explanations under MIT.
+license: ODC-By-1.0
+license_url: https://opendatacommons.org/licenses/by/1-0/
+source_url: https://polybox.ethz.ch/index.php/s/ZryWSdCFJZ9JR3R
+citation: >-
+  Langer, P., et al. (2025). OpenTSLM: Time-Series Language Models for Reasoning over Multivariate
+  Medical Text- and Time-Series Data. https://doi.org/10.48550/arXiv.2510.02410. EEG from Sleep-EDF:
+  Kemp, B., Zwinderman, A. H., Tuk, B., Kamphuisen, H. A. C., & Oberye, J. J. L. (2000). Analysis
+  of a sleep-dependent neuronal feedback loop: the slow-wave microcontinuity of the EEG. IEEE
+  Transactions on Biomedical Engineering, 47(9), 1185-1194.
+domains:
+  - sleep
+  - health
+tags:
+  - eeg
+  - sleep-staging
+  - classification
+  - cot
+  - generated-supervision
