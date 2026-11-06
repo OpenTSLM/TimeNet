@@ -36,6 +36,14 @@ Each occurrence adds its own `source`, `confidence`, and `occurrence_metadata`. 
 several objects share one long description without sharing occurrence details. The writer stores
 equal content once. Neither the content nor an occurrence has an ID in Python.
 
+An Annotation cannot change after you build it. It keeps its own copy of `metadata`,
+`occurrence_metadata`, and a list of strings, so a later change to the dict or list that you passed
+has no effect. The metadata copies compare equal to a `dict` or a `list`, and changing them raises
+`TypeError`. Reading a string-list value returns a separate list, which you can change without
+affecting the annotation. To change an annotation, create a new one, for example with
+`dataclasses.replace`. A `LazyText` or `LazyTextList` function must return the same text on every
+call.
+
 ## Reuse content
 
 `Annotation` is final, so it can't be subclassed. To reuse content, keep a constant. For content
