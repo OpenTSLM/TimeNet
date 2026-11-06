@@ -55,6 +55,8 @@ dataset_version: 1.0.0
 name: TSQA
 description: "Time-series question answering: a series plus a question/answer per record."
 license: Apache-2.0
+source_url: https://huggingface.co/datasets/ChengsenWang/TSQA
+source_revision: 22518209e3ee6302be4b4957f2692b3e8de849c3
 domains:
   - general
 tags:
@@ -75,6 +77,8 @@ commit. Set:
 
 - `HF_REPO`: the Hub repo id.
 - `SOURCE_REVISION`: a 40-character commit, not a branch, so every rebuild reads the same files.
+  The card's `source_revision` must name the same commit, or `metadata()` raises
+  `TimeNetInvalidCardError`.
 - `SOURCE_FILES`: part name -> file path in the repo.
 
 `download` is inherited and returns one `HubFileRef(path, part)` per file. Declare
