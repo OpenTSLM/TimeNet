@@ -3,9 +3,6 @@
 Each CSV row of the OpenTSLM release is one 2.56-second window of a triaxial accelerometer at
 50 Hz, so each axis has 128 values. Each row becomes one Record and one ClassificationTask. The
 target is the activity label. The rationale is the GPT-4o text that leads to the label.
-
-The release also holds the GPT-4o prompt that produced each rationale. The connector does not
-keep it, because the prompt names the correct activity and the OpenTSLM paper documents it.
 """
 
 from collections.abc import Iterator, Mapping
