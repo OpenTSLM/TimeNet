@@ -15,12 +15,15 @@ The connector delegates to five modules:
 
 from pathlib import Path
 
+import pyarrow as pa
+
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetConnectorError
 from timenet.types import ClassificationTask
 from timenet_connectors.datasets.oxwearables.capture24 import records, source, tasks
 from timenet_connectors.download import ensure_archive, find_dir_containing
+from timenet_connectors.sources.channels import SharedChannelLoader
 
 
 ARCHIVE_URL = "https://ora.ox.ac.uk/objects/uuid:99d7c092-d865-4a19-b096-cc16440cd001/files/rpr76f381b"
@@ -75,8 +78,15 @@ class Capture24Connector(BaseConnector[Path]):
         summaries = [
             source.summarize_recording(participant, labels) for participant in source.read_participant_metadata(root)
         ]
-        acceleration = source.RecordingCache()
-        participant_records = [records.build_record(summary, labels, acceleration) for summary in summaries]
+        summaries_by_path = {summary.participant.path: summary for summary in summaries}
+
+        def read_channels(path: Path) -> tuple[pa.Array, ...]:
+            values = source.read_acceleration(summaries_by_path[path])
+            return tuple(pa.array(values[axis], type=source.AXIS_TYPE) for axis in source.AXES)
+
+        # One cache per conversion, shared across axes and segments of the same recording.
+        shared_channels = SharedChannelLoader(read_channels)
+        participant_records = [records.build_record(summary, labels, shared_channels) for summary in summaries]
 
         dataset = TimeFDataset(metadata=self.metadata())
         for record in participant_records:

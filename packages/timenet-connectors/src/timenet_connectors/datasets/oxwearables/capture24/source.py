@@ -528,30 +528,3 @@ def read_acceleration(summary: RecordingSummary) -> Acceleration:
     if _acceleration_digest(values) != summary.acceleration_digest:
         raise TimeNetConnectorError(f"{path}: the acceleration values differ from when it was read; the file changed")
     return values
-
-
-class RecordingCache:
-    """Read a recording's acceleration once for all its signals and keep only the latest recording.
-
-    A Record's signals load one after another, so the cache needs only one recording. The class does
-    not use ``lru_cache(maxsize=1)``, because that cache reads the next recording before it releases
-    the previous one, so both are in memory for a moment. This class releases the previous one first.
-    """
-
-    def __init__(self) -> None:
-        self._path: Path | None = None
-        self._values: Acceleration | None = None
-
-    def __call__(self, summary: RecordingSummary) -> Acceleration:
-        """Return the recording's x, y and z values.
-
-        If the cache holds this recording, the method returns its values.
-        Otherwise, it releases the previous recording before reading this one.
-
-        """
-        if self._values is None or self._path != summary.participant.path:
-            # Release the previous recording before reading the next.
-            self._path, self._values = None, None
-            self._values = read_acceleration(summary)
-            self._path = summary.participant.path
-        return self._values

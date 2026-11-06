@@ -285,3 +285,34 @@ def test_storing_reads_each_recording_once(tmp_path, monkeypatch):
     original = Capture24Connector().convert([release(tmp_path)])
     LocalRegistry(tmp_path / "registry").store(original)
     assert reads == ["P001.csv.gz", "P100.csv.gz", "P101.csv.gz"]
+
+
+def test_segments_share_a_read_and_evicted_recordings_are_reread(tmp_path, monkeypatch):
+    root = release(tmp_path)
+    reads = []
+    read_acceleration = source.read_acceleration
+
+    def spy(summary):
+        reads.append(summary.participant.pid)
+        return read_acceleration(summary)
+
+    monkeypatch.setattr(source, "read_acceleration", spy)
+    dataset = Capture24Connector().convert([root])
+    records = {pid_of(record): record for record in dataset.records}
+    assert reads == []  # Conversion does not invoke the lazy reader.
+    x_signals = [signal for signal in records["P101"].signals if signal.name == "x"]
+    for signal, first_row, length in zip(x_signals, (0, 1500), (1500, 1432), strict=True):
+        expected = np.array(
+            [float(f"{index * 0.001:.8f}") for index in range(first_row, first_row + length)], dtype=np.float32
+        )
+        np.testing.assert_array_equal(signal.to_numpy(), expected)
+    assert reads == ["P101"]
+
+    records["P001"].signals[0].to_numpy()
+    x_signals[1].to_numpy()
+    assert reads == ["P101", "P001", "P101"]
+
+    # A separate conversion must not reuse this conversion's cached arrays.
+    other = Capture24Connector().convert([root])
+    next(record for record in other.records if pid_of(record) == "P101").signals[0].to_numpy()
+    assert reads == ["P101", "P001", "P101", "P101"]

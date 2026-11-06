@@ -4,9 +4,10 @@ Each segment between gaps becomes one Source with ``x``, ``y``, and ``z`` signal
 Each run of consecutive samples with the same raw label becomes one ``activity`` annotation on its Source.
 """
 
-from collections.abc import Callable, Iterator
+from collections.abc import Callable, Iterator, Mapping
 from enum import StrEnum, unique
 from functools import partial
+from pathlib import Path
 
 import pyarrow as pa
 
@@ -15,16 +16,12 @@ from timenet.dataset.axis import RegularAxis
 from timenet.types import Annotation, TimeInterval, TimeSeriesSpec, ureg
 from timenet_connectors.datasets.oxwearables.capture24.source import (
     AXES,
-    AXIS_TYPE,
-    Acceleration,
     LabelDictionary,
     RecordingSummary,
 )
 from timenet_connectors.datasets.oxwearables.capture24.windowing import SAMPLE_RATE_HZ, LabelRuns, Segment
+from timenet_connectors.sources.channels import SharedChannelLoader
 
-
-ReadAcceleration = Callable[[RecordingSummary], Acceleration]
-"""A function that returns a participant's x, y and z values."""
 
 # The paper's Methods: an Axivity AX3 on the dominant wrist, with a range of ±8 g.
 _DEVICE = "Axivity AX3"
@@ -57,10 +54,9 @@ _RECORDING_START_DESCRIPTION = (
 )
 
 
-def _load_segment(acceleration: ReadAcceleration, summary: RecordingSummary, segment: Segment, axis: str) -> pa.Array:
-    """Return a named axis sliced to the segment's sample range."""
-    values = acceleration(summary)[axis]
-    return pa.array(values[segment.first_row : segment.first_row + segment.n_values], type=AXIS_TYPE)
+def _load_segment(channel_loader: Callable[[], pa.Array], segment: Segment) -> pa.Array:
+    """Return a channel sliced to the segment's sample range."""
+    return channel_loader().slice(segment.first_row, segment.n_values)
 
 
 def _activity_annotations(runs: LabelRuns, labels: LabelDictionary) -> Iterator[Annotation]:
@@ -80,7 +76,11 @@ def _activity_annotations(runs: LabelRuns, labels: LabelDictionary) -> Iterator[
 
 
 def _source(
-    index: int, segment: Segment, runs: LabelRuns, labels: LabelDictionary, load: Callable[[Segment, str], pa.Array]
+    index: int,
+    segment: Segment,
+    runs: LabelRuns,
+    labels: LabelDictionary,
+    channel_loaders: Mapping[str, Callable[[], pa.Array]],
 ) -> Source:
     """Build one segment's Source, with its signals and its raw label runs.
 
@@ -94,7 +94,7 @@ def _source(
             spec=_SPEC,
             time_axis=time_axis,
             n_values=segment.n_values,
-            loader=partial(load, segment, column),
+            loader=partial(_load_segment, channel_loaders[column], segment),
         )
         for column in AXES
     )
@@ -107,7 +107,9 @@ def _source(
     )
 
 
-def build_record(summary: RecordingSummary, labels: LabelDictionary, acceleration: ReadAcceleration) -> Record:
+def build_record(
+    summary: RecordingSummary, labels: LabelDictionary, shared_channels: SharedChannelLoader[Path]
+) -> Record:
     """Build a participant's Record with one Source per segment.
 
     Each Source has x, y and z signals that load when needed, and carries the segment's raw label runs
@@ -116,14 +118,16 @@ def build_record(summary: RecordingSummary, labels: LabelDictionary, acceleratio
     Args:
         summary: The recording summary from the first pass.
         labels: The label dictionary, which names each run's raw label and its classes.
-        acceleration: The function that the signal loaders call to read the recording's values.
+        shared_channels: The conversion's shared recording reader and channel cache.
 
     Returns:
         The Record, whose values stay in the recording until read.
     """
-    load = partial(_load_segment, acceleration, summary)
+    channel_loaders = {
+        axis: shared_channels.channel_loader(summary.participant.path, index) for index, axis in enumerate(AXES)
+    }
     sources = tuple(
-        _source(index, segment, runs, labels, load)
+        _source(index, segment, runs, labels, channel_loaders)
         for index, (segment, runs) in enumerate(zip(summary.segments, summary.label_runs, strict=True))
     )
     participant = summary.participant
