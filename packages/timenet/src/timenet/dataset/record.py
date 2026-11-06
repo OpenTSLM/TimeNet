@@ -1,6 +1,6 @@
 """The :class:`Record` type: one logical unit of time-series data."""
 
-from collections.abc import Iterable
+from collections.abc import Iterable, Mapping
 from dataclasses import dataclass, field
 from datetime import datetime
 
@@ -13,6 +13,7 @@ from timenet.dataset.time_series import Signal
 from timenet.errors import TimeFValidationError
 from timenet.json import JsonMapping, validate_json_mapping
 from timenet.types import Annotation, SupportsAnnotate, TimeInterval, TimeOrigin, TimePoint
+from timenet.types.annotations import AnnotationValueInput, annotation_batch
 from timenet.types.clock import check_int64, offset_us, unix_us
 from timenet.types.ids import EntityId, assigned_id
 
@@ -232,7 +233,7 @@ class Record(SupportsAnnotate):
         return attached
 
     def add_annotations(
-        self, annotations: Iterable[Annotation], *, warn_when_outside: bool = True
+        self, annotations: Iterable[Annotation] | Mapping[str, AnnotationValueInput], *, warn_when_outside: bool = True
     ) -> tuple[Annotation, ...]:
         """Attach several annotations to the record, all together or not at all.
 
@@ -241,16 +242,19 @@ class Record(SupportsAnnotate):
         loop :meth:`annotate` instead.
 
         Args:
-            annotations: The annotations to attach. Pass a single one to :meth:`annotate`.
+            annotations: The annotations to attach, or a mapping from each key to its value, such as
+                ``{"sensor_location": "wrist"}``. Pass a single annotation to :meth:`annotate`.
             warn_when_outside: As on :meth:`annotate`.
 
         Returns:
             New occurrences that share the input annotations' reusable content, in the order given.
 
         Raises:
-            TimeFValidationError: as documented on :meth:`annotate`.
-        """  # ruff: ignore[docstring-extraneous-exception] (raised by _validate_annotation, not directly here)
-        batch = tuple(annotations)
+            TimeFValidationError: As documented on :meth:`annotate`, and if an item is not an
+                :class:`Annotation`, or a mapping has a key that is not text or a value that an
+                annotation does not accept.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by annotation_batch and _validate_annotation)
+        batch = annotation_batch(annotations)
         for annotation in batch:
             self._validate_annotation(annotation, warn_when_outside=warn_when_outside)
         attached = tuple(annotation._new_occurrence() for annotation in batch)

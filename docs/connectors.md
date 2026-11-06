@@ -80,6 +80,9 @@ builder function, as [Reuse content](data-model/annotations.md#reuse-content) sh
 prompt, write a function that builds the Task, as
 [Built-in task types](data-model/tasks.md#built-in-task-types) shows.
 
+`Record.add_annotations` takes a list of `Annotation` objects, or a mapping of keys to plain values,
+such as `{"device": "wrist"}`. A mapping gives plain annotations, with no unit, description, or span.
+
 ---
 
 ## People in a record
