@@ -55,9 +55,10 @@ license-check:
 		--fail-on="GPL;LGPL;AGPL;SSPL;EUPL;CDDL;OSL" \
 		--format=markdown
 
+# Builds through scripts/build_dists.py, so each wheel records the commit it was built from.
 build:
-	uv build --package timenet
-	uv build --package timenet-connectors
+	uv run scripts/build_dists.py --package timenet
+	uv run scripts/build_dists.py --package timenet-connectors
 
 check: schemas-check
 	uv run ruff format .

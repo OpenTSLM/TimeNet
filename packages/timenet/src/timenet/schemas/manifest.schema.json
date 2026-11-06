@@ -98,6 +98,13 @@
           },
           "title": "Packages",
           "type": "object"
+        },
+        "git": {
+          "additionalProperties": {
+            "$ref": "#/$defs/GitSource"
+          },
+          "title": "Git",
+          "type": "object"
         }
       },
       "title": "BuildEnvironment",
@@ -361,6 +368,27 @@
         "size"
       ],
       "title": "FilePart",
+      "type": "object"
+    },
+    "GitSource": {
+      "additionalProperties": false,
+      "description": "The git commit that one TimeNet distribution was built from.",
+      "properties": {
+        "sha": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Sha",
+          "type": "string"
+        },
+        "local_changes": {
+          "title": "Local Changes",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sha",
+        "local_changes"
+      ],
+      "title": "GitSource",
       "type": "object"
     },
     "InputModality": {

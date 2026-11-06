@@ -39,7 +39,7 @@ Manifest(
     counts=counts,              # ManifestCounts (default: empty)
     values_backend="parquet",   # "parquet" (default) or "zarr"
     value_encoding={},          # spec_type -> the encoding its shards carry
-    build_env={},               # {"python", "packages"} (default: empty)
+    build_env={},               # {"python", "packages", "git"} (default: empty)
     timef_format_version=1,     # required; validated against the supported set {1}
 )
 ```
@@ -56,6 +56,30 @@ selected. The field is empty for a backend that has no such choice.
 `build_env` records the environment that produced the version. It gives the interpreter version and
 every installed package with its version. `timenet.provenance.build_env` collects this data. Like
 `value_encoding`, `build_env` is provenance only. No code reads it to interpret the data.
+
+`build_env.git` records the git commit of each TimeNet distribution, keyed by distribution name:
+
+```json
+"git": {
+  "timenet": {"sha": "4818e37f...", "local_changes": false},
+  "timenet-connectors": {"sha": "4818e37f...", "local_changes": false}
+}
+```
+
+Each distribution records the commit of the code that runs:
+
+- An editable install, such as a workspace checkout, asks git. `local_changes` is `true` if the
+  package directory has uncommitted changes, untracked files included. A change elsewhere in the
+  repository does not set it.
+- A git install (`pip install git+https://...`) records the commit that pip installed, with
+  `local_changes` set to `false`.
+- Any other install, such as a wheel or `pip install ./packages/timenet`, reads the
+  `_build_info.json` file in the package. `scripts/build_dists.py` writes that file while it
+  builds the wheel, and records the state of the checkout at that time. `make build` and the
+  publish workflow run the script.
+
+A distribution whose commit is unknown is absent, for example a wheel that a plain `uv build`
+produced.
 
 The values locator is backend-neutral. One schema covers both scalar and multidimensional specs. A
 multidimensional spec records its shape in `value_shape` and `dimension_names`. It does not need a

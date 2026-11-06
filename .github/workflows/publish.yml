@@ -52,15 +52,17 @@ jobs:
       - name: Set up uv
         uses: astral-sh/setup-uv@v7
       - name: Build
+        # build_dists.py records the commit inside each package, so a build can name its code.
         run: |
           if [ "${{ inputs.package }}" = "both" ]; then
-            uv build --all-packages
+            uv run scripts/build_dists.py --all-packages
           else
-            uv build --package "${{ inputs.package }}"
+            uv run scripts/build_dists.py --package "${{ inputs.package }}"
           fi
       - name: Smoke test built artifacts
         # Import each built wheel and sdist in an isolated environment to catch missing files or
-        # broken metadata before uploading. timenet-connectors depends on timenet, so hand it the
+        # broken metadata before uploading. Each artifact must also report this commit, clean, as
+        # the code it was built from. timenet-connectors depends on timenet, so hand it the
         # wheel we just built when it is present (a `both` run); otherwise timenet resolves from the
         # default index, which requires it to be published already.
         run: |
@@ -68,20 +70,26 @@ jobs:
           shopt -s nullglob
           timenet_whl=(dist/timenet-*.whl)
           smoke() {
-            local module="$1"; shift
+            local module="$1" dist="$2"; shift 2
             local args=() artifact
             for artifact in "$@"; do args+=(--with "$artifact"); done
             echo "::group::import $module"
             uv run --isolated --no-project "${args[@]}" \
               python -c "import $module; print('smoke ok:', $module.__name__)"
+            uv run --isolated --no-project "${args[@]}" python -c "
+          from timenet.provenance import git_sources
+          commit = git_sources().get('$dist')
+          expected = {'sha': '$GITHUB_SHA', 'local_changes': False}
+          assert commit == expected, f'$dist records {commit}, expected {expected}'
+          print('commit ok:', commit)"
             echo "::endgroup::"
           }
           for artifact in dist/*; do
             case "$artifact" in
               dist/timenet-*.whl | dist/timenet-*.tar.gz)
-                smoke timenet "$artifact" ;;
+                smoke timenet timenet "$artifact" ;;
               dist/timenet_connectors-*.whl | dist/timenet_connectors-*.tar.gz)
-                smoke timenet_connectors ${timenet_whl[@]+"${timenet_whl[@]}"} "$artifact" ;;
+                smoke timenet_connectors timenet-connectors ${timenet_whl[@]+"${timenet_whl[@]}"} "$artifact" ;;
             esac
           done
       - name: Publish
