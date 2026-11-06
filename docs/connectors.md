@@ -391,6 +391,13 @@ An import copies every annotation of the parent objects. The child decides which
 publishes. For example, a parent can carry an official split as annotations. A child that follows
 that split keeps them. A child with a split of its own removes them and adds its own.
 
+## Shared channel loading
+
+Use `Signal.from_shared_loader` with `SignalChannel` metadata when one source read produces
+several signals. Reuse one `SharedChannelLoader` across a conversion to bound its recording
+cache. Keep source decoding and validation in the connector.
+
+
 ## Small CSV tables
 
 Declare metadata rows with `timenet_connectors.sources.rows.SourceRow` and Pydantic fields.

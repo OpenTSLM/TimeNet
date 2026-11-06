@@ -6,7 +6,7 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
+from timenet.dataset import Record, SignalChannel, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, Split, TimeSeriesSpec, ureg
@@ -131,6 +131,7 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
                 ``ecg_id``. For a repeated ``ecg_id``, the message also names the earlier row.
         """
         dataset = TimeFDataset(metadata=self.metadata())
+        recording_signals = self._recording_signals()
         source = raw_refs[0]
         # The CSV row where each ecg_id first appears.
         first_rows: dict[int, int] = {}
@@ -147,15 +148,18 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
                     if header.fs != _SAMPLING_RATE_HZ or len(header.sig_name) != _LEAD_COUNT:
                         raise TimeNetConnectorError("PTB-XL requires twelve leads at 500 Hz")
                     axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
-                    signals = tuple(
-                        Signal.from_loader(
-                            spec=_ECG,
-                            name=name,
-                            time_axis=axis,
-                            loader=self._lead_loader(base, header, position),
-                            n_values=int(header.sig_len),
-                        )
-                        for position, name in enumerate(header.sig_name)
+                    signals = recording_signals(
+                        base,
+                        header,
+                        tuple(
+                            SignalChannel(
+                                spec=_ECG,
+                                name=name,
+                                time_axis=axis,
+                                n_values=int(header.sig_len),
+                            )
+                            for name in header.sig_name
+                        ),
                     )
                     record = dataset.add_record(
                         record=Record(

@@ -24,6 +24,7 @@ from timenet.types import (
 )
 from timenet.types.handles import ArrayHandle, ArrowArray, CallableArray, NumpyArray
 from timenet.types.ids import EntityId, assigned_id
+from timenet.types.shared_loading import RecordingKey, SharedChannelLoader
 
 
 def _validate_enum_values(
@@ -217,6 +218,23 @@ class _StepRange(NamedTuple):
     """All time offsets of an irregular series if they were read to find the range, so callers need not reread them."""
 
 
+@dataclass(frozen=True, slots=True)
+class SignalChannel:
+    """Metadata for one channel returned by a shared loader, in reader order.
+
+    Offsets, annotations, and metadata have the same meaning as in ``Signal.from_loader``.
+    Declaring a channel never reads its values.
+    """
+
+    name: str
+    spec: TimeSeriesSpec
+    time_axis: TimeAxis
+    n_values: int
+    time_offsets_loader: ArrayHandle | Callable[[], pa.Array] | None = None
+    annotations: tuple[Annotation, ...] = ()
+    metadata: JsonMapping | None = None
+
+
 @dataclass(frozen=True, eq=False, init=False, kw_only=True)
 class Signal(SupportsAnnotate):
     """Reference to one logical stream of time-series data, with optional windowing and lazy values.
@@ -312,6 +330,43 @@ class Signal(SupportsAnnotate):
             metadata=metadata,
         )
         return instance
+
+    @classmethod
+    def from_shared_loader(
+        cls,
+        *,
+        loader: SharedChannelLoader[RecordingKey],
+        recording_key: RecordingKey,
+        channels: Sequence[SignalChannel],
+    ) -> tuple["Signal", ...]:
+        """Build lazy signals for a recording decoded together by ``loader``.
+
+        Create one :class:`~timenet.types.shared_loading.SharedChannelLoader` per conversion
+        and reuse it across recordings to bound retained decoded data. ``channels`` follows the
+        reader's array order; each channel may have its own spec, length, and time axis. Reading
+        any signal loads the recording. Evicted recordings are decoded again on demand.
+
+        Returns:
+            Independent signals backed by the shared recording cache, without reading values.
+
+        Raises:
+            TimeFValidationError: If no channels are declared.
+        """
+        if not channels:
+            raise TimeFValidationError("a shared loader needs at least one channel")
+        return tuple(
+            cls.from_loader(
+                name=channel.name,
+                spec=channel.spec,
+                time_axis=channel.time_axis,
+                n_values=channel.n_values,
+                time_offsets_loader=channel.time_offsets_loader,
+                annotations=channel.annotations,
+                metadata=channel.metadata,
+                loader=loader.channel_loader(recording_key, index),
+            )
+            for index, channel in enumerate(channels)
+        )
 
     def _initialize(  # ruff: ignore[too-many-arguments] - shared eager and lazy field initialization
         self,
