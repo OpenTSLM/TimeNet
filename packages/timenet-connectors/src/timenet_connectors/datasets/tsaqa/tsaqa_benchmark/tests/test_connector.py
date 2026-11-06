@@ -363,7 +363,7 @@ def test_a_reread_that_no_longer_matches_its_row_fails(tmp_path, position, rewri
     [
         (0, {"answer": "Z"}, "does not fit the question's letters"),
         (0, {"task": "forecasting"}, "task: Input should be"),
-        (0, {"input_ts": "[1.0, NaN]"}, "finite numbers"),
+        (0, {"input_ts": "[1.0, NaN]"}, r"series\[1\]: expected a finite number"),
         (4, {"meta_info": '["only one entry"]'}, "JSON list of 2 texts"),
         (9, {"domain": '["energy"]'}, "context lists differ in length"),
         (14, {"answer": "A,B,C"}, "does not fit"),

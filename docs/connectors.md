@@ -453,6 +453,15 @@ Use `PublishedStrEnum[YourEnum]` for published string enum values. Enable
 
 See the [source-helper API reference](api/sources.md) for validation and parsing rules.
 
+## Validate decoded fields and samples
+
+Use `SourceRow` models and `validate_row` to validate decoded metadata and
+`timenet_connectors.sources.signals` to check numeric samples against their `TimeSeriesSpec`.
+Validate before casting or caching values, and include source locations in errors. Keep
+calibration, unit conversion, timing, and dataset-specific constraints in the connector.
+
+See the [source-helper API reference](api/sources.md) for validation and casting rules.
+
 ---
 
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
