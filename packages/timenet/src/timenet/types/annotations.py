@@ -12,11 +12,11 @@ class synthesis. :class:`AnnotationDescriptor` is the type-level projection stor
 manifest.
 """
 
-from collections.abc import Hashable
+from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
 import json
-from typing import Annotated, Any, Protocol, final
+from typing import Annotated, Any, Protocol, cast, final
 
 import pint
 from pydantic import BeforeValidator, StrictStr
@@ -41,6 +41,10 @@ class AnnotationType(StrEnum):
 
 
 AnnotationValue = TextHandle | TextListHandle | bool | int | float | None
+
+AnnotationValueInput = str | list[str] | tuple[str, ...] | TextHandle | TextListHandle | bool | int | float
+"""A value that a mapping passed to ``add_annotations`` can hold. A sequence of strings must be a
+``list`` or a ``tuple``."""
 
 
 def _annotation_value(value: Any) -> AnnotationValue:
@@ -267,3 +271,58 @@ def value_type_of(value: Any) -> ValueType | None:
             return "list"
         raise TimeFValidationError("annotation list values must hold strings only")
     raise TimeFValidationError(f"unsupported annotation value type: {type(value).__name__}")
+
+
+def _annotation_item(key: object, value: Any) -> Annotation:
+    """Return an annotation from a mapping entry with contextual validation.
+
+    Raises:
+        TimeFValidationError: If the key or value is invalid for a mapping entry.
+    """
+    if not isinstance(key, str):
+        raise TimeFValidationError(f"an annotation key must be text, got {key!r}")
+    if isinstance(value, Annotation):
+        raise TimeFValidationError(
+            f"annotation {key!r}: mapping values must be annotation values, not Annotation objects; "
+            f"pass mapping.values() or a list of annotations instead"
+        )
+    if value is None:
+        raise TimeFValidationError(f"annotation {key!r}: a mapping value cannot be None")
+    try:
+        return Annotation(key=key, value=value)
+    except TimeFValidationError as error:
+        raise TimeFValidationError(f"annotation {key!r}: {error}") from error
+
+
+def annotation_batch(
+    annotations: Iterable["Annotation"] | Mapping[str, AnnotationValueInput],
+) -> tuple["Annotation", ...]:
+    """Convert annotation objects or a mapping of keys to values into a checked tuple of annotations.
+
+    A mapping gives one plain annotation per item, ``Annotation(key=key, value=value)``, in the
+    mapping's order. Build an :class:`Annotation` yourself for a unit, a description, or metadata.
+
+    Args:
+        annotations: The annotations, or a mapping from each key to its value.
+
+    Returns:
+        The annotations, in the order given.
+
+    Raises:
+        TimeFValidationError: If a mapping key is not text, a mapping value is ``None``, an
+            :class:`Annotation`, or not valid for an annotation, or an item of the iterable is not an
+            :class:`Annotation`.
+    """
+    if isinstance(annotations, Mapping):
+        return tuple(_annotation_item(key, value) for key, value in annotations.items())
+    if isinstance(annotations, Annotation):
+        raise TimeFValidationError("pass a sequence of Annotation objects; attach a single one with annotate()")
+    if annotations is None or isinstance(annotations, str | bytes):
+        raise TimeFValidationError(
+            f"pass a sequence of Annotation objects or a mapping, not {type(annotations).__name__}"
+        )
+    batch = list(annotations)
+    for item in batch:
+        if not isinstance(item, Annotation):
+            raise TimeFValidationError(f"each batch item must be an Annotation; got {type(item).__name__}")
+    return tuple(batch)
