@@ -14,9 +14,10 @@ Every TimeF dataset loads through the same client. Each Record contains a Source
 Source contains Signals.
 
 ```python
-from timenet.client import TimeNet
+import timenet
 
-dataset = TimeNet(".timenet-registry").load("timenet/hello-world")
+client = timenet.TimeNet(sources=[".timenet-registry"])
+dataset = client.load("timenet/hello-world")
 record = dataset.records[0]
 signal = record.signals[0]
 ```
@@ -25,7 +26,7 @@ signal = record.signals[0]
 instead. The reader's reads leave each Signal's values in storage until an array method reads them:
 
 ```python
-with TimeNet(".timenet-registry").open("timenet/hello-world") as reader:
+with client.open("timenet/hello-world") as reader:
     dataset = reader.read()
     values = dataset.records[0].signals[0].to_numpy()
 ```
@@ -96,9 +97,9 @@ Install the adapter with `uv add 'timenet[torch]'`. Then open a map-style PyTorc
 view holds an open reader, so use it in a `with` block or call its `close()`:
 
 ```python
-from timenet.client import TimeNet
+import timenet
 
-client = TimeNet(".timenet-registry")
+client = timenet.TimeNet(sources=[".timenet-registry"])
 with client.open_torch("timenet/hello-world") as view:
     item = view[0]
 
@@ -125,12 +126,11 @@ from pathlib import Path
 from sklearn.linear_model import LogisticRegression
 from sklearn.model_selection import train_test_split
 
-from timenet.client import TimeNet
-import timenet_connectors
+import timenet
 
 registry = Path(".timenet-registry")
-timenet_connectors.build("timenet/test-mean", out=registry)
-dataset = TimeNet(registry).load("timenet/test-mean")
+timenet.build("timenet/test-mean", store=registry)
+dataset = timenet.TimeNet(sources=[registry]).load("timenet/test-mean")
 
 x, y = dataset.to_features_and_targets(output="numpy")
 x_train, x_test, y_train, y_test = train_test_split(
@@ -155,10 +155,10 @@ The runnable version is
 
 ## Work with downloaded files
 
-`download()` returns a local TimeF version directory:
+`download()` copies a release into the store, and returns its TimeF version directory there:
 
 ```python
-path = TimeNet().download("org/name@1.0.0")
+path = timenet.TimeNet().download("org/name@1.0.0")
 ```
 
 The directory contains `manifest.json`, `control.duckdb`, and a Parquet or Zarr values plane. Use the

@@ -436,14 +436,15 @@ matches its row:
 The build downloads the three files, 387 MB, from the Hub at the pinned commit:
 
 ```bash
-uv run timenet-build build tsaqa/tsaqa-benchmark --out /tmp/timenet
+uv run timenet-build build tsaqa/tsaqa-benchmark --local-registry /tmp/timenet
 ```
 
 On 2026-10-29, building in-process took 79 s and peaked at 4.1 GB of memory, most of it the 510,093
 Records. The built dataset takes 123 MB. To load it:
 
 ```python
-from timenet.client import TimeNet
+import timenet
 
-dataset = TimeNet("/tmp/timenet").load("tsaqa/tsaqa-benchmark")
+client = timenet.TimeNet(sources=["/tmp/timenet"])
+dataset = client.load("tsaqa/tsaqa-benchmark")
 ```
