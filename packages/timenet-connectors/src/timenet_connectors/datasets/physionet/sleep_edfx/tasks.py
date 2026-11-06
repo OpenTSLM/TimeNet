@@ -125,7 +125,7 @@ def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation])
             yield ClassificationTask(
                 # The label the technician wrote. Merging stage 3 with stage 4 is a decision
                 # for whoever trains.
-                targets=(label,),
+                targets=(SLEEP_STAGES[label],),
                 label_set=SLEEP_STAGES,
                 scope=TimeInterval.micros(onset, onset + EPOCH_MICROSECONDS),
             )
@@ -175,14 +175,14 @@ def build_record_tasks(
     yield ClassificationTask(
         # The decoded letter, never the sheet's code. The two sheets code the column with
         # opposite meanings, so one code means two opposite things.
-        targets=(_one_of(recording_id, stated, AnnotationKey.SEX, SEX_LABELS),),
+        targets=(SEXES[_one_of(recording_id, stated, AnnotationKey.SEX, SEX_LABELS)],),
         label_set=SEXES,
     )
 
     # Only the telemetry sheet states a condition, so this one is optional.
     if AnnotationKey.CONDITION in stated:
         yield ClassificationTask(
-            targets=(_one_of(recording_id, stated, AnnotationKey.CONDITION, CONDITION_LABELS),),
+            targets=(CONDITIONS[_one_of(recording_id, stated, AnnotationKey.CONDITION, CONDITION_LABELS)],),
             label_set=CONDITIONS,
         )
 

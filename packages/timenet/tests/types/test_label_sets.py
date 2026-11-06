@@ -1,8 +1,8 @@
 from pydantic import ValidationError
 import pytest
 
-from timenet.errors import TimeFValidationError
-from timenet.types import ClassificationTask, Label, LabelSet
+from timenet.errors import TimeFNotFoundError, TimeFValidationError
+from timenet.types import ClassificationTask, Label, LabelSet, TextHandle
 
 
 STAGES = LabelSet(name="stage", labels=(Label(name="W", description="Awake."), Label(name="N1"), Label(name="R")))
@@ -24,7 +24,7 @@ def test_a_label_set_needs_at_least_one_label_and_distinct_names(labels, message
 @pytest.mark.parametrize(("label_set", "type_name"), [(None, "NoneType"), ("stage", "str")])
 def test_a_classification_task_requires_a_label_set(label_set, type_name):
     with pytest.raises(TimeFValidationError, match=f"label_set must be a LabelSet, got {type_name}"):
-        ClassificationTask(targets=("W",), label_set=label_set)
+        ClassificationTask(targets=(Label(name="W"),), label_set=label_set)
 
 
 @pytest.mark.parametrize(
@@ -48,3 +48,37 @@ def test_a_multi_label_target_accepts_any_distinct_listed_labels(targets):
 def test_a_multi_label_target_rejects_a_repeated_label():
     with pytest.raises(TimeFValidationError, match="repeated labels of label set 'findings': \\['AF'\\]"):
         FINDINGS.check_targets(("AF", "PVC", "AF"))
+
+
+def test_a_label_set_looks_up_a_label_by_name():
+    assert STAGES["W"] == Label(name="W", description="Awake.")
+    with pytest.raises(TimeFNotFoundError, match="label set 'stage' has no label 'X'"):
+        STAGES["X"]
+
+
+def test_a_label_target_is_stored_as_its_name():
+    task = ClassificationTask(targets=(STAGES["W"],), label_set=STAGES)
+
+    assert task.targets is not None
+    (target,) = task.targets
+    assert isinstance(target, TextHandle)
+    assert target.read() == "W"
+
+
+def test_task_labels_are_the_set_labels_in_target_order():
+    task = ClassificationTask(targets=(FINDINGS["LBBB"], FINDINGS["AF"]), label_set=FINDINGS)
+
+    assert task.labels == (FINDINGS["LBBB"], FINDINGS["AF"])
+
+
+def test_task_labels_reject_a_target_that_the_set_does_not_list():
+    # A Label that is not in the task's set, such as one from another set.
+    task = ClassificationTask(targets=(Label(name="X"),), label_set=STAGES)
+    with pytest.raises(TimeFNotFoundError, match="has no label 'X'"):
+        task.labels  # ruff: ignore[useless-expression]
+
+
+@pytest.mark.parametrize("target", ["W", 3])
+def test_a_classification_target_must_be_a_label(target):
+    with pytest.raises(TimeFValidationError, match="must be a Label from the task's label set"):
+        ClassificationTask(targets=(target,), label_set=STAGES)
