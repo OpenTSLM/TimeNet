@@ -210,7 +210,10 @@ and a Source or Signal that another Record owns. It then gives the Record and it
 validation error leaves the dataset unchanged.
 
 For a large corpus, `set_task_stream()` accepts a re-iterable task source. The writer validates and
-inserts that stream once without retaining every Task in memory.
+inserts that stream once without retaining every Task in memory. The stream can attach dataset
+annotations while it produces tasks, and the writer stores them after the ones attached before. If
+the stream raises, the writer publishes nothing, but the annotations that the stream attached stay on
+the dataset, as after any `annotate()` call.
 
 ## Annotations
 
