@@ -13,6 +13,7 @@ from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFi
 from timenet_connectors.datasets.time_mqa.tsqa.anomaly_detection import AnomalyDetectionRow
 from timenet_connectors.datasets.time_mqa.tsqa.classification import ClassificationRow
 from timenet_connectors.datasets.time_mqa.tsqa.forecasting import parse_forecasting_row
+from timenet_connectors.datasets.time_mqa.tsqa.free_answer import FreeAnswerRow
 from timenet_connectors.datasets.time_mqa.tsqa.imputation import ImputationRow
 from timenet_connectors.datasets.time_mqa.tsqa.release import (
     HF_REPO,
@@ -30,6 +31,7 @@ _PARSERS: Mapping[TaskFamily, Callable[[ReleaseRow], TaskRow]] = {
     TaskFamily.CLASSIFICATION: ClassificationRow.from_release_row,
     TaskFamily.FORECASTING: parse_forecasting_row,
     TaskFamily.IMPUTATION: ImputationRow.from_release_row,
+    TaskFamily.OPEN_ENDED_QA: FreeAnswerRow.from_release_row,
 }
 """The parser of each task family."""
 

@@ -19,7 +19,7 @@ from typing import Protocol, Self
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
 from timenet.errors import TimeNetConnectorError
-from timenet.json import JsonMapping
+from timenet.json import JsonMapping, JsonValue
 from timenet.types import LabelSet, Task, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import HubFileRef
 
@@ -46,6 +46,8 @@ class TaskFamily(StrEnum):
     CLASSIFICATION = "classification"
     FORECASTING = "forecasting"
     IMPUTATION = "imputation"
+    OPEN_ENDED_QA = "open-ended QA"
+    """The open-ended file writes a free task type for each question, such as ``trend analysis``."""
 
 
 @unique
@@ -56,6 +58,7 @@ class ReleasePart(StrEnum):
     CLASSIFICATION = "classification"
     FORECASTING_IMPUTATION_1 = "forecasting_imputation_1"
     FORECASTING_IMPUTATION_2 = "forecasting_imputation_2"
+    OPEN_ENDED_QA = "open_ended_qa"
 
     @property
     def filename(self) -> str:
@@ -64,8 +67,8 @@ class ReleasePart(StrEnum):
 
     @property
     def columns(self) -> tuple[str, ...]:
-        """The header of the file."""
-        return _COLUMNS
+        """The header of the file. Only the open-ended file has a ``question_format`` column."""
+        return _COLUMNS_WITH_QUESTION_FORMAT if self is ReleasePart.OPEN_ENDED_QA else _COLUMNS
 
     @property
     def families(self) -> frozenset[TaskFamily]:
@@ -81,6 +84,8 @@ class ReleasePart(StrEnum):
         Raises:
             TimeNetConnectorError: If the file holds no rows of the task type.
         """
+        if self is ReleasePart.OPEN_ENDED_QA:
+            return TaskFamily.OPEN_ENDED_QA
         try:
             family = TaskFamily(task_type)
         except ValueError:
@@ -95,6 +100,7 @@ _FILENAMES: Mapping[ReleasePart, str] = {
     ReleasePart.CLASSIFICATION: "Classification/classification.csv",
     ReleasePart.FORECASTING_IMPUTATION_1: "Forecasting+Imputation/Forecasting+Imputation_1/forecasting_imputation1.csv",
     ReleasePart.FORECASTING_IMPUTATION_2: "Forecasting+Imputation/Forecasting+Imputation_2/forecasting_imputation2.csv",
+    ReleasePart.OPEN_ENDED_QA: "Open_Ended_QA/open_ended_QA.csv",
 }
 _FORECASTING_AND_IMPUTATION = frozenset({TaskFamily.FORECASTING, TaskFamily.IMPUTATION})
 _FAMILIES: Mapping[ReleasePart, frozenset[TaskFamily]] = {
@@ -102,8 +108,10 @@ _FAMILIES: Mapping[ReleasePart, frozenset[TaskFamily]] = {
     ReleasePart.CLASSIFICATION: frozenset({TaskFamily.CLASSIFICATION}),
     ReleasePart.FORECASTING_IMPUTATION_1: _FORECASTING_AND_IMPUTATION,
     ReleasePart.FORECASTING_IMPUTATION_2: _FORECASTING_AND_IMPUTATION,
+    ReleasePart.OPEN_ENDED_QA: frozenset({TaskFamily.OPEN_ENDED_QA}),
 }
 _COLUMNS = ("application_domain", "task_type", "QA_list")
+_COLUMNS_WITH_QUESTION_FORMAT = ("application_domain", "task_type", "question_format", "QA_list")
 SOURCE_FILES: Mapping[str, str] = {part.value: part.filename for part in ReleasePart}
 """The file of each part, for the Hub download."""
 
@@ -186,6 +194,8 @@ class ReleaseRow:
     task_type: str
     question: str
     answer: str
+    question_format: str | None = None
+    """The format that the open-ended file names for the question; None for the other files."""
 
     @property
     def family(self) -> TaskFamily:
@@ -213,12 +223,15 @@ class ReleaseRow:
         Returns:
             The metadata.
         """
-        return {
+        metadata: dict[str, JsonValue] = {
             "file": self.part.value,
             "row": self.number,
             "application_domain": self.application_domain,
             "task_type": self.task_type,
         }
+        if self.question_format is not None:
+            metadata["question_format"] = self.question_format
+        return metadata
 
     def record_metadata(self, role: str) -> JsonMapping:
         """Return the provenance of a Record of the row: the file, the row, and the role of the Record.
@@ -355,4 +368,5 @@ class ReleaseFile:
                     task_type=cells["task_type"],
                     question=match["question"],
                     answer=match["answer"],
+                    question_format=cells.get("question_format"),
                 )

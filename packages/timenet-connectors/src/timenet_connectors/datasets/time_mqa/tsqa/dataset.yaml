@@ -42,6 +42,16 @@ description: >-
   the complete series. Each becomes an editing task whose input Record holds the printed series
   with a missing value at each 'X', and whose target Record holds the complete series. The two
   files repeat 8 question-and-answer pairs, and 5 pairs are in both files.
+
+  The open-ended file has 37,613 questions that GPT-4o wrote about series from healthcare, nature,
+  the web, energy, and traffic: 19,424 open questions, 11,273 multiple-choice questions, and 6,916
+  true-or-false questions. The question_format column names the format, and the task_type column
+  names the kind of question in the words of the row, such as "trend analysis" or "trend_analysis".
+  The dataset keeps both in the task metadata as released. A question prints zero to six series,
+  for example one series for each choice, and each becomes a Record of its own. Each question
+  becomes an answer task whose target is the released answer text, which may print a series too.
+  Sixteen further rows have an empty cell and no question, so the dataset skips them. The file
+  repeats 15 question-and-answer pairs.
 license: Apache-2.0
 source_url: https://huggingface.co/datasets/Time-MQA/TSQA
 citation: >-
