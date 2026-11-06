@@ -203,7 +203,6 @@ def prepare_local_copy(  # ruff: ignore[too-many-arguments]
     manifest: Manifest | None = None,
     force: bool = False,
     progress_cb: Callable[[int], None] | None = None,
-    before_fetch: Callable[[Manifest], object] | None = None,
 ) -> DatasetVersion:
     """Ensure complete local copies of a release and of each of its payload sources.
 
@@ -225,9 +224,6 @@ def prepare_local_copy(  # ruff: ignore[too-many-arguments]
         manifest: An already-loaded manifest for the requested release.
         force: Fetch the requested release again, even if it is cached.
         progress_cb: Report downloaded bytes.
-        before_fetch: A callback that gets the manifest of each release before this function
-            downloads the files of the release. For example, the callback can check the access
-            requirement of the release.
 
     Returns:
         The requested release with its payload sources attached and checked against its pins.
@@ -250,7 +246,6 @@ def prepare_local_copy(  # ruff: ignore[too-many-arguments]
             manifest=manifest if requested else None,
             force=force and requested,
             progress_cb=progress_cb,
-            before_fetch=before_fetch,
         )
         return DatasetVersion(release, pafs.LocalFileSystem(), str(directory))
 
@@ -293,16 +288,17 @@ def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-argument
     manifest: Manifest | None,
     force: bool,
     progress_cb: Callable[[int], None] | None,
-    before_fetch: Callable[[Manifest], object] | None = None,
 ) -> Manifest:
-    """Reuse or fetch one complete release, and repair a damaged copy only by fetching it.
+    """Reuse a complete local release or fetch it from a registry.
+
+    Local checks compare file sizes. Downloads also check file hashes.
 
     Returns:
-        The release manifest. File hashes are checked during transfer, not on every read.
+        The complete release's manifest.
 
     Raises:
-        TimeNetDatasetNotFoundError: If the release is absent and this function cannot fetch it.
-        TimeNetFileError: If a local file is damaged and ``fetch_from`` is not given, or a fetched file does not match.
+        TimeNetDatasetNotFoundError: If the release is missing and ``fetch_from`` is unset or lacks it.
+        TimeNetFileError: If a local file is damaged and ``fetch_from`` is unset, or a downloaded file is damaged.
         TimeFFormatError: If a manifest identifies a different release.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
     if manifest is not None:
@@ -322,9 +318,7 @@ def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-argument
         else:
             return local
     if fetch_from is not None:
-        return _download_dataset_version(
-            directory, reference, fetch_from, manifest=manifest, progress_cb=progress_cb, before_fetch=before_fetch
-        )
+        return _download_dataset_version(directory, reference, fetch_from, manifest=manifest, progress_cb=progress_cb)
     raise TimeNetDatasetNotFoundError(f"complete release {reference} is missing at {directory}")
 
 
@@ -348,27 +342,22 @@ def _load_complete_local_manifest(
     return manifest if complete_copy(directory, manifest) else None
 
 
-def _download_dataset_version(  # ruff: ignore[too-many-arguments]
+def _download_dataset_version(
     directory: Path,
     reference: DatasetRef,
     registry: "BaseRegistry",
     *,
     manifest: Manifest | None,
     progress_cb: Callable[[int], None] | None,
-    before_fetch: Callable[[Manifest], object] | None = None,
 ) -> Manifest:
-    """Check a release's identity and download its files.
-
-    Run ``before_fetch`` after checking the manifest and before downloading files.
+    """Download a complete release after checking its dataset ID and version.
 
     Returns:
-        The manifest of the downloaded and verified release.
+        The manifest for the downloaded and verified release.
     """
     if manifest is None:
         manifest = registry.get_manifest(reference.dataset_id, str(reference.version))
     validate_manifest_reference(manifest, reference)
-    if before_fetch is not None:
-        before_fetch(manifest)
     registry.download_release(reference, directory, force=True, manifest=manifest, progress_cb=progress_cb)
     return manifest
 

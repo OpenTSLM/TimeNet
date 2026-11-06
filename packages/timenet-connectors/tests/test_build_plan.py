@@ -569,7 +569,7 @@ def test_load_obtains_a_missing_parent_before_it_builds_and_reads(tmp_path, monk
     assert calls == (builds if obtain == "fetch_from" else [(PARENT.dataset_id, False), *builds])
 
 
-def test_load_copies_a_missing_payload_source_through_fetch_from(tmp_path, monkeypatch):
+def test_load_reads_a_missing_payload_source_through_fetch_from(tmp_path, monkeypatch):
     out = LocalRegistry(tmp_path / "out")
     _parent_without_its_source(out)
     origin = LocalRegistry(tmp_path / "origin")
@@ -577,14 +577,15 @@ def test_load_copies_a_missing_payload_source_through_fetch_from(tmp_path, monke
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("TIMENET_REGISTRY", str(out.root))
     # The build has nothing to do, and no builder backend can build the payload source, so only the
-    # read can copy it.
+    # read can get it.
     monkeypatch.setattr(api_module, "build", lambda dataset_id, **options: None)
     monkeypatch.setattr(builders, "entry_points", lambda group: [])
 
     dataset = timenet_connectors.load(PARENT.dataset_id, fetch_from=origin)
 
-    assert out.exists(GRAND.dataset_id, str(GRAND.version))
     assert len(dataset.records) == 2
+    # The read opens the payload source in origin, where it is, and copies nothing.
+    assert not out.exists(GRAND.dataset_id, str(GRAND.version))
 
 
 class _NoDownloads(_Hosted):

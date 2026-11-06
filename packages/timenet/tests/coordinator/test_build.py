@@ -140,14 +140,6 @@ def test_a_build_calls_the_claiming_backend_with_the_pins(store, fake_parent, fa
     assert store.exists(PARENT_REF.dataset_id, str(PARENT_REF.version))
 
 
-def test_a_build_passes_the_pins_of_the_caller_to_the_backend(store, fake_parent, pins):
-    plan = plan_release_build(PARENT_REF.dataset_id, store=store, pinned_by={CHILD_REF: pins})
-    run_plan(plan, store)
-    assert fake_parent.calls == [(PARENT_REF, False, {CHILD_REF: pins})]
-    assert plan.steps == (Step(PARENT_REF, "build", InstalledConnectors(), pinned_by={CHILD_REF: pins}),)
-    assert store.exists(PARENT_REF.dataset_id, str(PARENT_REF.version))
-
-
 def test_plan_release_build_rejects_a_version_the_connector_does_not_declare(store, fake):
     with pytest.raises(TimeNetVersionUnavailableError) as caught:
         plan_release_build("a/b@2.0.0", store=store)
