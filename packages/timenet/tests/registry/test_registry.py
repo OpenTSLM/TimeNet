@@ -13,11 +13,9 @@ from timenet.registry import (
     LocalRegistry,
     RemoteRegistry,
     S3Registry,
-    WritableRegistry,
     local_registry_path,
     open_local_version,
     open_registry,
-    open_writable_registry,
 )
 from timenet.testing import make_dataset
 from timenet.types import Annotation, AnswerTask, Domain, License
@@ -56,7 +54,7 @@ def test_open_registry_timenet_scheme_aliases_hosted_remote():
 def test_open_registry_timenet_scheme_rejects_a_path():
     # A path after timenet:// used to be dropped silently; now it is rejected, so a mistyped registry
     # URI fails loudly instead of hitting the default host.
-    with pytest.raises(ValueError, match="timenet:// takes no path"):
+    with pytest.raises(TimeNetRegistryError, match="timenet:// takes no path"):
         open_registry("timenet://chengsenwang/tsqa")
 
 
@@ -66,19 +64,20 @@ def test_open_registry_bare_timenet_scheme():
     assert registry._base_url == TIMENET_REGISTRY_URL
 
 
-def test_open_writable_registry_returns_writable(registry_root):
-    assert isinstance(open_writable_registry(registry_root), WritableRegistry)
-
-
 def test_open_registry_unknown_scheme_rejected():
     # must not fall through to a LocalRegistry rooted at the literal "gs://bucket" string
-    with pytest.raises(ValueError, match="unsupported registry scheme"):
+    with pytest.raises(TimeNetRegistryError, match="unsupported registry scheme"):
         open_registry("gs://bucket/registry")
 
 
 def test_open_registry_file_uri_with_host_rejected():
-    with pytest.raises(ValueError, match="absolute"):
+    with pytest.raises(TimeNetRegistryError, match="absolute"):
         open_registry("file://home/timo/registry")
+
+
+def test_open_registry_rejects_a_blank_value_instead_of_opening_the_current_directory():
+    with pytest.raises(TimeNetRegistryError, match=r"^--registry is blank; give a registry URL or a local path$"):
+        open_registry("  ", label="--registry")
 
 
 def test_open_registry_expands_user(monkeypatch, tmp_path):

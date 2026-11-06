@@ -50,7 +50,7 @@ def test_put_dataset_and_remote_load_round_trip(s3_root, tmp_path, backend, entr
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
     reference = registry.put_dataset(make_dataset(), values_backend=backend)
     assert reference == DatasetRef.parse(f"{make_dataset().metadata.dataset_id}@1.0.0")
-    client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
+    client = TimeNet(sources=[registry])
     if entry_point == "open":
         with client.open(make_dataset().metadata.dataset_id) as reader:
             # The reader reads the release from S3, not from a downloaded copy.
@@ -98,11 +98,12 @@ def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
     assert all(key.startswith("registry/datasets/") for key in keys)
 
 
-def test_download_then_load_serves_from_cache(s3_root, tmp_path):
+def test_download_then_load_serves_from_cache(s3_root, tmp_path, monkeypatch):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
     dataset_id = make_dataset().metadata.dataset_id
     registry.put_dataset(make_dataset())
-    client = TimeNet(registry=registry, storage_path=tmp_path / "cache")
+    monkeypatch.setenv("TIMENET_STORAGE", str(tmp_path / "cache"))
+    client = TimeNet(sources=[registry])
     path = client.download(dataset_id)  # boto3 GetObject per file, into the cache
     assert (path / "manifest.json").exists()
     handle = registry.open_release(DatasetRef.parse(f"{dataset_id}@1.0.0"))

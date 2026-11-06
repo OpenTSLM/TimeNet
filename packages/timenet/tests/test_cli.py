@@ -2,13 +2,13 @@ import importlib
 import subprocess
 import sys
 
+import click
 import pytest
 import typer
 from typer.testing import CliRunner
 
 from timenet.cache import cached_datasets, raw_cache_size
 from timenet.cli.app import _enum_list, app
-from timenet.client import TimeNet
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetDatasetNotFoundError
 from timenet.reader import TimeFReader
@@ -80,24 +80,27 @@ def test_cache_clear_all_removes_everything(home):
 
 
 def test_list(registry_root):
-    assert runner.invoke(app, ["list", "--registry", str(registry_root)]).exit_code == 0
-    assert any(d.dataset_id == "timenet/hello-world" for d in TimeNet(str(registry_root)).list())
+    result = runner.invoke(app, ["list", "--registry", str(registry_root)])
+    assert result.exit_code == 0, result.output
+    assert "timenet/hello-world" in click.unstyle(result.output)
 
 
 def test_search_by_domain(registry_root):
-    assert runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "general"]).exit_code == 0
-    results = TimeNet(str(registry_root)).search(domain=[Domain("general")])
-    assert any(d.dataset_id == "timenet/hello-world" for d in results)
+    result = runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "general"])
+    assert result.exit_code == 0, result.output
+    assert "timenet/hello-world" in click.unstyle(result.output)
 
 
 def test_search_no_match(registry_root):
-    assert runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "cardiology"]).exit_code == 0
-    assert TimeNet(str(registry_root)).search(domain=[Domain("cardiology")]) == []
+    result = runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "cardiology"])
+    assert result.exit_code == 0, result.output
+    assert click.unstyle(result.output) == "No datasets match.\n"
 
 
 def test_info(registry_root):
-    assert runner.invoke(app, ["info", "timenet/hello-world", "--registry", str(registry_root)]).exit_code == 0
-    assert TimeNet(str(registry_root)).get("timenet/hello-world").dataset_id == "timenet/hello-world"
+    result = runner.invoke(app, ["info", "timenet/hello-world", "--registry", str(registry_root)])
+    assert result.exit_code == 0, result.output
+    assert click.unstyle(result.output).startswith("timenet/hello-world")
 
 
 def _write(root, dataset):
@@ -148,12 +151,11 @@ def test_info_lists_the_access_page_of_each_release_that_sets_one(tmp_path):
     assert cells[start + 3][0] == "domains"
 
 
-def test_download(registry_root, tmp_path):
-    result = runner.invoke(
-        app,
-        ["download", "timenet/hello-world", "--registry", str(registry_root), "--storage", str(tmp_path / "store")],
-    )
-    assert result.exit_code == 0
+def test_download(registry_root, tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.setenv("TIMENET_STORAGE", str(tmp_path / "store"))
+    result = runner.invoke(app, ["download", "timenet/hello-world", "--registry", str(registry_root)])
+    assert result.exit_code == 0, result.output
     assert (tmp_path / "store" / "timenet/hello-world" / "1.0.0" / "manifest.json").exists()
 
 
