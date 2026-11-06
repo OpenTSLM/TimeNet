@@ -22,7 +22,15 @@ description: >-
   stage for 197 windows: 173 train, 9 validation, and 15 test. For example, the expert score for
   data row 840 is N3. Its CSV label and generated explanation say N2. The connector preserves
   these source errors.
-license: MIT
+
+  The paper scores five stages by treating both N3 and N4 as N3 in predictions and expected
+  answers. The connector keeps the six released labels.
+
+  The EEG and expert scores come from the Sleep-EDF Database at
+  https://physionet.org/content/sleep-edf/1.0.0/, under ODC-By-1.0. OpenTSLM provides the added
+  prompts and generated explanations under MIT.
+license: ODC-By-1.0
+license_url: https://opendatacommons.org/licenses/by/1-0/
 source_url: https://github.com/OpenTSLM/OpenTSLM
 citation: >-
   Langer, P., et al. (2025). OpenTSLM: Time-Series Language Models for Reasoning over Multivariate
