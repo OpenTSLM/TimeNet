@@ -1,4 +1,4 @@
-"""Convert ARFBench: 750 questions about Datadog incident metrics, with every published rollup and chart."""
+"""Convert ARFBench questions, metric series, and charts to TimeF."""
 
 from __future__ import annotations
 
@@ -68,7 +68,7 @@ METRIC = TimeSeriesSpec(
 
 @dataclass(frozen=True)
 class ARFBenchSource:
-    """What ``download`` hands ``convert``: paths, and no rows."""
+    """Paths to the ARFBench question table, series files, and charts."""
 
     qa_csv: Path
     series_dir: Path
@@ -81,16 +81,16 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
     values_backend = "zarr"  # the chart tensors need it
 
     def download(self, cache_dir: Path) -> list[ARFBenchSource]:  # ruff: ignore[no-self-use] - BaseConnector override
-        """Fetch the QA table, every series file, and every chart of the pinned release.
+        """Download the question table, series files, and charts from the pinned release.
 
         Args:
-            cache_dir: Directory where the connector caches Hub files.
+            cache_dir: Directory for cached Hub files.
 
         Returns:
-            One handle naming the table and the two folders.
+            A list with the paths to the table and the two directories.
 
         Raises:
-            TimeNetDownloadError: If the fetch returned no QA table.
+            TimeNetDownloadError: If the download fails or the question table is missing.
         """
         root = hub_snapshot(REPO, REVISION, cache_dir, (QA_CSV, f"{SERIES_DIR}/*.parquet", f"{CHART_DIR}/*.png"))
         if not (root / QA_CSV).is_file():
@@ -98,10 +98,10 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
         return [ARFBenchSource(qa_csv=root / QA_CSV, series_dir=root / SERIES_DIR, chart_dir=root / CHART_DIR)]
 
     def convert(self, raw_refs: list[ARFBenchSource]) -> TimeFDataset:
-        """Build one record per metric and one per chart, then two tasks per question.
+        """Build records for the metrics and charts, and two tasks per question.
 
         Args:
-            raw_refs: The single handle :meth:`download` gave back.
+            raw_refs: A list containing the paths to the source files.
 
         Returns:
             The populated dataset.
@@ -133,22 +133,16 @@ def _series_files(series_dir: Path) -> dict[str, dict[int, Path]]:
 
 
 def _read_rollup(path: Path) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarray]]:
-    """Read one series file into its tag groups, each cut to the window in which it has a value.
+    """Read a series file and group its values by tag.
 
-    Row order in the release is arbitrary, so the rows are sorted by tag group and then by time. The
-    file's other columns are not read: ``num_groups`` is the number of rows at that epoch,
-    ``query_name`` is the alias the metric's record states once, and the pandas index restores no
-    order.
-
-    The file lists every tag group at every step of one time grid. A group that reported nothing in
-    the whole window is all null, and a group that reported for part of it has null steps before
-    its first value and after its last one. Those steps are grid padding, not observations, so the
-    group is cut to its observed window, and an all-null group is left out. Null steps inside the
-    window stay missing timesteps.
+    The file lists every tag group at every step of one time grid, with a null where the metric
+    reported nothing. Steps before a group's first value and after its last one are grid padding,
+    so each group is cut to its observed window. A group with no value is left out. A null inside
+    the window stays a missing value. Rows are sorted by group and time, because the file order is
+    arbitrary.
 
     Returns:
-        Each tag label's ``(epochs in microseconds, values, missing mask)``, in time order, for
-        the labels that have at least one value.
+        Each tag label mapped to its timestamps in microseconds, values, and missing mask, in time order.
     """
     table = pq.read_table(path, columns=["epoch", "group", "value"])
     table = table.sort_by([("group", "ascending"), ("epoch", "ascending")])
@@ -168,19 +162,17 @@ def _read_rollup(path: Path) -> dict[str, tuple[np.ndarray, np.ndarray, np.ndarr
 
 
 def _metric_record(metric: str, files: Mapping[int, Path]) -> Record:
-    """Build one metric's record: a source per tag group, holding that group's series at every rollup it has.
+    """Build a metric record with a source for each tag group.
 
-    A metric's tag keys are the same at every rollup, so a tag label names one series that the
-    release publishes at several intervals. A tag group that has no value at a rollup gets no
-    series for it, and one that has no value at any rollup gets no source. The record's zero is
-    the metric's earliest observation.
+    Each source holds the group's series at every rollup where the group has a value. A group with
+    no value at any rollup gets no source. The record starts at the earliest observation.
 
     Args:
-        metric: The metric id, such as ``35928_0``.
+        metric: The metric ID, such as ``35928_0``.
         files: The metric's series files by interval in seconds, finest first.
 
     Returns:
-        The record, annotated with the metric's ids and its finest interval.
+        The record with the metric IDs and finest interval as annotations.
     """
     record_id = f"arfbench-{metric}"
     rollups = {interval_s: _read_rollup(path) for interval_s, path in files.items()}
@@ -221,14 +213,13 @@ def _signal(  # ruff: ignore[too-many-arguments] - the group's arrays, and what 
     origin_us: int,
     name: str,
 ) -> Signal:
-    """Build one rollup of one tag group.
+    """Build a signal for one tag group at one rollup interval.
 
-    A series that holds every step of its interval's grid gets a regular axis; one that skips a step
-    keeps its own time offsets. A missing point inside the group's observed window stays a missing
-    timestep rather than becoming a NaN. The spec says why: the metric reported nothing there.
+    A group that holds every step of its grid gets a regular axis. A group that skips a step keeps
+    its own time offsets. A null inside the window stays a missing value, not a NaN.
 
     Returns:
-        The signal.
+        The signal with missing values and a regular or irregular time axis.
     """
     offsets = offsets_from_origin(epochs, origin_us)
     present = values
@@ -247,10 +238,10 @@ def _signal(  # ruff: ignore[too-many-arguments] - the group's arrays, and what 
 
 
 def _chart_record(path: Path) -> Record:
-    """Build the record of one released chart: a metric's finest rollup, or a cited pair, as the release plots it.
+    """Build a record for a chart.
 
     Returns:
-        The record, holding the image as its one signal.
+        The record with the chart image as its signal.
     """
     record_id = f"arfbench-chart-{path.stem}"
     signal = image_signal(path, name="chart")
@@ -261,19 +252,20 @@ def _chart_record(path: Path) -> Record:
 
 
 def _tasks(qa_csv: Path, metrics: Mapping[str, Record], charts: Mapping[str, Record]) -> Iterator[AnswerTask]:
-    """Yield two tasks per question: one over the cited metrics, one over the released charts.
+    """Yield a metric task and a chart task for each question.
 
-    The question is the prompt and the correct option the target. Every question is a test item, as
-    the release is an evaluation set. The chart task lists the combined chart of a pair first and then
-    each metric's own chart, the order the release's evaluation shows a vision model.
+    Each task uses the question as its prompt and the correct answer as its target. Every task is
+    in the test split, because the release is an evaluation set. The chart task lists the combined
+    chart of a pair first and then each metric's own chart, in the order the release shows a vision
+    model.
 
     Args:
-        qa_csv: The QA table.
-        metrics: The metric records by metric id.
+        qa_csv: The question and answer table.
+        metrics: The metric records by metric ID.
         charts: The chart records by file stem.
 
     Yields:
-        The series task and the chart task of each row, in table order.
+        The metric task and chart task for each row, in table order.
     """
     with qa_csv.open(newline="", encoding="utf-8") as handle:
         for _index, row in enumerate(csv.DictReader(handle)):
@@ -296,13 +288,13 @@ def _tasks(qa_csv: Path, metrics: Mapping[str, Record], charts: Mapping[str, Rec
 
 
 def _question_annotations(row: Mapping[str, str]) -> list[Annotation]:
-    """Build a question's annotations, fresh for each task that carries them.
+    """Build annotations for a question.
 
-    The interpolation flags say whether the visualization an engineer saw was interpolated; nothing
+    The interpolation flags say whether the visualization an engineer saw was interpolated. Nothing
     here interpolates.
 
     Returns:
-        The candidate answers, the category, the tier, and the two interpolation flags.
+        The answer options, category, difficulty, and interpolation flags.
     """
     return [
         Annotation(key="answer_options", value=json.loads(row["options_str"])),
