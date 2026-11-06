@@ -1,10 +1,13 @@
+import csv
+import gzip
 from pathlib import Path
+import zlib
 
 import pyarrow as pa
 import pytest
 
 from timenet.errors import TimeNetConnectorError
-from timenet_connectors.datasets.oxwearables.capture24 import Capture24Connector
+from timenet_connectors.datasets.oxwearables.capture24 import Capture24Connector, source
 from timenet_connectors.datasets.oxwearables.capture24.tests.release import (
     SIT,
     SLEEP,
@@ -120,12 +123,6 @@ def test_metadata_and_recordings_must_name_the_same_participants(tmp_path, chang
         ),
         ("metadata.csv", "P101,18-29,M", "P101,18-29,X", "metadata.csv:4: unknown sex 'X'"),
         ("metadata.csv", "P101,18-29,M", "P101,52+,M", r"metadata.csv:4: unknown age '52\+'"),
-        (
-            "annotation-label-dictionary.csv",
-            ",light\n",
-            ",strolling\n",
-            r"classes missing from label set 'walmsley_2020': \['strolling'\]",
-        ),
     ],
 )
 def test_malformed_tables_fail_with_their_path(tmp_path, table, old, new, message):
@@ -301,3 +298,42 @@ def test_blank_recording_row_fails_at_its_line(tmp_path, lazy_read):
             _x_of(dataset, "P001").to_numpy()
     missing = "x value" if lazy_read else "timestamp"
     assert str(error.value) == f"{path}:6: no {missing}"
+
+
+@pytest.mark.parametrize("overflow_diagnostic", [False, True], ids=["header", "overflow-reread"])
+def test_corrupt_gzip_keeps_the_path_and_decompression_cause(tmp_path, overflow_diagnostic):
+    root = release(tmp_path)
+    path = root / "P001.csv.gz"
+    compressed = bytearray(gzip.compress(b"time,x,y,z,annotation\n"))
+    # The ten-byte gzip header is followed by a DEFLATE block; type 3 is invalid.
+    compressed[10] = (compressed[10] & ~6) | 6
+    path.write_bytes(compressed)
+    with pytest.raises(TimeNetConnectorError) as error:
+        if overflow_diagnostic:
+            source._source_value_is_finite(path, 0, "x")
+        else:
+            Capture24Connector().convert([root])
+    assert isinstance(error.value.__cause__, zlib.error)
+    prefix = f"{path}:2: cannot reread x value" if overflow_diagnostic else str(path)
+    assert str(error.value) == f"{prefix}: {error.value.__cause__}"
+
+
+@pytest.mark.parametrize(
+    ("column", "label_set"),
+    [
+        ("label:WillettsSpecific2018", "willetts_specific_2018"),
+        ("label:Walmsley2020", "walmsley_2020"),
+    ],
+)
+def test_unknown_dictionary_class_names_its_physical_line_and_scheme(tmp_path, column, label_set):
+    root = release(tmp_path)
+    path = root / "annotation-label-dictionary.csv"
+    with path.open(newline="", encoding="utf-8") as handle:
+        rows = list(csv.reader(handle))
+    rows[1][0] = "a raw label\non two lines"
+    rows[-1][rows[0].index(column)] = "unknown"
+    with path.open("w", newline="", encoding="utf-8") as handle:
+        csv.writer(handle).writerows(rows)
+    with pytest.raises(TimeNetConnectorError) as error:
+        Capture24Connector().convert([root])
+    assert str(error.value) == f"{path}:5: {column}: class 'unknown' is not in label set {label_set!r}"

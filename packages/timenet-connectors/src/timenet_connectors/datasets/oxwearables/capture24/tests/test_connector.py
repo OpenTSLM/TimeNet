@@ -244,6 +244,7 @@ def _assert_values(dataset) -> None:
 def test_converts_the_fixture(tmp_path):
     dataset = Capture24Connector().convert([release(tmp_path)])
     assert _output(dataset) == _EXPECTED
+    assert all(not task.input_annotations for task in dataset.iter_tasks())
     _assert_values(dataset)
 
 
@@ -268,6 +269,7 @@ def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
         reader.verify()
         restored = reader.read()
         assert _output(restored) == _EXPECTED
+        assert all(not task.input_annotations for task in restored.iter_tasks())
         _assert_values(restored)
 
 

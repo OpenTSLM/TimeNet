@@ -20,6 +20,7 @@ from itertools import islice
 from pathlib import Path
 import re
 from typing import TypeVar
+import zlib
 
 import numpy as np
 import pyarrow as pa
@@ -37,7 +38,7 @@ from timenet_connectors.datasets.oxwearables.capture24.windowing import (
     make_segments,
     make_windows,
 )
-from timenet_connectors.sources.csv import check_unique, read_csv_table
+from timenet_connectors.sources.csv import CsvRow, check_unique, read_csv_table
 
 
 METADATA_FILE = "metadata.csv"
@@ -175,8 +176,7 @@ def read_labels(root: Path) -> LabelDictionary:
     raw_labels = [row.values[_DICTIONARY_LABEL_COLUMN] for row in rows]
     check_unique(path, ((row.line, row.values[_DICTIONARY_LABEL_COLUMN]) for row in rows), name="raw label")
     class_index_by_raw_code = {
-        scheme: _class_codes(path, [row.values[scheme.column] for row in rows], label_set)
-        for scheme, label_set in LABEL_SETS.items()
+        scheme: _class_codes(path, rows, scheme, label_set) for scheme, label_set in LABEL_SETS.items()
     }
     return LabelDictionary(
         raw_labels=tuple(raw_labels),
@@ -186,7 +186,7 @@ def read_labels(root: Path) -> LabelDictionary:
     )
 
 
-def _class_codes(path: Path, classes: list[str], label_set: LabelSet) -> np.ndarray:
+def _class_codes(path: Path, rows: list[CsvRow], scheme: Scheme, label_set: LabelSet) -> np.ndarray:
     """Map each raw label's class in one scheme to its index in the scheme's label set.
 
     Returns:
@@ -197,11 +197,15 @@ def _class_codes(path: Path, classes: list[str], label_set: LabelSet) -> np.ndar
     Raises:
         TimeNetConnectorError: If a class is not in the label set.
     """
-    unknown = sorted(set(classes) - set(label_set.names))
-    if unknown:
-        raise TimeNetConnectorError(f"{path}: classes missing from label set {label_set.name!r}: {unknown}")
     index_of_class = {name: index for index, name in enumerate(label_set.names)}
-    codes = [index_of_class[name] for name in classes]
+    codes = []
+    for row in rows:
+        name = row.values[scheme.column]
+        if name not in index_of_class:
+            raise TimeNetConnectorError(
+                f"{path}:{row.line}: {scheme.column}: class {name!r} is not in label set {label_set.name!r}"
+            )
+        codes.append(index_of_class[name])
     unlabeled = len(label_set.labels)
     return np.array([*codes, unlabeled], dtype=np.int16)
 
@@ -366,7 +370,7 @@ def _read_table(path: Path) -> pa.Table:
     try:
         with gzip.open(path, "rt", newline="", encoding="utf-8") as handle:
             header = next(csv.reader(handle), None)
-    except (OSError, EOFError, UnicodeDecodeError, csv.Error) as exc:
+    except (OSError, EOFError, UnicodeDecodeError, csv.Error, zlib.error) as exc:
         raise TimeNetConnectorError(f"{path}: {exc}") from exc
     if header != _RECORDING_COLUMNS:
         raise TimeNetConnectorError(f"{path}: expected the header {','.join(_RECORDING_COLUMNS)}, got {header}")
@@ -444,7 +448,16 @@ def _source_value_is_finite(path: Path, row: int, column: str) -> bool:
             reader = csv.DictReader(handle)
             cells = next(islice(reader, row, row + 1))
             return Decimal(cells[column]).is_finite()
-    except (OSError, EOFError, UnicodeDecodeError, csv.Error, StopIteration, ArithmeticError, ValueError) as exc:
+    except (
+        OSError,
+        EOFError,
+        UnicodeDecodeError,
+        csv.Error,
+        zlib.error,
+        StopIteration,
+        ArithmeticError,
+        ValueError,
+    ) as exc:
         raise TimeNetConnectorError(f"{path}:{_line_number(row)}: cannot reread {column} value: {exc}") from exc
 
 
