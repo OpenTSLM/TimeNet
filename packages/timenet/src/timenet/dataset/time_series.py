@@ -7,6 +7,7 @@ from typing import NamedTuple, TypeGuard, assert_never
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
+import pyarrow.compute as pc
 
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis, TimeAxis, to_time_offsets_us
 from timenet.dataset.span_validation import check_span_within_window
@@ -549,6 +550,30 @@ class Signal(SupportsAnnotate):
             A primitive array for scalar values or a fixed-shape tensor array for N-D values.
         """
         return self._values.read()
+
+    def to_category_codes(self) -> pa.Array:
+        """Read enum values as the positions of their labels in ``spec.categories``.
+
+        Returns:
+            An int32 array of zero-based positions, with nulls for missing values.
+
+        Raises:
+            TimeFValidationError: If the spec is not an enum or a label is outside its categories.
+        """
+        if self.spec.dtype != "enum":
+            raise TimeFValidationError(
+                f"series {self.name!r} holds {self.spec.dtype} values, so it has no category codes"
+            )
+        labels = self.to_arrow()
+        # index_in finds each label's position in the categories using C code.
+        # This avoids a Python lookup for every value.
+        categories = pa.array(self.spec.categories, type=labels.type.value_type)
+        codes = pc.index_in(labels, value_set=categories)  # ty: ignore[unresolved-attribute]
+        if codes.null_count != labels.null_count:
+            raise TimeFValidationError(
+                f"enum series for {self.spec.spec_type!r} has values outside its categories ({list(self.spec.categories)!r})"
+            )
+        return codes.cast(pa.int32())
 
     def to_numpy(self) -> Shaped[np.ndarray, " time *value"]:
         """Read the series' values as a read-only NumPy array.

@@ -209,6 +209,8 @@ SIGNALS = Table(
         Column("unit", ColumnType.VARCHAR),
         _required("dtype"),
         _required("categories", ColumnType.VARCHAR_LIST),
+        _required("ordered", ColumnType.BOOLEAN),
+        Column("description", ColumnType.VARCHAR),
         _required("value_shape", ColumnType.BIGINT_LIST),
         _required("dimension_names", ColumnType.VARCHAR_LIST),
         _required("nullable", ColumnType.BOOLEAN),

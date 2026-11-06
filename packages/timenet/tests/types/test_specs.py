@@ -21,6 +21,11 @@ def test_spec_construction_modality_only():
     assert not hasattr(spec, "signal")  # signal lives on Signal, not the spec
 
 
+def test_ordered_is_only_valid_for_an_enum():
+    with pytest.raises(ValidationError, match="ordered is only valid for dtype 'enum'"):
+        _ecg_spec(ordered=True)
+
+
 def test_spec_frozen():
     with pytest.raises(ValidationError):
         _ecg_spec().spec_type = "x"

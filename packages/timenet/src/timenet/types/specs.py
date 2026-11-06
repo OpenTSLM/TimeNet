@@ -105,6 +105,17 @@ class TimeSeriesSpec(TimeFModel):
     """Value dtype: a NumPy scalar dtype, ``"str"`` for text, or ``"enum"`` for a categorical value."""
     categories: tuple[NonEmptyString, ...] = ()
     """Ordered codebook for ``dtype="enum"``. Empty for every other dtype."""
+    ordered: StrictBool = False
+    """Whether later categories represent larger amounts on one scale.
+
+    Then a consumer can treat the positions in :attr:`categories` as numbers. Only valid for
+    ``dtype="enum"``.
+    """
+    description: NonEmptyString | None = None
+    """Explanation of the values for a reader who does not know the modality, or ``None``.
+
+    For an enum, say what the categories mean.
+    """
     value_shape: tuple[StrictPositiveInt, ...] = ()
     """Shape of one timestep, excluding the leading time axis. An empty shape means scalar values."""
     dimension_names: tuple[NonEmptyString, ...] = ()
@@ -132,6 +143,8 @@ class TimeSeriesSpec(TimeFModel):
                 raise ValueError("enum categories must be unique")
         elif self.categories:
             raise ValueError("categories are only valid for dtype 'enum'")
+        if self.ordered and self.dtype != "enum":
+            raise ValueError("ordered is only valid for dtype 'enum'")
         if self.dimension_names and len(self.dimension_names) != len(self.value_shape):
             raise ValueError("TimeSeriesSpec.dimension_names must be empty or match value_shape length")
         if len(set(self.dimension_names)) != len(self.dimension_names):
