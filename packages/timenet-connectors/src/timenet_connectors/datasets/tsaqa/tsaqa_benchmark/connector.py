@@ -671,8 +671,9 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
         metadata: dict[str, JsonValue] = {"file": row.file, "row": row.index, "role": str(role)}
         record = Record(sources=(Source(name="series", signals=(signal,)),), metadata=metadata)
         if position == 0:
-            for key, value in row.contexts.on_input.items():
-                record.annotate(Annotation(key=key, value=value if isinstance(value, str) else list(value)))
+            record.add_annotations(
+                {key: value if isinstance(value, str) else list(value) for key, value in row.contexts.on_input.items()}
+            )
         records.append(record)
     return tuple(records)
 

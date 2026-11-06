@@ -34,6 +34,7 @@ from timenet.types import (
     read_value,
     value_type_of,
 )
+from timenet.types.annotations import AnnotationValueInput, annotation_batch
 from timenet.types.ids import IdCounters
 from timenet.types.load_plan import LoadPlan
 from timenet.types.parent_dataset_card import ParentDatasetCard
@@ -48,6 +49,19 @@ if TYPE_CHECKING:
 
 T = TypeVar("T")
 TTask = TypeVar("TTask", bound=Task)
+
+
+def _check_dataset_annotation(annotation: Annotation) -> None:
+    """Raise if ``annotation`` cannot attach to a dataset.
+
+    Raises:
+        TimeFValidationError: If ``annotation`` is not an :class:`Annotation`, or it has a time
+            placement, which is ambiguous across records.
+    """
+    if not isinstance(annotation, Annotation):
+        raise TimeFValidationError(f"a dataset annotation must be an Annotation, got {type(annotation).__name__}")
+    if annotation.span is not None:
+        raise TimeFValidationError("dataset annotations cannot have a time span")
 
 
 class _TaskValidationIndex:
@@ -378,11 +392,39 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
 
         Raises:
             TimeFValidationError: If the annotation has a time placement, which is ambiguous across records.
-        """
-        if annotation.span is not None:
-            raise TimeFValidationError("dataset annotations cannot have a time span")
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_dataset_annotation
+        _check_dataset_annotation(annotation)
         attached = annotation._new_occurrence()
         self._annotations.append(attached)
+        return attached
+
+    def add_annotations(
+        self, annotations: Iterable[Annotation] | Mapping[str, AnnotationValueInput]
+    ) -> tuple[Annotation, ...]:
+        """Attach several static annotations to the dataset, after validating every one of them.
+
+        The method checks the whole batch first. If one annotation fails, it raises and leaves the
+        dataset unchanged::
+
+            dataset.add_annotations({"sampling_rate_hz": 50, "device": "wrist"})
+
+        Args:
+            annotations: The annotations to attach, or a mapping from each key to its value. Pass a
+                single annotation to :meth:`annotate`.
+
+        Returns:
+            The attached occurrences, in the order given.
+
+        Raises:
+            TimeFValidationError: If an annotation has a time placement, an item is not an
+                :class:`Annotation`, or a mapping has a key that is not text or a value that an
+                annotation does not accept.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by annotation_batch and _check_dataset_annotation
+        batch = annotation_batch(annotations)
+        for annotation in batch:
+            _check_dataset_annotation(annotation)
+        attached = tuple(annotation._new_occurrence() for annotation in batch)
+        self._annotations.extend(attached)
         return attached
 
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
