@@ -2,7 +2,9 @@
 
 Subclasses set ``HF_REPO``, ``SOURCE_REVISION``, and ``SOURCE_FILES``, ship a ``dataset.yaml`` card
 beside the connector, and implement ``convert()`` over the :class:`HubFileRef` list ``download()``
-returns. The base checks that list before the subclass's ``convert()`` runs.
+returns. The base checks that list before the subclass's ``convert()`` runs. The card's
+``source_revision`` records the pinned commit in the release, so the base requires it and makes
+sure that the card and :attr:`~BaseHuggingFaceConnector.SOURCE_REVISION` name the same commit.
 :mod:`timenet_connectors.sources.huggingface_hub` describes how the files download. For the Hub's
 parquet conversion, pin the commit ``refs/convert/parquet`` points to.
 """
@@ -17,7 +19,8 @@ from typing import Any, ClassVar
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetInvalidCardError
+from timenet.types import DatasetMetadata
 from timenet_connectors.sources.huggingface_hub import download_hub_files
 
 
@@ -68,6 +71,29 @@ class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
                 return convert(self, raw_refs)
 
             cls.convert = checked
+
+    def metadata(self) -> DatasetMetadata:
+        """Check the card's source revision against the pinned commit, and return its metadata.
+
+        Returns:
+            The dataset's :class:`~timenet.types.DatasetMetadata`.
+
+        Raises:
+            TimeNetInvalidCardError: If the card has no ``source_revision``, or sets one other than
+                :attr:`SOURCE_REVISION`.
+        """
+        metadata = super().metadata()
+        if metadata.source_revision is None:
+            raise TimeNetInvalidCardError(
+                f"the card of {metadata.dataset_id} has no source_revision; set it to "
+                f"{type(self).__name__}.SOURCE_REVISION, {self.SOURCE_REVISION!r}"
+            )
+        if metadata.source_revision != self.SOURCE_REVISION:
+            raise TimeNetInvalidCardError(
+                f"the card of {metadata.dataset_id} sets source_revision {metadata.source_revision!r}, "
+                f"but {type(self).__name__}.SOURCE_REVISION is {self.SOURCE_REVISION!r}"
+            )
+        return metadata
 
     def check_refs(self, raw_refs: Sequence[HubFileRef]) -> None:
         """Check that ``raw_refs`` is nonempty and names each part once, only parts :attr:`SOURCE_FILES` declares.
