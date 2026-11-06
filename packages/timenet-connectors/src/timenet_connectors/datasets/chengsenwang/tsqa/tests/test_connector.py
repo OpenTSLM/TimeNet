@@ -206,6 +206,7 @@ def test_source_is_pinned():
         ({"Series": "[1, 2"}, r"Series: Invalid JSON"),
         ({"Series": "[]"}, r"Series.*at least 1 item"),
         ({"Series": json.dumps([1.0, "x"])}, r"Series.*1.*valid integer"),
+        ({"Series": "[1.0, NaN]"}, r"Series\[0\]\[1\]: expected a finite number"),
     ],
 )
 def test_a_malformed_cell_names_its_file_and_row(tmp_path, changes, message):
