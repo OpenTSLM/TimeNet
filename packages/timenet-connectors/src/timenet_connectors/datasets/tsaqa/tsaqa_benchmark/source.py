@@ -9,7 +9,7 @@ from array import array
 from collections import defaultdict
 from collections.abc import Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
-from functools import lru_cache
+from functools import lru_cache, partial
 import hashlib
 import itertools
 import json
@@ -43,6 +43,7 @@ from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.labels import (
     SplitFile,
 )
 from timenet_connectors.sources.parquet import iter_parquet_rows
+from timenet_connectors.sources.reread import checked_reread
 from timenet_connectors.sources.rows import NonBlankText, PublishedStrEnum, SourceRow, validate_row
 from timenet_connectors.sources.signals import numeric_signal
 
@@ -529,19 +530,26 @@ class SeriesLoader:
         input_ts, question = (table.column(name).chunk(0) for name in _SERIES_COLUMNS)
         return input_ts, question
 
-    def _read_series(self, request: _SeriesRead) -> tuple[pa.Array, ...]:
+    def _parse_series(self, request: _SeriesRead) -> list[Sequence[float]]:
         input_ts, question = self._columns(request.split)
         context = f"{request.split.filename} row {request.index}"
         try:
             printed = _printed_series(request.task, str(question[request.index].as_py()))
-            series = [
+            series: list[Sequence[float]] = [
                 *_input_series(request.task, str(input_ts[request.index].as_py())),
                 *(item.values for item in printed),
             ]
         except (TimeNetConnectorError, ValueError, IndexError) as exc:
-            raise TimeNetConnectorError(f"{context}: {exc}; the file changed since conversion") from exc
-        if tuple(len(values) for values in series) != request.lengths or _values_digest(series) != request.digest:
-            raise TimeNetConnectorError(f"{context}: the series differ from the converted row; the file changed")
+            raise TimeNetConnectorError(f"{context}: {exc}") from exc
+        return series
+
+    def _read_series(self, request: _SeriesRead) -> tuple[pa.Array, ...]:
+        series = checked_reread(
+            partial(self._parse_series, request),
+            fingerprint=lambda series: (tuple(map(len, series)), _values_digest(series)),
+            expected=(request.lengths, request.digest),
+            context=f"{request.split.filename} row {request.index}",
+        )
         return tuple(pa.array(values, type=pa.float64()) for values in series)
 
     def signals(self, row: Row) -> tuple[Signal, ...]:

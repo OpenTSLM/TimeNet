@@ -354,7 +354,9 @@ def test_a_reread_that_no_longer_matches_its_row_fails(tmp_path, position, rewri
         for record in dataset.records
         if (record.metadata["file"], record.metadata["row"]) == ("train.parquet", position)
     )
-    with pytest.raises(TimeNetConnectorError, match=rf"train.parquet row {position}: the series differ"):
+    with pytest.raises(
+        TimeNetConnectorError, match=rf"train.parquet row {position}: content differs from the conversion scan"
+    ):
         first.signals[0].to_numpy()
 
 
