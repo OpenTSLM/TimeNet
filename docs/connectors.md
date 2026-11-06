@@ -288,6 +288,12 @@ credentialed dataset from a hosted registry raises `TimeNetAccessError` instead 
 The error names each `access_url` that the dataset needs, with the release that sets it. A child
 dataset can need the access pages of its ancestors.
 
+## Source provenance
+
+Record where the data came from in the dataset card's `source_url` and `source_revision` fields,
+not in dataset annotations. For a `BaseHuggingFaceConnector`, `source_revision` must match
+`SOURCE_REVISION`, or `metadata()` raises `TimeNetInvalidCardError`.
+
 ## Downloading artifacts
 
 `timenet_connectors.download` has two async helpers. Each helper picks the backend from the scheme of

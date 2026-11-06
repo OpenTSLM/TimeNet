@@ -14,6 +14,7 @@ description: >-
   source splits; achieved sizes may differ to keep groups intact.
 license: Apache-2.0
 source_url: https://huggingface.co/datasets/ChengsenWang/TSQA
+source_revision: 22518209e3ee6302be4b4957f2692b3e8de849c3
 domains:
   - general
 tags:
