@@ -143,8 +143,8 @@ class BaseConnector(ABC, Generic[TRaw]):
     def convert(self, raw_refs: list[TRaw]) -> TimeFDataset:
         """Parse raw references and populate a :class:`~timenet.dataset.TimeFDataset`.
 
-        CPU-bound: no network I/O. Attach time-series values as lazy loaders instead of materializing
-        them.
+        CPU-bound: no network I/O. Use ``Signal.from_values`` when keeping the values is practical,
+        and ``Signal.from_loader`` for large values that stay in local source files.
 
         Args:
             raw_refs: The references returned by :meth:`download`.
