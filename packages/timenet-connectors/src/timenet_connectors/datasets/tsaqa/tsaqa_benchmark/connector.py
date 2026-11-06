@@ -665,8 +665,9 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
         metadata: dict[str, JsonValue] = {"file": row.file, "row": row.index, "role": str(role)}
         record = Record(sources=(Source(name="series", signals=(signal,)),), metadata=metadata)
         if position == 0:
-            for key, value in row.contexts.on_input.items():
-                record.annotate(Annotation(key=key, value=value if isinstance(value, str) else list(value)))
+            record.add_annotations(
+                {key: value if isinstance(value, str) else list(value) for key, value in row.contexts.on_input.items()}
+            )
         records.append(record)
     return tuple(records)
 
@@ -676,9 +677,7 @@ def _published_labels(row: _Row) -> tuple[tuple[str, str], tuple[str, str]]:
     return ("task", row.task.value), ("question_type", row.question_type)
 
 
-def _task(
-    row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue], labels: Mapping[tuple[str, str], Annotation]
-) -> Task:
+def _task(row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue], dataset: TimeFDataset) -> Task:
     """Build a row's task: a true-or-false row is a classification task, any other an answer task.
 
     The model reads what Appendix E.1 lists: the published context, then the published ``task`` and
@@ -690,7 +689,7 @@ def _task(
         row: The row.
         inputs: The row's input Records.
         issues: The row's source issues.
-        labels: The dataset's annotation of each published ``task`` and ``question_type`` value.
+        dataset: The dataset that shares each published task and question-type annotation.
 
     Returns:
         The task, its target the published answer.
@@ -698,7 +697,7 @@ def _task(
     annotations = itertools.chain.from_iterable(record.annotations for record in inputs)
     input_annotations = (
         *(a for a in annotations if a.key in _CONTEXT_KEYS or a.key in _PUBLISHED_LISTS.values()),
-        *(labels[label] for label in _published_labels(row)),
+        *(dataset.annotate_shared(Annotation(key=key, value=value)) for key, value in _published_labels(row)),
     )
     metadata: dict[str, JsonValue] = {
         "task": row.task.value,
@@ -770,18 +769,13 @@ class TSAQAConnector(BaseHuggingFaceConnector):
         dataset = TimeFDataset(metadata=self.metadata())
         for key, value in (("source_repository", self.HF_REPO), ("source_revision", self.SOURCE_REVISION)):
             dataset.annotate(Annotation(key=key, value=value))
-        # The model reads the published task and question_type, so each distinct value is a dataset annotation.
-        labels = {
-            label: dataset.annotate(Annotation(key=label[0], value=label[1]))
-            for label in sorted({label for row in rows for label in _published_labels(row)})
-        }
         for row_records in records:
             for record in row_records:
                 dataset.add_record(record=record)
 
         def tasks() -> Iterator[Task]:
             for row, inputs in zip(rows, records, strict=True):
-                yield _task(row, inputs, issues.get(row.key, frozenset()), labels)
+                yield _task(row, inputs, issues.get(row.key, frozenset()), dataset)
 
         dataset.set_task_stream((ClassificationTask, AnswerTask), tasks)
         return dataset

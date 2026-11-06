@@ -86,6 +86,9 @@ such as `{"device": "wrist"}`. A mapping gives plain annotations, with no unit, 
 Use `dataset.annotate_shared(annotation)` when several tasks need the same dataset annotation, such as a
 question type. See [Shared dataset annotations](timef-dataset.md#shared-dataset-annotations).
 `dataset.add_annotations` attaches several dataset annotations and takes the same mapping.
+SensorCaps uses these batch methods for its dataset and record metadata. TSAQA uses `annotate_shared`
+for the task and question-type annotations its task stream references, so repeated passes reuse
+those occurrences without a connector-owned lookup table.
 
 ---
 
