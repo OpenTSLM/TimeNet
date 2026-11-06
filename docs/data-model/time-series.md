@@ -83,7 +83,8 @@ present = values.is_valid()
 ```
 
 The mask marks present timesteps. The PyTorch adapter raises `TimeFValidationError` for actual nulls,
-even when `nullable=True`. Consumers must handle missing data before tensor conversion.
+even when the spec has a `missing` record. Consumers must handle missing data before tensor
+conversion.
 
 ## Cut a window
 

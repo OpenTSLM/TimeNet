@@ -735,7 +735,8 @@ class Signal(SupportsAnnotate):
         The span must hold at least one value. A step span must count on this series. A time span is
         placed by time only, so ask :meth:`is_selected_by` first when the scope matters. The slice
         keeps the name, spec, metadata, and place on the timeline, drops annotations, and reads no
-        values until it is read::
+        values until it is read. The spec's ``missing.max_fraction`` is not checked on the window
+        until a writer stores it as a series of its own::
 
             if signal.overlaps_with(interval):
                 part = signal.slice(interval, clip=True)

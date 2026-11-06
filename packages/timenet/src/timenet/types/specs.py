@@ -1,7 +1,7 @@
 """Measurement modality descriptors used by Signals."""
 
 from collections.abc import Callable
-from enum import Enum, unique
+from enum import StrEnum, unique
 from typing import Annotated, Any, Self, cast
 
 import pint
@@ -92,7 +92,7 @@ _RESERVED_SPEC_TYPES = frozenset({".", "..", "_irregular", "_time_offsets", "_va
 
 
 @unique
-class MissingReason(Enum):
+class MissingReason(StrEnum):
     """Reasons why whole timesteps of a modality can be missing."""
 
     SENSOR_GAP = "sensor_gap"
@@ -122,6 +122,11 @@ class MissingValues(TimeFModel):
 
     The writer rejects a series with a larger fraction of missing timesteps. ``1.0`` allows a
     series that misses almost every timestep.
+
+    The bound applies to each series as it is written. A window cut from a valid series with
+    :meth:`~timenet.dataset.Signal.slice` is a lazy view and is not checked again, but if a
+    dataset writes that window as a series of its own, the writer checks the window's fraction.
+    A dataset that cuts windows gives such a series a spec with a bound that fits the windows.
     """
 
 
@@ -167,7 +172,7 @@ class TimeSeriesSpec(TimeFModel):
         Raises:
             TimeFValidationError: If missing timesteps are disallowed or exceed ``max_fraction``.
         """
-        if not null_count:
+        if null_count == 0:
             return
         if self.missing is None:
             raise TimeFValidationError(
