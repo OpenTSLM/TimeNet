@@ -1,6 +1,6 @@
 import pytest
 
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources import json_stream
 
 
@@ -70,7 +70,7 @@ def test_a_syntax_error_raises_without_reading_the_rest_of_the_file(monkeypatch,
     path.write_text('{"a": {"x": 1 x}, "b": [' + "0, " * 100_000 + "0]}")
     monkeypatch.setattr(json_stream, "_CHUNK_SIZE", 64)
 
-    with pytest.raises(TimeFValidationError, match="delimiter at byte 14"):
+    with pytest.raises(TimeNetConnectorError, match="delimiter at byte 14"):
         list(json_stream.iter_object(path))
     assert sum(reads) <= 64
 
@@ -80,7 +80,7 @@ def test_a_non_string_key_raises_without_reading_it(monkeypatch, tmp_path, reads
     path.write_text("{[" + "0, " * 100_000 + "0]: 1}")
     monkeypatch.setattr(json_stream, "_CHUNK_SIZE", 64)
 
-    with pytest.raises(TimeFValidationError, match="expected a string key at byte 1"):
+    with pytest.raises(TimeNetConnectorError, match="expected a string key at byte 1"):
         list(json_stream.iter_object(path))
     assert sum(reads) <= 64
 
@@ -91,7 +91,7 @@ def test_a_syntax_error_names_its_byte_in_the_file(monkeypatch, tmp_path):
     path.write_text(text)
     monkeypatch.setattr(json_stream, "_CHUNK_SIZE", 100)
 
-    with pytest.raises(TimeFValidationError) as error:
+    with pytest.raises(TimeNetConnectorError) as error:
         list(json_stream.iter_object(path))
     # The "2" of [1 2], counted in bytes, where the two-byte "é" sits one past its character index.
     assert f"at byte {text.index('[1 2]') + 4}" in str(error.value)
@@ -109,7 +109,7 @@ def test_invalid_utf8_names_its_byte(monkeypatch, tmp_path, data, message):
     path = tmp_path / "rows.json"
     path.write_bytes(data)
     monkeypatch.setattr(json_stream, "_CHUNK_SIZE", 3)
-    with pytest.raises(TimeFValidationError, match=message):
+    with pytest.raises(TimeNetConnectorError, match=message):
         list(json_stream.iter_object(path))
 
 
@@ -126,7 +126,7 @@ def test_invalid_utf8_names_its_byte(monkeypatch, tmp_path, data, message):
 def test_a_cursor_raises_timenet_errors(tmp_path, text, message):
     path = tmp_path / "rows.json"
     path.write_text(text)
-    with json_stream.JsonCursor.open(path) as cursor, pytest.raises(TimeFValidationError, match=message):
+    with json_stream.JsonCursor.open(path) as cursor, pytest.raises(TimeNetConnectorError, match=message):
         cursor.value()
 
 
@@ -153,7 +153,7 @@ def test_empty_object_yields_nothing(tmp_path):
 def test_malformed_documents_name_the_file(tmp_path, text, message):
     path = tmp_path / "broken.json"
     path.write_text(text)
-    with pytest.raises(TimeFValidationError, match=message) as error:
+    with pytest.raises(TimeNetConnectorError, match=message) as error:
         list(json_stream.iter_object(path))
     assert str(path) in str(error.value)
 
@@ -176,7 +176,7 @@ def test_a_reread_that_does_not_decode_names_the_range(tmp_path, text, length, m
         path.write_bytes(text)
     else:
         path.write_text(text)
-    with pytest.raises(TimeFFormatError, match=message) as error:
+    with pytest.raises(TimeNetConnectorError, match=message) as error:
         json_stream.read_entry(path, 0, length)
     assert f"{path} (bytes 0-{length})" in str(error.value)
 
@@ -194,10 +194,26 @@ def test_a_reread_error_names_its_byte_in_the_file(tmp_path, value, message):
     data = value if isinstance(value, bytes) else value.encode()
     path = tmp_path / "changed.json"
     path.write_bytes(prefix + data + b"}")
-    with pytest.raises(TimeFFormatError, match=message):
+    with pytest.raises(TimeNetConnectorError, match=message):
         json_stream.read_entry(path, len(prefix), len(data))
 
 
 def test_a_reread_of_a_missing_file_raises_a_format_error(tmp_path):
-    with pytest.raises(TimeFFormatError, match="No such file"):
+    with pytest.raises(TimeNetConnectorError, match="No such file"):
         json_stream.read_entry(tmp_path / "gone.json", 0, 2)
+
+
+@pytest.mark.parametrize("during_read", [False, True])
+def test_file_errors_keep_path_and_cause(tmp_path, monkeypatch, during_read):
+    path = tmp_path / "rows.json"
+    if during_read:
+        path.write_text('{"a": 1}')
+
+        def fail_read(self, size):
+            raise OSError("read failed")
+
+        monkeypatch.setattr(json_stream.JsonCursor, "read", fail_read)
+    with pytest.raises(TimeNetConnectorError) as caught:
+        list(json_stream.iter_object(path))
+    assert str(path) in str(caught.value)
+    assert isinstance(caught.value.__cause__, OSError)

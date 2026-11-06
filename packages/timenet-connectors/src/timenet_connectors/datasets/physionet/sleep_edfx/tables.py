@@ -29,7 +29,7 @@ from collections.abc import Mapping, Sequence
 from dataclasses import dataclass
 from datetime import time
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet_connectors.bases.excel import decode_day_fraction_as_time, decode_whole_number
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import Condition
 from timenet_connectors.demographics import Sex
@@ -149,7 +149,7 @@ def parse_subject_table(shape: SheetShape, rows: Sequence[Sequence[object]]) -> 
         The facts of each row, keyed as the description states.
 
     Raises:
-        TimeFFormatError: If a row is short, if a cell does not decode, or if one key appears
+        TimeNetConnectorError: If a row is short, if a cell does not decode, or if one key appears
             twice.
     """
     named = [shape.subject, shape.age, shape.sex]
@@ -160,7 +160,9 @@ def parse_subject_table(shape: SheetShape, rows: Sequence[Sequence[object]]) -> 
     table: dict[tuple[int, ...], SubjectRow] = {}
     for row_number, row in enumerate(rows[shape.header_rows :], start=shape.header_rows + 1):
         if len(row) < columns:
-            raise TimeFFormatError(f"{shape.table_name} row {row_number}: holds {len(row)} columns and needs {columns}")
+            raise TimeNetConnectorError(
+                f"{shape.table_name} row {row_number}: holds {len(row)} columns and needs {columns}"
+            )
 
         subject = decode_whole_number(row[shape.subject], SUBJECT, shape.table_name, row_number)
         nights = tuple(
@@ -180,7 +182,7 @@ def parse_subject_table(shape: SheetShape, rows: Sequence[Sequence[object]]) -> 
         # it. A sheet whose key is the subject alone drops it.
         key = build_key(shape, subject, nights[0].night)
         if key in table:
-            raise TimeFFormatError(
+            raise TimeNetConnectorError(
                 f"{shape.table_name} row {row_number}: {_name_key(shape, key)} appears twice, and one key names one row"
             )
 
@@ -238,13 +240,13 @@ def find_subject_row(
         The row of that recording.
 
     Raises:
-        TimeFFormatError: If the table holds no row for that key. The join ties a recording
+        TimeNetConnectorError: If the table holds no row for that key. The join ties a recording
             to a person, and a recording with no row states no age, sex or lights-off time.
     """
     key = build_key(shape, subject, night)
     row = table.get(key)
     if row is None:
-        raise TimeFFormatError(f"{recording_id}: {shape.table_name} holds no row for {_name_key(shape, key)}")
+        raise TimeNetConnectorError(f"{recording_id}: {shape.table_name} holds no row for {_name_key(shape, key)}")
 
     return row
 
@@ -264,11 +266,11 @@ def find_night(row: SubjectRow, night: int, recording_id: str) -> SubjectNight:
         The night of that recording, with its condition and its lights-off time.
 
     Raises:
-        TimeFFormatError: If the night number matches no night of the row, or more than one.
+        TimeNetConnectorError: If the night number matches no night of the row, or more than one.
     """
     matches = [one for one in row.nights if one.night == night]
     if len(matches) != 1:
-        raise TimeFFormatError(
+        raise TimeNetConnectorError(
             f"{recording_id}: night {night} matches {len(matches)} of the {len(row.nights)} night columns "
             f"that the subject table gives for subject {row.subject}, and it must match one"
         )
@@ -289,12 +291,12 @@ def _decode_sex(cell: object, codes: Mapping[int, Sex], workbook: str, row_numbe
         The decoded sex.
 
     Raises:
-        TimeFFormatError: If the sheet defines no such code.
+        TimeNetConnectorError: If the sheet defines no such code.
     """
     code = decode_whole_number(cell, "sex", workbook, row_number)
     sex = codes.get(code)
     if sex is None:
-        raise TimeFFormatError(
+        raise TimeNetConnectorError(
             f"{workbook} row {row_number}: the sex column holds the code {code}, which this sheet does not define"
         )
 

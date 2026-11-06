@@ -6,7 +6,7 @@ import edfio
 import numpy as np
 import pytest
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet_connectors.bases.edf import reader
 
 
@@ -113,7 +113,7 @@ def test_open_edf_holds_a_record_duration_that_is_not_a_whole_second(tmp_path):
 def test_open_edf_refuses_a_file_that_is_not_edf(tmp_path):
     path = tmp_path / "notes.txt"
     path.write_text("this file holds no EDF header", encoding="utf-8")
-    with pytest.raises(TimeFFormatError, match="cannot read this file as EDF"):
+    with pytest.raises(TimeNetConnectorError, match="cannot read this file as EDF"):
         reader.open_edf(path)
 
 
@@ -122,7 +122,7 @@ def test_open_edf_refuses_a_file_that_lost_whole_records(tmp_path):
     raw = path.read_bytes()
     record_bytes = (_FAST_RATE + _SLOW_RATE) * 2
     path.write_bytes(raw[: len(raw) - 3 * record_bytes])
-    with pytest.raises(TimeFFormatError, match="ends before its own header says"):
+    with pytest.raises(TimeNetConnectorError, match="ends before its own header says"):
         reader.open_edf(path)
 
 
@@ -130,7 +130,7 @@ def test_open_edf_refuses_a_file_that_lost_part_of_a_record(tmp_path):
     path = _write_psg(tmp_path)
     raw = path.read_bytes()
     path.write_bytes(raw[: len(raw) - 50])
-    with pytest.raises(TimeFFormatError, match="ends before its own header says"):
+    with pytest.raises(TimeNetConnectorError, match="ends before its own header says"):
         reader.open_edf(path)
 
 
@@ -149,14 +149,14 @@ def test_open_edf_refuses_a_file_whose_start_date_is_anonymized(tmp_path):
     edf.anonymize()
     path = tmp_path / "anonymous.edf"
     edf.write(path)
-    with pytest.raises(TimeFFormatError, match="its header is anonymized"):
+    with pytest.raises(TimeNetConnectorError, match="its header is anonymized"):
         reader.open_edf(path)
 
 
 def test_open_edf_refuses_a_discontinuous_file(tmp_path):
     path = _write_scoring(tmp_path)
     _patch(path, _RESERVED_FIELD.start, b"EDF+D")
-    with pytest.raises(TimeFFormatError, match="discontinuous EDF\\+D"):
+    with pytest.raises(TimeNetConnectorError, match="discontinuous EDF\\+D"):
         reader.open_edf(path)
 
 
@@ -180,7 +180,7 @@ def test_read_signal_gives_every_sample_of_one_signal(tmp_path):
 
 def test_read_signal_refuses_a_signal_the_file_does_not_hold(tmp_path):
     file = reader.open_edf(_write_psg(tmp_path))
-    with pytest.raises(TimeFFormatError, match="signal 2 does not exist"):
+    with pytest.raises(TimeNetConnectorError, match="signal 2 does not exist"):
         reader.read_signal(file, 2)
 
 
@@ -211,7 +211,7 @@ def test_read_record_holds_a_record_duration_that_is_not_a_whole_second(tmp_path
 
 def test_read_record_refuses_a_record_after_the_end(tmp_path):
     file = reader.open_edf(_write_psg(tmp_path))
-    with pytest.raises(TimeFFormatError, match="record 10 does not exist"):
+    with pytest.raises(TimeNetConnectorError, match="record 10 does not exist"):
         reader.read_record(file, _NUM_RECORDS)
 
 
@@ -290,7 +290,7 @@ def test_compute_signal_end_microseconds_refuses_a_part_of_a_microsecond():
         units=("uV",),
         samples_per_record=(1,),
     )
-    with pytest.raises(TimeFFormatError, match="not a whole number of microseconds"):
+    with pytest.raises(TimeNetConnectorError, match="not a whole number of microseconds"):
         reader.compute_signal_end_microseconds(header)
 
 
@@ -302,7 +302,7 @@ def test_convert_digital_to_physical_uses_the_range_of_its_own_file():
 
 
 def test_convert_digital_to_physical_refuses_an_empty_digital_range():
-    with pytest.raises(TimeFFormatError, match="no scale"):
+    with pytest.raises(TimeNetConnectorError, match="no scale"):
         reader.convert_digital_to_physical(
             np.array([0]), digital_min=5, digital_max=5, physical_min=0.0, physical_max=1.0
         )
