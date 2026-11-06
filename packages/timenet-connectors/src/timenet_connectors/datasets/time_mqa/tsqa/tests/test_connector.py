@@ -97,4 +97,7 @@ def test_source_is_pinned():
     # Literal pins, so moving to another repo, commit, or file is a deliberate test edit.
     assert TimeMqaConnector.HF_REPO == "Time-MQA/TSQA"
     assert TimeMqaConnector.SOURCE_REVISION == "a7f9e95667b695d2647b9eff92bb6a38b5183a34"
-    assert dict(TimeMqaConnector.SOURCE_FILES) == {"anomaly_detection": "Anomaly_Detection/anomaly_detection.csv"}
+    assert dict(TimeMqaConnector.SOURCE_FILES) == {
+        "anomaly_detection": "Anomaly_Detection/anomaly_detection.csv",
+        "classification": "Classification/classification.csv",
+    }
