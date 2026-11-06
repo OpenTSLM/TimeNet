@@ -1,5 +1,5 @@
 import copy
-from dataclasses import dataclass
+from dataclasses import asdict, dataclass, replace
 import pickle
 
 import pytest
@@ -101,10 +101,17 @@ def test_inline_text_takes_only_a_string(value):
         InlineText(value)
 
 
-@pytest.mark.parametrize("value", ["ab", ("a", "b"), ["a", 1]])
-def test_inline_text_list_takes_only_a_list_of_strings(value):
-    with pytest.raises(TimeFValidationError, match="list of strings"):
+@pytest.mark.parametrize("value", ["ab", ["a", 1], ("a", 1), {"a"}])
+def test_inline_text_list_takes_only_a_list_or_tuple_of_strings(value):
+    with pytest.raises(TimeFValidationError, match="list or a tuple of strings"):
         InlineTextList(value)
+
+
+def test_an_inline_text_list_survives_replace_and_asdict():
+    texts = InlineTextList(["a", "b"])
+    assert replace(texts).read() == ["a", "b"]
+    assert InlineTextList(**asdict(texts)).read() == ["a", "b"]
+    assert InlineTextList(("a", "b")) == texts
 
 
 @pytest.mark.parametrize("handle", [InlineText(""), InlineTextList([])])
@@ -400,3 +407,11 @@ def test_a_lazy_text_without_a_length_learns_it_from_one_read():
 def test_a_lazy_handle_rejects_a_bad_function_length_or_result(make, message):
     with pytest.raises(TimeFValidationError, match=message):
         make()
+
+
+def test_an_inline_text_list_keeps_its_own_copy():
+    strings = ["a"]
+    texts = InlineTextList(strings)
+    strings.append("b")
+    texts.read().append("c")
+    assert texts.read() == ["a"]
