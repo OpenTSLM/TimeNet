@@ -13,6 +13,7 @@ from timenet.types import (
     Annotation,
     AnnotationDescriptor,
     AnnotationType,
+    LazyText,
     TextListHandle,
     TimeInterval,
     TimePoint,
@@ -282,9 +283,40 @@ def test_replace_freezes_the_new_metadata():
         items.append(2)
 
 
-def test_pickle_keeps_frozen_metadata():
+def test_pickle_keeps_frozen_metadata_and_an_equal_sharing_key():
     annotation = Annotation(key="k", value=["a"], metadata={"a": [1]}, occurrence_metadata={"b": {"c": 1}})
+    key = annotation._sharing_key
     restored = pickle.loads(pickle.dumps(annotation))
     assert restored == annotation
+    assert restored._sharing_key == key
     with pytest.raises(TypeError, match="cannot change"):
         restored.metadata["new"] = 1
+
+
+def test_a_lazy_text_is_read_once_for_the_sharing_key():
+    calls = []
+
+    def load() -> str:
+        calls.append(1)
+        return "note"
+
+    annotation = Annotation(key="n", value=LazyText(load))
+    assert annotation._sharing_key == annotation._sharing_key == Annotation(key="n", value="note")._sharing_key
+    assert calls == [1]
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        Annotation(key="k", value=1.0),
+        Annotation(key="k", value=True),
+        Annotation(key="k", value=1, source="rater"),
+        Annotation(key="k", value=1, confidence=0.5),
+        Annotation(key="k", value=1, metadata={"a": 1}),
+        Annotation(key="k", value=1, occurrence_metadata={"a": 1}),
+        Annotation(key="k", value=1, unit="s"),
+        Annotation(key="k", value=1, description="d"),
+    ],
+)
+def test_the_sharing_key_covers_every_stored_field(other):
+    assert Annotation(key="k", value=1)._sharing_key != other._sharing_key
