@@ -97,7 +97,7 @@ async def download_hub_files(repo: str, filenames: Sequence[str], *, revision: s
     return paths
 
 
-def hub_snapshot(repo: str, revision: str, cache_dir: Path, patterns: tuple[str, ...]) -> Path:
+async def hub_snapshot(repo: str, revision: str, cache_dir: Path, patterns: tuple[str, ...]) -> Path:
     """Download files that match the patterns from a pinned dataset revision.
 
     Returns:
@@ -114,11 +114,11 @@ def hub_snapshot(repo: str, revision: str, cache_dir: Path, patterns: tuple[str,
         raise ImportError(_MISSING_HUB_CLIENT) from exc
 
     try:
-        names = list_repo_files(repo, repo_type="dataset", revision=revision)
+        names = await asyncio.to_thread(list_repo_files, repo, repo_type="dataset", revision=revision)
     except Exception as exc:
         raise TimeNetDownloadError(f"Could not list {repo}@{revision}: {exc}") from exc
     selected = [name for name in names if any(fnmatchcase(name, pattern) for pattern in patterns)]
     if not selected:
         raise TimeNetDownloadError(f"{repo}@{revision} has no files matching {patterns}")
-    paths = asyncio.run(download_hub_files(repo, selected, revision=revision, cache_dir=cache_dir))
+    paths = await download_hub_files(repo, selected, revision=revision, cache_dir=cache_dir)
     return paths[0].parents[len(Path(selected[0]).parts) - 1]

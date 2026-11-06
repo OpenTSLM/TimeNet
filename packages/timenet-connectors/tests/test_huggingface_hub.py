@@ -173,9 +173,10 @@ def test_snapshot_selects_patterns_and_keeps_the_snapshot_root(monkeypatch, tmp_
         hub, "list_repo_files", lambda *args, **kwargs: ["meta.csv", "data/train.parquet", "README.md"], raising=False
     )
 
-    root = hub_snapshot("org/repo", _SHA, tmp_path, ("data/*.parquet",))
+    # asyncio.run gives the helper a running event loop, as download_async does in a build.
+    root = asyncio.run(hub_snapshot("org/repo", _SHA, tmp_path, ("data/*.parquet",)))
     assert root == tmp_path / "snapshot"
     assert (root / "data/train.parquet").is_file()
     assert calls[0][1]["allow_patterns"] == ["data/train.parquet"]
     with pytest.raises(TimeNetDownloadError, match="no files matching"):
-        hub_snapshot("org/repo", _SHA, tmp_path, ("missing/*",))
+        asyncio.run(hub_snapshot("org/repo", _SHA, tmp_path, ("missing/*",)))
