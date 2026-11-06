@@ -21,7 +21,9 @@ from timenet.registry._paths import safe_version_path, split_release_dir
 from timenet.registry.dependencies import prepare_local_copy, validate_manifest_reference
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
-from timenet.types import DatasetMetadata, Domain, License, Task
+from timenet.sources import Found, NotFound, NotServed
+from timenet.types import Access, DatasetMetadata, Domain, License, Task
+from timenet.types.access import access_requirements, effective_access
 from timenet.types.references import DatasetRef
 
 
@@ -33,7 +35,7 @@ ProgressCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
-    """A registry of dataset manifests, files, and searchable metadata."""
+    """A registry that provides TimeF dataset metadata, manifests, and files."""
 
     def __str__(self) -> str:
         return type(self).__name__
@@ -126,6 +128,29 @@ class BaseRegistry(ABC):
         Raises:
             TimeNetDatasetNotFoundError: If the dataset id or version is unknown.
         """
+
+    def resolve(self, dataset_id: str, version: str | None) -> Found | NotFound | NotServed:
+        """Check whether the registry serves a dataset release.
+
+        A remote registry serves a release only if its card and each card in its lineage declare open access.
+
+        Args:
+            dataset_id: The dataset ID.
+            version: An exact version, or ``None``, ``""``, or ``"latest"`` for the latest version.
+
+        Returns:
+            ``Found`` if served, ``NotServed`` if access is restricted, or ``NotFound`` if absent.
+        """
+        try:
+            manifest = self.get_manifest(dataset_id, version)
+        except TimeNetDatasetNotFoundError:
+            return NotFound()
+        held = manifest.metadata.dataset_version
+        access = effective_access(manifest.metadata, manifest.lineage)
+        if access is Access.OPEN:
+            return Found(held, self, manifest)
+        requirements = access_requirements(manifest.metadata, manifest.lineage)
+        return NotServed(held, access, requirements[0].access_url if requirements else None, requirements, manifest)
 
     def download_version(  # ruff: ignore[too-many-arguments]
         self,
