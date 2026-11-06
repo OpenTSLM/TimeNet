@@ -33,9 +33,6 @@ _CACHE_TAG_LINES = (
 )
 """The cache marker text, starting with the standard cache tag signature."""
 
-_FLAGS = {"local_registry": "--local-registry", "remote_registry": "--remote-registry"}
-"""CLI flag names for the registry settings."""
-
 
 class TimeNetSettings(BaseSettings):
     """TimeNet settings from arguments, ``TIMENET_*`` environment variables, and an optional ``.env`` file."""
@@ -78,9 +75,8 @@ class TimeNetSettings(BaseSettings):
             value = os.fspath(value)
         if isinstance(value, str) and not value.strip():
             name = str(info.field_name)
-            flag = f" (also as {_FLAGS[name]})" if name in _FLAGS else ""
             raise TimeFValidationError(
-                f"TIMENET_{name.upper()} must not be empty{flag}; give it a value, "
+                f"TIMENET_{name.upper()} must not be empty; give it a value, "
                 f"or leave it unset for {cls.model_fields[name].default}."
             )
         return value
@@ -92,7 +88,7 @@ class TimeNetSettings(BaseSettings):
         Raises:
             TimeNetRegistryError: If the store path is blank, remote or uses an invalid URI.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by local_registry_path)
-        return local_registry_path(self.local_registry)
+        return local_registry_path(self.local_registry, label="TIMENET_LOCAL_REGISTRY")
 
     @property
     def cache_dir(self) -> Path:

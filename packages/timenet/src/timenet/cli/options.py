@@ -14,6 +14,12 @@ LOCAL_REGISTRY = typer.Option(
     help="A local registry: the first source that a lookup checks, and the place where downloads and builds land "
     "(default: $TIMENET_LOCAL_REGISTRY, else ~/.timenet/registry).",
 )
+STORE = typer.Option(
+    None,
+    "--local-registry",
+    metavar="PATH",
+    help="The store (default: $TIMENET_LOCAL_REGISTRY, else ~/.timenet/registry).",
+)
 REMOTE_REGISTRY = typer.Option(
     None,
     "--remote-registry",
