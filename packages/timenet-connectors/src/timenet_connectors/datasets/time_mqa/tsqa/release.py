@@ -30,6 +30,12 @@ SOURCE_REVISION = "a7f9e95667b695d2647b9eff92bb6a38b5183a34"
 
 # The release states no unit and no sampling rate for a printed series.
 SERIES = TimeSeriesSpec(spec_type="series", name="Series", unit_value=None, dtype="float64")
+# An imputation question prints a gap marker in place of each missing value.
+SERIES_WITH_GAPS = TimeSeriesSpec(
+    spec_type="series_with_gaps", name="Series with gaps", unit_value=None, dtype="float64", nullable=True
+)
+GAP_MARKER = "'X'"
+"""How an imputation question prints a missing value."""
 
 
 @unique
@@ -38,6 +44,8 @@ class TaskFamily(StrEnum):
 
     ANOMALY_DETECTION = "anomaly detection"
     CLASSIFICATION = "classification"
+    FORECASTING = "forecasting"
+    IMPUTATION = "imputation"
 
 
 @unique
@@ -46,6 +54,8 @@ class ReleasePart(StrEnum):
 
     ANOMALY_DETECTION = "anomaly_detection"
     CLASSIFICATION = "classification"
+    FORECASTING_IMPUTATION_1 = "forecasting_imputation_1"
+    FORECASTING_IMPUTATION_2 = "forecasting_imputation_2"
 
     @property
     def filename(self) -> str:
@@ -83,10 +93,15 @@ class ReleasePart(StrEnum):
 _FILENAMES: Mapping[ReleasePart, str] = {
     ReleasePart.ANOMALY_DETECTION: "Anomaly_Detection/anomaly_detection.csv",
     ReleasePart.CLASSIFICATION: "Classification/classification.csv",
+    ReleasePart.FORECASTING_IMPUTATION_1: "Forecasting+Imputation/Forecasting+Imputation_1/forecasting_imputation1.csv",
+    ReleasePart.FORECASTING_IMPUTATION_2: "Forecasting+Imputation/Forecasting+Imputation_2/forecasting_imputation2.csv",
 }
+_FORECASTING_AND_IMPUTATION = frozenset({TaskFamily.FORECASTING, TaskFamily.IMPUTATION})
 _FAMILIES: Mapping[ReleasePart, frozenset[TaskFamily]] = {
     ReleasePart.ANOMALY_DETECTION: frozenset({TaskFamily.ANOMALY_DETECTION}),
     ReleasePart.CLASSIFICATION: frozenset({TaskFamily.CLASSIFICATION}),
+    ReleasePart.FORECASTING_IMPUTATION_1: _FORECASTING_AND_IMPUTATION,
+    ReleasePart.FORECASTING_IMPUTATION_2: _FORECASTING_AND_IMPUTATION,
 }
 _COLUMNS = ("application_domain", "task_type", "QA_list")
 SOURCE_FILES: Mapping[str, str] = {part.value: part.filename for part in ReleasePart}
@@ -105,23 +120,30 @@ class PrintedSeries:
     start: int
     end: int
     """The character span of the list in the text, brackets included."""
-    values: tuple[float, ...]
+    values: tuple[float | None, ...]
+    """The printed values; None where the text prints the gap marker."""
+
+    @property
+    def has_gaps(self) -> bool:
+        """Whether the text prints the gap marker in place of at least one value."""
+        return any(value is None for value in self.values)
 
     def create_record(self, metadata: JsonMapping) -> Record:
-        """Create the Record of the series: one float64 Signal on an ordinal axis.
+        """Create the Record of the series: one float64 Signal on an ordinal axis, nullable if the series has gaps.
 
         Returns:
             The Record, not yet added to a dataset.
         """
-        signal = Signal.from_values(self.values, spec=SERIES, name="series", time_axis=OrdinalAxis())
+        spec = SERIES_WITH_GAPS if self.has_gaps else SERIES
+        signal = Signal.from_values(self.values, spec=spec, name="series", time_axis=OrdinalAxis())
         return Record(sources=(Source(name="TSQA", signals=(signal,)),), metadata=dict(metadata))
 
 
-def find_printed_series(text: str) -> tuple[PrintedSeries, ...]:
+def find_printed_series(text: str, *, with_gaps: bool = False) -> tuple[PrintedSeries, ...]:
     """Find each bracketed list of decimal numbers in a text, in text order.
 
-    A bracketed list counts only if it is nonempty and each item is a decimal number. Any other
-    bracketed text, such as ``[?, ?, ?]`` or a citation, stays text.
+    A bracketed list counts only if it is nonempty and each item is a decimal number or, with gaps,
+    the gap marker. Any other bracketed text, such as ``[?, ?, ?]`` or a citation, stays text.
 
     Returns:
         The printed series.
@@ -129,8 +151,11 @@ def find_printed_series(text: str) -> tuple[PrintedSeries, ...]:
     found = []
     for match in _BRACKETED_LIST.finditer(text):
         items = [item.strip() for item in match[1].split(",")]
-        if match[1].strip() and all(_DECIMAL_NUMBER.fullmatch(item) for item in items):
-            found.append(PrintedSeries(match.start(), match.end(), tuple(float(item) for item in items)))
+        if match[1].strip() and all(
+            _DECIMAL_NUMBER.fullmatch(item) or (with_gaps and item == GAP_MARKER) for item in items
+        ):
+            values = tuple(None if item == GAP_MARKER else float(item) for item in items)
+            found.append(PrintedSeries(match.start(), match.end(), values))
     return tuple(found)
 
 
@@ -203,7 +228,7 @@ class ReleaseRow:
         """
         return {"file": self.part.value, "row": self.number, "role": role}
 
-    def only_printed_series_of_question(self) -> PrintedSeries:
+    def only_printed_series_of_question(self, *, with_gaps: bool = False) -> PrintedSeries:
         """Return the one series that the question prints.
 
         Returns:
@@ -212,9 +237,23 @@ class ReleaseRow:
         Raises:
             TimeNetConnectorError: If the question prints no series or more than one.
         """  # ruff: ignore[docstring-extraneous-exception] - raised through malformed()
-        series = find_printed_series(self.question)
+        return self._only_printed_series("question", self.question, with_gaps=with_gaps)
+
+    def only_printed_series_of_answer(self) -> PrintedSeries:
+        """Return the one series that the answer prints.
+
+        Returns:
+            The printed series.
+
+        Raises:
+            TimeNetConnectorError: If the answer prints no series or more than one.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised through malformed()
+        return self._only_printed_series("answer", self.answer, with_gaps=False)
+
+    def _only_printed_series(self, text_name: str, text: str, *, with_gaps: bool) -> PrintedSeries:
+        series = find_printed_series(text, with_gaps=with_gaps)
         if len(series) != 1:
-            raise self.malformed(f"the question prints {len(series)} series, not one")
+            raise self.malformed(f"the {text_name} prints {len(series)} series, not one")
         return series[0]
 
     def question_with_series_placeholders(self, series: Sequence[PrintedSeries]) -> str:
@@ -225,6 +264,20 @@ class ReleaseRow:
         """
         return replace_printed_series_with_placeholders(self.question, series)
 
+    def match_of_answer_template(self, template: re.Pattern[str]) -> re.Match[str]:
+        """Return the match of the whole answer against the template of its family.
+
+        Returns:
+            The match.
+
+        Raises:
+            TimeNetConnectorError: If the answer does not follow the template.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised through malformed()
+        match = template.fullmatch(self.answer)
+        if match is None:
+            raise self.malformed(f"answer {self.answer!r} does not follow the template {template.pattern!r}")
+        return match
+
     def label_of_answer(self, template: re.Pattern[str], label_set: LabelSet) -> str:
         """Return the label that the answer names in the ``label`` group of the template.
 
@@ -234,12 +287,10 @@ class ReleaseRow:
         Raises:
             TimeNetConnectorError: If the answer does not follow the template or names no label of the set.
         """  # ruff: ignore[docstring-extraneous-exception] - raised through malformed()
-        match = template.fullmatch(self.answer)
-        if match is None:
-            raise self.malformed(f"answer {self.answer!r} does not follow the template {template.pattern!r}")
-        if match["label"] not in label_set.names:
-            raise self.malformed(f"label {match['label']!r} is not one of {label_set.names}")
-        return match["label"]
+        label = self.match_of_answer_template(template)["label"]
+        if label not in label_set.names:
+            raise self.malformed(f"label {label!r} is not one of {label_set.names}")
+        return label
 
 
 class TaskRow(Protocol):
