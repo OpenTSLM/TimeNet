@@ -100,4 +100,6 @@ def test_source_is_pinned():
     assert dict(TimeMqaConnector.SOURCE_FILES) == {
         "anomaly_detection": "Anomaly_Detection/anomaly_detection.csv",
         "classification": "Classification/classification.csv",
+        "forecasting_imputation_1": "Forecasting+Imputation/Forecasting+Imputation_1/forecasting_imputation1.csv",
+        "forecasting_imputation_2": "Forecasting+Imputation/Forecasting+Imputation_2/forecasting_imputation2.csv",
     }
