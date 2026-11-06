@@ -3,7 +3,7 @@ import csv
 import pytest
 
 from timenet.errors import TimeNetConnectorError
-from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import _load_template_answers as load_template_answers
+from timenet_connectors.datasets.physionet.ecg_qa_cot.source import load_template_answers
 
 
 def _answers_file(tmp_path, classes):
