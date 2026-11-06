@@ -169,15 +169,15 @@ def _git(git: str, directory: Path, *args: str) -> str:
 
 def _wheel_commit(dist: Distribution) -> GitSource | UnknownCommit:
     """Read the commit that ``scripts/build_dists.py`` wrote into the installed package."""
-    for file in dist.files or ():
-        # The file sits at the top of the import package: ``<package>/_build_info.json``.
-        if file.name == BUILD_INFO_FILE and len(file.parent.parts) == 1:
-            try:
-                record = json.loads(file.read_text(encoding="utf-8"))
-            except json.JSONDecodeError as exc:
-                raise TimeNetBuildError(f"{dist.metadata['Name']} has a malformed {file}: {exc}") from exc
-            return _validate_recorded_commit(dist, record, str(file))
-    return UnknownCommit(f"the installed package carries no {BUILD_INFO_FILE}")
+    module = dist.metadata["Name"].replace("-", "_")
+    path = Path(str(dist.locate_file(f"{module}/{BUILD_INFO_FILE}")))
+    if not path.is_file():
+        return UnknownCommit(f"the installed package carries no {BUILD_INFO_FILE}")
+    try:
+        record = json.loads(path.read_text(encoding="utf-8"))
+    except json.JSONDecodeError as exc:
+        raise TimeNetBuildError(f"{dist.metadata['Name']} has a malformed {path}: {exc}") from exc
+    return _validate_recorded_commit(dist, record, str(path))
 
 
 def _validate_recorded_commit(dist: Distribution, record: object, where: str) -> GitSource:
