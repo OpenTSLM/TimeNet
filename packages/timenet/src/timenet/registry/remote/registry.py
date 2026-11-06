@@ -32,36 +32,36 @@ from timenet.types.references import DatasetRef, is_latest
 
 
 class RemoteRegistry(LazyReadRegistry):
-    """A dataset registry backed by the hosted TimeNet HTTP service."""
+    """A TimeNet registry that reads and publishes datasets over HTTP(S)."""
 
     def __init__(
         self,
         base_url: str,
         *,
         token: str | None = None,
-        cache_dir: str | Path | None = None,
+        store: str | Path | None = None,
         transport: httpx.BaseTransport | None = None,
     ) -> None:
-        """Open a remote registry.
+        """Configure a connection to a remote TimeNet registry.
 
         Args:
-            base_url: The service root, e.g. ``https://registry.timenet.ai``.
-            token: Bearer token. Defaults to ``$TIMENET_TOKEN`` (``None`` is anonymous).
-            cache_dir: Where downloads are cached; defaults to the configured storage directory.
-            transport: An httpx transport for testing; ``None`` uses the network.
+            base_url: The service root URL, such as ``https://registry.timenet.ai``.
+            token: Bearer token, or ``None`` for ``TIMENET_TOKEN`` with anonymous access when unset.
+            store: A directory of complete matching releases to reuse, or ``None`` to read remotely.
+            transport: Custom HTTP transport, or ``None`` to use the network.
         """
         cfg = settings()
         self._base_url = base_url
         self._http = RegistryHttpClient(base_url, token=token if token is not None else cfg.token, transport=transport)
-        self._cache_dir = Path(cache_dir) if cache_dir is not None else cfg.storage_dir
+        self._store = None if store is None else Path(store)
 
     def __str__(self) -> str:
         return f"registry {self._base_url}"
 
     @property
-    def local_root(self) -> Path:
-        """The directory that holds complete local releases."""
-        return self._cache_dir
+    def local_root(self) -> Path | None:
+        """The store directory whose copies of the same releases this registry reads, or ``None``."""
+        return self._store
 
     def list_datasets(self) -> list[DatasetMetadata]:
         """Return the latest-version metadata of every dataset, sorted by id.

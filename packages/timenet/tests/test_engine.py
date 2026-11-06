@@ -4,7 +4,7 @@ from typing import Any, ClassVar, cast
 
 import pytest
 
-from timenet.config import settings
+from timenet.config import is_cache_folder, settings
 from timenet.connectors import BaseConnector, BuildContext
 from timenet.dataset import TimeFDataset
 from timenet.engine import open_parents, run_pipeline, store_dataset
@@ -161,30 +161,34 @@ def test_clean_cache_keeps_caller_supplied_dir(tmp_path):
     assert cache.is_dir()  # a caller-owned cache_dir is never deleted, even when asked to clean it
 
 
-def _isolated_home(tmp_path, monkeypatch) -> None:
-    """Point the settings at a scratch home so the default cache lands under tmp_path."""
-    for var in ("TIMENET_STORAGE", "TIMENET_CACHE", "TIMENET_REGISTRY"):
-        monkeypatch.delenv(var, raising=False)
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
-
-
-def test_clean_cache_removes_the_auto_created_default(tmp_path, monkeypatch):
-    _isolated_home(tmp_path, monkeypatch)
+def test_clean_cache_removes_the_auto_created_default(tmp_path):
     run_pipeline(_DemoConnector(), tmp_path / "root")  # cache_dir=None -> the engine made it
-    assert not (settings().cache_dir / make_dataset().metadata.dataset_id).exists()
+    assert not (settings().downloads_dir / make_dataset().metadata.dataset_id).exists()
 
 
-def test_run_pipeline_keeps_the_cache_when_asked(tmp_path, monkeypatch):
-    _isolated_home(tmp_path, monkeypatch)
+def test_run_pipeline_keeps_the_cache_when_asked(tmp_path):
     run_pipeline(_DemoConnector(), tmp_path / "root", keep_cache=True)
-    assert (settings().cache_dir / make_dataset().metadata.dataset_id).exists()
+    assert (settings().downloads_dir / make_dataset().metadata.dataset_id).exists()
 
 
-def test_run_pipeline_keeps_the_cache_when_download_fails(tmp_path, monkeypatch):
+def test_the_engine_marks_the_downloads_folder_that_it_creates(tmp_path):
+    run_pipeline(_DemoConnector(), tmp_path / "root")
+    assert is_cache_folder(settings().downloads_dir)
+
+
+def test_the_engine_deletes_nothing_in_a_downloads_folder_without_the_marker(tmp_path):
+    # The folder existed before TimeNet used it, for example ~/Downloads on a volume that ignores case.
+    # So the engine leaves it unmarked, and the folder of the dataset in it can hold files of the user.
+    folder = settings().downloads_dir / make_dataset().metadata.dataset_id
+    folder.mkdir(parents=True)
+    (folder / "notes.txt").write_text("mine")
+    run_pipeline(_DemoConnector(), tmp_path / "root")
+    assert (folder / "notes.txt").read_text() == "mine"
+
+
+def test_run_pipeline_keeps_the_cache_when_download_fails(tmp_path):
     # Downloads resume: http writes a .part and renames it, so a file that landed is complete and the
     # next run skips it. Deleting the cache here would throw away good bytes.
-    _isolated_home(tmp_path, monkeypatch)
-
     class _HalfDownloadedConnector(_DemoConnector):
         def download(self, cache_dir: Path) -> list[str]:
             (cache_dir / "first.bin").write_bytes(b"complete")
@@ -192,14 +196,12 @@ def test_run_pipeline_keeps_the_cache_when_download_fails(tmp_path, monkeypatch)
 
     with pytest.raises(RuntimeError, match="download blew up"):
         run_pipeline(_HalfDownloadedConnector(), tmp_path / "root")
-    cache = settings().cache_dir / make_dataset().metadata.dataset_id
+    cache = settings().downloads_dir / make_dataset().metadata.dataset_id
     assert (cache / "first.bin").read_bytes() == b"complete"  # the finished file survives the retry
 
 
-def test_run_pipeline_keeps_the_cache_when_convert_fails(tmp_path, monkeypatch):
+def test_run_pipeline_keeps_the_cache_when_convert_fails(tmp_path):
     # The rmtree runs after store_dataset, so a convert that raises keeps what download fetched.
-    _isolated_home(tmp_path, monkeypatch)
-
     class _FailingConnector(_DemoConnector):
         def download(self, cache_dir: Path) -> list[str]:
             (cache_dir / "source.bin").write_bytes(b"raw")
@@ -210,7 +212,7 @@ def test_run_pipeline_keeps_the_cache_when_convert_fails(tmp_path, monkeypatch):
 
     with pytest.raises(RuntimeError, match="convert blew up"):
         run_pipeline(_FailingConnector(), tmp_path / "root")
-    assert (settings().cache_dir / make_dataset().metadata.dataset_id).exists()
+    assert (settings().downloads_dir / make_dataset().metadata.dataset_id).exists()
 
 
 _PARENT = DatasetRef(dataset_id=make_dataset().metadata.dataset_id, version=make_dataset().metadata.dataset_version)

@@ -217,7 +217,7 @@ def test_pipeline_preserves_source_semantics_after_source_removal(monkeypatch, t
     # Ten rows cover multiline features with/without location and a partial task batch.
     monkeypatch.setattr(control_writer, "_TASK_BATCH_SIZE", 3)
     monkeypatch.setenv("TIMENET_CACHE", str(tmp_path / "cache"))
-    cache = settings().cache_dir / "bash-lab/sensorcaps"
+    cache = settings().downloads_dir / "bash-lab/sensorcaps"
 
     async def download_async(self, cache_dir):
         assert cache_dir == cache

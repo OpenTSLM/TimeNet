@@ -1,14 +1,10 @@
 """Dataset registries: serve compiled TimeF versions and search over metadata."""
 
+from timenet._registry_uri import TIMENET_REGISTRY_URL, local_registry_path
 from timenet.registry._copy import copy_release
 from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import open_local_version
-from timenet.registry.factory import (
-    TIMENET_REGISTRY_URL,
-    default_registry_path,
-    local_registry_path,
-    open_registry,
-)
+from timenet.registry.factory import open_registry
 from timenet.registry.local import LocalRegistry
 from timenet.registry.remote import RemoteRegistry
 from timenet.registry.s3 import S3Registry
@@ -25,7 +21,6 @@ __all__ = [
     "S3Registry",
     "WritableRegistry",
     "copy_release",
-    "default_registry_path",
     "local_registry_path",
     "open_local_version",
     "open_registry",

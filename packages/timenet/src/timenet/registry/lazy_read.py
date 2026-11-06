@@ -89,10 +89,12 @@ class LazyReadRegistry(WritableRegistry, ABC):
             manifest: A manifest already read from this registry, or ``None`` to fetch it.
 
         Returns:
-            A handle to a complete copy in :attr:`local_root`, or to remote files read on demand.
+            A handle to a complete copy of the same release in :attr:`local_root`, or to remote files.
         """
+        if manifest is None:
+            manifest = self.get_manifest(reference.dataset_id, str(reference.version))
         return open_cached_or_remote_release(
-            self.local_root, reference, lambda ref: self._open_remote_version(ref, manifest=manifest)
+            self.local_root, reference, manifest, lambda ref: self._open_remote_version(ref, manifest=manifest)
         )
 
     @abstractmethod

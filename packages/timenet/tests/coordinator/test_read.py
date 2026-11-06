@@ -119,7 +119,7 @@ def _gated_remote(tmp_path) -> RemoteRegistry:
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(_demo(make_dataset().metadata.model_copy(update=_GATED)))
     transport, _ = build_fake(release_dir(origin.root, DEMO))
-    return RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
+    return RemoteRegistry("http://api.local", transport=transport, store=tmp_path / "cache")
 
 
 class _ClaimsEachVersion:
@@ -427,7 +427,7 @@ def test_two_readers_that_pin_one_file_differently_fail_the_read_before_any_step
 def test_a_remote_read_fetches_each_manifest_once(tmp_path, monkeypatch):
     origin, _ = _child_of_the_demo(tmp_path / "origin")
     transport, _ = build_service_fake(origin.root)
-    remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
+    remote = RemoteRegistry("http://api.local", transport=transport, store=tmp_path / "cache")
     reads = _count_reads(monkeypatch, remote)
 
     version = read_release(CHILD.dataset_id, None, sources=[remote], store=None)

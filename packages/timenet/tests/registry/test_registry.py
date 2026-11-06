@@ -112,7 +112,7 @@ def test_local_registry_path_expands_user(monkeypatch, tmp_path):
     "uri", ["timenet://", "timenet://hello/world", "http://reg.example", "https://reg.example", "s3://bucket/reg"]
 )
 def test_local_registry_path_rejects_remote(uri):
-    with pytest.raises(TimeNetRegistryError, match="remote"):
+    with pytest.raises(TimeNetRegistryError, match="is remote; the local registry needs a local directory"):
         local_registry_path(uri)
 
 

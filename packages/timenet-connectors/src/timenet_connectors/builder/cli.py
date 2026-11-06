@@ -48,23 +48,25 @@ def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress stat
 
 
 def _resolve_target(out: str | None) -> WritableRegistry | Path:
-    """Resolve the registry or local directory for build output.
-
-    It tries ``out``, then ``$TIMENET_REGISTRY``, then the default local registry.
+    """Resolve a build output to a local directory or writable remote registry.
 
     Args:
-        out: The output URL or path, or ``None`` to use the configured default.
+        out: The output URL or path, or ``None`` to use ``TIMENET_LOCAL_REGISTRY``.
 
     Returns:
-        A registry for a remote URL, or a ``Path`` for a local directory.
-    """
-    target = out if out is not None else settings().registry
-    if target is None:
-        return settings().registry_path
+        A local directory ``Path`` or a remote ``WritableRegistry``.
+
+    Raises:
+        TimeNetRegistryError: If ``out`` is blank or cannot be opened as a registry.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by open_registry
+    # TODO(adrian): Remove temporary glue which maps a missing --out onto the store of the
+    # default list until the build CLI takes the flags of the defaults.
+    if out is None:
+        return settings().local_registry_dir
     try:
-        return local_registry_path(target)
+        return local_registry_path(out, label="--out")
     except TimeNetRegistryError:
-        return open_registry(target)
+        return open_registry(out, label="--out")
 
 
 @app.command()
@@ -75,7 +77,7 @@ def build(
         None,
         "--out",
         help="Output registry: a local directory or a timenet:// / http(s):// / s3:// URL "
-        "(default: $TIMENET_REGISTRY, else the local registry).",
+        "(default: the store, $TIMENET_LOCAL_REGISTRY).",
     ),
     force: bool = typer.Option(
         False, "--force", "-f", help="Build the release again, even if the local registry holds it."
@@ -202,20 +204,21 @@ def _build_to(  # ruff: ignore[too-many-arguments]
     force: bool,
     options: BuildOptions,
 ) -> str:
-    """Build a release locally and copy it to a remote output if needed.
+    """Build a release for a local or remote output.
 
-    Reuse an existing release unless ``force`` is true.
+    Remote outputs receive a copy of a build in the local store. If the output already holds the release and
+    ``force`` is not set, nothing runs and a status line says so.
 
     Args:
         dataset_id: The dataset ID.
-        target: The local directory or remote registry to write to.
-        fetch_from: The registry to copy missing parents from. ``None`` uses a remote output, if any.
+        target: The local output directory or remote registry.
+        fetch_from: The registry to copy missing parents from, or ``None`` to use the remote output if present.
         build_parents: Build missing parents with installed connectors.
         force: Rebuild an existing local release.
-        options: Settings for each build.
+        options: Options for each build.
 
     Returns:
-        The local version directory or the remote version string.
+        The local version directory or remote version string.
 
     Raises:
         BadParameter: If ``force`` is set and the remote output already holds the version.
@@ -233,7 +236,9 @@ def _build_to(  # ruff: ignore[too-many-arguments]
         console.success(f"Nothing to do: '{release.dataset_id}' {release.version} is already in the remote --out")
         return str(release.version)
     else:
-        store, remote = LocalRegistry(settings().registry_path), target
+        # TODO(adrian): Remove temporary glue which maps a remote --out onto a build into the
+        # store of the default list until --publish-to replaces a remote --out.
+        store, remote = LocalRegistry(settings().local_registry_dir), target
         # A build into the remote registry found the parents there. So without --fetch-from, the build
         # copies a missing parent from the remote registry into the local one.
         fetch_from = fetch_from if fetch_from is not None else remote

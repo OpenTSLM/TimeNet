@@ -1,32 +1,48 @@
-"""Inspect and clear the local TimeNet cache under ``~/.cache/timenet/`` (see :mod:`timenet.config`).
+"""Inspect and clear the cache and the stored releases.
 
-Datasets live in the local registry (built locally) and the download storage. Raw sources land in the
-download cache. All three sit under the home directory.
+Cache removal requires TimeNet's ``CACHEDIR.TAG`` marker.
 """
-
-# TODO(adrian): Remove temporary glue which maps the "download storage" of this module onto the
-# storage directory, settings().storage_dir, until a later change replaces this module and its
-# view of the storage directory. download() copies into the store now, so the storage directory
-# holds only the copies that remote registries cache.
 
 from dataclasses import dataclass
 import os
 from pathlib import Path
 import shutil
+from typing import NamedTuple
 
-from timenet.config import settings
+from timenet.config import is_cache_folder, lies_in
+from timenet.errors import TimeFValidationError
 from timenet.format.constants import MANIFEST_FILE
+from timenet.registry import LocalRegistry
+from timenet.types.references import DatasetRef
 
 
 @dataclass(frozen=True)
-class CachedDataset:
-    """One cached dataset version on disk."""
+class StoredRelease:
+    """A stored release with its path and size in bytes."""
 
-    location: str  # "registry" or "storage"
-    dataset_id: str
-    version: str
+    release: DatasetRef
     path: Path
     size_bytes: int
+
+
+class ClearedCache(NamedTuple):
+    """The bytes freed and paths removed or kept by a cache clear."""
+
+    freed: int
+    """The number of bytes freed."""
+    removed: list[Path]
+    """The paths successfully removed."""
+    kept: list[Path]
+    """The cache paths kept because they lack TimeNet's cache marker."""
+
+
+class ClearedReleases(NamedTuple):
+    """The bytes freed and release folders removed by a release clear."""
+
+    freed: int
+    """The number of bytes freed."""
+    removed: list[Path]
+    """The release folders successfully removed."""
 
 
 def human_bytes(n: int) -> str:
@@ -47,54 +63,132 @@ def human_bytes(n: int) -> str:
     return f"{size:.1f} TB"
 
 
-def cached_datasets() -> list[CachedDataset]:
-    """List dataset versions and their sizes in the local registry and storage directory.
+def stored_releases(store: LocalRegistry) -> list[StoredRelease]:
+    """List stored releases and their sizes in bytes.
 
-    Returns:
-        The cached versions sorted by location, dataset ID, and version.
-    """
-    config = settings()
-    # TODO(adrian): Remove temporary glue which maps the download storage onto the storage
-    # directory until a later change replaces this module, as the note at the top says.
-    found = _scan(config.registry_path, "registry") + _scan(config.storage_dir, "storage")
-    return sorted(found, key=lambda dataset: (dataset.location, dataset.dataset_id, dataset.version))
-
-
-def raw_cache_size() -> int:
-    """Return the size in bytes of the raw download cache directory (0 if absent).
-
-    Returns:
-        The total size of ``<TIMENET_CACHE>``.
-    """
-    cache_dir = settings().cache_dir
-    return _dir_size(cache_dir) if cache_dir.is_dir() else 0
-
-
-def clear_cache(*, include_registry: bool) -> tuple[int, list[Path]]:
-    """Delete the storage directory and raw download cache.
-
-    Read or removal failures raise ``OSError``.
+    Releases have a ``<dataset_id>/<version>/manifest.json`` file outside hidden or temporary directories.
 
     Args:
-        include_registry: Remove the local registry too.
+        store: The local registry to inspect.
 
     Returns:
-        A ``(bytes_freed, removed_dirs)`` pair with the removed directory paths.
+        The releases, sorted by dataset ID and version.
     """
-    config = settings()
-    # TODO(adrian): Remove temporary glue which maps the download storage onto the storage
-    # directory until a later change replaces this module, as the note at the top says.
-    targets = [config.storage_dir, config.cache_dir]
-    if include_registry:
-        targets.append(config.registry_path)
+    root = store.root
+    found: list[StoredRelease] = []
+    for manifest_path in root.rglob(MANIFEST_FILE):
+        version_dir = manifest_path.parent
+        parts = version_dir.relative_to(root).parts
+        # A release needs a dataset ID before its version, so a manifest at the root or one level below is none.
+        if not parts[:-1] or any(part.startswith(".") or ".tmp-" in part for part in parts):
+            continue
+        try:
+            release = DatasetRef.parse(f"{'/'.join(parts[:-1])}@{parts[-1]}")
+        except TimeFValidationError:
+            continue  # for example a directory whose name is not a version
+        found.append(StoredRelease(release, version_dir, _dir_size(version_dir)))
+    return sorted(found, key=lambda item: (item.release.dataset_id, item.release.version))
 
+
+def cache_size(cache_dir: Path) -> int:
+    """Measure cached downloads and control databases marked as TimeNet's.
+
+    Only ``downloads`` and ``control`` folders with TimeNet's ``CACHEDIR.TAG`` file count.
+    A symlink contributes its own size rather than its target's size.
+
+    Args:
+        cache_dir: The cache directory.
+
+    Returns:
+        The total size in bytes, or ``0`` if no marked cache folders exist.
+    """
+    total = 0
+    for folder in _cache_folders(cache_dir):
+        if is_cache_folder(folder):
+            total += folder.lstat().st_size if folder.is_symlink() else _dir_size(folder)
+    return total
+
+
+def clear_cache(cache_dir: Path, *, store: LocalRegistry) -> ClearedCache:
+    """Clear cached raw source files and control databases.
+
+    Only folders with TimeNet's ``CACHEDIR.TAG`` marker are removed.
+    Removing a symlink keeps its target.
+
+    Args:
+        cache_dir: The cache directory.
+        store: The store, which must not overlap a cache folder selected for deletion.
+
+    Returns:
+        The bytes freed, paths successfully removed and cache paths kept.
+
+    Raises:
+        TimeFValidationError: If the store overlaps a cache folder selected for deletion, before any deletion.
+        OSError: If a folder cannot be removed completely.
+    """  # ruff: ignore[docstring-extraneous-exception] (OSError is raised by _delete_and_measure)
+    folders = _cache_folders(cache_dir)
+    marked = [folder for folder in folders if is_cache_folder(folder)]
+    for folder in marked:
+        if not folder.is_symlink() and (lies_in(store.root, folder) or lies_in(folder, store.root)):
+            raise TimeFValidationError(
+                f"the store {store.root} overlaps {folder}, which clear_cache() deletes. Move the store out of "
+                "the cache"
+            )
     freed = 0
     removed: list[Path] = []
-    for target in targets:
-        if target.is_dir():
-            freed += _delete_and_measure(target)
-            removed.append(target)
-    return freed, removed
+    for folder in marked:
+        if folder.is_symlink():
+            freed += folder.lstat().st_size
+            folder.unlink()  # a symlink goes, and its target stays
+        else:
+            freed += _delete_and_measure(folder)
+        removed.append(folder)
+    return ClearedCache(freed, removed, [folder for folder in folders if folder not in marked])
+
+
+def clear_releases(store: LocalRegistry) -> ClearedReleases:
+    """Delete stored releases and the dataset directories left empty.
+
+    Other files in the store stay.
+
+    Args:
+        store: The store.
+
+    Returns:
+        The bytes freed and the release folders removed.
+
+    Raises:
+        OSError: If a folder cannot be removed completely.
+    """  # ruff: ignore[docstring-extraneous-exception] (OSError is raised by _delete_and_measure)
+    freed = 0
+    removed: list[Path] = []
+    for item in stored_releases(store):
+        freed += _delete_and_measure(item.path)
+        removed.append(item.path)
+        _remove_empty_dataset_dirs(item.path.parent, store.root)
+    return ClearedReleases(freed, removed)
+
+
+def _cache_folders(cache_dir: Path) -> list[Path]:
+    """Find existing download and control cache paths.
+
+    Returns:
+        The ``downloads`` and ``control`` paths that exist, including symlinks.
+    """
+    folders = (cache_dir / "downloads", cache_dir / "control")
+    return [folder for folder in folders if folder.is_symlink() or folder.exists()]
+
+
+def _remove_empty_dataset_dirs(directory: Path, root: Path) -> None:
+    """Remove empty dataset directories up to but excluding the store root.
+
+    Args:
+        directory: The first directory to remove.
+        root: The store directory to preserve.
+    """
+    while root in directory.parents and not any(directory.iterdir()):
+        directory.rmdir()
+        directory = directory.parent
 
 
 def _delete_and_measure(path: Path) -> int:
@@ -125,27 +219,6 @@ def _delete_and_measure(path: Path) -> int:
             entry.unlink(missing_ok=True)  # a concurrent build may have removed it between walk and unlink
     shutil.rmtree(path)
     return freed
-
-
-def _scan(root: Path, location: str) -> list[CachedDataset]:
-    """Find every ``<...>/<version>/manifest.json`` under ``root`` and measure its version directory.
-
-    Returns:
-        The cached datasets found under ``root``.
-    """
-    if not root.is_dir():
-        return []
-    datasets: list[CachedDataset] = []
-    for manifest_path in root.rglob(MANIFEST_FILE):
-        version_dir = manifest_path.parent
-        parts = version_dir.relative_to(root).parts
-        if any(part.startswith(".") or ".tmp-" in part for part in parts):
-            continue
-        dataset_id = "/".join(parts[:-1])
-        if not dataset_id:
-            continue
-        datasets.append(CachedDataset(location, dataset_id, parts[-1], version_dir, _dir_size(version_dir)))
-    return datasets
 
 
 def _dir_size(path: Path) -> int:

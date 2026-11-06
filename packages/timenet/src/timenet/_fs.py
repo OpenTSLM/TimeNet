@@ -10,8 +10,8 @@ import uuid
 def same_directory(a: Path, b: Path) -> bool:
     """Check whether two paths name the same directory.
 
-    Existing paths match when they identify the same directory on disk.
-    If either path is missing, compare resolved paths while ignoring letter case.
+    The paths compare by :func:`path_identity`, so a symlink or a case variant on a volume that ignores case
+    matches.
 
     Args:
         a: The first path, whether or not it exists.
@@ -20,9 +20,26 @@ def same_directory(a: Path, b: Path) -> bool:
     Returns:
         ``True`` if the paths match.
     """
-    if a.exists() and b.exists():
-        return a.samefile(b)
-    return str(a.resolve()).casefold() == str(b.resolve()).casefold()
+    return path_identity(a.resolve()) == path_identity(b.resolve())
+
+
+def path_identity(path: Path) -> tuple[int, int, tuple[str, ...]]:
+    """Identify a path using its nearest existing ancestor.
+
+    Args:
+        path: An absolute path without symlinks.
+
+    Returns:
+        The ancestor's device and inode numbers, followed by the remaining names with case ignored.
+    """
+    for depth, candidate in enumerate((path, *path.parents)):
+        try:
+            info = candidate.stat()
+        except OSError:
+            continue
+        missing = path.parts[len(path.parts) - depth :]
+        return info.st_dev, info.st_ino, tuple(part.casefold() for part in missing)
+    return 0, 0, tuple(part.casefold() for part in path.parts)  # nothing exists, not even the root
 
 
 def publish_directory(staging: Path, final: Path) -> None:
