@@ -245,7 +245,7 @@ def _series_tensor_and_mask(ts: Signal) -> tuple[Shaped[Tensor, " time *value"],
             f"string series {ts.id!r} has no tensor representation; read it via Signal.to_arrow() instead"
         )
     if ts.spec.dtype == "enum":
-        codes = ts.to_category_codes()
+        codes = ts.spec.codebook.codes_of(ts.to_arrow())
         if codes.null_count:
             raise TimeFValidationError(
                 f"series {ts.id!r} contains null values. Handle missing data before conversion to PyTorch"
