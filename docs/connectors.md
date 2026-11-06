@@ -82,6 +82,24 @@ prompt, write a function that builds the Task, as
 
 ---
 
+## People in a record
+
+Use these shared annotations, so that users can filter and join datasets the same way. A change to a
+stored key or value needs a new dataset version. Build the annotations with
+`timenet_connectors.demographics`:
+
+| Fact | Builder | Stored value |
+| --- | --- | --- |
+| Subject identifiers | `subject_ids_annotation(ids)` | `subject_ids`: a list of strings |
+| Sex | `sex_annotation(Sex.MALE)` | `sex`: `male` or `female` |
+| Age | `age_annotation(years)` | `age`: whole years, unit `year` |
+
+Decode the source's codes into `Sex` first. Use `SEXES` as the label set of a sex task and
+`AGE_UNIT` for age targets. Use `age` for whole years only. Use a separate key for an age range,
+such as `age_band`, and another clearly named key for a fractional age.
+
+---
+
 ## Assigning dataset splits
 
 Use `timenet_connectors.splitting` during conversion to assign source samples to partitions.

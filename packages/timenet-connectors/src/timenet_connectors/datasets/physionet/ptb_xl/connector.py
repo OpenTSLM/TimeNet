@@ -11,6 +11,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, Split, TimeSeriesSpec, ureg
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
+from timenet_connectors.demographics import Sex, age_annotation, sex_annotation, subject_ids_annotation
 from timenet_connectors.download import ensure_archive, find_dir_containing
 
 
@@ -38,7 +39,7 @@ _EMPTY_CELLS = frozenset({"", "nan", "NaN"})
 # PTB-XL's signal-quality columns, then its extra-beats and pacemaker columns.
 _FINDINGS = ("baseline_drift", "static_noise", "burst_noise", "electrodes_problems", "extra_beats", "pacemaker")
 # PTB-XL codes sex as 0 = male, 1 = female.
-_SEX = {"0": "male", "1": "female"}
+_SEX = {"0": Sex.MALE, "1": Sex.FEMALE}
 # PTB-XL anonymizes the age of every patient older than 89 as 300, to comply with HIPAA. The PTB-XL
 # page on PhysioNet says in "Data Preprocessing": "ages of more than 89 years appear in the range of
 # 300 years".
@@ -126,7 +127,7 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
         Raises:
             TimeNetConnectorError: If a row of ``ptbxl_database.csv`` or its recording does not hold
                 what PTB-XL describes. Examples are a malformed cell, an empty required column, a
-                patient ID that is not a whole number, a sex code other than 0 or 1, or an
+                patient ID that is not a whole number, a negative age, a sex code other than 0 or 1, or an
                 ``ecg_id`` that an earlier row has. The message names the CSV row and the
                 ``ecg_id``. For a repeated ``ecg_id``, the message also names the earlier row.
         """
@@ -180,8 +181,8 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
         example ``patient_id`` and ``sex``. If one of them is empty, the row is broken.
 
         Raises:
-            TimeNetConnectorError: If a required column is empty, the sex code is not 0 or 1, or the age or
-                the patient ID is not a whole number.
+            TimeNetConnectorError: If a required column is empty, the sex code is not 0 or 1, the age is
+                negative, or the age or the patient ID is not a whole number.
         """
         cells = {key: (value or "").strip() for key, value in row.items()}
         empty = [column for column in _REQUIRED_COLUMNS if cells.get(column, "") in _EMPTY_CELLS]
@@ -190,7 +191,7 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
             raise TimeNetConnectorError(
                 f"required column {names} is empty" if len(empty) == 1 else f"required columns {names} are empty"
             )
-        result = [Annotation(key="age", value=_age_in_years(cells), unit="year", description=_AGE_DESCRIPTION)]
+        result = [age_annotation(_age_in_years(cells), description=_AGE_DESCRIPTION)]
         for key, unit in (("height", "centimeter"), ("weight", "kilogram")):
             if cells.get(key, "") not in _EMPTY_CELLS:
                 result.append(Annotation(key=key, value=float(cells[key]), unit=unit))
@@ -208,11 +209,11 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
         for key in _FINDINGS:
             if value := cells.get(key):
                 result.append(Annotation(key=key, value=value))
-        result.append(Annotation(key="subject_ids", value=[_parse_patient_id(cells)]))
+        result.append(subject_ids_annotation([_parse_patient_id(cells)]))
         sex = _SEX.get(cells["sex"])
         if sex is None:
             raise TimeNetConnectorError(f"sex {row['sex']!r} is not 0 or 1")
-        result.append(Annotation(key="sex", value=sex, description=_SEX_DESCRIPTION))
+        result.append(sex_annotation(sex, description=_SEX_DESCRIPTION))
         codes = ast.literal_eval(cells["scp_codes"])
         result.append(Annotation(key="scp_codes", value=sorted(codes), metadata={"likelihoods": codes}))
         fold = int(cells["strat_fold"])
