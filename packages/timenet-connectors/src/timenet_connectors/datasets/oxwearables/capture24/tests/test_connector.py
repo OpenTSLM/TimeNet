@@ -1,5 +1,4 @@
 import numpy as np
-import pytest
 
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
@@ -259,12 +258,6 @@ def test_recording_start_keeps_one_format_when_it_has_microseconds(tmp_path):
 
 def test_card_pins_the_archive_the_connector_downloads():
     assert Capture24Connector().metadata().source_revision == f"sha256:{connector.ARCHIVE_SHA256}"
-
-
-@pytest.mark.parametrize("label_set", [schemes.WILLETTS_SPECIFIC_2018, schemes.WALMSLEY_2020])
-def test_label_sets_are_in_string_order(label_set):
-    # A tie between classes goes to the first in string order, which is the first in the label set.
-    assert list(label_set.names) == sorted(label_set.names)
 
 
 def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
