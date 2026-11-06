@@ -23,7 +23,7 @@ import edfio
 import numpy as np
 import pyarrow as pa
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet.types import US_PER_S
 
 
@@ -77,7 +77,7 @@ def open_edf(path: Path) -> EdfFile:
         The open file, with its header.
 
     Raises:
-        TimeFFormatError: If the file is not readable as EDF, if it is shorter than the
+        TimeNetConnectorError: If the file is not readable as EDF, if it is shorter than the
             records that its own header states, if it is discontinuous, or if it states no
             start date.
     """
@@ -87,7 +87,7 @@ def open_edf(path: Path) -> EdfFile:
             edf = edfio.read_edf(path, lazy_load_data=True)
         # edfio has no single exception type for a bad file, so catch broadly and re-raise.
         except Exception as exc:
-            raise TimeFFormatError(f"{path}: cannot read this file as EDF") from exc
+            raise TimeNetConnectorError(f"{path}: cannot read this file as EDF") from exc
 
     _raise_on_a_short_file(path, caught)
     return EdfFile(path=path, header=_extract_header(edf, path), handle=edf)
@@ -105,12 +105,12 @@ def _raise_on_a_short_file(path: Path, caught: list[warnings.WarningMessage]) ->
         caught: The warnings that reading it raised.
 
     Raises:
-        TimeFFormatError: If ``edfio`` found fewer data records than the header states.
+        TimeNetConnectorError: If ``edfio`` found fewer data records than the header states.
     """
     for entry in caught:
         text = str(entry.message)
         if any(warning in text for warning in _SHORT_FILE_WARNINGS):
-            raise TimeFFormatError(f"{path}: ends before its own header says. {text}")
+            raise TimeNetConnectorError(f"{path}: ends before its own header says. {text}")
 
         warnings.warn_explicit(entry.message, entry.category, entry.filename, entry.lineno)
 
@@ -126,20 +126,20 @@ def _extract_header(edf: Any, path: Path) -> EdfHeader:
         The fields of its header.
 
     Raises:
-        TimeFFormatError: If the file is a discontinuous EDF+D, or if its start date is
+        TimeNetConnectorError: If the file is a discontinuous EDF+D, or if its start date is
             anonymized.
     """
     # An EDF+D file writes its records on a broken timeline. A gap between two records holds
     # no samples, and no header field states how long it is, thus every span this module
     # measures would be wrong. Refuse such a file rather than time it wrongly.
     if edf.reserved.startswith("EDF+D"):
-        raise TimeFFormatError(f"{path}: is a discontinuous EDF+D file, which this reader does not read")
+        raise TimeNetConnectorError(f"{path}: is a discontinuous EDF+D file, which this reader does not read")
 
     try:
         start_time = edf.startdatetime
     # A release can replace the start date with an X, and edfio then raises instead of guessing.
     except edfio.AnonymizedDateError as exc:
-        raise TimeFFormatError(f"{path}: states no start date, because its header is anonymized") from exc
+        raise TimeNetConnectorError(f"{path}: states no start date, because its header is anonymized") from exc
 
     signals = edf.signals
     samples_per_record = tuple(int(signal.samples_per_data_record) for signal in signals)
@@ -183,11 +183,13 @@ def convert_digital_to_physical(
         The values in the physical unit of the signal, as float32.
 
     Raises:
-        TimeFFormatError: If the digital range is empty, because it then gives no scale.
+        TimeNetConnectorError: If the digital range is empty, because it then gives no scale.
     """
     span = digital_max - digital_min
     if span == 0:
-        raise TimeFFormatError(f"an EDF signal with a digital range of {digital_min} to {digital_max} has no scale")
+        raise TimeNetConnectorError(
+            f"an EDF signal with a digital range of {digital_min} to {digital_max} has no scale"
+        )
 
     gain = (physical_max - physical_min) / span
     return (np.asarray(digital, dtype="float32") - digital_min) * gain + physical_min
@@ -242,10 +244,10 @@ def read_signal(file: EdfFile, index: int) -> np.ndarray:
         Every sample of that signal, in physical units.
 
     Raises:
-        TimeFFormatError: If the file holds no signal with this index.
+        TimeNetConnectorError: If the file holds no signal with this index.
     """
     if not 0 <= index < len(file.header.signals):
-        raise TimeFFormatError(
+        raise TimeNetConnectorError(
             f"{file.path}: holds {len(file.header.signals)} signals, thus signal {index} does not exist"
         )
 
@@ -269,10 +271,10 @@ def read_record(file: EdfFile, index: int) -> tuple[np.ndarray, ...]:
         One array for each signal, in the order of the header, in physical units.
 
     Raises:
-        TimeFFormatError: If the file holds no record with this index.
+        TimeNetConnectorError: If the file holds no record with this index.
     """
     if not 0 <= index < file.header.num_records:
-        raise TimeFFormatError(
+        raise TimeNetConnectorError(
             f"{file.path}: holds {file.header.num_records} records, thus record {index} does not exist"
         )
 
@@ -301,11 +303,11 @@ def compute_signal_end_microseconds(header: EdfHeader) -> int:
         ``num_records * record_duration`` as whole microseconds.
 
     Raises:
-        TimeFFormatError: If that product is not a whole number of microseconds.
+        TimeNetConnectorError: If that product is not a whole number of microseconds.
     """
     total = header.num_records * header.record_duration * US_PER_S
     if total.denominator != 1:
-        raise TimeFFormatError(f"an EDF duration of {total} us is not a whole number of microseconds")
+        raise TimeNetConnectorError(f"an EDF duration of {total} us is not a whole number of microseconds")
     return int(total)
 
 
@@ -327,7 +329,7 @@ def read_annotations(file: EdfFile) -> tuple[EdfAnnotation, ...]:
         One :class:`EdfAnnotation` for each labelled entry, in microseconds.
 
     Raises:
-        TimeFFormatError: If an onset or a duration is not a whole number of microseconds.
+        TimeNetConnectorError: If an onset or a duration is not a whole number of microseconds.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by _seconds_to_microseconds, not directly here)
     return tuple(
         EdfAnnotation(
@@ -347,9 +349,9 @@ def _seconds_to_microseconds(seconds: float) -> int:
         The value in microseconds.
 
     Raises:
-        TimeFFormatError: If the value is not a whole number of microseconds.
+        TimeNetConnectorError: If the value is not a whole number of microseconds.
     """
     total = Decimal(str(seconds)) * US_PER_S
     if total != total.to_integral_value():
-        raise TimeFFormatError(f"an EDF+ annotation time of {seconds} s is not a whole number of microseconds")
+        raise TimeNetConnectorError(f"an EDF+ annotation time of {seconds} s is not a whole number of microseconds")
     return int(total)

@@ -63,7 +63,17 @@ dataclass, or an S3 key. The connector is generic over `TRaw`:
 `class MyConnector(BaseConnector[MyRawRef])`.
 
 If an assumption about your source data, downloads, or parents does not hold, raise
-`TimeNetConnectorError` from `timenet.errors`.
+`TimeNetConnectorError` from `timenet.errors`. [Errors](#errors) gives the details.
+
+---
+
+## Errors
+
+Raise `TimeNetConnectorError` from `timenet.errors` when a connector rejects source data or a
+parent dataset. Include enough source context to locate the problem. Reserve TimeF exceptions
+for problems with TimeF objects and files.
+
+See the [errors API reference](api/errors.md) for exception types.
 
 ---
 
