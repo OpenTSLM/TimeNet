@@ -319,6 +319,12 @@ After the build, you can load and inspect a dataset with the SDK. See `examples/
 example loads a dataset and calls `describe()` to print its identity, its counts, its columns per
 spec, and a record preview.
 
+## Round-trip test
+
+Call `timenet.testing.assert_round_trips(dataset, tmp_path / "registry")` in the connector test. It
+stores the release, runs `TimeFReader.verify()`, reads it back, compares it with the dataset, and
+returns the restored dataset for further assertions.
+
 ## Compose a child dataset
 
 A child dataset reuses objects of other datasets, its parent releases. Its card declares each
