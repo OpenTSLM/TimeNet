@@ -100,7 +100,7 @@ def test_each_window_becomes_a_record_and_a_classification_task(tmp_path):
     [
         ({"source_sha256": "0" * 64}, "the split was made from the CSV 0+, not from the pinned"),
         ({"test": [1]}, r"rows \[1\] are named more than once"),
-        ({"test": [len(_ROWS)]}, rf"names rows \[{len(_ROWS)}\], past the {len(_ROWS)} rows"),
+        ({"test": [len(_ROWS)]}, f"names row {len(_ROWS)}, but the CSV has only {len(_ROWS)} rows"),
     ],
     ids=["another release CSV", "a row in two splits", "a row past the end"],
 )

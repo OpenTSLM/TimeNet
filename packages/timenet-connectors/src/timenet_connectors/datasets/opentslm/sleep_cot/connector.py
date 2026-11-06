@@ -203,9 +203,9 @@ class FrozenSplits(BaseModel):
             raise TimeNetConnectorError(
                 f"the split was made from the CSV {self.source_sha256}, not from the pinned {SLEEP_COT_SHA256}"
             )
-        past_the_end = sorted(position for position in self.positions if position >= n_rows)
-        if past_the_end:
-            raise TimeNetConnectorError(f"the split names rows {past_the_end}, past the {n_rows} rows of the CSV")
+        last_named_row = max(self.positions)
+        if last_named_row >= n_rows:
+            raise TimeNetConnectorError(f"the split names row {last_named_row}, but the CSV has only {n_rows} rows")
         split_by_position = dict.fromkeys(self.validation, Split.VALIDATION) | dict.fromkeys(self.test, Split.TEST)
         return [split_by_position.get(position, Split.TRAIN) for position in range(n_rows)]
 
