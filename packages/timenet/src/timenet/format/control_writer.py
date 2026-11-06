@@ -746,7 +746,6 @@ class DuckDBControlWriter:
                 "categories": list(spec.categories),
                 "value_shape": list(spec.value_shape),
                 "dimension_names": list(spec.dimension_names),
-                "nullable": spec.nullable,
                 "missing_reason": None if spec.missing is None else spec.missing.reason.value,
                 "missing_description": None if spec.missing is None else spec.missing.description,
                 "missing_max_fraction": None if spec.missing is None else spec.missing.max_fraction,
