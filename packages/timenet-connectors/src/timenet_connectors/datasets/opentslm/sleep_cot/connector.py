@@ -206,8 +206,12 @@ class FrozenSplits(BaseModel):
         last_named_row = max(self.positions)
         if last_named_row >= n_rows:
             raise TimeNetConnectorError(f"the split names row {last_named_row}, but the CSV has only {n_rows} rows")
-        split_by_position = dict.fromkeys(self.validation, Split.VALIDATION) | dict.fromkeys(self.test, Split.TEST)
-        return [split_by_position.get(position, Split.TRAIN) for position in range(n_rows)]
+        splits = [Split.TRAIN] * n_rows
+        for position in self.validation:
+            splits[position] = Split.VALIDATION
+        for position in self.test:
+            splits[position] = Split.TEST
+        return splits
 
 
 @dataclass(frozen=True)
