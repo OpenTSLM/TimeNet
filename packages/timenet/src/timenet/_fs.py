@@ -1,10 +1,28 @@
-"""Replace a directory with a complete staging directory."""
+"""Compare directory paths and replace directories from staging."""
 
 from collections.abc import Generator
 from contextlib import contextmanager
 from pathlib import Path
 import shutil
 import uuid
+
+
+def same_directory(a: Path, b: Path) -> bool:
+    """Check whether two paths name the same directory.
+
+    Existing paths match when they identify the same directory on disk.
+    If either path is missing, compare resolved paths while ignoring letter case.
+
+    Args:
+        a: The first path, whether or not it exists.
+        b: The second path, whether or not it exists.
+
+    Returns:
+        ``True`` if the paths match.
+    """
+    if a.exists() and b.exists():
+        return a.samefile(b)
+    return str(a.resolve()).casefold() == str(b.resolve()).casefold()
 
 
 def publish_directory(staging: Path, final: Path) -> None:

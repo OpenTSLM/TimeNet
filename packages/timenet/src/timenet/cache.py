@@ -4,6 +4,11 @@ Datasets live in the local registry (built locally) and the download storage. Ra
 download cache. All three sit under the home directory.
 """
 
+# TODO(adrian): Remove temporary glue which maps the "download storage" of this module onto the
+# storage directory, settings().storage_dir, until a later change replaces this module and its
+# view of the storage directory. download() copies into the store now, so the storage directory
+# holds only the copies that remote registries cache.
+
 from dataclasses import dataclass
 import os
 from pathlib import Path
@@ -43,12 +48,14 @@ def human_bytes(n: int) -> str:
 
 
 def cached_datasets() -> list[CachedDataset]:
-    """List every dataset version in the local registry and download storage, with sizes.
+    """List dataset versions and their sizes in the local registry and storage directory.
 
     Returns:
-        The cached datasets, sorted by (location, id, version).
+        The cached versions sorted by location, dataset ID, and version.
     """
     config = settings()
+    # TODO(adrian): Remove temporary glue which maps the download storage onto the storage
+    # directory until a later change replaces this module, as the note at the top says.
     found = _scan(config.registry_path, "registry") + _scan(config.storage_dir, "storage")
     return sorted(found, key=lambda dataset: (dataset.location, dataset.dataset_id, dataset.version))
 
@@ -64,20 +71,19 @@ def raw_cache_size() -> int:
 
 
 def clear_cache(*, include_registry: bool) -> tuple[int, list[Path]]:
-    """Delete cached data and return the bytes freed and the directories removed.
+    """Delete the storage directory and raw download cache.
 
-    This always clears the download storage and the raw download cache. The caller can fetch both again.
-    It removes the local registry (locally built datasets) only when the caller sets ``include_registry``.
+    Read or removal failures raise ``OSError``.
 
     Args:
-        include_registry: Also remove the local registry.
+        include_registry: Remove the local registry too.
 
     Returns:
-        A ``(bytes_freed, removed_dirs)`` pair. Every directory in ``removed_dirs`` is gone when this
-        returns. This raises an ``OSError`` if it cannot fully remove a tree. This stops the caller from
-        reporting space it never freed.
+        A ``(bytes_freed, removed_dirs)`` pair with the removed directory paths.
     """
     config = settings()
+    # TODO(adrian): Remove temporary glue which maps the download storage onto the storage
+    # directory until a later change replaces this module, as the note at the top says.
     targets = [config.storage_dir, config.cache_dir]
     if include_registry:
         targets.append(config.registry_path)

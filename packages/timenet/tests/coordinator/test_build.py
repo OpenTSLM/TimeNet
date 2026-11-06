@@ -8,7 +8,7 @@ from timenet.coordinator.build import plan_release_build, run_plan
 from timenet.coordinator.plan import Step
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetAccessError, TimeNetDatasetNotFoundError, TimeNetVersionUnavailableError
-from timenet.progress import StepFinished, StepStarted
+from timenet.progress import BytesMoved, StepFinished, StepStarted
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.registry._paths import release_dir
@@ -168,7 +168,8 @@ def test_a_build_copies_a_missing_parent_and_reports_each_step_once(tmp_path, st
         Step(PARENT_REF, "copy", origin),
         Step(CHILD_REF, "build", InstalledConnectors(), depends_on=(PARENT_REF,)),
     )
-    assert events == [
+    # A copy also sends the bytes that it moves.
+    assert [event for event in events if not isinstance(event, BytesMoved)] == [
         StepStarted(PARENT_REF, "copy"),
         StepFinished(PARENT_REF, "copy"),
         StepStarted(CHILD_REF, "build"),
@@ -197,7 +198,8 @@ def test_a_build_reuses_a_held_release_and_copies_only_its_payload_source(
 
     # The payload source gets its own copy step. The store keeps its copy of the child.
     assert plan.steps == (Step(PARENT_REF, "copy", origin),)
-    assert events == [StepStarted(PARENT_REF, "copy"), StepFinished(PARENT_REF, "copy")]
+    steps = [event for event in events if not isinstance(event, BytesMoved)]
+    assert steps == [StepStarted(PARENT_REF, "copy"), StepFinished(PARENT_REF, "copy")]
     assert fake_parent.calls == []
     assert complete_copy(release_dir(store.root, PARENT_REF), origin.get_manifest(PARENT_REF.dataset_id))
 
