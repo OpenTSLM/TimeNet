@@ -275,6 +275,28 @@ def test_reading_the_records_in_order_reads_each_split_file_once(monkeypatch):
     assert reads == {"train.parquet": 1, "val.parquet": 1, "test.parquet": 1}
 
 
+def test_a_rows_series_share_one_parse(monkeypatch):
+    dataset = _FixtureConnector().convert(_refs())
+    parse = connector._input_series
+    calls = []
+
+    def counted(task, text):
+        calls.append((task, text))
+        return parse(task, text)
+
+    monkeypatch.setattr(connector, "_input_series", counted)
+    rows = set()
+    for record in dataset.records:
+        rows.add((record.metadata["file"], record.metadata["row"]))
+        record.signals[0].to_numpy()
+    assert len(calls) == len(rows)
+    # The last row is still cached, including its other input or candidate series.
+    dataset.records[-1].signals[0].to_numpy()
+    assert len(calls) == len(rows)
+    dataset.records[0].signals[0].to_numpy()
+    assert len(calls) == len(rows) + 1
+
+
 def test_declares_the_pinned_release():
     assert TSAQAConnector.HF_REPO == "TSAQA/TSAQA-Benchmark"
     assert TSAQAConnector.SOURCE_REVISION == "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd"

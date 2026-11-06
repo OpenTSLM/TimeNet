@@ -16,10 +16,11 @@ from typing import Annotated, ClassVar
 import pyarrow as pa
 from pydantic import Field, FiniteFloat, JsonValue, Strict, TypeAdapter, ValidationError
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
+from timenet.dataset import Record, Signal, SignalChannel, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec
+from timenet.types.shared_loading import SharedChannelLoader
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 
 
@@ -235,26 +236,21 @@ def _iter_rows(file: HubFileRef) -> Iterator[tuple[_RowRef, _ParsedRow]]:
             index += 1
 
 
-class _ValueLoader:
-    """Share one bounded sensor-row cache across a dataset's lazy channel loaders."""
+def _read_channels(ref: _RowRef) -> tuple[pa.Array, ...]:
+    """Read and validate one sensor row.
 
-    def __init__(self) -> None:
-        self.cached: tuple[_RowRef, tuple[list[list[float]], list[list[float]]]] | None = None
-
-    def __call__(self, ref: _RowRef, sensor: int, axis: int) -> pa.Array:
-        cached = self.cached
-        if cached is None or cached[0] != ref:
-            with ref.file.path.open("rb") as handle:
-                handle.seek(ref.offset)
-                values = _parse_row(handle.readline(), ref.context).values
-            self.cached = ref, values
-        else:
-            values = cached[1]
-        # Preserve the HF benchmark values. Do not infer nulls from zeros or substitute
-        # original PAMAP2 readings: resampling has already mixed zero-filled gaps into
-        # the published arrays. See README.md for the missing-data limitation.
-        # Use the local values even if another consumer replaces the shared cache during this read.
-        return pa.array((sample[axis] for sample in values[sensor]), type=pa.float32())
+    Returns:
+        Six float32 arrays: accelerometer XYZ followed by gyroscope XYZ.
+    """
+    with ref.file.path.open("rb") as handle:
+        handle.seek(ref.offset)
+        values = _parse_row(handle.readline(), ref.context).values
+    # Preserve the published arrays, including their zero-filled gaps and PAMAP2 column order.
+    channels = []
+    for sensor in values:
+        for axis in range(3):
+            channels.append(pa.array([sample[axis] for sample in sensor], type=pa.float32()))
+    return tuple(channels)
 
 
 def _load_time_offsets() -> pa.Array:
@@ -326,11 +322,11 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         ):
             dataset.annotate(Annotation(key=key, value=value))
         records: dict[tuple[str, int], Record] = {}
-        loader = _ValueLoader()
+        shared_channels = SharedChannelLoader(_read_channels)
         for file in raw_refs:
             count = 0
             for ref, row in _iter_rows(file):
-                record = self._make_record(ref, row, loader)
+                record = self._make_record(ref, row, shared_channels)
                 dataset.add_record(record=record)
                 records[ref.key] = record
                 count += 1
@@ -341,23 +337,26 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         dataset.set_task_stream([AnswerTask], partial(_iter_tasks, tuple(raw_refs), records))
         return dataset
 
-    def _make_record(self, ref: _RowRef, row: _ParsedRow, loader: _ValueLoader) -> Record:
+    def _make_record(self, ref: _RowRef, row: _ParsedRow, shared_channels: SharedChannelLoader[_RowRef]) -> Record:
         """Build one six-channel IMU Record with its source provenance.
 
         Returns:
             A Record with lazy sensor values and annotations from the original row.
         """
         channels = _PAMAP2_CHANNELS if ref.file.part == "pamap2_v2" else _CHANNELS
-        signals = tuple(
-            Signal.from_loader(
-                name=name,
-                spec=spec,
-                time_axis=_AXIS,
-                time_offsets_loader=_load_time_offsets,
-                n_values=len(row.values[sensor]),
-                loader=partial(loader, ref, sensor, dimension),
-            )
-            for spec, name, sensor, dimension in channels
+        signals = Signal.from_shared_loader(
+            loader=shared_channels,
+            recording_key=ref,
+            channels=tuple(
+                SignalChannel(
+                    name=name,
+                    spec=spec,
+                    time_axis=_AXIS,
+                    time_offsets_loader=_load_time_offsets,
+                    n_values=len(row.values[sensor]),
+                )
+                for spec, name, sensor, _dimension in channels
+            ),
         )
         record = Record(sources=(Source(name="IMU", signals=signals),))
         source = ref.file.part.rsplit("_", 1)[0]
