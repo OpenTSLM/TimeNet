@@ -20,9 +20,7 @@ TIMENET_DISTRIBUTIONS = ("timenet", "timenet-connectors")
 """The distributions whose git commit a build records."""
 
 BUILD_INFO_FILE = "_build_info.json"
-"""The file that ``scripts/build_dists.py`` writes into an import package while it builds a wheel.
-It holds the :class:`~timenet.manifest.GitSource` of the checkout that built the wheel. The script
-keeps the same name in its own constant."""
+"""The commit record that ``scripts/build_dists.py`` writes into each package of a wheel."""
 
 _GIT_SOURCE = TypeAdapter(GitSource)
 _GIT_TIMEOUT_S = 30
@@ -100,12 +98,7 @@ def local_source_path(dist: Distribution) -> Path | None:
 
 
 def _read_git() -> dict[str, GitSource | UnknownCommit]:
-    """Look up the commit of each installed TimeNet distribution. This is the only call that runs git.
-
-    Returns:
-        The commit or the reason it is unknown, keyed by distribution name. A distribution that is
-        not installed is absent.
-    """
+    """Look up the commit of each installed TimeNet distribution. This is the only call that runs git."""
     commits: dict[str, GitSource | UnknownCommit] = {}
     for name in TIMENET_DISTRIBUTIONS:
         try:
@@ -117,19 +110,12 @@ def _read_git() -> dict[str, GitSource | UnknownCommit]:
 
 
 def _commit_of(dist: Distribution) -> GitSource | UnknownCommit:
-    """Return the commit of the code that one installed distribution runs.
-
-    Returns:
-        The commit, or the reason it is unknown.
-
-    Raises:
-        TimeNetBuildError: If a recorded commit is not a valid commit record.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _direct_url, _validated, and _wheel_commit
+    """Return the commit of the code that one installed distribution runs, or why it is unknown."""
     info = _direct_url(dist)
     if info is not None:
         vcs = info.get("vcs_info", {})
         if vcs.get("vcs") == "git" and "commit_id" in vcs:
-            return _validated(dist, {"sha": vcs["commit_id"], "local_changes": False}, "direct_url.json")
+            return _validate_recorded_commit(dist, {"sha": vcs["commit_id"], "local_changes": False}, "direct_url.json")
         if info.get("dir_info", {}).get("editable"):
             directory = local_source_path(dist)
             if directory is not None:
@@ -138,14 +124,7 @@ def _commit_of(dist: Distribution) -> GitSource | UnknownCommit:
 
 
 def _direct_url(dist: Distribution) -> dict | None:
-    """Read the PEP 610 ``direct_url.json`` of a distribution.
-
-    Returns:
-        The parsed record, or ``None`` for an install from an index.
-
-    Raises:
-        TimeNetBuildError: If the record is not a JSON object.
-    """
+    """Read the PEP 610 ``direct_url.json`` of a distribution, or ``None`` for an index install."""
     raw = dist.read_text("direct_url.json")
     if raw is None:
         return None
@@ -159,11 +138,7 @@ def _direct_url(dist: Distribution) -> dict | None:
 
 
 def _checkout_commit(directory: Path) -> GitSource | UnknownCommit:
-    """Ask git for the commit of a checkout and whether its package directory has changes.
-
-    Returns:
-        The commit, or the reason git could not give it.
-    """
+    """Ask git for the commit of a checkout and whether its package directory has changes."""
     git = shutil.which("git")
     if git is None:
         return UnknownCommit("git is not on PATH")
@@ -179,15 +154,10 @@ def _checkout_commit(directory: Path) -> GitSource | UnknownCommit:
 
 
 def _git(git: str, directory: Path, *args: str) -> str:
-    """Run one git command in ``directory`` and return its stripped stdout.
-
-    ``--no-optional-locks`` keeps ``git status`` from refreshing the index, so a build never takes
-    the index lock while the user runs git.
-
-    Returns:
-        The command's stdout without surrounding whitespace.
-    """
+    """Run one git command in ``directory`` and return its stripped stdout."""
     result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+        # --no-optional-locks keeps `git status` from refreshing the index, so a build never takes
+        # the index lock while the user runs git.
         [git, "--no-optional-locks", "-C", str(directory), *args],
         capture_output=True,
         text=True,
@@ -198,14 +168,7 @@ def _git(git: str, directory: Path, *args: str) -> str:
 
 
 def _wheel_commit(dist: Distribution) -> GitSource | UnknownCommit:
-    """Read the commit that ``scripts/build_dists.py`` wrote into the installed package.
-
-    Returns:
-        The commit, or the reason it is unknown.
-
-    Raises:
-        TimeNetBuildError: If the file is not valid JSON or not a valid commit record.
-    """
+    """Read the commit that ``scripts/build_dists.py`` wrote into the installed package."""
     for file in dist.files or ():
         # The file sits at the top of the import package: ``<package>/_build_info.json``.
         if file.name == BUILD_INFO_FILE and len(file.parent.parts) == 1:
@@ -213,19 +176,12 @@ def _wheel_commit(dist: Distribution) -> GitSource | UnknownCommit:
                 record = json.loads(file.read_text(encoding="utf-8"))
             except json.JSONDecodeError as exc:
                 raise TimeNetBuildError(f"{dist.metadata['Name']} has a malformed {file}: {exc}") from exc
-            return _validated(dist, record, str(file))
+            return _validate_recorded_commit(dist, record, str(file))
     return UnknownCommit(f"the installed package carries no {BUILD_INFO_FILE}")
 
 
-def _validated(dist: Distribution, record: object, where: str) -> GitSource:
-    """Validate a recorded commit.
-
-    Returns:
-        The commit.
-
-    Raises:
-        TimeNetBuildError: If the record is not a valid commit record.
-    """
+def _validate_recorded_commit(dist: Distribution, record: object, where: str) -> GitSource:
+    """Validate a commit record that ``where`` holds, and raise ``TimeNetBuildError`` if it is invalid."""
     try:
         return _GIT_SOURCE.validate_python(record)
     except ValidationError as exc:

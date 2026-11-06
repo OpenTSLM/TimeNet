@@ -20,8 +20,8 @@ from timenet.types.wire import ValueEncoding
 from timenet.values_backends import ValuesBackend
 
 
-GitSha = Annotated[str, StringConstraints(strict=True, pattern=r"^(?:[0-9a-f]{40}|[0-9a-f]{64})$")]
-"""A full git commit id: 40 hex digits, or 64 in a SHA-256 repository."""
+GitSha = Annotated[str, StringConstraints(strict=True, pattern=r"^[0-9a-f]{40}$")]
+"""A full SHA-1 git commit id: 40 lowercase hex digits."""
 
 
 @with_config(ConfigDict(extra="forbid"))

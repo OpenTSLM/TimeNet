@@ -60,9 +60,9 @@ workspace definition and the shared ruff/ty/pytest config; per-package
   workspace extras (`timenet[cli,torch]`). It does not install connector dependencies. Each
   connector declares its own in a `requirements.txt`, and `make test-connectors` runs that
   connector's tests and type-check in an environment built from it.
-- Build distributables with `make build`. It runs `scripts/build_dists.py`, which records the git
-  commit inside each package and then runs `uv build --package <name>` per member. A plain
-  `uv build` gives a wheel whose commit is unknown, so build release artifacts through the script.
+- Build distributables with `make build`. It runs the build through a proxy script, which records
+  the git commit inside each package for provenance, before running `uv build --package <name>`
+  per member.
 - For one-off scripts, use inline `uv` metadata and run with `uv run <script.py>`. Never `pip install`.
 - Keep `uv.lock` committed; the `uv-lock` pre-commit hook enforces freshness.
 
