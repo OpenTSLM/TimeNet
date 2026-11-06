@@ -2418,3 +2418,23 @@ def test_resolving_references_takes_steps_linear_in_them(tmp_path, monkeypatch, 
     assert len(task.input_annotations) == count
     assert all(read_value(annotation.value) in values for annotation in task.input_annotations)
     assert max(steps.values()) <= 4 * count
+
+
+def test_read_and_imported_annotations_cannot_change(tmp_path):
+    parent = _tree()
+    ids = _ids(parent)
+    with _reader(tmp_path, parent) as reader:
+        restored = reader.read(load=LoadPlan.ALL_EAGER)
+        child = _child(reader)
+        child.import_from(reader, records=[ids["rec"]])
+    annotations = [
+        *restored.annotations,
+        *(annotation for record in restored.records for annotation in record.walk_annotations()),
+        *(annotation for record in child.records for annotation in record.walk_annotations()),
+    ]
+    assert annotations
+    for annotation in annotations:
+        with pytest.raises(TypeError, match="cannot change"):
+            annotation.metadata["added"] = True
+        with pytest.raises(TypeError, match="cannot change"):
+            annotation.occurrence_metadata["added"] = True
