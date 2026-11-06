@@ -94,6 +94,9 @@ stored key or value needs a new dataset version. Build the annotations with
 | Sex | `sex_annotation(Sex.MALE)` | `sex`: `male` or `female` |
 | Age | `age_annotation(years)` | `age`: whole years, unit `year` |
 
+PTB-XL and CAPTURE-24 use these builders. CAPTURE-24 keeps its published `age_band`
+instead of inventing an exact age.
+
 Decode the source's codes into `Sex` first. Use `SEXES` as the label set of a sex task and
 `AGE_UNIT` for age targets. Use `age` for whole years only. Use a separate key for an age range,
 such as `age_band`, and another clearly named key for a fractional age.

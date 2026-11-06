@@ -38,6 +38,7 @@ from timenet_connectors.datasets.oxwearables.capture24.windowing import (
     make_segments,
     make_windows,
 )
+from timenet_connectors.demographics import Sex
 from timenet_connectors.sources.csv import CsvRow, check_unique, read_csv_table
 
 
@@ -76,18 +77,6 @@ _COLUMN_TYPES = {
     **dict.fromkeys(AXES, AXIS_TYPE),
     _LABEL_COLUMN: pa.dictionary(pa.int32(), pa.string()),
 }
-
-
-@unique
-class Sex(StrEnum):
-    """A participant's sex, as the connector stores it.
-
-    The values match ``Sex`` in ``timenet_connectors.demographics``, which PR #677 adds.
-    TODO(#677): use that enum and its annotation builders after PR #677 reaches the base branch.
-    """
-
-    FEMALE = "female"
-    MALE = "male"
 
 
 _SEX_OF_LETTER = {"F": Sex.FEMALE, "M": Sex.MALE}

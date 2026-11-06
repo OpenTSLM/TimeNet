@@ -20,6 +20,7 @@ from timenet_connectors.datasets.oxwearables.capture24.source import (
     RecordingSummary,
 )
 from timenet_connectors.datasets.oxwearables.capture24.windowing import SAMPLE_RATE_HZ, LabelRuns, Segment
+from timenet_connectors.demographics import sex_annotation, subject_ids_annotation
 from timenet_connectors.sources.channels import SharedChannelLoader
 
 
@@ -36,10 +37,8 @@ _RECORD_FILE_KEY = "file"
 class _Key(StrEnum):
     """The key of an annotation that this connector writes."""
 
-    SUBJECT_IDS = "subject_ids"
     AGE_BAND = "age_band"
     """The participant's age band. Other connectors use ``age`` for an exact age in years."""
-    SEX = "sex"
     RECORDING_START_LOCAL = "recording_start_local"
     """The first sample's published timestamp. The authors randomized its date and shifted its time."""
     ACTIVITY = "activity"
@@ -131,14 +130,13 @@ def build_record(
         for index, (segment, runs) in enumerate(zip(summary.segments, summary.label_runs, strict=True))
     )
     participant = summary.participant
-    # TODO(#677): build subject_ids and sex with the shared demographics builders after #677 lands.
     return Record(
         sources=sources,
         metadata={_RECORD_FILE_KEY: participant.path.name},
         annotations=(
-            Annotation(key=_Key.SUBJECT_IDS, value=[participant.pid]),
+            subject_ids_annotation([participant.pid]),
             Annotation(key=_Key.AGE_BAND, value=participant.age_band.value, description=_AGE_BAND_DESCRIPTION),
-            Annotation(key=_Key.SEX, value=participant.sex.value),
+            sex_annotation(participant.sex),
             Annotation(
                 key=_Key.RECORDING_START_LOCAL,
                 value=summary.start_local,
