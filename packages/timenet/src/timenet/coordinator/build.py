@@ -10,6 +10,7 @@ from timenet.registry import copy_release
 from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import prepare_local_copy
 from timenet.registry.local import LocalRegistry
+from timenet.registry.origin import record_origin
 from timenet.sources import ReleaseSource
 from timenet.types.references import split_ref
 
@@ -55,18 +56,18 @@ def plan_release_build(
 
 
 def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None = None) -> None:
-    """Run the copy and build steps of a plan in order.
+    """Run a plan's copy and build steps in order.
 
-    Skip read steps.
+    Each copied or built release gets a record of its source.
 
     Args:
-        plan: The steps to run.
+        plan: The plan to run.
         store: The local registry to copy and build into.
-        options: Build settings, including the progress callback.
+        options: Build settings, such as the progress callback.
 
     Raises:
-        TimeNetVersionConflictError: If a copied release conflicts with the files in ``store``.
-        TimeFFormatError: If a build changes files pinned by other releases.
+        TimeNetVersionConflictError: If the store holds the same release with different files.
+        TimeFFormatError: If a build changes files that other releases pin.
         TimeNetBuildError: If a build fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the copy and the backends
     options = options or BuildOptions()
@@ -74,13 +75,14 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
         if step.action == "copy":
             # The planner gives each copy step a registry as its entry.
             registry = cast("BaseRegistry", step.entry)
-            copy_release(step.release, registry, store, force=step.force, progress=options.progress)
+            for release in copy_release(step.release, registry, store, force=step.force, progress=options.progress):
+                record_origin(store, release, "copy", registry.location)
         elif step.action == "build":
             _build(step, store, options=options)
 
 
 def _build(step: Step, store: LocalRegistry, *, options: BuildOptions) -> None:
-    """Build an exact release and check its required files.
+    """Build the requested release and record the builder's package.
 
     Args:
         step: The build step, with ``force`` set to rebuild an existing release.
@@ -88,13 +90,14 @@ def _build(step: Step, store: LocalRegistry, *, options: BuildOptions) -> None:
         options: The build settings.
 
     Raises:
-        TimeNetDatasetNotFoundError: If no backend builds this version or the result lacks a release or payload source.
+        TimeNetDatasetNotFoundError: If no backend builds the exact release or the build omits it or a payload source.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by declared and prepare_local_copy
-    builder = declared(step.release.dataset_id, step.release.version).backend
+    found = declared(step.release.dataset_id, step.release.version)
     if options.progress is not None:
         options.progress(StepStarted(step.release, "build"))
-    builder.build(step.release, store, force=step.force, pinned_by=step.pinned_by, options=options)
+    found.backend.build(step.release, store, force=step.force, pinned_by=step.pinned_by, options=options)
     # After a successful build, the store must hold the exact release with its payload sources.
     prepare_local_copy(store.root, step.release)
+    record_origin(store, step.release, "build", found.package)
     if options.progress is not None:
         options.progress(StepFinished(step.release, "build"))

@@ -60,6 +60,11 @@ class S3Registry(LazyReadRegistry):
         return f"S3 registry {self._display_root()}"
 
     @property
+    def location(self) -> str:
+        """The registry's root URL as ``s3://bucket/prefix``."""
+        return self._display_root()
+
+    @property
     def local_root(self) -> Path | None:
         """The store directory whose copies of the same releases this registry reads, or ``None``."""
         return self._store

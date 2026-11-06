@@ -330,6 +330,14 @@ def test_put_release_refuses_a_directory_without_a_readable_manifest(tmp_path, m
 # ---- s3 catalog -------------------------------------------------------------------------------
 
 
+def test_each_registry_names_its_location(tmp_path):
+    assert RemoteRegistry("https://registry.example.test").location == "https://registry.example.test"
+    assert open_registry("timenet://").location == TIMENET_REGISTRY_URL
+    assert S3Registry("s3://bucket/prefix").location == "s3://bucket/prefix"
+    assert S3Registry("s3://bucket").location == "s3://bucket"
+    assert LocalRegistry(tmp_path / "other" / ".." / "store").location == str((tmp_path / "store").resolve())
+
+
 def test_s3_registry_has_no_catalog():
     # The S3 backend does store + download by explicit id, but has no catalog: list/search raise.
     s3 = S3Registry("s3://bucket/registry")
