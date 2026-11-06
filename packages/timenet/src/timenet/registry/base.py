@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 import shutil
-from typing import BinaryIO, TypeVar
+from typing import BinaryIO
 
 from timenet._fs import staged_directory
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetFileError
@@ -24,10 +24,9 @@ from timenet.registry.version import DatasetVersion
 from timenet.sources import Found, NotFound, NotServed
 from timenet.types import Access, DatasetMetadata, Domain, License, Task
 from timenet.types.access import access_requirements, effective_access
+from timenet.types.metadata import _normalize_into_list, matches_metadata
 from timenet.types.references import DatasetRef
 
-
-T = TypeVar("T")
 
 # Reports download progress: called with each file (or chunk) of bytes as it lands. A ``download_release``
 # implementation calls it so a caller can render a progress bar; ``None`` downloads silently.
@@ -35,7 +34,7 @@ ProgressCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
-    """A searchable source of TimeF datasets, manifests, and files.
+    """A registry of TimeF manifests, files, and searchable dataset metadata.
 
     :meth:`open_release` and :meth:`download_release` handle one release without its payload
     sources. :func:`~timenet.registry.copy_release` copies a release with its payload sources.
@@ -236,55 +235,39 @@ class BaseRegistry(ABC):
         tag: str | list[str] | None = None,
         limit: int = 100,
     ) -> list[DatasetMetadata]:
-        """Filter datasets by any combination of criteria.
+        """Find datasets that match every filter.
 
-        Each filter accepts a single value or a list of values. The method ignores filters set to
-        ``None``. It combines all other filters with AND logic. The filters ``query``, ``domain``,
-        ``task``, ``license``, and ``dataset_id`` match a dataset when any of their values match.
-        The filters ``time_series_spec`` and ``tag`` match a dataset only when all of their values
-        match. The type filters ``task`` and ``time_series_spec`` read the manifest schema of each
-        dataset.
+        Each filter accepts one value or a list, with ``None`` or an empty list meaning no restriction.
+        The ``task`` and ``time_series_spec`` filters read each dataset's manifest schema.
 
         Args:
-            query: Free-text terms. The method matches each term as a case-insensitive substring
-                in the dataset name, description, or tags.
-            domain: Keep datasets that share any of these domains.
-            task: Keep datasets whose schema includes any of these task classes.
-            license: Keep datasets that have any of these licenses.
-            time_series_spec: Keep datasets that declare all of these ``spec_type`` values.
-            dataset_id: Keep only these ids.
-            tag: Keep datasets that declare all of these tags.
-            limit: The maximum number of results. The default is 100.
+            query: Match any term in the name, description, or tags, ignoring case.
+            domain: Match any of these domains.
+            task: Match any of these task classes in the schema.
+            license: Match any of these licenses.
+            time_series_spec: Match all of these ``spec_type`` values.
+            dataset_id: Match any of these IDs.
+            tag: Match all of these tags.
+            limit: The maximum number of results, defaulting to 100.
 
         Returns:
-            The matching dataset metadata. The list has at most ``limit`` entries.
+            The matching dataset metadata, with at most ``limit`` entries.
 
         Raises:
             ValueError: If ``limit`` is negative.
         """
         if limit < 0:
             raise ValueError(f"limit must be non-negative, got {limit}")
-        queries = _as_list(query)
-        domains = _as_list(domain)
-        tasks = _as_list(task)
-        licenses = _as_list(license)
-        specs = _as_list(time_series_spec)
-        ids = _as_list(dataset_id)
-        tags = _as_list(tag)
+        tasks = _normalize_into_list(task)
+        specs = _normalize_into_list(time_series_spec)
 
         results: list[DatasetMetadata] = []
         for metadata in self.list_datasets():
             if len(results) >= limit:
                 break
-            if ids and metadata.dataset_id not in ids:
-                continue
-            if licenses and metadata.license not in licenses:
-                continue
-            if domains and not set(metadata.domains) & set(domains):
-                continue
-            if tags and not set(tags) <= set(metadata.tags):
-                continue
-            if queries and not _query_matches(metadata, queries):
+            if not matches_metadata(
+                metadata, query=query, domain=domain, license=license, dataset_id=dataset_id, tag=tag
+            ):
                 continue
             if (tasks or specs) and not self._schema_matches(metadata.dataset_id, tasks, specs):
                 continue
@@ -297,25 +280,3 @@ class BaseRegistry(ABC):
         if tasks and not set(tasks) & set(schema.tasks):
             return False
         return not (specs and not set(specs) <= {spec.spec_type for spec in schema.time_series_specs})
-
-
-def _as_list(value: T | list[T] | None) -> list[T]:
-    """Normalize a filter value to a list.
-
-    Args:
-        value: ``None``, a single value, or a list of values.
-
-    Returns:
-        An empty list, the list itself, or a list with one value.
-    """
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    return [value]
-
-
-def _query_matches(metadata: DatasetMetadata, terms: list[str]) -> bool:
-    """Return whether any term is a case-insensitive substring of the dataset name, description, or tags."""
-    haystack = " ".join([metadata.name, metadata.description, *metadata.tags]).lower()
-    return any(term.lower() in haystack for term in terms)

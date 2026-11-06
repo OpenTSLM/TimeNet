@@ -1,7 +1,7 @@
 """Dataset-level descriptive identity and derived type declaration."""
 
 from pathlib import Path
-from typing import Annotated, Any, Self
+from typing import Annotated, Any, Self, TypeVar
 
 from pydantic import (
     Field,
@@ -24,6 +24,9 @@ from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
 from timenet.types.specs import TimeSeriesSpec
 from timenet.types.tasks import TASKS, Task, TaskType
+
+
+T = TypeVar("T")
 
 
 class DatasetMetadata(TimeFModel):
@@ -143,6 +146,68 @@ class DatasetMetadata(TimeFModel):
             raise TimeNetInvalidCardError(f"dataset card {card_path} must be a YAML mapping, got {type(raw).__name__}")
 
         return cls.model_validate(raw)
+
+
+def matches_metadata(  # ruff: ignore[too-many-arguments]
+    metadata: DatasetMetadata,
+    *,
+    query: str | list[str] | None,
+    domain: Domain | list[Domain] | None,
+    license: License | list[License] | None,
+    dataset_id: str | list[str] | None,
+    tag: str | list[str] | None,
+) -> bool:
+    """Return whether dataset metadata matches all filters.
+
+    Each filter takes one value or a list, and ``None`` or an empty list skips it.
+
+    Args:
+        metadata: Dataset metadata from a connector card or manifest.
+        query: Match any term in the name, description, or tags, ignoring case.
+        domain: Match any of these domains.
+        license: Match any of these licenses.
+        dataset_id: Match any of these dataset IDs.
+        tag: Match all of these tags.
+
+    Returns:
+        Whether the metadata matches every filter.
+    """
+    queries = _normalize_into_list(query)
+    domains = _normalize_into_list(domain)
+    licenses = _normalize_into_list(license)
+    ids = _normalize_into_list(dataset_id)
+    tags = _normalize_into_list(tag)
+    if ids and metadata.dataset_id not in ids:
+        return False
+    if licenses and metadata.license not in licenses:
+        return False
+    if domains and not set(metadata.domains) & set(domains):
+        return False
+    if tags and not set(tags) <= set(metadata.tags):
+        return False
+    return not (queries and not _query_matches(metadata, queries))
+
+
+def _normalize_into_list(value: T | list[T] | None) -> list[T]:
+    """Normalize a filter value to a list.
+
+    Args:
+        value: ``None``, a single value, or a list of values.
+
+    Returns:
+        An empty list, the list itself, or a list with one value.
+    """
+    if value is None:
+        return []
+    if isinstance(value, list):
+        return value
+    return [value]
+
+
+def _query_matches(metadata: DatasetMetadata, terms: list[str]) -> bool:
+    """Return whether any term is a case-insensitive substring of the dataset name, description, or tags."""
+    haystack = " ".join([metadata.name, metadata.description, *metadata.tags]).lower()
+    return any(term.lower() in haystack for term in terms)
 
 
 def _resolve_task(value: Any) -> type[Task]:
