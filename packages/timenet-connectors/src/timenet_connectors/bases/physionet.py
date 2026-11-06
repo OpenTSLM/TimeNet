@@ -169,7 +169,7 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             A factory for lazy lead loaders, sharing one recording cache.
         """
 
-        def read(request: _WfdbRead) -> tuple[pa.Array, ...]:
+        def read_channels(request: _WfdbRead) -> tuple[pa.Array, ...]:
             n_sig = len(request.gains)
             try:
                 if request.direct:
@@ -190,12 +190,12 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             except (OSError, ValueError) as error:
                 raise TimeNetConnectorError(f"{request.base}: cannot read WFDB samples: {error}") from error
 
-        shared = SharedChannelLoader(read)
+        shared_channels = SharedChannelLoader(read_channels)
 
         def channel(record_base: Path, header: WfdbHeader, lead_idx: int) -> Callable[[], pa.Array]:
             request = _WfdbRead(
                 record_base, header.sig_len, header.dat_names, header.gains, header.baselines, header.direct_read
             )
-            return shared.channel(request, lead_idx)
+            return shared_channels.channel_loader(request, lead_idx)
 
         return channel

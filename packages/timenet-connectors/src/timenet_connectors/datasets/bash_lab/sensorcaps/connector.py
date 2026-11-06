@@ -322,11 +322,11 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         ):
             dataset.annotate(Annotation(key=key, value=value))
         records: dict[tuple[str, int], Record] = {}
-        loader = SharedChannelLoader(_read_channels)
+        shared_channels = SharedChannelLoader(_read_channels)
         for file in raw_refs:
             count = 0
             for ref, row in _iter_rows(file):
-                record = self._make_record(ref, row, loader)
+                record = self._make_record(ref, row, shared_channels)
                 dataset.add_record(record=record)
                 records[ref.key] = record
                 count += 1
@@ -337,7 +337,7 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         dataset.set_task_stream([AnswerTask], partial(_iter_tasks, tuple(raw_refs), records))
         return dataset
 
-    def _make_record(self, ref: _RowRef, row: _ParsedRow, loader: SharedChannelLoader[_RowRef]) -> Record:
+    def _make_record(self, ref: _RowRef, row: _ParsedRow, shared_channels: SharedChannelLoader[_RowRef]) -> Record:
         """Build one six-channel IMU Record with its source provenance.
 
         Returns:
@@ -351,7 +351,7 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
                 time_axis=_AXIS,
                 time_offsets_loader=_load_time_offsets,
                 n_values=len(row.values[sensor]),
-                loader=loader.channel(ref, sensor * 3 + dimension),
+                loader=shared_channels.channel_loader(ref, sensor * 3 + dimension),
             )
             for spec, name, sensor, dimension in channels
         )

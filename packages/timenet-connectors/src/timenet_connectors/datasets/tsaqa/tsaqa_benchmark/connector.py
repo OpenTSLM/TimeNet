@@ -614,7 +614,7 @@ class _SeriesLoader:
         self._paths = paths
         self._columns = lru_cache(maxsize=1)(self._read_columns)
         # A row's Records load one after another, so one parsed row suffices.
-        self._series = SharedChannelLoader(self._read_series)
+        self._shared_channels = SharedChannelLoader(self._read_series)
 
     def _read_columns(self, split: _SplitFile) -> tuple[pa.StringArray, pa.StringArray]:
         try:
@@ -639,10 +639,10 @@ class _SeriesLoader:
             raise TimeFFormatError(f"{context}: the series differ from the converted row; the file changed")
         return tuple(pa.array(values, type=pa.float64()) for values in series)
 
-    def channel(self, row: _Row, position: int) -> Callable[[], pa.Array]:
+    def channel_loader(self, row: _Row, position: int) -> Callable[[], pa.Array]:
         """Return a lazy series callback sharing the row's validated arrays."""
         request = _SeriesRead(row.split, row.index, row.task, row.lengths, row.values_digest)
-        return self._series.channel(request, position)
+        return self._shared_channels.channel_loader(request, position)
 
 
 def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
@@ -660,7 +660,7 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
             spec=_SERIES_SPEC if is_input or row.transform is None else _TRANSFORM_SPECS[row.transform],
             time_axis=_AXIS,
             n_values=length,
-            loader=loader.channel(row, position),
+            loader=loader.channel_loader(row, position),
         )
         metadata: dict[str, JsonValue] = {"file": row.file, "row": row.index, "role": str(role)}
         record = Record(sources=(Source(name="series", signals=(signal,)),), metadata=metadata)

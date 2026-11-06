@@ -401,9 +401,9 @@ Channel lengths and types are preserved; no values are filled or cast.
 ```python
 from timenet_connectors.sources.channels import SharedChannelLoader
 
-shared = SharedChannelLoader(read_channels, max_records=1)
+shared_channels = SharedChannelLoader(read_channels, max_recordings=1)
 # For each recording and channel:
-loader = shared.channel(recording_key, channel_index)
+loader = shared_channels.channel_loader(recording_key, channel_index)
 # Pass loader to Signal.from_loader(..., loader=loader).
 ```
 
@@ -417,7 +417,7 @@ loads share a decode while the recording remains cached. The reader must not cal
 same helper.
 
 The limit counts recordings, not bytes. Arrays retained by callers can outlive eviction.
-`shared.clear()` releases cached entries without invalidating existing loader callbacks.
+`shared_channels.clear()` releases cached entries without invalidating existing loader callbacks.
 Invalid configuration, channel indices, or reader return values raise `TimeFValidationError`.
 For formats that cheaply read channels independently, keep separate loaders instead.
 
