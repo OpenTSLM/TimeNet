@@ -1,7 +1,7 @@
 import numpy as np
 
-from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
+from timenet.testing import assert_round_trips
 from timenet.types.text import read_value
 from timenet_connectors.datasets.oxwearables.capture24 import Capture24Connector, connector, schemes, source
 from timenet_connectors.datasets.oxwearables.capture24.tests.release import (
@@ -263,14 +263,10 @@ def test_card_pins_the_archive_the_connector_downloads():
 
 def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     original = Capture24Connector().convert([release(tmp_path)])
-    registry = LocalRegistry(tmp_path / "registry")
-    registry.store(original)
-    with TimeFReader(registry.open_version("oxwearables/capture24", "1.0.0")) as reader:
-        reader.verify()
-        restored = reader.read()
-        assert _output(restored) == _EXPECTED
-        assert all(not task.input_annotations for task in restored.iter_tasks())
-        _assert_values(restored)
+    restored = assert_round_trips(original, tmp_path / "registry")
+    assert _output(restored) == _EXPECTED
+    assert all(not task.input_annotations for task in restored.iter_tasks())
+    _assert_values(restored)
 
 
 def test_storing_reads_each_recording_once(tmp_path, monkeypatch):
