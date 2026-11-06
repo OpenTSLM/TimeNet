@@ -114,9 +114,10 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
 - A spec allows no missing timestep by default, so a `None` value fails the build. If the source
-  has gaps, say why on the spec: `missing=MissingValues(reason=MissingReason.SENSOR_GAP)`. The
-  writer records how many timesteps each signal misses, as `Signal.null_count`. Keep a null a
-  null: never fill a gap.
+  has gaps, say why on the spec: `missing=MissingValues(reason=MissingReason.SENSOR_GAP)`. Add
+  `replacement_value=0` only if the source gives a missing timestep that meaning, such as a count
+  that reports nothing when no event happened. The writer records how many timesteps each signal
+  misses, as `Signal.null_count`. Keep a null a null: never fill a gap.
 - Group signals under a `Source(name=..., signals=...)`. Then
   `dataset.add_record(record=Record(sources=(source,)))` registers the record and returns it. A
   windowed record says so through its axis: `RegularAxis.at_index(...)` moves the origin into the

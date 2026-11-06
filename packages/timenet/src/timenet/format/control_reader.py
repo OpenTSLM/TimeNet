@@ -134,6 +134,7 @@ class _SignalRow(NamedTuple):
     dimension_names: list[str]
     missing_reason: str | None
     missing_description: str | None
+    missing_replacement_value: str | None
     n_values: int
     null_count: int | None
     metadata: str
@@ -157,6 +158,7 @@ class _SignalRow(NamedTuple):
             tuple(self.dimension_names),
             self.missing_reason,
             self.missing_description,
+            self.missing_replacement_value,
             self.modality,
         )
 
@@ -2142,6 +2144,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 {
                     "reason": row.missing_reason,
                     "description": row.missing_description,
+                    "replacement_value": _decode_json(row.missing_replacement_value),
                 }
             )
         except ValidationError as exc:

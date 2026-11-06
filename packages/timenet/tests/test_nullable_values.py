@@ -38,6 +38,39 @@ def _spec(dtype="float32", **kwargs):
 _MISSING = MissingValues(reason=MissingReason.SENSOR_GAP)
 
 
+@pytest.mark.parametrize(
+    ("dtype", "categories", "value", "fits"),
+    [
+        ("float32", (), 0, True),
+        ("float32", (), -1.5, True),
+        ("float32", (), "0", False),
+        ("int16", (), 0, True),
+        ("int16", (), 1.5, False),
+        ("int16", (), True, False),
+        ("bool", (), False, True),
+        ("bool", (), 0, False),
+        ("str", (), "none", True),
+        ("enum", ("a", "b"), "a", True),
+        ("enum", ("a", "b"), "c", False),
+    ],
+)
+def test_a_recommended_replacement_value_must_fit_the_dtype(dtype, categories, value, fits):
+    missing = MissingValues(reason=MissingReason.NOT_RECORDED, replacement_value=value)
+    if fits:
+        assert _spec(dtype, categories=categories, missing=missing).missing.replacement_value == value
+    else:
+        with pytest.raises(ValidationError, match="replacement_value must be"):
+            _spec(dtype, categories=categories, missing=missing)
+
+
+def test_the_recommended_replacement_value_round_trips_with_its_type(tmp_path):
+    missing = MissingValues(reason=MissingReason.NOT_RECORDED, replacement_value=0)
+    series = Signal.from_values([1, None, 3], spec=_spec("int16", missing=missing), name="x", time_axis=OrdinalAxis())
+    restored = _write_read(tmp_path, series, values_backend="parquet")
+    assert restored.spec.missing == missing
+    assert type(restored.spec.missing.replacement_value) is int
+
+
 def test_nullable_is_true_exactly_when_the_spec_has_a_missing_record():
     assert not _spec().nullable
     assert _spec(missing=_MISSING).nullable

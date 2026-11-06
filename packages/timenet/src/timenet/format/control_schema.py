@@ -213,6 +213,7 @@ SIGNALS = Table(
         _required("dimension_names", ColumnType.VARCHAR_LIST),
         Column("missing_reason", ColumnType.VARCHAR),
         Column("missing_description", ColumnType.VARCHAR),
+        Column("missing_replacement_value", ColumnType.VARCHAR),
         _key("n_values"),
         Column("null_count", ColumnType.BIGINT),
         _required("metadata", ColumnType.JSON),
@@ -225,6 +226,9 @@ SIGNALS = Table(
     ),
 )
 """The ``missing_*`` columns hold a spec's missing-value record, or are all null when it has none.
+
+``missing_replacement_value`` is the recommended replacement value as JSON, so that it keeps the
+type that the spec's dtype requires.
 
 A spec is nullable exactly when ``missing_reason`` is set. The Zarr backend reads that to find the
 validity arrays. ``null_count`` records how many of a signal's ``n_values`` timesteps are missing.
