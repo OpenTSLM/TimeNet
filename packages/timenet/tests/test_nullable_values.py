@@ -1,5 +1,3 @@
-import json
-
 import numpy as np
 import pyarrow as pa
 from pydantic import ValidationError
@@ -8,8 +6,6 @@ import pytest
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis, OrdinalAxis, RegularAxis
 from timenet.errors import TimeFValidationError
-from timenet.format.checksums import file_checksum
-from timenet.format.duckdb import connect_control
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.testing import make_dataset
@@ -121,14 +117,6 @@ def test_series_with_more_nulls_than_max_fraction_are_rejected(tmp_path):
     array = pa.array([1.0, None, None, 4.0], type=pa.float32())
     with pytest.raises(TimeFValidationError, match=r"more than the max_fraction 0\.25"):
         TimeFWriter(tmp_path, make_dataset())._read_and_validate(_lazy_series(spec, array))
-
-
-def test_the_unspecified_reason_rejects_a_new_series_with_nulls():
-    spec = _spec(missing=MissingValues.unspecified())
-    with pytest.raises(TimeFValidationError, match="gives no reason"):
-        Signal.from_values([1.0, None], spec=spec, name="x", time_axis=OrdinalAxis())
-    # Without nulls the series is fine, so a release read back can be written again.
-    Signal.from_values([1.0, 2.0], spec=spec, name="x", time_axis=OrdinalAxis())
 
 
 @pytest.mark.parametrize("value", [np.nan, np.inf, -np.inf])
@@ -260,41 +248,6 @@ def test_nullable_tensor_round_trips_whole_timesteps(tmp_path):
     assert back.null_count == 1
     assert back.is_valid().to_pylist() == [True, False, True, True]
     np.testing.assert_array_equal(back.to_numpy_ndarray()[0], frames[0])
-
-
-def test_a_release_written_before_the_missing_record_reads_as_unspecified(tmp_path):
-    # Older releases store only the nullable flag: in the manifest's schema, and as the signals
-    # table's nullable column without the missing_* columns.
-    whole = Signal.from_values(
-        [1.0, 2.0, 3.0], spec=_spec().model_copy(update={"spec_type": "w"}), name="w", time_axis=OrdinalAxis()
-    )
-    gappy = Signal.from_values([1.0, None, 3.0], spec=_spec(missing=_MISSING), name="x", time_axis=OrdinalAxis())
-    _write_read(tmp_path, gappy, values_backend="zarr", leading_series=whole)
-    version_dir = tmp_path / "timenet/nullable/1.0.0"
-    with connect_control(version_dir / "control.duckdb") as connection:
-        for column in ("missing_reason", "missing_description", "missing_max_fraction"):
-            connection.execute(f"ALTER TABLE signals DROP COLUMN {column}")
-    manifest_path = version_dir / "manifest.json"
-    manifest = json.loads(manifest_path.read_text())
-    for spec in manifest["schema"]["time_series_specs"]:
-        spec["nullable"] = spec.pop("missing") is not None
-    control = version_dir / "control.duckdb"
-    manifest["files"]["control"] = [
-        {"path": "control.duckdb", "checksum": file_checksum(control), "size": control.stat().st_size}
-    ]
-    manifest_path.write_text(json.dumps(manifest))
-
-    version = open_local_version(version_dir)
-    assert [spec.missing for spec in version.manifest.dataset_schema.time_series_specs] == [
-        None,
-        MissingValues.unspecified(),
-    ]
-    with TimeFReader(version) as reader:
-        restored_whole, restored_gappy = reader.read().records[0].signals
-    assert restored_whole.spec.missing is None
-    assert restored_gappy.spec.missing == MissingValues.unspecified()
-    assert restored_gappy.spec.nullable
-    assert restored_gappy.to_arrow().to_pylist() == [1.0, None, 3.0]
 
 
 def test_nonnullable_zarr_writes_no_validity_array(tmp_path):

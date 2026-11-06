@@ -3,7 +3,7 @@
 The SQL table definitions and the writer's Arrow batch schemas come from :data:`CONTROL_TABLES`.
 The audit also uses it to examine keys and references. Define schema changes there.
 
-This is version 1 of the control schema. Every table except ``label_sets`` uses ids as keys.
+This is version 2 of the control schema. Every table except ``label_sets`` uses ids as keys.
 Records, Signals, and Tasks use the public ids that the caller sees. All other objects use the
 writer's storage ids.
 
@@ -13,9 +13,6 @@ Fixed-shape fields are typed columns, so SQL can filter them. Only the free-form
 dictionaries are JSON. The database has no persisted constraints. The writer keeps
 :data:`Table.unique` and :data:`Table.foreign_keys` while it streams rows, and
 :func:`timenet.format.control_audit.audit_control_database` checks them again.
-
-A column added to version 1 after releases were written is listed in :data:`LEGACY_ABSENT_COLUMNS`.
-The reader reads NULL for it from a release that predates it and applies the older meaning.
 """
 
 from dataclasses import dataclass
@@ -228,15 +225,10 @@ SIGNALS = Table(
         ForeignKey("axis_id", "axes", "axis_id"),
     ),
 )
-"""The ``nullable`` flag is true when the ``missing_*`` columns hold a missing-value record.
+"""The ``nullable`` flag is true exactly when the ``missing_*`` columns hold a missing-value record.
 
-The Zarr backend reads the flag to find the validity arrays. Older releases have only the flag.
+The Zarr backend reads the flag to find the validity arrays.
 """
-
-LEGACY_ABSENT_COLUMNS: dict[str, frozenset[str]] = {
-    SIGNALS.name: frozenset({"missing_reason", "missing_description", "missing_max_fraction"}),
-}
-"""Columns by table that releases written before the column was added do not have."""
 
 SIGNAL_CHUNKS = Table(
     "signal_chunks",
