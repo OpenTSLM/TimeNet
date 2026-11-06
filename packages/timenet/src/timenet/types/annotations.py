@@ -15,8 +15,9 @@ manifest.
 from collections.abc import Hashable, Iterable, Mapping
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
+from functools import cached_property
 import json
-from typing import Annotated, Any, Protocol, cast, final
+from typing import Annotated, Any, NoReturn, Protocol, cast, final
 
 import pint
 from pydantic import BeforeValidator, StrictStr
@@ -45,6 +46,61 @@ AnnotationValue = TextHandle | TextListHandle | bool | int | float | None
 AnnotationValueInput = str | list[str] | tuple[str, ...] | TextHandle | TextListHandle | bool | int | float
 """A value that a mapping passed to ``add_annotations`` can hold. A sequence of strings must be a
 ``list`` or a ``tuple``."""
+
+
+def _refuse_change(*_args: object, **_kwargs: object) -> NoReturn:
+    """Refuse a change to frozen annotation metadata.
+
+    Raises:
+        TypeError: Always.
+    """
+    raise TypeError("annotation metadata cannot change; build a new Annotation instead")
+
+
+class _FrozenJsonObject(dict):
+    """A JSON object that cannot change. It compares equal to a ``dict``, and ``json.dumps`` writes it as one."""
+
+    __slots__ = ()
+
+    __setitem__ = __delitem__ = __ior__ = clear = pop = popitem = setdefault = update = _refuse_change
+
+    def __reduce__(self) -> tuple[type, tuple[dict]]:
+        # Unpickling a dict subclass would otherwise set each item, which this class refuses.
+        return (_FrozenJsonObject, (dict(self),))
+
+
+class _FrozenJsonArray(list):
+    """A JSON array that cannot change. It compares equal to a ``list``, and ``json.dumps`` writes it as one."""
+
+    __slots__ = ()
+
+    __setitem__ = __delitem__ = __iadd__ = __imul__ = _refuse_change
+    append = clear = extend = insert = pop = remove = reverse = sort = _refuse_change
+
+    def __reduce__(self) -> tuple[type, tuple[list]]:
+        # Unpickling a list subclass would otherwise append each item, which this class refuses.
+        return (_FrozenJsonArray, (list(self),))
+
+
+def _frozen(value: object) -> object:
+    """Return a copy of a validated JSON value in which no object or array can change."""
+    if isinstance(value, dict):
+        return _FrozenJsonObject({key: _frozen(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return _FrozenJsonArray(_frozen(item) for item in value)
+    return value
+
+
+def _frozen_metadata(value: object) -> JsonMapping:
+    """Validate a metadata mapping and return a copy of it that cannot change.
+
+    Returns:
+        The frozen copy.
+
+    Raises:
+        TimeFValidationError: If the value is not a JSON object with text keys.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by validate_json_mapping
+    return cast("JsonMapping", _frozen(validate_json_mapping(value)))
 
 
 def _annotation_value(value: Any) -> AnnotationValue:
@@ -105,11 +161,12 @@ class Annotation:
     ``description``, which the descriptor holds once per key, ``source`` can differ between
     annotations that share a key."""
     metadata: JsonMapping = field(default_factory=dict)
-    """Optional metadata that is part of the reusable content."""
+    """Optional metadata that is part of the reusable content. The annotation keeps a copy that
+    cannot change: it compares equal to a ``dict``, and changing it raises ``TypeError``."""
     confidence: float | None = field(default=None, compare=False)
     """Optional confidence for this particular application."""
     occurrence_metadata: JsonMapping = field(default_factory=dict, compare=False)
-    """Optional metadata for this particular application."""
+    """Optional metadata for this particular application. It cannot change, as ``metadata``."""
 
     # cls is typed as a plain type: with the class final, a checker would otherwise report a
     # subclass twice, once as a final-class error and once as a bad argument to this method.
@@ -135,12 +192,10 @@ class Annotation:
                 the annotation has neither a value nor a span.
         """
         object.__setattr__(self, "unit", normalize_unit(self.unit))
-        object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
-        object.__setattr__(
-            self,
-            "occurrence_metadata",
-            validate_json_mapping(self.occurrence_metadata),
-        )
+        # Freeze both metadata mappings, so that the content of an annotation cannot change once
+        # it is built, also through a dict or a list that the caller still holds.
+        object.__setattr__(self, "metadata", _frozen_metadata(self.metadata))
+        object.__setattr__(self, "occurrence_metadata", _frozen_metadata(self.occurrence_metadata))
         if self.span is not None and not isinstance(self.span, TimeSpan):
             raise TimeFValidationError(
                 f"annotation {self.key!r} span must be a TimePoint or a TimeInterval, got {type(self.span).__name__}"
@@ -175,6 +230,39 @@ class Annotation:
             content = value
         metadata = json.dumps(self.metadata, sort_keys=True)
         return (self.key, value_type_of(value), content, self.unit, self.description, metadata)
+
+    @cached_property
+    def _sharing_key(self) -> tuple[Hashable, ...]:
+        """A cached key that matches annotations by every stored field except the span.
+
+        Two annotations with equal keys store the same content and the same occurrence fields. Text
+        is compared by its value, so a handle from a release matches the same string from a
+        connector. The value type is part of the key, as in :attr:`_content_key`, and a float
+        compares by its bits. The annotation cannot change, so the key is computed once. A lazy text
+        handle is then read once, which is why its function must return the same text on each call.
+        """
+        value = self.value
+        content: Hashable
+        if isinstance(value, TextHandle):
+            content = value.read()
+        elif isinstance(value, TextListHandle):
+            content = tuple(value.read())
+        elif isinstance(value, float):
+            content = float.hex(value)
+        else:
+            content = value
+        confidence = None if self.confidence is None else float.hex(float(self.confidence))
+        return (
+            self.key,
+            value_type_of(value),
+            content,
+            self.unit,
+            self.description,
+            json.dumps(self.metadata, sort_keys=True),
+            self.source,
+            confidence,
+            json.dumps(self.occurrence_metadata, sort_keys=True),
+        )
 
     @property
     def name(self) -> str:

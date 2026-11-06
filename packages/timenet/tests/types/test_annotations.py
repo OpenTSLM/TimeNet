@@ -1,16 +1,20 @@
 from dataclasses import dataclass, replace
+import json
 import math
 import pickle
 from typing import Literal
 
-from pydantic import ValidationError
+from pydantic import JsonValue, ValidationError
 import pytest
 
 from timenet.errors import TimeFValidationError
+from timenet.json import JsonMapping
 from timenet.types import (
     Annotation,
     AnnotationDescriptor,
     AnnotationType,
+    LazyText,
+    TextListHandle,
     TimeInterval,
     TimePoint,
     annotation_type_of,
@@ -223,3 +227,96 @@ def test_value_type_of_rejects_maps_and_non_string_lists():
 def test_value_type_of_rejects_unsupported_type():
     with pytest.raises(TimeFValidationError, match="unsupported annotation value type"):
         value_type_of(object())
+
+
+def test_metadata_is_a_copy_that_cannot_change():
+    rater: dict[str, JsonValue] = {"name": "a"}
+    scores: list[JsonValue] = [1, 2]
+    run: list[JsonValue] = [1]
+    annotation = Annotation(
+        key="k", value=1, metadata={"rater": rater, "scores": scores}, occurrence_metadata={"run": run}
+    )
+    rater["name"] = "b"
+    scores.append(3)
+    run.append(2)
+    assert annotation.metadata == {"rater": {"name": "a"}, "scores": [1, 2]}
+    assert annotation.occurrence_metadata == {"run": [1]}
+    frozen_rater, frozen_scores = annotation.metadata["rater"], annotation.metadata["scores"]
+    frozen_run = annotation.occurrence_metadata["run"]
+    assert isinstance(frozen_rater, dict) and isinstance(frozen_scores, list) and isinstance(frozen_run, list)
+    changes = [
+        lambda: annotation.metadata.update(added=True),
+        lambda: annotation.metadata.pop("rater"),
+        lambda: frozen_rater.__setitem__("name", "c"),
+        lambda: frozen_scores.append(3),
+        frozen_scores.reverse,
+        frozen_run.clear,
+    ]
+    for change in changes:
+        with pytest.raises(TypeError, match="cannot change"):
+            change()
+    assert annotation.metadata == {"rater": {"name": "a"}, "scores": [1, 2]}
+
+
+def test_a_text_list_does_not_follow_the_callers_list_or_a_read():
+    labels = ["a", "b"]
+    annotation = Annotation(key="labels", value=labels)
+    labels.append("c")
+    value = annotation.value
+    assert isinstance(value, TextListHandle)
+    value.read().append("d")
+    assert value.read() == ["a", "b"]
+
+
+def test_frozen_metadata_writes_the_same_json():
+    metadata: JsonMapping = {"b": [1, {"c": None}], "a": "x"}
+    annotation = Annotation(key="k", value=1, metadata=metadata)
+    assert json.dumps(annotation.metadata, sort_keys=True) == json.dumps(metadata, sort_keys=True)
+    assert annotation.metadata == metadata
+
+
+def test_replace_freezes_the_new_metadata():
+    copy = replace(Annotation(key="k", value=1), metadata={"a": [1]})
+    items = copy.metadata["a"]
+    assert isinstance(items, list)
+    with pytest.raises(TypeError, match="cannot change"):
+        items.append(2)
+
+
+def test_pickle_keeps_frozen_metadata_and_an_equal_sharing_key():
+    annotation = Annotation(key="k", value=["a"], metadata={"a": [1]}, occurrence_metadata={"b": {"c": 1}})
+    key = annotation._sharing_key
+    restored = pickle.loads(pickle.dumps(annotation))
+    assert restored == annotation
+    assert restored._sharing_key == key
+    with pytest.raises(TypeError, match="cannot change"):
+        restored.metadata["new"] = 1
+
+
+def test_a_lazy_text_is_read_once_for_the_sharing_key():
+    calls = []
+
+    def load() -> str:
+        calls.append(1)
+        return "note"
+
+    annotation = Annotation(key="n", value=LazyText(load))
+    assert annotation._sharing_key == annotation._sharing_key == Annotation(key="n", value="note")._sharing_key
+    assert calls == [1]
+
+
+@pytest.mark.parametrize(
+    "other",
+    [
+        Annotation(key="k", value=1.0),
+        Annotation(key="k", value=True),
+        Annotation(key="k", value=1, source="rater"),
+        Annotation(key="k", value=1, confidence=0.5),
+        Annotation(key="k", value=1, metadata={"a": 1}),
+        Annotation(key="k", value=1, occurrence_metadata={"a": 1}),
+        Annotation(key="k", value=1, unit="s"),
+        Annotation(key="k", value=1, description="d"),
+    ],
+)
+def test_the_sharing_key_covers_every_stored_field(other):
+    assert Annotation(key="k", value=1)._sharing_key != other._sharing_key
