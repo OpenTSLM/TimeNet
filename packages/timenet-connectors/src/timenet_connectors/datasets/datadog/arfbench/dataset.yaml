@@ -1,20 +1,28 @@
 # yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card.schema.json
 # Each metric record contains one source per tag group and one signal per available rollup.
-# Rollup intervals are 10, 60, 300, 1800, 3600, or 86400 seconds.
-# ARFBench supplies each rollup through a separate query, not by resampling one series.
-# Coarser rollups can cover more time and include more tag groups.
-# Consumers choose a rollup. The release evaluation uses the finest one that fits the model context.
-# Charts use the finest rollup. `finest_interval_s` names its interval.
+# Rollup intervals are 10, 60, 300, 1800, 3600, or 86400 seconds. The rollups of a metric differ in
+# time range and in tag groups, so they are not resamplings of one series.
+# Consumers choose a rollup. The paper's statistics and the charts use the finest one, which
+# `finest_interval_s` names. The release evaluation uses the finest one that fits the model context.
+# The release stores its epochs as naive timestamps, and its charts and answer options use the same
+# clock. The dataset reads the epochs as UTC.
+# `query_name` is an identifier from the release. It differs from the metric ID for 122 of the 142
+# metrics, and the release does not explain it.
 #
-# Each question creates a series task and a chart task in the test split.
-# Series tasks cite metric records; chart tasks use the released PNG images.
+# Each question creates a series task and a chart task in the test split, so the split holds 1,500
+# tasks for 750 questions. Both tasks of a question carry its row in the question table as
+# `question_index` in their metadata. Series tasks cite metric records; chart tasks use the released
+# PNG images.
 # Values remain float64 with unspecified units.
-# A rollup file lists every tag group at every step of one time grid, with a null where the metric
+# A rollup file lists the tag groups of a metric on one time grid, with a null where the metric
 # reported nothing for the group. Each series is cut to the window in which its group has a value,
 # so grid steps before its first value and after its last one are not stored, and a group with no
 # value at a rollup has no series there. A null inside the window stays a missing timestep, with
 # the spec's missing-value reason `not_recorded`.
 # Series with missing steps use explicit time offsets.
+# One end-time question (row 191, metric 36464_0) has a correct answer 140 seconds after the last
+# step of the metric's series, and 29 answer options of the start-time and end-time questions lie
+# outside every rollup. The dataset keeps them as released.
 yaml_schema_version: 1
 dataset_id: datadog/arfbench
 dataset_version: 1.0.0
