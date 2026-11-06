@@ -12,8 +12,7 @@ import pytest
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.json import JsonValue
-from timenet.reader import TimeFReader
-from timenet.registry import LocalRegistry
+from timenet.testing import assert_round_trips
 from timenet.types import AnswerTask, ClassificationTask, Split
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark import connector
@@ -124,25 +123,22 @@ def test_every_task_holds_its_published_row():
 
 def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     original = _FixtureConnector().convert(_refs())
-    registry = LocalRegistry(tmp_path / "registry")
-    registry.store(original)
+    restored = assert_round_trips(original, tmp_path / "registry")
     published = _published()
-    with TimeFReader(registry.open_version("tsaqa/tsaqa-benchmark", "1.0.0")) as reader:
-        restored = reader.read()
-        assert {a.key: a.value for a in restored.annotations if a.key not in {"task", "question_type"}} == {
-            "source_repository": "TSAQA/TSAQA-Benchmark",
-            "source_revision": "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd",
-        }
-        labels = [(a.key, a.value) for a in restored.annotations if a.key in {"task", "question_type"}]
-        expected = {("task", row["task"]) for row in published.values()}
-        expected |= {("question_type", row["question_type"]) for row in published.values()}
-        assert len(labels) == len(expected)
-        assert all(label in labels for label in expected)
-        tasks = list(restored.iter_tasks())
-        assert len(tasks) == len(published)
-        for task in tasks:
-            _check_task(task, published[_row_of(task)])
-        specs = Counter(record.signals[0].spec.spec_type for record in restored.records)
+    assert {a.key: a.value for a in restored.annotations if a.key not in {"task", "question_type"}} == {
+        "source_repository": "TSAQA/TSAQA-Benchmark",
+        "source_revision": "883dcb0f96e0d1c8fd3806f35548ff1f2058a9cd",
+    }
+    labels = [(a.key, a.value) for a in restored.annotations if a.key in {"task", "question_type"}]
+    expected = {("task", row["task"]) for row in published.values()}
+    expected |= {("question_type", row["question_type"]) for row in published.values()}
+    assert len(labels) == len(expected)
+    assert all(label in labels for label in expected)
+    tasks = list(restored.iter_tasks())
+    assert len(tasks) == len(published)
+    for task in tasks:
+        _check_task(task, published[_row_of(task)])
+    specs = Counter(record.signals[0].spec.spec_type for record in restored.records)
     # 20 inputs and the comparisons' second ones, and the temporal relationship series; then the
     # sequences of one Fourier, one wavelet and one first-order difference question, and the four
     # choices of the first-order difference multiple-choice question.
