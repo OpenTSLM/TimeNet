@@ -92,6 +92,8 @@ dataset. Sources, axes, and annotations have no id. Put upstream identifiers in 
 (for example `{"ecg_id": 17}`) or in an annotation. Refer to other objects by the Python object,
 not by an id. A span takes Signal objects, for example
 `TimeInterval.seconds(0.0, 1.0, time_series=(signal,))`.
+Use `dataset.annotate_shared(annotation)` when several tasks need the same dataset annotation. See "Shared
+dataset annotations" in `docs/timef-dataset.md`.
 
 ### 7. Verify
 - Add a fixture-based test in `<org>/<name>/tests/`, mirroring the one at

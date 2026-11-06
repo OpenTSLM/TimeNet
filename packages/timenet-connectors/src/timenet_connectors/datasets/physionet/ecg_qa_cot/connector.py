@@ -205,17 +205,6 @@ class _CotRow:
     rationale: str
 
 
-@dataclass(frozen=True)
-class _TaskAnnotations:
-    """The dataset annotations the QA tasks reference, one lookup per annotation key."""
-
-    question_type: dict[str, Annotation]
-    answer_options: dict[int, Annotation]
-    """Keyed by template id. A template with no answer options has no entry."""
-    clinical_context: dict[int, Annotation]
-    """Keyed by PTB-XL ECG ID. Recordings with the same context share one annotation."""
-
-
 def _load_template_answers(path: Path) -> dict[int, tuple[str, ...]]:
     """Load per-template answer options from ``answers_for_each_template.csv``.
 
@@ -291,10 +280,9 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
     def compose(self, raw_refs: list[EcgQaCotSource], context: BuildContext) -> TimeFDataset:
         """Build one record per recording and stream one :class:`AnswerTask` per CoT row.
 
-        A first pass over the CoT CSVs collects each recording's split and the distinct question
-        metadata. Then the method imports the selected parent records. It finds them by the
+        A first pass over the CoT CSVs collects each recording's split. Then the method imports the selected parent records. It finds them by the
         ``ecg_id`` in their metadata. It builds the clinical context of each recording from the
-        imported PTB-XL annotations. Last, it registers the deduped metadata annotations. The tasks
+        imported PTB-XL annotations. The task stream registers shared metadata annotations on first use. The tasks
         themselves stream from :meth:`_iter_tasks`, so the ~230k questions never all live in memory.
 
         Args:
@@ -314,13 +302,9 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
         dataset = TimeFDataset(metadata=self.metadata())
 
         split_of_ecg: dict[int, Split] = {}
-        question_types: set[str] = set()
-        template_ids: set[int] = set()
         for split, csv_path in source.cot_csvs:
             for row in _iter_cot_rows(csv_path):
                 split_of_ecg.setdefault(row.ecg_id, split)
-                question_types.add(row.question_type)
-                template_ids.add(row.template_id)
 
         ptbxl = context.parents[ParentAlias("ptbxl")]
         # PTB-XL keeps each recording's upstream ecg_id in the record's metadata.
@@ -347,76 +331,40 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             records[ecg_id] = record
             contexts[ecg_id] = _clinical_context(recording)
 
-        task_annotations = self._annotate_task_metadata(dataset, question_types, template_ids, contexts, answers)
         dataset.set_task_stream(
             [AnswerTask],
-            lambda: self._iter_tasks(source, records, task_annotations),
+            lambda: self._iter_tasks(source, records, dataset, contexts, answers),
         )
         return dataset
-
-    @staticmethod
-    def _annotate_task_metadata(
-        dataset: TimeFDataset,
-        question_types: set[str],
-        template_ids: set[int],
-        contexts: Mapping[int, str],
-        answers: dict[int, tuple[str, ...]],
-    ) -> _TaskAnnotations:
-        """Attach one dataset annotation per distinct question-metadata value.
-
-        Args:
-            dataset: The dataset the annotations attach to.
-            question_types: The distinct question types.
-            template_ids: The distinct template ids, which select the answer options.
-            contexts: Each recording's clinical context, keyed by PTB-XL ECG ID.
-            answers: Per-template answer options.
-
-        Returns:
-            The attached annotations, keyed by the value that :meth:`_iter_tasks` looks them up by.
-        """
-        question_type_annotations = {
-            question_type: dataset.annotate(Annotation(key="question_type", value=question_type))
-            for question_type in sorted(question_types)
-        }
-        answer_options_annotations: dict[int, Annotation] = {}
-        for template_id in sorted(template_ids):
-            options = answers.get(template_id)
-            if options:
-                answer_options_annotations[template_id] = dataset.annotate(
-                    Annotation(key="answer_options", value=list(options))
-                )
-        context_annotations = {
-            context: dataset.annotate(Annotation(key="clinical_context", value=context))
-            for context in sorted(set(contexts.values()))
-        }
-        return _TaskAnnotations(
-            question_type=question_type_annotations,
-            answer_options=answer_options_annotations,
-            clinical_context={ecg_id: context_annotations[context] for ecg_id, context in contexts.items()},
-        )
 
     @staticmethod
     def _iter_tasks(
         source: EcgQaCotSource,
         records: Mapping[int, Record],
-        annotations: _TaskAnnotations,
+        dataset: TimeFDataset,
+        contexts: Mapping[int, str],
+        answers: Mapping[int, tuple[str, ...]],
     ) -> Iterator[AnswerTask]:
         """Yield one :class:`AnswerTask` per CoT row, referencing its recording and metadata annotations.
 
         Args:
             source: The download handle naming the CoT CSVs.
             records: Input Records keyed by PTB-XL ECG ID.
-            annotations: The dataset annotations the tasks reference.
+            dataset: The dataset whose shared annotations the tasks reference.
+            contexts: Each recording's clinical context, keyed by PTB-XL ECG ID.
+            answers: Per-template answer options.
 
         Yields:
             Each question as an answer task, streamed so the whole set never lives in memory.
         """
         for split, csv_path in source.cot_csvs:
             for row in _iter_cot_rows(csv_path):
-                input_annotations = [annotations.question_type[row.question_type]]
-                if (options := annotations.answer_options.get(row.template_id)) is not None:
-                    input_annotations.append(options)
-                input_annotations.append(annotations.clinical_context[row.ecg_id])
+                input_annotations = [
+                    dataset.annotate_shared(_question_type(row.question_type)),
+                ]
+                if options := answers.get(row.template_id):
+                    input_annotations.append(dataset.annotate_shared(_answer_options(options)))
+                input_annotations.append(dataset.annotate_shared(_clinical_context_annotation(contexts[row.ecg_id])))
                 yield AnswerTask(
                     inputs=(records[row.ecg_id],),
                     prompt=row.question,
@@ -426,6 +374,21 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
                     split=split,
                     metadata={"template_id": row.template_id},
                 )
+
+
+def _question_type(question_type: str) -> Annotation:
+    """Return the annotation of a question type."""
+    return Annotation(key="question_type", value=question_type)
+
+
+def _answer_options(options: tuple[str, ...]) -> Annotation:
+    """Return the annotation of a template's answer options."""
+    return Annotation(key="answer_options", value=list(options))
+
+
+def _clinical_context_annotation(context: str) -> Annotation:
+    """Return the annotation of a recording's clinical context."""
+    return Annotation(key="clinical_context", value=context)
 
 
 CONNECTOR = EcgQaCotConnector
