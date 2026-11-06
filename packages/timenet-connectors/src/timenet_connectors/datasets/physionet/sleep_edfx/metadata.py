@@ -202,7 +202,7 @@ class SubjectTables:
             The annotations, in a stable order.
 
         Raises:
-            TimeFFormatError: If the table of that study holds no row for the recording.
+            TimeNetConnectorError: If the table of that study holds no row for the recording.
         """
         shape = self._shapes[recording.study]
         row = tables.find_subject_row(

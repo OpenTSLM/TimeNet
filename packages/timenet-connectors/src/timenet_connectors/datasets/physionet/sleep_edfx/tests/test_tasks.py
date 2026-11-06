@@ -1,6 +1,6 @@
 import pytest
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet.types import (
     US_PER_S,
     Annotation,
@@ -109,25 +109,25 @@ def test_a_hole_between_two_entries_gets_no_task():
 
 
 def test_an_entry_that_does_not_divide_into_epochs_names_its_duration():
-    with pytest.raises(TimeFFormatError, match="lasts 45000000 us"):
+    with pytest.raises(TimeNetConnectorError, match="lasts 45000000 us"):
         list(tasks.build_epoch_tasks(_RECORDING_ID, [_stage("Sleep stage W", 0, 45)]))
 
 
 def test_an_entry_off_the_epoch_boundary_names_its_onset_and_not_its_duration():
     # An entry from 15 s to 45 s lasts exactly one epoch. The onset is the value that is wrong.
     # A message about the duration misleads the reader.
-    with pytest.raises(TimeFFormatError, match="starts at 15000000 us"):
+    with pytest.raises(TimeNetConnectorError, match="starts at 15000000 us"):
         list(tasks.build_epoch_tasks(_RECORDING_ID, [_stage("Sleep stage W", 15, 45)]))
 
 
 def test_an_entry_with_no_span_raises_rather_than_being_dropped():
     entry = Annotation(key="sleep_stage", value="Sleep stage W")
-    with pytest.raises(TimeFFormatError, match="states no span"):
+    with pytest.raises(TimeNetConnectorError, match="states no span"):
         list(tasks.build_epoch_tasks(_RECORDING_ID, [entry]))
 
 
 def test_a_label_the_release_does_not_write_raises():
-    with pytest.raises(TimeFFormatError, match="not a label this release writes"):
+    with pytest.raises(TimeNetConnectorError, match="not a label this release writes"):
         list(tasks.build_epoch_tasks(_RECORDING_ID, [_stage("N3", 0, 30)]))
 
 
@@ -207,30 +207,30 @@ def test_provenance_becomes_no_task():
 
 
 def test_a_missing_age_raises_rather_than_dropping_the_question():
-    with pytest.raises(TimeFFormatError, match="states no age"):
+    with pytest.raises(TimeNetConnectorError, match="states no age"):
         list(tasks.build_record_tasks(_RECORDING_ID, [_fact("sex", "female")], []))
 
 
 def test_a_missing_sex_raises_rather_than_dropping_the_question():
-    with pytest.raises(TimeFFormatError, match="states no sex"):
+    with pytest.raises(TimeNetConnectorError, match="states no sex"):
         list(tasks.build_record_tasks(_RECORDING_ID, [_fact("age", 33)], []))
 
 
 def test_an_age_that_is_not_a_whole_number_raises():
     facts = [_fact("age", "thirty-three"), _fact("sex", "female")]
-    with pytest.raises(TimeFFormatError, match="not a whole number of years"):
+    with pytest.raises(TimeNetConnectorError, match="not a whole number of years"):
         list(tasks.build_record_tasks(_RECORDING_ID, facts, []))
 
 
 def test_a_sex_the_release_does_not_write_raises():
     facts = [_fact("age", 33), _fact("sex", 1)]
-    with pytest.raises(TimeFFormatError, match="does not write"):
+    with pytest.raises(TimeNetConnectorError, match="does not write"):
         list(tasks.build_record_tasks(_RECORDING_ID, facts, []))
 
 
 def test_a_key_stated_twice_raises():
     facts = [*_CASSETTE_FACTS, _fact("age", 40)]
-    with pytest.raises(TimeFFormatError, match="twice"):
+    with pytest.raises(TimeNetConnectorError, match="twice"):
         list(tasks.build_record_tasks(_RECORDING_ID, facts, []))
 
 

@@ -18,7 +18,7 @@ from pathlib import Path
 
 import xlrd
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 
 
 SECONDS_PER_DAY = 24 * 60 * 60
@@ -39,7 +39,7 @@ def read_table_rows(path: Path) -> list[tuple[object, ...]]:
         One tuple of cell values for each row of the first sheet, in sheet order.
 
     Raises:
-        TimeFFormatError: If the file does not open as a workbook, or holds no sheet.
+        TimeNetConnectorError: If the file does not open as a workbook, or holds no sheet.
     """
     try:
         # These are legacy BIFF8 workbooks that Excel wrote. openpyxl reads only the ZIP-based
@@ -47,10 +47,10 @@ def read_table_rows(path: Path) -> list[tuple[object, ...]]:
         book = xlrd.open_workbook(path)
     # xlrd has no single exception type for a bad file, so catch broadly and re-raise.
     except Exception as exc:
-        raise TimeFFormatError(f"{path}: cannot read this file as a workbook") from exc
+        raise TimeNetConnectorError(f"{path}: cannot read this file as a workbook") from exc
 
     if book.nsheets == 0:
-        raise TimeFFormatError(f"{path}: holds no data sheet")
+        raise TimeNetConnectorError(f"{path}: holds no data sheet")
 
     sheet = book.sheet_by_index(0)
     return [tuple(sheet.row_values(index)) for index in range(sheet.nrows)]
@@ -72,10 +72,10 @@ def decode_whole_number(cell: object, field: str, workbook: str, row_number: int
         The value as a whole number.
 
     Raises:
-        TimeFFormatError: If the cell holds no whole number.
+        TimeNetConnectorError: If the cell holds no whole number.
     """
     if isinstance(cell, bool) or not isinstance(cell, int | float) or not float(cell).is_integer():
-        raise TimeFFormatError(f"{workbook} row {row_number}: {field} holds {cell!r}, which is not a whole number")
+        raise TimeNetConnectorError(f"{workbook} row {row_number}: {field} holds {cell!r}, which is not a whole number")
 
     return int(cell)
 
@@ -98,17 +98,17 @@ def decode_day_fraction_as_time(cell: object, workbook: str, row_number: int) ->
         The clock time that the fraction states, to the second.
 
     Raises:
-        TimeFFormatError: If the cell holds no number, or a number outside 0 up to 1.
+        TimeNetConnectorError: If the cell holds no number, or a number outside 0 up to 1.
     """
     if isinstance(cell, bool) or not isinstance(cell, int | float):
-        raise TimeFFormatError(
+        raise TimeNetConnectorError(
             f"{workbook} row {row_number}: the cell holds {cell!r}, which is not a number. "
             "Excel states a bare time as the fraction of a day past midnight"
         )
 
     seconds = round(cell * SECONDS_PER_DAY)
     if not 0 <= seconds < SECONDS_PER_DAY:
-        raise TimeFFormatError(
+        raise TimeNetConnectorError(
             f"{workbook} row {row_number}: the cell holds {cell!r}, which is not a day fraction from 0 up to 1"
         )
 
