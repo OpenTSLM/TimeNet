@@ -68,7 +68,7 @@ MAX_CITED_METRICS = 2  # a question is about one metric or a pair
 # the tag groups of a metric on one time grid, and a step at which the metric reported nothing for
 # a group holds a null. Inside a group's observed window such a null stays a missing timestep.
 # In the 1.0.0 release, 42 of 142 metrics have such gaps, and a sparse metric misses up to 99% of
-# the steps of a fine grid, so the bound is the whole series.
+# the steps of a fine grid. The release records each series' null count, so a consumer can see this.
 METRIC = TimeSeriesSpec(
     spec_type="metric",
     name="Observability metric",
@@ -80,7 +80,6 @@ METRIC = TimeSeriesSpec(
             "The metric reported no data point for this step of the rollup grid. A sparse metric can "
             "miss almost every step of a fine rollup."
         ),
-        max_fraction=1.0,
     ),
 )
 
