@@ -7,8 +7,11 @@ import sys
 import pytest
 
 from timenet.errors import TimeNetBuildError
+from timenet.manifest import PayloadSource
+from timenet.manifest.files import FilePart
+from timenet.types.references import DatasetRef
 from timenet_connectors.builder import env as env_module
-from timenet_connectors.builder.env import EnvSpec, env_spec, run_isolated, uv_command
+from timenet_connectors.builder.env import EnvSpec, env_spec, run_isolated, run_isolated_build, uv_command
 
 
 def _spec(requirements=None, base=("--with", "timenet==0.1.0")):
@@ -228,3 +231,27 @@ def test_uv_command_reports_a_missing_uv_binary(monkeypatch):
 
     with pytest.raises(TimeNetBuildError, match="uv"):
         uv_command(_spec(), ["timenet-build"])
+
+
+def test_run_isolated_build_runs_build_release_with_the_store_and_the_pins(monkeypatch, tmp_path):
+    release = DatasetRef.parse("timenet/hello-world@1.0.0")
+    pinned = PayloadSource(release=release, files=(FilePart(path="a.bin", checksum="sha256:" + "0" * 64, size=1),))
+    captured = {}
+
+    def run(command, env):
+        # The pins file exists only while the child runs.
+        pins = json.loads(Path(command[command.index("--pinned-by") + 1]).read_text(encoding="utf-8"))
+        captured.update(argv=command[command.index("timenet-build") :], env=env, pins=pins)
+        return "", "", 0
+
+    monkeypatch.setattr(env_module, "_run_build", run)
+    pins = {DatasetRef.parse("test/reader@1.0.0"): pinned}
+
+    run_isolated_build(release, tmp_path / "store", force=True, keep_cache=True, quiet=True, pinned_by=pins)
+
+    argv = captured["argv"]
+    assert argv[:4] == ["timenet-build", "--quiet", "build-prepared-release", "timenet/hello-world@1.0.0"]
+    assert argv[argv.index("--store") + 1] == str(tmp_path / "store")
+    assert {"--force", "--keep-cache"} <= set(argv)
+    assert captured["pins"] == {"test/reader@1.0.0": pinned.model_dump(mode="json")}
+    assert captured["env"]["TIMENET_ISOLATION"] == "off"

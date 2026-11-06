@@ -10,23 +10,12 @@ from collections.abc import Generator, Mapping
 from contextlib import contextmanager, nullcontext
 import json
 from pathlib import Path
-import sys
 
-from rich.progress import (
-    BarColumn,
-    DownloadColumn,
-    Progress,
-    TaskID,
-    TextColumn,
-    TimeRemainingColumn,
-    TransferSpeedColumn,
-)
 import typer
 
-from timenet.builders import BuilderBackend, claim, declared, find_card
-from timenet.cache import human_bytes
+from timenet.builders import BuilderBackend, BuildOptions, claim, declared, find_card
 from timenet.cli.runner import run_cli
-from timenet.cli.ui import console
+from timenet.cli.ui import console, progress_renderer
 from timenet.config import settings
 from timenet.coordinator.plan import Step, prepare_parents
 from timenet.engine import publish_pipeline, run_pipeline
@@ -38,6 +27,7 @@ from timenet.errors import (
     TimeNetRegistryError,
 )
 from timenet.manifest import PayloadSource
+from timenet.progress import BytesMoved
 from timenet.registry import (
     BaseRegistry,
     LocalRegistry,
@@ -50,7 +40,7 @@ from timenet.types.references import DatasetRef, split_ref
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.builder.env import run_isolated
 from timenet_connectors.discovery import known_ids, resolve
-from timenet_connectors.download import DownloadProgress, ProgressCallback, progress_sink
+from timenet_connectors.download import DownloadProgress, progress_sink
 
 
 app = typer.Typer(help="Build TimeNet datasets from connectors.", no_args_is_help=True)
@@ -184,6 +174,31 @@ def build(
         error.hint = "A remote --out holds open releases only. Build it into a local --out instead."
         raise
     typer.echo(result)
+
+
+@app.command("build-prepared-release", hidden=True)
+def build_prepared_release_command(
+    release: str,
+    store: Path = typer.Option(..., "--store", help="The local registry to build into."),
+    force: bool = typer.Option(False, "--force", help="Build the release again, even if the store holds it."),
+    keep_cache: bool = typer.Option(False, "--keep-cache", help="Keep the raw download cache after building."),
+    pinned_by: Path | None = typer.Option(
+        None, "--pinned-by", help="A JSON file of the releases that read files of this release, with their pins."
+    ),
+) -> None:
+    """Build a release in a local registry.
+
+    The registry must already contain all parent releases and their payload sources.
+    Status and progress go to stderr, and nothing goes to stdout.
+    """
+    # backend.py imports this module, so a module-level import here would be circular.
+    from timenet_connectors.builder.backend import ConnectorBuilder  # ruff: ignore[import-outside-top-level]
+
+    reference = DatasetRef.parse(release)
+    pins = {} if pinned_by is None else _read_pins(pinned_by)
+    with progress_renderer() as progress:
+        options = BuildOptions(keep_cache=keep_cache, progress=progress, quiet=console.quiet)
+        ConnectorBuilder().build_prepared(reference, LocalRegistry(store), force=force, pinned_by=pins, options=options)
 
 
 def build_one(  # ruff: ignore[too-many-arguments]
@@ -414,92 +429,19 @@ def _report_progress(event: WriteProgressEvent) -> None:
 
 
 @contextmanager
-def _download_progress() -> Generator[Progress | None]:
-    """Install the download-progress sink for a build and render it.
-
-    In an interactive terminal, downloads show as live progress bars, one row per file, updating in
-    parallel. When output goes through a pipe or you set ``--quiet``, this falls back to throttled
-    text lines (or silence), so redirected logs stay readable.
-
-    Yields:
-        The live progress display when rendering bars, else ``None``. This installs the sink for
-        the duration of the block.
-    """
-    if console.quiet:
-        with progress_sink(None):
-            yield None
-        return
-    if not sys.stderr.isatty():
-        with progress_sink(_text_download_reporter()):
-            yield None
-        return
-    progress = Progress(
-        TextColumn("[bold blue]{task.fields[name]}", justify="right"),
-        BarColumn(bar_width=None),
-        "[progress.percentage]{task.percentage:>3.1f}%",
-        "•",
-        DownloadColumn(),
-        "•",
-        TransferSpeedColumn(),
-        "•",
-        TimeRemainingColumn(),
-        console=console.rich,
-    )
-    with progress, progress_sink(_bar_reporter(progress)):
-        yield progress
-
-
-def _bar_reporter(progress: Progress) -> ProgressCallback:
-    """Build a download-progress sink that maps each URL to a live progress-bar task.
-
-    The first event for a URL adds a task (keyed by URL so concurrent downloads stay on their own
-    row). Later events update its position.
-
-    Args:
-        progress: The display to add and update per-file tasks on.
-
-    Returns:
-        A callback for :func:`~timenet_connectors.download.progress_sink`.
-    """
-    tasks: dict[str, TaskID] = {}
-
-    def report(event: DownloadProgress) -> None:
-        task_id = tasks.get(event.url)
-        if task_id is None:
-            task_id = progress.add_task("download", name=event.url.rsplit("/", 1)[-1], total=event.total)
-            tasks[event.url] = task_id
-        progress.update(task_id, completed=event.downloaded, total=event.total)
-
-    return report
-
-
-_UNKNOWN_TOTAL_STEP_BYTES = 50 * 1024 * 1024  # progress cadence when the download size is unknown
-
-
-def _text_download_reporter() -> ProgressCallback:
-    """Build a download-progress sink that prints throttled status lines to the console.
-
-    Reports each file at roughly 20% steps, or every 50 MB when the total size is unknown. Keys each
-    report per URL so concurrent downloads do not interleave into a flood of lines.
-
-    Returns:
-        A callback for :func:`~timenet_connectors.download.progress_sink`.
-    """
-    last: dict[str, int] = {}
-
-    def report(event: DownloadProgress) -> None:
-        # ~20% steps when the size is known, else one line every 50 MB.
-        step = event.downloaded * 5 // event.total if event.total else event.downloaded // _UNKNOWN_TOTAL_STEP_BYTES
-        if last.get(event.url) == step:
+def _download_progress() -> Generator[None]:
+    """Display download progress during the ``with`` block."""
+    with progress_renderer() as render:
+        if render is None:
+            with progress_sink(None):
+                yield
             return
-        last[event.url] = step
-        name = event.url.rsplit("/", 1)[-1]
-        if event.total:
-            console.status("⬇️", f"{name} {event.downloaded * 100 // event.total}% ({human_bytes(event.total)})")
-        else:
-            console.status("⬇️", f"{name} {human_bytes(event.downloaded)}")
 
-    return report
+        def report(event: DownloadProgress) -> None:
+            render(BytesMoved(event.url, event.downloaded, event.total))
+
+        with progress_sink(report):
+            yield
 
 
 def main() -> None:
