@@ -10,6 +10,7 @@ a build that never reaches the fallback needs nothing extra.
 
 from abc import ABC
 from collections.abc import Callable
+import math
 from pathlib import Path
 import re
 from typing import Any, NamedTuple, TypeVar
@@ -60,18 +61,42 @@ def _read_dat16(dat_path: str, n_sig: int) -> np.ndarray:
 
     Returns:
         The raw samples, one column per signal.
+
+    Raises:
+        TimeNetConnectorError: If ``n_sig`` is less than 1, the file has an odd number of bytes, or
+            its samples do not split evenly into ``n_sig`` signals.
     """
-    return np.fromfile(dat_path, dtype="<i2").reshape(-1, n_sig)
+    if n_sig < 1:
+        raise TimeNetConnectorError(f"{dat_path}: a format-16 file needs at least 1 signal, got {n_sig}")
+    size = Path(dat_path).stat().st_size
+    if size % 2:
+        raise TimeNetConnectorError(f"{dat_path}: {size} bytes is not a whole number of 2-byte samples")
+    raw = np.fromfile(dat_path, dtype="<i2")
+    if raw.size % n_sig:
+        raise TimeNetConnectorError(f"{dat_path}: {raw.size} samples do not split into {n_sig} signals")
+    return raw.reshape(-1, n_sig)
 
 
-def _parse_record_line(_record_base: Path, line: str) -> tuple[int, float, int]:
-    """Parse record fields; the header reader reports malformed fields with their source path.
+def _parse_record_line(record_base: Path, line: str) -> tuple[int, float, int]:
+    """Return the signal count, sampling frequency, and length from a header's record line.
 
-    Returns:
-        The signal count, sampling frequency and sample count.
-    """
+    The record line is ``<name> <n_sig> <fs>[/<counter_freq>] <sig_len> ...``.
+
+    Raises:
+        TimeNetConnectorError: If the count or the length is negative, or the frequency is not
+            finite and positive.
+        IndexError: If the line has too few fields. The caller reports it as a malformed header.
+        ValueError: If a field is not a number. The caller reports it as a malformed header.
+    """  # ruff: ignore[docstring-extraneous-exception] - int(), float() and indexing raise the last two
     record = line.split()
-    return int(record[1]), float(record[2].split("/")[0]), int(record[3])
+    n_sig, fs, sig_len = int(record[1]), float(record[2].split("/")[0]), int(record[3])
+    if n_sig < 0 or sig_len < 0:
+        raise TimeNetConnectorError(
+            f"{record_base}.hea: the signal count {n_sig} and the length {sig_len} must not be negative"
+        )
+    if not math.isfinite(fs) or fs <= 0:
+        raise TimeNetConnectorError(f"{record_base}.hea: the sampling frequency {fs} is not finite and positive")
+    return n_sig, fs, sig_len
 
 
 class _WfdbRead(NamedTuple):
@@ -125,8 +150,10 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
 
         Raises:
             TimeNetConnectorError: If the header is malformed: text that is not UTF-8, a missing line
-                or field, a field that is not a number, an unparseable gain, a signal line with no
-                signal name, or fewer signal lines than the record declares.
+                or field, a field that is not a number, a negative signal count or length, a sampling
+                frequency that is not finite and positive, a gain that is not finite or cannot be
+                parsed, a signal line with no signal name, or fewer signal lines than the record
+                declares.
         """
         try:
             # Decode inside the try, so that text that is not UTF-8 is a malformed header too.
@@ -146,6 +173,8 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
                 if len(fields) <= _DESCRIPTION_FIELD:
                     raise TimeNetConnectorError(f"{record_base}.hea: signal line names no signal: {line!r}")
                 gain = float(match["gain"])
+                if not math.isfinite(gain):
+                    raise TimeNetConnectorError(f"{record_base}.hea: the gain {fields[2]!r} is not finite")
                 dat_names.append(fields[0])
                 raw_formats.append(raw_format)
                 formats.append(raw_format.partition("x")[0].partition(":")[0])
