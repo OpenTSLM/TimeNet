@@ -1,0 +1,26 @@
+{
+  "TSAD_train": {
+    "0": {
+      "Observation": [0.123456789, -0.2, 657372000.0],
+      "Source": "Healthcare-ECG",
+      "FigurePath": "figures/train/0.jpg",
+      "Thought": "A normal ECG waveform.\nNo abnormal changes — café.",
+      "Action": "Normal Sequence",
+      "ActionID": 0,
+      "Label": "Normal"
+    }
+  },
+  "TSAD_test": {
+    "0": {
+      "Observation": [1.0, 8.0],
+      "Source": "Server",
+      "FigurePath": "figures/test/0.jpg",
+      "Thought": "A sudden spike at the second sample.",
+      "Action": "Temporal Dependency Anomaly",
+      "ActionID": 2,
+      "Label": "Normal",
+      "Rank": ["model-b", "model-a"]
+    },
+    "106": null
+  }
+}
