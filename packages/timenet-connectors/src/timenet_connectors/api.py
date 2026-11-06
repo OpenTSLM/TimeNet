@@ -24,31 +24,31 @@ def build(  # ruff: ignore[too-many-arguments]
     fetch_from: "str | BaseRegistry | None" = None,
     build_parents: bool = False,
 ) -> Path:
-    # ruff: ignore[docstring-extraneous-exception] (raised by build_release, not directly here)
+    # ruff: ignore[docstring-extraneous-exception] (raised by the plan and its run, not directly here)
     """Build a dataset release in a local registry.
 
-    The build reuses an existing release unless you set ``force``. The connector runs in an environment
-    with its required packages, or in this interpreter if ``TIMENET_ISOLATION=off``.
+    The build reuses an existing release unless ``force`` is set. The connector runs in an environment
+    from its ``requirements.txt``, or in this interpreter if ``TIMENET_ISOLATION=off``.
 
     Args:
-        dataset_id: The connector's dataset ID (``org/name``).
-        version: The version to build, or ``None`` for the connector's declared version.
-        out: The output directory, or ``None`` to use the default local registry.
-        force: Rebuild the release even if it exists in the registry.
-        keep_cache: Keep downloaded source files after a successful build.
-        fetch_from: The registry, or its URI, to copy missing parent releases from.
-        build_parents: Build missing parent releases from their installed connectors.
+        dataset_id: The ``org/name`` ID declared in the connector's card.
+        version: The required card version, or ``None`` to accept any version.
+        out: The local registry directory, or ``None`` to use the default local registry.
+        force: Rebuild an existing release.
+        keep_cache: Keep the raw download cache after a successful build.
+        fetch_from: The registry or URI to copy missing parents from before trying builds.
+        build_parents: Build missing parents with installed connectors.
 
     Returns:
-        The release's version directory.
+        The version directory of the release.
 
     Raises:
         TimeNetDatasetNotFoundError: If no installed connector builds ``dataset_id``.
-        TimeNetVersionUnavailableError: If ``version`` differs from the connector's declared version.
-        TimeNetMissingParentError: If a required parent release is still missing.
+        TimeNetVersionUnavailableError: If the card's version differs from ``version``.
+        TimeNetMissingParentError: If a required release cannot be copied or built.
     """
     from timenet.builders import BuildOptions, declared  # ruff: ignore[import-outside-top-level]
-    from timenet.coordinator.build import build_release  # ruff: ignore[import-outside-top-level]
+    from timenet.coordinator.build import plan_release_build, run_plan  # ruff: ignore[import-outside-top-level]
     from timenet.errors import TimeNetMissingParentError  # ruff: ignore[import-outside-top-level]
     from timenet.registry import (  # ruff: ignore[import-outside-top-level]
         LocalRegistry,
@@ -56,22 +56,50 @@ def build(  # ruff: ignore[too-many-arguments]
         open_registry,
     )
     from timenet.registry._paths import release_dir  # ruff: ignore[import-outside-top-level, import-private-name]
+    from timenet.sources import InstalledConnectors  # ruff: ignore[import-outside-top-level]
 
     release = declared(dataset_id).release
     root = Path(out).expanduser() if out is not None else default_registry_path()
+    source = open_registry(fetch_from) if isinstance(fetch_from, str) else fetch_from
+    store = LocalRegistry(root)
     try:
-        build_release(
+        plan = plan_release_build(
             f"{dataset_id}@{version}" if version else dataset_id,
-            store=LocalRegistry(root),
-            fetch_from=open_registry(fetch_from) if isinstance(fetch_from, str) else fetch_from,
-            build_parents=build_parents,
+            store=store,
+            # TODO(adrian): Remove temporary glue which maps fetch_from and build_parents onto a
+            # list of sources until the producer API replaces this function.
+            parents_from=[
+                *([source] if source is not None else []),
+                *([InstalledConnectors()] if build_parents else []),
+            ],
             force=force,
-            options=BuildOptions(keep_cache=keep_cache),
         )
+        run_plan(plan, store, options=BuildOptions(keep_cache=keep_cache))
     except TimeNetMissingParentError as error:
-        error.hint = "Copy it with fetch_from=<registry> or build it with build_parents=True."
+        error.hint = _missing_hint(fetch_from=fetch_from, build_parents=build_parents)
         raise
     return release_dir(root, release)
+
+
+def _missing_hint(*, fetch_from: "str | BaseRegistry | None", build_parents: bool) -> str | None:
+    """Suggest options to obtain a missing release.
+
+    Args:
+        fetch_from: The selected registry or URI, or ``None``.
+        build_parents: Whether parent builds are enabled.
+
+    Returns:
+        A sentence naming unused options, or ``None`` if both are enabled.
+    """
+    ways = []
+    if fetch_from is None:
+        ways.append("copy it with fetch_from=<registry>")
+    if not build_parents:
+        ways.append("build it with build_parents=True")
+    if not ways:
+        return None
+    hint = " or ".join(ways)
+    return f"{hint[0].upper()}{hint[1:]}."
 
 
 def load(
