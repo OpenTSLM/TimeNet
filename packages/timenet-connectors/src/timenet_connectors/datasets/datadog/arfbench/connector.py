@@ -81,7 +81,7 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
 
     values_backend = "zarr"  # the chart tensors need it
 
-    def download(self, cache_dir: Path) -> list[ARFBenchSource]:  # ruff: ignore[no-self-use] - BaseConnector override
+    async def download_async(self, cache_dir: Path) -> list[ARFBenchSource]:  # ruff: ignore[no-self-use] - BaseConnector override
         """Download the question table, series files, and charts from the pinned release.
 
         Args:
@@ -93,7 +93,7 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
         Raises:
             TimeNetDownloadError: If the download fails or the question table is missing.
         """
-        root = hub_snapshot(REPO, REVISION, cache_dir, (QA_CSV, f"{SERIES_DIR}/*.parquet", f"{CHART_DIR}/*.png"))
+        root = await hub_snapshot(REPO, REVISION, cache_dir, (QA_CSV, f"{SERIES_DIR}/*.parquet", f"{CHART_DIR}/*.png"))
         if not (root / QA_CSV).is_file():
             raise TimeNetDownloadError(f"{REPO!r} at {REVISION!r} holds no {QA_CSV} under {root}")
         return [ARFBenchSource(qa_csv=root / QA_CSV, series_dir=root / SERIES_DIR, chart_dir=root / CHART_DIR)]
