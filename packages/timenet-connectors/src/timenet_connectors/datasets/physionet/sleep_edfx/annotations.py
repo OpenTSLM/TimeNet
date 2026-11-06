@@ -77,7 +77,7 @@ def build(entries: tuple[reader.EdfAnnotation, ...]) -> list[Annotation]:
     """
     return [
         Annotation(
-            key=AnnotationKey.SLEEP_STAGE,
+            key=AnnotationKey.SLEEP_STAGE.value,
             value=entry.label,
             span=TimeInterval.micros(
                 entry.onset_microseconds,

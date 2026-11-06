@@ -103,6 +103,7 @@ def test_age_is_an_int_in_years(tmp_path, cell, years):
         ({"sex": "2"}, "sex '2' is not 0 or 1"),
         ({"age": "56.5"}, "age '56.5' is not a whole number"),
         ({"age": "unknown"}, "age 'unknown' is not a whole number"),
+        ({"age": "-1.0"}, "age -1 must be an integer of zero or more years"),
         ({"weight": "heavy"}, "could not convert string to float: 'heavy'"),
         ({"patient_id": "p1"}, "patient_id 'p1' is not a whole number"),
         ({"patient_id": "1.9"}, "patient_id '1.9' is not a whole number"),
@@ -110,7 +111,18 @@ def test_age_is_an_int_in_years(tmp_path, cell, years):
         ({"scp_codes": "{'NORM'"}, ""),
         ({"filename_hr": "missing"}, "missing.hea"),
     ],
-    ids=["sex", "age-fraction", "age-text", "weight", "patient", "patient-fraction", "fold", "scp-codes", "waveform"],
+    ids=[
+        "sex",
+        "age-fraction",
+        "age-text",
+        "age-negative",
+        "weight",
+        "patient",
+        "patient-fraction",
+        "fold",
+        "scp-codes",
+        "waveform",
+    ],
 )
 def test_a_malformed_row_raises_a_connector_error_that_names_the_row_and_the_ecg_id(tmp_path, cells, reason):
     with pytest.raises(TimeNetConnectorError, match=r"invalid PTB-XL row 2 \(ecg_id 1\) in .*: .*" + re.escape(reason)):

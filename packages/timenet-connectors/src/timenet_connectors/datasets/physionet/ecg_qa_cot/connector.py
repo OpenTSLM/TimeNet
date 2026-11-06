@@ -7,7 +7,7 @@ QA tasks. There is no record per question. The connector stores the question typ
 and the clinical context once, as value-deduped annotations that the tasks reference as their input.
 The task metadata stores the question template ID for provenance. The question text already expresses
 the template, so the ID is excluded from the input annotations. Each recording carries its dataset
-split and the patient's sex and age from PTB-XL. The ~230k tasks stream to disk, so they never all
+split and the patient's subject IDs, sex, and age from PTB-XL. The ~230k tasks stream to disk, so they never all
 live in memory.
 
 The connector imports the recordings and their patient metadata from the pinned PTB-XL TimeF
@@ -71,7 +71,7 @@ _OTHER_FINDINGS = (
     ("pacemaker", "pacemaker present"),
 )
 # The imported PTB-XL annotations that a record keeps. The connector clears every other one.
-_KEPT_ANNOTATIONS = frozenset({"sex", "age"})
+_KEPT_ANNOTATIONS = frozenset({"subject_ids", "sex", "age"})
 # The sexes that an imported PTB-XL record can have. The connector refuses any other value.
 _SEXES = frozenset({"male", "female"})
 
@@ -339,9 +339,7 @@ class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
             record = imported.records[parent_ids[ecg_id]]
             recording = _ptbxl_recording(ecg_id, record)
             record.metadata["patient_id"] = recording.patient_id
-            # Keep the sex and the age from PTB-XL, which have no span. Clear the other imported
-            # annotations. Then the Records match our standalone ECG-QA-CoT 1.1.0, whose Records
-            # have ``sex``, ``age``, and the split.
+            # Keep subject IDs, sex, and age from PTB-XL. The child adds its own split.
             record.annotations = tuple(
                 annotation for annotation in record.annotations if annotation.key in _KEPT_ANNOTATIONS
             )
