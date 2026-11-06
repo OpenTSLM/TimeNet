@@ -121,7 +121,9 @@ def test_a_split_file_that_does_not_fit_the_release_raises(tmp_path, splits, mes
 )
 def test_a_malformed_row_raises_with_its_location(tmp_path, change, message):
     rows = [*_ROWS[:2], _ROWS[2] | change]
-    with pytest.raises(TimeNetConnectorError, match=rf"sleep_cot\.csv data row 3: {message}"):
+    with pytest.raises(
+        TimeNetConnectorError, match=rf"sleep_cot\.csv:10: {next(iter(change))}: Value error, {message}"
+    ):
         SleepCotConnector().convert([_write_release(tmp_path, rows)])
 
 

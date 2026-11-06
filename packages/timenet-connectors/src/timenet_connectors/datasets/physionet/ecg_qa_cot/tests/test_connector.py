@@ -19,7 +19,11 @@ from timenet.testing import assert_round_trips
 from timenet.types import AnswerTask, ObjectKind, Split
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.text import read_value
-from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import EcgQaCotConnector, EcgQaCotSource
+from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import (
+    EcgQaCotConnector,
+    EcgQaCotSource,
+    _load_template_answers,
+)
 from timenet_connectors.datasets.physionet.ptb_xl.connector import PtbXlConnector, PtbXlSource
 
 
@@ -437,3 +441,14 @@ def test_compose_round_trips_through_the_writer(tmp_path, records_dir):
         "clinical_context",
     }
     assert {task.metadata["template_id"] for task in restored.iter_tasks()} == {0, 1}
+
+
+@pytest.mark.parametrize("cell", ["56.5", "2.0000000000000001", "NaN", "true"])
+def test_template_ids_reject_lossy_csv_numbers(tmp_path, cell):
+    path = tmp_path / "answers.csv"
+    with path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(["template_id", "classes"])
+        writer.writerow([cell, "['yes']"])
+    with pytest.raises(TimeNetConnectorError, match=r"answers\.csv:2: template_id"):
+        _load_template_answers(path)
