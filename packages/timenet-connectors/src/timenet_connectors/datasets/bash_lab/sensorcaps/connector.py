@@ -19,7 +19,7 @@ from pydantic import Field, FiniteFloat, JsonValue, Strict, TypeAdapter, Validat
 from timenet.dataset import Record, Signal, SignalChannel, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis
 from timenet.errors import TimeFValidationError
-from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec
+from timenet.types import AnswerTask, Split, TimeSeriesSpec
 from timenet.types.shared_loading import SharedChannelLoader
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 
@@ -312,15 +312,16 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
             TimeFValidationError: If references or source rows violate the SensorCaps mapping.
         """
         dataset = TimeFDataset(metadata=self.metadata())
-        for key, value in (
-            ("source_repository", self.HF_REPO),
-            ("source_revision", self.SOURCE_REVISION),
-            ("declared_sampling_rate_hz", DECLARED_SAMPLING_RATE_HZ),
-            ("source_sampling_rate_hz", _SOURCE_SAMPLING_RATE_HZ),
-            ("source_window_samples", _SOURCE_WINDOW_SAMPLES),
-            ("time_axis_reconstruction", "round(linspace(0, 119, 60)) / 20 seconds relative to window start"),
-        ):
-            dataset.annotate(Annotation(key=key, value=value))
+        dataset.add_annotations(
+            {
+                "source_repository": self.HF_REPO,
+                "source_revision": self.SOURCE_REVISION,
+                "declared_sampling_rate_hz": DECLARED_SAMPLING_RATE_HZ,
+                "source_sampling_rate_hz": _SOURCE_SAMPLING_RATE_HZ,
+                "source_window_samples": _SOURCE_WINDOW_SAMPLES,
+                "time_axis_reconstruction": "round(linspace(0, 119, 60)) / 20 seconds relative to window start",
+            }
+        )
         records: dict[tuple[str, int], Record] = {}
         shared_channels = SharedChannelLoader(_read_channels)
         for file in raw_refs:
@@ -369,8 +370,7 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         }
         if row.location is not None:
             metadata["sensor_location"] = row.location
-        for key, value in metadata.items():
-            record.annotate(Annotation(key=key, value=value))
+        record.add_annotations(metadata)
         return record
 
 

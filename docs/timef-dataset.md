@@ -235,6 +235,9 @@ lead_i.annotate(
 )
 ```
 
+`dataset.add_annotations()` attaches several dataset annotations. It validates every annotation
+before it attaches any of them. It takes a list of annotations or a mapping of keys to values.
+
 ## Schema and persistence
 
 `derive_schema()` collects the time-series specifications, annotation descriptors, and concrete Task
