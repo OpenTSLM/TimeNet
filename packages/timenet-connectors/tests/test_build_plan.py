@@ -1,6 +1,7 @@
 from pathlib import Path
 import shutil
 
+import click
 import numpy as np
 import pytest
 from typer.testing import CliRunner
@@ -440,26 +441,41 @@ def test_a_remote_output_names_the_access_page_of_a_held_parent_from_its_lineage
     assert caught.value.requirements == (AccessRequirement(GRAND, Access.CREDENTIALED, _GATED["access_url"]),)
 
 
-def _isolated_builds(calls: list) -> object:
-    """Return a stand-in for ``run_isolated`` that stores each dataset from its card and records the call.
+def _store_from_card(dataset_id: str, root: Path, *, force: bool) -> Path:
+    """Store a dataset from its card and return its version directory.
 
     A dataset with parents imports one Record of each; one without parents holds the demo dataset.
     """
+    registry = LocalRegistry(Path(root))
+    metadata = builders.find_card(dataset_id)
+    assert metadata is not None
+    with open_parents(metadata, registry) as context:
+        dataset = TimeFDataset(metadata=metadata) if context.parents else make_dataset()
+        dataset._metadata = metadata
+        for handle in context.parents.values():
+            dataset.import_from(handle, records=[make_dataset().records[0].id])
+        registry.put_dataset(dataset, force=force)
+    return registry.root / dataset_id / str(metadata.dataset_version)
+
+
+def _isolated_builds(calls: list) -> object:
+    """Return a stand-in for ``run_isolated`` that stores each dataset from its card and records the call."""
 
     def run_isolated(dataset_id, root, *, force=False, **_):
         calls.append((dataset_id, force))
-        registry = LocalRegistry(Path(root))
-        metadata = builders.find_card(dataset_id)
-        assert metadata is not None
-        with open_parents(metadata, registry) as context:
-            dataset = TimeFDataset(metadata=metadata) if context.parents else make_dataset()
-            dataset._metadata = metadata
-            for handle in context.parents.values():
-                dataset.import_from(handle, records=[make_dataset().records[0].id])
-            registry.put_dataset(dataset, force=force)
-        return str(registry.root / dataset_id / str(metadata.dataset_version))
+        return str(_store_from_card(dataset_id, root, force=force))
 
     return run_isolated
+
+
+def _prepared_builds(calls: list) -> object:
+    """Return a stand-in for ``run_isolated_build`` that stores each release from its card and records the call."""
+
+    def run_isolated_build(release, store_root, *, force=False, **_):
+        calls.append((release.dataset_id, force))
+        _store_from_card(release.dataset_id, store_root, force=force)
+
+    return run_isolated_build
 
 
 def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch):
@@ -470,7 +486,7 @@ def test_build_prepares_parents_before_the_isolated_child(tmp_path, monkeypatch)
     origin.put_dataset(make_dataset())
     out = tmp_path / "out"
     calls = []
-    monkeypatch.setattr(cli_module, "run_isolated", _isolated_builds(calls))
+    monkeypatch.setattr(backend_module, "run_isolated_build", _prepared_builds(calls))
 
     result = runner.invoke(
         app,
@@ -499,6 +515,7 @@ def test_every_build_entry_point_prepares_parents(tmp_path, monkeypatch, entry):
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     calls = []
     monkeypatch.setattr(cli_module, "run_isolated", _isolated_builds(calls))
+    monkeypatch.setattr(backend_module, "run_isolated_build", _prepared_builds(calls))
     build = timenet_connectors.build if entry == "api" else ConnectorBuilder().build
     out = tmp_path / "out"
 
@@ -527,7 +544,7 @@ def test_load_obtains_a_missing_parent_before_it_builds_and_reads(tmp_path, monk
     monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setenv("TIMENET_REGISTRY", str(tmp_path / "out"))
     calls = []
-    monkeypatch.setattr(cli_module, "run_isolated", _isolated_builds(calls))
+    monkeypatch.setattr(backend_module, "run_isolated_build", _prepared_builds(calls))
     origin = LocalRegistry(tmp_path / "origin")
     parent = make_dataset()
     parent._metadata = cards[PARENT.dataset_id]
@@ -599,17 +616,15 @@ def test_a_fetch_of_a_release_that_is_not_open_fails_before_any_download(tmp_pat
 
 
 def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, monkeypatch):
-    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={"parent": GRAND})
+    cards = _install_cards(monkeypatch, parent={"parent": GRAND})
     output = LocalRegistry(tmp_path / "output")
     _parent_without_its_source(output)
     pins = output.get_manifest(PARENT.dataset_id).payload_sources[SourceKey(str(GRAND))]
     received, pin_files = [], []
 
-    def run_pipeline(connector, root, *, pinned_by=None, **_):
+    def run_pipeline(connector, root, *, pinned_by, **_):
         received.append(pinned_by)
-        if pinned_by:
-            output.put_dataset(make_dataset())
-        return Path(root)
+        output.put_dataset(make_dataset(), pinned_by=pinned_by)
 
     def child(command, env):
         # Stands in for the uv child: run the forwarded command line through the CLI in this process.
@@ -620,18 +635,19 @@ def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, mo
         return result.stdout, "", result.exit_code
 
     monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
-    monkeypatch.setattr(env_module, "requirements_for", lambda dataset_id: None)
     monkeypatch.setattr(env_module, "_run_build", child)
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
-    monkeypatch.setattr(cli_module, "resolve", lambda dataset_id: _Grand)
-    monkeypatch.setattr(cli_module, "run_pipeline", run_pipeline)
+    monkeypatch.setattr(backend_module, "run_pipeline", run_pipeline)
 
-    cli_module.build_one(CHILD.dataset_id, output.root, build_parents=True)
+    # The output holds PARENT, so the build gets only GRAND, the payload source of PARENT.
+    result = runner.invoke(app, ["build", PARENT.dataset_id, "--out", str(output.root), "--build-parents"])
 
+    assert result.exit_code == 0, result.output
     # The rebuild of GRAND gets the pins of PARENT, through a file that is gone afterwards.
-    assert received == [{PARENT: pins}, None]
+    assert received == [{PARENT: pins}]
     assert len(pin_files) == 1
     assert not pin_files[0].exists()
+    assert output.exists(GRAND.dataset_id, str(GRAND.version))
 
 
 STORED = DatasetRef.parse("test/stored@1.0.0")
@@ -754,6 +770,7 @@ def test_a_proxy_backend_builds_a_parent_through_the_build_of_its_instance(tmp_p
 def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     out = LocalRegistry(tmp_path / "out")
     if case == "damaged":
         out.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))
@@ -786,3 +803,106 @@ def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
     error, hint = hints[case]
     assert isinstance(result.exception, error)
     assert str(result.exception).endswith(hint)
+
+
+def _remote_out(tmp_path, monkeypatch, cards) -> tuple[_Hosted, LocalRegistry, list]:
+    """Make the ``--out`` of the CLI a registry that is not local, and record each isolated build.
+
+    Returns:
+        The registry that ``--out`` names, the default local registry, and the list of the builds.
+    """
+    remote = _Hosted(tmp_path / "hosted")
+    monkeypatch.setattr(cli_module, "_resolve_target", lambda target: remote)
+    monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
+    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
+    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
+    calls = []
+    monkeypatch.setattr(backend_module, "run_isolated_build", _prepared_builds(calls))
+    return remote, LocalRegistry(tmp_path / "home/registry"), calls
+
+
+def test_build_to_a_remote_out_refuses_a_credentialed_release_before_any_download(tmp_path, monkeypatch):
+    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
+    cards[PARENT.dataset_id] = cards[PARENT.dataset_id].model_copy(update=_GATED)
+    origin = LocalRegistry(tmp_path / "origin")
+    origin.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))
+    _, local, calls = _remote_out(tmp_path, monkeypatch, cards)
+
+    command = ["build", CHILD.dataset_id, "--out", "s3://bucket/registry", "--fetch-from", str(origin.root)]
+
+    result = runner.invoke(app, command)
+
+    # The build into the local registry gets the access checks of the remote registry.
+    assert isinstance(result.exception, TimeNetAccessError), result.output
+    assert result.exception.dataset == PARENT
+    assert calls == []
+    assert not local.exists(PARENT.dataset_id, str(PARENT.version))
+
+
+def test_build_to_a_remote_out_builds_locally_and_copies(tmp_path, monkeypatch):
+    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
+    origin = LocalRegistry(tmp_path / "origin")
+    parent = make_dataset()
+    parent._metadata = cards[PARENT.dataset_id]
+    origin.put_dataset(parent)
+    remote, local, calls = _remote_out(tmp_path, monkeypatch, cards)
+    command = ["build", CHILD.dataset_id, "--out", "s3://bucket/registry", "--fetch-from", str(origin.root)]
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == str(CHILD.version)
+    # The parent lands in the local registry first, and the child builds there. Then the copy takes
+    # the child and its payload source, the parent, to the remote registry.
+    assert calls == [(CHILD.dataset_id, False)]
+    for registry in (local, remote):
+        assert registry.exists(CHILD.dataset_id, str(CHILD.version))
+        assert registry.exists(PARENT.dataset_id, str(PARENT.version))
+    # A remote registry that holds the version gets nothing, and nothing builds.
+    shutil.rmtree(local.root)
+    result = runner.invoke(app, command)
+    assert (result.exit_code, result.stdout.strip()) == (0, str(CHILD.version))
+    assert result.stderr.splitlines() == ["✅ Nothing to do: 'test/child' 1.0.0 is already in the remote --out"]
+    assert calls == [(CHILD.dataset_id, False)]
+    assert not local.root.exists()
+
+
+def test_build_to_a_remote_out_copies_a_missing_parent_from_that_registry(tmp_path, monkeypatch):
+    cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
+    remote, local, calls = _remote_out(tmp_path, monkeypatch, cards)
+    parent = make_dataset()
+    parent._metadata = cards[PARENT.dataset_id]
+    remote.put_dataset(parent)
+
+    result = runner.invoke(app, ["build", CHILD.dataset_id, "--out", "s3://bucket/registry"])
+
+    # Without --fetch-from, the build copies the parent from the remote --out, which holds it, into
+    # the local registry. So only the child builds.
+    assert result.exit_code == 0, result.output
+    assert calls == [(CHILD.dataset_id, False)]
+    assert local.exists(PARENT.dataset_id, str(PARENT.version))
+    assert remote.exists(CHILD.dataset_id, str(CHILD.version))
+
+
+def _files(root: Path) -> dict[Path, tuple[int, int]]:
+    """Return the size and the modification time of each file under ``root``, by its path."""
+    return {path: (path.stat().st_size, path.stat().st_mtime_ns) for path in root.rglob("*") if path.is_file()}
+
+
+def test_force_is_a_usage_error_if_the_remote_out_holds_the_version(tmp_path, monkeypatch):
+    cards = _install_cards(monkeypatch, child={}, parent={})
+    _, local, calls = _remote_out(tmp_path, monkeypatch, cards)
+    command = ["build", CHILD.dataset_id, "--out", "s3://bucket/registry"]
+    assert runner.invoke(app, command).exit_code == 0
+    held = _files(local.root)
+
+    result = runner.invoke(app, [*command, "--force"])
+
+    # A published version never changes. So the command refuses before anything downloads or builds.
+    assert result.exit_code == 2, result.output
+    output = click.unstyle(result.output)
+    assert "Invalid value for --force" in output
+    # The error box wraps the message and draws a border on each line.
+    assert "a published version never changes" in " ".join(output.replace("│", " ").split())
+    assert calls == [(CHILD.dataset_id, False)]
+    assert _files(local.root) == held
