@@ -5,7 +5,7 @@ different registries. A release that only installed connectors provide is built 
 """
 
 from collections.abc import Sequence
-from typing import cast
+from typing import NoReturn, cast
 
 from timenet.builders import declared, find_card
 from timenet.coordinator.build import run_plan
@@ -84,6 +84,31 @@ def read_release(
     return attach_payload_sources(graph.open(release), graph.open, searched=describe_searched_sources(sources, release))
 
 
+def raise_not_found(dataset_id: str, version: str | None, sources: Sequence[ReleaseSource]) -> NoReturn:
+    """Raise the error for a release that no source provides.
+
+    For an exact version, an installed connector that builds another version gives a more exact error.
+
+    Args:
+        dataset_id: The dataset ID.
+        version: An exact version, ``"latest"``, or ``None`` or ``""`` for no version.
+        sources: The sources searched for the release.
+
+    Raises:
+        TimeNetVersionUnavailableError: If the installed connector declares a different version.
+        TimeNetInvalidCardError: If the card of the connector cannot be read.
+        TimeNetDatasetNotFoundError: Otherwise, with a message that names the searched sources.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by declared
+    requested = None if is_latest(version) else DatasetRef.parse(f"{dataset_id}@{version}")
+    connectors = any(isinstance(source, InstalledConnectors) for source in sources)
+    if requested is not None and connectors and find_card(dataset_id) is not None:
+        # The installed connector builds another version.
+        declared(dataset_id, requested.version)
+    names = ", ".join(str(source) for source in sources)
+    wanted = dataset_id if requested is None else str(requested)
+    raise TimeNetDatasetNotFoundError(f"{wanted} is in none of the sources: {names}.")
+
+
 def _walk(
     dataset_id: str, version: str | None, *, sources: Sequence[ReleaseSource], store: LocalRegistry | None
 ) -> tuple[_Graph, DatasetRef]:
@@ -94,23 +119,16 @@ def _walk(
 
     Raises:
         TimeNetDatasetNotFoundError: If no source provides the release.
-    """
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by raise_not_found
     graph = _Graph(store, sources, open_only=False)
     answer = graph.lookups.resolve(sources, dataset_id, version)
     if isinstance(answer, NotFound):
-        requested = None if is_latest(version) else DatasetRef.parse(f"{dataset_id}@{version}")
-        if requested is not None:
+        if not is_latest(version):
             # Nothing but a registry replaces a damaged copy in the local registry.
-            damage = graph.in_output(requested)[1]
+            damage = graph.in_output(DatasetRef.parse(f"{dataset_id}@{version}"))[1]
             if damage is not None:
                 raise damage
-            connectors = any(isinstance(source, InstalledConnectors) for source in sources)
-            if connectors and find_card(dataset_id) is not None:
-                # The installed connector builds another version.
-                declared(dataset_id, requested.version)
-        names = ", ".join(str(source) for source in sources)
-        wanted = dataset_id if requested is None else str(requested)
-        raise TimeNetDatasetNotFoundError(f"{wanted} is in none of the sources: {names}.")
+        raise_not_found(dataset_id, version, sources)
     release = DatasetRef(dataset_id=dataset_id, version=answer.version)
     # The walk takes the answer, so that a read without an exact version does not ask again for the exact version.
     graph.visit(release, release, needed_in_local_registry=False, answer=answer)

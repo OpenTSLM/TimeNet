@@ -21,7 +21,7 @@ from timenet.errors import (
 from timenet.format.checksums import file_checksum
 from timenet.manifest import Manifest
 from timenet.reader import LoadPlan, TimeFReader
-from timenet.registry import LocalRegistry, RemoteRegistry, open_local_version
+from timenet.registry import LocalRegistry, RemoteRegistry, copy_release, open_local_version
 from timenet.sources import FoundInRegistry, NotServed
 from timenet.testing import assert_datasets_equal, make_dataset
 from timenet.types import Access, DatasetSchema, Domain, License, Version
@@ -195,11 +195,24 @@ def test_token_required_when_configured(version_dir, tmp_path):
 def test_full_download_writes_identical_bytes(version_dir, tmp_path):
     registry, _ = _remote(version_dir, tmp_path)
     directory, manifest = version_dir
-    dest = tmp_path / "out" / manifest.metadata.dataset_id / str(manifest.metadata.dataset_version)
-    registry.download_version(manifest.metadata.dataset_id, str(manifest.metadata.dataset_version), dest)
+    release = DatasetRef(dataset_id=manifest.metadata.dataset_id, version=manifest.metadata.dataset_version)
+    dest = tmp_path / "out" / release.dataset_id / str(release.version)
+    registry.download_release(release, dest)
     for part in manifest.files.all_parts():
         assert (dest / part).read_bytes() == (directory / part).read_bytes()
     assert (dest / "manifest.json").exists()
+
+
+def test_a_download_into_the_store_resolves_a_remote_release_once(version_dir, tmp_path):
+    registry, requests = _remote(version_dir, tmp_path)
+    directory, manifest = version_dir
+    store = LocalRegistry(tmp_path / "store", store=True)
+
+    path = TimeNet(sources=[store, registry]).download(manifest.metadata.dataset_id)
+
+    assert (path / "manifest.json").read_bytes() == (directory / "manifest.json").read_bytes()
+    # One read of the manifest resolves the release, and one starts the copy.
+    assert sum(request.url.path.endswith("/manifest") for request in requests) == 2
 
 
 def test_a_corrupted_remote_download_names_the_file_and_its_checksums(version_dir, tmp_path):
@@ -213,7 +226,7 @@ def test_a_corrupted_remote_download_names_the_file_and_its_checksums(version_di
     dest = tmp_path / "out" / release.dataset_id / str(release.version)
 
     with pytest.raises(TimeNetFileError) as caught:
-        registry.download_version(release.dataset_id, str(release.version), dest)
+        registry.download_release(release, dest)
 
     error = caught.value
     # A caller that handles format errors still catches it.
@@ -235,7 +248,7 @@ def test_a_remote_download_whose_size_differs_from_its_record_names_both_sizes(v
     dest = tmp_path / "out" / release.dataset_id / str(release.version)
 
     with pytest.raises(TimeNetFileError) as caught:
-        registry.download_version(release.dataset_id, str(release.version), dest)
+        registry.download_release(release, dest)
 
     error = caught.value
     size = record["size"]
@@ -441,8 +454,8 @@ def test_latest_detail_rejects_non_string_version(tmp_path):
 
 
 def test_a_registry_url_in_the_sources_caches_under_the_storage_directory(tmp_path, monkeypatch):
-    # A remote registry that the sources name by URL caches under the storage directory, where
-    # download() copies to, so download() and load() share one cache-first directory.
+    # A remote registry that the sources name by URL reuses the complete copies under the storage
+    # directory.
     monkeypatch.setenv("TIMENET_STORAGE", str(tmp_path / "store"))
     (registry,) = TimeNet(sources=["https://registry.example.test"])._sources
     assert isinstance(registry, RemoteRegistry)
@@ -501,7 +514,7 @@ def test_child_streams_physical_sources_and_downloads_for_offline_reads(tmp_path
             assert any(parent_id + "/1.0.0/download/" in path for path in requests)
             assert not any(parent_id + "/1.0.0/download/control.duckdb" in path for path in requests)
             assert not (cache / parent_id / "1.0.0").exists()
-        remote.download_version("test/child", "1.0.0", cache / "test/child/1.0.0")
+        copy_release(DatasetRef.parse("test/child@1.0.0"), remote, LocalRegistry(cache))
     with TimeNet(sources=[remote]).open("test/child", "1.0.0") as reader:
         assert reader.get(Signal, signal_id).to_arrow().equals(expected)
     assert not any("test/build-only" in path for path in requests)
@@ -511,7 +524,9 @@ def test_child_streams_physical_sources_and_downloads_for_offline_reads(tmp_path
         assert reader.get(Signal, signal_id).to_arrow().equals(expected)
     # The parent is already complete: preparing it again requires no network requests.
     prepared_requests = list(requests)
-    remote.download_version(parent_id, "1.0.0", cache / parent_id / "1.0.0")
+    parent = DatasetRef.parse(f"{parent_id}@1.0.0")
+    manifest = LocalRegistry(cache).get_manifest(parent_id, "1.0.0")
+    remote.download_release(parent, cache / parent_id / "1.0.0", manifest=manifest)
     assert (cache / parent_id / "1.0.0/control.duckdb").is_file()
     assert requests == prepared_requests
 
@@ -534,13 +549,15 @@ def _gated_release(origin: Path, page: str) -> tuple[str, DatasetRef]:
     return dataset.metadata.dataset_id, release
 
 
-def test_a_read_checks_access_before_it_reads_from_a_remote_registry(tmp_path):
+@pytest.mark.parametrize("entry_point", ["open", "download"])
+def test_a_read_or_a_download_checks_access_before_it_reads_from_a_remote_registry(tmp_path, entry_point):
     dataset_id, release = _gated_release(tmp_path / "origin", "ancestor")
     transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
     remote = RemoteRegistry("http://api.local", transport=transport, cache_dir=tmp_path / "cache")
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "local", store=True), remote])
 
     with pytest.raises(TimeNetAccessError) as caught:
-        TimeNet(sources=[LocalRegistry(tmp_path / "local", store=True), remote]).open(dataset_id)
+        getattr(client, entry_point)(dataset_id)
 
     assert caught.value.requirements == (AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua"),)
     assert caught.value.hint == (

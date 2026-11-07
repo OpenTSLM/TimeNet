@@ -99,13 +99,14 @@ def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
     assert all(key.startswith("registry/datasets/") for key in keys)
 
 
-def test_download_then_load_serves_from_cache(s3_root, tmp_path, monkeypatch):
+def test_download_then_load_serves_from_cache(s3_root, tmp_path):
     registry = S3Registry(s3_root, cache_dir=tmp_path / "cache")
     dataset_id = make_dataset().metadata.dataset_id
     registry.put_dataset(make_dataset())
-    monkeypatch.setenv("TIMENET_STORAGE", str(tmp_path / "cache"))
-    client = TimeNet(sources=[registry])
-    path = client.download(dataset_id)  # boto3 GetObject per file, into the cache
+    # The store is the cache directory of the registry, so the registry reuses each download.
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "cache", store=True), registry])
+    path = client.download(dataset_id)  # boto3 GetObject per file, into the store
+    assert path == tmp_path / "cache" / dataset_id / "1.0.0"
     assert (path / "manifest.json").exists()
     handle = registry.open_release(DatasetRef.parse(f"{dataset_id}@1.0.0"))
     assert isinstance(handle.filesystem, pafs.LocalFileSystem)  # cache-first: no S3 reads

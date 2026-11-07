@@ -4,12 +4,13 @@ A payload source is a release whose data files another release reads.
 Manifests must match for existing releases, except for their build environments.
 """
 
+from collections.abc import Callable
 from pathlib import Path
 import tempfile
 
-from timenet.errors import TimeNetMissingParentError, TimeNetVersionConflictError
+from timenet.errors import TimeFValidationError, TimeNetMissingParentError, TimeNetVersionConflictError
 from timenet.manifest import Manifest, same_release
-from timenet.progress import ProgressCallback, StepFinished, StepStarted
+from timenet.progress import BytesMoved, ProgressCallback, StepFinished, StepStarted
 from timenet.registry._paths import release_dir
 from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import find_payload_sources, validate_manifest_reference
@@ -19,37 +20,47 @@ from timenet.types.access import require_open_access
 from timenet.types.references import DatasetRef
 
 
-def copy_release(
+def copy_release(  # ruff: ignore[too-many-arguments]
     reference: DatasetRef,
     source: BaseRegistry,
     dest: WritableRegistry,
     *,
     with_payload_sources: bool = True,
+    force: bool = False,
     progress: ProgressCallback | None = None,
 ) -> None:
-    """Copy a release and its required payload sources to another registry.
+    """Copy a release and its required payload sources to a registry.
 
-    The copy reuses complete releases in ``dest`` and fetches damaged local copies again.
-    It checks access, file records and pins before copying payload sources and then the requested release.
+    Payload sources go first, a complete copy in ``dest`` is reused, and a damaged local copy is fetched again.
+    All checks run before the first copy, so a failed check copies nothing.
 
     Args:
         reference: The exact release to copy.
         source: The registry to copy from.
         dest: The registry to copy to.
         with_payload_sources: Also copy the payload sources that the manifest of the release lists.
-        progress: Callback for ``StepStarted`` and ``StepFinished`` events for each copied release.
+        force: Fetch ``reference`` again, even if ``dest`` has a complete local copy.
+        progress: Receives step events for each copied release and byte counts when ``dest`` is local.
 
     Raises:
-        TimeNetVersionConflictError: If ``dest`` holds other files or another card for a release being copied.
-        TimeNetAccessError: If a release fails an open access requirement of ``dest`` or ``source``.
-        TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
-        TimeNetMissingParentError: If ``source`` lacks a payload source and ``dest`` holds no complete copy of it.
-        TimeFFormatError: If a manifest names a different release or a pin fails.
+        TimeFValidationError: If ``force`` is set and ``dest`` is not local.
+        TimeNetVersionConflictError: If ``dest`` holds a release of the copy with other files or another card.
+        TimeNetAccessError: If a release is not open and ``dest`` or ``source`` requires open access.
+        TimeNetDatasetNotFoundError: If ``source`` lacks the release.
+        TimeNetMissingParentError: If neither registry holds a complete payload source.
+        TimeFFormatError: If a manifest names the wrong release or a pin fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
+    if force and not isinstance(dest, LocalRegistry):
+        raise TimeFValidationError(f"force=True needs a local dest: {dest} never writes a published version again")
     manifests = _manifests(reference, source, dest, with_payload_sources=with_payload_sources)
     # Check every release before anything is copied, so that a refusal leaves dest unchanged. A payload
-    # source that only dest holds is complete there, so it is never pending.
-    pending = [ref for ref, manifest in manifests.items() if _needs_copy(reference, ref, manifest, source, dest)]
+    # source that only dest holds is complete there, so it is never pending. _needs_copy() runs first,
+    # so that other files raise also with force.
+    pending = [
+        ref
+        for ref, manifest in manifests.items()
+        if _needs_copy(reference, ref, manifest, source, dest) or (force and ref == reference)
+    ]
     _check_access(manifests, set(pending), source, dest)
     if not pending:
         return
@@ -59,26 +70,38 @@ def copy_release(
         for ref in pending:
             if progress is not None:
                 progress(StepStarted(ref, "copy"))
-            _copy_one(ref, manifests[ref], source, dest, Path(staging))
+            again = force and ref == reference
+            _copy_one(ref, manifests[ref], source, dest, Path(staging), force=again, progress=progress)
             if progress is not None:
                 progress(StepFinished(ref, "copy"))
 
 
-def _copy_one(
-    reference: DatasetRef, manifest: Manifest, source: BaseRegistry, dest: WritableRegistry, staging: Path
+def _copy_one(  # ruff: ignore[too-many-arguments]
+    reference: DatasetRef,
+    manifest: Manifest,
+    source: BaseRegistry,
+    dest: WritableRegistry,
+    staging: Path,
+    *,
+    force: bool,
+    progress: ProgressCallback | None,
 ) -> None:
-    """Copy one release without its payload sources to ``dest``, or repair its local copy.
+    """Copy or repair one release without its payload sources in the destination registry.
 
     Args:
         reference: The release to copy.
-        manifest: The release's manifest from ``source``.
+        manifest: The release manifest from ``source``.
         source: The registry to copy from.
         dest: The registry to copy to.
-        staging: Temporary download root when both registries are remote.
+        staging: A temporary directory for downloads from a remote source.
+        force: Fetch the release again, even if ``dest`` has a complete local copy.
+        progress: Receives byte progress events when ``dest`` is local.
     """
     # A local registry is a folder that the copy reads or writes directly.
     if isinstance(dest, LocalRegistry):
-        source.download_release(reference, release_dir(dest.local_root, reference), manifest=manifest)
+        report = None if progress is None else _bytes_of(reference, manifest, progress)
+        directory = release_dir(dest.local_root, reference)
+        source.download_release(reference, directory, force=force, manifest=manifest, progress_cb=report)
         return
     if isinstance(source, LocalRegistry):
         directory = release_dir(source.root, reference)
@@ -89,6 +112,28 @@ def _copy_one(
         directory = release_dir(staging, reference)
         source.download_release(reference, directory, manifest=manifest)
     dest.put_release(directory)
+
+
+def _bytes_of(reference: DatasetRef, manifest: Manifest, progress: ProgressCallback) -> Callable[[int], None]:
+    """Create a callback that reports cumulative bytes for a release.
+
+    Args:
+        reference: The release to report.
+        manifest: The manifest whose file sizes define the total.
+        progress: The callback that receives ``BytesMoved`` events.
+
+    Returns:
+        A callback that accepts each file or chunk's byte count and reports the bytes moved so far.
+    """
+    total = sum(part.size for part in manifest.files.all_files())
+    done = 0
+
+    def report(count: int) -> None:
+        nonlocal done
+        done += count
+        progress(BytesMoved(str(reference), done, total))
+
+    return report
 
 
 def _check_access(

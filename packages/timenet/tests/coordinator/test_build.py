@@ -8,7 +8,7 @@ from timenet.coordinator.build import plan_release_build, run_plan
 from timenet.coordinator.plan import BuildStep, CopyStep
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetAccessError, TimeNetVersionUnavailableError
-from timenet.progress import StepFinished, StepStarted
+from timenet.progress import BytesMoved, StepFinished, StepStarted
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.registry._paths import release_dir
@@ -137,7 +137,8 @@ def test_a_build_copies_a_missing_parent_and_reports_each_step_once(tmp_path, st
         CopyStep(PARENT_REF, origin),
         _build(CHILD_REF, depends_on=(PARENT_REF,)),
     )
-    assert events == [
+    # A copy also sends the bytes that it moves.
+    assert [event for event in events if not isinstance(event, BytesMoved)] == [
         StepStarted(PARENT_REF, "copy"),
         StepFinished(PARENT_REF, "copy"),
         StepStarted(CHILD_REF, "build"),
