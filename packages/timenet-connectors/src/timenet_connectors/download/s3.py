@@ -15,7 +15,7 @@ from typing import Any
 from urllib.parse import urlparse
 
 from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetBuildError
-from timenet_connectors.download.progress import DownloadProgress, ProgressCallback, current_sink
+from timenet_connectors.download.progress import DownloadCallback, DownloadProgress, current_sink
 
 
 _LOG = logging.getLogger(__name__)
@@ -71,8 +71,8 @@ def download_s3_object(s3_url: str, dest: Path, *, sha256: str | None = None) ->
         sha256: An optional SHA-256 hash in hexadecimal that the downloaded file must match.
 
     Raises:
-        TimeFValidationError: If the URL uses a scheme other than ``s3://`` or lacks a bucket or key.
-        TimeFFormatError: If the downloaded file does not match the supplied SHA-256 hash.
+        TimeFValidationError: If the URL is not an ``s3://`` URL with a bucket and key.
+        TimeFFormatError: If the downloaded file does not match ``sha256``.
     """
     parsed = urlparse(s3_url)
     bucket, key = parsed.netloc, parsed.path.lstrip("/")
@@ -90,7 +90,7 @@ def download_s3_object(s3_url: str, dest: Path, *, sha256: str | None = None) ->
             total = client.head_object(Bucket=bucket, Key=key)["ContentLength"]
             transferred = 0
 
-            def _on_bytes(count: int, report: ProgressCallback = sink) -> None:
+            def _on_bytes(count: int, report: DownloadCallback = sink) -> None:
                 nonlocal transferred
                 transferred += count
                 report(DownloadProgress(s3_url, transferred, total))
