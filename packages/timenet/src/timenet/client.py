@@ -563,22 +563,22 @@ def _copy_source(sources: Sequence[ReleaseSource], store: LocalRegistry, release
 
 
 def _repair_hint(release: DatasetRef, found: Found | None, store: LocalRegistry) -> str:
-    """Suggest how to replace a damaged release in the local registry.
+    """Suggest how to replace a damaged local release.
 
     Args:
         release: The damaged release.
-        found: The answer of the available source, or ``None`` if none exists.
-        store: The local registry.
+        found: The answer of a source for the release, or ``None``.
+        store: The local registry that holds the damaged release.
 
     Returns:
-        A message with a download or build command, or the reason replacement is unavailable.
+        A download or rebuild hint, or an explanation that no replacement is available.
     """
     if isinstance(found, FoundInRegistry) and not is_same_registry(found.registry, store):
         # A registry other than the local registry provides the release.
         return f"Copy an intact release into the local registry with download('{release}')."
     if isinstance(found, FoundInConnector):
         # Only an installed connector provides the release.
-        command = f"timenet-build build {release.dataset_id} --out {shlex.quote(str(store.root))} --force"
+        command = f"timenet-build build {release.dataset_id} --local-registry {shlex.quote(str(store.root))} --force"
         return f"Build it again with `{command}`."
     # Only the local registry holds the release.
     return "No registry other than the local registry provides it, so download() cannot replace it."

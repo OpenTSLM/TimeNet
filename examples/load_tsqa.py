@@ -1,11 +1,11 @@
-"""Print a local dataset's summary and sample signal values.
+"""Load a local TimeF dataset and print its summary and a sample.
 
-Build the dataset into a local registry, then run this script::
+Build the dataset into a local registry first, then run this script::
 
-    uv run timenet-build build "chengsenwang/tsqa" --out .timenet-registry
+    uv run timenet-build build chengsenwang/tsqa --local-registry .timenet-registry
     uv run python examples/load_tsqa.py
 
-Pass a dataset ID and a registry path as arguments to load another dataset.
+Pass another dataset ID and registry path as the first and second arguments.
 """
 
 from pathlib import Path
