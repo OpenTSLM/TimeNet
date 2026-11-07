@@ -231,6 +231,7 @@ def test_the_dataset_round_trips_through_storage(release, tmp_path):
         ({"correct_answer": "Maybe"}, r"data row 3: correct_answer 'Maybe' is not one of"),
         ({"options_str": "Yes"}, r"data row 3: options_str is not JSON"),
         ({"interpolate_1": "yes"}, r"data row 3: interpolate_1 must be 0 or 1"),
+        ({"task_category": "Anomaly Vibes"}, r"data row 3: task_category must be one of \["),
         ({"query_group": "35997_0, 35997_1, 35997_1"}, r"data row 3: query_group must name one or two metrics"),
     ],
     ids=[
@@ -239,6 +240,7 @@ def test_the_dataset_round_trips_through_storage(release, tmp_path):
         "an answer outside the options",
         "options that are not JSON",
         "a flag that is not 0 or 1",
+        "an unknown task category",
         "three cited metrics",
     ],
 )
