@@ -1,6 +1,6 @@
 """Find dataset releases across registries and installed connectors."""
 
-from collections.abc import Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias, Union
 
@@ -128,7 +128,13 @@ class InstalledConnectors:
         return FoundInConnector(builder)
 
 
-def resolve_release(sources: Sequence[ReleaseSource], dataset_id: str, version: str | None) -> ReleaseLookup:
+Ask: TypeAlias = Callable[[ReleaseSource, str, Version | None], ReleaseLookup]
+"""A function that asks one source for a release: ``ask(source, dataset_id, version)``."""
+
+
+def resolve_release(
+    sources: Sequence[ReleaseSource], dataset_id: str, version: str | None, *, ask: Ask | None = None
+) -> ReleaseLookup:
     """Find a source that provides the requested dataset release.
 
     An exact version comes from the first source that serves it, and no version means the newest version of the first
@@ -139,6 +145,7 @@ def resolve_release(sources: Sequence[ReleaseSource], dataset_id: str, version: 
         sources: The sources, in order.
         dataset_id: The dataset ID.
         version: An exact version, ``"latest"``, or ``None`` or ``""`` for no version.
+        ask: The function that asks one source, or ``None`` to call the source's ``resolve()``.
 
     Returns:
         A ``Found`` result if available, otherwise the first ``NotServed`` result or ``NotFound``.
@@ -146,16 +153,24 @@ def resolve_release(sources: Sequence[ReleaseSource], dataset_id: str, version: 
     Raises:
         TimeFValidationError: If ``version`` is neither ``"latest"`` nor a ``major.minor.patch`` version.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by Version.parse
+    ask = ask or _ask
     if version == LATEST_VERSION:
-        return _resolve_latest(sources, dataset_id)
-    return _resolve_first(sources, dataset_id, Version.parse(version) if version else None)
+        return _resolve_latest(sources, dataset_id, ask)
+    return _resolve_first(sources, dataset_id, Version.parse(version) if version else None, ask)
 
 
-def _resolve_first(sources: Sequence[ReleaseSource], dataset_id: str, version: Version | None) -> ReleaseLookup:
+def _ask(source: ReleaseSource, dataset_id: str, version: Version | None) -> ReleaseLookup:
+    """Return the answer of a source for a release."""
+    return source.resolve(dataset_id, version)
+
+
+def _resolve_first(
+    sources: Sequence[ReleaseSource], dataset_id: str, version: Version | None, ask: Ask
+) -> ReleaseLookup:
     """Return the answer of the first source that serves ``version``, or its newest for ``None``, else the first listing."""
     listed: NotServed | None = None
     for source in sources:
-        answer = source.resolve(dataset_id, version)
+        answer = ask(source, dataset_id, version)
         if isinstance(answer, Found):
             return answer
         if isinstance(answer, NotServed) and listed is None:
@@ -163,23 +178,25 @@ def _resolve_first(sources: Sequence[ReleaseSource], dataset_id: str, version: V
     return NotFound() if listed is None else listed
 
 
-def _resolve_latest(sources: Sequence[ReleaseSource], dataset_id: str) -> ReleaseLookup:
+def _resolve_latest(sources: Sequence[ReleaseSource], dataset_id: str, ask: Ask) -> ReleaseLookup:
     """Return the highest version that any source provides, from the first source that provides it."""
     best: Found | None = None
     listed: list[tuple[ReleaseSource, NotServed]] = []
     before_best = 0
     for source in sources:
-        answer = source.resolve(dataset_id, None)
+        answer = ask(source, dataset_id, None)
         if isinstance(answer, NotServed):
             listed.append((source, answer))
         elif isinstance(answer, Found) and (best is None or answer.version > best.version):
             best, before_best = answer, len(listed)
     if best is None:
         return listed[0][1] if listed else NotFound()
-    return _ask_again(listed[:before_best], dataset_id, best.version) or best
+    return _ask_again(listed[:before_best], dataset_id, best.version, ask) or best
 
 
-def _ask_again(listed: Sequence[tuple[ReleaseSource, NotServed]], dataset_id: str, version: Version) -> Found | None:
+def _ask_again(
+    listed: Sequence[tuple[ReleaseSource, NotServed]], dataset_id: str, version: Version, ask: Ask
+) -> Found | None:
     """Ask each source that lists a higher version without serving it whether it serves ``version``.
 
     Returns:
@@ -187,7 +204,7 @@ def _ask_again(listed: Sequence[tuple[ReleaseSource, NotServed]], dataset_id: st
     """
     for source, answer in listed:
         if answer.version > version:
-            again = source.resolve(dataset_id, version)
+            again = ask(source, dataset_id, version)
             if isinstance(again, Found):
                 return again
     return None

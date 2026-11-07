@@ -290,9 +290,13 @@ def test_copy_release_checks_the_access_of_a_payload_source_that_only_dest_holds
 
 
 def test_copy_release_refuses_a_payload_source_that_no_registry_holds(source, dest):
+    origin = _without_parent(source)
     with pytest.raises(TimeNetMissingParentError) as raised:
-        copy_release(child_ref, _without_parent(source), dest)
+        copy_release(child_ref, origin, dest)
     assert (raised.value.missing, raised.value.needed_by) == (parent_ref, child_ref)
+    # The error names both registries that the copy looked in.
+    assert raised.value.searched == f"{origin} or {dest}"
+    assert str(raised.value) == f"payload source {parent_ref} of {child_ref} is not in {origin} or {dest}."
     assert not dest.exists(*child)
 
 
