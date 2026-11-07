@@ -11,7 +11,7 @@ Pass a dataset ID and a registry path as arguments to load another dataset.
 from pathlib import Path
 import sys
 
-from timenet.client import TimeNet
+from timenet import TimeNet
 
 
 def main() -> None:
