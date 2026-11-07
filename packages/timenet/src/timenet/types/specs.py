@@ -4,14 +4,10 @@ from collections.abc import Callable
 from enum import StrEnum, unique
 from typing import Annotated, Any, Self, cast
 
-import numpy as np
 import pint
 from pydantic import (
     PlainSerializer,
     PlainValidator,
-    StrictBool,
-    StrictFloat,
-    StrictInt,
     StrictStr,
     WithJsonSchema,
     model_validator,
@@ -121,14 +117,6 @@ class MissingValues(TimeFModel):
     """Why timesteps are missing."""
     description: NonEmptyString | None = None
     """An explanation of missing timesteps in the source, or ``None``."""
-    replacement_value: StrictBool | StrictInt | StrictFloat | StrictStr | None = None
-    """The value that the connector recommends in place of a missing timestep, or ``None``.
-
-    A count that reports nothing when no event happened can recommend ``0``. A gauge whose missing
-    reading is unknown recommends nothing. The value must fit the spec's ``dtype``, and for an enum
-    it must be one of the ``categories``. TimeNet never applies it: a consumer that fills gaps with a
-    constant reads it from the spec.
-    """
 
 
 class TimeSeriesSpec(TimeFModel):
@@ -153,7 +141,7 @@ class TimeSeriesSpec(TimeFModel):
     dimension_names: tuple[NonEmptyString, ...] = ()
     """Optional names for the dimensions in :attr:`value_shape`."""
     missing: MissingValues | None = None
-    """The reason and maximum fraction for missing timesteps, or ``None`` if none are allowed."""
+    """Why timesteps can be missing, or ``None`` if none are allowed."""
     modality: InputModality = InputModality.TIME_SERIES
     """Semantic input kind. Set IMAGE, AUDIO, or TEXT for Signals that carry those kinds of data."""
 
@@ -202,25 +190,4 @@ class TimeSeriesSpec(TimeFModel):
             raise ValueError("TimeSeriesSpec.dimension_names must be empty or match value_shape length")
         if len(set(self.dimension_names)) != len(self.dimension_names):
             raise ValueError("TimeSeriesSpec.dimension_names must be unique")
-        if self.missing is not None and self.missing.replacement_value is not None:
-            self._check_replacement_value_fits_dtype(self.missing.replacement_value)
         return self
-
-    def _check_replacement_value_fits_dtype(self, value: bool | int | float | str) -> None:
-        """Reject a recommended replacement value that the spec's values could not hold.
-
-        Raises:
-            ValueError: If the value's type does not match ``dtype``, or an enum value is not a category.
-        """
-        if self.dtype == "enum":
-            fits, expected = value in self.categories, f"one of the categories {list(self.categories)}"
-        elif self.dtype == "str":
-            fits, expected = isinstance(value, str), "a string"
-        elif self.dtype == "bool":
-            fits, expected = isinstance(value, bool), "a bool"
-        elif np.dtype(self.dtype).kind in "iu":
-            fits, expected = isinstance(value, int) and not isinstance(value, bool), "an integer"
-        else:
-            fits, expected = isinstance(value, int | float) and not isinstance(value, bool), "a number"
-        if not fits:
-            raise ValueError(f"missing.replacement_value must be {expected} for dtype {self.dtype!r}, got {value!r}")

@@ -117,9 +117,8 @@ backend for multidimensional values.
 ### Missing values
 
 A spec allows no missing timestep unless the connector says why timesteps are missing. It does so
-with a `MissingValues` record: one `MissingReason`, an optional description for a reader who does
-not know the source, and an optional `replacement_value` that the connector recommends in place
-of a missing timestep.
+with a `MissingValues` record: one `MissingReason` and an optional description for a reader who
+does not know the source.
 
 ```python
 from timenet.types import MissingReason, MissingValues, TimeSeriesSpec
@@ -142,12 +141,6 @@ glucose = TimeSeriesSpec(
 | `alignment_padding` | The source aligned several series to one time grid, and this series covers only part of it. |
 | `not_applicable` | The quantity has no meaning at the timestep. |
 | `redacted` | The source removed the value on purpose. |
-
-A connector sets `replacement_value` only when the source gives a missing timestep a meaning. A
-count that reports nothing when no event happened can recommend `0`. A gauge whose missing reading
-is unknown recommends nothing. The value must fit the spec's `dtype`, and for an enum it must be
-one of the categories. TimeNet never applies it. A consumer that fills gaps with a constant reads
-it from `spec.missing.replacement_value`.
 
 Pass `None` for a missing timestep. Arrow stores missingness in a validity bitmap. This keeps a
 missing value distinct from a valid floating-point NaN. The writer rejects a null when the spec has

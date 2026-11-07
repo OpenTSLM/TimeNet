@@ -753,11 +753,6 @@ class DuckDBControlWriter:
                 "dimension_names": list(spec.dimension_names),
                 "missing_reason": None if spec.missing is None else spec.missing.reason.value,
                 "missing_description": None if spec.missing is None else spec.missing.description,
-                "missing_replacement_value": (
-                    None
-                    if spec.missing is None or spec.missing.replacement_value is None
-                    else json.dumps(spec.missing.replacement_value)
-                ),
                 "n_values": signal.n_values,
                 "null_count": self._null_counts.get(signal.id, signal.null_count),
                 "metadata": _json(signal.metadata),

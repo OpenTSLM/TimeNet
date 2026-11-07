@@ -530,27 +530,6 @@
           ],
           "default": null,
           "title": "Description"
-        },
-        "replacement_value": {
-          "anyOf": [
-            {
-              "type": "boolean"
-            },
-            {
-              "type": "integer"
-            },
-            {
-              "type": "number"
-            },
-            {
-              "type": "string"
-            },
-            {
-              "type": "null"
-            }
-          ],
-          "default": null,
-          "title": "Replacement Value"
         }
       },
       "required": [

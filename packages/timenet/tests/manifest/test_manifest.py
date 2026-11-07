@@ -165,11 +165,7 @@ def test_missing_values_round_trip_at_format_version_1():
     )
     assert manifest.timef_format_version == 1
     stored = manifest.to_dict()["schema"]["time_series_specs"][0]
-    assert stored["missing"] == {
-        "reason": "sensor_gap",
-        "description": "The sensor lost contact.",
-        "replacement_value": None,
-    }
+    assert stored["missing"] == {"reason": "sensor_gap", "description": "The sensor lost contact."}
     assert "nullable" not in stored
     assert Manifest.model_validate_json(manifest.to_json()) == manifest
     jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
