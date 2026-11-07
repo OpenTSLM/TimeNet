@@ -1,28 +1,31 @@
 # yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card.schema.json
-# Each metric record contains one source per tag group and one signal per available rollup.
-# Rollup intervals are 10, 60, 300, 1800, 3600, or 86400 seconds. The rollups of a metric differ in
-# time range and in tag groups, so they are not resamplings of one series.
-# Consumers choose a rollup. The paper's statistics and the charts use the finest one, which
-# `finest_interval_s` names. The release evaluation uses the finest one that fits the model context.
-# The release stores its epochs as naive timestamps, and its charts and answer options use the same
-# clock. The dataset reads the epochs as UTC.
-# `query_name` is an identifier from the release. It differs from the metric ID for 122 of the 142
-# metrics, and the release does not explain it.
 #
-# Each question creates a series task and a chart task in the test split, so the split holds 1,500
-# tasks for 750 questions. Both tasks of a question carry its row in the question table as
-# `question_index` in their metadata. Series tasks cite metric records; chart tasks use the released
-# PNG images.
-# Values remain float64 with unspecified units.
-# A rollup file lists the tag groups of a metric on one time grid, with a null where the metric
-# reported nothing for the group. Each series is cut to the window in which its group has a value,
-# so grid steps before its first value and after its last one are not stored, and a group with no
-# value at a rollup has no series there. A null inside the window is a missing timestep, with
-# the spec's missing-value reason `not_recorded`, and so is a grid step that the file skips for the
-# group. Thus every series is on the regular grid of its rollup.
-# One end-time question (row 191, metric 36464_0) has a correct answer 140 seconds after the last
-# step of the metric's series, and 29 answer options of the start-time and end-time questions lie
-# outside every rollup. The dataset keeps them as released.
+# ARFBench asks 750 multiple-choice questions about 142 metrics from 63 Datadog incidents. A metric
+# is one monitored quantity, such as the request count of a service. Datadog splits a metric by
+# tags, so a metric holds one series per tag group, for example one per host.
+#
+# Datadog stores a metric at several rollups. A rollup is the metric on a fixed time grid, with one
+# value per interval of 10, 60, 300, 1800, 3600, or 86400 seconds. The rollups of a metric are
+# separate exports, not resamplings of one series: their time ranges and tag groups differ.
+#
+# Each metric is one record, with one source per tag group and one signal per rollup. A consumer
+# chooses the rollup. The paper and the charts use the finest one, which the annotation
+# `finest_interval_s` names.
+#
+# A rollup file lists the tag groups at the steps of its grid. Where the metric reported nothing
+# for a group, the step holds a null or is left out. Each series is cut to the window from its
+# group's first value to its last, so a group with no value at a rollup has no series there. Inside
+# the window, each such step is a missing timestep on the regular grid, with the spec's reason
+# `not_recorded`. Values are float64, and the release names no units. The release stores naive
+# epochs, which the dataset reads as UTC. The charts and the answer options use the same clock.
+#
+# Each question becomes two test tasks: one over the cited metric records, one over the released
+# chart images. Both carry the question's row as `question_index` in their metadata, so the test
+# split holds 1,500 tasks.
+#
+# Kept as released: `query_name`, an identifier that differs from the metric ID for 122 of the 142
+# metrics and that the release does not explain; one end-time answer (row 191, metric 36464_0)
+# 140 seconds after its series ends; and 29 time options that lie outside every rollup.
 yaml_schema_version: 1
 dataset_id: datadog/arfbench
 dataset_version: 1.0.0
