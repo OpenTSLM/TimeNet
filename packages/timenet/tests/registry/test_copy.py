@@ -408,6 +408,22 @@ def test_copy_release_without_payload_sources_copies_the_release_alone(chain_sou
     assert not dest.exists(*chain[0])
 
 
+def test_copy_release_returns_the_releases_that_it_copied(chain_source, dest):
+    copy_release(grandparent_ref, chain_source, dest)
+    # Payload sources come first. dest holds the grandparent already, so the tuple leaves it out.
+    assert copy_release(grandchild_ref, chain_source, dest) == (middle_ref, grandchild_ref)
+    assert copy_release(grandchild_ref, chain_source, dest) == ()
+
+
+def test_copy_release_returns_each_release_that_it_repairs_or_copies_again(source, tmp_path):
+    dest = LocalRegistry(tmp_path / "dest")
+    copy_release(child_ref, source, dest)
+    parent_dir = dest.root / parent_ref.dataset_id / str(parent_ref.version)
+    (parent_dir / dest.get_manifest(*parent).files.control[0].path).unlink()
+    assert copy_release(child_ref, source, dest) == (parent_ref,)
+    assert copy_release(child_ref, source, dest, force=True) == (child_ref,)
+
+
 def test_copy_release_copies_a_shared_payload_source_once(tmp_path):
     root = tmp_path / "chain"
     _write_chain(root, grandchild_reads_grandparent=True)

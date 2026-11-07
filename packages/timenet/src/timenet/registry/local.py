@@ -44,6 +44,11 @@ class LocalRegistry(WritableRegistry):
         return f"local registry {self._root}"
 
     @property
+    def location(self) -> str:
+        """The registry's absolute root path."""
+        return str(self._root.resolve())
+
+    @property
     def is_store(self) -> bool:
         """Whether ``store=True`` marks this registry as the place where downloads and builds land."""
         return self._is_store

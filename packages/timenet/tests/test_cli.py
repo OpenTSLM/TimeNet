@@ -3,6 +3,7 @@ import shutil
 import subprocess
 import sys
 
+from _demo_child import _child_of_the_demo
 import click
 import pytest
 from rich.console import Console
@@ -23,6 +24,7 @@ from timenet.errors import (
 )
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
+from timenet.registry.origin import record_origin
 from timenet.testing import install_backends, make_dataset
 from timenet.types import Access, Domain
 from timenet.types.reference_keys import ParentAlias
@@ -65,14 +67,39 @@ def state(tmp_path, monkeypatch):
     return store, cache
 
 
-def test_local_info_shows_the_path_and_size_of_the_cache_and_the_local_registry(state):
+def _put_demo(store, dataset_id, origin=None, **update):
+    """Put the demo dataset into the store under ``dataset_id``, with a provenance record of ``origin``.
+
+    Returns:
+        The release.
+    """
+    dataset = make_dataset()
+    dataset._metadata = dataset.metadata.model_copy(update={"dataset_id": dataset_id, **update})
+    registry = LocalRegistry(store)
+    release = registry.put_dataset(dataset)
+    if origin is not None:
+        record_origin(registry, release, origin, f"https://{origin}.example.org")
+    return release
+
+
+def _stderr_has(result, text):
+    """Return whether stderr holds ``text``.
+
+    The console wraps a long line, also in a path, so the check ignores whitespace.
+    """
+    return "".join(text.split()) in "".join(click.unstyle(result.stderr).split())
+
+
+def test_local_info_shows_the_path_and_size_of_the_cache_the_downloads_and_the_builds(state):
     store, cache = state
+    _put_demo(store, "demo/copy", "copy")
     result = runner.invoke(app, ["local", "info"])
     assert result.exit_code == 0, result.output
-    [release] = stored_releases(LocalRegistry(store))
+    copy, build = stored_releases(LocalRegistry(store))
     assert click.unstyle(result.stdout).splitlines() == [
         f"Cache {cache}: {human_bytes(_downloads_size(cache))}",
-        f"Local registry {store}: 1 release, {human_bytes(release.size_bytes)}",
+        f"Downloads in {store}: 1 release, {human_bytes(copy.size_bytes)}",
+        f"Builds in {store}: 1 release, {human_bytes(build.size_bytes)}",
     ]
 
 
@@ -84,19 +111,55 @@ def test_local_cache_info_shows_the_path_and_size_of_the_cache(state):
 
 
 @pytest.mark.parametrize(
-    ("command", "prompt"),
+    ("command", "rows"),
     [
-        (["local", "clear"], "Delete the cache in {cache} and every release in {store}?"),
-        (["local", "cache", "clear"], "Delete the raw source files and control databases in {cache}?"),
+        (["local", "downloads", "info"], [["demo/copy", "1.0.0", "https://copy.example.org"]]),
+        (
+            ["local", "builds", "info"],
+            [["demo/built", "1.0.0", "https://build.example.org"], ["timenet/hello-world", "1.0.0", "-"]],
+        ),
     ],
 )
-def test_each_clear_asks_first_and_names_the_paths(state, command, prompt):
+def test_downloads_info_and_builds_info_list_the_releases_of_their_kind(state, command, rows):
+    store, _ = state
+    _put_demo(store, "demo/copy", "copy")
+    _put_demo(store, "demo/built", "build")
+    result = runner.invoke(app, command)
+    assert result.exit_code == 0, result.output
+    lines = click.unstyle(result.stdout).splitlines()
+    cells = [[cell.strip() for cell in line.split("│")[1:-1]] for line in lines if "│" in line]
+    sizes = {item.release.dataset_id: item.size_bytes for item in stored_releases(LocalRegistry(store))}
+    total = sum(sizes[row[0]] for row in rows)
+    # The header uses another border, so the cells are the body rows. A build without a record has no source.
+    assert cells == [*([*row, human_bytes(sizes[row[0]])] for row in rows), ["total", "", "", human_bytes(total)]]
+
+
+def test_downloads_info_of_a_local_registry_without_downloads(state):
+    store, _ = state
+    result = runner.invoke(app, ["local", "downloads", "info"])
+    assert result.exit_code == 0, result.output
+    assert click.unstyle(result.stdout) == f"No downloads in {store}.\n"
+
+
+@pytest.mark.parametrize(
+    ("command", "prompt"),
+    [
+        (["local", "clear"], "Delete the cache in {cache} and every release in {store}, 2 builds included?"),
+        (["local", "cache", "clear"], "Delete the raw source files and control databases in {cache}?"),
+        (["local", "downloads", "clear"], "Delete 1 download from {store}?"),
+        (["local", "builds", "clear"], "Delete 2 builds from {store}?"),
+    ],
+)
+def test_each_clear_asks_first_and_counts_what_it_deletes(state, command, prompt):
     store, cache = state
+    _put_demo(store, "demo/copy", "copy")
+    _put_demo(store, "demo/built", "build")
+    releases = stored_releases(LocalRegistry(store))
     result = runner.invoke(app, command, input="n\n")
     assert result.exit_code != 0  # aborted
     assert f"{prompt.format(cache=cache, store=store)} [y/N]" in click.unstyle(result.output)
     assert (cache / "downloads").exists()
-    assert LocalRegistry(store).exists("timenet/hello-world", "1.0.0")
+    assert stored_releases(LocalRegistry(store)) == releases
 
 
 def test_local_cache_clear_keeps_the_local_registry(state):
@@ -106,7 +169,7 @@ def test_local_cache_clear_keeps_the_local_registry(state):
     assert result.exit_code == 0, result.output
     assert click.unstyle(result.stdout).splitlines()[-1] == f"Freed {size} from 1 location(s)."
     assert not (cache / "downloads").exists()
-    assert LocalRegistry(store).exists("timenet/hello-world", "1.0.0")
+    assert [item.release for item in stored_releases(LocalRegistry(store))] == [HELLO]
 
 
 def test_local_cache_clear_warns_about_a_folder_without_the_marker_and_keeps_it(state):
@@ -115,32 +178,67 @@ def test_local_cache_clear_warns_about_a_folder_without_the_marker_and_keeps_it(
     (cache / "control/notes.txt").write_text("not from TimeNet")
     result = runner.invoke(app, ["local", "cache", "clear", "--yes"])
     assert result.exit_code == 0, result.output
-    # The console wraps a long line, also in a path, so the check ignores whitespace.
-    expected = f"Kept {cache / 'control'}: it has no CACHEDIR.TAG from TimeNet"
-    assert "".join(expected.split()) in "".join(click.unstyle(result.stderr).split())
+    assert _stderr_has(result, f"Kept {cache / 'control'}: it has no CACHEDIR.TAG from TimeNet")
     assert click.unstyle(result.stdout).splitlines()[-1].endswith("from 1 location(s).")
     assert (cache / "control/notes.txt").exists()
 
 
+def test_downloads_clear_keeps_each_download_that_a_build_needs_and_names_it(state):
+    store, cache = state
+    parent = _put_demo(store, "demo/copy", "copy")
+    other = _put_demo(store, "demo/other", "copy")
+    child = _put_demo(store, "demo/built", "build", parents={ParentAlias("parent"): parent})
+    [gone] = [item for item in stored_releases(LocalRegistry(store)) if item.release == other]
+    size = human_bytes(gone.size_bytes)
+    result = runner.invoke(app, ["local", "downloads", "clear", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert _stderr_has(result, f"Kept {parent}: {child} needs it.")
+    assert click.unstyle(result.stdout).splitlines()[-1] == f"Freed {size} from 1 location(s)."
+    assert [item.release for item in stored_releases(LocalRegistry(store))] == [child, parent, HELLO]
+    assert (cache / "downloads").exists()
+
+
+def test_builds_clear_keeps_each_build_that_a_download_needs_and_names_it(tmp_path, monkeypatch):
+    # The download test/child reads files of the build timenet/hello-world.
+    registry, payload_source = _child_of_the_demo(tmp_path / "store")
+    child = DatasetRef.parse("test/child@1.0.0")
+    record_origin(registry, child, "copy", "https://copy.example.org")
+    _put_demo(tmp_path / "store", "demo/built", "build")
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
+    result = runner.invoke(app, ["local", "builds", "clear", "--yes"])
+    assert result.exit_code == 0, result.output
+    assert _stderr_has(result, f"Kept {payload_source}: {child} needs it.")
+    assert [item.release for item in stored_releases(registry)] == [child, payload_source]
+
+
 def test_local_clear_deletes_the_cache_and_every_release(state):
     store, cache = state
-    [release] = stored_releases(LocalRegistry(store))
-    size = human_bytes(_downloads_size(cache) + release.size_bytes)
+    _put_demo(store, "demo/copy", "copy")
+    releases = stored_releases(LocalRegistry(store))
+    size = human_bytes(_downloads_size(cache) + sum(item.size_bytes for item in releases))
     result = runner.invoke(app, ["local", "clear", "--yes"])
     assert result.exit_code == 0, result.output
-    assert click.unstyle(result.stdout).splitlines()[-1] == f"Freed {size} from 2 location(s)."
+    assert click.unstyle(result.stdout).splitlines()[-1] == f"Freed {size} from 3 location(s)."
     assert stored_releases(LocalRegistry(store)) == []
     assert not (cache / "downloads").exists()
 
 
 def test_the_local_commands_take_the_local_registry_flag(tmp_path):
-    # The variable of the autouse fixture names an empty store, so the release comes from the flag.
+    # The variable of the autouse fixture names an empty store, so the releases come from the flag.
     store = tmp_path / "store"
     LocalRegistry(store).put_dataset(make_dataset())
-    result = runner.invoke(app, ["local", "info", "--local-registry", str(store)])
+    _put_demo(store, "demo/copy", "copy")
+    flag = ["--local-registry", str(store)]
+    result = runner.invoke(app, ["local", "info", *flag])
     assert result.exit_code == 0, result.output
-    assert f"Local registry {store}: 1 release" in click.unstyle(result.stdout)
-    result = runner.invoke(app, ["local", "clear", "--yes", "--local-registry", str(store)])
+    assert f"Builds in {store}: 1 release" in click.unstyle(result.stdout)
+    result = runner.invoke(app, ["local", "builds", "info", *flag])
+    assert result.exit_code == 0, result.output
+    assert "timenet/hello-world" in click.unstyle(result.stdout)
+    result = runner.invoke(app, ["local", "downloads", "clear", "--yes", *flag])
+    assert result.exit_code == 0, result.output
+    assert [item.release for item in stored_releases(LocalRegistry(store))] == [HELLO]
+    result = runner.invoke(app, ["local", "clear", "--yes", *flag])
     assert result.exit_code == 0, result.output
     assert stored_releases(LocalRegistry(store)) == []
 

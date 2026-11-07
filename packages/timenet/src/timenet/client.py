@@ -393,31 +393,30 @@ class TimeNet:
         force: bool = False,
         progress: ProgressCallback | None = None,
     ) -> Path:
-        """Copy a dataset release and its payload sources into the local registry.
+        """Copy a release and its payload sources into the local registry.
 
-        The release resolves as in :meth:`open`, without a build. The release and each payload source that the
-        local registry lacks or holds damaged come from the first registry other than the local registry that
-        provides them.
+        The release resolves as in :meth:`open`, without a build. Missing or damaged releases come from the first
+        other registry that provides them, with a provenance record that names it.
 
         Args:
-            dataset_id: The dataset ID, optionally followed by ``@version``.
+            dataset_id: The dataset ID.
             version: An exact version, ``"latest"``, or ``None``, as in :meth:`open`.
             force: Copy the release again, even if the local registry holds a complete copy.
-            progress: A callback for copy events and byte counts.
+            progress: Receives step events and byte counts for each copied release.
 
         Returns:
             The release directory in the local registry.
 
         Raises:
-            TimeFValidationError: If no source is a local registry with ``store=True``.
-            TimeNetAccessError: If a required release is only listed or requires access in a remote registry.
-            TimeNetNotBuiltError: If only an installed connector provides the release.
+            TimeFValidationError: If the sources have no local registry with ``store=True``.
+            TimeNetAccessError: If a required release is only listed or lacks open access in a remote registry.
+            TimeNetNotBuiltError: If only installed connectors provide the release.
             TimeNetDatasetNotFoundError: If no registry other than the local registry provides the release.
             TimeNetVersionUnavailableError: If the version is missing and its connector builds another version.
             TimeNetMissingParentError: If no registry provides a missing payload source.
             TimeNetVersionConflictError: If the local registry holds the same release with different files.
-            TimeNetFileError: If no registry can replace a damaged copy, or a copied file is damaged.
-            TimeFFormatError: If a payload source differs from its recorded files or the source links form a cycle.
+            TimeNetFileError: If a stored copy cannot be repaired or a copied file is damaged.
+            TimeFFormatError: If a payload source breaks a pin or the payload sources form a cycle.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by the plan and the copies)
         dataset_id, version = _resolve_ref(dataset_id, version)
         store = self._store

@@ -30,7 +30,7 @@ from timenet.types.references import DatasetRef
 
 # Reports download progress: called with each file (or chunk) of bytes as it lands. A ``download_release``
 # implementation calls it so a caller can render a progress bar; ``None`` downloads silently.
-ProgressCallback = Callable[[int], None]
+ByteCountCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
@@ -42,6 +42,11 @@ class BaseRegistry(ABC):
 
     def __str__(self) -> str:
         return type(self).__name__
+
+    @property
+    def location(self) -> str:
+        """The registry's URL, path, or name."""
+        return str(self)
 
     @property
     @abstractmethod
@@ -161,7 +166,7 @@ class BaseRegistry(ABC):
         *,
         force: bool = False,
         manifest: Manifest | None = None,
-        progress_cb: ProgressCallback | None = None,
+        progress_cb: ByteCountCallback | None = None,
     ) -> None:
         """Download one release's files to a local directory.
 
