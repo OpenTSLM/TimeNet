@@ -1,17 +1,21 @@
 from pathlib import Path
+import re
 import sys
 
 import pytest
 
-from timenet.errors import TimeNetInvalidCardError
+from timenet.builders import installed_builder
+from timenet.errors import ConnectorCardWarning, TimeNetInvalidCardError
 from timenet.manifest import Manifest, PayloadSource
 from timenet.manifest.files import FilePart
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.types.references import DatasetRef
 from timenet.values_backends import ValuesBackend
+from timenet_connectors import datasets as datasets_module
 from timenet_connectors.builder import backend as backend_module, cli as cli_module
 from timenet_connectors.builder.backend import ConnectorBuilder
+from timenet_connectors.discovery import known_ids
 
 
 def _unexpected_isolation(*args, **kwargs):
@@ -31,6 +35,17 @@ def test_knows_rejects_an_unknown_id_without_importing_a_connector():
     assert leaf not in sys.modules
 
 
+def test_connector_builder_lists_its_dataset_ids_without_importing_a_connector(monkeypatch):
+    leaf = "timenet_connectors.datasets.physionet.ecg_qa_cot"
+    monkeypatch.delitem(sys.modules, leaf, raising=False)
+
+    dataset_ids = list(ConnectorBuilder().dataset_ids())
+
+    assert {"timenet/hello-world", "physionet/ecg-qa-cot"} <= set(dataset_ids)
+    assert "nope/nothing" not in dataset_ids
+    assert leaf not in sys.modules
+
+
 def test_a_card_that_cannot_be_read_raises_and_only_a_missing_connector_gives_none(tmp_path, monkeypatch):
     assert ConnectorBuilder().card("nope/nothing") is None
     assert ConnectorBuilder().declared_version("nope/nothing") is None
@@ -41,6 +56,29 @@ def test_a_card_that_cannot_be_read_raises_and_only_a_missing_connector_gives_no
         ConnectorBuilder().card("test/broken")
     with pytest.raises(TimeNetInvalidCardError, match="could not read dataset card"):
         ConnectorBuilder().declared_version("test/broken")
+
+
+@pytest.mark.parametrize(
+    ("text", "message"),
+    [
+        ("dataset_id: [unclosed\n", "could not read dataset card {}"),
+        ("- a list\n", "dataset card {} must be a YAML mapping"),
+        ("title: no id\n", "dataset card {} must declare a dataset_id"),
+    ],
+)
+def test_a_card_that_cannot_be_read_is_skipped_with_a_warning(tmp_path, monkeypatch, text, message):
+    (tmp_path / "test" / "broken").mkdir(parents=True)
+    (tmp_path / "test" / "broken" / "dataset.yaml").write_text(text)
+    monkeypatch.setattr(datasets_module, "__path__", [*datasets_module.__path__, str(tmp_path)])
+    expected = re.escape(message.format(tmp_path / "test" / "broken" / "dataset.yaml"))
+
+    with pytest.warns(ConnectorCardWarning, match=expected):
+        assert "timenet/hello-world" in known_ids()
+    # The installed entry point loads the builder backend of this package, which lists its dataset IDs.
+    with pytest.warns(ConnectorCardWarning, match=expected):
+        found = installed_builder("timenet/hello-world")
+    assert found is not None
+    assert found.card.dataset_id == "timenet/hello-world"
 
 
 def test_build_runs_in_an_isolated_environment_by_default(tmp_path, monkeypatch):
