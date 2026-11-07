@@ -23,7 +23,7 @@ from urllib.request import url2pathname
 
 from uv import find_uv_bin
 
-from timenet.errors import TimeNetBuildError
+from timenet.errors import TimeNetBuildError, TimeNetIsolationError
 from timenet.manifest import PayloadSource
 from timenet.types.references import DatasetRef
 from timenet_connectors.discovery import requirements_for
@@ -58,7 +58,7 @@ def env_spec(dataset_id: str) -> EnvSpec:
 
     Raises:
         LookupError: If no connector exists for the id.
-        TimeNetBuildError: If a base distribution is not installed.
+        TimeNetIsolationError: If a base distribution is not installed.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by requirements_for and _base_args, not directly here)
     base = _base_args()
     # The parent cannot read the connector's backend before the environment exists, so the
@@ -83,15 +83,12 @@ def uv_command(spec: EnvSpec, argv: Sequence[str]) -> list[str]:
         The full argument vector.
 
     Raises:
-        TimeNetBuildError: If the uv executable is missing.
+        TimeNetIsolationError: If the uv executable is missing.
     """
     try:
         uv = find_uv_bin()
     except FileNotFoundError as exc:
-        raise TimeNetBuildError(
-            "cannot run an isolated build: no uv executable found. Install uv, or build in this "
-            "interpreter with TIMENET_ISOLATION=off."
-        ) from exc
+        raise TimeNetIsolationError("cannot run an isolated build: no uv executable found.") from exc
     command = [uv, "run", "--no-project", "--python", spec.python, *spec.base]
     if spec.requirements is not None:
         command += ["--with-requirements", str(spec.requirements)]
@@ -206,16 +203,15 @@ def _base_args() -> tuple[str, ...]:
         Alternating flag/value arguments for uv.
 
     Raises:
-        TimeNetBuildError: If a base distribution is not installed in this interpreter.
+        TimeNetIsolationError: If a base distribution is not installed in this interpreter.
     """
     args: list[str] = []
     for name in BASE_DISTRIBUTIONS:
         try:
             dist = Distribution.from_name(name)
         except PackageNotFoundError as exc:
-            raise TimeNetBuildError(
-                f"cannot build a build environment: {name} is not installed in {sys.executable}. "
-                "Reinstall it, or build in this interpreter with TIMENET_ISOLATION=off."
+            raise TimeNetIsolationError(
+                f"cannot make a build environment: {name} is not installed in {sys.executable}."
             ) from exc
         source = _local_source_path(dist)
         if source is not None:

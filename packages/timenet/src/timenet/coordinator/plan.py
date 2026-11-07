@@ -677,9 +677,7 @@ def _add_release_copy(
         raise damage
     elif held:
         # With force, the copy needs a registry other than the local registry, and none provides the release.
-        raise TimeNetDatasetNotFoundError(
-            f"No registry other than the local registry provides {release}, so download(force=True) cannot copy it again."
-        )
+        raise TimeNetDatasetNotFoundError(f"no registry other than the local registry provides {release} to copy again")
     elif isinstance(answer, NotServed):
         # A registry lists the release but serves none of its files.
         raise answer.access_error(release.dataset_id)
@@ -701,10 +699,7 @@ def _not_built(release: DatasetRef) -> str:
     Returns:
         The error message.
     """
-    return (
-        f"{release} is not built yet: only an installed connector provides it. open() or load() builds it into "
-        "the local registry."
-    )
+    return f"{release} is not built yet: only an installed connector provides it."
 
 
 def describe_searched_sources(sources: Iterable[ReleaseSource], reference: DatasetRef) -> str:

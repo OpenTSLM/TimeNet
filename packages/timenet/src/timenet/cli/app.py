@@ -3,13 +3,13 @@
 from collections.abc import Callable, Iterable, Sequence
 from functools import partial
 from pathlib import Path
-import shlex
-from typing import TypeVar
+from typing import Literal, TypeVar, cast
 
 from rich.console import Console
 from rich.table import Table
 import typer
 
+from timenet._hints import Facts, build_command
 from timenet.cache import (
     ReleaseKind,
     cache_size,
@@ -19,15 +19,16 @@ from timenet.cache import (
     releases_to_clear,
     stored_releases,
 )
-from timenet.cli.options import AUTO_BUILD, LOCAL_REGISTRY, REMOTE_REGISTRY
+from timenet.cli.hints import cli_hints, registry_flag, sources_from_flags, store_from_flag
+from timenet.cli.options import AUTO_BUILD, LOCAL_REGISTRY, REMOTE_REGISTRY, STORE
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console as ui, progress_renderer
-from timenet.client import TimeNet, default_local_registry, default_sources
+from timenet.client import TimeNet
 from timenet.config import settings
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetNotBuiltError
+from timenet.errors import TimeNetNotBuiltError
 from timenet.producer import publish as publish_release
 from timenet.progress import ProgressCallback, ProgressEvent, StepStarted
-from timenet.registry import BaseRegistry, LocalRegistry, open_registry
+from timenet.registry import LocalRegistry
 from timenet.types import DatasetMetadata, Domain, License, TaskType
 from timenet.types.access import access_requirements, effective_access
 from timenet.types.parent_dataset_card import ParentDatasetCard
@@ -35,7 +36,7 @@ from timenet.types.references import split_ref
 from timenet.types.tasks import TASKS
 
 
-app = typer.Typer(help="Browse a TimeNet registry and fetch datasets.", no_args_is_help=True)
+app = typer.Typer(help="Find, read, download and publish TimeNet datasets.", no_args_is_help=True)
 console = Console()
 
 T = TypeVar("T")
@@ -43,7 +44,7 @@ T = TypeVar("T")
 
 @app.callback()
 def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress status output.")) -> None:
-    """Browse a TimeNet registry and fetch datasets."""
+    """Find, read, download and publish TimeNet datasets."""
     ui.quiet = quiet
 
 
@@ -69,21 +70,40 @@ def _enum_list(values: list[str], factory: Callable[[str], T], flag: str, choice
     return parsed or None
 
 
-def _client(local_registry: str | None, remote_registry: str | None, auto_build: bool | None) -> TimeNet:
-    """Create a client with the selected registries and build setting.
+def _client(
+    local_registry: str | None,
+    remote_registry: str | None,
+    auto_build: bool | None,
+    *,
+    request: Literal["read", "download"] = "read",
+    wanted: str | None = None,
+) -> tuple[TimeNet, Facts]:
+    """Create a client and error-hint details from CLI options.
 
-    Pass ``None`` to use the matching ``TIMENET_*`` environment variable or its default.
+    A ``None`` flag uses the matching ``TIMENET_*`` environment variable or its default.
 
     Args:
         local_registry: The local registry path.
         remote_registry: The remote registry URL or path.
         auto_build: Whether to build missing datasets with installed connectors.
+        request: What the command does.
+        wanted: The requested dataset ID, or ``None``.
 
     Returns:
-        The configured client.
+        The client and the facts.
     """
-    sources = default_sources(local_registry=local_registry, remote_registry=remote_registry, auto_build=auto_build)
-    return TimeNet(sources=sources)
+    sources = sources_from_flags(local_registry, remote_registry, auto_build)
+    # The default list starts with the local registry.
+    store = cast("LocalRegistry", sources[0])
+    facts = Facts(
+        sources,
+        store,
+        request=request,
+        local_registry=local_registry,
+        remote_registry=remote_registry,
+        wanted=wanted,
+    )
+    return TimeNet(sources=sources), facts
 
 
 def _metadata_table(rows: list[DatasetMetadata], title: str) -> Table:
@@ -118,7 +138,9 @@ def list_datasets(
     auto_build: bool | None = AUTO_BUILD,
 ) -> None:
     """List each dataset at its highest version across all sources."""
-    rows = _client(local_registry, remote_registry, auto_build).list()
+    client, facts = _client(local_registry, remote_registry, auto_build)
+    with cli_hints(facts):
+        rows = client.list()
     if not rows:
         typer.echo("No datasets in the sources.")
         return
@@ -143,16 +165,18 @@ def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
 
     Repeat a filter flag to pass several values.
     """
-    results = _client(local_registry, remote_registry, auto_build).search(
-        query=query or None,
-        domain=_enum_list(domain, Domain, "--domain", [d.value for d in Domain]),
-        task=_enum_list(task, lambda value: TASKS[TaskType(value)], "--task", [t.value for t in TaskType]),
-        license=_enum_list(license, License, "--license", [lic.value for lic in License]),
-        time_series_spec=spec or None,
-        dataset_id=dataset_id or None,
-        tag=tag or None,
-        limit=limit,
-    )
+    client, facts = _client(local_registry, remote_registry, auto_build)
+    with cli_hints(facts):
+        results = client.search(
+            query=query or None,
+            domain=_enum_list(domain, Domain, "--domain", [d.value for d in Domain]),
+            task=_enum_list(task, lambda value: TASKS[TaskType(value)], "--task", [t.value for t in TaskType]),
+            license=_enum_list(license, License, "--license", [lic.value for lic in License]),
+            time_series_spec=spec or None,
+            dataset_id=dataset_id or None,
+            tag=tag or None,
+            limit=limit,
+        )
     if not results:
         typer.echo("No datasets match.")
         return
@@ -170,19 +194,16 @@ def info(
 
     For an unbuilt release, show its metadata card and build command instead.
     """
-    client = _client(local_registry, remote_registry, auto_build)
-    try:
-        manifest = client.get_manifest(dataset_id)
-    except TimeNetNotBuiltError:
-        console.print(_card_table(client.get_card(dataset_id)))
-        build = f"timenet-build build {split_ref(dataset_id)[0]}"
-        if local_registry is not None:
-            build += f" --local-registry {shlex.quote(local_registry)}"
-        if remote_registry is not None:
-            build += f" --remote-registry {shlex.quote(remote_registry)}"
-        # A plain line, so that a long path does not wrap.
-        typer.echo(f"The schema and the counts appear after a build: `{build}`.")
-        return
+    client, facts = _client(local_registry, remote_registry, auto_build, wanted=dataset_id)
+    with cli_hints(facts):
+        try:
+            manifest = client.get_manifest(dataset_id)
+        except TimeNetNotBuiltError:
+            console.print(_card_table(client.get_card(dataset_id)))
+            # A plain line, so that a long path does not wrap.
+            build = build_command(split_ref(dataset_id)[0], facts)
+            typer.echo(f"The schema and the counts appear after a build: `{build}`.")
+            return
     counts = manifest.counts
     table = _card_table(manifest.metadata, manifest.lineage)
     table.add_row("specs", ", ".join(spec.spec_type for spec in manifest.dataset_schema.time_series_specs) or "-")
@@ -247,13 +268,12 @@ def download(
     The command prints the release directory to stdout.
     """
     started: list[StepStarted] = []
-    with progress_renderer() as show:
-        client = _client(local_registry, remote_registry, auto_build)
+    client, facts = _client(local_registry, remote_registry, auto_build, request="download", wanted=dataset_id)
+    with cli_hints(facts), progress_renderer() as show:
         target = client.download(dataset_id, progress=partial(_keep_steps, started, show))
     if not started:
         # The local registry already held the release and its payload sources.
-        store = default_local_registry(local_registry=local_registry)
-        ui.success(f"Nothing to do: '{split_ref(dataset_id)[0]}' {target.name} is already in {store}")
+        ui.success(f"Nothing to do: '{split_ref(dataset_id)[0]}' {target.name} is already in {facts.store}")
     typer.echo(str(target))
 
 
@@ -281,56 +301,30 @@ def publish(
         metavar="URL",
         help="The registry to copy from: a URL or a local path (default: the local registry).",
     ),
-    local_registry: str | None = LOCAL_REGISTRY,
+    local_registry: str | None = STORE,
 ) -> None:
     """Copy a release and its payload sources to another registry.
 
-    Read from ``--source`` or the local registry, and print the release to stdout.
+    Read from `--source` or the local registry, and print the release to stdout.
     Skip identical releases and fail if the destination has different files for the same version.
-    \f
-
-    Raises:
-        TimeNetDatasetNotFoundError: If the source does not contain the release.
-    """  # ruff: ignore[escape-sequence-in-docstring] - the form feed ends the help text of the command
-    store = default_local_registry(local_registry=local_registry)
-    origin = store if source is None else _source_registry(source, store)
-    try:
-        with progress_renderer() as progress:
-            release = publish_release(dataset_id, dest=dest, source=origin, progress=progress)
-    except TimeNetDatasetNotFoundError as error:
-        # The hint fits only a release that the local registry lacks. A subclass, such as a missing payload
-        # source, names its own registries.
-        if source is not None or type(error) is not TimeNetDatasetNotFoundError:
-            raise
-        bare_id, version = split_ref(dataset_id)
-        wanted = bare_id if version is None else f"{bare_id}@{version}"
-        # Repeat the path of --local-registry, so that each command of the hint uses it too.
-        flag = "" if local_registry is None else f" --local-registry {shlex.quote(str(store.root))}"
-        hint = (
-            f"Build it into the local registry with `timenet-build build {wanted}{flag}`, "
-            f"or copy it there with `timenet download {wanted}{flag}`."
-        )
-        raise TimeNetDatasetNotFoundError(f"{str(error).rstrip('.')}. {hint}") from error
+    """
+    store = store_from_flag(local_registry)
+    target = registry_flag(dest, "--dest")
+    # A remote source reads the copies of the same releases in the local registry.
+    origin = store if source is None else registry_flag(source, "--source", store=store.root)
+    # Only the local registry gets the hints that copy or build a release into it.
+    facts = Facts(
+        [origin],
+        store if source is None else None,
+        request="publish",
+        local_registry=local_registry,
+        dest=target,
+        wanted=dataset_id,
+    )
+    with cli_hints(facts), progress_renderer() as progress:
+        release = publish_release(dataset_id, dest=target, source=origin, progress=progress)
     ui.success(f"Published {release} to {dest}")
     typer.echo(str(release))
-
-
-def _source_registry(source: str, store: LocalRegistry) -> BaseRegistry:
-    """Open a source registry from a URL or local path.
-
-    A remote registry reads the copies of the same releases in ``store``.
-
-    Args:
-        source: The registry URL or path.
-        store: The local registry for complete release copies.
-
-    Returns:
-        The registry.
-
-    Raises:
-        TimeNetRegistryError: If ``source`` cannot be opened as a registry.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by open_registry
-    return open_registry(source, local_registry=store.root, label="--source")
 
 
 local_app = typer.Typer(help="Inspect and clear the local files of TimeNet.", no_args_is_help=True)
@@ -353,9 +347,9 @@ _KINDS: tuple[ReleaseKind, ...] = ("download", "build")
 
 
 @local_app.command("info")
-def local_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
+def local_info(local_registry: str | None = STORE) -> None:
     """Show paths and sizes for the cache, downloads, and builds."""
-    store, cache_dir = default_local_registry(local_registry=local_registry), settings().cache_dir
+    store, cache_dir = store_from_flag(local_registry), settings().cache_dir
     releases = stored_releases(store)
     # Plain lines, so that a long path does not wrap.
     typer.echo(_cache_line(cache_dir))
@@ -366,16 +360,17 @@ def local_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
 
 
 @local_app.command("clear")
-def local_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
+def local_clear(yes: bool = _YES, local_registry: str | None = STORE) -> None:
     """Delete the cache, every download and every build."""
-    store, cache_dir = default_local_registry(local_registry=local_registry), settings().cache_dir
-    if not yes:
-        builds = _count(sum(item.kind == "build" for item in stored_releases(store)), "build")
-        typer.confirm(
-            f"Delete the cache in {cache_dir} and every release in {store.root}, {builds} included?", abort=True
-        )
-    releases = clear_releases(store, kinds=_KINDS)
-    cache = clear_cache(cache_dir, local_registry=store)
+    store, cache_dir = store_from_flag(local_registry), settings().cache_dir
+    with cli_hints(Facts([store], store, request="clear", local_registry=local_registry)):
+        if not yes:
+            builds = _count(sum(item.kind == "build" for item in stored_releases(store)), "build")
+            typer.confirm(
+                f"Delete the cache in {cache_dir} and every release in {store.root}, {builds} included?", abort=True
+            )
+        releases = clear_releases(store, kinds=_KINDS)
+        cache = clear_cache(cache_dir, local_registry=store)
     _warn_unmarked(cache.kept)
     _freed(releases.freed + cache.freed, len(releases.removed) + len(cache.removed))
 
@@ -388,42 +383,42 @@ def cache_info() -> None:
 
 @cache_app.command("clear")
 def cache_clear(yes: bool = _YES) -> None:
-    """Delete the raw source files and the control databases in the cache."""
+    """Clear cached source files and control databases."""
     cache_dir = settings().cache_dir
     if not yes:
         typer.confirm(f"Delete the raw source files and control databases in {cache_dir}?", abort=True)
-    freed, removed, kept = clear_cache(cache_dir, local_registry=default_local_registry())
+    freed, removed, kept = clear_cache(cache_dir, local_registry=store_from_flag(None))
     _warn_unmarked(kept)
     _freed(freed, len(removed))
 
 
 @downloads_app.command("info")
-def downloads_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
+def downloads_info(local_registry: str | None = STORE) -> None:
     """Show each download in the local registry with its registry and size."""
     _show_releases("download", local_registry)
 
 
 @downloads_app.command("clear")
-def downloads_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
+def downloads_clear(yes: bool = _YES, local_registry: str | None = STORE) -> None:
     """Delete the downloads in the local registry, except those that a remaining release needs."""
     _clear_releases("download", yes, local_registry)
 
 
 @builds_app.command("info")
-def builds_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
+def builds_info(local_registry: str | None = STORE) -> None:
     """Show each build in the local registry with its connector package and size."""
     _show_releases("build", local_registry)
 
 
 @builds_app.command("clear")
-def builds_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
+def builds_clear(yes: bool = _YES, local_registry: str | None = STORE) -> None:
     """Delete the builds in the local registry, except those that a remaining release needs."""
     _clear_releases("build", yes, local_registry)
 
 
 def _show_releases(kind: ReleaseKind, local_registry: str | None) -> None:
     """Show releases of one kind in a table, or a message if none exist."""
-    store = default_local_registry(local_registry=local_registry)
+    store = store_from_flag(local_registry)
     releases = [item for item in stored_releases(store) if item.kind == kind]
     if not releases:
         typer.echo(f"No {kind}s in {store.root}.")
@@ -444,11 +439,12 @@ def _show_releases(kind: ReleaseKind, local_registry: str | None) -> None:
 
 def _clear_releases(kind: ReleaseKind, yes: bool, local_registry: str | None) -> None:
     """Delete the releases of one kind after a prompt that counts them, and name each release that stays."""
-    store = default_local_registry(local_registry=local_registry)
-    if not yes:
-        releases, _ = releases_to_clear(store, kinds=[kind])
-        typer.confirm(f"Delete {_count(len(releases), kind)} from {store.root}?", abort=True)
-    freed, removed, kept = clear_releases(store, kinds=[kind])
+    store = store_from_flag(local_registry)
+    with cli_hints(Facts([store], store, request="clear", local_registry=local_registry)):
+        if not yes:
+            releases, _ = releases_to_clear(store, kinds=[kind])
+            typer.confirm(f"Delete {_count(len(releases), kind)} from {store.root}?", abort=True)
+        freed, removed, kept = clear_releases(store, kinds=[kind])
     for item in kept:
         ui.warn(f"Kept {item.release}: {item.needed_by} needs it.")
     _freed(freed, len(removed))

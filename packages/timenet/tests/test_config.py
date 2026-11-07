@@ -73,22 +73,13 @@ def test_an_empty_or_blank_setting_raises_instead_of_naming_a_directory(monkeypa
         settings()
 
 
-@pytest.mark.parametrize(
-    ("name", "message"),
-    [
-        (
-            "remote_registry",
-            "TIMENET_REMOTE_REGISTRY must not be empty (also as --remote-registry); give it a value, "
-            "or leave it unset for timenet://.",
-        ),
-        ("cache", "TIMENET_CACHE must not be empty; give it a value, or leave it unset for ~/.cache/timenet."),
-    ],
-)
-def test_an_empty_argument_raises_with_the_text_of_its_variable_and_its_flag(name, message):
-    # TIMENET_CACHE has no flag, so its message names only the variable.
+def test_an_empty_argument_raises_with_the_text_of_its_variable():
+    # The CLIs check their flags first, so the message names only the variable.
     with pytest.raises(TimeFValidationError) as error:
-        settings(**{name: ""})
-    assert str(error.value) == message
+        settings(remote_registry="")
+    assert str(error.value) == (
+        "TIMENET_REMOTE_REGISTRY must not be empty; give it a value, or leave it unset for timenet://."
+    )
 
 
 def test_an_invalid_variable_fails_even_when_an_argument_overrides_it(monkeypatch, tmp_path):

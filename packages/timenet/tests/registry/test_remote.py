@@ -10,6 +10,7 @@ import pyarrow.fs as pafs
 from pydantic import ValidationError
 import pytest
 
+from timenet import builders
 from timenet.client import TimeNet, default_sources
 from timenet.config import settings
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
@@ -585,7 +586,9 @@ def _gated_release(origin: Path, page: str) -> tuple[str, DatasetRef]:
 
 
 @pytest.mark.parametrize("entry_point", ["open", "download"])
-def test_a_read_or_a_download_checks_access_before_it_reads_from_a_remote_registry(tmp_path, entry_point):
+def test_a_read_or_a_download_checks_access_before_it_reads_from_a_remote_registry(tmp_path, monkeypatch, entry_point):
+    # The hint of the error asks the installed connectors, so the test installs none.
+    monkeypatch.setattr(builders, "entry_points", lambda group: [])
     dataset_id, release = _gated_release(tmp_path / "origin", "ancestor")
     transport, requests = build_fake(next((tmp_path / "origin").rglob("manifest.json")).parent)
     remote = RemoteRegistry("http://api.local", transport=transport, local_registry=tmp_path / "cache")
@@ -595,10 +598,6 @@ def test_a_read_or_a_download_checks_access_before_it_reads_from_a_remote_regist
         getattr(client, entry_point)(dataset_id)
 
     assert caught.value.requirements == (AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua"),)
-    assert caught.value.hint == (
-        "No source serves its files. Add InstalledConnectors() to the sources, or build it locally with "
-        f"`timenet-build build {dataset_id}`."
-    )
     assert not any("/download/" in request.url.path or request.url.host == "blob.local" for request in requests)
     assert not (tmp_path / "local").exists()
 

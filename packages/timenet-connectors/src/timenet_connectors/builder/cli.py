@@ -8,24 +8,20 @@ time. To add one, drop a ``datasets/<org>/<name>/`` package with a ``connector.p
 
 import json
 from pathlib import Path
-import shlex
+from typing import cast
 
 import typer
 
 from timenet import BuildStep, Plan, Step, plan_build, publish
 from timenet.builders import BuildOptions, declared
+from timenet.cli.hints import Facts, cli_hints, registry_flag, sources_from_flags
 from timenet.cli.options import AUTO_BUILD, LOCAL_REGISTRY, REMOTE_REGISTRY
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console, progress_renderer
-from timenet.client import default_local_registry, default_sources
 from timenet.coordinator.build import run_plan
-from timenet.errors import (
-    TimeNetAccessError,
-    TimeNetFileError,
-    TimeNetMissingParentError,
-)
-from timenet.manifest import PayloadSource
-from timenet.registry import LocalRegistry, WritableRegistry, open_registry
+from timenet.errors import TimeNetVersionConflictError
+from timenet.manifest import PayloadSource, same_release
+from timenet.registry import LocalRegistry, WritableRegistry
 from timenet.registry._paths import release_dir  # ruff: ignore[import-private-name]
 from timenet.sources import InstalledConnectors, ReleaseSource
 from timenet.types.references import DatasetRef, is_latest, split_ref
@@ -55,7 +51,8 @@ def build(
     isolation: bool | None = typer.Option(
         None,
         "--isolation/--no-isolation",
-        help="Run the build in an environment built from the connector's requirements.",
+        help="Run the build in an environment built from the connector's requirements "
+        "(default: $TIMENET_ISOLATION, else on).",
     ),
     publish_to: str | None = typer.Option(
         None,
@@ -89,9 +86,10 @@ def build(
     builds a parent over a release that the local registry already holds. If the local registry already holds the
     version, the build needs only the payload sources of the version. It prepares them the same way
     as a parent.
+    \f
 
     Raises:
-        BadParameter: If ``dataset_id`` has no known connector.
+        BadParameter: If ``dataset_id`` has no known connector, or a registry flag names no registry.
         TimeNetVersionUnavailableError: If the connector cannot build the requested version.
         TimeNetMissingParentError: If a parent is missing. The hint of the error names the flags.
         TimeNetFileError: If a copy of a parent in the local registry is damaged, or a copied file
@@ -100,106 +98,45 @@ def build(
             ``open``.
         TimeNetVersionConflictError: If the copy to ``--publish-to`` finds other files of the
             version, or of a payload source of it, in that registry. Nothing is copied then.
-    """  # ruff: ignore[docstring-extraneous-exception] - the publish raises TimeNetVersionConflictError
+    """  # ruff: ignore[docstring-extraneous-exception, escape-sequence-in-docstring] - raised by the build and the publish; the form feed ends the help text
     # known_ids() imports no connector. So an unknown id fails before any environment exists.
     dataset_id, version = split_ref(release)
     known = known_ids()
     if dataset_id not in known:
         raise typer.BadParameter(f"no connector for {dataset_id!r}; known: {', '.join(known) or '(none)'}")
-    if not is_latest(version):
-        declared(dataset_id, version)
-    store = default_local_registry(local_registry=local_registry)
-    # The first entry of the default list is the local registry, and the build has it already.
-    parents_from = default_sources(
-        local_registry=local_registry, remote_registry=remote_registry, auto_build=auto_build
-    )[1:]
-    dest = None if publish_to is None else open_registry(publish_to, label="--publish-to")
-    has_connectors = any(isinstance(source, InstalledConnectors) for source in parents_from)
-    try:
-        # The parent shows each copy and build step. An isolated child shows its own downloads and shards.
-        with progress_renderer() as progress:
-            result = _build_and_publish(
-                dataset_id,
-                store=store,
-                parents_from=parents_from,
-                publish_to=dest,
-                force=force,
-                options=BuildOptions(
-                    keep_cache=keep_cache,
-                    progress=progress,
-                    quiet=console.quiet,
-                    isolation=None if isolation is None else ("on" if isolation else "off"),
-                ),
-                dry_run=dry_run,
-            )
-    except TimeNetMissingParentError as error:
-        error.hint = _missing_hint(has_connectors=has_connectors)
-        raise
-    except TimeNetFileError as error:
-        flags = _registry_flags(local_registry=local_registry, remote_registry=remote_registry)
-        error.hint = (
-            f"Copy an intact release into the local registry with `timenet download {error.release}{flags}`, or rebuild "
-            f"it with `timenet-build build {error.release.dataset_id} --force{flags}`. A rebuild changes its "
-            "files, and the releases that pin the old files then fail to open."
+    sources = sources_from_flags(local_registry, remote_registry, auto_build)
+    # The default list starts with the local registry, and the build has it already.
+    store, parents_from = cast("LocalRegistry", sources[0]), sources[1:]
+    dest = None if publish_to is None else registry_flag(publish_to, "--publish-to")
+    facts = Facts(
+        sources,
+        store,
+        request="build",
+        local_registry=local_registry,
+        remote_registry=remote_registry,
+        dest=dest,
+        wanted=release,
+    )
+    # The parent shows each copy and build step. An isolated child shows its own downloads and shards.
+    with cli_hints(facts), progress_renderer() as progress:
+        if not is_latest(version):
+            declared(dataset_id, version)
+        result = _build_and_publish(
+            dataset_id,
+            store=store,
+            parents_from=parents_from,
+            publish_to=dest,
+            force=force,
+            options=BuildOptions(
+                keep_cache=keep_cache,
+                progress=progress,
+                quiet=console.quiet,
+                isolation=None if isolation is None else ("on" if isolation else "off"),
+            ),
+            dry_run=dry_run,
         )
-        raise
-    except TimeNetAccessError as error:
-        error.hint = _access_hint(dest, has_connectors=has_connectors)
-        raise
     if result is not None:
         typer.echo(result)
-
-
-def _missing_hint(*, has_connectors: bool) -> str:
-    """Explain how to obtain a missing parent release.
-
-    Args:
-        has_connectors: Whether the source list includes installed connectors.
-
-    Returns:
-        Instructions to find the parent, including ``--auto-build`` when connectors are absent.
-    """
-    ways = (
-        "copy it from a registry that holds it with --remote-registry <url>, or publish it to such a registry "
-        "first with `timenet publish`."
-    )
-    if not has_connectors:
-        return f"Build it from its installed connector with --auto-build, {ways}"
-    return f"{ways[0].upper()}{ways[1:]}"
-
-
-def _access_hint(dest: WritableRegistry | None, *, has_connectors: bool) -> str | None:
-    """Explain how to resolve a release access error.
-
-    Args:
-        dest: The publish destination, or ``None``.
-        has_connectors: Whether the source list includes installed connectors.
-
-    Returns:
-        Instructions to use a local registry or build the release, or ``None`` if neither applies.
-    """
-    if dest is not None and dest.requires_open_access:
-        return (
-            f"{dest} serves open releases only, so --publish-to takes open releases only. Build it into the "
-            "local registry without --publish-to instead."
-        )
-    if not has_connectors:
-        return "Build it from its installed connector with --auto-build."
-    return None
-
-
-def _registry_flags(*, local_registry: str | None, remote_registry: str | None) -> str:
-    """Format registry options as shell arguments.
-
-    Args:
-        local_registry: The local registry path, or ``None``.
-        remote_registry: The remote registry URL, or ``None``.
-
-    Returns:
-        Each supplied flag and shell-quoted value, preceded by a space, or an empty string.
-    """
-    flags = (("--local-registry", local_registry), ("--remote-registry", remote_registry))
-    return "".join(f" {flag} {shlex.quote(value)}" for flag, value in flags if value is not None)
 
 
 def _build_and_publish(  # ruff: ignore[too-many-arguments]
@@ -215,12 +152,12 @@ def _build_and_publish(  # ruff: ignore[too-many-arguments]
     """Build a release in the local registry and optionally publish it.
 
     The plan goes to the console before the first step. If nothing needs to run, for example because ``publish_to``
-    already holds the release, a status line says so.
+    holds the version and ``force`` is false, a status line says so.
 
     Args:
         dataset_id: The dataset ID.
         store: The local registry to build into.
-        parents_from: The sources of the parents and payload sources that the local registry lacks.
+        parents_from: Sources for missing parents and payload sources.
         publish_to: The destination registry, or ``None`` to keep the release local.
         force: Whether to rebuild a release already in the local registry.
         options: Options for each build.
@@ -228,9 +165,20 @@ def _build_and_publish(  # ruff: ignore[too-many-arguments]
 
     Returns:
         The release path, the version when publishing, or the plan text (``None`` if empty) for a dry run.
+
+    Raises:
+        TimeNetVersionConflictError: If the local registry holds the release and ``publish_to`` holds it with other
+            files or another card. Nothing is built then.
     """
     release = declared(dataset_id).release
-    if publish_to is not None and not force and publish_to.exists(release.dataset_id, str(release.version)):
+    # With force, the build runs, and the publish compares its files with the destination.
+    published = None if publish_to is None or force else publish_to.find_manifest(release)
+    if publish_to is not None and published is not None:
+        held = store.find_manifest(release)
+        # If the local registry holds the release, the destination must hold the same one.
+        if held is not None and not same_release(held, published):
+            difference = "files" if held.files != published.files else "card"
+            raise TimeNetVersionConflictError(release, str(publish_to), str(store), difference=difference)
         console.success(f"Nothing to do: '{release.dataset_id}' {release.version} is already in {publish_to}")
         return None if dry_run else str(release.version)
     # A destination that requires open access holds open releases only. So for such a destination, the

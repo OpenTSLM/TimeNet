@@ -6,7 +6,7 @@ from typing import Annotated, Any, Self
 from pydantic import Field, StrictStr, ValidationError, model_validator
 from typing_extensions import TypedDict
 
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeFFormatError, TimeNetManifestError
 from timenet.manifest.counts import ManifestCounts
 from timenet.manifest.files import ManifestFiles
 from timenet.manifest.payload_source import PayloadSource
@@ -130,7 +130,7 @@ def parse_manifest(text: str | bytes, where: str) -> Manifest:
         The manifest.
 
     Raises:
-        TimeFFormatError: If the text is not a valid manifest.
+        TimeNetManifestError: If the text is not a valid manifest.
     """
     try:
         return Manifest.model_validate_json(text)
@@ -138,8 +138,7 @@ def parse_manifest(text: str | bytes, where: str) -> Manifest:
         first = error.errors()[0]
         location = ".".join(str(part) for part in first["loc"])
         message = first["msg"].removeprefix("Value error, ")
-        detail = f"{location}: {message}" if location else message
-        raise TimeFFormatError(f"{where} is not a valid manifest: {detail}") from error
+        raise TimeNetManifestError(where, f"{location}: {message}" if location else message) from error
 
 
 def read_manifest(path: Path) -> Manifest:
@@ -152,8 +151,9 @@ def read_manifest(path: Path) -> Manifest:
         The manifest.
 
     Raises:
-        TimeFFormatError: If the file cannot be read or is not a valid manifest.
-    """
+        TimeFFormatError: If the file cannot be read.
+        TimeNetManifestError: If the file is not a valid manifest.
+    """  # ruff: ignore[docstring-extraneous-exception] - raised by parse_manifest
     try:
         text = path.read_bytes()
     except OSError as error:
