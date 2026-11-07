@@ -1,26 +1,24 @@
 """Plan and run release builds with dependencies first."""
 
-from collections.abc import Mapping, Sequence
+from collections.abc import Sequence
 from typing import assert_never
 
 from timenet.builders import BuildOptions, declared
 from timenet.coordinator.plan import BuildStep, CopyStep, Plan, ReadStep, plan_steps
-from timenet.manifest import PayloadSource
 from timenet.progress import StepFinished, StepStarted
 from timenet.registry import copy_release
 from timenet.registry.dependencies import prepare_local_copy
 from timenet.registry.local import LocalRegistry
 from timenet.sources import ReleaseSource
-from timenet.types.references import DatasetRef, is_latest, split_ref
+from timenet.types.references import is_latest, split_ref
 
 
-def plan_release_build(  # ruff: ignore[too-many-arguments]
+def plan_release_build(
     dataset_id: str,
     *,
     store: LocalRegistry,
     parents_from: Sequence[ReleaseSource] = (),
     force: bool = False,
-    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
     open_access_only: bool = False,
 ) -> Plan:
     """Plan a release build in a local registry.
@@ -33,7 +31,6 @@ def plan_release_build(  # ruff: ignore[too-many-arguments]
         store: The local registry to write to.
         parents_from: Sources to copy or build missing dependencies from, in preference order.
         force: Plan a forced rebuild and its parents even if the requested release already exists.
-        pinned_by: File pins grouped by dependent release that the build must preserve.
         open_access_only: Require ``access: open`` for every needed release.
 
     Returns:
@@ -52,7 +49,6 @@ def plan_release_build(  # ruff: ignore[too-many-arguments]
         parents_from=parents_from,
         force_build=force,
         open_access_only=open_access_only,
-        pinned_by=pinned_by,
     )
     return Plan(tuple(steps))
 

@@ -544,14 +544,13 @@ def _check_agreement(release: DatasetRef, readers: Mapping[DatasetRef, PayloadSo
                 )
 
 
-def plan_steps(  # ruff: ignore[too-many-arguments]
+def plan_steps(
     builder: InstalledBuilder,
     output: LocalRegistry,
     *,
     parents_from: Sequence[ReleaseSource],
     force_build: bool,
     open_access_only: bool,
-    pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> tuple[DatasetRef, list[Step]]:
     """Plan a dataset build and all required releases.
 
@@ -563,7 +562,6 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
         parents_from: The sources to search for missing releases, in order.
         force_build: Rebuild the requested release even if the output holds it.
         open_access_only: Require open access for every release.
-        pinned_by: The releases that pin files of the requested release, with their file requirements.
 
     Returns:
         The requested release and ordered steps, ending with its build if needed.
@@ -574,8 +572,6 @@ def plan_steps(  # ruff: ignore[too-many-arguments]
     root = builder.release
     # The graph leaves the output out of the sources of its copies and builds.
     graph = _Graph(output, parents_from, open_only=open_access_only)
-    if pinned_by:
-        graph.pins[root] = dict(pinned_by)
     # If the output already holds the requested release, a reader needs only its payload sources to
     # open it. Its declared parents matter only to a rebuild.
     held, damage = (None, None) if force_build else graph.in_output(root)

@@ -119,20 +119,6 @@ def _store_child_without_parent(registry):
     return registry.get_manifest(CHILD_REF.dataset_id).payload_sources[SourceKey(str(PARENT_REF))]
 
 
-@pytest.fixture
-def pins(store):
-    """Store the child without the parent, and return the pins of the child on the files of the parent."""
-    return _store_child_without_parent(store)
-
-
-def test_a_build_passes_the_pins_of_the_caller_to_the_backend(store, fake_parent, pins):
-    plan = plan_release_build(PARENT_REF.dataset_id, store=store, pinned_by={CHILD_REF: pins})
-    run_plan(plan, store)
-    assert fake_parent.calls == [(PARENT_REF, False, {CHILD_REF: pins})]
-    assert plan.steps == (_build(PARENT_REF, pinned_by={CHILD_REF: pins}),)
-    assert store.exists(PARENT_REF.dataset_id, str(PARENT_REF.version))
-
-
 def test_plan_release_build_rejects_a_version_the_connector_does_not_declare(store, fake):
     with pytest.raises(TimeNetVersionUnavailableError) as caught:
         plan_release_build("a/b@2.0.0", store=store)
