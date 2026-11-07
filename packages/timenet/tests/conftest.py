@@ -5,9 +5,15 @@ Registers Hypothesis profiles so the example count can be tuned per environment 
 """
 
 import os
+from pathlib import Path
+import sys
 
 from hypothesis import HealthCheck, settings
 
+
+# Make the test helpers of this directory (e.g. ``_demo_child``) importable by name under pytest's
+# importlib import mode, which does not add test dirs to ``sys.path``.
+sys.path.insert(0, str(Path(__file__).parent))
 
 settings.register_profile("dev", max_examples=10)
 settings.register_profile("ci", max_examples=100, print_blob=True)
