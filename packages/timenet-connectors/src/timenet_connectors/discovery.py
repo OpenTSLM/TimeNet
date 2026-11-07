@@ -52,22 +52,6 @@ def connector_dir(dataset_id: str) -> Path:
     raise LookupError(f"no connector for {dataset_id!r}; known: {', '.join(known_ids()) or '(none)'}")
 
 
-def has_connector(dataset_id: str) -> bool:
-    """Check for a dataset's connector package and card without importing the connector.
-
-    Args:
-        dataset_id: The dataset ID, as ``org/name``.
-
-    Returns:
-        Whether a connector package with a ``dataset.yaml`` card exists.
-    """
-    try:
-        connector_dir(dataset_id)
-    except LookupError:
-        return False
-    return True
-
-
 def requirements_for(dataset_id: str) -> Path | None:
     """Find a connector's requirements file.
 
