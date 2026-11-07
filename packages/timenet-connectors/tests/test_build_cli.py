@@ -51,7 +51,6 @@ def _unexpected(*args, **kwargs):
 
 
 def test_build_runs_isolated_by_default(monkeypatch, tmp_path):
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
 
@@ -67,9 +66,7 @@ def test_build_runs_in_process_without_isolation(monkeypatch, tmp_path, how):
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _unexpected)
     monkeypatch.setattr(backend_module, "run_pipeline", _in_process(calls))
-    if how == "flag":
-        monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
-    else:
+    if how == "setting":
         monkeypatch.setenv("TIMENET_ISOLATION", "off")
 
     result = runner.invoke(
@@ -104,7 +101,6 @@ def test_build_without_isolation_shows_each_build_line_once(monkeypatch, tmp_pat
 
 
 def test_a_build_that_reuses_the_release_says_so_on_stderr(monkeypatch, tmp_path):
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     # The line names a long path, so the console must not wrap it.
     monkeypatch.setattr(cli_module.console, "rich", Console(stderr=True, width=1000))
     calls = []
@@ -122,7 +118,6 @@ def test_a_build_that_reuses_the_release_says_so_on_stderr(monkeypatch, tmp_path
 
 
 def test_build_takes_an_exact_release_and_refuses_another_version(monkeypatch, tmp_path):
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
     result = runner.invoke(app, ["build", "timenet/hello-world@1.0.0", "--out", str(tmp_path)])
@@ -162,7 +157,6 @@ def test_build_rejects_an_id_that_no_card_declares_and_names_the_known_ids(tmp_p
 
 @pytest.mark.parametrize("quiet", [False, True])
 def test_build_forwards_quiet_to_the_isolated_child(monkeypatch, tmp_path, quiet):
-    monkeypatch.delenv("TIMENET_ISOLATION", raising=False)
     # The console is a process-wide singleton; monkeypatch restores it for the tests that follow.
     monkeypatch.setattr(cli_module.console, "quiet", False)
     calls = []
