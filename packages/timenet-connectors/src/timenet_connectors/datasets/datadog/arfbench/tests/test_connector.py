@@ -11,7 +11,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 import pytest
 
-from timenet.dataset import IrregularAxis, RegularAxis
+from timenet.dataset import RegularAxis
 from timenet.errors import TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
@@ -156,7 +156,10 @@ def test_a_metric_record_keeps_every_rollup_per_tag_group(release):
     assert dc1_60s.spec.missing is not None and dc1_60s.spec.missing.reason is MissingReason.NOT_RECORDED
     assert dc1_10s.spec.unit_value is None
     assert isinstance(dc1_10s.time_axis, RegularAxis) and dc1_10s.time_axis.offset_us == 0
-    assert isinstance(first.sources[1].signals[0].time_axis, IrregularAxis)  # dc:2 skips the 10 s step
+    # dc:2 skips the 10 s step, which is a missing timestep on the grid like a null row.
+    (dc2_10s,) = first.sources[1].signals
+    assert dc2_10s.to_arrow().to_pylist() == [5.0, None, 6.0]
+    assert isinstance(dc2_10s.time_axis, RegularAxis)
     # dc:3 starts at its first value, not at the grid's first step, and dc:4 has no value, so no source.
     (dc3_60s,) = first.sources[2].signals
     assert dc3_60s.to_arrow().to_pylist() == [9.0]
@@ -249,6 +252,12 @@ def test_a_malformed_question_raises_with_its_location(release, change, message)
 def test_an_unexpected_header_raises(release):
     _write_qa_csv(release.qa_csv.parent, [_PRESENCE_ROW], columns=QUESTION_COLUMNS[1:])
     with pytest.raises(TimeNetConnectorError, match=r"arfbench-qa\.csv: expected columns"):
+        ARFBenchConnector().convert([release])
+
+
+def test_a_row_off_the_rollup_grid_raises(release):
+    _series_file(release.series_dir / "35997_1_10.parquet", [(30, "", 0.5), (35, "", 0.6)])
+    with pytest.raises(TimeNetConnectorError, match=r"35997_1_10\.parquet group '': rows are off the 10 s grid"):
         ARFBenchConnector().convert([release])
 
 

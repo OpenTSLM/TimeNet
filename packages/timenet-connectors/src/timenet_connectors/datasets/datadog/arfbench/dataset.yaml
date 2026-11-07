@@ -17,9 +17,9 @@
 # A rollup file lists the tag groups of a metric on one time grid, with a null where the metric
 # reported nothing for the group. Each series is cut to the window in which its group has a value,
 # so grid steps before its first value and after its last one are not stored, and a group with no
-# value at a rollup has no series there. A null inside the window stays a missing timestep, with
-# the spec's missing-value reason `not_recorded`.
-# Series with missing steps use explicit time offsets.
+# value at a rollup has no series there. A null inside the window is a missing timestep, with
+# the spec's missing-value reason `not_recorded`, and so is a grid step that the file skips for the
+# group. Thus every series is on the regular grid of its rollup.
 # One end-time question (row 191, metric 36464_0) has a correct answer 140 seconds after the last
 # step of the metric's series, and 29 answer options of the start-time and end-time questions lie
 # outside every rollup. The dataset keeps them as released.

@@ -20,8 +20,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import IrregularAxis
+from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.errors import TimeNetConnectorError, TimeNetDownloadError
 from timenet.types import (
     Annotation,
@@ -35,7 +34,6 @@ from timenet.types import (
 )
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
 from timenet_connectors.sources.images import image_signal
-from timenet_connectors.time_axes import axis_for_offsets, offsets_from_origin
 
 
 if TYPE_CHECKING:
@@ -65,10 +63,10 @@ UNTAGGED = "untagged"  # the source name for the empty tag label of a metric wit
 MAX_CITED_METRICS = 2  # a question is about one metric or a pair
 
 # The release states no unit for any metric, and it stores values as float64. A rollup file lists
-# the tag groups of a metric on one time grid, and a step at which the metric reported nothing for
-# a group holds a null. Inside a group's observed window such a null stays a missing timestep.
-# In the 1.0.0 release, 42 of 142 metrics have such gaps, and a sparse metric misses up to 99% of
-# the steps of a fine grid. The release records each series' null count, so a consumer can see this.
+# the tag groups of a metric on one time grid. A step at which the metric reported nothing for a
+# group holds a null, or the file skips it. Inside a group's observed window both are a missing
+# timestep. In the 1.0.0 release, 42 of 142 metrics have such gaps, and a sparse metric misses up
+# to 99% of the steps of a fine grid. The release records each series' null count.
 METRIC = TimeSeriesSpec(
     spec_type="metric",
     name="Observability metric",
@@ -86,35 +84,55 @@ METRIC = TimeSeriesSpec(
 
 @dataclass(frozen=True)
 class TagGroupSeries:
-    """One tag group's values at one rollup interval, cut to the window in which the group has a value."""
+    """One tag group's values on its rollup grid, from the group's first value to its last."""
 
-    epochs_us: np.ndarray
-    """The timestamp of each grid step, in microseconds since the epoch."""
-    values: np.ndarray
-    """The metric value at each step. The value at a missing step is undefined."""
-    missing: np.ndarray
-    """Whether each step is missing: the metric reported nothing for the group at that step."""
+    start_us: int
+    """The timestamp of the first value, in microseconds since the epoch."""
+    values: pa.Array
+    """The value at each grid step, with a null at each step without a value."""
 
-    def to_signal(self, *, interval_s: int, origin_us: int, name: str) -> Signal:
-        """Build the signal for this group at its rollup interval.
+    @classmethod
+    def from_rows(cls, epochs_us: np.ndarray, values: np.ndarray, missing: np.ndarray, *, period_us: int) -> Self:
+        """Place the rows of one group on the grid of its rollup.
 
-        A group that holds every step of its grid gets a regular axis. A group that skips a step
-        keeps its own time offsets. A missing step stays an Arrow null, not a NaN.
+        The rows must be in time order and start and end with a value. A step that the rows skip
+        is a missing timestep, like a row that holds a null.
 
         Args:
-            interval_s: The rollup interval in seconds, which sets the grid period.
-            origin_us: The record's start, which the time offsets count from.
+            epochs_us: The timestamp of each row, in microseconds since the epoch.
+            values: The value of each row. The value of a row that holds a null is undefined.
+            missing: Whether each row holds a null.
+            period_us: The rollup interval in microseconds.
+
+        Returns:
+            The group's series on the grid.
+
+        Raises:
+            TimeNetConnectorError: If a row is off the grid, or two rows share a step.
+        """
+        steps = epochs_us - epochs_us[0]
+        if np.any(steps % period_us) or np.any(np.diff(steps) <= 0):
+            raise TimeNetConnectorError(f"rows are off the {period_us // US_PER_S} s grid or repeat a step")
+        steps //= period_us
+        grid_values = np.full(int(steps[-1]) + 1, np.nan)
+        grid_values[steps] = values
+        present = np.zeros(len(grid_values), dtype=bool)
+        present[steps[~missing]] = True
+        return cls(start_us=int(epochs_us[0]), values=pa.array(grid_values, mask=~present))
+
+    def to_signal(self, *, period_us: int, origin_us: int, name: str) -> Signal:
+        """Build the signal for this group at its rollup interval.
+
+        Args:
+            period_us: The rollup interval in microseconds.
+            origin_us: The record's start, which the axis offset counts from.
             name: The signal name.
 
         Returns:
-            The signal with missing values and a regular or irregular time axis.
+            The signal on a regular axis, with a missing timestep at each step without a value.
         """
-        offsets = offsets_from_origin(self.epochs_us, origin_us)
-        present = pa.array(self.values, mask=self.missing)
-        axis = axis_for_offsets(offsets, period_us=Fraction(interval_s * US_PER_S))
-        if isinstance(axis, IrregularAxis):
-            return Signal.from_irregular(present, time_offsets_us=offsets, spec=METRIC, name=name)
-        return Signal.from_values(present, spec=METRIC, name=name, time_axis=axis)
+        axis = RegularAxis(period_us=Fraction(period_us), offset_us=self.start_us - origin_us)
+        return Signal.from_values(self.values, spec=METRIC, name=name, time_axis=axis)
 
 
 @dataclass(frozen=True)
@@ -142,17 +160,26 @@ class RollupFile:
             raise TimeNetConnectorError(f"{path.name} is not named {{metric}}_{{interval}}.parquet")
         return cls(metric=metric, interval_s=int(interval_s), path=path)
 
+    @property
+    def period_us(self) -> int:
+        """The rollup interval in microseconds."""
+        return self.interval_s * US_PER_S
+
     def read_tag_group_series(self) -> dict[str, TagGroupSeries]:
         """Read the file and cut each tag group to its observed window.
 
         The file lists the tag groups of the metric on one time grid, with a null where the metric
         reported nothing. Most files list every group at every step. Steps before a group's first
         value and after its last one are grid padding, so each group is cut to its observed window.
-        A group with no value is left out. A null inside the window stays a missing value. Rows are
-        sorted by group and time, because the file order is arbitrary.
+        A group with no value is left out. Rows are sorted by group and time, because the file
+        order is arbitrary.
 
         Returns:
-            Each tag label mapped to its series, in time order.
+            Each tag label mapped to its series on the grid.
+
+        Raises:
+            TimeNetConnectorError: If a group has rows off the grid. The message names the file
+                and the group.
         """
         table = pq.read_table(self.path, columns=["epoch", "group", "value"])
         table = table.sort_by([("group", "ascending"), ("epoch", "ascending")])
@@ -163,11 +190,17 @@ class RollupFile:
         bounds = [0, *(np.flatnonzero(labels[1:] != labels[:-1]) + 1), len(labels)]
         groups = {}
         for start, stop in pairwise(bounds):
-            observed = np.flatnonzero(~missing[start:stop])
+            observed = np.flatnonzero(~missing[start:stop]) + start
             if not len(observed):
                 continue
-            first, last = start + int(observed[0]), start + int(observed[-1]) + 1
-            groups[str(labels[start])] = TagGroupSeries(epochs[first:last], values[first:last], missing[first:last])
+            window = slice(int(observed[0]), int(observed[-1]) + 1)
+            label = str(labels[start])
+            try:
+                groups[label] = TagGroupSeries.from_rows(
+                    epochs[window], values[window], missing[window], period_us=self.period_us
+                )
+            except TimeNetConnectorError as exc:
+                raise TimeNetConnectorError(f"{self.path.name} group {label!r}: {exc}") from exc
         return groups
 
     def read_query_name(self) -> str:
@@ -220,13 +253,13 @@ class MetricSeriesFiles:
             The Record, not yet added to a dataset, with the metric IDs and the finest interval as
             annotations.
         """
-        series_by_rollup = {rollup.interval_s: rollup.read_tag_group_series() for rollup in self.rollups}
-        origin_us = min(int(group.epochs_us[0]) for groups in series_by_rollup.values() for group in groups.values())
+        series_by_rollup = {rollup: rollup.read_tag_group_series() for rollup in self.rollups}
+        origin_us = min(group.start_us for groups in series_by_rollup.values() for group in groups.values())
         sources = []
         for label in sorted({label for groups in series_by_rollup.values() for label in groups}):
             signals = tuple(
-                groups[label].to_signal(interval_s=interval_s, origin_us=origin_us, name=f"{interval_s}s")
-                for interval_s, groups in series_by_rollup.items()
+                groups[label].to_signal(period_us=rollup.period_us, origin_us=origin_us, name=f"{rollup.interval_s}s")
+                for rollup, groups in series_by_rollup.items()
                 if label in groups
             )
             sources.append(Source(name=label or UNTAGGED, signals=signals))
