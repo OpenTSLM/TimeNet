@@ -12,7 +12,8 @@ sentence and raises the error again. The message ends with a period, and the hin
 sentence.
 """
 
-from typing import TYPE_CHECKING
+from functools import partial
+from typing import TYPE_CHECKING, Literal
 
 
 if TYPE_CHECKING:
@@ -33,28 +34,72 @@ class TimeNetDatasetNotFoundError(TimeNetError):
 
 
 class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
-    """A release that another release needs is absent: a declared parent of a build, or a payload source.
+    """A required parent release or payload source is missing.
 
     Attributes:
         missing: The absent release.
         needed_by: The release that needs it.
-        payload_source: Whether ``needed_by`` reads files of ``missing`` (a payload source), rather than
-            declaring it as a parent to build from.
-        searched: Where the release was looked for.
-        hint: How the caller can obtain the release, added by the front end, or ``None``.
+        payload_source: ``True`` if ``needed_by`` reads files of ``missing``, ``False`` for a declared build parent.
+        searched: The search location.
+        hint: Advice on obtaining the release, or ``None``.
     """
 
-    def __init__(self, missing: "DatasetRef", needed_by: "DatasetRef", payload_source: bool, searched: str) -> None:
-        super().__init__(missing, needed_by, payload_source, searched)
+    def __init__(self, missing: "DatasetRef", needed_by: "DatasetRef", searched: str, *, payload_source: bool) -> None:
+        super().__init__(missing, needed_by, searched, payload_source)
         self.missing = missing
         self.needed_by = needed_by
         self.payload_source = payload_source
         self.searched = searched
         self.hint: str | None = None
 
+    def __reduce__(self) -> tuple[object, ...]:
+        # Pickle passes the arguments by position, so the keyword-only flag travels in a partial.
+        rebuild = partial(type(self), payload_source=self.payload_source)
+        return rebuild, (self.missing, self.needed_by, self.searched), self.__dict__
+
     def __str__(self) -> str:
         role = "payload source" if self.payload_source else "parent release"
         message = f"{role} {self.missing} of {self.needed_by} is not in {self.searched}."
+        return message if self.hint is None else f"{message} {self.hint}"
+
+
+class TimeNetVersionConflictError(TimeNetError):
+    """A registry already holds a release with other files or another card than the copy.
+
+    A changed release needs a new version.
+
+    Attributes:
+        release: The release that differs.
+        registry: The destination registry, as text.
+        source: The source registry, as text.
+        needed_by: The requested release that needs this payload source, or ``None`` if ``release`` is the request.
+        difference: ``"files"`` if the file records differ, else ``"card"`` for the rest of the manifest.
+        hint: Advice to append to the error message, or ``None``.
+    """
+
+    def __init__(
+        self,
+        release: "DatasetRef",
+        registry: str,
+        source: str,
+        needed_by: "DatasetRef | None" = None,
+        difference: Literal["files", "card"] = "files",
+    ) -> None:
+        super().__init__(release, registry, source, needed_by, difference)
+        self.release = release
+        self.registry = registry
+        self.source = source
+        self.needed_by = needed_by
+        self.difference = difference
+        self.hint: str | None = None
+
+    def __str__(self) -> str:
+        held = str(self.release) if self.needed_by is None else f"{self.release}, a payload source of {self.needed_by},"
+        other = "other files" if self.difference == "files" else "another card"
+        message = (
+            f"{self.registry} already holds {held} with {other} than {self.source}. "
+            "A published version cannot change, so a changed release needs a new version."
+        )
         return message if self.hint is None else f"{message} {self.hint}"
 
 

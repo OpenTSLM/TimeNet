@@ -106,6 +106,8 @@ def test_run_pipeline_writes_the_requested_values_backend(tmp_path):
 
 def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tmp_path):
     class _Registry:
+        requires_open_access = True
+
         def __init__(self) -> None:
             self.values_backend: str | None = None
 
@@ -483,6 +485,8 @@ def test_publish_pipeline_refuses_a_card_that_is_not_open_before_downloading(tmp
 
 class _HostedRegistry:
     """A registry that is not local. It serves the parents from a local registry and refuses writes."""
+
+    requires_open_access = True
 
     def __init__(self, root: Path) -> None:
         self.local = LocalRegistry(root)
