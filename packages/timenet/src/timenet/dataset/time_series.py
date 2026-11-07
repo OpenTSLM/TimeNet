@@ -72,9 +72,8 @@ def _arrow_from_values(
         Values converted to the spec's dtype, with a separate bit that marks whether each timestep is present.
 
     Raises:
-        TimeFValidationError: If a non-nullable spec receives a null value, or an enum value is
-            outside the spec's categories.
-    """
+        TimeFValidationError: If missing values are not allowed or an enum value is outside the allowed categories.
+    """  # ruff: ignore[docstring-extraneous-exception] (raised by check_nulls_within_missing_contract)
     arrow_type = pa.string() if spec.dtype in {"str", "enum"} else pa.from_numpy_dtype(np.dtype(spec.dtype))
     if isinstance(values, pa.Array):
         array = values.cast(arrow_type)
@@ -84,8 +83,7 @@ def _arrow_from_values(
     else:
         # pa.array preserves None as a null. The null count below avoids a separate scan.
         array = pa.array(values, type=arrow_type)
-    if array.null_count and not spec.nullable:
-        raise TimeFValidationError(f"series for {spec.spec_type!r} has null values but nullable=False")
+    spec.check_nulls_allowed(array.null_count, series="series")
     if spec.dtype == "enum":
         # Encode the labels first. The dictionary stores each distinct label once.
         # Compare these labels with the allowed categories, without creating an object for every value.
@@ -110,8 +108,8 @@ def _in_memory(
         A :class:`~timenet.types.handles.NumpyArray` or an :class:`~timenet.types.handles.ArrowArray`.
 
     Raises:
-        TimeFValidationError: If NumPy values do not have the spec's per-timestep shape, a
-            non-nullable spec receives a null value, or an enum value is outside the categories.
+        TimeFValidationError: If the shape differs from the specification or missing values are not allowed.
+            Also if an enum value is outside the allowed categories.
     """
     if isinstance(values, pa.Array) and not validate_arrow:
         return ArrowArray(values)
@@ -249,6 +247,13 @@ class Signal(SupportsAnnotate):
     ``n_values`` reports.
 
     """
+    null_count: int | None
+    """The number of missing timesteps, or ``None`` if unknown.
+
+    Signals built from values in memory have a known count. Signals built with :meth:`from_loader`
+    have a count only if ``null_count`` is supplied. Slices have an unknown count.
+    The writer counts missing timesteps and rejects a supplied count that differs from the values.
+    """
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached directly to this signal."""
     metadata: JsonMapping = field(default_factory=dict)
@@ -273,6 +278,7 @@ class Signal(SupportsAnnotate):
             name=name,
             values=held,
             n_values=len(held.values),
+            null_count=held.values.null_count if isinstance(held, ArrowArray) else 0,
             annotations=annotations,
             metadata=metadata,
         )
@@ -286,16 +292,18 @@ class Signal(SupportsAnnotate):
         name: str,
         loader: ArrayHandle | Callable[[], pa.Array],
         n_values: int,
+        null_count: int | None = None,
         time_offsets_loader: ArrayHandle | Callable[[], pa.Array] | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
     ) -> "Signal":
         """Build a signal whose values are loaded only when they are read.
 
-        ``loader`` and ``time_offsets_loader`` each take a value handle, which the signal keeps as it
-        is, or a plain callable returning an Arrow array, which the signal calls on every read. A
-        callable with its own ``read_steps()`` is rejected: subclass ``ArrayHandle`` to keep its range
-        reads.
+        ``loader`` and ``time_offsets_loader`` each accept an ``ArrayHandle`` or a callable that returns
+        an Arrow array. The signal keeps handles unchanged and calls plain callables on every read.
+        A callable with a ``read_steps()`` method must subclass ``ArrayHandle``.
+        ``null_count`` gives the number of missing timesteps, or ``None`` if unknown.
+        The writer counts missing timesteps when it reads the values.
 
         Returns:
             A signal backed by ``loader`` without reading it.
@@ -307,6 +315,7 @@ class Signal(SupportsAnnotate):
             name=name,
             values=_array_handle(loader),
             n_values=n_values,
+            null_count=null_count,
             time_offsets=None if time_offsets_loader is None else _array_handle(time_offsets_loader),
             annotations=annotations,
             metadata=metadata,
@@ -321,6 +330,7 @@ class Signal(SupportsAnnotate):
         name: str,
         values: ArrayHandle,
         n_values: int,
+        null_count: int | None,
         time_offsets: ArrayHandle | None = None,
         annotations: tuple[Annotation, ...] = (),
         metadata: JsonMapping | None = None,
@@ -334,6 +344,7 @@ class Signal(SupportsAnnotate):
         set_field(self, "_time_offsets", time_offsets)
         set_field(self, "_id", None)
         set_field(self, "n_values", n_values)
+        set_field(self, "null_count", null_count)
         set_field(self, "annotations", tuple(annotations))
         set_field(self, "metadata", {} if metadata is None else metadata)
         self.__post_init__()
@@ -368,19 +379,27 @@ class Signal(SupportsAnnotate):
         return attached
 
     def __post_init__(self) -> None:
-        """Validate the intrinsic per-series invariants.
+        """Check the signal's name, length, null count, and time offsets.
 
         Raises:
-            TimeFValidationError: If ``n_values`` is not a positive integer. Also if the time
-                offsets and the axis shape disagree about whether this series stores per-value time
-                offsets.
-            ValueError: If ``signal`` is empty. The axis validates itself.
+            TimeFValidationError: If ``n_values`` is not a positive integer, or a supplied
+                ``null_count`` is not an integer between 0 and ``n_values``.
+                Also if an irregular axis has no time offsets, or another axis has time offsets.
+            ValueError: If the signal name is empty.
         """
         if not self.name:
             raise ValueError("Signal.name must be non-empty")
         object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
         if isinstance(self.n_values, bool) or not isinstance(self.n_values, int) or self.n_values <= 0:
             raise TimeFValidationError(f"Signal.n_values must be a positive integer, got {self.n_values!r}")
+        if self.null_count is not None and (
+            isinstance(self.null_count, bool)
+            or not isinstance(self.null_count, int)
+            or not 0 <= self.null_count <= self.n_values
+        ):
+            raise TimeFValidationError(
+                f"Signal.null_count must be an integer between 0 and n_values={self.n_values}, got {self.null_count!r}"
+            )
         irregular = isinstance(self.time_axis, IrregularAxis)
         if irregular and self._time_offsets is None:
             raise TimeFValidationError(
@@ -453,9 +472,9 @@ class Signal(SupportsAnnotate):
         does not read the values immediately.
 
         Args:
-            values: The signal values to convert to the spec's dtype. Text and enum specs take
-                strings. Python ``None`` marks a missing timestep when ``spec.nullable`` is true.
-            spec: The series' measurement-modality spec.
+            values: Values to convert to the specified dtype. Text and enum values are strings.
+                ``None`` marks a missing timestep.
+            spec: The specification for the signal's values.
             name: The signal name.
             time_axis: Where the values sit in time.
 
@@ -489,10 +508,10 @@ class Signal(SupportsAnnotate):
         buffers as read-only.
 
         Args:
-            values: The signal values to convert to the spec's dtype. Text and enum specs take
-                strings. Python ``None`` marks a missing timestep when ``spec.nullable`` is true.
+            values: Values to convert to the specified dtype. Text and enum values are strings.
+                ``None`` marks a missing timestep.
             time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
-            spec: The series' measurement-modality spec.
+            spec: The specification for the signal's values.
             name: The signal name.
             full_validation: Check timestamp ordering by default. Set to ``False`` only for previously
                 validated timestamps to skip that scan. Both modes check type, shape, integer range,
@@ -521,6 +540,7 @@ class Signal(SupportsAnnotate):
             loader=held,
             time_offsets_loader=NumpyArray(time_offsets),
             n_values=n_values,
+            null_count=held.values.null_count if isinstance(held, ArrowArray) else 0,
         )
 
     def time_offsets_us(self) -> np.ndarray:
@@ -557,9 +577,8 @@ class Signal(SupportsAnnotate):
             The series' values with shape ``(n_steps, *spec.value_shape)``.
 
         Raises:
-            TimeFNullValuesError: If a timestep is missing or only partially present. Use
-                :meth:`to_arrow` to preserve missingness. A nullable spec without actual nulls
-                remains supported, as do NaN and infinity values.
+            TimeFNullValuesError: If a timestep is wholly or partly missing.
+                Use :meth:`to_arrow` to preserve missing values.
         """
         try:
             return self._values.read_numpy()
@@ -742,7 +761,8 @@ class Signal(SupportsAnnotate):
         The span must hold at least one value. A step span must count on this series. A time span is
         placed by time only, so ask :meth:`is_selected_by` first when the scope matters. The slice
         keeps the name, spec, metadata, and place on the timeline, drops annotations, and reads no
-        values until it is read::
+        values until it is read. The slice has ``null_count=None`` because its number of missing
+        timesteps is unknown::
 
             if signal.overlaps_with(interval):
                 part = signal.slice(interval, clip=True)

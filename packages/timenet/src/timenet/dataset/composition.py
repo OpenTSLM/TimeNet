@@ -284,6 +284,7 @@ class _Importer:
             name=original.name,
             loader=original._values,
             n_values=original.n_values,
+            null_count=original.null_count,
             time_offsets_loader=original._time_offsets,
             annotations=tuple(self.copy_annotation(annotation) for annotation in original.annotations),
             metadata=deepcopy(original.metadata),

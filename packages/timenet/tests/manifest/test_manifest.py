@@ -18,6 +18,8 @@ from timenet.types import (
     Domain,
     InputModality,
     License,
+    MissingReason,
+    MissingValues,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -145,14 +147,15 @@ def test_manifest_rejects_unknown_domain():
         Manifest.model_validate(payload)
 
 
-def test_nullable_schema_roundtrips_at_format_version_1():
-    # Nullable schemas retain format version 1. Reading nullable artifacts still requires an SDK
-    # that supports nullability, including the parallel validity arrays in Zarr.
+def test_missing_values_round_trip_at_format_version_1():
+    # Schemas with missing values retain format version 1. Reading such artifacts still requires
+    # an SDK that supports missing values, including the parallel validity arrays in Zarr.
     base = _replace(
         _manifest(),
         files=ManifestFiles(control=_CONTROL),
     )
-    spec = _replace(base.dataset_schema.time_series_specs[0], nullable=True)
+    missing = MissingValues(reason=MissingReason.SENSOR_GAP, description="The sensor lost contact.")
+    spec = _replace(base.dataset_schema.time_series_specs[0], missing=missing)
     manifest = Manifest(
         dataset_id=base.dataset_id,
         metadata=base.metadata,
@@ -161,34 +164,24 @@ def test_nullable_schema_roundtrips_at_format_version_1():
         timef_format_version=1,
     )
     assert manifest.timef_format_version == 1
-    assert manifest.to_dict()["schema"]["time_series_specs"][0]["nullable"] is True
+    stored = manifest.to_dict()["schema"]["time_series_specs"][0]
+    assert stored["missing"] == {"reason": "sensor_gap", "description": "The sensor lost contact."}
+    assert "nullable" not in stored
     assert Manifest.model_validate_json(manifest.to_json()) == manifest
     jsonschema.validate(manifest.to_dict(), MANIFEST_SCHEMA)
 
 
-def test_missing_nullable_defaults_to_false():
+def test_a_spec_without_missing_allows_no_missing_timestep():
     data = _replace(
         _manifest(),
         files=ManifestFiles(control=_CONTROL),
     ).to_dict()
-    data["schema"]["time_series_specs"][0].pop("nullable", None)
+    data["schema"]["time_series_specs"][0].pop("missing")
     restored = Manifest.model_validate(data)
     assert restored.timef_format_version == 1
+    assert restored.dataset_schema.time_series_specs[0].missing is None
     assert restored.dataset_schema.time_series_specs[0].nullable is False
     jsonschema.validate(data, MANIFEST_SCHEMA)
-
-
-@pytest.mark.parametrize("nullable", [1, None, "true"])
-def test_manifest_rejects_nonboolean_nullable(nullable):
-    data = _replace(
-        _manifest(),
-        files=ManifestFiles(control=_CONTROL),
-    ).to_dict()
-    data["schema"]["time_series_specs"][0]["nullable"] = nullable
-    with pytest.raises(ValidationError, match="nullable"):
-        Manifest.model_validate(data)
-    with pytest.raises(jsonschema.ValidationError):
-        jsonschema.validate(data, MANIFEST_SCHEMA)
 
 
 @pytest.mark.parametrize("version", [None, True, 1.0])

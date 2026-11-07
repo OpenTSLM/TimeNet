@@ -499,6 +499,45 @@
       "title": "ManifestFiles",
       "type": "object"
     },
+    "MissingReason": {
+      "description": "Reasons why a series can have missing timesteps.",
+      "enum": [
+        "sensor_gap",
+        "not_recorded",
+        "alignment_padding",
+        "not_applicable",
+        "redacted"
+      ],
+      "title": "MissingReason",
+      "type": "string"
+    },
+    "MissingValues": {
+      "additionalProperties": false,
+      "description": "The reason for missing timesteps in a series.\n\nA time-series specification without this record allows no missing timesteps.\nAn Arrow null represents a missing timestep.",
+      "properties": {
+        "reason": {
+          "$ref": "#/$defs/MissingReason"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        }
+      },
+      "required": [
+        "reason"
+      ],
+      "title": "MissingValues",
+      "type": "object"
+    },
     "ParentDatasetCard": {
       "additionalProperties": false,
       "description": "A copy of the card for a parent dataset used by a build.\n\nA child manifest stores these cards in ``parent_cards``, indexed by parent alias.\nThe card records the parent's exact release, license, citation, and access requirements.\nReaders can inspect this information without opening the parent dataset.",
@@ -606,10 +645,16 @@
           "title": "Dimension Names",
           "type": "array"
         },
-        "nullable": {
-          "default": false,
-          "title": "Nullable",
-          "type": "boolean"
+        "missing": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/MissingValues"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null
         },
         "modality": {
           "$ref": "#/$defs/InputModality",

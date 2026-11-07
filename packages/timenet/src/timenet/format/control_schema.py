@@ -3,7 +3,7 @@
 The SQL table definitions and the writer's Arrow batch schemas come from :data:`CONTROL_TABLES`.
 The audit also uses it to examine keys and references. Define schema changes there.
 
-This is version 1 of the control schema. Every table except ``label_sets`` uses ids as keys.
+This is version 2 of the control schema. Every table except ``label_sets`` uses ids as keys.
 Records, Signals, and Tasks use the public ids that the caller sees. All other objects use the
 writer's storage ids.
 
@@ -211,8 +211,10 @@ SIGNALS = Table(
         _required("categories", ColumnType.VARCHAR_LIST),
         _required("value_shape", ColumnType.BIGINT_LIST),
         _required("dimension_names", ColumnType.VARCHAR_LIST),
-        _required("nullable", ColumnType.BOOLEAN),
+        Column("missing_reason", ColumnType.VARCHAR),
+        Column("missing_description", ColumnType.VARCHAR),
         _key("n_values"),
+        Column("null_count", ColumnType.BIGINT),
         _required("metadata", ColumnType.JSON),
         _required("modality"),
     ),
@@ -222,6 +224,12 @@ SIGNALS = Table(
         ForeignKey("axis_id", "axes", "axis_id"),
     ),
 )
+"""The ``missing_*`` columns hold a spec's missing-value record, or are all null when it has none.
+
+A specification allows missing timesteps when ``missing_reason`` is set.
+``null_count`` is the number of missing timesteps among the signal's ``n_values`` timesteps.
+It is null only when the signal has no stored values and no supplied count.
+"""
 
 SIGNAL_CHUNKS = Table(
     "signal_chunks",

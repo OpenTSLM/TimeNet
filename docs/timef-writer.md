@@ -108,7 +108,7 @@ differing payload source.
 | `data_page_size` | Optional Parquet data-page target. |
 | `value_encoding` | Parquet values-column encoding, or `"auto"`. |
 
-Multidimensional Signals use Zarr. Parquet supports scalar Signals. Both backends preserve nullable
+Multidimensional Signals use Zarr. Parquet supports scalar Signals. Both backends preserve missing
 timesteps. Irregular-axis time offsets live in packed Parquet payloads under `payloads/`, not in
 either values backend.
 
