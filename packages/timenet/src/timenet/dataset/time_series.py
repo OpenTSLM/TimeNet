@@ -72,7 +72,7 @@ def _arrow_from_values(
         Values converted to the spec's dtype, with a separate bit that marks whether each timestep is present.
 
     Raises:
-        TimeFValidationError: If the spec rejects the null values or an enum value.
+        TimeFValidationError: If missing values are not allowed or an enum value is outside the allowed categories.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by check_nulls_within_missing_contract)
     arrow_type = pa.string() if spec.dtype in {"str", "enum"} else pa.from_numpy_dtype(np.dtype(spec.dtype))
     if isinstance(values, pa.Array):
@@ -108,7 +108,8 @@ def _in_memory(
         A :class:`~timenet.types.handles.NumpyArray` or an :class:`~timenet.types.handles.ArrowArray`.
 
     Raises:
-        TimeFValidationError: If the shape, null values, or enum values violate the spec.
+        TimeFValidationError: If the shape differs from the specification or missing values are not allowed.
+            Also if an enum value is outside the allowed categories.
     """
     if isinstance(values, pa.Array) and not validate_arrow:
         return ArrowArray(values)
@@ -247,12 +248,11 @@ class Signal(SupportsAnnotate):
 
     """
     null_count: int | None
-    """The number of missing timesteps, or ``None`` if the signal does not know it yet.
+    """The number of missing timesteps, or ``None`` if unknown.
 
-    Values built in memory know their count, and so does a signal read from a release whose writer
-    stored its values. A signal built with :meth:`from_loader` knows it only if the caller states
-    it, and a slice does not know the count of its window. The writer reads every series it stores,
-    records the count in the release, and rejects a stated count that the values contradict.
+    Signals built from values in memory have a known count. Signals built with :meth:`from_loader`
+    have a count only if ``null_count`` is supplied. Slices have an unknown count.
+    The writer counts missing timesteps and rejects a supplied count that differs from the values.
     """
     annotations: tuple[Annotation, ...] = ()
     """Annotations attached directly to this signal."""
@@ -299,11 +299,11 @@ class Signal(SupportsAnnotate):
     ) -> "Signal":
         """Build a signal whose values are loaded only when they are read.
 
-        ``loader`` and ``time_offsets_loader`` each take a value handle, which the signal keeps as it
-        is, or a plain callable returning an Arrow array, which the signal calls on every read. A
-        callable with its own ``read_steps()`` is rejected: subclass ``ArrayHandle`` to keep its range
-        reads. ``null_count`` states how many timesteps are missing, if the caller knows; the writer
-        finds out when it reads the values.
+        ``loader`` and ``time_offsets_loader`` each accept an ``ArrayHandle`` or a callable that returns
+        an Arrow array. The signal keeps handles unchanged and calls plain callables on every read.
+        A callable with a ``read_steps()`` method must subclass ``ArrayHandle``.
+        ``null_count`` gives the number of missing timesteps, or ``None`` if unknown.
+        The writer counts missing timesteps when it reads the values.
 
         Returns:
             A signal backed by ``loader`` without reading it.
@@ -379,13 +379,13 @@ class Signal(SupportsAnnotate):
         return attached
 
     def __post_init__(self) -> None:
-        """Validate the intrinsic per-series invariants.
+        """Check the signal's name, length, null count, and time offsets.
 
         Raises:
-            TimeFValidationError: If ``n_values`` is not a positive integer, or ``null_count`` is
-                set and not between 0 and ``n_values``. Also if the time offsets and the axis shape
-                disagree about whether this series stores per-value time offsets.
-            ValueError: If ``signal`` is empty. The axis validates itself.
+            TimeFValidationError: If ``n_values`` is not a positive integer, or a supplied
+                ``null_count`` is not an integer between 0 and ``n_values``.
+                Also if an irregular axis has no time offsets, or another axis has time offsets.
+            ValueError: If the signal name is empty.
         """
         if not self.name:
             raise ValueError("Signal.name must be non-empty")
@@ -472,8 +472,9 @@ class Signal(SupportsAnnotate):
         does not read the values immediately.
 
         Args:
-            values: Values in the spec's dtype. Text and enum values are strings; ``None`` marks a missing timestep.
-            spec: The signal's measurement spec.
+            values: Values to convert to the specified dtype. Text and enum values are strings.
+                ``None`` marks a missing timestep.
+            spec: The specification for the signal's values.
             name: The signal name.
             time_axis: Where the values sit in time.
 
@@ -507,9 +508,10 @@ class Signal(SupportsAnnotate):
         buffers as read-only.
 
         Args:
-            values: Values in the spec's dtype. Text and enum values are strings; ``None`` marks a missing timestep.
+            values: Values to convert to the specified dtype. Text and enum values are strings.
+                ``None`` marks a missing timestep.
             time_offsets_us: One time offset per value, in microseconds from the record's relative zero.
-            spec: The series' measurement-modality spec.
+            spec: The specification for the signal's values.
             name: The signal name.
             full_validation: Check timestamp ordering by default. Set to ``False`` only for previously
                 validated timestamps to skip that scan. Both modes check type, shape, integer range,
@@ -575,7 +577,8 @@ class Signal(SupportsAnnotate):
             The series' values with shape ``(n_steps, *spec.value_shape)``.
 
         Raises:
-            TimeFNullValuesError: If a timestep is missing or partially present. Use :meth:`to_arrow` for nulls.
+            TimeFNullValuesError: If a timestep is wholly or partly missing.
+                Use :meth:`to_arrow` to preserve missing values.
         """
         try:
             return self._values.read_numpy()
@@ -758,8 +761,8 @@ class Signal(SupportsAnnotate):
         The span must hold at least one value. A step span must count on this series. A time span is
         placed by time only, so ask :meth:`is_selected_by` first when the scope matters. The slice
         keeps the name, spec, metadata, and place on the timeline, drops annotations, and reads no
-        values until it is read. It does not know how many timesteps of the window are missing, so
-        its ``null_count`` is ``None``::
+        values until it is read. The slice has ``null_count=None`` because its number of missing
+        timesteps is unknown::
 
             if signal.overlaps_with(interval):
                 part = signal.slice(interval, clip=True)

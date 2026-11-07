@@ -241,8 +241,8 @@ class DuckDBControlWriter:
             dataset: The complete in-memory hierarchy.
             placements: Values-plane chunks keyed by ``(signal_id, chunk_index)``.
             tasks: A previously validated task stream, or ``None`` to use the dataset's tasks.
-            null_counts: The number of missing timesteps per signal id, counted by the writer that
-                read the values. A signal that is not listed stores its own ``null_count``.
+            null_counts: The number of missing timesteps for each signal id.
+                Signals absent from this mapping use their own ``null_count``.
 
         Returns:
             Counts keyed by concrete task type.

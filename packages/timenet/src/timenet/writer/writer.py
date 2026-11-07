@@ -394,7 +394,7 @@ class TimeFWriter:
         return shared, owned
 
     def _read_and_validate(self, ts: Signal) -> pa.Array:
-        """Read a series' values, enforce the per-series array contract, and note its null count.
+        """Read and validate a series' values, and record its number of missing timesteps.
 
         Args:
             ts: The series to read.
@@ -404,8 +404,8 @@ class TimeFWriter:
             present values, not missing ones.
 
         Raises:
-            TimeFValidationError: If the dtype, shape, nulls, or length violate the series' spec, or
-                the series states a null count that its values contradict.
+            TimeFValidationError: If the dtype, shape, missing values, or length differ from the
+                specification. Also if the supplied null count differs from the values.
         """
         values = ts.to_arrow()
         if ts.spec.dtype == "enum":

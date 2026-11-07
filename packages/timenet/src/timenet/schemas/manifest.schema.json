@@ -500,7 +500,7 @@
       "type": "object"
     },
     "MissingReason": {
-      "description": "Reasons why whole timesteps of a modality can be missing.",
+      "description": "Reasons why a series can have missing timesteps.",
       "enum": [
         "sensor_gap",
         "not_recorded",
@@ -513,7 +513,7 @@
     },
     "MissingValues": {
       "additionalProperties": false,
-      "description": "The reason for missing timesteps in a series.\n\nA spec without this record allows no missing timesteps. An Arrow null marks a missing timestep.\nThe writer records how many timesteps each signal misses, which a reader gets as\n``Signal.null_count``, so a consumer decides for itself which share it accepts.",
+      "description": "The reason for missing timesteps in a series.\n\nA time-series specification without this record allows no missing timesteps.\nAn Arrow null represents a missing timestep.",
       "properties": {
         "reason": {
           "$ref": "#/$defs/MissingReason"

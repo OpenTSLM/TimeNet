@@ -2098,10 +2098,10 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
 
     @staticmethod
     def _spec_from_row(row: _SignalRow) -> TimeSeriesSpec:
-        """Reconstruct an inline signal specification.
+        """Build a time-series specification from a stored signal row.
 
         Returns:
-            The typed specification.
+            The time-series specification.
 
         Raises:
             TimeFFormatError: If the stored Signal modality or missing-value record is invalid.
@@ -2126,14 +2126,14 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
 
     @staticmethod
     def _missing_values_from_row(row: _SignalRow) -> MissingValues | None:
-        """Rebuild a spec's missing-value record from its ``signals`` row.
+        """Read the reason and description for missing timesteps from a stored signal row.
 
         Returns:
-            The missing-value record, or ``None`` if the row stores no reason, which means that the
-            spec allows no missing timesteps.
+            The reason and description, or ``None`` if the row has no reason.
+            Without a reason, the specification allows no missing timesteps.
 
         Raises:
-            TimeFFormatError: If the row stores a reason but not a valid ``MissingValues`` record.
+            TimeFFormatError: If the stored reason or description is invalid.
         """
         if row.missing_reason is None:
             return None

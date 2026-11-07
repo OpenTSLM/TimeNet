@@ -226,10 +226,9 @@ SIGNALS = Table(
 )
 """The ``missing_*`` columns hold a spec's missing-value record, or are all null when it has none.
 
-A spec is nullable exactly when ``missing_reason`` is set. The Zarr backend reads that to find the
-validity arrays. ``null_count`` records how many of a signal's ``n_values`` timesteps are missing.
-The writer counts it for every signal whose values it stores. It is null only for a signal that was
-written without its values and did not state the count itself.
+A specification allows missing timesteps when ``missing_reason`` is set.
+``null_count`` is the number of missing timesteps among the signal's ``n_values`` timesteps.
+It is null only when the signal has no stored values and no supplied count.
 """
 
 SIGNAL_CHUNKS = Table(

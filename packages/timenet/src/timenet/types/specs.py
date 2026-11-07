@@ -91,26 +91,25 @@ _RESERVED_SPEC_TYPES = frozenset({".", "..", "_irregular", "_time_offsets", "_va
 
 @unique
 class MissingReason(StrEnum):
-    """Reasons why whole timesteps of a modality can be missing."""
+    """Reasons why a series can have missing timesteps."""
 
     SENSOR_GAP = "sensor_gap"
-    """The device recorded nothing for a while, for example because it lost contact with the body."""
+    """The device stopped recording, for example because it lost contact with the body."""
     NOT_RECORDED = "not_recorded"
-    """The source reported no value for the timestep, although the recording ran."""
+    """The recording continued, but the source reported no value for this timestep."""
     ALIGNMENT_PADDING = "alignment_padding"
-    """The source aligned several series to one time grid, and this series covers only part of it."""
+    """The series covers only part of a shared time grid. Values outside that part are missing."""
     NOT_APPLICABLE = "not_applicable"
-    """The quantity has no meaning at the timestep, for example a glucose reading before the sensor warmed up."""
+    """The measurement does not apply at this timestep, for example before a sensor is ready."""
     REDACTED = "redacted"
-    """The source removed the value on purpose, for example to protect a person's privacy."""
+    """The source deliberately removed the value, for example to protect a person's privacy."""
 
 
 class MissingValues(TimeFModel):
     """The reason for missing timesteps in a series.
 
-    A spec without this record allows no missing timesteps. An Arrow null marks a missing timestep.
-    The writer records how many timesteps each signal misses, which a reader gets as
-    ``Signal.null_count``, so a consumer decides for itself which share it accepts.
+    A time-series specification without this record allows no missing timesteps.
+    An Arrow null represents a missing timestep.
     """
 
     reason: MissingReason
@@ -147,11 +146,11 @@ class TimeSeriesSpec(TimeFModel):
 
     @property
     def nullable(self) -> bool:
-        """Whether a whole timestep can be missing. This is true when :attr:`missing` is set."""
+        """Whether the specification allows missing timesteps. True when :attr:`missing` is set."""
         return self.missing is not None
 
     def check_nulls_allowed(self, null_count: int, *, series: str) -> None:
-        """Check that the spec says why timesteps are missing, if the series has any.
+        """Check that the specification allows missing timesteps.
 
         Args:
             null_count: The number of missing timesteps in the series.

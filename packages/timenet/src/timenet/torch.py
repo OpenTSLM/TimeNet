@@ -54,8 +54,7 @@ class TimeFTorchDataset(Dataset):
     ``__getitem__`` returns a dict. Its ``series`` field holds tensors with the original dtype and
     shape ``(n_steps, *value_shape)``. Its ``series_masks`` field holds one boolean tensor per series.
     Each mask is all true. Missing values raise ``TimeFValidationError``, including when the Signal
-    spec's missing-value record permits nulls. Consumers must handle missing data before conversion
-    to PyTorch.
+    spec allows missing timesteps. Resolve missing values before conversion to PyTorch.
 
     The dict also contains ``record_id``, resolved ``tasks``, and ``annotations``.
     Use ``transform`` to reshape items for a model. A ``collate_fn`` combines records into a batch.
