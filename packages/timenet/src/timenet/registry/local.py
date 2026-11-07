@@ -9,13 +9,14 @@ import pyarrow.fs as pafs
 
 from timenet._fs import staged_directory
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError, TimeNetDatasetNotFoundError, TimeNetFileError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetFileError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
 from timenet.registry.dependencies import check_file_sizes, open_local_release
 from timenet.registry.version import DatasetVersion
 from timenet.registry.writable import WritableRegistry
+from timenet.sources import FoundInRegistry, NotFound, ReleaseLookup
 from timenet.types import DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
 from timenet.types.references import DatasetRef, is_latest
@@ -23,7 +24,7 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class LocalRegistry(WritableRegistry):
-    """Read and publish datasets in a local directory."""
+    """A registry that reads and writes datasets in a local directory."""
 
     def __init__(self, root: Path) -> None:
         """Open a local registry rooted at a directory.
@@ -122,6 +123,33 @@ class LocalRegistry(WritableRegistry):
             )
         self._manifest_cache[dataset_id, resolved] = (mtime, manifest)
         return manifest
+
+    def resolve(self, dataset_id: str, version: Version | None) -> ReleaseLookup:
+        """Check whether the local registry holds a dataset release.
+
+        Local releases are available at any access level.
+
+        Args:
+            dataset_id: The dataset ID.
+            version: An exact version, or ``None`` for the latest version.
+
+        Returns:
+            ``FoundInRegistry`` with the committed version, or ``NotFound`` if the release is absent.
+
+        Raises:
+            TimeFValidationError: If ``dataset_id`` is invalid.
+        """
+        try:
+            validate_dataset_id(dataset_id)
+        except ValueError as error:
+            raise TimeFValidationError(f"invalid dataset ID {dataset_id!r}: {error}") from error
+        resolved = self._latest_version(dataset_id) if version is None else str(version)
+        if resolved is None:
+            return NotFound()
+        reference = DatasetRef.parse(f"{dataset_id}@{resolved}")
+        if not (release_dir(self._root, reference) / MANIFEST_FILE).exists():
+            return NotFound()
+        return FoundInRegistry(reference.version, self)
 
     def open_file(self, dataset_id: str, version: str, relpath: str) -> BinaryIO:
         """Open one file of a dataset version for binary reading.

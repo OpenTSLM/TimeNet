@@ -9,7 +9,7 @@ from timenet.types.version import Version
 
 
 LATEST_VERSION = "latest"
-"""Reference identifier that selects the newest committed dataset version."""
+"""Reference identifier that selects the newest committed dataset version across all sources."""
 
 
 def is_latest(version: str | None) -> bool:
@@ -24,15 +24,16 @@ def is_latest(version: str | None) -> bool:
 
 
 def split_ref(ref: str) -> tuple[str, str | None]:
-    """Split a dataset reference into its id and pinned version.
+    """Split a dataset reference into its id and requested version.
 
-    ``"org/id@1.0.0"`` -> ``("org/id", "1.0.0")``. ``"org/id@latest"`` or ``"org/id"`` -> ``("org/id", None)``.
+    ``"org/id@1.0.0"`` -> ``("org/id", "1.0.0")``. ``"org/id@latest"`` -> ``("org/id", "latest")``. ``"org/id"`` ->
+    ``("org/id", None)``.
 
     Args:
         ref: A dataset id, optionally suffixed with ``@<version>`` or ``@latest``.
 
     Returns:
-        The bare dataset id and the pinned version string, or ``None`` for latest.
+        The bare dataset id and the version string, ``"latest"``, or ``None`` without a version.
 
     Raises:
         TimeFValidationError: If ``ref`` has more than one ``@``, an empty id or version, or a version
@@ -43,11 +44,12 @@ def split_ref(ref: str) -> tuple[str, str | None]:
     dataset_id, separator, version = ref.partition("@")
     if not dataset_id:
         raise TimeFValidationError(f"dataset ref has an empty id: {ref!r}")
-    if not separator or version == LATEST_VERSION:
+    if not separator:
         return dataset_id, None
     if not version:
         raise TimeFValidationError(f"dataset ref has an empty version: {ref!r}")
-    Version.parse(version)  # Validate the pin. This raises TimeFValidationError on a malformed version.
+    if version != LATEST_VERSION:
+        Version.parse(version)  # Validate the pin. This raises TimeFValidationError on a malformed version.
     return dataset_id, version
 
 
@@ -71,7 +73,7 @@ class DatasetRef(TimeFModel):
             TimeFValidationError: If the reference is malformed or does not contain an exact version.
         """
         dataset_id, version = split_ref(value)
-        if version is None:
+        if is_latest(version):
             raise TimeFValidationError(f"an exact dataset release is required: {value!r}")
         try:
             return cls.model_validate({"dataset_id": dataset_id, "version": version})

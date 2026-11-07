@@ -4,6 +4,7 @@ import pytest
 boto3 = pytest.importorskip("boto3")
 pytest.importorskip("moto")
 
+import botocore.exceptions  # ruff: ignore[module-import-not-at-top-of-file]
 from moto.server import ThreadedMotoServer  # ruff: ignore[module-import-not-at-top-of-file]
 import pyarrow.fs as pafs  # ruff: ignore[module-import-not-at-top-of-file]
 
@@ -16,7 +17,7 @@ from timenet.errors import (  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.reader import TimeFReader  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.registry import LocalRegistry, S3Registry  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.testing import assert_datasets_equal, make_dataset  # ruff: ignore[module-import-not-at-top-of-file]
-from timenet.types import DatasetSchema  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.types import DatasetSchema, Version  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.types.references import DatasetRef  # ruff: ignore[module-import-not-at-top-of-file]
 
 
@@ -135,3 +136,20 @@ def test_list_and_search_are_unsupported(tmp_path):
 def test_rejects_a_non_s3_uri(tmp_path):
     with pytest.raises(TimeNetRegistryError, match="s3://"):
         S3Registry("https://not-s3", cache_dir=tmp_path)
+
+
+class _Unreachable:
+    """An S3 client whose every request fails to reach the endpoint."""
+
+    def __getattr__(self, name):
+        def request(*args, **kwargs):
+            raise botocore.exceptions.EndpointConnectionError(endpoint_url="https://s3.example")
+
+        return request
+
+
+def test_an_unreachable_bucket_raises_a_registry_error_that_names_it(monkeypatch):
+    registry = S3Registry("s3://tn-test/registry")
+    monkeypatch.setattr(registry, "_client", _Unreachable)
+    with pytest.raises(TimeNetRegistryError, match=r"^cannot reach s3://tn-test/registry: Could not connect"):
+        registry.resolve("timenet/hello-world", Version(1, 0, 0))
