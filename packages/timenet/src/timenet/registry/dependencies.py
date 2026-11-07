@@ -23,7 +23,7 @@ from timenet.errors import (
     TimeNetMissingParentError,
 )
 from timenet.format.constants import MANIFEST_FILE
-from timenet.manifest import FilePart, Manifest, PayloadSource, read_manifest
+from timenet.manifest import FilePart, Manifest, PayloadSource, read_manifest, same_release
 from timenet.registry._paths import release_dir
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
@@ -323,30 +323,35 @@ def prepare_local_copy(  # ruff: ignore[too-many-arguments]
 
 
 def open_cached_or_remote_release(
-    root: Path, reference: DatasetRef, open_remote_version: Callable[[DatasetRef], DatasetVersion]
+    root: Path | None,
+    reference: DatasetRef,
+    manifest: Manifest,
+    open_remote_version: Callable[[DatasetRef], DatasetVersion],
 ) -> DatasetVersion:
-    """Open a complete cached release or fall back to remote storage.
+    """Open a complete local copy of the same release, or else the remote release.
 
     Payload sources remain unattached.
 
     Args:
-        root: The cache directory to check before opening remote files.
+        root: The local directory to check first, or ``None`` to read remotely.
         reference: The exact dataset ID and version to open.
+        manifest: The manifest of the remote release.
         open_remote_version: Open one remote release without its payload sources.
 
     Returns:
-        A handle to the complete cached copy, or a remote handle if the cache is incomplete.
+        A handle to a complete local copy matching the manifest, or to the remote release.
 
     Raises:
-        TimeFFormatError: If the manifest declares a different release.
+        TimeFFormatError: If a manifest declares a different release.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by validate_manifest_reference
-    directory = release_dir(root, reference)
-    cached = _load_complete_local_manifest(directory, reference)
-    if cached is not None:
-        return DatasetVersion(cached, pafs.LocalFileSystem(), str(directory))
-    version = open_remote_version(reference)
-    validate_manifest_reference(version.manifest, reference)
-    return version
+    validate_manifest_reference(manifest, reference)
+    if root is not None:
+        directory = release_dir(root, reference)
+        local = _load_complete_local_manifest(directory, reference)
+        # Another build of the same version in the local registry has other files, so the remote files count.
+        if local is not None and same_release(local, manifest):
+            return DatasetVersion(local, pafs.LocalFileSystem(), str(directory))
+    return open_remote_version(reference)
 
 
 def _ensure_dataset_version_available_locally(  # ruff: ignore[too-many-arguments]

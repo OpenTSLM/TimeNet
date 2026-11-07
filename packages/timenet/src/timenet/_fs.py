@@ -10,8 +10,8 @@ import uuid
 def same_directory(a: Path, b: Path) -> bool:
     """Check whether two paths name the same directory, as the file system sees them.
 
-    Existing paths match when they identify the same directory on disk, and never match a missing path.
-    Missing paths match when their nearest existing parents match and the names below them are equal as written.
+    The paths compare by :func:`path_identity`, so a symlink or a case variant on a volume that ignores case
+    matches, and names that do not exist compare as written.
 
     Args:
         a: The first path, whether or not it exists.
@@ -20,27 +20,25 @@ def same_directory(a: Path, b: Path) -> bool:
     Returns:
         ``True`` if the paths match.
     """
-    if a.exists() or b.exists():
-        # On a volume that ignores case, a case variant of an existing path exists too.
-        return a.exists() and b.exists() and a.samefile(b)
-    return _below_existing_parent(a.resolve()) == _below_existing_parent(b.resolve())
+    return path_identity(a.resolve()) == path_identity(b.resolve())
 
 
-def _below_existing_parent(path: Path) -> tuple[int, int, tuple[str, ...]]:
-    """Identify a missing path by its nearest existing parent and the names below that parent.
+def path_identity(path: Path) -> tuple[int, int, tuple[str, ...]]:
+    """Identify a path using its nearest existing ancestor.
 
     Args:
-        path: A missing absolute path without symlinks.
+        path: An absolute path without symlinks.
 
     Returns:
-        The parent's device and inode numbers, followed by the names below it as written.
+        The ancestor's device and inode numbers, followed by the remaining names as written.
     """
-    for depth, parent in enumerate(path.parents, start=1):
+    for depth, candidate in enumerate((path, *path.parents)):
         try:
-            info = parent.stat()
+            info = candidate.stat()
         except OSError:
             continue
-        return info.st_dev, info.st_ino, path.parts[len(path.parts) - depth :]
+        missing = path.parts[len(path.parts) - depth :]
+        return info.st_dev, info.st_ino, missing
     return 0, 0, path.parts  # nothing exists, not even the root
 
 

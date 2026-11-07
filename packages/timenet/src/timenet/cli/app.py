@@ -2,16 +2,18 @@
 
 from collections.abc import Callable, Iterable
 from functools import partial
+from pathlib import Path
 from typing import TypeVar
 
 from rich.console import Console
 from rich.table import Table
 import typer
 
-from timenet.cache import CachedDataset, cached_datasets, clear_cache, human_bytes, raw_cache_size
+from timenet.cache import cache_size, clear_cache, clear_releases, human_bytes, stored_releases
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console as ui, progress_renderer
-from timenet.client import TimeNet, default_sources
+from timenet.client import TimeNet, default_local_registry, default_sources
+from timenet.config import settings
 from timenet.progress import ProgressCallback, ProgressEvent, StepStarted
 from timenet.types import DatasetMetadata, Domain, License, TaskType
 from timenet.types.access import access_requirements, effective_access
@@ -26,7 +28,7 @@ _registry_option = typer.Option(
     None,
     "--registry",
     "-r",
-    help="Registry URL or path that this command reads (else $TIMENET_REGISTRY, then timenet://).",
+    help="Registry URL or path that this command reads (else $TIMENET_REMOTE_REGISTRY, then timenet://).",
 )
 # TODO(adrian): Remove temporary glue which maps --registry onto the list after the local registry, until the CLI
 # takes the flags of the defaults.
@@ -222,61 +224,83 @@ def _keep_steps(started: list[StepStarted], show: ProgressCallback | None, event
         show(event)
 
 
-cache_app = typer.Typer(help="Inspect and clear the local cache.", no_args_is_help=True)
-app.add_typer(cache_app, name="cache")
+local_app = typer.Typer(help="Inspect and clear the local files of TimeNet.", no_args_is_help=True)
+app.add_typer(local_app, name="local")
+cache_app = typer.Typer(
+    help="The cache in $TIMENET_CACHE: raw source files of connectors and control databases of remote registries.",
+    no_args_is_help=True,
+)
+local_app.add_typer(cache_app, name="cache")
+
+_YES = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt.")
+
+
+@local_app.command("info")
+def local_info() -> None:
+    """Show the path and size of the cache and the local registry."""
+    store, cache_dir = default_local_registry(), settings().cache_dir
+    releases = stored_releases(store)
+    size = human_bytes(sum(item.size_bytes for item in releases))
+    # Plain lines, so that a long path does not wrap.
+    typer.echo(_cache_line(cache_dir))
+    typer.echo(f"Local registry {store.root}: {_count(len(releases), 'release')}, {size}")
+
+
+@local_app.command("clear")
+def local_clear(yes: bool = _YES) -> None:
+    """Delete the cache and every release in the local registry."""
+    store, cache_dir = default_local_registry(), settings().cache_dir
+    if not yes:
+        typer.confirm(f"Delete the cache in {cache_dir} and every release in {store.root}?", abort=True)
+    releases = clear_releases(store)
+    cache = clear_cache(cache_dir, local_registry=store)
+    _warn_unmarked(cache.kept)
+    _freed(releases.freed + cache.freed, len(releases.removed) + len(cache.removed))
 
 
 @cache_app.command("info")
 def cache_info() -> None:
-    """Show the datasets in the local cache with their sizes."""
-    datasets = cached_datasets()
-    if datasets:
-        console.print(_cache_table(datasets))
-    else:
-        console.print("No cached datasets.")
-    raw = raw_cache_size()
-    if raw:
-        console.print(f"Raw download cache: {human_bytes(raw)}")
-
-
-def _cache_table(datasets: list[CachedDataset]) -> Table:
-    """Build a table of cached dataset versions with a total-size footer.
-
-    Args:
-        datasets: The cached dataset versions to render.
-
-    Returns:
-        A populated :class:`rich.table.Table`.
-    """
-    table = Table(title="TimeNet cache", title_justify="left", title_style="bold")
-    table.add_column("Location")
-    table.add_column("Dataset", style="cyan")
-    table.add_column("Version")
-    table.add_column("Size", justify="right")
-    for dataset in datasets:
-        table.add_row(dataset.location, dataset.dataset_id, dataset.version, human_bytes(dataset.size_bytes))
-    table.add_section()
-    total = sum(dataset.size_bytes for dataset in datasets)
-    table.add_row("total", "", "", human_bytes(total), style="bold")
-    return table
+    """Show the path and size of the cache."""
+    typer.echo(_cache_line(settings().cache_dir))
 
 
 @cache_app.command("clear")
-def cache_clear(
-    all_: bool = typer.Option(False, "--all", help="Also remove the default local registry (builds and downloads)."),
-    yes: bool = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt."),
-) -> None:
-    """Delete the storage directory and raw cache.
-
-    Use ``--all`` to also remove the default local registry.
-    """
+def cache_clear(yes: bool = _YES) -> None:
+    """Delete the raw source files and the control databases in the cache."""
+    cache_dir = settings().cache_dir
     if not yes:
-        what = "the storage directory and the raw cache"
-        if all_:
-            what += " and the local registry (builds and downloads)"
-        typer.confirm(f"Remove {what}?", abort=True)
-    freed, removed = clear_cache(include_registry=all_)
-    typer.echo(f"Freed {human_bytes(freed)} from {len(removed)} location(s).")
+        typer.confirm(f"Delete the raw source files and control databases in {cache_dir}?", abort=True)
+    freed, removed, kept = clear_cache(cache_dir, local_registry=default_local_registry())
+    _warn_unmarked(kept)
+    _freed(freed, len(removed))
+
+
+def _cache_line(cache_dir: Path) -> str:
+    """Return the path and the size of the cache."""
+    return f"Cache {cache_dir}: {human_bytes(cache_size(cache_dir))}"
+
+
+def _warn_unmarked(folders: list[Path]) -> None:
+    """Warn about cache folders kept because they lack TimeNet's marker."""
+    for folder in folders:
+        ui.warn(
+            f"Kept {folder}: it has no CACHEDIR.TAG from TimeNet, so TimeNet did not create it. Delete it "
+            "yourself if you do not need it."
+        )
+
+
+def _freed(freed: int, locations: int) -> None:
+    """Print the bytes that a clear freed, and from how many locations."""
+    typer.echo(f"Freed {human_bytes(freed)} from {locations} location(s).")
+
+
+def _count(number: int, noun: str) -> str:
+    """Format a count with a noun, adding ``s`` unless the count is 1.
+
+    Returns:
+        The count and noun, such as ``"1 build"`` or ``"2 builds"``.
+    """
+    return f"{number} {noun}" if number == 1 else f"{number} {noun}s"
 
 
 def main() -> None:

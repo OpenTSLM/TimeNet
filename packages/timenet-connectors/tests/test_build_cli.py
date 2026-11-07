@@ -88,10 +88,9 @@ def test_build_isolates_when_the_flag_overrides_the_setting(monkeypatch, tmp_pat
     assert len(calls) == 1
 
 
-def test_build_without_isolation_shows_each_build_line_once(monkeypatch, tmp_path):
+def test_build_without_isolation_shows_each_build_line_once(tmp_path):
     # In this process, the coordinator sends the build step, and the renderer shows it. Nothing else
     # prints a build line.
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
 
     result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path / "out"), "--no-isolation"])
 
@@ -177,7 +176,7 @@ def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path):
     # the child's inherited stderr is captured here too, where a double-narration regression would
     # surface: the parent and the child both see the build step.
     registry = tmp_path / "registry"
-    env = {**os.environ, "TIMENET_HOME": str(tmp_path / "home")}
+    env = dict(os.environ)  # the store, the remote registry and the cache of this test
     env.pop("TIMENET_ISOLATION", None)  # default is "on"; make sure nothing forces it off
     run_cli = [sys.executable, "-c", "from timenet_connectors.builder.cli import main; main()"]
     result = subprocess.run(
@@ -246,7 +245,6 @@ def test_the_build_prepared_release_command_does_not_plan(monkeypatch, tmp_path)
     monkeypatch.setattr(ConnectorBuilder, "card", lambda self, dataset_id: connectors[dataset_id]().metadata())
     monkeypatch.setattr(backend_module, "resolve", connectors.__getitem__)
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(cli_module.console, "quiet", False)
 
     # The store lacks the parent. A planner would build it first. The command must fail on the
@@ -261,7 +259,6 @@ def test_the_build_prepared_release_command_does_not_plan(monkeypatch, tmp_path)
 
 def test_the_build_prepared_release_command_builds_a_release_without_parents(monkeypatch, tmp_path):
     monkeypatch.setenv("TIMENET_ISOLATION", "off")
-    monkeypatch.setenv("TIMENET_HOME", str(tmp_path / "home"))
     monkeypatch.setattr(cli_module.console, "quiet", False)
 
     result = runner.invoke(

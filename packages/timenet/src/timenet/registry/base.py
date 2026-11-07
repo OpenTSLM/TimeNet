@@ -46,8 +46,8 @@ class BaseRegistry(ABC):
 
     @property
     @abstractmethod
-    def local_root(self) -> Path:
-        """The local registry or cache directory that holds prepared releases."""
+    def local_root(self) -> Path | None:
+        """The local directory whose complete releases this registry reads, or ``None`` for none."""
 
     @property
     def requires_open_access(self) -> bool:
