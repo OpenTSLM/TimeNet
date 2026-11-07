@@ -19,6 +19,7 @@ from timenet.types import Access, Version
 from timenet.types.access import AccessRequirement, effective_access
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
+from timenet.values_backends import ValuesBackend
 from timenet.writer import TimeFWriter
 
 
@@ -88,22 +89,16 @@ def test_run_pipeline_end_to_end(tmp_path):
 
 
 def test_connector_defaults_to_the_parquet_values_backend():
-    assert _DemoConnector().values_backend == "parquet"
+    assert _DemoConnector().values_backend == ValuesBackend.PARQUET
 
 
 def test_run_pipeline_writes_the_requested_values_backend(tmp_path):
     pytest.importorskip("zarr")
 
     class _ZarrConnector(_DemoConnector):
-        values_backend = "zarr"
+        values_backend = ValuesBackend.ZARR
 
-    connector = _ZarrConnector()
-    version_dir = run_pipeline(
-        connector,
-        tmp_path,
-        cache_dir=tmp_path / "cache",
-        values_backend=connector.values_backend,
-    )
+    version_dir = run_pipeline(_ZarrConnector(), tmp_path, cache_dir=tmp_path / "cache")
 
     manifest = Manifest.model_validate_json((version_dir / "manifest.json").read_text())
     assert manifest.values_backend == "zarr"
@@ -121,16 +116,10 @@ def test_publish_pipeline_passes_the_requested_values_backend_to_the_registry(tm
             self.values_backend = values_backend
 
     class _ZarrConnector(_DemoConnector):
-        values_backend = "zarr"
+        values_backend = ValuesBackend.ZARR
 
-    connector = _ZarrConnector()
     registry = _Registry()
-    publish_pipeline(
-        connector,
-        cast(WritableRegistry, registry),
-        cache_dir=tmp_path / "cache",
-        values_backend=connector.values_backend,
-    )
+    publish_pipeline(_ZarrConnector(), cast(WritableRegistry, registry), cache_dir=tmp_path / "cache")
 
     assert registry.values_backend == "zarr"
 
@@ -176,21 +165,13 @@ def test_a_failed_forced_rebuild_keeps_the_committed_version(tmp_path, monkeypat
     assert [path.name for path in version_dir.parent.iterdir()] == [version_dir.name]
 
 
-@pytest.mark.parametrize("use_default", [False, True])
-def test_invalid_backend_preserves_committed_version(tmp_path, use_default):
+def test_invalid_backend_preserves_committed_version(tmp_path):
     connector = _CountingConnector()
     version_dir = run_pipeline(connector, tmp_path, cache_dir=tmp_path / "cache")
     before = {p.relative_to(version_dir): p.read_bytes() for p in version_dir.rglob("*") if p.is_file()}
-    if use_default:
-        connector.values_backend = "invalid"
+    connector.values_backend = cast("ValuesBackend", "invalid")
     with pytest.raises(TimeFValidationError, match="backend"):
-        run_pipeline(
-            connector,
-            tmp_path,
-            cache_dir=tmp_path / "cache",
-            force=True,
-            values_backend=None if use_default else "invalid",
-        )
+        run_pipeline(connector, tmp_path, cache_dir=tmp_path / "cache", force=True)
     assert {p.relative_to(version_dir): p.read_bytes() for p in version_dir.rglob("*") if p.is_file()} == before
     assert connector.downloads == 1
 
