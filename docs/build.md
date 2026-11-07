@@ -14,17 +14,18 @@ version contains `manifest.json`, `control.duckdb`, and Parquet or Zarr Signal v
 Use `timenet-build` for normal builds:
 
 ```bash
-timenet-build build timenet/hello-world --out .timenet-registry
+timenet-build build timenet/hello-world
 ```
 
-The output can be a local directory or a writable registry URL.
+The release lands in the local registry (default `~/.timenet/registry`), where
+`TimeNet()` reads from. `--local-registry` selects another local registry. `--publish-to` publishes the release to another registry after the build:
 
 ```bash
 # Publish through the hosted registry API.
-timenet-build build org/name --out timenet://
+timenet-build build org/name --publish-to timenet://
 
 # Publish to S3.
-timenet-build build org/name --out s3://bucket/prefix
+timenet-build build org/name --publish-to s3://bucket/prefix
 ```
 
 See the [`timenet-build` reference](cli/build.md) for all options.
@@ -38,150 +39,98 @@ requirements do not affect each other or your current environment.
 Use `--no-isolation` while developing a connector in the current environment:
 
 ```bash
-timenet-build build org/name --out .timenet-registry --no-isolation
+timenet-build build org/name --local-registry .timenet-registry --no-isolation
 ```
 
-`TIMENET_ISOLATION=off` provides the same setting. The manifest records the Python and package
-versions used for the build.
+Most parameters can also be specified as environment variables. For example, `$TIMENET_LOCAL_REGISTRY` & `TIMENET_ISOLATION=off`. These apply to every CLI command, and the Python SDK also honors them. 
+
+For each build, the used Python and package and TimeNet versions are recorded to the build's manifest.
 
 ## Pipeline
 
 The engine runs these stages:
 
-1. Read and validate the connector's `dataset.yaml` card. If the output registry is not local, the
-   card must declare `access: open`.
-2. Open the parent releases that the card declares. The output registry must hold them, as
+1. Read and validate the connector's `dataset.yaml` card.
+2. Prepare the parent datasets that the card declares, in the local registry. Before the build
+   runs, the plan downloads or builds each missing parent there, as
    [Prepare parent releases](#prepare-parent-releases) describes.
 3. Download raw artifacts into the build cache.
 4. Compose the parents and the raw artifacts into a `TimeFDataset`. Record each parent in it.
 5. Derive the dataset schema.
-6. Write or publish the complete TimeF version. Then close the parent releases. Before a publish to
-   a registry that is not local, the build makes sure that each card in the lineage also declares
-   `access: open`.
+6. Write the complete TimeF version into the local registry.
 7. Remove the raw cache after success, unless `--keep-cache` is set.
 
-`--force` rebuilds or republishes a version that already exists. Without this flag, the pipeline
-returns the committed version and skips expensive work. A forced local build replaces the old
-version only once the new one is complete, so a failed rebuild keeps it.
-
-The connector selects Parquet or Zarr by default. Override it when you need to inspect another
-backend:
-
-```bash
-timenet-build build timenet/hello-world \
-    --out .timenet-registry \
-    --values-backend zarr
-```
+By default a build reuses an existing version already in the local registry and a status line says so. Use `--force` to skip this behavior. A forced build replaces the old version only after the new one is
+complete, so a failed build keeps the old one. A published version never changes, so with
+`--publish-to`, `--force` only affects the build to the local registry. The publish then only checks the rebuild against the already published version.
 
 ## Programmatic builds
 
-Use `run_pipeline()` for a local directory:
+Build and publish from Python with the producer functions of `timenet`:
 
 ```python
-from pathlib import Path
+import timenet
 
-from timenet.engine import run_pipeline
+# Build into the local registry.
+timenet.build("org/name")
 
-version_dir = run_pipeline(
-    connector,
-    Path(".timenet-registry"),
-    values_backend="parquet",
+# Read the new release, like any other.
+dataset = timenet.TimeNet().load("org/name")
+
+# Copy the release and its payload sources to a registry.
+timenet.publish("org/name", dest="s3://bucket/registry")
+```
+
+`timenet.build()` builds a release with the installed connector that claims its dataset ID, in an
+[isolated environment](#isolated-build-environments). It returns the plan that ran: one step for
+each release that it copied or built, in order. Each argument that you leave out comes from the
+environment at the time of the call:
+
+- `store` comes from `$TIMENET_LOCAL_REGISTRY`.
+- `parents_from` comes from `$TIMENET_REMOTE_REGISTRY`, then `InstalledConnectors()`. With
+  `TIMENET_AUTO_BUILD=false`, the connectors stay out.
+
+So a default build lands where `TimeNet()` reads. `store` takes a local directory, a `file://` URI
+or a `LocalRegistry`. `parents_from` lists, in order, where the parents and payload sources that the local registry lacks come from (see [Prepare parent releases](#prepare-parent-releases)).
+
+```python
+import timenet
+
+plan = timenet.build(
+    "org/name@1.2.0",
+    store=".timenet-registry",
+    parents_from=["timenet://", timenet.InstalledConnectors()],
 )
+for step in plan.steps:
+    print(step.release, step.action)
 ```
 
-Use `publish_pipeline()` with a writable registry:
+`timenet.publish()` copies a complete release and the payload sources that it needs from `source`,
+by default the local registry, to `dest`. Without a version in the dataset ID, it
+copies the latest version of `source`. It mirrors the [`timenet publish`](cli/timenet.md#commands) CLI command.
 
-```python
-from timenet.engine import publish_pipeline
-from timenet.registry import open_writable_registry
+A published version cannot change. If `dest` already holds the same release, `publish()` copies nothing.
 
-registry = open_writable_registry("s3://bucket/prefix")
-version = publish_pipeline(connector, registry)
-```
 
-Both functions accept `force`, `keep_cache`, `cache_dir`, `values_backend`, `pinned_by`, and a
-writer progress callback.
-
-A registry that is not local holds only releases with access declared `open`. `publish_pipeline()`
-checks the card before it downloads anything. A credentialed or restricted card raises
-`TimeNetAccessError` for such a registry. After the connector composes the dataset,
-`publish_pipeline()` checks the dataset again with its lineage, before it writes. If the card of a
-child declares `access: open` but its parent is credentialed, the second check raises the error.
-
-The error names the release and its effective access level, which is the strictest level of its
-card and of the cards in its lineage. It also names each `access_url` that a user needs, with the
-release that sets it. For a card, this is the `access_url` of the card.
+A remote registry holds only releases with access declared `open`. Before
+`timenet.publish()` copies anything to such a registry, it checks the card and the lineage of each
+release.
 
 ## Prepare parent releases
 
 A connector card can declare exact parent releases under `parents`. The connector reads these
-releases when it composes the child dataset. Before the build downloads anything, it prepares each
-parent release in the output registry. It also prepares the payload sources of each parent. A
-payload source is a release whose payload files the parent reads.
+releases when it composes the child dataset, preparing each parent release in the local registry that it builds into.
 
-For each release, the build uses the first of these steps that works:
+When resolving dependencies, the build uses the first of these steps that
+works:
 
-1. Reuse a complete copy in the output registry.
-2. Copy the release from the registry that `--fetch-from` names.
-3. If `--build-parents` is set, build the release from its own connector.
+1. Reuse a complete copy in the local registry. `--local-registry` selects it.
+2. Copy the release from the remote registry. `--remote-registry` selects it, else
+   `$TIMENET_REMOTE_REGISTRY` (default `timenet://`).
+3. Build the release from its own connector. `--no-auto-build`, or `TIMENET_AUTO_BUILD=false`,
+   removes this step.
 
-If no step works, the build stops before any download. The error names the missing release. The
-build prepares each parent before its children. If the output already holds the requested version
-and `--force` is not set, the build prepares only the missing payload sources of that version. It
-uses the same steps in the same order. The build does not run the connector of the requested
-dataset.
-
-```bash
-timenet-build build org/name --out .timenet-registry \
-    --fetch-from timenet:// --build-parents
-```
-
-A parent builds like the requested dataset, in the environment of its own connector. A parent never
-builds with `--force`. If the builder backend of another installed package claims a parent, that
-backend builds it.
-
-The build never builds over a release that the output holds. If a file of the copy in the output
-is missing or has another size, the build copies the release again from `--fetch-from`. If the build
-cannot copy it, the build raises `TimeNetFileError`. If a copied file does not match the size and
-checksum that its manifest records, the build raises `TimeNetFileError`.
-
-If `--build-parents` is set, a missing payload source builds as a pinned release. The build
-publishes the payload source only if it writes the files that the reading release pins. See
-[Rebuild a pinned release](#rebuild-a-pinned-release) for the check and the two fixes.
-
-`--fetch-from` needs a local `--out`. An output that is not local holds only releases with access
-declared `open`. So the build checks the access of each release before any download. A copy from a
-registry that is not local also needs access declared `open`.
-
-`timenet_connectors.build()` and `timenet_connectors.load()` take the same options as keywords.
-`fetch_from` takes a registry or its URI. `build_parents=True` builds missing parents.
-
-```python
-import timenet_connectors
-
-dataset = timenet_connectors.load(
-    "org/name",
-    fetch_from="timenet://",
-    build_parents=True,
-)
-```
-
-## Rebuild a pinned release
-
-A release can read payload files that another release stores. The reading release pins each of
-these files by path, size, and checksum (see [Shared payloads](timef-format.md#shared-payloads)).
-A rebuild of the stored release must write the same files.
-
-Pass the pins to `run_pipeline()` or `publish_pipeline()` as `pinned_by`, keyed by the reading
-release. The writer builds the release in a staging directory. Before it publishes the release, it
-compares each pinned file with the file that it wrote. If a pinned file differs, the writer deletes
-the staging directory and raises `TimeFFormatError`. Nothing is published.
-
-The error names two fixes:
-
-- Fetch the exact release from a registry that holds it.
-- Rebuild the reading release with force, so that it pins the new files. The releases that pin the
-  old files of the reading release then fail to open.
+If no step works, the build stops before any download, and the error names the missing release.
 
 ## Authoring loop
 
@@ -195,11 +144,9 @@ The error names two fixes:
 The local check keeps build and load paths explicit:
 
 ```python
-from timenet.client import TimeNet
+import timenet
 
-with TimeNet(".timenet-registry").open("org/name") as reader:
+client = timenet.TimeNet(sources=[".timenet-registry"])
+with client.open("org/name") as reader:
     reader.read().describe()
 ```
-
-See [Connectors](connectors.md) for the `download()` and `convert()` contract. See the
-[`timenet.engine` API](api/engine.md) for the programmatic interface.

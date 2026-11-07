@@ -1,6 +1,6 @@
 ---
 icon: lucide/terminal
-description: "The timenet consumer CLI: browse a registry and download datasets from the shell."
+description: "The timenet consumer CLI: find, read, download and publish TimeNet datasets from the shell."
 tags:
   - cli
 ---
@@ -14,8 +14,7 @@ from the shell that you do in Python. Install it with the `cli` extra:
 uv add 'timenet[cli]'
 ```
 
-By default, the command uses the hosted TimeNet registry. You can also select a local or S3
-registry:
+By default, the command uses the hosted TimeNet registry:
 
 ```bash
 timenet list
@@ -24,32 +23,65 @@ timenet info chengsenwang/tsqa@1.0.0   # pin a version; omit @ for the latest
 timenet download chengsenwang/tsqa
 ```
 
+To use a local or S3 registry instead, see [Selecting the sources](#selecting-the-sources).
+
 ## Commands
 
 | Command | What it does |
 | --- | --- |
-| `timenet list` | Print every dataset in the registry (id, name, license, domains), from the metadata of its latest version. |
-| `timenet search [flags]` | Filter datasets. The flags map one-to-one to [`registry.search`](../registry.md#search). Repeat a flag for list values (`--spec` for `time_series_spec`, `--id` for `dataset_id`). |
-| `timenet info <id>[@version]` | Show a dataset's [manifest](../manifest.md): metadata, schema, and counts. |
-| `timenet download <id>[@version]` | Copy a version's files into local storage and print the directory. `--storage <dir>` picks the target (else `$TIMENET_STORAGE`, then `<home>/storage`). If a local version already exists, it skips the copy. |
-| `timenet cache info` | List downloaded datasets on disk (location, id, version, size) and the total. |
-| `timenet cache clear` | Remove downloads and the raw cache. It prompts first. `-y` skips the prompt. `--all` also clears built data. |
+| `timenet list` | Print every dataset of the sources (id, name, license, domains), from the metadata of the highest version that a source lists. The cards of the installed connectors count too. See [`list()`](../client.md#browse-datasets). |
+| `timenet search [flags]` | Filter the datasets of the sources, the cards of the installed connectors included. The flags map one-to-one to [`registry.search`](../registry.md#search). Repeat a flag for list values (`--spec` for `time_series_spec`, `--id` for `dataset_id`). `--limit` applies after the merge of the sources. |
+| `timenet info <id>[@version]` | Show the [manifest](../manifest.md) of the release that `open()` reads: metadata, schema, and counts. For a release that only an installed connector provides, show its card, and the `timenet-build` command that adds the schema and the counts. See [`get_manifest()`](../client.md#inspect-a-release). |
+| `timenet download <id>[@version]` | Copy a release and its data files into the local registry, and print the release directory. The release and each payload source that the local registry lacks come from the first registry that provides them. It never builds. See [`download()`](../client.md#open-load-or-download). |
+| `timenet publish <id>[@version] --dest URL` | Copy a complete release and its payload sources to the registry `--dest`, and print the release. The release comes from the local registry, which `--local-registry` selects, or from the registry `--source URL`, and without a version it is the latest version there. A remote `--source` reads the complete copies of the same releases in the local registry. A published version cannot change, so another release under the version in `--dest` is an error. See [`publish()`](../build.md#programmatic-builds). |
+| `timenet local info` | Print the path and size of the cache. Then print one line for the downloads and one line for the builds in the local registry, such as `Downloads in <path>: 2 releases, 1.4 GB`. |
+| `timenet local clear [--yes]` | Delete the cache and every release in the local registry. The prompt counts the builds. |
+| `timenet local cache info` | Print the path and size of the cache, `$TIMENET_CACHE`. |
+| `timenet local cache clear [--yes]` | Delete the raw source files (`downloads/`) and the control databases (`control/`) of the cache that carry TimeNet's `CACHEDIR.TAG` file. |
+| `timenet local downloads info` | List the downloads in the local registry: dataset, version, source, size, and the total. |
+| `timenet local downloads clear [--yes]` | Delete the downloads in the local registry, except the ones that a release that stays needs. |
+| `timenet local builds info` | List the builds in the local registry: dataset, version, source, size, and the total. |
+| `timenet local builds clear [--yes]` | Delete the builds in the local registry, except the ones that a release that stays needs. |
 
-Every command writes its status to stderr. It writes its machine-readable result (a path) to stdout.
-Therefore, you can capture `timenet download <id>` in a script safely.
+Every command writes its status to stderr and its machine-readable result (a path or a release) to
+stdout, so you can capture `timenet download <id>` in a script safely.
 
-`--quiet`/`-q` removes that status output. It belongs to `timenet` itself. Therefore, it goes before
+Most errors end with a hint that names a command or a flag that helps.
+
+`--quiet`/`-q` removes the status output. It belongs to `timenet` itself. Therefore, it goes before
 the subcommand: `timenet --quiet list`, not `timenet list --quiet`. Be careful with the collision:
 after `search`, `-q` is the short form of `--query`.
 
-## Selecting a registry
+## Downloads and builds in the local registry
 
-The tool resolves the registry in this order: `--registry`, then `$TIMENET_REGISTRY`, then
-`timenet://`. The last value selects the hosted registry. Local paths, `file://`, `s3://`,
-`http(s)://`, and `timenet://` are valid selectors.
+The local registry holds two kinds of release, downloads and local builds. Releases can depend on each other (parent-child relationships). In that case `timenet local downloads clear` and `timenet local builds clear` might keep releases that are dependet on, and print `Kept <release>: <release> needs it.` for each. Because `local clear` deletes everything, no dependency relationships can persist, and everything is removed. A symlinked dataset or release folder in the local registry stops `downloads clear` and `builds clear` before they delete anything. Do not run a clear while a build or a download runs.
 
-The build tool has a different final default: it writes to the local registry. Pass the same explicit
-path to both tools when you build and inspect a dataset locally.
+## Selecting the sources
+
+`list`, `search`, `info`, and `download` create a client with the default list of sources,
+`[local registry, remote registry, installed connectors]` (see
+[Choose the sources](../client.md#choose-the-sources)). Three flags set this list, and each flag
+overrides one [variable](../client.md#settings):
+
+| Flag | Variable | Default | What it sets |
+| --- | --- | --- | --- |
+| `--local-registry PATH` | `TIMENET_LOCAL_REGISTRY` | `~/.timenet/registry` | A local registry: the first source that a lookup checks, and the place where downloads and builds land. |
+| `--remote-registry URL` | `TIMENET_REMOTE_REGISTRY` | `timenet://` | A remote registry, as a URL or a local path: the second source that a lookup checks, if the local registry does not have the dataset. |
+| `--auto-build` / `--no-auto-build` | `TIMENET_AUTO_BUILD` | `true` | Whether installed connectors build a dataset that neither the local nor the remote registry has. |
+
+A flag wins over its variable, and the variable wins over its default. Flags go after the subcommand:
+
+```bash
+timenet list --remote-registry https://registry.example.com
+timenet download chengsenwang/tsqa --local-registry ./data --no-auto-build
+```
+
+`publish` copies out of the local registry by default. To mirror a hosted release in a registry of
+your own, name the hosted registry as the source:
+
+```bash
+timenet publish org/name --source timenet:// --dest s3://my-bucket/timenet
+```
 
 ## Pinning versions
 
