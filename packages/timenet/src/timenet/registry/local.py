@@ -24,21 +24,28 @@ from timenet.writer import TimeFWriter, WriteProgressEvent
 
 
 class LocalRegistry(WritableRegistry):
-    """A registry that reads and writes datasets in a local directory."""
+    """Read and write dataset versions in a local directory."""
 
-    def __init__(self, root: Path) -> None:
-        """Open a local registry rooted at a directory.
+    def __init__(self, root: str | Path, *, store: bool = False) -> None:
+        """Open a registry in a local directory.
 
         Args:
-            root: The directory containing ``<dataset_id>/<version>/`` layouts. This expands ``~``.
+            root: The directory containing ``<dataset_id>/<version>/`` folders, with ``~`` expanded.
+            store: Mark this registry as the destination for local builds.
         """
         self._root = Path(root).expanduser()
+        self._is_store = store
         # (dataset_id, version) -> (manifest mtime, parsed manifest). This avoids re-parsing on repeat
         # reads, for example list_datasets then search's schema filter. An mtime change invalidates it.
         self._manifest_cache: dict[tuple[str, str], tuple[float, Manifest]] = {}
 
     def __str__(self) -> str:
         return f"local registry {self._root}"
+
+    @property
+    def is_store(self) -> bool:
+        """Whether ``store=True`` marks this registry as the place where downloads and builds land."""
+        return self._is_store
 
     @property
     def root(self) -> Path:
