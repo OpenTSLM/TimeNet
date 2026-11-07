@@ -10,6 +10,7 @@ import uuid
 import numpy as np
 import pyarrow as pa
 
+from timenet._fs import publish_directory
 from timenet.dataset import Signal, TimeFDataset
 from timenet.dataset.time_series import _validate_enum_values
 from timenet.errors import TimeFFormatError, TimeFValidationError
@@ -246,32 +247,12 @@ class TimeFWriter:
                 write as pinned. Nothing is published.
             OSError: If publishing fails and the old release cannot be moved back either. The
                 error names the ``<version>.old-<uuid>`` directory that holds it.
-        """  # ruff: ignore[docstring-extraneous-exception] - _check_pinned_by raises TimeFFormatError
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_pinned_by and publish_directory
         if not self._written:
             raise RuntimeError("write() must run successfully before close()")
         self._check_pinned_by(self._write_manifest())
         self._final_dir.parent.mkdir(parents=True, exist_ok=True)
-        old = None
-        if self._final_dir.exists():
-            # A committed version reaches here only with replace=True, which LocalRegistry.store()
-            # and run_pipeline() pass for force. Otherwise the caller pre-created the directory.
-            old = self._final_dir.with_name(f"{self._final_dir.name}.old-{uuid.uuid4().hex}")
-            self._final_dir.replace(old)
-        try:
-            self._staging_dir.replace(self._final_dir)
-        except BaseException as error:
-            if old is not None:
-                try:
-                    old.replace(self._final_dir)
-                except OSError as restore_error:
-                    raise OSError(
-                        f"could not publish {self._final_dir} ({error}) or move the old release back "
-                        f"({restore_error}); it is in {old}, so rename that to {self._final_dir} to recover it"
-                    ) from error
-            raise
-        if old is not None:
-            # The new release is published, so failing to delete the old one must not fail the write.
-            shutil.rmtree(old, ignore_errors=True)
+        publish_directory(self._staging_dir, self._final_dir)
         self._emit(ProgressStage.COMMIT, 1, 1)
 
     def abort(self) -> None:

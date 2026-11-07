@@ -233,29 +233,29 @@ def test_a_registry_refuses_a_release_whose_payload_sources_it_does_not_hold(tmp
             match=rf"payload source timenet/hello-world@1\.0\.0 of test/child@1\.0\.0 is not in local registry "
             rf"{tmp_path / 'children'}; store test/child@1\.0\.0 in the registry that holds",
         ):
-            elsewhere.store(child)
+            elsewhere.put_dataset(child)
         assert not elsewhere.exists("test/child", "1.0.0")
         assert not list((tmp_path / "children").rglob("*.tmp-*"))
 
         # Next to the release that stores its payloads, the same dataset is stored and opens.
-        LocalRegistry(tmp_path / "parents").store(child)
+        LocalRegistry(tmp_path / "parents").put_dataset(child)
         expected = parent.records[0].signals[0].to_arrow()
     with TimeFReader(open_local_version(tmp_path / "parents/test/child/1.0.0")) as reader:
         assert reader.read().records[0].signals[0].to_arrow().equals(expected)
 
 
-def test_a_refused_forced_store_keeps_the_committed_release(tmp_path):
+def test_a_refused_forced_put_dataset_keeps_the_committed_release(tmp_path):
     parent_dir = store(tmp_path / "parents", make_dataset())
     children = LocalRegistry(tmp_path / "children")
     with TimeFReader(open_local_version(parent_dir)) as reader:
         parent = reader.read()
         # The committed release owns its values, so this registry holds everything it needs.
-        children.store(_release("test/child", [_record_in_memory("old", "Old report.", [0, 1_000])]))
+        children.put_dataset(_release("test/child", [_record_in_memory("old", "Old report.", [0, 1_000])]))
         child_dir = tmp_path / "children/test/child/1.0.0"
         before = (child_dir / "manifest.json").read_bytes()
         child = _derive(parent, "test/child", [parent.records[0]])
         with pytest.raises(TimeNetDatasetNotFoundError, match=r"payload source .* of test/child@1\.0\.0 is not in"):
-            children.store(child, force=True)
+            children.put_dataset(child, force=True)
     assert (child_dir / "manifest.json").read_bytes() == before
     with TimeFReader(open_local_version(child_dir)) as reader:
         assert [_name(record) for record in reader.read().records] == ["old"]
@@ -380,7 +380,7 @@ def test_a_child_pins_exactly_the_source_files_it_reads(tmp_path, backend):
 
 def test_opening_a_child_detects_a_forced_replace_of_its_source(tmp_path):
     _, child_dir = _parent_and_child(tmp_path)
-    LocalRegistry(tmp_path).store(
+    LocalRegistry(tmp_path).put_dataset(
         _release("test/p", [_record_in_memory("p", "Replaced. " * 300, [0, 2_000])]), force=True
     )
     first = min(part.path for part in _pins(child_dir)["test/p@1.0.0"].files)
@@ -396,7 +396,7 @@ def test_storing_a_child_detects_a_forced_replace_of_its_source(tmp_path):
     registry = LocalRegistry(tmp_path)
     with TimeFReader(open_local_version(parent_dir)) as reader:
         loaded = reader.read()
-        registry.store(_release("test/p", [_record_in_memory("p", "Replaced. " * 300, [0, 2_000])]), force=True)
+        registry.put_dataset(_release("test/p", [_record_in_memory("p", "Replaced. " * 300, [0, 2_000])]), force=True)
         # Both releases store the same values, so their shards match; the time offsets differ, and the
         # error names that payload file.
         with pytest.raises(
@@ -405,23 +405,23 @@ def test_storing_a_child_detects_a_forced_replace_of_its_source(tmp_path):
             r"values were read from: they read 'payloads/part-00000000\.parquet' as \d+ bytes with checksum "
             r"sha256:[0-9a-f]{64}, but test/p@1\.0\.0 there records \d+ bytes with checksum sha256:[0-9a-f]{64}$",
         ):
-            registry.store(_derive(loaded, "test/c", loaded.records))
+            registry.put_dataset(_derive(loaded, "test/c", loaded.records))
     assert not (tmp_path / "test/c").exists() or not list((tmp_path / "test/c").iterdir())
 
 
 def test_a_child_is_refused_by_a_registry_that_holds_another_release_of_its_source(tmp_path):
     ours, foreign = LocalRegistry(tmp_path / "ours"), LocalRegistry(tmp_path / "foreign")
-    ours.store(_release("test/p", [_record_in_memory("p", "Ours. " * 300, [0, 1_000])]))
-    foreign.store(_release("test/p", [_record_in_memory("p", "Foreign. " * 300, [0, 3_000])]))
+    ours.put_dataset(_release("test/p", [_record_in_memory("p", "Ours. " * 300, [0, 1_000])]))
+    foreign.put_dataset(_release("test/p", [_record_in_memory("p", "Foreign. " * 300, [0, 3_000])]))
     with TimeFReader(ours.open_version("test/p", "1.0.0")) as reader:
         loaded = reader.read()
         with pytest.raises(
             TimeFFormatError,
             match=r"payload source test/p@1\.0\.0 in local registry .*foreign differs from the release",
         ):
-            foreign.store(_derive(loaded, "test/c", loaded.records))
+            foreign.put_dataset(_derive(loaded, "test/c", loaded.records))
         assert not foreign.exists("test/c", "1.0.0")
-        ours.store(_derive(loaded, "test/c", loaded.records))
+        ours.put_dataset(_derive(loaded, "test/c", loaded.records))
     assert _reports(tmp_path / "ours/test/c/1.0.0") == {"p": ([0.0, 1.0], [0, 1_000], "Ours. " * 300)}
 
 
@@ -468,7 +468,7 @@ def test_a_release_cannot_reuse_payloads_of_a_source_that_reads_it(tmp_path):
         with pytest.raises(
             TimeFValidationError, match=r"test/c@1\.0\.0, which reads payloads of test/p@1\.0\.0 itself"
         ):
-            registry.store(_derive(loaded, "test/p", own), force=True)
+            registry.put_dataset(_derive(loaded, "test/p", own), force=True)
     assert {name: _reports(directory) for name, directory in (("p", parent_dir), ("c", child_dir))} == before
 
 

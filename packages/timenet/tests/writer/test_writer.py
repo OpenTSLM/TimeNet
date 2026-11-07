@@ -1,6 +1,5 @@
 from dataclasses import dataclass
 import json
-from pathlib import Path
 import shutil
 
 import duckdb
@@ -248,44 +247,6 @@ def test_replace_publishes_over_a_committed_version_and_drops_the_old_one(tmp_pa
         keys = {annotation.key for record in reader.read().records for annotation in record.annotations}
     assert "replaced" in keys
     assert [path.name for path in version_dir.parent.iterdir()] == [version_dir.name]
-
-
-def test_a_failed_publish_rename_moves_the_old_release_back(tmp_path, monkeypatch):
-    version_dir = _written(tmp_path)
-    before = (version_dir / "manifest.json").read_bytes()
-    rename = Path.replace
-
-    def replace(self, target):
-        if ".tmp-" in self.name:
-            raise OSError("rename failed")
-        return rename(self, target)
-
-    monkeypatch.setattr(Path, "replace", replace)
-    with pytest.raises(OSError, match="rename failed"), TimeFWriter(tmp_path, _replacement(), replace=True) as writer:
-        writer.write()
-    assert (version_dir / "manifest.json").read_bytes() == before
-    assert [path.name for path in version_dir.parent.iterdir()] == [version_dir.name]
-
-
-def test_a_failed_publish_that_cannot_restore_the_old_release_names_where_it_is(tmp_path, monkeypatch):
-    version_dir = _written(tmp_path)
-    before = (version_dir / "manifest.json").read_bytes()
-    rename = Path.replace
-
-    def replace(self, target):
-        if ".tmp-" in self.name or ".old-" in self.name:
-            raise OSError("rename failed")
-        return rename(self, target)
-
-    monkeypatch.setattr(Path, "replace", replace)
-    with (
-        pytest.raises(OSError, match=r"it is in .*/1\.0\.0\.old-[0-9a-f]+, so rename that to") as raised,
-        TimeFWriter(tmp_path, _replacement(), replace=True) as writer,
-    ):
-        writer.write()
-    (old,) = version_dir.parent.glob(f"{version_dir.name}.old-*")
-    assert str(old) in str(raised.value)
-    assert (old / "manifest.json").read_bytes() == before
 
 
 def test_the_staging_sweep_keeps_an_old_release_that_a_hard_kill_left(tmp_path):

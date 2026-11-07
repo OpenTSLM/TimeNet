@@ -125,7 +125,7 @@ def test_resolve_target_publishes_to_remote_timenet_registry(clean_env, monkeypa
 
 
 def test_publish_pipeline_stores_through_writable_registry(clean_env, converted, tmp_path):
-    # publish_pipeline hands the converted dataset to registry.store; a LocalRegistry stands in for a
+    # publish_pipeline hands the converted dataset to registry.put_dataset; a LocalRegistry stands in for a
     # remote one, so the publish path is exercised without a network round-trip.
     registry = LocalRegistry(tmp_path / "registry")
     assert publish_pipeline(HelloWorldConnector(), registry) == "1.0.0"
