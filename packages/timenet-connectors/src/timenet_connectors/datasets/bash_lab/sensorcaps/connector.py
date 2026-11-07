@@ -2,9 +2,9 @@
 
 The connector downloads the original JSONL files at a pinned commit through the HuggingFace base,
 indexes rows by byte offset, and keeps just one decoded sensor row cached across the six channel
-loaders, so the complete corpus is never held in memory. Tasks use the original system message
-followed by the original derived-feature text as their prompt, with the activity summary and optional
-sensor location as input annotations. Feature text is streamed rather than retained across the corpus.
+loaders. The prompt of each task is the row's system message. Its input annotations are the activity
+summary and, when present, the sensor location. The 12 derived features are Record annotations only,
+so the Records keep their text in memory. The connector reads the files again for the tasks.
 """
 
 from collections.abc import Iterator, Mapping
@@ -68,6 +68,25 @@ _PAMAP2_CHANNELS = (
         2,
     ),
 )
+FEATURE_HEADINGS = tuple(
+    f"{sensor} {statistic}"
+    for statistic in ("moving average", "FFT", "minimum", "maximum", "median", "variance")
+    for sensor in ("Gyroscope", "Accelerometer")
+)
+"""The derived features every v2 user message carries after its sensor arrays, in source order.
+
+The LLaSA generator writes these 12 headings in this order. For PAMAP2, it writes the sensor location
+after them. The parser rejects any other heading, so a change of the source format fails the conversion:
+https://github.com/BASHLab/LLaSA/blob/37ea514bef969d81edc721846689a120d2abeba4/llasa_v2_data_generation.py#L103-L114
+https://github.com/BASHLab/LLaSA/blob/37ea514bef969d81edc721846689a120d2abeba4/llasa_v2_data_generation_pamap2.py#L92-L104
+"""
+INPUT_ANNOTATION_KEYS = frozenset({"activity_summary", "sensor_location"})
+"""The Record annotations that a task gives a model: the activity label and the sensor location.
+
+The derived features stay on the Record only. They are about 36,000 characters of NumPy text per row,
+and the generator computed them from the 120-reading source window, not from the 60 stored readings.
+"""
+_FIELDS = frozenset({"Summary", "Accelerometer", "Gyroscope", "Location"})
 _ROLES = ("system", "user", "assistant")
 _XYZValues = Annotated[list[Annotated[FiniteFloat, Strict()]], Field(min_length=3, max_length=3)]
 _SENSOR_VALUES = TypeAdapter(Annotated[list[_XYZValues], Field(min_length=1)])
@@ -94,8 +113,10 @@ class _ParsedRow:
     caption: str
     summary: str
     location: str | None
-    features: str
+    features: Mapping[str, str]
+    """The original text of each derived feature, keyed by its heading in :data:`FEATURE_HEADINGS`."""
     values: tuple[list[list[float]], list[list[float]]]
+    """The accelerometer's and then the gyroscope's readings."""
 
 
 def _sensor_values(text: str, name: str) -> list[list[float]]:
@@ -115,28 +136,41 @@ def _sensor_values(text: str, name: str) -> list[list[float]]:
         raise TimeFValidationError(f"{name}: {exc}") from exc
 
 
-def _user_sections(user: str) -> tuple[dict[str, str], str]:
-    """Separate structured fields from verbatim multiline feature text.
+def _user_sections(user: str) -> tuple[dict[str, str], dict[str, str]]:
+    """Split the user message into its structured fields and its derived features.
 
     Returns:
-        Named source fields and the remaining original feature text.
+        Named source fields, and each derived feature's original text keyed by its heading.
 
     Raises:
-        TimeFValidationError: If a structured field is repeated.
+        TimeFValidationError: If a section is repeated, a derived feature is missing, or a line
+            belongs to no known section.
     """
     sections: dict[str, str] = {}
-    feature_lines: list[str] = []
+    feature_lines: dict[str, list[str]] = {}
+    current: list[str] | None = None
     for line in user.splitlines(keepends=True):
         heading, separator, value = line.partition(":")
-        if separator and heading in {"Summary", "Accelerometer", "Gyroscope", "Location"}:
+        if separator and heading in _FIELDS:
             if heading in sections:
                 raise TimeFValidationError(f"repeated {heading} section")
             sections[heading] = value.strip()
+            current = None
+        elif separator and heading in FEATURE_HEADINGS:
+            if heading in feature_lines:
+                raise TimeFValidationError(f"repeated {heading} section")
+            current = feature_lines[heading] = [value]
+        elif current is not None and (not line.strip() or line[0].isspace()):
+            # NumPy prints a long statistic over indented continuation lines.
+            current.append(line)
         else:
-            # NumPy statistics can span lines and contain complex numbers or ellipses.
-            # Preserve their original text, including headings and whitespace.
-            feature_lines.append(line)
-    return sections, "".join(feature_lines)
+            raise TimeFValidationError(f"unexpected line in the user message: {line[:40]!r}")
+    missing = [heading for heading in FEATURE_HEADINGS if heading not in feature_lines]
+    if missing:
+        raise TimeFValidationError(f"missing derived features: {missing}")
+    # Keep each statistic's original text, including complex numbers and NumPy ellipses.
+    features = {heading: "".join(feature_lines[heading]).strip() for heading in FEATURE_HEADINGS}
+    return sections, features
 
 
 def _message_contents(row: JsonValue) -> tuple[str, str, str]:
@@ -266,25 +300,31 @@ def _load_time_offsets() -> pa.Array:
     return _TIME_OFFSETS_US
 
 
+def _feature_key(heading: str) -> str:
+    """Return the annotation key of a derived feature, such as ``gyroscope_moving_average``.
+
+    Returns:
+        The heading in lowercase, with underscores for spaces.
+    """
+    return heading.lower().replace(" ", "_")
+
+
 def _iter_tasks(files: tuple[HubFileRef, ...], records: Mapping[tuple[str, int], Record]) -> Iterator[AnswerTask]:
     """Re-read original system prompts and caption targets without retaining the corpus.
 
     Yields:
-        A caption task with its instruction prompt and registered input Record.
+        A caption task with the system message as prompt, its registered input Record, and the activity
+        summary and sensor location as input annotations.
     """
     for file in files:
         for ref, row in _iter_rows(file):
             record = records[ref.key]
-            context = [
-                annotation
-                for annotation in record.annotations
-                if annotation.key in {"activity_summary", "sensor_location"}
-            ]
             yield AnswerTask(
                 inputs=(record,),
                 targets=(row.caption,),
-                prompt=f"{row.system}\n\n{row.features}" if row.features.strip() else row.system,
-                input_annotations=tuple(context),
+                prompt=row.system,
+                # The summary and the location, in Record order. The derived features stay on the Record.
+                input_annotations=tuple(a for a in record.annotations if a.key in INPUT_ANNOTATION_KEYS),
                 split=Split.TRAIN,
             )
 
@@ -310,7 +350,9 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         """Index local rows into six-channel Records and a re-iterable caption stream.
 
         Returns:
-            A dataset retaining its hierarchy, small annotations, and file-backed loaders.
+            A dataset that keeps its hierarchy, its annotations, and file-backed loaders. The
+            annotations hold the derived-feature text of every row, about 1.3 billion characters for
+            the full release.
 
         Raises:
             TimeFValidationError: If references or source rows violate the SensorCaps mapping.
@@ -345,7 +387,8 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
         """Build one six-channel IMU Record with its source provenance.
 
         Returns:
-            A Record with lazy sensor values and annotations from the original row.
+            A Record with lazy sensor values, provenance metadata, the row's task context, and its
+            derived features as annotations.
         """
         channels = _PAMAP2_CHANNELS if ref.file.part == "pamap2_v2" else _CHANNELS
         signals = tuple(
@@ -359,19 +402,26 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
             )
             for spec, name, sensor, dimension in channels
         )
-        record = Record(sources=(Source(name="IMU", signals=signals),))
-        source = ref.file.part.rsplit("_", 1)[0]
-        metadata: dict[str, str | int] = {
-            "source_dataset": source,
-            "source_partition": ref.file.part,
-            "source_file": self.SOURCE_FILES[ref.file.part],
-            "source_row": ref.index,
-            "activity_summary": row.summary,
-        }
+        record = Record(
+            sources=(Source(name="IMU", signals=signals),),
+            # Provenance only. The task context and the features below are annotations.
+            metadata={
+                "source_dataset": ref.file.part.rsplit("_", 1)[0],
+                "source_partition": ref.file.part,
+                "source_file": self.SOURCE_FILES[ref.file.part],
+                "source_row": ref.index,
+            },
+        )
+        context: dict[str, str] = {"activity_summary": row.summary}
         if row.location is not None:
-            metadata["sensor_location"] = row.location
-        for key, value in metadata.items():
+            context["sensor_location"] = row.location
+        for key, value in context.items():
             record.annotate(Annotation(key=key, value=value))
+        # The derived features are Record annotations only. They are not task inputs, because they are long
+        # NumPy text that the generator computed from the 120-reading source window, not from the 60 stored
+        # readings.
+        for heading in FEATURE_HEADINGS:
+            record.annotate(Annotation(key=_feature_key(heading), value=row.features[heading]))
         return record
 
 

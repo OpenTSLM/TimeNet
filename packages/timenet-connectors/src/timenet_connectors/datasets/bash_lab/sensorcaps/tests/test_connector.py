@@ -54,15 +54,42 @@ _DATASET_ANNOTATIONS = {
 # Independent expected offsets: the upstream sampler skips index 60 at the midpoint.
 _EXPECTED_OFFSETS_US = np.asarray([*range(0, 60, 2), *range(61, 120, 2)], dtype=np.int64) * 50_000
 
-_FEATURES = (
-    "Gyroscope moving average: [[ 0.1  0.2  0.3]\n"
-    " [ 0.4  0.5  0.6]]\n\n"
-    "Accelerometer FFT: [[1.+2.j 3.-4.j]\n"
-    " ...\n"
-    " [5.+6.j 7.-8.j]]\n"
-    "Gyroscope minimum: [-1. -2. -3.]\n"
-    "Accelerometer variance: [0.1 0.2 0.3]  \n"
+# The 12 derived features, in source order, as the user message prints them: NumPy text that can span
+# lines and hold complex numbers, ellipses, blank lines and trailing spaces.
+_FEATURE_TEXT = {
+    "Gyroscope moving average": "[[ 0.1  0.2  0.3]\n [ 0.4  0.5  0.6]]",
+    "Accelerometer moving average": "[[9.1 9.2 9.3]]",
+    "Gyroscope FFT": "[[1.+2.j 3.-4.j]\n ...\n\n [5.+6.j 7.-8.j]]",
+    "Accelerometer FFT": "[[ 2.07+0.j -1.08+5.55j]]",
+    "Gyroscope minimum": "[-1. -2. -3.]",
+    "Accelerometer minimum": "[-6.5 -6.4\n -6.3]",
+    "Gyroscope maximum": "[1. 2. 3.]",
+    "Accelerometer maximum": "[7.5 7.6 7.7]",
+    "Gyroscope median": "[0. 0.1 0.2]",
+    "Accelerometer median": "[1.09 1.11 1.12]",
+    "Gyroscope variance": "[1.2e-05 1.6e-05]",
+    "Accelerometer variance": "[0.1 0.2 0.3]",
+}
+_FEATURES = "".join(f"{heading}: {text}\n" for heading, text in _FEATURE_TEXT.items()).replace(
+    "Accelerometer variance: [0.1 0.2 0.3]\n", "Accelerometer variance: [0.1 0.2 0.3]  \n"
 )
+
+
+# The Record annotation key of each derived feature, written out so that a wrong key rule fails.
+_FEATURE_KEYS = {
+    "Gyroscope moving average": "gyroscope_moving_average",
+    "Accelerometer moving average": "accelerometer_moving_average",
+    "Gyroscope FFT": "gyroscope_fft",
+    "Accelerometer FFT": "accelerometer_fft",
+    "Gyroscope minimum": "gyroscope_minimum",
+    "Accelerometer minimum": "accelerometer_minimum",
+    "Gyroscope maximum": "gyroscope_maximum",
+    "Accelerometer maximum": "accelerometer_maximum",
+    "Gyroscope median": "gyroscope_median",
+    "Accelerometer median": "accelerometer_median",
+    "Gyroscope variance": "gyroscope_variance",
+    "Accelerometer variance": "accelerometer_variance",
+}
 
 
 def _expected_values(partition_index, row_index, channel_index):
@@ -87,10 +114,12 @@ def _rows(partition="hhar_v2"):
             if heading in {"Accelerometer", "Gyroscope"}:
                 samples = [[number + offset for number in sample] for sample in json.loads(value)]
                 lines[index] = f"{heading}: {json.dumps(samples)}"
+        user = "\n".join(lines) + "\n" + _FEATURES
         if partition == "pamap2_v2":
-            lines.append("Location: ankle")
+            # As in the release, PAMAP2's location follows the derived features.
+            user += "Location: ankle"
             row["messages"][0]["content"] += " Location is supplied."
-        row["messages"][1]["content"] = "\n".join(lines) + "\n" + _FEATURES
+        row["messages"][1]["content"] = user
     return rows
 
 
@@ -124,7 +153,7 @@ def _write_row(tmp_path, row):
 def _assert_records_and_tasks(records, tasks):
     assert len(records) == len(tasks) == 10
     records_by_row = {
-        (_annotations(record)["source_partition"], _annotations(record)["source_row"]): record for record in records
+        (record.metadata["source_partition"], record.metadata["source_row"]): record for record in records
     }
     tasks_by_record = {task.inputs[0].id: task for task in tasks}
     for partition_index, partition in enumerate(_PARTITIONS):
@@ -137,17 +166,19 @@ def _assert_records_and_tasks(records, tasks):
             assert source.name == "IMU"
             assert source.sources == ()
             assert len(source.signals) == len(record.signals) == 6
-            expected_annotations = {
+            assert record.metadata == {
                 "source_dataset": partition.removesuffix("_v2"),
                 "source_partition": partition,
                 "source_file": f"data/{partition}-00000-of-00001.jsonl",
                 "source_row": row_index,
-                "activity_summary": f"synthetic café {partition} movement {row_index}",
             }
+            expected_context = {"activity_summary": f"synthetic café {partition} movement {row_index}"}
             if partition == "pamap2_v2":
-                expected_annotations["sensor_location"] = "ankle"
-            # Feature text is streamed with tasks, never retained on the record graph.
-            assert _annotations(record) == expected_annotations
+                expected_context["sensor_location"] = "ankle"
+            # Each feature's text, without its heading or surrounding whitespace, stays on the record
+            # and is not a task input.
+            features = {_FEATURE_KEYS[heading]: text for heading, text in _FEATURE_TEXT.items()}
+            assert _annotations(record) == expected_context | features
             identities = (
                 _PAMAP2_CHANNELS if partition == "pamap2_v2" else tuple((sensor, axis) for sensor, axis, _ in _CHANNELS)
             )
@@ -170,17 +201,12 @@ def _assert_records_and_tasks(records, tasks):
             assert type(task) is AnswerTask
             assert len(task.inputs) == 1 and task.inputs[0] is record
             assert task.targets == (row["messages"][2]["content"],)
-            assert task.prompt == row["messages"][0]["content"] + "\n\n" + _FEATURES
+            assert task.prompt == row["messages"][0]["content"]
             assert task.metadata == {}
             assert task.split is Split.TRAIN
-            expected_context = {
-                "activity_summary": f"synthetic café {partition} movement {row_index}",
-            }
-            if partition == "pamap2_v2":
-                expected_context["sensor_location"] = "ankle"
-            assert {annotation.key: annotation.value for annotation in task.input_annotations} == expected_context
-            for annotation in task.input_annotations:
-                assert any(annotation is attached for attached in record.annotations)
+            # Exactly the summary and the location, as the record's own annotation objects, in record order.
+            assert {a.key: read_value(a.value) for a in task.input_annotations} == expected_context
+            assert task.input_annotations == tuple(a for a in record.annotations if a.key in expected_context)
             assert task.resolved_input_modalities == frozenset({InputModality.TEXT, InputModality.TIME_SERIES})
 
 
@@ -265,6 +291,31 @@ def test_invalid_sensor_data_has_source_context(tmp_path, sensor, pattern):
     with pytest.raises(TimeFValidationError, match=pattern) as error:
         SensorCapsConnector().convert([ref])
     assert str(ref.path) in str(error.value)
+    assert "hhar_v2, row 0" in str(error.value)
+
+
+@pytest.mark.parametrize(
+    ("edit", "pattern"),
+    [
+        (lambda user: user.replace("Gyroscope median: ", "Gyroscope mean: "), "unexpected line"),
+        (
+            lambda user: user.replace("Gyroscope median: [0. 0.1 0.2]\n", ""),
+            r"missing derived features: \['Gyroscope median'\]",
+        ),
+        (lambda user: user + "Gyroscope FFT: [0.]\n", "repeated Gyroscope FFT section"),
+        # A line before the first section.
+        (lambda user: user.replace("Summary:", "\nSummary:"), "unexpected line"),
+        # An indented line after the location is not a continuation of the last feature.
+        (lambda user: user + "Location: ankle\n [0.1 0.2]", "unexpected line"),
+        (lambda user: user.replace(" [ 0.4", "[ 0.4"), "unexpected line"),
+    ],
+)
+def test_unexpected_user_message_layout_fails_with_source_context(tmp_path, edit, pattern):
+    row = _rows()[0]
+    row["messages"][1]["content"] = edit(row["messages"][1]["content"])
+    ref = _write_row(tmp_path, row)
+    with pytest.raises(TimeFValidationError, match=pattern) as error:
+        SensorCapsConnector().convert([ref])
     assert "hhar_v2, row 0" in str(error.value)
 
 
