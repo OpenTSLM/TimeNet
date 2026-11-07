@@ -588,6 +588,24 @@
           "title": "Categories",
           "type": "array"
         },
+        "ordered": {
+          "default": false,
+          "title": "Ordered",
+          "type": "boolean"
+        },
+        "description": {
+          "anyOf": [
+            {
+              "minLength": 1,
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ],
+          "default": null,
+          "title": "Description"
+        },
         "value_shape": {
           "default": [],
           "items": {

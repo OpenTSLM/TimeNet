@@ -106,6 +106,12 @@ vibration = TimeSeriesSpec(
 | `unit_value` | Physical unit of each value, or `None` when unknown. |
 | `dtype` | NumPy scalar dtype, `"str"`, or `"enum"`. |
 | `categories` | Allowed labels for an enum specification. |
+| `ordered` | Whether the position of a category in `categories` is a rank on one scale. Only valid for an enum specification. |
+| `description` | Optional explanation of the values, for example what the categories of an enum mean. |
+
+For an enum specification, `spec.codebook` gives the categories with their order. Its `codes_of`
+maps labels to their zero-based positions, and `labels_of` maps positions back to labels. Both raise
+`TimeFValidationError` for a value outside the categories.
 | `value_shape` | Shape of one timestep, without the time dimension. |
 | `dimension_names` | Optional names for every dimension in `value_shape`. |
 | `nullable` | Whether a complete timestep can be missing. |

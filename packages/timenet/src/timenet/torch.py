@@ -12,8 +12,6 @@ from typing import TYPE_CHECKING, Any, Protocol, cast
 
 from jaxtyping import Shaped
 import numpy as np
-import pyarrow as pa
-import pyarrow.compute as pc
 import torch
 from torch import Tensor
 from torch.utils.data import Dataset
@@ -247,17 +245,11 @@ def _series_tensor_and_mask(ts: Signal) -> tuple[Shaped[Tensor, " time *value"],
             f"string series {ts.id!r} has no tensor representation; read it via Signal.to_arrow() instead"
         )
     if ts.spec.dtype == "enum":
-        # index_in finds each label's position in the categories using C code.
-        # This avoids a Python lookup for every value.
-        arrow = ts.to_arrow()
-        if arrow.null_count:
+        codes = ts.spec.codebook.codes_of(ts.to_arrow())
+        if codes.null_count:
             raise TimeFValidationError(
                 f"series {ts.id!r} contains null values. Handle missing data before conversion to PyTorch"
             )
-        categories = pa.array(ts.spec.categories, type=arrow.type.value_type)
-        codes = pc.index_in(arrow, value_set=categories)  # ty: ignore[unresolved-attribute]
-        if pc.any(codes.is_null()).as_py():  # ty: ignore[unresolved-attribute]
-            raise TimeFValidationError(f"enum series for {ts.spec.spec_type!r} has values outside its categories")
         dense = codes.to_numpy(zero_copy_only=False).astype(_ENUM_INDEX_DTYPE, copy=False)
     else:
         dense = ts.to_numpy()

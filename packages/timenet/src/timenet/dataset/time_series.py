@@ -1,6 +1,6 @@
 """The :class:`Signal` leaf type: one logical stream whose values sit behind an array handle."""
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import NamedTuple, TypeGuard, assert_never
 
@@ -24,28 +24,6 @@ from timenet.types import (
 )
 from timenet.types.handles import ArrayHandle, ArrowArray, CallableArray, NumpyArray
 from timenet.types.ids import EntityId, assigned_id
-
-
-def _validate_enum_values(
-    spec: TimeSeriesSpec,
-    values: Iterable[object],
-) -> None:
-    """Reject enum values outside the spec's codebook.
-
-    Args:
-        spec: The series' spec with its ``categories``.
-        values: The label values to check.
-
-    Raises:
-        TimeFValidationError: If any value is not in ``spec.categories``.
-    """
-    allowed = set(spec.categories)
-    unknown = {v for v in values if v not in allowed and not (v is None and spec.nullable)}
-    if unknown:
-        raise TimeFValidationError(
-            f"enum series for {spec.spec_type!r} has values outside its categories "
-            f"({list(spec.categories)!r}): {sorted(unknown, key=str)}"
-        )
 
 
 def _can_use_numpy_storage(
@@ -90,7 +68,7 @@ def _arrow_from_values(
         # Encode the labels first. The dictionary stores each distinct label once.
         # Compare these labels with the allowed categories, without creating an object for every value.
         array = array.dictionary_encode()
-        _validate_enum_values(spec, array.dictionary.to_pylist())
+        spec.codebook.check_labels(array.dictionary.to_pylist(), nullable=spec.nullable)
     return array
 
 

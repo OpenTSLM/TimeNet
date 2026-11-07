@@ -25,13 +25,20 @@ from timenet.writer import TimeFWriter
 pytestmark = pytest.mark.value_dtypes
 
 
-def _spec(categories: tuple[str, ...] = ("awake", "light", "deep", "rem")) -> TimeSeriesSpec:
+def _spec(
+    categories: tuple[str, ...] = ("awake", "light", "deep", "rem"),
+    *,
+    ordered: bool = False,
+    description: str | None = None,
+) -> TimeSeriesSpec:
     return TimeSeriesSpec(
         spec_type="sleep_stage",
         name="Sleep stage",
         unit_value=ureg.dimensionless,
         dtype="enum",
         categories=categories,
+        ordered=ordered,
+        description=description,
     )
 
 
@@ -39,6 +46,7 @@ def _dataset(
     values: list[str],
     *,
     n_records: int = 1,
+    spec: TimeSeriesSpec | None = None,
 ) -> TimeFDataset:
     dataset = TimeFDataset(
         metadata=DatasetMetadata(
@@ -50,7 +58,7 @@ def _dataset(
             domains=(Domain.GENERAL,),
         )
     )
-    spec = _spec()
+    spec = spec or _spec()
     per_record = len(values) // n_records
     for i in range(n_records):
         start = i * per_record
@@ -147,6 +155,38 @@ def test_enum_manifest_records_dtype_and_categories(tmp_path):
     spec = manifest.dataset_schema.time_series_specs[0]
     assert spec.dtype == "enum"
     assert spec.categories == ("awake", "light", "deep", "rem")
+
+
+def test_enum_order_and_description_round_trip(tmp_path):
+    # The signals table stores both fields. Without them, a reader could not tell a ranked
+    # scale, such as sleep depth, from a plain set of names.
+    spec = _spec(ordered=True, description="Deeper stages come later.")
+    version_dir = _write(tmp_path, _dataset(["awake", "deep"], spec=spec))
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        series = reader.read().records[0].signals[0]
+    assert series.spec == spec
+    assert series.spec.ordered
+    assert series.spec.description == "Deeper stages come later."
+
+
+def test_category_codes_follow_the_spec_order(tmp_path):
+    # The Arrow dictionary of the stored values lists the labels in order of first use. The codes
+    # must follow the spec, not that dictionary.
+    version_dir = _write(tmp_path, _dataset(["deep", "awake", "rem", "deep"]))
+    with TimeFReader(open_local_version(version_dir)) as reader:
+        series = reader.read().records[0].signals[0]
+    assert series.spec.codebook.codes_of(series.to_arrow()).to_pylist() == [2, 0, 3, 2]
+
+
+def test_category_codes_reject_a_label_outside_the_categories():
+    # Values from a loader skip the checks of Signal.from_values, so a corrupt payload can hold a
+    # label the spec does not know. The codes must not silently become null.
+    stored = pa.DictionaryArray.from_arrays(pa.array([0, 1], pa.int32()), pa.array(["awake", "dozing"]))
+    series = Signal.from_loader(
+        name="stage", spec=_spec(), time_axis=RegularAxis.from_rate_hz(1), n_values=2, loader=lambda: stored
+    )
+    with pytest.raises(TimeFValidationError, match="outside its categories"):
+        series.spec.codebook.codes_of(series.to_arrow())
 
 
 def test_enum_read_range_returns_labels(tmp_path):

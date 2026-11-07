@@ -27,7 +27,6 @@ from urllib.parse import quote
 from jaxtyping import Shaped
 import numpy as np
 import pyarrow as pa
-import pyarrow.compute as pc
 
 from timenet.dataset import Signal
 from timenet.errors import TimeFValidationError
@@ -133,10 +132,7 @@ def _dense_and_validity(
         non-nullable spec.
     """
     if spec.dtype == "enum":
-        # index_in finds each label's position in the categories using C code.
-        # This avoids a Python lookup for every value.
-        categories = pa.array(spec.categories, type=arrow_values.type.value_type)
-        codes = pc.index_in(arrow_values, value_set=categories)  # ty: ignore[unresolved-attribute]
+        codes = spec.codebook.codes_of(arrow_values)
         values = codes.fill_null(0).to_numpy(zero_copy_only=False).astype(np.int32)
     elif isinstance(arrow_values, pa.FixedShapeTensorArray):
         # The tensor's storage already holds a value at every slot, absent timesteps included.

@@ -1,9 +1,11 @@
 import pickle
 
 import pint
+import pyarrow as pa
 from pydantic import ValidationError
 import pytest
 
+from timenet.errors import TimeFValidationError
 from timenet.types import DatasetSchema, TimeSeriesSpec, ureg
 from timenet.types.specs import Unit
 
@@ -19,6 +21,24 @@ def test_spec_construction_modality_only():
     assert spec.spec_type == "ecg_lead"
     assert spec.unit_value == ureg.millivolt
     assert not hasattr(spec, "signal")  # signal lives on Signal, not the spec
+
+
+def test_ordered_is_only_valid_for_an_enum():
+    with pytest.raises(ValidationError, match="ordered is only valid for dtype 'enum'"):
+        _ecg_spec(ordered=True)
+
+
+def test_only_an_enum_spec_has_a_codebook():
+    with pytest.raises(TimeFValidationError, match="has no codebook"):
+        _ = _ecg_spec().codebook
+
+
+def test_codebook_rejects_a_code_outside_its_labels():
+    # A corrupt Zarr chunk can hold a code that the categories do not cover.
+    codebook = _ecg_spec(dtype="enum", categories=("a", "b")).codebook
+    assert codebook.labels_of(pa.array([1, None, 0])).to_pylist() == ["b", None, "a"]
+    with pytest.raises(TimeFValidationError, match="outside its 2 categories"):
+        codebook.labels_of(pa.array([0, 2]))
 
 
 def test_spec_frozen():
