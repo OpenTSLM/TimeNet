@@ -145,10 +145,32 @@ def test_the_local_commands_take_the_local_registry_flag(tmp_path):
     assert stored_releases(LocalRegistry(store)) == []
 
 
-def test_search_no_match(registry_root):
-    result = runner.invoke(app, ["search", "--remote-registry", str(registry_root), "--domain", "cardiology"])
+def _flags(tmp_path, remote):
+    """Return the flags of a list of sources: an empty store and ``remote``, without the connectors."""
+    return ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(remote), "--no-auto-build"]
+
+
+def _first_cells(output):
+    """Return the first cell of each body row of the table in ``output``."""
+    return [line.split("│")[1].strip() for line in output.splitlines() if line.startswith("│")]
+
+
+def test_list(registry_root, tmp_path):
+    result = runner.invoke(app, ["list", *_flags(tmp_path, registry_root)])
     assert result.exit_code == 0, result.output
-    assert click.unstyle(result.output) == "No datasets match.\n"
+    assert _first_cells(result.stdout) == ["timenet/hello-world"]
+
+
+def test_search_by_domain(registry_root, tmp_path):
+    result = runner.invoke(app, ["search", "--domain", "general", *_flags(tmp_path, registry_root)])
+    assert result.exit_code == 0, result.output
+    assert _first_cells(result.stdout) == ["timenet/hello-world"]
+
+
+def test_search_no_match(registry_root, tmp_path):
+    result = runner.invoke(app, ["search", "--domain", "cardiology", *_flags(tmp_path, registry_root)])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == "No datasets match.\n"
 
 
 def test_info(registry_root, tmp_path):
@@ -433,8 +455,8 @@ def test_an_empty_flag_is_an_error(tmp_path, monkeypatch, argv):
     assert f"must not be empty (also as {argv[-2]})" in str(result.exception)
 
 
-def test_search_rejects_unknown_filter_value(registry_root):
-    assert runner.invoke(app, ["search", "--remote-registry", str(registry_root), "--domain", "bogus"]).exit_code == 2
+def test_search_rejects_unknown_filter_value(registry_root, tmp_path):
+    assert runner.invoke(app, ["search", "--domain", "bogus", *_flags(tmp_path, registry_root)]).exit_code == 2
     # The error message is a Rich-rendered panel, so assert it on the raising helper directly.
     with pytest.raises(typer.BadParameter, match="invalid --domain"):
         _enum_list(["bogus"], Domain, "--domain", [d.value for d in Domain])

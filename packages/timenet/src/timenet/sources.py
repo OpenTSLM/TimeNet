@@ -3,10 +3,13 @@
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
 from typing import TYPE_CHECKING, TypeAlias, Union
+import warnings
 
 from timenet import builders
-from timenet.errors import TimeNetAccessError
+from timenet.errors import ConnectorCardWarning, TimeFValidationError, TimeNetAccessError, TimeNetInvalidCardError
+from timenet.types import DatasetMetadata, Domain, License, Task
 from timenet.types.access import Access, AccessRequirement
+from timenet.types.metadata import matches_metadata
 from timenet.types.references import LATEST_VERSION, DatasetRef
 from timenet.types.version import Version
 
@@ -96,10 +99,10 @@ ReleaseLookup: TypeAlias = Found | NotFound | NotServed
 
 @dataclass(frozen=True)
 class InstalledConnectors:
-    """A release source backed by installed dataset connectors.
+    """A source for the datasets that installed connectors build.
 
-    Each connector provides only the version in its card.
-    All instances compare equal.
+    A connector counts as installed if a package registers it under the ``timenet.builders`` entry point group. Each
+    connector provides only the version its card declares, and all instances are equal.
     """
 
     def __str__(self) -> str:
@@ -126,6 +129,87 @@ class InstalledConnectors:
         if builder is None or (version is not None and version != builder.card.dataset_version):
             return NotFound()
         return FoundInConnector(builder)
+
+    def list_datasets(self) -> list[DatasetMetadata]:
+        """Return dataset cards from installed connectors without building the datasets.
+
+        The first entry point that claims a dataset takes priority.
+        The method skips unreadable cards and emits a :class:`~timenet.errors.ConnectorCardWarning`.
+
+        Returns:
+            The cards, sorted by dataset ID.
+
+        Raises:
+            TimeNetInvalidCardError: If a backend cannot list its dataset IDs.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
+        return self._cards()
+
+    def search(  # ruff: ignore[too-many-arguments]
+        self,
+        *,
+        query: str | list[str] | None = None,
+        domain: Domain | list[Domain] | None = None,
+        task: type[Task] | list[type[Task]] | None = None,
+        license: License | list[License] | None = None,
+        time_series_spec: str | list[str] | None = None,
+        dataset_id: str | list[str] | None = None,
+        tag: str | list[str] | None = None,
+        limit: int = 100,
+    ) -> list[DatasetMetadata]:
+        """Return the cards of :meth:`list_datasets` that match every filter.
+
+        A card has no schema, so a ``task`` or ``time_series_spec`` filter matches no card.
+
+        Args:
+            query: Match any term in the name, description, or tags, ignoring case.
+            domain: Match any of these domains.
+            task: Match any of these task classes in the schema.
+            license: Match any of these licenses.
+            time_series_spec: Match all of these ``spec_type`` values.
+            dataset_id: Match any of these IDs.
+            tag: Match all of these tags.
+            limit: The maximum number of results, defaulting to 100.
+
+        Returns:
+            The matching cards, sorted by dataset ID, with at most ``limit`` entries.
+
+        Raises:
+            TimeFValidationError: If ``limit`` is negative.
+            TimeNetInvalidCardError: If a backend cannot list its dataset IDs.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
+        if limit < 0:
+            raise TimeFValidationError(f"limit must be 0 or more, got {limit}")
+        # None or an empty list skips a filter. A type filter reads the schema, which a card does not have.
+        if task not in (None, []) or time_series_spec not in (None, []):
+            return []
+        cards = self._cards()
+        return [
+            card
+            for card in cards
+            if matches_metadata(card, query=query, domain=domain, license=license, dataset_id=dataset_id, tag=tag)
+        ][:limit]
+
+    def _cards(self) -> list[DatasetMetadata]:  # ruff: ignore[no-self-use] (the listing of this source)
+        """Return the readable cards of installed connectors, sorted by dataset ID."""
+        claimed: dict[str, DatasetMetadata | None] = {}
+        for entry in builders.entry_points(group=builders.ENTRY_POINT_GROUP):
+            backend = entry.load()()
+            for dataset_id in backend.dataset_ids():
+                if dataset_id in claimed:
+                    continue
+                try:
+                    claimed[dataset_id] = backend.card(dataset_id)
+                except TimeNetInvalidCardError as error:
+                    claimed[dataset_id] = None
+                    warnings.warn(
+                        ConnectorCardWarning(
+                            f"{dataset_id}: the card of its installed connector cannot be read, "
+                            f"so the listing leaves it out: {error}"
+                        ),
+                        stacklevel=5,
+                    )
+        cards = {dataset_id: card for dataset_id, card in claimed.items() if card is not None}
+        return [cards[dataset_id] for dataset_id in sorted(cards)]
 
 
 Ask: TypeAlias = Callable[[ReleaseSource, str, Version | None], ReleaseLookup]

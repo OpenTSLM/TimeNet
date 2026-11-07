@@ -109,10 +109,10 @@ def list_datasets(
     remote_registry: str | None = REMOTE_REGISTRY,
     auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """List the datasets in the registry."""
+    """List each dataset at its highest version across all sources."""
     rows = _client(local_registry, remote_registry, auto_build).list()
     if not rows:
-        typer.echo("No datasets in the registry.")
+        typer.echo("No datasets in the sources.")
         return
     console.print(_metadata_table(rows, "Datasets"))
 
@@ -131,9 +131,9 @@ def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
     remote_registry: str | None = REMOTE_REGISTRY,
     auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """Search for datasets that match the filters.
+    """Search datasets across all sources with filters.
 
-    Repeat a filter flag to supply multiple values.
+    Repeat a filter flag to pass several values.
     """
     results = _client(local_registry, remote_registry, auto_build).search(
         query=query or None,
