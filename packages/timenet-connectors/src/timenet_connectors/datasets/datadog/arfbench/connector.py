@@ -9,11 +9,12 @@ from __future__ import annotations
 
 import csv
 from dataclasses import dataclass
+from enum import Enum
 from fractions import Fraction
 from itertools import pairwise
 import json
 from pathlib import Path
-from typing import TYPE_CHECKING, Self
+from typing import TYPE_CHECKING, Self, TypeVar
 
 import numpy as np
 import pyarrow as pa
@@ -38,6 +39,8 @@ from timenet_connectors.sources.images import image_signal
 
 if TYPE_CHECKING:
     from collections.abc import Iterator, Mapping
+
+ChoiceT = TypeVar("ChoiceT", bound=Enum)
 
 REPO = "Datadog/ARFBench"
 REVISION = "1cc8ae54e9633f596b755f7c4bce54ccb0cb9f5a"
@@ -291,6 +294,44 @@ def _create_chart_record(path: Path) -> Record:
     )
 
 
+class TaskCategory(Enum):
+    """The eight kinds of question in the release."""
+
+    ANOMALY_PRESENCE = "Anomaly Presence"
+    ANOMALY_START = "Anomaly Start"
+    ANOMALY_END = "Anomaly End"
+    ANOMALY_MAGNITUDE = "Anomaly Magnitude"
+    ANOMALY_CATEGORIZATION = "Anomaly Categorization"
+    ANOMALY_IDENTIFICATION = "Anomaly Identification"
+    ANOMALY_INDICATOR = "Anomaly Indicator"
+    ANOMALY_CORRELATION = "Anomaly Correlation"
+
+
+class Difficulty(Enum):
+    """The three difficulty tiers of the release, from easiest to hardest."""
+
+    TIER_1 = "Tier 1"
+    TIER_2 = "Tier 2"
+    TIER_3 = "Tier 3"
+
+
+def _parse_choice(row: Mapping[str, str], column: str, choices: type[ChoiceT]) -> ChoiceT:
+    """Parse a cell that must hold one value of a closed set.
+
+    Returns:
+        The member of ``choices`` with the cell's value.
+
+    Raises:
+        TimeNetConnectorError: If the cell holds another value.
+    """
+    try:
+        return choices(row[column])
+    except ValueError as exc:
+        raise TimeNetConnectorError(
+            f"{column} must be one of {[choice.value for choice in choices]}, got {row[column]!r}"
+        ) from exc
+
+
 def _parse_flag(row: Mapping[str, str], column: str) -> bool:
     """Parse a ``0`` or ``1`` cell.
 
@@ -331,8 +372,8 @@ class ARFBenchQuestion:
     """The row index of the question in the release table."""
     question: str
     """The question text, which includes the caption of each cited metric."""
-    task_category: str
-    difficulty: str
+    task_category: TaskCategory
+    difficulty: Difficulty
     answer_options: tuple[str, ...]
     correct_answer: str
     cited_metrics: tuple[str, ...]
@@ -351,7 +392,8 @@ class ARFBenchQuestion:
 
         Raises:
             TimeNetConnectorError: If the row cites no metric or more than two, if the options are
-                malformed, if the correct answer is not an option, or if a flag is not 0 or 1.
+                malformed, if the correct answer is not an option, if the category or the
+                difficulty is unknown, or if a flag is not 0 or 1.
         """
         cited_metrics = tuple(part.strip() for part in row["query_group"].split(","))
         if not all(cited_metrics) or len(cited_metrics) > MAX_CITED_METRICS:
@@ -362,8 +404,8 @@ class ARFBenchQuestion:
         return cls(
             index=int(row["Unnamed: 0"]),
             question=row["question"],
-            task_category=row["task_category"],
-            difficulty=row["difficulty"],
+            task_category=_parse_choice(row, "task_category", TaskCategory),
+            difficulty=_parse_choice(row, "difficulty", Difficulty),
             answer_options=answer_options,
             correct_answer=row["correct_answer"],
             cited_metrics=cited_metrics,
@@ -437,8 +479,8 @@ class ARFBenchQuestion:
             metadata={"question_index": self.index},
         )
         task.annotate(Annotation(key="answer_options", value=list(self.answer_options)))
-        task.annotate(Annotation(key="task_category", value=self.task_category))
-        task.annotate(Annotation(key="difficulty", value=self.difficulty))
+        task.annotate(Annotation(key="task_category", value=self.task_category.value))
+        task.annotate(Annotation(key="difficulty", value=self.difficulty.value))
         task.annotate(Annotation(key="interpolate_1", value=self.interpolate_1))
         task.annotate(Annotation(key="interpolate_2", value=self.interpolate_2))
         return task
