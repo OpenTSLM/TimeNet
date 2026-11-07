@@ -17,11 +17,8 @@ from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.types import InputModality, MissingReason, Split, read_value, read_values
 from timenet.writer import TimeFWriter
-from timenet_connectors.datasets.datadog.arfbench.connector import (
-    QUESTION_COLUMNS,
-    ARFBenchConnector,
-    ARFBenchSource,
-)
+from timenet_connectors.datasets.datadog.arfbench.connector import ARFBenchConnector, ARFBenchSource
+from timenet_connectors.datasets.datadog.arfbench.questions import QUESTION_COLUMNS
 
 
 START = datetime(2025, 3, 7, 9, 30)  # naive, as the release stores its epochs; the connector reads it as UTC
