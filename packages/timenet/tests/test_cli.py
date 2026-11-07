@@ -23,7 +23,7 @@ from timenet.errors import (
 )
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
-from timenet.testing import make_dataset
+from timenet.testing import install_backends, make_dataset
 from timenet.types import Access, Domain
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
@@ -151,6 +151,61 @@ def test_search_no_match(registry_root):
     assert click.unstyle(result.output) == "No datasets match.\n"
 
 
+def test_info(registry_root, tmp_path):
+    flags = ["--remote-registry", str(registry_root), "--local-registry", str(tmp_path / "store"), "--no-auto-build"]
+
+    result = runner.invoke(app, ["info", "timenet/hello-world", *flags])
+
+    assert result.exit_code == 0, result.output
+    cells = [[cell.strip() for cell in line.split("│")[1:-1]] for line in result.stdout.splitlines() if "│" in line]
+    assert ["version", "1.0.0"] in cells
+    assert ["records", str(len(make_dataset().records))] in cells
+
+
+class _Backend:
+    """A builder backend with one connector, whose card declares ``test/gated@1.0.0``."""
+
+    def dataset_ids(self):
+        return ["test/gated"]
+
+    def card(self, dataset_id):
+        return make_dataset().metadata.model_copy(
+            update={
+                "dataset_id": dataset_id,
+                "access": Access.CREDENTIALED,
+                "access_url": "https://gated.example",
+                "citation": "A citation.",
+            }
+        )
+
+
+def test_info_shows_the_card_of_a_dataset_that_only_a_connector_has(tmp_path, monkeypatch):
+    install_backends(monkeypatch, _Backend())
+    store = tmp_path / "store"
+    flags = ["--local-registry", str(store), "--remote-registry", str(tmp_path / "empty"), "--auto-build"]
+
+    result = runner.invoke(app, ["info", "test/gated", *flags])
+
+    assert result.exit_code == 0, result.output
+    cells = [[cell.strip() for cell in line.split("│")[1:-1]] for line in result.stdout.splitlines() if "│" in line]
+    card = _Backend().card("test/gated")
+    assert cells == [
+        ["version", "1.0.0"],
+        ["name", card.name],
+        ["license", str(card.license)],
+        ["access", "credentialed"],
+        ["access_urls", "test/gated@1.0.0 (credentialed): https://gated.example"],
+        ["citation", "A citation."],
+        ["domains", "general"],
+    ]
+    assert result.stdout.splitlines()[-1] == (
+        "The schema and the counts appear after a build: "
+        f"`timenet-build build test/gated --local-registry {store} --remote-registry {tmp_path / 'empty'}`."
+    )
+    # The command reads the card and builds nothing.
+    assert not store.exists()
+
+
 def _write(root, dataset):
     with TimeFWriter(root, dataset) as writer:
         writer.write()
@@ -185,7 +240,7 @@ def test_info_lists_the_access_page_of_each_release_that_sets_one(tmp_path):
             child.import_from(reader)
     _write(root, child)
 
-    result = runner.invoke(app, ["info", "test/child", "--remote-registry", str(root)])
+    result = runner.invoke(app, ["info", "test/child", "--remote-registry", str(root), "--no-auto-build"])
 
     assert result.exit_code == 0, result.output
     lines = click.unstyle(result.output).splitlines()

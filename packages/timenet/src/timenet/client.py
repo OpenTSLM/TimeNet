@@ -1,23 +1,24 @@
-"""Find, read, and download datasets with :class:`TimeNet`.
+"""Find, inspect, download, and read datasets with :class:`TimeNet`.
 
-Clients search their sources in order. Builds and downloads go into the local registry.
+A client checks sources in order and builds releases from installed connectors into its local registry.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
 # ``list[str]`` resolved to the builtin type, not to the method.
 from __future__ import annotations
 
-from collections.abc import Sequence
+from collections.abc import Generator, Sequence
+from contextlib import contextmanager
 import os
 from pathlib import Path
 import shlex
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
-from timenet.builders import BuildOptions
+from timenet.builders import BuildOptions, declared
 from timenet.config import check_local_registry, settings
 from timenet.coordinator.build import run_plan
-from timenet.coordinator.plan import Lookups, plan_download
-from timenet.coordinator.read import raise_not_found, read_release
+from timenet.coordinator.plan import Lookups, Plan, plan_download
+from timenet.coordinator.read import plan_read, raise_not_found, read_release
 from timenet.dataset import TimeFDataset
 from timenet.errors import (
     TimeFValidationError,
@@ -25,6 +26,7 @@ from timenet.errors import (
     TimeNetDatasetNotFoundError,
     TimeNetFileError,
     TimeNetMissingParentError,
+    TimeNetNotBuiltError,
     TimeNetVersionUnavailableError,
 )
 from timenet.manifest import Manifest
@@ -224,20 +226,63 @@ class TimeNet:
         """
         return self._catalog().list_datasets()
 
-    def get(self, dataset_id: str, version: str | None = None) -> Manifest:
-        """Return a dataset version's manifest from the selected registry.
+    def get_manifest(self, dataset_id: str, version: str | None = None) -> Manifest:
+        """Return the manifest of the release that :meth:`open` reads, without a copy or a build.
 
-        The client uses the first registry other than the local registry, or the local registry if it is the only one.
+        For a release that a registry lists but does not serve, return its listed manifest with access links.
 
         Args:
-            dataset_id: The dataset ID.
-            version: The version string, or ``None`` for the latest.
+            dataset_id: The dataset ID, optionally ending with ``@<version>`` or ``@latest``.
+            version: An exact version, ``"latest"``, or ``None``, as in :meth:`open`.
 
         Returns:
-            The dataset's manifest.
-        """
+            The release's manifest.
+
+        Raises:
+            TimeNetNotBuiltError: If the release needs a build to create its manifest.
+            TimeNetDatasetNotFoundError: If no source provides the release.
+            TimeNetVersionUnavailableError: If the version is unavailable and a connector declares another version.
+            TimeNetAccessError: If a registry only lists the release and provides no manifest.
+            TimeNetInvalidCardError: If the connector's card is unreadable or invalid.
+            TimeFValidationError: If ``dataset_id`` and ``version`` both give a version.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by the resolution of the release)
         dataset_id, version = _resolve_ref(dataset_id, version)
-        return self._catalog().get_manifest(dataset_id, version)
+        with self._hints(dataset_id):
+            found = self._manifest_or_release(dataset_id, version)
+        if not isinstance(found, DatasetRef):
+            return found
+        raise TimeNetNotBuiltError(
+            found,
+            f"{found} has no manifest yet: only an installed connector provides it, and a release gets its "
+            f"manifest when it is built. Read its card with get_card('{found.dataset_id}'), or build it with "
+            f"timenet.build('{found}').",
+        )
+
+    def get_card(self, dataset_id: str, version: str | None = None) -> DatasetMetadata:
+        """Return the card of the release that :meth:`open` reads, without a copy or a build.
+
+        The card comes from the manifest or, for an unbuilt release, from the installed connector.
+
+        Args:
+            dataset_id: The dataset ID, optionally ending with ``@<version>`` or ``@latest``.
+            version: An exact version, ``"latest"``, or ``None``, as in :meth:`open`.
+
+        Returns:
+            The release's metadata card.
+
+        Raises:
+            TimeNetDatasetNotFoundError: If no source provides the release.
+            TimeNetVersionUnavailableError: If the version is unavailable and a connector declares another version.
+            TimeNetAccessError: If a registry only lists the release and provides no manifest.
+            TimeNetInvalidCardError: If the connector's card is unreadable or invalid.
+            TimeFValidationError: If ``dataset_id`` and ``version`` both give a version.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by the resolution of the release)
+        dataset_id, version = _resolve_ref(dataset_id, version)
+        with self._hints(dataset_id):
+            found = self._manifest_or_release(dataset_id, version)
+        if not isinstance(found, DatasetRef):
+            return found.metadata
+        return declared(found.dataset_id, found.version).card
 
     def search(  # ruff: ignore[too-many-arguments]
         self,
@@ -297,20 +342,21 @@ class TimeNet:
             dataset_id: The dataset ID, optionally followed by ``@version``.
             version: An exact version, ``"latest"``, or ``None``, as in :meth:`open`.
             force: Copy the release again, even if the local registry holds a complete copy.
-            progress: Receives step events and byte counts for each copied release.
+            progress: A callback for copy events and byte counts.
 
         Returns:
             The release directory in the local registry.
 
         Raises:
-            TimeFValidationError: If the sources lack a local registry with ``store=True``, or both arguments specify a version.
-            TimeNetAccessError: If a required release is only listed or a remote release is not open.
+            TimeFValidationError: If no source is a local registry with ``store=True``.
+            TimeNetAccessError: If a required release is only listed or requires access in a remote registry.
+            TimeNetNotBuiltError: If only an installed connector provides the release.
             TimeNetDatasetNotFoundError: If no registry other than the local registry provides the release.
             TimeNetVersionUnavailableError: If the version is missing and its connector builds another version.
             TimeNetMissingParentError: If no registry provides a missing payload source.
-            TimeNetVersionConflictError: If the local registry holds a release of the copy with different files.
-            TimeNetFileError: If a copied file is damaged or no registry can replace a damaged local copy.
-            TimeFFormatError: If payload sources have conflicting file records or form a dependency cycle.
+            TimeNetVersionConflictError: If the local registry holds the same release with different files.
+            TimeNetFileError: If no registry can replace a damaged copy, or a copied file is damaged.
+            TimeFFormatError: If a payload source differs from its recorded files or the source links form a cycle.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by the plan and the copies)
         dataset_id, version = _resolve_ref(dataset_id, version)
         store = self._store
@@ -397,24 +443,8 @@ class TimeNet:
             TimeNetBuildError: If a build runs but fails.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by read_release and the builder)
         dataset_id, version = _resolve_ref(dataset_id, version)
-        try:
+        with self._hints(dataset_id):
             return TimeFReader(read_release(dataset_id, version, sources=self._sources, store=self._store))
-        except TimeNetAccessError as error:
-            error.hint = _access_hint(dataset_id, self._sources)
-            raise
-        except TimeNetFileError as error:
-            error.hint = self._file_hint(error)
-            raise
-        except TimeNetMissingParentError as error:
-            error.hint = _not_provided_hint(self._sources)
-            raise
-        except TimeNetDatasetNotFoundError as error:
-            # A subclass, such as TimeNetVersionUnavailableError, names its own fix.
-            if type(error) is not TimeNetDatasetNotFoundError:
-                raise
-            raise TimeNetDatasetNotFoundError(
-                f"{str(error).rstrip('.')}. {_not_provided_hint(self._sources)}"
-            ) from error
 
     def load(self, dataset_id: str, version: str | None = None) -> TimeFDataset:
         """Read a whole dataset version into memory, with every stored value loaded.
@@ -446,14 +476,38 @@ class TimeNet:
         with self.open(dataset_id, version) as reader:
             return reader.read(load=LoadPlan.ALL_EAGER)
 
-    def _catalog(self) -> BaseRegistry:
-        """Select a registry from the sources.
+    def plan_read(self, dataset_id: str, version: str | None = None) -> Plan:
+        """Return the plan of the read that :meth:`open` runs, without running it.
+
+        The call checks the file sizes of each release that it reads from a local registry.
+
+        Args:
+            dataset_id: The dataset ID, optionally ending with ``@<version>`` or ``@latest``.
+            version: An exact version, ``"latest"``, or ``None``, as in :meth:`open`.
 
         Returns:
-            The first registry other than the local registry, or the local registry if no other registry exists.
+            The plan, with one step per required release in execution order.
 
         Raises:
-            TimeFValidationError: If no source is a registry.
+            TimeNetAccessError: If a registry lists the release or a payload source but does not serve it.
+            TimeNetDatasetNotFoundError: If no source provides the release.
+            TimeNetVersionUnavailableError: If the version is unavailable and a connector declares another version.
+            TimeNetMissingParentError: If a required payload source or build parent is missing.
+            TimeNetFileError: If a required local file is missing or has the wrong size.
+            TimeFFormatError: If a payload source differs from the files recorded by the requested release.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by the plan of the read)
+        dataset_id, version = _resolve_ref(dataset_id, version)
+        with self._hints(dataset_id):
+            return plan_read(dataset_id, version, sources=self._sources, store=self._store)
+
+    def _catalog(self) -> BaseRegistry:
+        """Choose the registry to browse.
+
+        Returns:
+            The first registry other than the local registry, or the local registry if it is the only one.
+
+        Raises:
+            TimeFValidationError: If the sources contain no registry.
         """
         # TODO(adrian): Remove temporary glue which maps these methods onto one registry until
         # list() and search() ask every source. This registry gives the results of the client of
@@ -461,8 +515,71 @@ class TimeNet:
         registries = [source for source in self._sources if isinstance(source, BaseRegistry)]
         registry = next((registry for registry in registries if registry is not self._store), self._store)
         if registry is None:
-            raise TimeFValidationError("list(), get() and search() need a registry in the sources")
+            raise TimeFValidationError("list() and search() need a registry in the sources")
         return registry
+
+    @contextmanager
+    def _hints(self, dataset_id: str) -> Generator[None]:
+        """Add recovery hints to errors raised inside the block.
+
+        Args:
+            dataset_id: The dataset ID without a version suffix.
+
+        Yields:
+            Nothing.
+
+        Raises:
+            TimeNetAccessError: If access fails.
+            TimeNetFileError: If a file is missing or damaged.
+            TimeNetMissingParentError: If a required release is missing.
+            TimeNetDatasetNotFoundError: If the dataset is missing.
+        """
+        try:
+            yield
+        except TimeNetAccessError as error:
+            error.hint = _access_hint(dataset_id, self._sources)
+            raise
+        except TimeNetFileError as error:
+            error.hint = self._file_hint(error)
+            raise
+        except TimeNetMissingParentError as error:
+            error.hint = _not_provided_hint(self._sources)
+            raise
+        except TimeNetDatasetNotFoundError as error:
+            if type(error) is not TimeNetDatasetNotFoundError:
+                raise
+            raise TimeNetDatasetNotFoundError(
+                f"{str(error).rstrip('.')}. {_not_provided_hint(self._sources)}"
+            ) from error
+
+    def _manifest_or_release(self, dataset_id: str, version: str | None) -> Manifest | DatasetRef:
+        """Resolve a release to its manifest or reference.
+
+        Args:
+            dataset_id: The dataset ID without a version suffix.
+            version: An exact version, ``"latest"``, or ``None``, as in :meth:`open`.
+
+        Returns:
+            The manifest, or the release reference if only an installed connector provides it.
+
+        Raises:
+            TimeNetDatasetNotFoundError: If no source provides the release.
+            TimeNetAccessError: If a registry only lists the release and provides no manifest.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by raise_not_found)
+        answer = resolve_release(self._sources, dataset_id, version)
+        if isinstance(answer, NotFound):
+            raise_not_found(dataset_id, version, self._sources)
+        if isinstance(answer, NotServed):
+            if answer.manifest is None:
+                raise answer.access_error(dataset_id)
+            return answer.manifest
+        if isinstance(answer, FoundInConnector):
+            return answer.builder.release
+        return (
+            answer.manifest
+            if answer.manifest is not None
+            else answer.registry.get_manifest(dataset_id, str(answer.version))
+        )
 
     def _file_hint(self, error: TimeNetFileError) -> str | None:
         """Suggest how to replace a damaged release in the local registry.
