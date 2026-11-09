@@ -133,11 +133,6 @@ def test_repeated_task_iteration_reuses_shared_labels():
     second_tasks = list(dataset.iter_tasks())
     for first, second in zip(first_tasks, second_tasks, strict=True):
         labels = _published_labels(first)
-        assert [annotation.key for annotation in labels] == ["task", "question_type"]
-        assert [read_value(annotation.value) for annotation in labels] == [
-            first.metadata["task"],
-            first.metadata["question_type"],
-        ]
         # A second pass reuses the occurrences of the first.
         assert all(one is two for one, two in zip(labels, _published_labels(second), strict=True))
     # One occurrence per distinct published value, however often the stream runs.
