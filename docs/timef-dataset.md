@@ -210,7 +210,8 @@ and a Source or Signal that another Record owns. It then gives the Record and it
 validation error leaves the dataset unchanged.
 
 For a large corpus, `set_task_stream()` accepts a re-iterable task source. The writer validates and
-inserts that stream once without retaining every Task in memory.
+inserts that stream once without retaining every Task in memory. The stream can attach shared
+dataset annotations while it produces tasks, and the writer includes them in the release.
 
 ## Annotations
 
@@ -234,6 +235,47 @@ lead_i.annotate(
     )
 )
 ```
+
+### Shared dataset annotations
+
+Use `dataset.annotate_shared(annotation)` for metadata that many tasks reference, such as a
+question type or answer options. It returns the first equivalent occurrence already attached to
+the dataset, or attaches a new one. Pass that returned occurrence to the task:
+
+```python
+question_type = dataset.annotate_shared(
+    Annotation(key="question_type", value=row.question_type)
+)
+task = AnswerTask(
+    inputs=(record,),
+    targets=(row.answer,),
+    input_annotations=(question_type,),
+)
+```
+
+Matching includes key, value type, value, unit, description, metadata, source, confidence, and
+occurrence metadata. Loaded and imported occurrences also count. Text compares by value; only
+annotations of the requested key and value type need their text read for lookup. A lazy text
+loader must return consistent content on every call.
+
+Each compared annotation caches its comparison key, and the key holds the text that was read. That
+text stays in memory for as long as the annotation lives, also for a lazy handle loaded from a
+release. Replacing the dataset annotations rebuilds the sharing index without reading text, but it
+does not clear the keys of annotations that are still in use. Use sharing for short metadata that
+many tasks repeat, such as labels and answer options, and not for long text.
+
+Shared annotations keep first-registration order. A deterministic source order therefore gives
+deterministic annotation ordering, including after partial inspection or repeated task iteration.
+Sharing rejects time spans because dataset annotations have no single recording timeline.
+
+A task stream can call `annotate_shared()` on every pass. A failed write publishes nothing, while
+the occurrences already attached remain available for retry. Ordinary `annotate()` always creates
+a new occurrence. A separate `Annotation` with equal content is not an attached occurrence and
+cannot substitute for the returned object in task references.
+
+For repeated record metadata, attach an occurrence to each record instead. The writer deduplicates
+equal content while preserving ownership. The sharing index grows with registered annotations;
+this API does not bound the writer's existing task-reference buffering.
 
 ## Schema and persistence
 
