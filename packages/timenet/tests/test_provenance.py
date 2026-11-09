@@ -208,7 +208,7 @@ def test_a_manifest_without_the_commit_of_timenet_is_refused():
         TimeNetSnapshot.from_source_map({"timenet-connectors": _CLEAN})
 
 
-def test_a_field_must_hold_the_commit_of_its_own_distribution():
+def test_a_field_must_hold_the_commit_of_its_own_package():
     connectors = PackageSnapshot(package_name="timenet-connectors", source=_CLEAN)
     with pytest.raises(ValidationError, match="the field for timenet holds the commit of timenet-connectors"):
         TimeNetSnapshot(timenet=connectors)

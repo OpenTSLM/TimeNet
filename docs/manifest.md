@@ -58,8 +58,8 @@ every installed package with its version, and the git commit of the TimeNet code
 `BuildEnvironment.capture` collects this data. Like `value_encoding`, `build_env` is provenance
 only. No code reads it to interpret the data.
 
-`build_env.git` records the git commit of each installed TimeNet distribution, keyed by
-distribution name. A distribution that is not installed has no entry:
+`build_env.git` records the git commit of each installed TimeNet package, keyed by package
+name. A package that is not installed has no entry:
 
 ```json
 "git": {
@@ -68,7 +68,7 @@ distribution name. A distribution that is not installed has no entry:
 }
 ```
 
-Each distribution records the commit of the code that runs:
+Each package records the commit of the code that runs:
 
 - An editable install, such as a workspace checkout, asks git. `contains_local_changes` is
   `true` if the package directory has uncommitted changes, untracked files included. A change
@@ -80,7 +80,7 @@ Each distribution records the commit of the code that runs:
   builds the wheel, and records the state of the checkout at that time. `make build` and the
   publish workflow run the script.
 
-If the commit of an installed distribution is unknown, the build fails and names the reason. For
+If the commit of an installed package is unknown, the build fails and names the reason. For
 example, git is not on `PATH`, git fails in the checkout, or a plain `uv build` produced the wheel,
 so the package has no `_build_info.json`.
 

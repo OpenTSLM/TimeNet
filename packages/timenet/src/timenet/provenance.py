@@ -200,11 +200,7 @@ class PackageSnapshot(Snapshot):
 
 
 class TimeNetSnapshot(Snapshot):
-    """The commit of each installed TimeNet package, read at one point in time.
-
-    Each build records it in its manifest. Its fields are the one list of the packages that count
-    as TimeNet code. Each field carries the name of its package, as its alias or as its own name.
-    """
+    """The commit of each installed TimeNet package, read at one point in time."""
 
     timenet: PackageSnapshot
     timenet_connectors: PackageSnapshot | None = Field(default=None, alias="timenet-connectors")
