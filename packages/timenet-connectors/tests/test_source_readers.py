@@ -1,11 +1,13 @@
 from contextlib import closing
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from pydantic import ValidationError
 import pytest
 
 from timenet.errors import TimeNetConnectorError
-from timenet_connectors.sources.readers import CsvDataReader, DataRow
+from timenet_connectors.sources.readers import CsvDataReader, DataRow, ParquetReader
 
 
 class Row(DataRow):
@@ -75,3 +77,68 @@ def test_closing_a_partially_consumed_csv_reader_closes_its_file(tmp_path, monke
         assert next(rows) == Row(name="first", count=1)
         assert not handles[0].closed
     assert handles[0].closed
+
+
+def test_parquet_reads_rows_in_order(tmp_path):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"name": ["first", "second"], "count": [1, 2]}), path)
+    reader = ParquetReader(path, Row, strict=True)
+    assert list(reader.iter_rows()) == [Row(name="first", count=1), Row(name="second", count=2)]
+
+
+def test_parquet_strict_validation_and_error_context(tmp_path):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"name": ["sensor"], "count": ["42"]}), path)
+    assert list(ParquetReader(path, Row).iter_rows()) == [Row(name="sensor", count=42)]
+    with pytest.raises(TimeNetConnectorError, match="row 1") as exc:
+        list(ParquetReader(path, Row, strict=True).iter_rows())
+    assert str(path) in str(exc.value)
+    assert exc.value.__cause__ is not None
+
+
+def test_parquet_reads_only_selected_columns(tmp_path):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"name": ["x"], "count": [1], "other": [3]}), path)
+    assert list(ParquetReader(path, Row, columns=("name", "count")).iter_rows()) == [Row(name="x", count=1)]
+
+
+def test_parquet_rejects_missing_selected_columns(tmp_path):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"name": ["x"], "count": [1]}), path)
+    with pytest.raises(TimeNetConnectorError, match="missing columns"):
+        list(ParquetReader(path, Row, columns=("missing",)).iter_rows())
+
+
+def test_parquet_rejects_duplicate_columns(tmp_path):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table([pa.array(["x"]), pa.array(["y"])], names=["name", "name"]), path)
+    with pytest.raises(TimeNetConnectorError, match="duplicate Parquet column"):
+        list(ParquetReader(path, Row).iter_rows())
+
+
+def test_parquet_reads_across_batches_in_order(tmp_path):
+    path = tmp_path / "source.parquet"
+    count = 65537
+    pq.write_table(pa.table({"name": ["sensor"] * count, "count": range(count)}), path)
+    rows = ParquetReader(path, Row).iter_rows()
+    for expected_count, row in enumerate(rows):
+        assert row == Row(name="sensor", count=expected_count)
+    assert expected_count == count - 1
+
+
+def test_closing_a_partially_consumed_parquet_reader_closes_its_file(tmp_path, monkeypatch):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"name": ["first", "second"], "count": [1, 2]}), path)
+    opened_files = []
+    open_parquet = pq.ParquetFile
+
+    def track_open(*args, **kwargs):
+        parquet = open_parquet(*args, **kwargs)
+        opened_files.append(parquet)
+        return parquet
+
+    monkeypatch.setattr(pq, "ParquetFile", track_open)
+    with closing(ParquetReader(path, Row).iter_rows()) as rows:
+        assert next(rows) == Row(name="first", count=1)
+        assert not opened_files[0].closed
+    assert opened_files[0].closed
