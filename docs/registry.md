@@ -103,7 +103,9 @@ with its payload sources, use [`TimeNet.open()`](client.md#open-load-or-download
 over the versioned REST contract (`GET /api/v1/datasets`, `/api/v1/datasets/{id}/{version}/manifest`,
 `.../download/{relpath}`); `S3Registry` serves the same layout under an `s3://bucket/prefix` root. The
 S3 backend has no catalog: its `has_catalog` is `False`, and `list_datasets` and `search` raise
-`NotImplementedError`.
+`NotImplementedError`. `TimeNet.list()` and `TimeNet.search()` leave a registry without a catalog
+out, with a `CatalogWarning` that names it. If no source of the list has a catalog, they raise
+`TimeNetNoCatalogError`.
 
 A dataset id is an `org/name` pair, for example `chengsenwang/tsqa`. The id nests one level deep on
 disk, at `<root>/chengsenwang/tsqa/<version>/`. `list_datasets` finds these ids at any depth. Use

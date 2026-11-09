@@ -294,6 +294,7 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeNetError` | Base class for TimeNet failures. |
 | `TimeNetRegistryError` | A registry cannot complete an operation. |
 | `TimeNetUnreachableError` | A request to a registry or its storage failed on the network. The original error is its cause. A `TimeNetRegistryError`. |
+| `TimeNetNoCatalogError` | No source of a list or a search has a catalog. The hint names the read of an exact release. A `TimeNetRegistryError`. |
 | `TimeNetDatasetNotFoundError` | A dataset ID or version does not exist. |
 | `TimeNetVersionUnavailableError` | The installed connector of a dataset builds another version than the requested one. A `TimeNetDatasetNotFoundError` and a `TimeFValidationError`. |
 | `TimeNetVersionConflictError` | A registry already holds a release with other files or another card than a copy that would go there. `difference` is `ReleaseDifference.FILES` or `ReleaseDifference.CARD`, and `registry_location` is the location of that registry. For a publish, the hint asks for a new version. For a copy into the local registry, the hint names the release folder to delete. |
@@ -326,5 +327,9 @@ behavior. It derives from `TimeNetWarning` and `UserWarning`.
 
 `ConnectorCardWarning` reports a connector card that cannot be read. The list of installed
 connectors leaves its dataset out, so the card fails only its own dataset.
+
+`CatalogWarning` reports a source without a catalog, which `TimeNet.list()` and
+`TimeNet.search()` leave out. Both warnings point at the first line of the call stack outside the
+`timenet` package, which is usually your own call.
 
 See the [API reference for `timenet.types`](api/timenet.types.md) for all symbols.

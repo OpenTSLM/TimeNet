@@ -119,9 +119,12 @@ dataset IDs, and tags. See [Registry search](registry.md#search) for their match
 It reads only for a row whose card matches the other filters, and only until `limit` rows match. A
 connector card has no manifest, so it never matches these two filters.
 
-The calls ask the sources one after another, in order. If two sources list a dataset at the same
-version, the row of the earlier source stays. A listed version can be newer than the version that
-`open()` reads without a version. To query one registry alone, open it and ask it:
+The calls ask the sources one after another, in order. A registry without a catalog, such as an
+S3 registry, is left out with a `CatalogWarning`. If no source has a catalog, the calls raise
+`TimeNetNoCatalogError`, and its hint names `open('<id>@<version>')`, the read of an exact release.
+If two sources list a dataset at the same version, the row of the earlier source stays. A listed
+version can be newer than the version that `open()` reads without a version. To query one registry
+alone, open it and ask it:
 
 ```python
 from timenet.registry import open_registry
