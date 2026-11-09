@@ -1,3 +1,4 @@
+import sys
 from typing import Any, TypeVar, cast
 
 from hypothesis import given, strategies as st
@@ -6,7 +7,15 @@ import pint
 from pydantic import BaseModel, ValidationError
 import pytest
 
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles, PayloadSource
+from timenet.manifest import (
+    BuildEnvironment,
+    FilePart,
+    GitSource,
+    Manifest,
+    ManifestCounts,
+    ManifestFiles,
+    PayloadSource,
+)
 from timenet.schemas import MANIFEST_SCHEMA
 from timenet.types import (
     AnnotationDescriptor,
@@ -31,6 +40,11 @@ from timenet.values_backends import ValuesBackend
 
 
 _CONTROL = (FilePart(path="control.duckdb", checksum="sha256:" + "0" * 64, size=5),)
+_BUILD_ENV = BuildEnvironment(
+    python="3.13.1",
+    packages={"timenet": "0.1.0"},
+    git={"timenet": GitSource(sha="a" * 40, contains_local_changes=False)},
+)
 
 _ModelT = TypeVar("_ModelT", bound=BaseModel)
 
@@ -89,6 +103,7 @@ def _manifest(*, values_backend: str = ValuesBackend.PARQUET) -> Manifest:
             ),
         ),
         values_backend=cast("ValuesBackend", values_backend),
+        build_env=_BUILD_ENV,
         timef_format_version=1,
     )
 
@@ -161,6 +176,7 @@ def test_missing_values_round_trip_at_format_version_1():
         metadata=base.metadata,
         files=base.files,
         dataset_schema=_replace(base.dataset_schema, time_series_specs=(spec,)),
+        build_env=_BUILD_ENV,
         timef_format_version=1,
     )
     assert manifest.timef_format_version == 1
@@ -299,6 +315,7 @@ def test_direct_construction_validates_format_version():
             dataset_id="x",
             metadata=_manifest().metadata,
             files=_manifest().files,
+            build_env=_BUILD_ENV,
             timef_format_version=99,
         )
 
@@ -309,11 +326,12 @@ def test_dataset_id_must_match_metadata():
             dataset_id="other/dataset",
             metadata=_manifest().metadata,
             files=_manifest().files,
+            build_env=_BUILD_ENV,
             timef_format_version=1,
         )
 
 
-@pytest.mark.parametrize("missing", ["timef_format_version", "dataset_id", "metadata", "files"])
+@pytest.mark.parametrize("missing", ["timef_format_version", "dataset_id", "metadata", "files", "build_env"])
 def test_model_validate_requires_core_blocks(missing):
     d = _manifest().to_dict()
     del d[missing]
@@ -457,6 +475,7 @@ def test_codec_roundtrip_property(version, records, task_counts):
         ),
         counts=ManifestCounts(records=records, tasks=task_counts),
         files=ManifestFiles(control=_CONTROL),
+        build_env=_BUILD_ENV,
         timef_format_version=1,
     )
     assert Manifest.model_validate_json(manifest.to_json()) == manifest
@@ -483,8 +502,12 @@ def test_bad_dict_block_names_itself(block):
         Manifest.model_validate(d)
 
 
-def test_build_env_defaults_to_empty():
-    assert _manifest().build_env == {}
+def test_build_env_captures_the_running_python_and_the_installed_packages():
+    build_env = BuildEnvironment.capture(git=_BUILD_ENV.git)
+    assert build_env.python == ".".join(str(part) for part in sys.version_info[:3])
+    assert build_env.packages["timenet"]
+    assert list(build_env.packages) == sorted(build_env.packages)
+    assert build_env.git == _BUILD_ENV.git
 
 
 def test_build_env_round_trips():
@@ -496,9 +519,19 @@ def test_build_env_round_trips():
 @pytest.mark.parametrize(
     "change",
     [
-        {"build_env": {"python": 313}},
-        {"build_env": {"git": {"timenet": {"sha": "4818e37f", "contains_local_changes": False}}}},
-        {"build_env": {"git": {"timenet": {"sha": "a" * 40, "contains_local_changes": "no"}}}},
+        {"build_env": {**_BUILD_ENV.model_dump(), "python": 313}},
+        {
+            "build_env": {
+                **_BUILD_ENV.model_dump(),
+                "git": {"timenet": {"sha": "4818e37f", "contains_local_changes": False}},
+            }
+        },
+        {
+            "build_env": {
+                **_BUILD_ENV.model_dump(),
+                "git": {"timenet": {"sha": "a" * 40, "contains_local_changes": "no"}},
+            }
+        },
         {"value_encoding": {"ecg_lead": "zip"}},
     ],
 )
@@ -508,17 +541,16 @@ def test_direct_manifest_rejects_invalid_provenance_blocks(change):
 
 
 def test_to_dict_copies_build_env():
-    build_env = {"python": "3.11.9", "packages": {"timenet": "0.1.0"}}
-    d = _replace(_manifest(), build_env=build_env).to_dict()
-    d["build_env"]["python"] = "2.7.0"
-    assert build_env["python"] == "3.11.9"
+    manifest = _manifest()
+    manifest.to_dict()["build_env"]["packages"]["timenet"] = "2.7.0"
+    assert manifest.build_env.packages["timenet"] == "0.1.0"
 
 
 @pytest.mark.parametrize("method", ["to_dict", "to_json"])
 @pytest.mark.parametrize(
     "mutate",
     [
-        lambda manifest: manifest.build_env.update(python=313),
+        lambda manifest: manifest.build_env.packages.update(timenet=313),
         lambda manifest: manifest.counts.tasks.update(classification=-1),
     ],
 )

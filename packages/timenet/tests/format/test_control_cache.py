@@ -6,7 +6,7 @@ from timenet.format.control_cache import materialize_control
 from timenet.format.control_writer import DuckDBControlWriter
 from timenet.format.storage import StorageSources
 from timenet.format.stored_values import PackedValueWriter
-from timenet.manifest import FilePart, Manifest, ManifestFiles
+from timenet.manifest import BuildEnvironment, FilePart, Manifest, ManifestFiles
 from timenet.registry.version import DatasetVersion
 
 from .test_control_writer import _dataset
@@ -22,6 +22,7 @@ def test_local_control_database_uses_its_existing_path(tmp_path):
         files=ManifestFiles(
             control=(FilePart(path=path.name, checksum=file_checksum(path), size=path.stat().st_size),),
         ),
+        build_env=BuildEnvironment(python="3.13.1", packages={}, git={}),
         timef_format_version=1,
     )
     version = DatasetVersion(

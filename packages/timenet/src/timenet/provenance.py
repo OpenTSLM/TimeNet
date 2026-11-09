@@ -1,109 +1,156 @@
-"""Describe the environment a build ran in, for the manifest's provenance block."""
+"""Read the git commit of the installed TimeNet code, for the manifest's ``build_env.git`` block.
 
-from collections.abc import Mapping
+Two layers do this. :class:`InstalledDistribution` and its :class:`InstallSource` read the commit
+of any one installed package. The snapshot types (:class:`PackageSnapshot`, :class:`GroupSnapshot`,
+and :class:`TimeNetSnapshot`) are typed views of the commits that a manifest records.
+"""
+
+from abc import ABC, abstractmethod
 from dataclasses import dataclass
-from importlib.metadata import Distribution, PackageNotFoundError, distributions
+from importlib.metadata import Distribution, PackageNotFoundError
 from pathlib import Path
-import platform
 import shutil
 import subprocess  # ruff: ignore[suspicious-subprocess-import] - the commands are fixed argument vectors
-from typing import Self
+import sys
+from typing import ClassVar, Self
 from urllib.parse import urlparse
 from urllib.request import url2pathname
 
-from pydantic import BaseModel, ConfigDict, StrictBool, StrictStr, ValidationError
+from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError
 
 from timenet.errors import TimeNetBuildError
-from timenet.manifest import BuildEnvironment, GitSource, GitSourceMap
+from timenet.manifest import DistributionName, GitSource, GitSourceMap
 
 
 _GIT_TIMEOUT_S = 30
 
 
-def build_env() -> BuildEnvironment:
-    """Describe this process's Python version, installed packages, and TimeNet commits.
+@dataclass(frozen=True)
+class InstallSource(ABC):
+    """How one distribution was installed. The install type decides where its commit is recorded."""
 
-    Under an isolated build the recorded set is exactly the base, the connector's requirements, and
-    their transitives. Under ``--no-isolation`` it is the whole ambient environment, which is noisier
-    but still the truth about what produced the dataset.
+    distribution: DistributionName
 
-    Returns:
-        A dict with ``python`` (the interpreter version), ``packages`` (name -> version, sorted), and
-        ``git`` (see :meth:`GitSnapshot.recorded_sources`).
-    """
-    packages: dict[str, str] = {}
-    for dist in distributions():
-        name = dist.metadata["Name"]
-        if name:
-            packages[name] = dist.version
-    return {
-        "python": platform.python_version(),
-        "packages": dict(sorted(packages.items())),
-        "git": GitSnapshot.read().recorded_sources(),
-    }
+    @abstractmethod
+    def read_git_source(self) -> GitSource:
+        """Return the commit of the code that this install runs. Raises ``TimeNetBuildError`` if it is unknown."""
+
+    def _unknown_commit(self, reason: str) -> TimeNetBuildError:
+        return TimeNetBuildError(
+            f"cannot find the git commit of {self.distribution}, which each build records in its manifest: {reason}"
+        )
 
 
 @dataclass(frozen=True)
-class UnknownGitSource:
-    """Why the commit of an installed TimeNet distribution is unknown."""
+class EditableCheckout(InstallSource):
+    """An editable install of a git checkout. Git reports the commit and the local changes."""
 
-    reason: str
+    project_directory: Path
+
+    def read_git_source(self) -> GitSource:
+        """Ask git for the commit of the checkout and whether the package directory has changes."""
+        git = shutil.which("git")
+        if git is None:
+            raise self._unknown_commit(
+                f"it is installed editable from {self.project_directory}, and git is not on PATH. Install git, "
+                f"or install {self.distribution} from a wheel that scripts/build_dists.py built"
+            )
+        try:
+            sha = _run_git(git, self.project_directory, "rev-parse", "HEAD")
+            # The pathspec "." scopes the status to the package directory, untracked files included. A
+            # scratch file elsewhere in the repository does not count as a local change.
+            status = _run_git(git, self.project_directory, "status", "--porcelain", "--untracked-files=all", "--", ".")
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip() or str(exc)
+            raise self._unknown_commit(f"git failed in {self.project_directory}: {detail}") from exc
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise self._unknown_commit(f"git failed in {self.project_directory}: {exc}") from exc
+        return GitSource(sha=sha, contains_local_changes=bool(status))
 
 
-class TimeNetDistribution:
-    """One installed TimeNet distribution, and the commit of the code it runs.
+@dataclass(frozen=True)
+class GitInstall(InstallSource):
+    """An install from a git URL (``pip install git+https://...``). Pip recorded the commit."""
 
-    Each install type finds its commit in its own place:
+    commit_id: str
 
-    - An editable install asks git. ``contains_local_changes`` covers the package directory only,
-      so a scratch file elsewhere in the repository does not set it.
-    - A git install (``pip install git+https://...``) has the commit that pip recorded.
-    - Any other install, such as a wheel or ``pip install ./packages/timenet``, reads the
-      ``_build_info.json`` that ``scripts/build_dists.py`` wrote into the package.
-    """
+    def read_git_source(self) -> GitSource:
+        """Return the commit that pip installed, which has no local changes."""
+        try:
+            return GitSource(sha=self.commit_id, contains_local_changes=False)
+        except ValidationError as exc:
+            raise TimeNetBuildError(f"{self.distribution} records an invalid commit in direct_url.json: {exc}") from exc
 
-    NAMES = ("timenet", "timenet-connectors")
-    """The distributions whose git commit a build records."""
 
-    BUILD_INFO_FILE = "_build_info.json"
-    """The commit record in each package of a wheel. ``scripts/build_dists.py`` uses the same name."""
+@dataclass(frozen=True)
+class BuiltPackage(InstallSource):
+    """A wheel, or a path install that is not editable. The package carries its commit record."""
+
+    BUILD_INFO_FILE: ClassVar[str] = "_build_info.json"
+    """The commit record in each built package. ``scripts/build_dists.py`` writes it."""
+
+    build_info: Path
+
+    def read_git_source(self) -> GitSource:
+        """Read the commit that ``scripts/build_dists.py`` wrote into the package."""
+        if not self.build_info.is_file():
+            raise self._unknown_commit(
+                f"the installed package carries no {self.BUILD_INFO_FILE}. Build it with `make build` or "
+                f"scripts/build_dists.py, or upgrade {self.distribution} to a release that records its commit"
+            )
+        try:
+            return GitSource.load_from_build_info(self.build_info)
+        except ValidationError as exc:
+            raise TimeNetBuildError(
+                f"{self.distribution} records an invalid commit in {self.build_info}: {exc}"
+            ) from exc
+
+
+class InstalledDistribution:
+    """One distribution that is installed in this interpreter."""
 
     def __init__(self, distribution: Distribution) -> None:
         self._distribution = distribution
 
     @classmethod
-    def installed(cls) -> list[Self]:
-        """Return each TimeNet distribution that is installed in this interpreter."""
-        installed: list[Self] = []
-        for name in cls.NAMES:
-            try:
-                installed.append(cls(Distribution.from_name(name)))
-            except PackageNotFoundError:
-                continue
-        return installed
+    def from_name(cls, name: DistributionName) -> Self:
+        """Find an installed distribution. Raises ``PackageNotFoundError`` if it is not installed."""
+        return cls(Distribution.from_name(name))
 
     @property
-    def name(self) -> str:
+    def name(self) -> DistributionName:
         """The distribution name, for example ``timenet-connectors``."""
         return self._distribution.metadata["Name"]
+
+    @property
+    def version(self) -> str:
+        """The installed version."""
+        return self._distribution.version
+
+    def install_source(self) -> InstallSource:
+        """Return how this distribution was installed, which decides where its commit is recorded."""
+        direct_url = self._read_direct_url()
+        if direct_url is not None:
+            commit_id = direct_url.installed_git_commit()
+            if commit_id is not None:
+                return GitInstall(self.name, commit_id)
+            project_directory = direct_url.local_directory()
+            if direct_url.is_editable() and project_directory is not None:
+                return EditableCheckout(self.name, project_directory)
+        # An install from an index has no direct_url.json. A path install that is not editable
+        # copied the package, so the live checkout can differ from the code that runs.
+        module = self.name.replace("-", "_")
+        build_info = self._distribution.locate_file(f"{module}/{BuiltPackage.BUILD_INFO_FILE}")
+        return BuiltPackage(self.name, Path(str(build_info)))
+
+    def read_git_source(self) -> GitSource:
+        """Return the commit of the code that this distribution runs. Raises ``TimeNetBuildError`` if it is unknown."""
+        return self.install_source().read_git_source()
 
     def path_to_ondisk_project_directory(self) -> Path | None:
         """Return the project directory of an editable or local path install, else ``None``."""
         direct_url = self._read_direct_url()
         return None if direct_url is None else direct_url.local_directory()
-
-    def read_git_source(self) -> GitSource | UnknownGitSource:
-        """Return the commit of the code that this distribution runs, or why it is unknown."""
-        direct_url = self._read_direct_url()
-        if direct_url is None:
-            return self._read_build_info_git_source()
-        installed_commit = direct_url.installed_git_commit()
-        if installed_commit is not None:
-            return self._git_source_of_installed_commit(installed_commit)
-        project_directory = direct_url.local_directory()
-        if direct_url.is_editable() and project_directory is not None:
-            return TimeNetDistribution._read_checkout_git_source(project_directory)
-        return self._read_build_info_git_source()
 
     def _read_direct_url(self) -> "_DirectUrl | None":
         """Read the PEP 610 ``direct_url.json``, or return ``None`` for an install from an index."""
@@ -115,58 +162,106 @@ class TimeNetDistribution:
         except ValidationError as exc:
             raise TimeNetBuildError(f"{self.name} has a malformed direct_url.json: {exc}") from exc
 
-    def _git_source_of_installed_commit(self, sha: str) -> GitSource:
-        """Return the clean commit record of a git install, and raise if pip recorded an invalid sha."""
+
+class Snapshot(BaseModel, ABC):
+    """The commit of some installed code, read at one point in time."""
+
+    model_config = ConfigDict(frozen=True, validate_by_name=True)
+
+    @abstractmethod
+    def to_source_map(self) -> GitSourceMap:
+        """Return the commits in the form that a manifest records."""
+
+
+class PackageSnapshot(Snapshot):
+    """The commit of one installed distribution."""
+
+    distribution: DistributionName
+    source: GitSource
+
+    @classmethod
+    def read(cls, distribution: DistributionName) -> Self:
+        """Read the commit of an installed distribution. Raises ``TimeNetBuildError`` if it is not installed."""
+        snapshot = cls.read_if_installed(distribution)
+        if snapshot is None:
+            raise TimeNetBuildError(
+                f"cannot find the git commit of {distribution}: it is not installed in {sys.executable}"
+            )
+        return snapshot
+
+    @classmethod
+    def read_if_installed(cls, distribution: DistributionName) -> Self | None:
+        """Read the commit of a distribution, or return ``None`` if it is not installed."""
         try:
-            return GitSource(sha=sha, contains_local_changes=False)
+            installed = InstalledDistribution.from_name(distribution)
+        except PackageNotFoundError:
+            return None
+        return cls(distribution=distribution, source=installed.read_git_source())
+
+    def to_source_map(self) -> GitSourceMap:
+        """Return this package's commit in the form that a manifest records."""
+        return {self.distribution: self.source}
+
+
+class GroupSnapshot(Snapshot, ABC):
+    """The commits of a fixed group of distributions, one :class:`PackageSnapshot` field each.
+
+    A field takes its name from its distribution, or carries the distribution name as its alias. A
+    field that may be ``None`` is a distribution that need not be installed.
+    """
+
+    @classmethod
+    @abstractmethod
+    def read(cls) -> Self:
+        """Read the commit of each distribution in the group."""
+
+    @classmethod
+    def distributions(cls) -> tuple[DistributionName, ...]:
+        """Return the name of each distribution in the group."""
+        return tuple(field.alias or name for name, field in cls.model_fields.items())
+
+    @classmethod
+    def from_source_map(cls, sources: GitSourceMap) -> Self:
+        """Return the typed view of the commits that a manifest records."""
+        packages = {name: PackageSnapshot(distribution=name, source=source) for name, source in sources.items()}
+        try:
+            # The field aliases map each distribution name to its field.
+            return cls.model_validate(packages)
         except ValidationError as exc:
-            raise TimeNetBuildError(f"{self.name} records an invalid commit in direct_url.json: {exc}") from exc
+            missing = ", ".join(str(error["loc"][0]) for error in exc.errors())
+            raise TimeNetBuildError(f"the manifest records no git commit for {missing}") from exc
 
-    @staticmethod
-    def _read_checkout_git_source(project_directory: Path) -> GitSource | UnknownGitSource:
-        """Ask git for the commit of a checkout and whether its package directory has changes."""
-        git = shutil.which("git")
-        if git is None:
-            return UnknownGitSource("git is not on PATH")
-        try:
-            sha = _run_git(git, project_directory, "rev-parse", "HEAD")
-            # The pathspec "." scopes the status to the package directory, untracked files included.
-            status = _run_git(git, project_directory, "status", "--porcelain", "--untracked-files=all", "--", ".")
-        except subprocess.CalledProcessError as exc:
-            return UnknownGitSource(f"git failed in {project_directory}: {(exc.stderr or '').strip() or exc}")
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            return UnknownGitSource(f"git failed in {project_directory}: {exc}")
-        return GitSource(sha=sha, contains_local_changes=bool(status))
+    def to_source_map(self) -> GitSourceMap:
+        """Return the commit of each installed distribution in the group."""
+        sources: GitSourceMap = {}
+        for snapshot in self._snapshots():
+            sources.update(snapshot.to_source_map())
+        return sources
 
-    def _read_build_info_git_source(self) -> GitSource | UnknownGitSource:
-        """Read the commit that ``scripts/build_dists.py`` wrote into the installed package."""
-        module = self.name.replace("-", "_")
-        path = Path(str(self._distribution.locate_file(f"{module}/{self.BUILD_INFO_FILE}")))
-        if not path.is_file():
-            return UnknownGitSource(f"the installed package carries no {self.BUILD_INFO_FILE}")
-        try:
-            return GitSource.load_from_build_info(path)
-        except ValidationError as exc:
-            raise TimeNetBuildError(f"{self.name} records an invalid commit in {path}: {exc}") from exc
+    def _snapshots(self) -> list[Snapshot]:
+        """Return the snapshot of each installed distribution in the group."""
+        children = (getattr(self, name) for name in type(self).model_fields)
+        return [child for child in children if child is not None]
 
 
-@dataclass(frozen=True)
-class GitSnapshot:
-    """The commit of each installed TimeNet distribution, read at one point in time."""
+class TimeNetSnapshot(GroupSnapshot):
+    """The commit of each installed TimeNet distribution, read at one point in time.
 
-    sources: Mapping[str, GitSource | UnknownGitSource]
-    """The commit, or why it is unknown, keyed by distribution name."""
+    Each build records it in its manifest. This class is the one list of the distributions that
+    count as TimeNet code.
+    """
+
+    timenet: PackageSnapshot
+    timenet_connectors: PackageSnapshot | None = Field(default=None, alias="timenet-connectors")
+    """``None`` if timenet-connectors is not installed."""
 
     @classmethod
     def read(cls) -> Self:
-        """Read the commit of each installed TimeNet distribution. This is the only call that runs git."""
+        """Read the commit of each installed TimeNet distribution. Raises ``TimeNetBuildError`` if one is unknown."""
         return cls(
-            {distribution.name: distribution.read_git_source() for distribution in TimeNetDistribution.installed()}
+            timenet=PackageSnapshot.read("timenet"),
+            timenet_connectors=PackageSnapshot.read_if_installed("timenet-connectors"),
         )
-
-    def recorded_sources(self) -> GitSourceMap:
-        """Return the known commits, in the form that a manifest records."""
-        return {name: source for name, source in self.sources.items() if isinstance(source, GitSource)}
 
 
 class _DirInfo(BaseModel):

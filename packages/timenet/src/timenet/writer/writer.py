@@ -27,8 +27,8 @@ from timenet.format.duckdb import CONTROL_FILE, connect_control
 from timenet.format.storage import StorageSources
 from timenet.format.stored_array import StoredArray
 from timenet.format.stored_values import PackedValueWriter
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles, PayloadSource
-from timenet.provenance import build_env
+from timenet.manifest import BuildEnvironment, FilePart, Manifest, ManifestCounts, ManifestFiles, PayloadSource
+from timenet.provenance import TimeNetSnapshot
 from timenet.types.ids import EntityId
 from timenet.types.reference_keys import SourceKey
 from timenet.types.references import DatasetRef
@@ -475,7 +475,7 @@ class TimeFWriter:
             payload_sources=self._storage_sources.sources,
             parent_cards=import_state.parent_cards,
             lineage=tuple(import_state.lineage.values()),
-            build_env=build_env(),
+            build_env=BuildEnvironment.capture(git=TimeNetSnapshot.read().to_source_map()),
             timef_format_version=1,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())

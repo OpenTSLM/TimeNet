@@ -23,7 +23,7 @@ from uv import find_uv_bin
 
 from timenet.errors import TimeNetBuildError, TimeNetIsolationError
 from timenet.manifest import PayloadSource
-from timenet.provenance import TimeNetDistribution
+from timenet.provenance import InstalledDistribution, TimeNetSnapshot
 from timenet.types.references import DatasetRef
 from timenet_connectors.discovery import requirements_for
 
@@ -202,16 +202,16 @@ def _base_args() -> tuple[str, ...]:
     # Pin TimeNet to the parent's own versions, so the code that writes the TimeF bytes is the code
     # that reads them back. timenet-connectors depends on timenet[build], so the card-YAML
     # dependencies arrive transitively and the extra never needs naming here.
-    for name in TimeNetDistribution.NAMES:
+    for name in TimeNetSnapshot.distributions():
         try:
-            dist = Distribution.from_name(name)
+            installed = InstalledDistribution.from_name(name)
         except PackageNotFoundError as exc:
             raise TimeNetIsolationError(
                 f"cannot make a build environment: {name} is not installed in {sys.executable}."
             ) from exc
-        source = TimeNetDistribution(dist).path_to_ondisk_project_directory()
+        source = installed.path_to_ondisk_project_directory()
         if source is not None:
             args += ["--with-editable", str(source)]
         else:
-            args += ["--with", f"{name}=={dist.version}"]
+            args += ["--with", f"{name}=={installed.version}"]
     return tuple(args)

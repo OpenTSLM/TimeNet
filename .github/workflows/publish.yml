@@ -78,8 +78,8 @@ jobs:
               python -c "import $module; print('smoke ok:', $module.__name__)"
             uv run --isolated --no-project "${args[@]}" python -c "
           from timenet.manifest import GitSource
-          from timenet.provenance import GitSnapshot
-          commit = GitSnapshot.read().recorded_sources().get('$dist')
+          from timenet.provenance import PackageSnapshot
+          commit = PackageSnapshot.read('$dist').source
           expected = GitSource(sha='$GITHUB_SHA', contains_local_changes=False)
           assert commit == expected, f'$dist records {commit}, expected {expected}'
           print('commit ok:', commit)"

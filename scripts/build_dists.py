@@ -20,7 +20,7 @@ PACKAGES = {
     ROOT / "packages" / "timenet": "timenet",
     ROOT / "packages" / "timenet-connectors": "timenet_connectors",
 }
-# Keep in step with timenet.provenance.TimeNetDistribution.BUILD_INFO_FILE, which reads the file.
+# Keep in step with timenet.provenance.BuiltPackage.BUILD_INFO_FILE, which reads the file.
 BUILD_INFO_FILE = "_build_info.json"
 
 

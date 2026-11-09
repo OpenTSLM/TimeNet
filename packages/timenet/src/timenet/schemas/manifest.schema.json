@@ -86,7 +86,7 @@
     },
     "BuildEnvironment": {
       "additionalProperties": false,
-      "description": "Build-provenance fields recorded in a manifest.",
+      "description": "The Python version, the installed packages, and the TimeNet commits that produced a version.",
       "properties": {
         "python": {
           "title": "Python",
@@ -107,6 +107,11 @@
           "type": "object"
         }
       },
+      "required": [
+        "python",
+        "packages",
+        "git"
+      ],
       "title": "BuildEnvironment",
       "type": "object"
     },
@@ -779,6 +784,7 @@
     "dataset_id",
     "metadata",
     "files",
+    "build_env",
     "timef_format_version"
   ],
   "title": "Manifest",
