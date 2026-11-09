@@ -9,7 +9,7 @@ from pathlib import Path
 import tempfile
 
 from timenet.errors import TimeFValidationError, TimeNetMissingParentError, TimeNetVersionConflictError
-from timenet.manifest import Manifest, same_release
+from timenet.manifest import Manifest
 from timenet.progress import BytesMoved, ProgressCallback, StepFinished, StepStarted
 from timenet.registry._paths import release_dir
 from timenet.registry.base import BaseRegistry
@@ -240,11 +240,11 @@ def _needs_copy(
     held = dest.find_manifest(reference)
     if held is None:
         return True
-    files_differ = _file_records(held) != _file_records(manifest)
-    if not files_differ and same_release(held, manifest):
+    difference = held.difference_from(manifest)
+    if difference is None:
         return not _complete(reference, manifest, dest)
     needed_by = None if reference == requested else requested
-    raise TimeNetVersionConflictError(reference, str(dest), str(source), needed_by, "files" if files_differ else "card")
+    raise TimeNetVersionConflictError(reference, str(dest), dest.location, str(source), difference, needed_by)
 
 
 def _complete(reference: DatasetRef, manifest: Manifest, dest: WritableRegistry) -> bool:
@@ -262,15 +262,3 @@ def _complete(reference: DatasetRef, manifest: Manifest, dest: WritableRegistry)
         ``True`` for a complete local copy or any release in a non-local registry.
     """
     return not isinstance(dest, LocalRegistry) or dest.damage(reference, manifest) is None
-
-
-def _file_records(manifest: Manifest) -> frozenset[tuple[str, int, str]]:
-    """Collect each file's path, size, and checksum from a manifest.
-
-    Args:
-        manifest: The manifest to read.
-
-    Returns:
-        A frozen set of ``(path, size, checksum)`` entries.
-    """
-    return frozenset((part.path, part.size, part.checksum) for part in manifest.files.all_files())

@@ -16,6 +16,7 @@ import pytest
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.errors import (
+    ReleaseDifference,
     TimeFFormatError,
     TimeFValidationError,
     TimeNetAccessError,
@@ -215,7 +216,7 @@ def test_copy_release_refuses_a_release_with_the_same_files_and_another_card(sou
     # A fresh registry: the rewrite can keep the mtime of the first write, so a cached manifest could stay.
     with pytest.raises(TimeNetVersionConflictError, match="another card than") as raised:
         copy_release(child_ref, source, LocalRegistry(dest.root))
-    assert raised.value.difference == "card"
+    assert raised.value.difference is ReleaseDifference.CARD
     assert path.read_bytes() == before
 
 
@@ -232,11 +233,15 @@ def test_copy_release_refuses_another_build_of_the_version(source, dest):
     # the destination holds child_ref built from other records
     dest.put_dataset(_other_build(child_ref.dataset_id))
     before = dest.get_manifest(*child)
-    with pytest.raises(TimeNetVersionConflictError, match="new version") as raised:
+    with pytest.raises(TimeNetVersionConflictError, match="with other files than") as raised:
         copy_release(child_ref, source, dest)
     assert (raised.value.release, raised.value.needed_by) == (child_ref, None)
-    assert (raised.value.registry, raised.value.source) == (str(dest), str(source))
-    assert raised.value.difference == "files"  # the card differs too, but the files come first
+    assert (raised.value.registry, raised.value.registry_location, raised.value.source) == (
+        str(dest),
+        dest.location,
+        str(source),
+    )
+    assert raised.value.difference is ReleaseDifference.FILES  # the card differs too, but the files come first
     assert dest.get_manifest(*child) == before
     assert not dest.exists(*parent)  # nothing is copied, not even the payload source
 
@@ -346,7 +351,7 @@ def test_copy_release_with_force_copies_a_complete_local_copy_again(source, tmp_
     # force=True does not replace a copy with other files.
     other = LocalRegistry(tmp_path / "other")
     other.put_dataset(_other_build(child_ref.dataset_id))
-    with pytest.raises(TimeNetVersionConflictError, match="new version"):
+    with pytest.raises(TimeNetVersionConflictError, match="with other files than"):
         copy_release(child_ref, source, other, force=True)
 
 

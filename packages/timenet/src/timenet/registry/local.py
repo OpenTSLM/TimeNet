@@ -13,7 +13,13 @@ from pydantic import ValidationError
 
 from timenet._fs import delete_and_measure, same_directory, staged_directory
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetDatasetNotFoundError, TimeNetFileError
+from timenet.errors import (
+    TimeFFormatError,
+    TimeFValidationError,
+    TimeNetDatasetNotFoundError,
+    TimeNetFileError,
+    TimeNetOriginError,
+)
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, PayloadSource, read_manifest
 from timenet.registry._paths import release_dir
@@ -96,6 +102,27 @@ class LocalRegistry(WritableRegistry):
             OSError: If a folder cannot be read.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by _walk)
         return self._walk()[0]
+
+    def release_at(self, path: Path) -> DatasetRef | None:
+        """Return the release whose folder holds a path.
+
+        Args:
+            path: A path, whether or not it exists.
+
+        Returns:
+            The release, or ``None`` if no release folder of this registry holds the path.
+        """
+        resolved = path.expanduser().resolve()
+        release_depth = 3  # <org>/<name>/<version> below the root
+        for folder in (resolved, *resolved.parents):
+            if len(folder.parents) < release_depth or not same_directory(folder.parents[release_depth - 1], self._root):
+                continue
+            try:
+                release = DatasetRef.parse(f"{folder.parent.parent.name}/{folder.parent.name}@{folder.name}")
+            except TimeFValidationError:
+                return None
+            return release if folder.name == str(release.version) else None
+        return None
 
     def check_no_linked_folders(self) -> None:
         """Check that no dataset or release folder is a symlink, which :meth:`releases` would skip.
@@ -210,7 +237,7 @@ class LocalRegistry(WritableRegistry):
             The record, or ``None`` if the release has none.
 
         Raises:
-            TimeFFormatError: If the record is invalid.
+            TimeNetOriginError: If the record is invalid.
         """
         path = release_dir(self._root, release) / _ORIGIN_FILE
         try:
@@ -220,7 +247,7 @@ class LocalRegistry(WritableRegistry):
         try:
             return Origin.model_validate_json(text)
         except ValidationError as error:
-            raise TimeFFormatError(f"{path} is not a valid provenance record: {_first_problem(error)}.") from error
+            raise TimeNetOriginError(release, str(path), _first_problem(error)) from error
 
     def get_manifest(self, dataset_id: str, version: str | None = None) -> Manifest:
         """Return a dataset's manifest (latest version if unspecified).
@@ -238,11 +265,7 @@ class LocalRegistry(WritableRegistry):
         """
         resolved = self._latest_version(dataset_id) if is_latest(version) else version
         if resolved is None:
-            known = ", ".join(m.dataset_id for m in self.list_datasets()) or "(none)"
-            raise TimeNetDatasetNotFoundError(
-                f"no committed version for dataset {dataset_id!r}; this registry has: {known}. "
-                "Build one with `timenet-build build <id>`."
-            )
+            raise TimeNetDatasetNotFoundError(f"{self} holds no version of {dataset_id!r}")
         path = release_dir(self._root, DatasetRef.parse(f"{dataset_id}@{resolved}")) / MANIFEST_FILE
         if not path.exists():
             raise TimeNetDatasetNotFoundError(f"no manifest for {dataset_id!r} version {resolved!r}")

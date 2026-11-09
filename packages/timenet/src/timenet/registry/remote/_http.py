@@ -18,7 +18,7 @@ from typing import Any, BinaryIO, cast
 
 import httpx
 
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError, TimeNetUnreachableError
 
 
 _LOG = logging.getLogger(__name__)
@@ -133,12 +133,12 @@ def _reaching(where: str) -> Generator[None]:
         where: The registry or storage location to name in the error.
 
     Raises:
-        TimeNetRegistryError: If a request fails to reach ``where``.
+        TimeNetUnreachableError: If a request fails to reach ``where``.
     """
     try:
         yield
     except httpx.TransportError as error:
-        raise TimeNetRegistryError(f"cannot reach {where}: {error}") from error
+        raise TimeNetUnreachableError(f"cannot reach {where}: {error}") from error
 
 
 def timenet_user_agent() -> str:

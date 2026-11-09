@@ -618,10 +618,6 @@ def test_a_read_or_a_download_checks_access_before_it_reads_from_a_remote_regist
         getattr(client, entry_point)(dataset_id)
 
     assert caught.value.requirements == (AccessRequirement(release, Access.CREDENTIALED, "https://example.org/dua"),)
-    assert caught.value.hint == (
-        "No source serves its files. Add InstalledConnectors() to the sources, or build it locally with "
-        f"`timenet-build build {dataset_id}`."
-    )
     assert not any("/download/" in request.url.path or request.url.host == "blob.local" for request in requests)
     assert not (tmp_path / "local").exists()
 

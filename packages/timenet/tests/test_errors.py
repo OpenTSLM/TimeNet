@@ -1,8 +1,10 @@
+from pathlib import Path
 import pickle
 
 import pytest
 
 from timenet.errors import (
+    ReleaseDifference,
     TimeFFormatError,
     TimeFNotFoundError,
     TimeFReaderError,
@@ -13,6 +15,7 @@ from timenet.errors import (
     TimeNetDownloadError,
     TimeNetError,
     TimeNetFileError,
+    TimeNetManifestError,
     TimeNetMissingParentError,
     TimeNetNotBuiltError,
     TimeNetRegistryError,
@@ -127,32 +130,43 @@ _PAGE_C = AccessRequirement(_C, Access.RESTRICTED, "https://c.example")
             (),
         ),
         (
-            TimeNetVersionConflictError(_A, "registry here", "registry there"),
+            TimeNetVersionConflictError(_A, "registry here", "/here", "registry there", ReleaseDifference.FILES),
             {
                 "release": _A,
                 "registry": "registry here",
+                "registry_location": "/here",
                 "source": "registry there",
                 "needed_by": None,
-                "difference": "files",
+                "difference": ReleaseDifference.FILES,
             },
-            "registry here already holds org/a@1.0.0 with other files than registry there. "
-            "A published version cannot change, so a changed release needs a new version.",
+            "registry here already holds org/a@1.0.0 with other files than registry there.",
             (),
         ),
         (
-            TimeNetVersionConflictError(_A, "registry here", "registry there", _B, "card"),
-            {"release": _A, "needed_by": _B, "difference": "card"},
+            TimeNetVersionConflictError(_A, "registry here", "/here", "registry there", ReleaseDifference.CARD, _B),
+            {"release": _A, "needed_by": _B, "difference": ReleaseDifference.CARD},
             "registry here already holds org/a@1.0.0, a payload source of org/b@2.0.0, with another card than "
-            "registry there. A published version cannot change, so a changed release needs a new version.",
+            "registry there.",
             (),
         ),
         (
             TimeNetVersionUnavailableError(_B, Version(1, 0, 0)),
             {"release": _B, "declared": Version(1, 0, 0)},
-            "connector for 'org/b' builds version 1.0.0, not the requested 2.0.0. "
-            "Ask for version 1.0.0, or leave out the version.",
+            "connector for 'org/b' builds version 1.0.0, not the requested 2.0.0.",
             # The client reports a missing version, and a build reports invalid input.
             (TimeNetDatasetNotFoundError, TimeFValidationError),
+        ),
+        (
+            TimeNetManifestError(
+                "/store/org/a/1.0.0/manifest.json", "Invalid JSON", Path("/store/org/a/1.0.0/manifest.json")
+            ),
+            {
+                "where": "/store/org/a/1.0.0/manifest.json",
+                "detail": "Invalid JSON",
+                "path": Path("/store/org/a/1.0.0/manifest.json"),
+            },
+            "/store/org/a/1.0.0/manifest.json is not a valid manifest: Invalid JSON",
+            (TimeFFormatError,),
         ),
     ],
 )
@@ -164,8 +178,8 @@ def test_an_error_with_facts_ends_with_the_hint_of_its_front_end(error, facts, m
     assert {name: getattr(restored, name) for name in facts} == facts
     # A front end can catch the error as each of these classes.
     assert all(isinstance(restored, kind) for kind in caught_as)
-    # The message ends with a period, and the hint follows as its own sentence.
-    assert str(restored) == f"{message} Do this instead."
+    # The hint follows the message as a sentence of its own.
+    assert str(restored) == f"{message.removesuffix('.')}. Do this instead."
 
 
 def test_a_not_built_error_keeps_its_release_and_card_through_pickle():

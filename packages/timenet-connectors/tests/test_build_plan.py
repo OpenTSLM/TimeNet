@@ -1,13 +1,17 @@
+import json
 from pathlib import Path
 import shlex
 import shutil
 
+import click
 import numpy as np
 import pytest
 from rich.console import Console
 from typer.testing import CliRunner
 
+import timenet
 from timenet import builders, client as client_module
+from timenet.cli import hints as hints_module
 from timenet.client import default_local_registry
 from timenet.connectors import BaseConnector
 from timenet.coordinator.build import plan_release_build, run_plan
@@ -15,12 +19,13 @@ from timenet.coordinator.plan import BuildStep, CopyStep, Plan, ReadStep, Step
 from timenet.dataset import Record, RegularAxis, Signal, Source, TimeFDataset
 from timenet.engine import open_parents, run_pipeline
 from timenet.errors import (
+    ReleaseDifference,
     TimeFFormatError,
     TimeFValidationError,
     TimeNetAccessError,
     TimeNetFileError,
+    TimeNetIsolationError,
     TimeNetMissingParentError,
-    TimeNetRegistryError,
     TimeNetVersionConflictError,
 )
 from timenet.reader import TimeFReader
@@ -614,30 +619,25 @@ def test_a_pinned_parent_build_hands_its_pins_to_the_isolated_child(tmp_path, mo
     assert local_registry.exists(GRAND.dataset_id, str(GRAND.version))
 
 
-_COPY_HINT = (
-    "copy it from a registry that holds it with --remote-registry <url>, or publish it to such a registry first "
-    "with `timenet publish`."
-)
-
-
-@pytest.mark.parametrize("case", ["missing", "missing-without-auto-build", "damaged", "not-open", "not-served"])
+@pytest.mark.parametrize("case", ["missing", "missing-buildable", "damaged", "not-open", "not-served"])
 def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
     cards = _install_cards(monkeypatch, child={"parent": PARENT}, parent={})
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
     local_registry = LocalRegistry(tmp_path / "store")
     options = []
-    if case == "missing":
-        # No registry holds the parent, and no installed connector builds it.
-        del cards[PARENT.dataset_id]
-    if case == "missing-without-auto-build":
+    if case in {"missing", "missing-buildable"}:
+        # No registry holds the parent, and the list has no connectors.
         options = ["--no-auto-build"]
+    if case == "missing":
+        # No installed connector builds the parent.
+        del cards[PARENT.dataset_id]
     if case == "damaged":
         local_registry.put_dataset(TimeFDataset(metadata=cards[PARENT.dataset_id]))
         (release_dir(local_registry.root, PARENT) / "control.duckdb").write_bytes(b"cut short")
         options = ["--remote-registry", str(tmp_path / "remote registry")]
     if case == "not-open":
         cards[CHILD.dataset_id] = cards[CHILD.dataset_id].model_copy(update=_GATED)
-        monkeypatch.setattr(cli_module, "open_registry", lambda url, **_: _Hosted(tmp_path / "hosted"))
+        monkeypatch.setattr(hints_module, "open_registry", lambda url, **_: _Hosted(tmp_path / "hosted"))
         options = ["--publish-to", "s3://bucket/registry"]
     if case == "not-served":
         # The remote registry lists the parent without serving its files, and the list has no connectors.
@@ -652,28 +652,25 @@ def test_the_cli_hint_names_its_flags(tmp_path, monkeypatch, case):
     remote = str(tmp_path / "remote registry")
     flags = f" --local-registry {shlex.quote(str(local_registry.root))} --remote-registry {shlex.quote(remote)}"
     hints = {
-        "missing": (TimeNetMissingParentError, f". {_COPY_HINT[0].upper()}{_COPY_HINT[1:]}"),
-        "missing-without-auto-build": (
+        # No installed connector builds the parent.
+        "missing": (TimeNetMissingParentError, "Pass a registry that holds it with --remote-registry <url>."),
+        "missing-buildable": (
             TimeNetMissingParentError,
-            f". Build it from its installed connector with --auto-build, {_COPY_HINT}",
+            "Pass a registry that holds it with --remote-registry <url>, or build it from its installed connector "
+            "with --auto-build.",
         ),
-        # A rebuild of a release that others read changes the files they pin.
-        "damaged": (
-            TimeNetFileError,
-            f". Copy an intact release into the local registry with `timenet download test/parent@1.0.0{flags}`, or "
-            f"rebuild it with `timenet-build build test/parent --force{flags}`. "
-            "A rebuild changes its files, and the releases that pin the old files then fail to open.",
-        ),
+        # No registry provides the parent, so the hint names no download.
+        "damaged": (TimeNetFileError, f"Build it again with `timenet-build build test/parent{flags} --force`."),
         "not-open": (
             TimeNetAccessError,
-            ". _Hosted serves open releases only, so --publish-to takes open releases only. "
+            "_Hosted serves open releases only, so --publish-to takes open releases only. "
             "Build it into the local registry without --publish-to instead.",
         ),
-        "not-served": (TimeNetAccessError, ". Build it from its installed connector with --auto-build."),
+        "not-served": (TimeNetAccessError, "Build it locally from its installed connector with --auto-build."),
     }
     error, hint = hints[case]
     assert isinstance(result.exception, error), result.output
-    assert str(result.exception).endswith(hint)
+    assert result.exception.hint == hint
 
 
 def _publish_to(tmp_path, monkeypatch, cards) -> tuple[_Hosted, LocalRegistry, list]:
@@ -683,7 +680,10 @@ def _publish_to(tmp_path, monkeypatch, cards) -> tuple[_Hosted, LocalRegistry, l
         The registry that ``--publish-to`` opens, the local registry, and the list of the builds.
     """
     remote = _Hosted(tmp_path / "hosted")
-    monkeypatch.setattr(cli_module, "open_registry", lambda url, **_: remote)
+    opened = hints_module.open_registry
+    monkeypatch.setattr(
+        hints_module, "open_registry", lambda url, **kw: remote if url == "s3://bucket/registry" else opened(url, **kw)
+    )
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
     monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
     calls = []
@@ -730,13 +730,6 @@ def test_publish_to_builds_into_the_local_registry_and_publishes(tmp_path, monke
     for registry in (local_registry, remote):
         assert registry.exists(CHILD.dataset_id, str(CHILD.version))
         assert registry.exists(PARENT.dataset_id, str(PARENT.version))
-    # A destination that holds the version gets nothing, and nothing builds.
-    shutil.rmtree(local_registry.root)
-    result = runner.invoke(app, command)
-    assert (result.exit_code, result.stdout) == (0, f"{CHILD.version}\n")
-    assert result.stderr.splitlines() == [f"✅ Nothing to do: 'test/child' 1.0.0 is already in {remote}"]
-    assert calls == [(CHILD.dataset_id, False)]
-    assert not local_registry.root.exists()
 
 
 def test_publish_to_copies_parents_only_from_the_sources(tmp_path, monkeypatch):
@@ -752,7 +745,6 @@ def test_publish_to_copies_parents_only_from_the_sources(tmp_path, monkeypatch):
 
     assert isinstance(result.exception, TimeNetMissingParentError), result.output
     assert "--remote-registry" in str(result.exception)
-    assert "`timenet publish`" in str(result.exception)
     assert calls == []
     # As the remote registry of the list, the same registry provides the parent.
     result = runner.invoke(app, [*command, "--remote-registry", str(remote.local_root)])
@@ -784,10 +776,51 @@ def test_a_blank_publish_to_is_a_usage_error_before_any_build(monkeypatch, child
     # A blank value names no registry. Unchecked, it would publish into the current directory.
     result = runner.invoke(app, ["build", GRAND.dataset_id, "--publish-to", " "])
 
-    assert result.exit_code == 1, result.output
-    assert isinstance(result.exception, TimeNetRegistryError)
-    assert str(result.exception).startswith("--publish-to ")
+    # A usage error that names the flag.
+    assert result.exit_code == 2, result.output
+    assert "Invalidvalue:--publish-to" in "".join(click.unstyle(result.output).split())
     assert child_builds == []
+
+
+def test_publish_to_a_destination_that_holds_another_card_fails_before_any_build(tmp_path, monkeypatch):
+    cards = _install_cards(monkeypatch, child={}, parent={})
+    remote, local_registry, calls = _publish_to(tmp_path, monkeypatch, cards)
+    # The destination holds the files of the local registry, under another card.
+    published = release_dir(remote.local_root, CHILD)
+    shutil.copytree(_store_from_card(CHILD.dataset_id, local_registry.root, force=False), published)
+    manifest = json.loads((published / "manifest.json").read_text())
+    manifest["metadata"]["description"] = "Another card."
+    (published / "manifest.json").write_text(json.dumps(manifest))
+
+    result = runner.invoke(app, ["build", CHILD.dataset_id, "--publish-to", "s3://bucket/registry"])
+
+    assert isinstance(result.exception, TimeNetVersionConflictError), result.output
+    assert result.exception.difference is ReleaseDifference.CARD
+    assert result.exception.hint == (
+        "Build it again with `--force` to compare a fresh build with the published release, or give a changed release "
+        "a new version."
+    )
+    assert "Nothing to do" not in click.unstyle(result.output)
+    assert calls == []
+
+
+def test_publish_to_a_destination_that_holds_the_version_builds_nothing_without_force(tmp_path, monkeypatch):
+    cards = _install_cards(monkeypatch, child={}, parent={})
+    remote, local_registry, calls = _publish_to(tmp_path, monkeypatch, cards)
+    # The line names a long path, so the console must not wrap it.
+    monkeypatch.setattr(cli_module.console, "rich", Console(stderr=True, width=1000))
+    # The destination holds the version, and the local registry does not.
+    shutil.copytree(
+        _store_from_card(CHILD.dataset_id, tmp_path / "elsewhere", force=False), release_dir(remote.local_root, CHILD)
+    )
+
+    result = runner.invoke(app, ["build", CHILD.dataset_id, "--publish-to", "s3://bucket/registry"])
+
+    assert result.exit_code == 0, result.output
+    assert click.unstyle(result.stdout) == f"{CHILD.version}\n"
+    assert click.unstyle(result.stderr).splitlines() == [f"✅ Nothing to do: 'test/child' 1.0.0 is already in {remote}"]
+    assert calls == []
+    assert not local_registry.exists(CHILD.dataset_id, str(CHILD.version))
 
 
 def _files(root: Path) -> dict[Path, tuple[int, int]]:
@@ -818,6 +851,8 @@ def test_force_with_publish_to_rebuilds_and_the_publish_refuses_other_files(tmp_
     _change_the_next_build(monkeypatch)  # the next build writes other files
     result = runner.invoke(app, [*command, "--force"])
     assert isinstance(result.exception, TimeNetVersionConflictError)
+    # The conflict comes from the publish, so it gets the hint of a publish.
+    assert result.exception.hint == "A published version cannot change, so a changed release needs a new version."
     assert calls == [(CHILD.dataset_id, False), (CHILD.dataset_id, True)]
     # A published version cannot change, so the destination keeps its files.
     assert _files(remote.local_root) == published
@@ -846,6 +881,30 @@ def test_force_with_publish_to_does_nothing_for_the_same_files(tmp_path, monkeyp
     assert calls == [(CHILD.dataset_id, False), (CHILD.dataset_id, True)]
     # The destination holds the same files, so the publish copied nothing.
     assert _files(remote.local_root) == published
+
+
+@pytest.mark.parametrize(
+    ("entry", "hint"),
+    [
+        ("cli", "Build in this interpreter with --no-isolation."),
+        ("sdk", "Build in this interpreter with TIMENET_ISOLATION=off."),
+    ],
+)
+def test_an_environment_that_cannot_be_made_names_the_build_in_this_interpreter(tmp_path, monkeypatch, entry, hint):
+    cards = _install_cards(monkeypatch, parent={})
+    monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
+    monkeypatch.setattr(env_module, "BASE_DISTRIBUTIONS", ("timenet-not-installed",))
+    local_registry = tmp_path / "store"
+
+    if entry == "cli":
+        error = runner.invoke(app, ["build", PARENT.dataset_id, "--local-registry", str(local_registry)]).exception
+    else:
+        with pytest.raises(TimeNetIsolationError) as caught:
+            timenet.build(PARENT.dataset_id, local_registry=local_registry)
+        error = caught.value
+
+    assert isinstance(error, TimeNetIsolationError)
+    assert error.hint == hint
 
 
 def test_the_plan_drops_the_target_registry_from_parents_from(tmp_path, monkeypatch):
@@ -1030,14 +1089,17 @@ def test_quiet_hides_the_plan(tmp_path, monkeypatch, child_builds):
     assert child_builds == [(PARENT.dataset_id, False), (CHILD.dataset_id, False)]
 
 
-@pytest.mark.parametrize("held_in", ["local-registry", "destination", "local-registry-only"])
+@pytest.mark.parametrize("held_in", ["local-registry", "both", "local-registry-only", "destination-only"])
 def test_a_dry_run_of_a_held_release_says_nothing_to_do(tmp_path, monkeypatch, held_in):
     cards = _install_cards(monkeypatch, child={}, parent={})
     remote, local_registry, calls = _publish_to(tmp_path, monkeypatch, cards)
     # The line names a long path, so the console must not wrap it.
     monkeypatch.setattr(cli_module.console, "rich", Console(stderr=True, width=1000))
-    held_by = remote if held_in == "destination" else local_registry
-    _store_from_card(CHILD.dataset_id, held_by.root if held_by is local_registry else remote.local_root, force=False)
+    directory = _store_from_card(CHILD.dataset_id, local_registry.root, force=False)
+    if held_in in {"both", "destination-only"}:
+        shutil.copytree(directory, release_dir(remote.local_root, CHILD))
+    if held_in == "destination-only":
+        shutil.rmtree(local_registry.root)
     options = [] if held_in == "local-registry" else ["--publish-to", "s3://bucket/registry"]
 
     result = runner.invoke(app, ["build", CHILD.dataset_id, "--dry-run", *options])
@@ -1048,6 +1110,7 @@ def test_a_dry_run_of_a_held_release_says_nothing_to_do(tmp_path, monkeypatch, h
         assert result.stdout.splitlines() == [f"then publish test/child@1.0.0 to {remote}"]
         assert result.stderr == ""
     else:
+        held_by = local_registry if held_in == "local-registry" else remote
         assert result.stdout == ""
         assert result.stderr.splitlines() == [f"✅ Nothing to do: 'test/child' 1.0.0 is already in {held_by}"]
     assert calls == []
