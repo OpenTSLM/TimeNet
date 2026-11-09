@@ -54,7 +54,7 @@ def test_csv_checks_expected_header_even_without_rows(tmp_path):
     path = tmp_path / "source.csv"
     path.write_text("count,name\n")
     with pytest.raises(TimeNetConnectorError, match="expected columns"):
-        list(CsvDataReader(path, Row, columns=("name", "count")).iter_rows())
+        list(CsvDataReader(path, Row, expected_columns=("name", "count")).iter_rows())
 
 
 def test_closing_a_partially_consumed_csv_reader_closes_its_file(tmp_path, monkeypatch):

@@ -18,10 +18,10 @@ class CsvDataReader(DataReader[RowT]):
         row_type: type[RowT],
         *,
         strict_parsing: bool | None = None,
-        columns: tuple[str, ...] | None = None,
+        expected_columns: tuple[str, ...] | None = None,
     ) -> None:
         super().__init__(path, row_type, strict_parsing=strict_parsing)
-        self.columns = columns
+        self.expected_columns = expected_columns
 
     def iter_rows(self) -> Generator[RowT, None, None]:
         """Yield validated rows parsed from CSV cells.
@@ -39,7 +39,9 @@ class CsvDataReader(DataReader[RowT]):
                 if not self._has_unique_header(header):
                     raise TimeNetConnectorError(f"{self.path}: missing or duplicate CSV header")
                 if not self._has_expected_columns(header):
-                    raise TimeNetConnectorError(f"{self.path.name}: expected columns {self.columns}, got {header}")
+                    raise TimeNetConnectorError(
+                        f"{self.path.name}: expected columns {self.expected_columns}, got {header}"
+                    )
                 for cells in reader:
                     if self._has_extra_cells(cells):
                         raise TimeNetConnectorError(f"{self.path}: line {reader.line_num}: too many cells")
@@ -51,7 +53,7 @@ class CsvDataReader(DataReader[RowT]):
 
     def _has_expected_columns(self, header: Sequence[str]) -> bool:
         """Return whether the header has exactly the expected columns in order, or no columns are expected."""
-        return self.columns is None or tuple(header) == self.columns
+        return self.expected_columns is None or tuple(header) == self.expected_columns
 
     @staticmethod
     def _has_unique_header(header: Sequence[str] | None) -> TypeGuard[Sequence[str]]:
