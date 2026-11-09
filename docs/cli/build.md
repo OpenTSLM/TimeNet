@@ -23,8 +23,8 @@ author or change a connector.
 ```bash
 timenet-build [--quiet] build <dataset_id>[@<version>] \
     [--force] [--keep-cache] [--isolation | --no-isolation] \
-    [--publish-to <url>] [--dry-run] \
-    [--local-registry <path>] [--remote-registry <url>] \
+    [--publish-to <url|path>] [--dry-run] \
+    [--local-registry <path>] [--remote-registry <url|path>] \
     [--auto-build | --no-auto-build]
 ```
 

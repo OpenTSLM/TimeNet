@@ -33,7 +33,7 @@ To use a local or S3 registry instead, see [Selecting the sources](#selecting-th
 | `timenet search [flags]` | Filter the datasets of the sources, the cards of the installed connectors included. The flags map one-to-one to [`registry.search`](../registry.md#search). Repeat a flag for list values (`--spec` for `time_series_spec`, `--id` for `dataset_id`). `--limit` applies after the merge of the sources. |
 | `timenet info <id>[@version]` | Show the [manifest](../manifest.md) of the release that `open()` reads: metadata, schema, and counts. For a release that only an installed connector provides, show its card, and the `timenet-build` command that adds the schema and the counts. See [`get_manifest()`](../client.md#inspect-a-release). |
 | `timenet download <id>[@version]` | Copy a release and its data files into the local registry, and print the release directory. The release and each payload source that the local registry lacks come from the first registry that provides them. It never builds. See [`download()`](../client.md#open-load-or-download). |
-| `timenet publish <id>[@version] --dest URL` | Copy a complete release and its payload sources to the registry `--dest`, and print the release. The release comes from the local registry, which `--local-registry` selects, or from the registry `--source URL`, and without a version it is the latest version there. A remote `--source` reads the complete copies of the same releases in the local registry. A published version cannot change, so another release under the version in `--dest` is an error. See [`publish()`](../build.md#programmatic-builds). |
+| `timenet publish <id>[@version] --dest URL|PATH` | Copy a complete release and its payload sources to the registry `--dest`, and print the release. The release comes from the local registry, which `--local-registry` selects, or from the registry `--source URL|PATH`, and without a version it is the latest version there. A published version cannot change, so another release under the version in `--dest` is an error. See [`publish()`](../build.md#programmatic-builds). |
 | `timenet local info` | Print the path and size of the cache. Then print one line for the downloads and one line for the builds in the local registry, such as `Downloads in <path>: 2 releases, 1.4 GB`. |
 | `timenet local clear [--yes]` | Delete the cache and every release in the local registry. The prompt counts the builds. |
 | `timenet local cache info` | Print the path and size of the cache, `$TIMENET_CACHE`. |
@@ -66,7 +66,7 @@ overrides one [variable](../client.md#settings):
 | Flag | Variable | Default | What it sets |
 | --- | --- | --- | --- |
 | `--local-registry PATH` | `TIMENET_LOCAL_REGISTRY` | `~/.timenet/registry` | A local registry: the first source that a lookup checks, and the place where downloads and builds land. |
-| `--remote-registry URL` | `TIMENET_REMOTE_REGISTRY` | `timenet://` | A remote registry, as a URL or a local path: the second source that a lookup checks, if the local registry does not have the dataset. |
+| `--remote-registry URL|PATH` | `TIMENET_REMOTE_REGISTRY` | `timenet://` | A remote registry, as a URL or a local path: the second source that a lookup checks, if the local registry does not have the dataset. |
 | `--auto-build` / `--no-auto-build` | `TIMENET_AUTO_BUILD` | `true` | Whether installed connectors build a dataset that neither the local nor the remote registry has. |
 
 A flag wins over its variable, and the variable wins over its default. Flags go after the subcommand:

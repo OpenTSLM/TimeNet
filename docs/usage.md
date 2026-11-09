@@ -130,7 +130,7 @@ from sklearn.model_selection import train_test_split
 import timenet
 
 registry = Path(".timenet-registry")
-timenet.build("timenet/test-mean", store=registry)
+timenet.build("timenet/test-mean", local_registry=registry)
 dataset = timenet.TimeNet(sources=[registry]).load("timenet/test-mean")
 
 x, y = dataset.to_features_and_targets(output="numpy")

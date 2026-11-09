@@ -42,7 +42,7 @@ Use `--no-isolation` while developing a connector in the current environment:
 timenet-build build org/name --local-registry .timenet-registry --no-isolation
 ```
 
-Most parameters can also be specified as environment variables. For example, `$TIMENET_LOCAL_REGISTRY` & `TIMENET_ISOLATION=off`. These apply to every CLI command, and the Python SDK also honors them. 
+Most parameters can also be specified as environment variables. For example, `$TIMENET_LOCAL_REGISTRY` & `TIMENET_ISOLATION=off`. These apply to every CLI command, and the Python SDK also honors them.
 
 For each build, the used Python and package and TimeNet versions are recorded to the build's manifest.
 
@@ -82,27 +82,27 @@ timenet.publish("org/name", dest="s3://bucket/registry")
 ```
 
 `timenet.build()` builds a release with the installed connector that claims its dataset ID, in an
-[isolated environment](#isolated-build-environments). It returns the plan that ran: one step for
-each release that it copied or built, in order. Each argument that you leave out comes from the
-environment at the time of the call:
+[isolated environment](#isolated-build-environments). It returns the release directory in the
+local registry. Each argument that you leave out comes from the environment at the time of the
+call:
 
-- `store` comes from `$TIMENET_LOCAL_REGISTRY`.
-- `parents_from` comes from `$TIMENET_REMOTE_REGISTRY`, then `InstalledConnectors()`. With
+- `local_registry` comes from `$TIMENET_LOCAL_REGISTRY`.
+- `sources` comes from `$TIMENET_REMOTE_REGISTRY`, then `InstalledConnectors()`. With
   `TIMENET_AUTO_BUILD=false`, the connectors stay out.
 
-So a default build lands where `TimeNet()` reads. `store` takes a local directory, a `file://` URI
-or a `LocalRegistry`. `parents_from` lists, in order, where the parents and payload sources that the local registry lacks come from (see [Prepare parent releases](#prepare-parent-releases)).
+So a default build lands where `TimeNet()` reads. `local_registry` takes a local directory, a
+`file://` URI or a `LocalRegistry`. `sources` lists, in order, where the parents and payload sources
+that the local registry lacks come from (see [Prepare parent releases](#prepare-parent-releases)).
 
 ```python
 import timenet
 
-plan = timenet.build(
+path = timenet.build(
     "org/name@1.2.0",
-    store=".timenet-registry",
-    parents_from=["timenet://", timenet.InstalledConnectors()],
+    local_registry=".timenet-registry",
+    sources=["timenet://", timenet.InstalledConnectors()],
 )
-for step in plan.steps:
-    print(step.release, step.action)
+print(path)
 ```
 
 `timenet.publish()` copies a complete release and the payload sources that it needs from `source`,

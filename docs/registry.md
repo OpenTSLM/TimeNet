@@ -36,9 +36,9 @@ registry = open_registry("./local_registry")
 | `timenet://` | `RemoteRegistry`, an alias for the hosted `https://registry.timenet.ai` |
 
 `open_registry()` returns a `WritableRegistry`, so you can also publish to the registry that it
-opens (see [Writing to a registry](#writing-to-a-registry)). `store=` gives an HTTP or S3 registry
-the directory of the local registry where downloads and builds land (see
-[Remote reads](#remote-reads)). A local registry ignores it.
+opens (see [Writing to a registry](#writing-to-a-registry)). A remote registry reads only its own
+files. To read a local copy first, put its `LocalRegistry` before the remote registry in the
+sources.
 
 !!! note "Catalog support"
     Every backend serves reads and takes new releases. Remote publishing needs a writer token, and
@@ -73,9 +73,8 @@ uv add 'timenet[s3]'
 The layout under the prefix is `datasets/org/name/version/…`, with `manifest.json` beside the data
 files. `put_dataset` uploads to a temporary `version.tmp-<uuid>` prefix and moves each object into
 place (`manifest.json` last), so that failed publishing does not leak partial versions.
-`TimeNet.open()` reads lazily and `load()` reads every value. Both read the complete copy of the
-same release in the local registry, if it holds one (see [Remote reads](#remote-reads)). Otherwise
-they read remote payload ranges through a pyarrow `S3FileSystem`. The backend has no catalog, so
+`TimeNet.open()` reads lazily and `load()` reads every value. Both read remote payload ranges
+through a pyarrow `S3FileSystem` (see [Remote reads](#remote-reads)). The backend has no catalog, so
 `list` and `search` are unsupported: publish and fetch by an explicit `org/name@version`.
 
 ## `BaseRegistry`
@@ -88,7 +87,6 @@ Every backend implements this contract.
 | `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version. Raises `TimeFFormatError` if the stored manifest is not valid, or if its own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
 | `location` | Where the registry is: the base URL of a remote registry, the `s3://bucket/prefix` root of an S3 registry, or the resolved root directory of a local registry. Any other registry gives its name. |
-| `local_root` | The directory whose complete releases the registry reads: the root of a local registry, or the local registry that `store=` gives a remote registry. `None` for a remote registry without `store=`. |
 | `requires_open_access` | Whether the registry holds and serves only releases with open access. `False` only for `LocalRegistry`. |
 | `find_manifest(release)` | The manifest of an exact release, or `None` if the registry does not hold it. Raises `TimeFFormatError` if the stored manifest names another release. |
 | `download_release(reference, directory, *, force=False, manifest=None, progress_cb=None)` | Download the files of one release, without its payload sources, into a local directory. A failed download leaves no partial copy, and it keeps the copy that was there before. |
@@ -136,9 +134,9 @@ copies complete files, and makes sure that each file has its recorded size and c
 
 ## Sources
 
-A source is something that can provide a release. `timenet.sources` defines the protocol
-`ReleaseSource`, with one method: `resolve(dataset_id, version)`. `version` is an exact version,
-such as `"1.2.0"`, or `None` for the latest version. Two kinds of source exist:
+A source is something that can provide a release. `timenet.sources` defines the type
+`ReleaseSource`. Each source has the method `resolve(dataset_id, version)`. `version` is an exact
+version, such as `"1.2.0"`, or `None` for the latest version. Two kinds of source exist:
 
 - A registry. Every `BaseRegistry` is a source.
 - `InstalledConnectors()`: every installed package that registers a builder backend under the
@@ -148,12 +146,14 @@ A source gives one of three answers:
 
 | Answer | Meaning |
 | --- | --- |
-| `Found(version, entry)` | The source can serve or build the release. `entry` is the source that does it: the registry or `InstalledConnectors()`. |
+| `FoundInRegistry(version, registry)` | The registry serves the release. |
+| `FoundInConnector(builder)` | An installed connector builds the release. `version` is the version that its card declares. |
 | `NotFound()` | The source does not know the release. |
-| `NotServed(version, access, access_url, requirements)` | The source lists the release, but does not serve its files. `access` is the effective access of the release, `access_url` the page of the first card that is not open, and `requirements` each such card. `access_error(dataset_id)` returns the `TimeNetAccessError` that names each page. |
+| `NotServed(version, access, requirements)` | The source lists the release, but does not serve its files. `access` is the effective access of the release, and `requirements` names each card that is not open, with its access page. `access_error(dataset_id)` returns the `TimeNetAccessError` that names each page. |
 
-`Found` and `NotServed` also carry the `manifest` that the source read, or `None`, so that you do
-not need to fetch it again.
+The type `Found` covers `FoundInRegistry` and `FoundInConnector`. `FoundInRegistry` and
+`NotServed` also carry the `manifest` that the source read, or `None`, so that you do not need to
+fetch it again.
 
 A `LocalRegistry` serves every release that it holds, so it never answers `NotServed`. A registry
 that is not local serves the files of a release only if its effective access is `open`, and
@@ -186,9 +186,9 @@ answer = resolve_release(sources, "timenet/hello-world", None)
 A build uses such a list to find the parent releases that its local registry lacks. Each missing
 parent comes from the first source that provides its exact version.
 
-`TimeNet` takes such a list as `sources`. `LocalRegistry(path, store=True)` marks the local
-registry where downloads and builds land. A client accepts at most one such local registry, and a
-list with `InstalledConnectors()` needs one. See [Choose the sources](client.md#choose-the-sources).
+`TimeNet` takes such a list as `sources`. The first `LocalRegistry` of the list that is not
+`read_only=True` gets the downloads and builds, and a list with `InstalledConnectors()` needs one.
+See [Choose the sources](client.md#choose-the-sources).
 
 ## Writing to a registry
 
@@ -257,10 +257,10 @@ release = registry.put_dataset(dataset)  # compile, upload, finalize
 
 ### Copying a release
 
-`timenet.registry.copy_release(reference, source, dest, *, force=False, progress=None)` copies one
-release from `source` to the writable registry `dest`.
+`timenet.registry.copy_release(reference, source, dest, *, with_payload_sources=True, force=False,
+progress=None)` copies one release from `source` to the writable registry `dest`.
 
-A dataset can depend on payload files stored as part of another dataset (parent/child relationship). 
+A dataset can depend on payload files stored as part of another dataset (parent/child relationship).
 `copy_release` copies each parent release too, so that
 `dest` can open the copied release. It copies only the releases that `dest` does not hold yet.
 

@@ -29,7 +29,7 @@ The CLI needs the `cli` extra (`timenet[cli]`); `make sync` already installs it.
 | `timenet search [filters]` | Filter the datasets of the sources, connector cards included. See flags below. |
 | `timenet info <id>[@version]` | Manifest summary of the release that `open()` reads: version, name, license, domains, specs, task types, and counts (records / annotations / chunks). A dataset that only a connector provides shows its card and the build command. |
 | `timenet download <id>[@version]` | Copy a release and its data files into the local registry, and print the release directory to stdout. Never builds. Prints "Nothing to do" if the local registry holds everything. |
-| `timenet publish <id>[@version] --dest URL [--source URL]` | Copy a complete release and its payload sources from the local registry (or `--source`) to another registry, and print the release to stdout. Same release: nothing happens. Another release under the version: an error. |
+| `timenet publish <id>[@version] --dest URL|PATH [--source URL|PATH]` | Copy a complete release and its payload sources from the local registry (or `--source`) to another registry, and print the release to stdout. Same release: nothing happens. Another release under the version: an error. |
 | `timenet local info` | Path and size of the cache, then one line each for the downloads and the builds in the local registry (count and size). |
 | `timenet local clear [--yes]` | Delete the cache and every release in the local registry. The prompt counts the builds. |
 | `timenet local cache info` / `clear [--yes]` | Path and size of the cache (`$TIMENET_CACHE`), or delete its raw source files (`downloads/`) and control databases (`control/`) that carry TimeNet's `CACHEDIR.TAG`. |
@@ -60,9 +60,9 @@ flag. A bad `TIMENET_*` variable exits with code 1 and names the variable.
 
 - `--local-registry PATH`: a local registry, the first source that a lookup checks, and the place
   where downloads and builds land (`$TIMENET_LOCAL_REGISTRY`, else `~/.timenet/registry`).
-- `--remote-registry URL`: a remote registry, as a URL or a local path, the second source that a
-  lookup checks, if the local registry does not have the dataset (`$TIMENET_REMOTE_REGISTRY`, else
-  `timenet://`).
+- `--remote-registry URL|PATH`: a remote registry, as a URL or a local path, the second source that
+  a lookup checks, if the local registry does not have the dataset (`$TIMENET_REMOTE_REGISTRY`,
+  else `timenet://`).
 - `--auto-build`/`--no-auto-build`: whether installed connectors build a dataset that neither the
   local nor the remote registry has (`$TIMENET_AUTO_BUILD`, else true).
 
@@ -79,7 +79,7 @@ tn = timenet.TimeNet()               # the default list of sources, see below
 tn.list()                            # list[DatasetMetadata]
 tn.get_manifest("chengsenwang/tsqa") # Manifest (add a version or use id@version)
 tn.search(domain=..., task=AnswerTask, tag="ecg", limit=50)   # filters are scalar-or-list, ANDed
-path = tn.download("chengsenwang/tsqa")                   # -> <store>/<id>/<version>/ dir
+path = tn.download("chengsenwang/tsqa")                   # -> <local registry>/<id>/<version>/ dir
 with tn.open("chengsenwang/tsqa") as reader:              # TimeFReader; values stay in storage
     dataset = reader.read()
 dataset = tn.load("chengsenwang/tsqa")                    # every value read into memory
@@ -89,13 +89,13 @@ dataset = tn.load("chengsenwang/tsqa")                    # every value read int
   URL, a `file://` URI, a local path, or `timenet.InstalledConnectors()`. Pass a list even for one
   registry: `timenet.TimeNet(sources=[".timenet-registry"])`. An exact version comes from the
   first source that has it; "latest" is the highest version of any source.
-- One local registry in the list can declare `timenet.LocalRegistry(path, store=True)`. Builds land there. A
-  list with `InstalledConnectors()` needs a local registry with `store=True`, and only such a list builds on a read. A registry
-  URL in the list reads the complete copy of the same release in that local registry. Without one
-  in the list, it reads only its own files.
+- The first `timenet.LocalRegistry(path)` of the list that is not `read_only=True` gets the
+  downloads and builds. A path in the list opens such a registry too. A list with
+  `InstalledConnectors()` needs a writable local registry, and only such a list builds on a read.
+  A remote registry reads only its own files.
 - `TimeNet()` uses `timenet.client.default_sources()`: the local registry `$TIMENET_LOCAL_REGISTRY`, then
   `$TIMENET_REMOTE_REGISTRY`, then `InstalledConnectors()` unless `TIMENET_AUTO_BUILD=false`. The
-  first entry is always the registry configured with `store=True`; `default_store()` returns it alone.
+  first entry is always the local registry; `default_local_registry()` returns it alone.
 - `list()` and `search()` merge every source of the list, connector cards included: one row per
   dataset at the highest version, sorted by ID. `limit` applies after the merge. A connector never
   matches `task` or `time_series_spec`. A registry without a catalog (S3) adds nothing, and a card
@@ -105,8 +105,8 @@ dataset = tn.load("chengsenwang/tsqa")                    # every value read int
   files. A registry that lists a release without serving it gives its listed manifest. A release
   that only a connector provides raises `TimeNetNotBuiltError` (no manifest before a build).
   `get_card()` returns the card, also from a connector. `plan_read()` returns the plan of `open()`
-  (`timenet.Plan`, one step per release with its action and source) and runs nothing.
-- `download()` needs a local registry configured with `store=True`. It resolves like `open()`. The release and each payload source that
+  (one step per release with its action and source) and runs nothing.
+- `download()` needs a writable local registry in the list. It resolves like `open()`. The release and each payload source that
   the local registry lacks or holds damaged come from the first registry other than the local registry that provides
   it, so they can come from different registries. If the local registry holds a complete copy of the
   release, only the missing payload sources are copied. It never builds: a release that only a

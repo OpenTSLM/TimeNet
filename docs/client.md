@@ -33,7 +33,7 @@ A client takes an ordered list of sources. A source is a local or remote registr
 import timenet
 
 client = timenet.TimeNet(sources=[
-    timenet.LocalRegistry(".timenet-registry", store=True),
+    timenet.LocalRegistry(".timenet-registry"),
     "https://registry.example.com",
     "timenet://",
     timenet.InstalledConnectors(),
@@ -43,26 +43,25 @@ client = timenet.TimeNet(sources=[
 - `InstalledConnectors()` stands for every installed package that registers a builder backend,
   such as `timenet-connectors`. If only this source provides a release, a read builds it. Without
   it in the list, a client never runs connector code.
-- `LocalRegistry(path, store=True)` marks the local registry where downloads and builds land. A
-  client accepts at most one such local registry, and a list with `InstalledConnectors()` needs
-  one. A `LocalRegistry` without the flag is only read, for example a mirror on a network drive.
-- A registry URL in the list gets the directory of this local registry. If the local registry holds
-  a complete copy of the same release, with the same manifest apart from the build environment, the
-  registry reads that copy instead of its remote files. Without this local registry in the list, it
-  reads only its own files.
+- The first `LocalRegistry` of the list that is not `read_only=True` is the local registry where
+  downloads and builds land. A path in the list opens such a registry too. The client only reads a
+  later local registry. `LocalRegistry(path, read_only=True)` is never written, for example a
+  mirror on a network drive. A list with `InstalledConnectors()` needs a writable local registry.
+- A remote registry reads only its own files.
 
 An exact version comes from the first source that provides it, while "latest" is the highest
 version that any source provides. Only "not found" and "not served" fall through to the next
 source, and any other error stops the call. So if a registry in the list does not answer, a request
 for "latest" fails.
 
-A client that only reads takes a list without `store=True`:
+A client that must never write takes `read_only=True`. A list of remote registries alone has no
+local registry, so it never writes either:
 
 ```python
 import timenet
 
+local = timenet.TimeNet(sources=[timenet.LocalRegistry(".timenet-registry", read_only=True)])
 hosted = timenet.TimeNet(sources=["timenet://"])
-local = timenet.TimeNet(sources=[".timenet-registry"])
 s3 = timenet.TimeNet(sources=["s3://my-bucket/timenet"])
 ```
 
@@ -71,7 +70,7 @@ the list is:
 
 ```python
 [
-    LocalRegistry("~/.timenet/registry", store=True),
+    LocalRegistry("~/.timenet/registry"),
     "timenet://",
     InstalledConnectors(),
 ]
@@ -80,7 +79,7 @@ the list is:
 `TIMENET_LOCAL_REGISTRY` moves the local registry, `TIMENET_REMOTE_REGISTRY` replaces `timenet://`,
 and `TIMENET_AUTO_BUILD=false` removes `InstalledConnectors()` (see [Settings](#settings)). The
 arguments `local_registry`, `remote_registry` and `auto_build` of `default_sources()` override
-them, and `timenet.client.default_store()` returns the local registry alone.
+them, and `timenet.client.default_local_registry()` returns the local registry alone.
 
 ## Settings
 
@@ -207,7 +206,7 @@ declares a newer version than the local registry holds, the call builds the newe
 import timenet
 
 client = timenet.TimeNet(sources=[
-    timenet.LocalRegistry(".timenet-registry", store=True),
+    timenet.LocalRegistry(".timenet-registry"),
     "timenet://",
 ])
 with client.open("org/name") as reader:
@@ -221,9 +220,8 @@ If only `InstalledConnectors()` provides a release, the call builds it into the 
 first and reads it there. The build copies or builds each missing parent from the same sources, as
 [Prepare parent releases](build.md#prepare-parent-releases) describes.
 
-When `open()`, `load()`, or `open_torch()` reads from an HTTP or S3 registry, it reads the
-complete copy of the same release in the local registry, if it holds one. Otherwise it reads the
-remote files by range.
+When `open()`, `load()`, or `open_torch()` reads from an HTTP or S3 registry, it reads the remote
+files by range.
 
 A child dataset gives the objects that it imports from a parent IDs of its own. To read such a copy
 by the ID that the parent gives it, pass the parent to `get()` with `parent=`:
@@ -269,7 +267,7 @@ from timenet.progress import BytesMoved
 
 def show(event):
     if isinstance(event, BytesMoved):
-        print(f"{event.url}: {event.done} of {event.total} bytes")
+        print(f"{event.subject}: {event.done} of {event.total} bytes")
 
 client.download("chengsenwang/tsqa", progress=show)
 ```
