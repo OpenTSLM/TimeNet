@@ -292,7 +292,10 @@ each filter. The registry combines the filters with AND logic. `TimeNet.search()
 CLI, `timenet search`, take the same filters as keywords. They build one `DatasetFilter`, apply it
 to each source of their list, and merge the hits (see
 [Browse datasets](client.md#browse-datasets)). `limit` caps the number of results, with a default
-of 100. `limit=0` returns no results, and a negative limit raises `TimeFValidationError`.
+of 100. `limit=0` returns no results, and a negative limit raises `TimeFValidationError`. A
+registry sorts its catalog by dataset ID before it filters, so `search()` returns the first matches
+by dataset ID. A `task` or `time_series_spec` filter reads the manifests only until it has `limit`
+matches.
 
 | Filter | Matches |
 | --- | --- |
