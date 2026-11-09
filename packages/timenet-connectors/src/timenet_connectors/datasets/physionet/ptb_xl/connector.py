@@ -1,10 +1,12 @@
 """Build reusable PTB-XL ECG records without tasks, at their original sampling rate."""
 
 import ast
-import csv
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
+from typing import Annotated
+
+from pydantic import PlainValidator, TypeAdapter, ValidationInfo, field_validator
 
 from timenet.dataset import Record, SignalChannel, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
@@ -13,6 +15,8 @@ from timenet.types import Annotation, Split, TimeSeriesSpec, ureg
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.demographics import Sex, age_annotation, sex_annotation, subject_ids_annotation
 from timenet_connectors.download import ensure_archive, find_dir_containing
+from timenet_connectors.sources.csv import iter_csv_rows
+from timenet_connectors.sources.rows import SourceRow
 
 
 PTBXL_ZIP_URL = "s3://physionet-open/ptb-xl/ptb-xl-1.0.3.zip"
@@ -22,18 +26,6 @@ _LEAD_COUNT = 12
 _VALIDATION_FOLD = 9
 _TEST_FOLD = 10
 _ECG = TimeSeriesSpec(spec_type="ecg", name="12-lead ECG", unit_value=ureg.millivolt)
-# The columns that PTB-XL fills in every row. If one of them is empty, the row is broken.
-_REQUIRED_COLUMNS = (
-    "ecg_id",
-    "filename_hr",
-    "patient_id",
-    "age",
-    "sex",
-    "recording_date",
-    "device",
-    "scp_codes",
-    "strat_fold",
-)
 # A cell is empty if it holds one of these values after its surrounding whitespace is removed.
 _EMPTY_CELLS = frozenset({"", "nan", "NaN"})
 # PTB-XL's signal-quality columns, then its extra-beats and pacemaker columns.
@@ -59,53 +51,111 @@ class PtbXlSource:
     database_csv: Path
 
 
-def _age_in_years(cells: dict[str, str]) -> int:
-    """Return the age of a PTB-XL row in whole years.
-
-    PTB-XL writes each age as a float, such as ``"56.0"``.
-
-    Args:
-        cells: The cells of the ``ptbxl_database.csv`` row, without surrounding whitespace.
+def _whole_number(cell: str) -> int:
+    """Read a published integer, including whole numbers written as floats.
 
     Returns:
-        The age.
+        The integer.
 
     Raises:
-        TimeNetConnectorError: If the cell holds no whole number.
+        ValueError: If the cell does not hold a whole number.
     """
-    cell = cells["age"]
-    try:
-        years = float(cell)
-    except ValueError:
-        years = None
-    if years is None or not years.is_integer():
-        raise TimeNetConnectorError(f"age {cell!r} is not a whole number")
-    return int(years)
-
-
-def _parse_patient_id(cells: dict[str, str]) -> str:
-    """Return the patient ID of a PTB-XL row as a whole number.
-
-    PTB-XL writes each patient ID as a float. For example, this function returns ``"15709"`` for
-    ``"15709.0"``.
-
-    Args:
-        cells: The cells of the ``ptbxl_database.csv`` row, without surrounding whitespace.
-
-    Returns:
-        The patient ID.
-
-    Raises:
-        TimeNetConnectorError: If the cell holds no whole number.
-    """
-    cell = cells["patient_id"]
     try:
         number = float(cell)
     except ValueError:
         number = None
     if number is None or not number.is_integer():
-        raise TimeNetConnectorError(f"patient_id {cell!r} is not a whole number")
-    return str(int(number))
+        raise ValueError(f"{cell!r} is not a whole number")
+    return int(number)
+
+
+def _optional_float(cell: str) -> float | None:
+    """Return a measurement or None for PTB-XL's missing-value markers."""
+    return None if cell.strip() in _EMPTY_CELLS else float(cell)
+
+
+_SCP_CODES = TypeAdapter(dict[str, int | float])
+
+
+def _scp_codes(cell: str) -> dict[str, int | float]:
+    """Decode the published finding likelihoods with contextual parse errors.
+
+    Returns:
+        The finding likelihoods.
+
+    Raises:
+        ValueError: If the cell is not a dictionary of finding likelihoods.
+    """
+    try:
+        codes = ast.literal_eval(cell.strip())
+    except (SyntaxError, ValueError) as exc:
+        raise ValueError(f"invalid finding likelihoods: {exc}") from exc
+    return _SCP_CODES.validate_python(codes, strict=True)
+
+
+class _PtbXlRow(SourceRow):
+    """Published metadata, with source-specific number and missing-value conventions."""
+
+    ecg_id: Annotated[int, PlainValidator(int)]
+    filename_hr: str
+    patient_id: Annotated[int, PlainValidator(_whole_number)]
+    age: Annotated[int, PlainValidator(_whole_number)]
+    sex: str
+    recording_date: str
+    device: str
+    scp_codes: Annotated[dict[str, int | float], PlainValidator(_scp_codes)]
+    strat_fold: Annotated[int, PlainValidator(int)]
+    height: Annotated[float | None, PlainValidator(_optional_float)] = None
+    weight: Annotated[float | None, PlainValidator(_optional_float)] = None
+    report: str = ""
+    heart_axis: str = ""
+    baseline_drift: str = ""
+    static_noise: str = ""
+    burst_noise: str = ""
+    electrodes_problems: str = ""
+    extra_beats: str = ""
+    pacemaker: str = ""
+    nurse: str = ""
+    site: str = ""
+    validated_by: str = ""
+    second_opinion: str = ""
+    initial_autogenerated_report: str = ""
+    validated_by_human: str = ""
+    infarction_stadium1: str = ""
+    infarction_stadium2: str = ""
+    filename_lr: str = ""
+
+    @field_validator(
+        "ecg_id",
+        "filename_hr",
+        "patient_id",
+        "age",
+        "sex",
+        "recording_date",
+        "device",
+        "scp_codes",
+        "strat_fold",
+        mode="before",
+    )
+    @classmethod
+    def _required_cell(cls, value: str, info: ValidationInfo) -> str:
+        if value.strip() in _EMPTY_CELLS:
+            raise ValueError(f"required column {info.field_name} is empty")
+        return value
+
+    @field_validator("sex")
+    @classmethod
+    def _sex_code(cls, value: str) -> str:
+        if value.strip() not in _SEX:
+            raise ValueError(f"sex {value!r} is not 0 or 1")
+        return value.strip()
+
+    @field_validator("age")
+    @classmethod
+    def _nonnegative_age(cls, value: int) -> int:
+        if value < 0:
+            raise ValueError(f"age {value} must be an integer of zero or more years")
+        return value
 
 
 class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
@@ -128,105 +178,71 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
             TimeNetConnectorError: If a row of ``ptbxl_database.csv`` or its recording does not hold
                 what PTB-XL describes. Examples are a malformed cell, an empty required column, a
                 patient ID that is not a whole number, a negative age, a sex code other than 0 or 1, or an
-                ``ecg_id`` that an earlier row has. The message names the CSV row and the
-                ``ecg_id``. For a repeated ``ecg_id``, the message also names the earlier row.
+                ``ecg_id`` that an earlier row has. Row errors name the file, physical line and field.
+                Recording errors also name the ``ecg_id``; duplicates name both source lines.
         """
         dataset = TimeFDataset(metadata=self.metadata())
         recording_signals = self._recording_signals()
         source = raw_refs[0]
-        # The CSV row where each ecg_id first appears.
-        first_rows: dict[int, int] = {}
-        with source.database_csv.open(newline="", encoding="utf-8") as stream:
-            for line, row in enumerate(csv.DictReader(stream), 2):
-                try:
-                    annotations = self._annotations(row)
-                    identity = int(row["ecg_id"])
-                    if identity in first_rows:
-                        raise TimeNetConnectorError(f"ecg_id {identity} repeats row {first_rows[identity]}")
-                    first_rows[identity] = line
-                    base = source.root / row["filename_hr"]
-                    header = self._read_header(base)
-                    if header.fs != _SAMPLING_RATE_HZ or len(header.sig_name) != _LEAD_COUNT:
-                        raise TimeNetConnectorError("PTB-XL requires twelve leads at 500 Hz")
-                    axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
-                    signals = recording_signals(
-                        base,
-                        header,
-                        tuple(
-                            SignalChannel(
-                                spec=_ECG,
-                                name=name,
-                                time_axis=axis,
-                                n_values=int(header.sig_len),
-                            )
-                            for name in header.sig_name
-                        ),
-                    )
-                    record = dataset.add_record(
-                        record=Record(
-                            metadata={"ecg_id": identity},
-                            sources=(Source(name="PTB-XL ECG", signals=signals),),
+        for line, row in iter_csv_rows(source.database_csv, _PtbXlRow, unique="ecg_id"):
+            identity = row.ecg_id
+            try:
+                base = source.root / row.filename_hr
+                header = self._read_header(base)
+                if header.fs != _SAMPLING_RATE_HZ or len(header.sig_name) != _LEAD_COUNT:
+                    raise TimeNetConnectorError("PTB-XL requires twelve leads at 500 Hz")
+                axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
+                signals = recording_signals(
+                    base,
+                    header,
+                    tuple(
+                        SignalChannel(
+                            spec=_ECG,
+                            name=name,
+                            time_axis=axis,
+                            n_values=int(header.sig_len),
                         )
+                        for name in header.sig_name
+                    ),
+                )
+                record = dataset.add_record(
+                    record=Record(
+                        metadata={"ecg_id": identity},
+                        sources=(Source(name="PTB-XL ECG", signals=signals),),
                     )
-                    record.add_annotations(annotations)
-                except (KeyError, ValueError, SyntaxError, OSError, TimeNetConnectorError) as exc:
-                    raise TimeNetConnectorError(
-                        f"invalid PTB-XL row {line} (ecg_id {row.get('ecg_id')}) in {source.database_csv}: {exc}"
-                    ) from exc
+                )
+                record.add_annotations(self._annotations(row))
+            except (OSError, TimeNetConnectorError) as exc:
+                raise TimeNetConnectorError(f"{source.database_csv}:{line}: ecg_id {identity}: {exc}") from exc
         return dataset
 
     @staticmethod
-    def _annotations(row: dict[str, str]) -> list[Annotation]:
-        """Return the clinical annotations of one PTB-XL row.
-
-        PTB-XL leaves a cell empty when a value is unknown, for example ``height`` and ``weight``. An empty
-        cell in such a column adds no annotation. PTB-XL fills the required columns in every row, for
-        example ``patient_id`` and ``sex``. If one of them is empty, the row is broken.
-
-        Raises:
-            TimeNetConnectorError: If a required column is empty, the sex code is not 0 or 1, the age is
-                negative, or the age or the patient ID is not a whole number.
-        """
-        cells = {key: (value or "").strip() for key, value in row.items()}
-        empty = [column for column in _REQUIRED_COLUMNS if cells.get(column, "") in _EMPTY_CELLS]
-        if empty:
-            names = ", ".join(empty)
-            raise TimeNetConnectorError(
-                f"required column {names} is empty" if len(empty) == 1 else f"required columns {names} are empty"
-            )
-        result = [age_annotation(_age_in_years(cells), description=_AGE_DESCRIPTION)]
+    def _annotations(row: _PtbXlRow) -> list[Annotation]:
+        """Return annotations from validated metadata, preserving published text."""
+        result = [age_annotation(row.age, description=_AGE_DESCRIPTION)]
         for key, unit in (("height", "centimeter"), ("weight", "kilogram")):
-            if cells.get(key, "") not in _EMPTY_CELLS:
-                result.append(Annotation(key=key, value=float(cells[key]), unit=unit))
+            if (value := getattr(row, key)) is not None:
+                result.append(Annotation(key=key, value=value, unit=unit))
         for key in ("report", "heart_axis"):
-            if cells.get(key):
-                result.append(Annotation(key=key, value=row[key]))
-        result.extend(
-            (
-                Annotation(key="device", value=row["device"]),
-                Annotation(key="recording_date", value=cells["recording_date"]),
-            )
-        )
-        # The cell of a finding can name the leads that the finding affects. The annotation gets the
-        # cell value without its surrounding whitespace.
-        for key in _FINDINGS:
-            if value := cells.get(key):
+            if (value := getattr(row, key)).strip():
                 result.append(Annotation(key=key, value=value))
-        result.append(subject_ids_annotation([_parse_patient_id(cells)]))
-        sex = _SEX.get(cells["sex"])
-        if sex is None:
-            raise TimeNetConnectorError(f"sex {row['sex']!r} is not 0 or 1")
-        result.append(sex_annotation(sex, description=_SEX_DESCRIPTION))
-        codes = ast.literal_eval(cells["scp_codes"])
-        result.append(Annotation(key="scp_codes", value=sorted(codes), metadata={"likelihoods": codes}))
-        fold = int(cells["strat_fold"])
-        split = Split.TEST if fold == _TEST_FOLD else Split.VALIDATION if fold == _VALIDATION_FOLD else Split.TRAIN
         result.extend(
             (
-                Annotation(key="strat_fold", value=fold),
-                Annotation(key="split", value=split.value),
+                Annotation(key="device", value=row.device),
+                Annotation(key="recording_date", value=row.recording_date.strip()),
             )
         )
+        for key in _FINDINGS:
+            if value := getattr(row, key).strip():
+                result.append(Annotation(key=key, value=value))
+        result.append(subject_ids_annotation([str(row.patient_id)]))
+        result.append(sex_annotation(_SEX[row.sex], description=_SEX_DESCRIPTION))
+        result.append(
+            Annotation(key="scp_codes", value=sorted(row.scp_codes), metadata={"likelihoods": dict(row.scp_codes)})
+        )
+        fold = row.strat_fold
+        split = Split.TEST if fold == _TEST_FOLD else Split.VALIDATION if fold == _VALIDATION_FOLD else Split.TRAIN
+        result.extend((Annotation(key="strat_fold", value=fold), Annotation(key="split", value=split.value)))
         return result
 
 

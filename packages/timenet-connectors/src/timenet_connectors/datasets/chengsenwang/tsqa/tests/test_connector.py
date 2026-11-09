@@ -6,7 +6,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.testing import assert_round_trips
 from timenet.types import AnswerTask
 from timenet.types.splits import Split
@@ -196,3 +196,20 @@ def test_source_is_pinned():
     assert TSQAConnector.HF_REPO == "ChengsenWang/TSQA"
     assert TSQAConnector.SOURCE_REVISION == "22518209e3ee6302be4b4957f2692b3e8de849c3"
     assert dict(TSQAConnector.SOURCE_FILES) == {"train": "default/train/0000.parquet"}
+
+
+@pytest.mark.parametrize(
+    ("changes", "message"),
+    [
+        ({"Question": "  "}, r"Question:"),
+        ({"Answer": None}, r"Answer:"),
+        ({"Series": "[1, 2"}, r"Series: Invalid JSON"),
+        ({"Series": "[]"}, r"Series.*at least 1 item"),
+        ({"Series": json.dumps([1.0, "x"])}, r"Series.*1.*valid integer"),
+    ],
+)
+def test_a_malformed_cell_names_its_file_and_row(tmp_path, changes, message):
+    rows = _fixture_rows()
+    rows[4] = {**rows[4], **changes}
+    with pytest.raises(TimeNetConnectorError, match=rf"rows-0\.parquet row 4: .*{message}"):
+        TSQAConnector().convert(_refs(tmp_path, rows))
