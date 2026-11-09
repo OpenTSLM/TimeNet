@@ -108,7 +108,9 @@ it between the Signals that use it.
 
 The two `missing_*` columns hold the spec's `MissingValues` record. They are both null for a spec
 that allows no missing timesteps, so `missing_reason` alone tells whether a series is nullable.
-`null_count` records how many of the signal's `n_values` timesteps are missing.
+`null_count` records how many of the signal's `n_values` timesteps are missing. A release written before the record existed has only `nullable` and no
+`null_count`. The reader reads NULL for the absent columns and gives such a spec the reason
+`unspecified`.
 
 Regular axes store a rational microsecond period and origin. Ordinal axes need only their type.
 Irregular axes store their endpoints in `axes` and their ordered microsecond time offsets in

@@ -1,5 +1,6 @@
 """Dataset-level descriptive identity and derived type declaration."""
 
+from collections.abc import Mapping
 from pathlib import Path
 from typing import Annotated, Any, Self
 
@@ -194,3 +195,17 @@ class DatasetSchema(TimeFModel):
     """Type-level descriptors for the dataset's annotation keys."""
     tasks: tuple[TaskDeclaration, ...] = ()
     """Built-in ``Task`` subclasses the dataset declares, resolved from the registry."""
+
+    @field_validator("time_series_specs", mode="before")
+    @classmethod
+    def _upgrade_legacy_specs(cls, specs: Any) -> Any:
+        """Convert legacy ``nullable`` flags to missing-value records.
+
+        Returns:
+            The specs with their ``nullable`` flags converted to ``missing`` records.
+        """
+        if not isinstance(specs, (list, tuple)):
+            return specs
+        return tuple(
+            TimeSeriesSpec.upgrade_legacy_nullable(spec) if isinstance(spec, Mapping) else spec for spec in specs
+        )

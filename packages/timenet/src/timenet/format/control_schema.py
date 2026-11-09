@@ -13,6 +13,9 @@ Fixed-shape fields are typed columns, so SQL can filter them. Only the free-form
 dictionaries are JSON. The database has no persisted constraints. The writer keeps
 :data:`Table.unique` and :data:`Table.foreign_keys` while it streams rows, and
 :func:`timenet.format.control_audit.audit_control_database` checks them again.
+
+A column that some releases lack is listed in :data:`LEGACY_ABSENT_COLUMNS`. The reader reads
+NULL for it from such a release and applies the older meaning.
 """
 
 from dataclasses import dataclass
@@ -229,6 +232,20 @@ SIGNALS = Table(
 A specification allows missing timesteps when ``missing_reason`` is set.
 ``null_count`` is the number of missing timesteps among the signal's ``n_values`` timesteps.
 It is null only when the signal has no stored values and no supplied count.
+
+A release written before the ``missing_*`` and ``null_count`` columns existed has only the
+``nullable`` flag. The reader reads NULL for the absent columns and gives such a spec the
+reason ``unspecified``.
+"""
+
+LEGACY_ABSENT_COLUMNS: dict[str, frozenset[str]] = {
+    SIGNALS.name: frozenset({"missing_reason", "missing_description", "null_count", "nullable"}),
+}
+"""Columns by table that some releases do not have.
+
+A release written before a column was added lacks it. The ``nullable`` flag is the other way
+round: only a release written before the missing-value record existed has it. The reader
+selects NULL for an absent column, so one row type reads both kinds of release.
 """
 
 SIGNAL_CHUNKS = Table(

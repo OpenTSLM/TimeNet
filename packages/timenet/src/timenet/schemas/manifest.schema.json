@@ -506,7 +506,8 @@
         "not_recorded",
         "alignment_padding",
         "not_applicable",
-        "redacted"
+        "redacted",
+        "unspecified"
       ],
       "title": "MissingReason",
       "type": "string"
@@ -659,6 +660,11 @@
         "modality": {
           "$ref": "#/$defs/InputModality",
           "default": "time_series"
+        },
+        "nullable": {
+          "deprecated": true,
+          "description": "Older flag. A reader turns true into missing with the reason 'unspecified'.",
+          "type": "boolean"
         }
       },
       "required": [

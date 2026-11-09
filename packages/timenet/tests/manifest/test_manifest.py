@@ -184,6 +184,34 @@ def test_a_spec_without_missing_allows_no_missing_timestep():
     jsonschema.validate(data, MANIFEST_SCHEMA)
 
 
+@pytest.mark.parametrize("nullable", [False, True])
+def test_the_legacy_nullable_flag_reads_as_an_unspecified_reason(nullable):
+    # Manifests written before the missing record existed store the flag instead.
+    data = _replace(
+        _manifest(),
+        files=ManifestFiles(control=_CONTROL),
+    ).to_dict()
+    data["schema"]["time_series_specs"][0].pop("missing")
+    data["schema"]["time_series_specs"][0]["nullable"] = nullable
+    restored = Manifest.model_validate(data)
+    assert restored.dataset_schema.time_series_specs[0].missing == (MissingValues.unspecified() if nullable else None)
+    assert "nullable" not in restored.to_dict()["schema"]["time_series_specs"][0]
+    jsonschema.validate(data, MANIFEST_SCHEMA)
+
+
+@pytest.mark.parametrize("nullable", [1, None, "true"])
+def test_manifest_rejects_nonboolean_nullable(nullable):
+    data = _replace(
+        _manifest(),
+        files=ManifestFiles(control=_CONTROL),
+    ).to_dict()
+    data["schema"]["time_series_specs"][0]["nullable"] = nullable
+    with pytest.raises(ValidationError, match="nullable"):
+        Manifest.model_validate(data)
+    with pytest.raises(jsonschema.ValidationError):
+        jsonschema.validate(data, MANIFEST_SCHEMA)
+
+
 @pytest.mark.parametrize("version", [None, True, 1.0])
 def test_parsed_manifest_requires_integer_version(version):
     data = _manifest().to_dict()

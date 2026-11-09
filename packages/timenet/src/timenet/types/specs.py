@@ -1,11 +1,12 @@
 """Measurement modality descriptors used by Signals."""
 
-from collections.abc import Callable
+from collections.abc import Callable, Mapping
 from enum import StrEnum, unique
 from typing import Annotated, Any, Self, cast
 
 import pint
 from pydantic import (
+    ConfigDict,
     PlainSerializer,
     PlainValidator,
     StrictStr,
@@ -103,6 +104,12 @@ class MissingReason(StrEnum):
     """The measurement does not apply at this timestep, for example before a sensor is ready."""
     REDACTED = "redacted"
     """The source deliberately removed the value, for example to protect a person's privacy."""
+    UNSPECIFIED = "unspecified"
+    """The release does not record a reason for missing timesteps.
+
+    Only a release written before TimeF recorded a reason has this value. A new series with
+    missing timesteps must use another reason.
+    """
 
 
 class MissingValues(TimeFModel):
@@ -116,6 +123,24 @@ class MissingValues(TimeFModel):
     """Why timesteps are missing."""
     description: NonEmptyString | None = None
     """An explanation of missing timesteps in the source, or ``None``."""
+
+    @classmethod
+    def unspecified(cls) -> Self:
+        """Create a missing-value record for a legacy release.
+
+        Returns:
+            A record with the reason :attr:`MissingReason.UNSPECIFIED`.
+        """
+        return cls(reason=MissingReason.UNSPECIFIED)
+
+
+def _add_legacy_nullable_to_schema(schema: dict[str, Any]) -> None:
+    """Keep the legacy ``nullable`` flag in the JSON schema of a spec."""
+    schema["properties"]["nullable"] = {
+        "type": "boolean",
+        "deprecated": True,
+        "description": "Older flag. A reader turns true into missing with the reason 'unspecified'.",
+    }
 
 
 class TimeSeriesSpec(TimeFModel):
@@ -144,10 +169,40 @@ class TimeSeriesSpec(TimeFModel):
     modality: InputModality = InputModality.TIME_SERIES
     """Semantic input kind. Set IMAGE, AUDIO, or TEXT for Signals that carry those kinds of data."""
 
+    model_config = ConfigDict(json_schema_extra=_add_legacy_nullable_to_schema)
+
     @property
     def nullable(self) -> bool:
         """Whether the specification allows missing timesteps. True when :attr:`missing` is set."""
         return self.missing is not None
+
+    @staticmethod
+    def upgrade_legacy_nullable(data: Mapping[str, Any]) -> dict[str, Any]:
+        """Convert a legacy ``nullable`` flag to a ``missing`` record.
+
+        If ``missing`` is present, ``nullable`` must agree with it.
+
+        Args:
+            data: The fields of one spec from a manifest.
+
+        Returns:
+            The fields without ``nullable``.
+
+        Raises:
+            ValueError: If ``nullable`` is not a bool or disagrees with ``missing``.
+        """
+        fields = dict(data)
+        if "nullable" not in fields:
+            return fields
+        nullable = fields.pop("nullable")
+        if not isinstance(nullable, bool):
+            raise ValueError(f"TimeSeriesSpec.nullable must be a bool, got {nullable!r}")
+        missing = fields.get("missing")
+        if missing is None:
+            fields["missing"] = MissingValues.unspecified() if nullable else None
+        elif not nullable:
+            raise ValueError("TimeSeriesSpec.nullable is false but missing says that timesteps can be missing")
+        return fields
 
     def check_nulls_allowed(self, null_count: int, *, series: str) -> None:
         """Check that the specification allows missing timesteps.
@@ -158,14 +213,21 @@ class TimeSeriesSpec(TimeFModel):
 
         Raises:
             TimeFValidationError: If the series has missing timesteps but the spec has no
-                :attr:`missing` record.
+                :attr:`missing` record, or its record has the ``unspecified`` reason.
         """
-        if null_count == 0 or self.missing is not None:
+        if null_count == 0:
             return
-        raise TimeFValidationError(
-            f"{series} has {null_count} null values but its spec {self.spec_type!r} allows no missing "
-            "timestep. Set TimeSeriesSpec.missing to say why values are missing"
-        )
+        if self.missing is None:
+            raise TimeFValidationError(
+                f"{series} has {null_count} null values but its spec {self.spec_type!r} allows no missing "
+                "timestep. Set TimeSeriesSpec.missing to say why values are missing"
+            )
+        if self.missing.reason is MissingReason.UNSPECIFIED:
+            raise TimeFValidationError(
+                f"{series} has {null_count} null values but its spec {self.spec_type!r} gives no reason. "
+                "The 'unspecified' reason is only for releases written before TimeF recorded one. "
+                "Set TimeSeriesSpec.missing to say why values are missing"
+            )
 
     @model_validator(mode="after")
     def _valid_contract(self) -> Self:

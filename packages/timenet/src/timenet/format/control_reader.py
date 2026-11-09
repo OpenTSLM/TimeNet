@@ -23,7 +23,7 @@ from timenet.dataset import IrregularAxis, OrdinalAxis, Record, RegularAxis, Sig
 from timenet.dataset.composition import ImportMap
 from timenet.errors import TimeFFormatError, TimeFNotFoundError, TimeFReaderError, TimeFValidationError
 from timenet.format.annotation_codec import decode_annotation_value
-from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX, TABLES
+from timenet.format.control_schema import ANNOTATED_OBJECT_TYPES, LAST_ID_PREFIX, LEGACY_ABSENT_COLUMNS, TABLES
 from timenet.format.duckdb import CATALOG_ERRORS, check_control_schema, connect_control
 from timenet.format.stored_array import ChunkLocation
 from timenet.format.stored_values import (
@@ -138,6 +138,9 @@ class _SignalRow(NamedTuple):
     null_count: int | None
     metadata: str
     modality: str
+    # Only a release written before the missing-value record existed has this column. The
+    # reader selects NULL for it from a newer release.
+    nullable: bool | None = None
 
     @property
     def id(self) -> EntityId:
@@ -158,6 +161,7 @@ class _SignalRow(NamedTuple):
             self.missing_reason,
             self.missing_description,
             self.modality,
+            self.nullable,
         )
 
 
@@ -600,6 +604,8 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         self._known_record_ids: set[int] = set()
         # Chunk files and sources named by the chunk locations read so far, so equal names share one string.
         self._chunk_strings: dict[str, str] = {}
+        self._columns_by_table: dict[str, frozenset[str]] = {}
+        """The columns that this database has, by table, for the tables looked at so far."""
 
     def run(self, query: Callable[[duckdb.DuckDBPyConnection], _T]) -> _T:
         """Run one read through the connection, which opens again first if it was closed.
@@ -1206,7 +1212,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             TimeFFormatError: If an ID occurs more than once.
         """
         table, order_column, relation_column, kind = _HIERARCHY_TABLES[row_type]
-        columns = ", ".join(row_type._fields)
+        columns = self._select_list(table, row_type._fields)
         query = (
             # ruff: ignore[hardcoded-sql-expression] - fixed identifiers
             f"SELECT {columns} FROM {table} WHERE ? OR {relation_column} IN (SELECT unnest(?)) ORDER BY {order_column}"
@@ -1216,6 +1222,39 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
         if len(indexed) != len(rows):
             raise TimeFFormatError(f"control.duckdb contains duplicate {kind.value.lower()} IDs")
         return indexed
+
+    def _select_list(self, table: str, fields: tuple[str, ...]) -> str:
+        """Create a ``SELECT`` list for the columns of a row type.
+
+        A release written before a column was added lacks it. Such a column, listed in
+        :data:`LEGACY_ABSENT_COLUMNS`, is selected as NULL so the row builder applies the older
+        meaning. Any other absent column fails in DuckDB.
+
+        Args:
+            table: The table to read.
+            fields: The columns in the row type's order.
+
+        Returns:
+            The comma-separated list for the ``SELECT`` clause.
+        """
+        legacy = LEGACY_ABSENT_COLUMNS.get(table, frozenset())
+        if not legacy & set(fields):
+            return ", ".join(fields)
+        present = self._table_columns(table)
+        return ", ".join(f"NULL AS {name}" if name in legacy and name not in present else name for name in fields)
+
+    def _table_columns(self, table: str) -> frozenset[str]:
+        """Return the columns that this database has in a table.
+
+        Returns:
+            The column names, read once per table and kept.
+        """
+        columns = self._columns_by_table.get(table)
+        if columns is None:
+            rows = self._query("SELECT column_name FROM information_schema.columns WHERE table_name = ?", [table])
+            columns = frozenset(row[0] for row in rows)
+            self._columns_by_table[table] = columns
+        return columns
 
     @staticmethod
     def _group_sources(
@@ -2128,6 +2167,9 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
     def _missing_values_from_row(row: _SignalRow) -> MissingValues | None:
         """Read the reason and description for missing timesteps from a stored signal row.
 
+        A release written before TimeF recorded a reason stores only the ``nullable`` flag. Its
+        specs that allow missing timesteps get the ``unspecified`` reason.
+
         Returns:
             The reason and description, or ``None`` if the row has no reason.
             Without a reason, the specification allows no missing timesteps.
@@ -2136,7 +2178,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             TimeFFormatError: If the stored reason or description is invalid.
         """
         if row.missing_reason is None:
-            return None
+            return MissingValues.unspecified() if row.nullable else None
         try:
             return MissingValues.model_validate(
                 {
