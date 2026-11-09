@@ -22,20 +22,20 @@ RowT = TypeVar("RowT", bound=DataRow)
 class DataReader(ABC, Generic[RowT]):
     """Read and validate rows from one local source file.
 
-    ``strict`` controls validation of decoded JSON and Parquet values. When omitted,
+    ``strict_parsing`` controls validation of decoded JSON and Parquet values. When omitted,
     the row schema determines strictness. CSV always parses its string cells.
     """
 
-    def __init__(self, path: Path, row_type: type[RowT], *, strict: bool | None = None) -> None:
+    def __init__(self, path: Path, row_type: type[RowT], *, strict_parsing: bool | None = None) -> None:
         self.path = path
         self.row_type = row_type
-        self.strict = strict
+        self.strict_parsing = strict_parsing
 
     def _validate(self, value: object, context: str, *, strings: bool = False) -> RowT:
         try:
             if strings:
                 return self.row_type.model_validate_strings(value)
-            return self.row_type.model_validate(value, strict=self.strict)
+            return self.row_type.model_validate(value, strict=self.strict_parsing)
         except ValidationError as exc:
             raise TimeNetConnectorError(f"{self.path}: {context}: {exc}") from exc
 
