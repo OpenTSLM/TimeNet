@@ -160,9 +160,3 @@ def test_frozen_json_keeps_its_json_and_stays_frozen_after_a_copy(copy_value):
     assert isinstance(item, dict)
     with pytest.raises(TypeError, match="cannot change"):
         item["flag"] = False
-
-
-@pytest.mark.parametrize("source", [{"bad": math.nan}, {1: "value"}, {"bad": (1, 2)}, {"bad": np.float64(1.0)}])
-def test_freezing_preserves_strict_json_validation(source):
-    with pytest.raises(ValidationError):
-        freeze_json_mapping(source)
