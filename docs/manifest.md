@@ -61,18 +61,18 @@ every installed package with its version. `timenet.provenance.build_env` collect
 
 ```json
 "git": {
-  "timenet": {"sha": "4818e37f...", "local_changes": false},
-  "timenet-connectors": {"sha": "4818e37f...", "local_changes": false}
+  "timenet": {"sha": "4818e37f...", "contains_local_changes": false},
+  "timenet-connectors": {"sha": "4818e37f...", "contains_local_changes": false}
 }
 ```
 
 Each distribution records the commit of the code that runs:
 
-- An editable install, such as a workspace checkout, asks git. `local_changes` is `true` if the
-  package directory has uncommitted changes, untracked files included. A change elsewhere in the
-  repository does not set it.
+- An editable install, such as a workspace checkout, asks git. `contains_local_changes` is
+  `true` if the package directory has uncommitted changes, untracked files included. A change
+  elsewhere in the repository does not set it.
 - A git install (`pip install git+https://...`) records the commit that pip installed, with
-  `local_changes` set to `false`.
+  `contains_local_changes` set to `false`.
 - Any other install, such as a wheel or `pip install ./packages/timenet`, reads the
   `_build_info.json` file in the package. `scripts/build_dists.py` writes that file while it
   builds the wheel, and records the state of the checkout at that time. `make build` and the

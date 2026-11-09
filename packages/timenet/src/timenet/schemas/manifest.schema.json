@@ -379,14 +379,14 @@
           "title": "Sha",
           "type": "string"
         },
-        "local_changes": {
-          "title": "Local Changes",
+        "contains_local_changes": {
+          "title": "Contains Local Changes",
           "type": "boolean"
         }
       },
       "required": [
         "sha",
-        "local_changes"
+        "contains_local_changes"
       ],
       "title": "GitSource",
       "type": "object"

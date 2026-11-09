@@ -77,9 +77,10 @@ jobs:
             uv run --isolated --no-project "${args[@]}" \
               python -c "import $module; print('smoke ok:', $module.__name__)"
             uv run --isolated --no-project "${args[@]}" python -c "
-          from timenet.provenance import git_sources
-          commit = git_sources().get('$dist')
-          expected = {'sha': '$GITHUB_SHA', 'local_changes': False}
+          from timenet.manifest import GitSource
+          from timenet.provenance import GitSnapshot
+          commit = GitSnapshot.read().recorded_sources().get('$dist')
+          expected = GitSource(sha='$GITHUB_SHA', contains_local_changes=False)
           assert commit == expected, f'$dist records {commit}, expected {expected}'
           print('commit ok:', commit)"
             echo "::endgroup::"

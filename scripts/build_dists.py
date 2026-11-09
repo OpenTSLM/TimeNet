@@ -20,7 +20,7 @@ PACKAGES = {
     ROOT / "packages" / "timenet": "timenet",
     ROOT / "packages" / "timenet-connectors": "timenet_connectors",
 }
-# Keep in step with timenet.provenance.BUILD_INFO_FILE, which reads the file.
+# Keep in step with timenet.provenance.TimeNetDistribution.BUILD_INFO_FILE, which reads the file.
 BUILD_INFO_FILE = "_build_info.json"
 
 
@@ -55,7 +55,8 @@ def main(build_args: list[str]) -> int:
     try:
         for directory, module in PACKAGES.items():
             sha, status = before[directory]
-            info = {"sha": sha, "local_changes": bool(status)}
+            # Keep the keys in step with timenet.manifest.GitSource.
+            info = {"sha": sha, "contains_local_changes": bool(status)}
             target = directory / "src" / module / BUILD_INFO_FILE
             # Register the file before the write, so a write that fails halfway is removed too.
             written.append(target)

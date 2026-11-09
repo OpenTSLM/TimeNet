@@ -9,7 +9,8 @@ import sys
 import pytest
 
 from timenet.errors import TimeNetBuildError
-from timenet.provenance import build_env, git_sources
+from timenet.manifest import GitSource
+from timenet.provenance import GitSnapshot, build_env
 
 
 def test_build_env_records_the_running_python():
@@ -94,7 +95,7 @@ def _editable(directory: Path) -> dict:
 def test_an_editable_install_records_the_commit_of_its_checkout(git, checkout, installed):
     installed(direct_url=_editable(checkout))
     head = _run(git, checkout, "rev-parse", "HEAD")
-    assert build_env()["git"] == {"timenet": {"sha": head, "local_changes": False}}
+    assert build_env()["git"] == {"timenet": GitSource(sha=head, contains_local_changes=False)}
 
 
 @pytest.mark.real_git
@@ -102,7 +103,7 @@ def test_an_editable_install_records_the_commit_of_its_checkout(git, checkout, i
 def test_a_change_in_the_package_directory_is_a_local_change(checkout, installed, change):
     installed(direct_url=_editable(checkout))
     (checkout / change).write_text("x = 2\n")
-    assert git_sources()["timenet"]["local_changes"] is True
+    assert GitSnapshot.read().recorded_sources()["timenet"].contains_local_changes is True
 
 
 @pytest.mark.real_git
@@ -110,7 +111,7 @@ def test_a_change_outside_the_package_directory_is_not_a_local_change(checkout, 
     installed(direct_url=_editable(checkout))
     (checkout.parents[1] / "README.md").write_text("edited\n")
     (checkout.parents[1] / "scratch.ipynb").write_text("{}\n")
-    assert git_sources()["timenet"]["local_changes"] is False
+    assert GitSnapshot.read().recorded_sources()["timenet"].contains_local_changes is False
 
 
 @pytest.mark.real_git
@@ -118,34 +119,34 @@ def test_an_editable_install_outside_git_has_no_commit(git, tmp_path, installed)
     outside = tmp_path / "outside"
     outside.mkdir()
     installed(direct_url=_editable(outside))
-    assert git_sources() == {}
+    assert GitSnapshot.read().recorded_sources() == {}
 
 
 @pytest.mark.real_git
 def test_a_path_install_reads_its_build_info_and_not_the_live_checkout(checkout, installed):
-    info = {"sha": "a" * 40, "local_changes": False}
-    installed(direct_url={"url": checkout.as_uri(), "dir_info": {}}, build_info=json.dumps(info))
-    assert git_sources() == {"timenet": info}
+    info = GitSource(sha="a" * 40, contains_local_changes=False)
+    installed(direct_url={"url": checkout.as_uri(), "dir_info": {}}, build_info=info.model_dump_json())
+    assert GitSnapshot.read().recorded_sources() == {"timenet": info}
 
 
 @pytest.mark.real_git
 def test_a_git_install_records_the_commit_that_pip_installed(installed):
     sha = "b" * 40
     installed(direct_url={"url": "https://example.org/timenet.git", "vcs_info": {"vcs": "git", "commit_id": sha}})
-    assert git_sources() == {"timenet": {"sha": sha, "local_changes": False}}
+    assert GitSnapshot.read().recorded_sources() == {"timenet": GitSource(sha=sha, contains_local_changes=False)}
 
 
 @pytest.mark.real_git
 def test_a_wheel_reads_its_commit_from_the_build_info(installed):
-    info = {"sha": "a" * 40, "local_changes": True}
-    installed(build_info=json.dumps(info))
-    assert git_sources() == {"timenet": info}
+    info = GitSource(sha="a" * 40, contains_local_changes=True)
+    installed(build_info=info.model_dump_json())
+    assert GitSnapshot.read().recorded_sources() == {"timenet": info}
 
 
 @pytest.mark.real_git
 def test_a_wheel_without_build_info_has_no_commit(installed):
     installed()
-    assert git_sources() == {}
+    assert GitSnapshot.read().recorded_sources() == {}
 
 
 @pytest.mark.real_git
@@ -154,11 +155,11 @@ def test_a_wheel_without_build_info_has_no_commit(installed):
     [
         # The manifest forbids extra keys for every nested block, but this standalone check must
         # forbid them itself.
-        json.dumps({"sha": "a" * 40, "local_changes": False, "branch": "main"}),
+        json.dumps({"sha": "a" * 40, "contains_local_changes": False, "branch": "main"}),
         "not json",
     ],
 )
 def test_a_wheel_with_invalid_build_info_fails(installed, build_info):
     installed(build_info=build_info)
     with pytest.raises(TimeNetBuildError, match=r"_build_info\.json"):
-        git_sources()
+        GitSnapshot.read().recorded_sources()
