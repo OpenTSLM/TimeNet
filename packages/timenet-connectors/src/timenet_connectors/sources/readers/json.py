@@ -8,7 +8,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources.readers.base import DataReader, RowT
 
 
-def _distinct_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+def _reject_duplicate_keys(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     result: dict[str, Any] = {}
     for key, value in pairs:
         if key in result:
@@ -17,7 +17,7 @@ def _distinct_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-class JsonDataReader(DataReader[RowT]):
+class JsonArrayDataReader(DataReader[RowT]):
     """Read rows from a UTF-8 JSON array, loaded into memory."""
 
     def iter_rows(self) -> Generator[RowT, None, None]:
@@ -31,7 +31,7 @@ class JsonDataReader(DataReader[RowT]):
         """
         try:
             with self.path.open(encoding="utf-8") as handle:
-                values = json.load(handle, object_pairs_hook=_distinct_fields)
+                values = json.load(handle, object_pairs_hook=_reject_duplicate_keys)
         except (OSError, UnicodeError, ValueError) as exc:
             raise TimeNetConnectorError(f"{self.path}: {exc}") from exc
         if not isinstance(values, list):
@@ -56,7 +56,7 @@ class JsonlDataReader(DataReader[RowT]):
             with self.path.open(encoding="utf-8") as handle:
                 for number, line in enumerate(handle, start=1):
                     try:
-                        value = json.loads(line, object_pairs_hook=_distinct_fields)
+                        value = json.loads(line, object_pairs_hook=_reject_duplicate_keys)
                     except ValueError as exc:
                         raise TimeNetConnectorError(f"{self.path}: line {number}: {exc}") from exc
                     yield self._validate(value, f"line {number}")
