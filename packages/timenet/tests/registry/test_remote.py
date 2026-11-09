@@ -200,6 +200,35 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
     assert (dest / "manifest.json").exists()
 
 
+def test_full_download_waits_out_a_rate_limited_presign(version_dir, tmp_path, monkeypatch, caplog):
+    directory, manifest = version_dir
+    transport, _ = build_fake(directory)
+    limited = set()
+
+    def handler(request):
+        if "/download/" in request.url.path and request.url.path not in limited:
+            limited.add(request.url.path)
+            return httpx.Response(429, headers={"Retry-After": "1"}, json={"detail": "rate limit exceeded"})
+        return transport.handler(request)
+
+    waits = []
+
+    async def no_sleep(seconds):
+        waits.append(seconds)
+
+    monkeypatch.setattr("timenet.registry.remote._http.asyncio.sleep", no_sleep)
+    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=tmp_path / "cache")
+    dest = tmp_path / "out" / manifest.metadata.dataset_id / str(manifest.metadata.dataset_version)
+
+    registry.download_version(manifest.metadata.dataset_id, str(manifest.metadata.dataset_version), dest)
+
+    assert limited
+    assert waits == [1.0] * len(limited)
+    assert sum("rate-limited (429)" in message for message in caplog.messages) == len(limited)
+    for part in manifest.files.all_parts():
+        assert (dest / part).read_bytes() == (directory / part).read_bytes()
+
+
 def test_a_corrupted_remote_download_names_the_file_and_its_checksums(version_dir, tmp_path):
     registry, _ = _remote(version_dir, tmp_path)
     directory, manifest = version_dir

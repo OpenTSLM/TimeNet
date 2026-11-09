@@ -7,8 +7,10 @@ leaking the token to object storage. It maps HTTP status codes onto TimeNet erro
 :class:`httpx.AsyncClient` sharing the same configuration for the parallel downloader.
 """
 
-from collections.abc import Callable, Mapping
+import asyncio
+from collections.abc import Awaitable, Callable, Mapping
 import importlib.metadata
+import logging
 import time
 from typing import Any, BinaryIO, cast
 
@@ -16,6 +18,8 @@ import httpx
 
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 
+
+_LOG = logging.getLogger(__name__)
 
 API_PREFIX = "/api/v1"
 _STREAM_CHUNK_BYTES = 1 << 20
@@ -48,6 +52,34 @@ def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
     return min(delay, _MAX_RETRY_WAIT_SECONDS)
 
 
+def _retry_delay(response: httpx.Response, attempt: int, waited: float) -> float | None:
+    """Return how long to wait before retrying a response, or ``None`` to stop.
+
+    Logs a warning for each retry so a caller sees why a download pauses.
+
+    Args:
+        response: The response to the last attempt.
+        attempt: The zero-based retry attempt.
+        waited: The seconds already spent waiting on earlier retries.
+
+    Returns:
+        The delay in seconds, or ``None`` if the response is not a 429 or the wait budget is spent.
+    """
+    if response.status_code != httpx.codes.TOO_MANY_REQUESTS:
+        return None
+    delay = _retry_after_seconds(response, attempt)
+    if waited + delay > _MAX_RETRY_WAIT_SECONDS:
+        return None
+    _LOG.warning(
+        "registry rate-limited (429) on %s, retrying in %gs (attempt %d of %d)",
+        response.request.url.path,
+        delay,
+        attempt + 1,
+        _MAX_RETRIES,
+    )
+    return delay
+
+
 def _send_with_retry(send: Callable[[], httpx.Response]) -> httpx.Response:
     """Issue a request, retrying while the service answers 429, honoring Retry-After.
 
@@ -61,14 +93,32 @@ def _send_with_retry(send: Callable[[], httpx.Response]) -> httpx.Response:
     waited = 0.0
     for attempt in range(_MAX_RETRIES):
         response = send()
-        if response.status_code != httpx.codes.TOO_MANY_REQUESTS:
-            return response
-        delay = _retry_after_seconds(response, attempt)
-        if waited + delay > _MAX_RETRY_WAIT_SECONDS:
+        delay = _retry_delay(response, attempt, waited)
+        if delay is None:
             return response
         time.sleep(delay)
         waited += delay
     return send()
+
+
+async def _send_with_retry_async(send: Callable[[], Awaitable[httpx.Response]]) -> httpx.Response:
+    """Issue an async request, retrying while the service answers 429, honoring Retry-After.
+
+    Args:
+        send: Issues the request and returns the response; called again for each retry.
+
+    Returns:
+        The first non-429 response, or the last 429 once the retry budget is spent.
+    """
+    waited = 0.0
+    for attempt in range(_MAX_RETRIES):
+        response = await send()
+        delay = _retry_delay(response, attempt, waited)
+        if delay is None:
+            return response
+        await asyncio.sleep(delay)
+        waited += delay
+    return await send()
 
 
 def timenet_user_agent() -> str:

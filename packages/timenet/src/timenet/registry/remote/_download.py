@@ -23,7 +23,13 @@ from timenet.manifest import Manifest
 from timenet.manifest.files import FilePart
 from timenet.registry._paths import safe_version_path
 from timenet.registry.base import ProgressCallback
-from timenet.registry.remote._http import RegistryHttpClient, _download_path, _raise_for_status, _redirect_target
+from timenet.registry.remote._http import (
+    RegistryHttpClient,
+    _download_path,
+    _raise_for_status,
+    _redirect_target,
+    _send_with_retry_async,
+)
 from timenet.registry.shared import complete_copy
 from timenet.types.references import DatasetRef
 
@@ -139,7 +145,7 @@ async def _resolve(client: httpx.AsyncClient, headers: dict, dataset_id: str, ve
         TimeNetRegistryError: If the download endpoint does not redirect.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by _redirect_target
     path = _download_path(dataset_id, version, relpath)
-    response = await client.get(path, headers=headers, follow_redirects=False)
+    response = await _send_with_retry_async(lambda: client.get(path, headers=headers, follow_redirects=False))
     return _redirect_target(response, path)
 
 
