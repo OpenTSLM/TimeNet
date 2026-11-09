@@ -39,8 +39,8 @@ The CLI needs the `cli` extra (`timenet[cli]`); `make sync` already installs it.
 | `timenet local downloads info` / `clear [--yes]` | List the downloads in the local registry (dataset, version, source, size, total), or delete them. |
 | `timenet local builds info` / `clear [--yes]` | List the builds in the local registry (dataset, version, source, size, total), or delete them. |
 
-A download is a release whose provenance record says `copy`. A build is a release whose record says
-`build`, or a release without a record. Releases can depend on each other (parent-child
+A download is a release whose provenance record says `download`. A build is a release whose
+record says `build`, or a release without a record. Releases can depend on each other (parent-child
 relationships). In that case `downloads clear` and `builds clear` might keep releases that are
 depended on, and print `Kept <release>: <release> needs it.` for each. Because `local clear` deletes
 everything, no dependency relationships can persist, and everything is removed. A symlinked dataset
