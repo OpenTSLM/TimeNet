@@ -21,10 +21,14 @@ import pyarrow as pa
 from timenet.connectors import BaseConnector
 from timenet.dataset import Signal, SignalChannel
 from timenet.errors import TimeNetConnectorError
+from timenet.types import TimeSeriesSpec
 from timenet.types.shared_loading import SharedChannelLoader
+from timenet_connectors.sources.errors import error_context
+from timenet_connectors.sources.signals import check_channel_matrix, numeric_signal
 
 
 TRaw = TypeVar("TRaw")
+_WAVEFORM_SPEC = TimeSeriesSpec(spec_type="waveform", name="Waveform", unit_value=None)
 
 # The gain field of a signal line: ``<gain>[(<baseline>)][/<units>]``, e.g. ``1000.0(0)/mV``.
 _GAIN_RE = re.compile(r"(?P<gain>[-\d.eE+]+)(?:\((?P<baseline>-?\d+)\))?")
@@ -141,6 +145,7 @@ class _WfdbRead(NamedTuple):
     gains: tuple[float, ...]
     baselines: tuple[int, ...]
     direct: bool
+    names: tuple[str, ...]
 
 
 class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
@@ -238,16 +243,23 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
                     samples = _read_dat16(str(request.base.parent / request.dat_names[0]), n_sig)
                 else:
                     samples, _ = self._wfdb().rdsamp(str(request.base))
-                if samples.shape != (request.length, n_sig):
-                    raise TimeNetConnectorError(
-                        f"{request.base}: expected samples with shape {(request.length, n_sig)}, got {samples.shape}"
-                    )
-                channels = []
-                for index in range(n_sig):
-                    values = samples[:, index].astype("float32")
-                    if request.direct:
-                        values = (values - request.baselines[index]) / request.gains[index]
-                    channels.append(pa.array(values))
+                with error_context(str(request.base)):
+                    check_channel_matrix(samples, "waveforms", sample_axis=0, n_channels=n_sig, n_values=request.length)
+                    channels = []
+                    for index in range(n_sig):
+                        values = samples[:, index]
+                        if request.direct:
+                            # Keep the existing float32 calibration order for digital samples.
+                            values = (values.astype("float32") - request.baselines[index]) / request.gains[index]
+                        channels.append(
+                            numeric_signal(
+                                values,
+                                request.names[index],
+                                spec=_WAVEFORM_SPEC,
+                                n_values=request.length,
+                                casting="float_rounding",
+                            )
+                        )
                 return tuple(channels)
             except (OSError, ValueError) as error:
                 raise TimeNetConnectorError(f"{request.base}: cannot read WFDB samples: {error}") from error
@@ -260,7 +272,13 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
 
         def channel(record_base: Path, header: WfdbHeader, lead_idx: int) -> Callable[[], pa.Array]:
             request = _WfdbRead(
-                record_base, header.sig_len, header.dat_names, header.gains, header.baselines, header.direct_read
+                record_base,
+                header.sig_len,
+                header.dat_names,
+                header.gains,
+                header.baselines,
+                header.direct_read,
+                tuple(header.sig_name),
             )
             return shared_channels.channel_loader(request, lead_idx)
 
@@ -272,7 +290,13 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
 
         def signals(base: Path, header: WfdbHeader, channels: tuple[SignalChannel, ...]) -> tuple[Signal, ...]:
             request = _WfdbRead(
-                base, header.sig_len, header.dat_names, header.gains, header.baselines, header.direct_read
+                base,
+                header.sig_len,
+                header.dat_names,
+                header.gains,
+                header.baselines,
+                header.direct_read,
+                tuple(header.sig_name),
             )
             return Signal.from_shared_loader(loader=shared, recording_key=request, channels=channels)
 
