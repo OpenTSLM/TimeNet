@@ -1,6 +1,6 @@
-"""Strict validation for metadata documented as JSON-compatible."""
+"""Validation and immutable copies of metadata documented as JSON-compatible."""
 
-from typing import Annotated, cast
+from typing import Annotated, NoReturn, cast
 
 from pydantic import (
     BeforeValidator,
@@ -68,3 +68,60 @@ def validate_json_mapping(value: object) -> JsonMapping:
     if type(value) is dict and not value:
         return {}
     return cast("JsonMapping", _MAPPING_ADAPTER.validate_python(value))
+
+
+def _refuse_change(*_args: object, **_kwargs: object) -> NoReturn:
+    """Refuse a change to immutable JSON metadata.
+
+    Raises:
+        TypeError: Always.
+    """
+    raise TypeError("JSON metadata cannot change; create a new mapping instead")
+
+
+# Keep JSON-native subclasses so json.dumps accepts objects and arrays and equality with the
+# corresponding dict and list is preserved. MappingProxyType and tuples do not provide both.
+class _FrozenJsonObject(dict):
+    """A JSON object that cannot change. It compares equal to a ``dict``, and ``json.dumps`` writes it as one."""
+
+    __slots__ = ()
+
+    __setitem__ = __delitem__ = __ior__ = clear = pop = popitem = setdefault = update = _refuse_change
+
+    def __reduce__(self) -> tuple[type, tuple[dict]]:
+        # Unpickling a dict subclass would otherwise set each item, which this class refuses.
+        return (_FrozenJsonObject, (dict(self),))
+
+
+class _FrozenJsonArray(list):
+    """A JSON array that cannot change. It compares equal to a ``list``, and ``json.dumps`` writes it as one."""
+
+    __slots__ = ()
+
+    __setitem__ = __delitem__ = __iadd__ = __imul__ = _refuse_change
+    append = clear = extend = insert = pop = remove = reverse = sort = _refuse_change
+
+    def __reduce__(self) -> tuple[type, tuple[list]]:
+        # Unpickling a list subclass would otherwise append each item, which this class refuses.
+        return (_FrozenJsonArray, (list(self),))
+
+
+def _frozen(value: object) -> object:
+    """Return a copy of a validated JSON value in which no object or array can change."""
+    if isinstance(value, dict):
+        return _FrozenJsonObject({key: _frozen(item) for key, item in value.items()})
+    if isinstance(value, list):
+        return _FrozenJsonArray(_frozen(item) for item in value)
+    return value
+
+
+def freeze_json_mapping(value: object) -> JsonMapping:
+    """Validate a metadata mapping and return a copy of it that cannot change.
+
+    Args:
+        value: Candidate JSON metadata, validated with the same rules as :func:`validate_json_mapping`.
+
+    Returns:
+        A detached mapping with immutable nested objects and arrays, still serializable as JSON.
+    """
+    return cast("JsonMapping", _frozen(validate_json_mapping(value)))
