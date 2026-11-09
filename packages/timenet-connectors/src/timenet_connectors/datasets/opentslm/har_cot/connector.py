@@ -6,7 +6,6 @@ target is the activity label. The rationale is the GPT-4o text that leads to the
 """
 
 from collections.abc import Iterator, Mapping
-import csv
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -20,6 +19,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetConnectorError
 from timenet.types import ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import ensure_archive
+from timenet_connectors.sources.readers import CsvReader, DataRow
 
 
 HAR_COT_URL = "https://polybox.ethz.ch/index.php/s/kD74GnMYxn3HBEM/download"
@@ -84,6 +84,17 @@ def _parse_axis(row: dict[str, str], column: AxisColumn) -> np.ndarray:
 def _is_repeated_header(row: dict[str, str]) -> bool:
     """Return whether a row repeats the header line, with each cell equal to its column name."""
     return all(row[column] == column for column in COLUMNS)
+
+
+class _SourceRow(DataRow):
+    """A source CSV row before parsing its sensor axes."""
+
+    x_axis: str
+    y_axis: str
+    z_axis: str
+    label: str
+    prompt: str
+    rationale: str
 
 
 @dataclass(frozen=True)
@@ -164,17 +175,14 @@ class HarCotSplitFile:
             TimeNetConnectorError: If the header is not the expected one, or a data row is malformed.
                 The message names the file and the data row.
         """
-        with self.path.open(newline="", encoding="utf-8") as stream:
-            reader = csv.DictReader(stream)
-            if tuple(reader.fieldnames or ()) != COLUMNS:
-                raise TimeNetConnectorError(f"{self.path.name}: expected columns {COLUMNS}, got {reader.fieldnames}")
-            data_rows = (row for row in reader if not _is_repeated_header(row))
-            for number, row in enumerate(data_rows, start=1):
-                try:
-                    parsed = HarCotRow.from_csv_row(row)
-                except TimeNetConnectorError as exc:
-                    raise TimeNetConnectorError(f"{self.path.name} data row {number}: {exc}") from exc
-                yield parsed
+        rows = (row.model_dump() for row in CsvReader(self.path, _SourceRow, columns=COLUMNS).iter_rows())
+        data_rows = (row for row in rows if not _is_repeated_header(row))
+        for number, row in enumerate(data_rows, start=1):
+            try:
+                parsed = HarCotRow.from_csv_row(row)
+            except TimeNetConnectorError as exc:
+                raise TimeNetConnectorError(f"{self.path.name} data row {number}: {exc}") from exc
+            yield parsed
 
 
 class HarCotConnector(BaseConnector[HarCotSplitFile]):

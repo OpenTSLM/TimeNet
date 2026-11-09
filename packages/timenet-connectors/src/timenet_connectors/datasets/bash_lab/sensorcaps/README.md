@@ -8,6 +8,9 @@ The connector imports the [Hugging Face dataset](https://huggingface.co/datasets
 as one TimeF record and one captioning task per example. All tasks belong to the training split;
 source partitions identify the contributing datasets, not train/test folds.
 
+Conversion holds the signal values in memory as float32 arrays. Caption tasks are streamed from the
+JSONL files, which must remain available until the dataset has been written.
+
 ## Records and captioning tasks
 
 Each record contains one source named `IMU` with six signals. Record annotations identify the source

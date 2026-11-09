@@ -7,7 +7,7 @@ import pytest
 from timenet.config import settings
 from timenet.dataset.axis import IrregularAxis
 from timenet.engine import run_pipeline
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.format import control_writer
 from timenet.format.control_audit import audit_control_database
 from timenet.format.duckdb import connect_control
@@ -15,7 +15,7 @@ from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
 from timenet.types import AnswerTask, InputModality, Split, TimeSeriesSpec, read_value
 from timenet_connectors.bases.huggingface import HubFileRef
-from timenet_connectors.datasets.bash_lab.sensorcaps import SensorCapsConnector, connector as module
+from timenet_connectors.datasets.bash_lab.sensorcaps import SensorCapsConnector
 from timenet_connectors.datasets.bash_lab.sensorcaps.connector import DECLARED_SAMPLING_RATE_HZ
 
 
@@ -193,24 +193,22 @@ def test_conversion_preserves_source_semantics_and_reiterable_tasks(tmp_path):
         _assert_records_and_tasks(dataset.records, list(dataset.iter_tasks()))
 
 
-def test_channel_reads_reuse_rows_and_reread_offsets(monkeypatch, tmp_path):
-    dataset = SensorCapsConnector().convert(_refs(tmp_path)[:1])
-    original = module._parse_row
-    calls = []
-
-    def parse(raw, context):
-        calls.append(context)
-        return original(raw, context)
-
-    monkeypatch.setattr(module, "_parse_row", parse)
+def test_signal_values_remain_available_after_source_removal(tmp_path):
+    refs = _refs(tmp_path)[:1]
+    dataset = SensorCapsConnector().convert(refs)
+    refs[0].path.unlink()
     first, second = dataset.records
-    for signal in first.signals:
-        assert len(signal.to_arrow()) == 60
-    assert len(calls) == 1  # six channels decode only one source row
-    np.testing.assert_array_equal(second.signals[0].to_numpy(), _expected_values(0, 1, 0))
-    assert len(calls) == 2
-    np.testing.assert_array_equal(first.signals[3].to_numpy(), _expected_values(0, 0, 3))
-    assert len(calls) == 3  # revisiting evicted rows reads by byte offset, including UTF-8
+    np.testing.assert_array_equal(first.signals[0].to_numpy(), _expected_values(0, 0, 0))
+    np.testing.assert_array_equal(second.signals[3].to_numpy(), _expected_values(0, 1, 3))
+
+
+def test_jsonl_reader_rejects_duplicate_keys(tmp_path):
+    path = tmp_path / "duplicate.jsonl"
+    path.write_text('{"messages":[],"messages":[]}\n', encoding="utf-8")
+    with pytest.raises(TimeNetConnectorError, match="duplicate key") as error:
+        SensorCapsConnector().convert([HubFileRef(path, "hhar_v2")])
+    assert str(path) in str(error.value)
+    assert "line 1" in str(error.value)
 
 
 def test_pipeline_preserves_source_semantics_after_source_removal(monkeypatch, tmp_path):

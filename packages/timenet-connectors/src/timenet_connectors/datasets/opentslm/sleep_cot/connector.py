@@ -7,7 +7,6 @@ the stage.
 """
 
 from collections import Counter
-import csv
 from dataclasses import dataclass
 import json
 from pathlib import Path
@@ -23,6 +22,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import Artifact, download_files
+from timenet_connectors.sources.readers import CsvReader, DataRow
 
 
 SLEEP_COT_URL = "https://polybox.ethz.ch/index.php/s/ZryWSdCFJZ9JR3R/download"
@@ -92,6 +92,16 @@ def _parse_subject_id(row: dict[str, str]) -> str:
     if match is None:
         raise TimeNetConnectorError(f"id {row['id']!r} is not a Sleep-EDF recording name")
     return f"{_STUDIES[match['study']]}-{match['subject']}"
+
+
+class _SourceRow(DataRow):
+    """A source CSV row before parsing its signal."""
+
+    id: str
+    time_series: str
+    label: str
+    prompt: str
+    rationale: str
 
 
 @dataclass(frozen=True)
@@ -232,17 +242,11 @@ class SleepCotReader:
                 The message names the file and the data row.
         """
         rows = []
-        with self.csv_path.open(newline="", encoding="utf-8") as stream:
-            reader = csv.DictReader(stream)
-            if tuple(reader.fieldnames or ()) != COLUMNS:
-                raise TimeNetConnectorError(
-                    f"{self.csv_path.name}: expected columns {COLUMNS}, got {reader.fieldnames}"
-                )
-            for number, row in enumerate(reader, start=1):
-                try:
-                    rows.append(SleepCotRow.from_csv_row(row))
-                except TimeNetConnectorError as exc:
-                    raise TimeNetConnectorError(f"{self.csv_path.name} data row {number}: {exc}") from exc
+        for number, source in enumerate(CsvReader(self.csv_path, _SourceRow, columns=COLUMNS).iter_rows(), start=1):
+            try:
+                rows.append(SleepCotRow.from_csv_row(source.model_dump()))
+            except TimeNetConnectorError as exc:
+                raise TimeNetConnectorError(f"{self.csv_path.name} data row {number}: {exc}") from exc
         return rows
 
     def read_splits(self, n_rows: int) -> list[Split]:

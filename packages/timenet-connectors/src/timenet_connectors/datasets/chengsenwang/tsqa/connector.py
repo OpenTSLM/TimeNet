@@ -9,13 +9,15 @@ lists. Each row becomes one record that carries the series and an :class:`~timen
 from collections.abc import Mapping
 from typing import ClassVar
 
+from pydantic import ConfigDict, Field
+
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet.types.splits import Split
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.datasets.chengsenwang.tsqa.sample import TSQASample, get_category, get_signal_id
-from timenet_connectors.sources.parquet import iter_parquet_rows
+from timenet_connectors.sources.readers import DataRow, ParquetReader
 from timenet_connectors.splitting import Splitter, StratifiedSplitter
 
 
@@ -24,6 +26,18 @@ _SPEC = TimeSeriesSpec(
     name="TSQA Series",
     unit_value=ureg.dimensionless,
 )
+
+
+class _SourceRow(DataRow):
+    """Columns consumed from a TSQA Parquet row."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    task: str = Field(alias="Task")
+    question: str = Field(alias="Question")
+    answer: str = Field(alias="Answer")
+    label: str | None = Field(default=None, alias="Label")
+    series: str = Field(alias="Series")
 
 
 class TSQAConnector(BaseHuggingFaceConnector):
@@ -58,8 +72,8 @@ class TSQAConnector(BaseHuggingFaceConnector):
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
-        rows = (row for ref in raw_refs for row in iter_parquet_rows(ref.path))
-        samples = [TSQASample.from_row(row) for row in rows]
+        rows = (row for ref in raw_refs for row in ParquetReader(ref.path, _SourceRow).iter_rows())
+        samples = [TSQASample.from_row(row.model_dump(by_alias=True)) for row in rows]
         splits = self.splitter.split(samples)
         dataset = TimeFDataset(metadata=self.metadata())
         for split_name, samples_in_split in splits.items():

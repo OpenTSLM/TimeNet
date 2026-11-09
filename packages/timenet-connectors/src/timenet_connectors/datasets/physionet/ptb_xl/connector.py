@@ -1,10 +1,11 @@
 """Build reusable PTB-XL ECG records without tasks, at their original sampling rate."""
 
 import ast
-import csv
 from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
+
+from pydantic import ConfigDict
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
@@ -12,6 +13,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, Split, TimeSeriesSpec, ureg
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.download import ensure_archive, find_dir_containing
+from timenet_connectors.sources.readers import CsvReader, DataRow
 
 
 PTBXL_ZIP_URL = "s3://physionet-open/ptb-xl/ptb-xl-1.0.3.zip"
@@ -48,6 +50,15 @@ _AGE_DESCRIPTION = (
     f"The patient's age in whole years, as PTB-XL states it. PTB-XL states {_AGE_OVER_89} for every "
     "patient older than 89."
 )
+
+
+class _SourceRow(DataRow):
+    """PTB-XL source cells; clinical rules are checked during conversion."""
+
+    model_config = ConfigDict(extra="allow")
+
+    ecg_id: str
+    filename_hr: str
 
 
 @dataclass(frozen=True)
@@ -134,40 +145,40 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
         source = raw_refs[0]
         # The CSV row where each ecg_id first appears.
         first_rows: dict[int, int] = {}
-        with source.database_csv.open(newline="", encoding="utf-8") as stream:
-            for line, row in enumerate(csv.DictReader(stream), 2):
-                try:
-                    annotations = self._annotations(row)
-                    identity = int(row["ecg_id"])
-                    if identity in first_rows:
-                        raise TimeNetConnectorError(f"ecg_id {identity} repeats row {first_rows[identity]}")
-                    first_rows[identity] = line
-                    base = source.root / row["filename_hr"]
-                    header = self._read_header(base)
-                    if header.fs != _SAMPLING_RATE_HZ or len(header.sig_name) != _LEAD_COUNT:
-                        raise TimeNetConnectorError("PTB-XL requires twelve leads at 500 Hz")
-                    axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
-                    signals = tuple(
-                        Signal.from_loader(
-                            spec=_ECG,
-                            name=name,
-                            time_axis=axis,
-                            loader=self._lead_loader(base, header, position),
-                            n_values=int(header.sig_len),
-                        )
-                        for position, name in enumerate(header.sig_name)
+        for line, source_row in enumerate(CsvReader(source.database_csv, _SourceRow).iter_rows(), 2):
+            row = source_row.model_dump()
+            try:
+                annotations = self._annotations(row)
+                identity = int(row["ecg_id"])
+                if identity in first_rows:
+                    raise TimeNetConnectorError(f"ecg_id {identity} repeats row {first_rows[identity]}")
+                first_rows[identity] = line
+                base = source.root / row["filename_hr"]
+                header = self._read_header(base)
+                if header.fs != _SAMPLING_RATE_HZ or len(header.sig_name) != _LEAD_COUNT:
+                    raise TimeNetConnectorError("PTB-XL requires twelve leads at 500 Hz")
+                axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
+                signals = tuple(
+                    Signal.from_loader(
+                        spec=_ECG,
+                        name=name,
+                        time_axis=axis,
+                        loader=self._lead_loader(base, header, position),
+                        n_values=int(header.sig_len),
                     )
-                    record = dataset.add_record(
-                        record=Record(
-                            metadata={"ecg_id": identity},
-                            sources=(Source(name="PTB-XL ECG", signals=signals),),
-                        )
+                    for position, name in enumerate(header.sig_name)
+                )
+                record = dataset.add_record(
+                    record=Record(
+                        metadata={"ecg_id": identity},
+                        sources=(Source(name="PTB-XL ECG", signals=signals),),
                     )
-                    record.add_annotations(annotations)
-                except (KeyError, ValueError, SyntaxError, OSError, TimeNetConnectorError) as exc:
-                    raise TimeNetConnectorError(
-                        f"invalid PTB-XL row {line} (ecg_id {row.get('ecg_id')}) in {source.database_csv}: {exc}"
-                    ) from exc
+                )
+                record.add_annotations(annotations)
+            except (KeyError, ValueError, SyntaxError, OSError, TimeNetConnectorError) as exc:
+                raise TimeNetConnectorError(
+                    f"invalid PTB-XL row {line} (ecg_id {row.get('ecg_id')}) in {source.database_csv}: {exc}"
+                ) from exc
         return dataset
 
     @staticmethod
