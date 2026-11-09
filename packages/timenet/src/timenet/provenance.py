@@ -22,9 +22,9 @@ _GIT_TIMEOUT_S = 30
 
 @dataclass(frozen=True)
 class InstallSource(ABC):
-    """How one distribution was installed. The install type decides where its commit is recorded."""
+    """How one package was installed. The install type decides where its commit is recorded."""
 
-    distribution: PackageName
+    package_name: PackageName
 
     @abstractmethod
     def read_git_source(self) -> GitSource:
@@ -32,7 +32,7 @@ class InstallSource(ABC):
 
     def _unknown_commit(self, reason: str) -> TimeNetBuildError:
         return TimeNetBuildError(
-            f"cannot find the git commit of {self.distribution}, which each build records in its manifest: {reason}"
+            f"cannot find the git commit of {self.package_name}, which each build records in its manifest: {reason}"
         )
 
 
@@ -48,7 +48,7 @@ class EditableCheckout(InstallSource):
         if git is None:
             raise self._unknown_commit(
                 f"it is installed editable from {self.project_directory}, and git is not on PATH. Install git, "
-                f"or install {self.distribution} from a wheel that scripts/build_dists.py built"
+                f"or install {self.package_name} from a wheel that scripts/build_dists.py built"
             )
         try:
             sha = _run_git(git, self.project_directory, "rev-parse", "HEAD")
@@ -74,7 +74,7 @@ class GitInstall(InstallSource):
         try:
             return GitSource(sha=self.commit_id, contains_local_changes=False)
         except ValidationError as exc:
-            raise TimeNetBuildError(f"{self.distribution} records an invalid commit in direct_url.json: {exc}") from exc
+            raise TimeNetBuildError(f"{self.package_name} records an invalid commit in direct_url.json: {exc}") from exc
 
 
 @dataclass(frozen=True)
@@ -91,13 +91,13 @@ class BuiltPackage(InstallSource):
         if not self.build_info.is_file():
             raise self._unknown_commit(
                 f"the installed package carries no {self.BUILD_INFO_FILE}. Build it with `make build` or "
-                f"scripts/build_dists.py, or upgrade {self.distribution} to a release that records its commit"
+                f"scripts/build_dists.py, or upgrade {self.package_name} to a release that records its commit"
             )
         try:
             return GitSource.model_validate_json(self.build_info.read_text(encoding="utf-8"))
         except ValidationError as exc:
             raise TimeNetBuildError(
-                f"{self.distribution} records an invalid commit in {self.build_info}: {exc}"
+                f"{self.package_name} records an invalid commit in {self.build_info}: {exc}"
             ) from exc
 
 
@@ -114,7 +114,7 @@ class InstalledDistribution:
 
     @property
     def name(self) -> PackageName:
-        """The distribution name, for example ``timenet-connectors``."""
+        """The package name that pip installs, for example ``timenet-connectors``."""
         return self._distribution.metadata["Name"]
 
     @property
