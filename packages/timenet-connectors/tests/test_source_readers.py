@@ -175,7 +175,7 @@ def test_default_respects_row_schema_strictness(tmp_path):
     path.write_text('[{"count":"42"}]')
     with pytest.raises(TimeNetConnectorError, match="count"):
         list(JsonDataReader(path, StrictRow).iter_rows())
-    assert list(JsonDataReader(path, StrictRow, strict=False).iter_rows()) == [StrictRow(count=42)]
+    assert list(JsonDataReader(path, StrictRow, strict_parsing=False).iter_rows()) == [StrictRow(count=42)]
 
 
 @pytest.mark.parametrize("reader_type", [JsonDataReader, JsonlDataReader])
@@ -183,7 +183,7 @@ def test_json_readers_validate_rows_in_order(tmp_path, reader_type):
     path = tmp_path / "source"
     values = [{"name": "first", "count": 1}, {"name": "second", "count": 2}]
     path.write_text(json.dumps(values) if reader_type is JsonDataReader else "\n".join(map(json.dumps, values)))
-    reader = reader_type(path, Row, strict=True)
+    reader = reader_type(path, Row, strict_parsing=True)
     assert list(reader.iter_rows()) == [Row(name="first", count=1), Row(name="second", count=2)]
 
 
@@ -210,7 +210,7 @@ def test_json_strict_validation(tmp_path, reader_type):
     path.write_text(json.dumps([value] if reader_type is JsonDataReader else value))
     assert list(reader_type(path, Row).iter_rows()) == [Row(name="sensor", count=42)]
     with pytest.raises(TimeNetConnectorError, match="count"):
-        list(reader_type(path, Row, strict=True).iter_rows())
+        list(reader_type(path, Row, strict_parsing=True).iter_rows())
 
 
 def test_json_requires_array_and_jsonl_rejects_invalid_line(tmp_path):
