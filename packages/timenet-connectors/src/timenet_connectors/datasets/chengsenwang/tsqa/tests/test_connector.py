@@ -7,8 +7,7 @@ import pytest
 
 from timenet.dataset import TimeFDataset
 from timenet.errors import TimeFValidationError
-from timenet.reader import TimeFReader
-from timenet.registry import LocalRegistry
+from timenet.testing import assert_round_trips
 from timenet.types import AnswerTask
 from timenet.types.splits import Split
 from timenet.types.text import read_value
@@ -186,10 +185,7 @@ def test_equivalent_series_encodings_share_a_split(series, tmp_path):
 
 def test_splits_survive_storage_round_trip(tmp_path):
     original = TSQAConnector().convert(_refs(tmp_path, _balanced_rows()))
-    registry = LocalRegistry(tmp_path / "registry")
-    registry.store(original)
-    with TimeFReader(registry.open_version("chengsenwang/tsqa", "1.2.0")) as reader:
-        restored = reader.read()
+    restored = assert_round_trips(original, tmp_path / "registry")
     assert {read_value(task.prompt): task.split for task in restored.tasks} == {
         read_value(task.prompt): task.split for task in original.tasks
     }

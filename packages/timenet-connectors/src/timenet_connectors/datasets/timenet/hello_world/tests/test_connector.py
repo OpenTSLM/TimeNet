@@ -2,7 +2,7 @@ from pathlib import Path
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.testing import assert_datasets_equal
+from timenet.testing import assert_datasets_equal, assert_round_trips
 from timenet.types import (
     AnnotationType,
     AnswerTask,
@@ -33,6 +33,10 @@ def test_download_is_deterministic_and_offline():
 
 def test_convert_is_deterministic():
     assert_datasets_equal(_convert(), _convert())
+
+
+def test_stored_release_verifies_and_reads_back_equal(tmp_path):
+    assert_round_trips(_convert(), tmp_path / "registry")
 
 
 def test_schema_covers_every_feature():
