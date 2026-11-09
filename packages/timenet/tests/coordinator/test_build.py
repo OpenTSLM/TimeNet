@@ -80,7 +80,7 @@ def backends(monkeypatch):
 
 
 @pytest.fixture
-def store(tmp_path):
+def target_registry(tmp_path):
     return LocalRegistry(tmp_path / "store")
 
 
@@ -121,26 +121,26 @@ def _store_child_without_parent(registry):
     return registry.get_manifest(CHILD_REF.dataset_id).payload_sources[SourceKey(str(PARENT_REF))]
 
 
-def test_plan_release_build_rejects_a_version_the_connector_does_not_declare(store, fake):
+def test_plan_release_build_rejects_a_version_the_connector_does_not_declare(target_registry, fake):
     with pytest.raises(TimeNetVersionUnavailableError) as caught:
-        plan_release_build("a/b@2.0.0", store=store)
+        plan_release_build("a/b@2.0.0", target_registry=target_registry)
     assert (caught.value.release, caught.value.declared) == (DatasetRef.parse("a/b@2.0.0"), REF_AB.version)
 
 
 def test_a_plan_that_builds_refuses_a_read_only_local_registry_before_any_step(tmp_path, fake):
-    store = LocalRegistry(tmp_path / "store", read_only=True)
+    target_registry = LocalRegistry(tmp_path / "store", read_only=True)
     with pytest.raises(TimeNetRegistryError, match=r"read_only=True, so it refuses the copies and builds of a plan\."):
-        run_plan(Plan((_build(REF_AB),)), store)
+        run_plan(Plan((_build(REF_AB),)), target_registry)
     assert fake.calls == []
 
 
-def test_a_build_copies_a_missing_parent_and_reports_each_step_once(tmp_path, store, fake_parent, fake_child):
+def test_a_build_copies_a_missing_parent_and_reports_each_step_once(tmp_path, target_registry, fake_parent, fake_child):
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
     events = []
 
-    plan = plan_release_build(CHILD_REF.dataset_id, store=store, parents_from=[origin])
-    run_plan(plan, store, options=BuildOptions(progress=events.append))
+    plan = plan_release_build(CHILD_REF.dataset_id, target_registry=target_registry, parents_from=[origin])
+    run_plan(plan, target_registry, options=BuildOptions(progress=events.append))
 
     assert plan.steps == (
         CopyStep(PARENT_REF, origin),
@@ -154,21 +154,21 @@ def test_a_build_copies_a_missing_parent_and_reports_each_step_once(tmp_path, st
         StepFinished(CHILD_REF, "build"),
     ]
     assert fake_parent.calls == []
-    assert store.exists(PARENT_REF.dataset_id, str(PARENT_REF.version))
+    assert target_registry.exists(PARENT_REF.dataset_id, str(PARENT_REF.version))
 
 
-def test_a_build_copies_a_release_whose_payload_source_only_the_store_holds(
-    tmp_path, store, fake_parent, fake_child, backends
+def test_a_build_copies_a_release_whose_payload_source_only_the_target_registry_holds(
+    tmp_path, target_registry, fake_parent, fake_child, backends
 ):
     # The registry to copy from holds the child, but not the parent whose files the child reads.
     origin = LocalRegistry(tmp_path / "origin")
     _store_child_without_parent(origin)
-    store.put_dataset(make_dataset())
+    target_registry.put_dataset(make_dataset())
     fake_grandchild = _Backend(_grandchild_card())
     backends.append(fake_grandchild)
 
-    plan = plan_release_build(GRANDCHILD_REF.dataset_id, store=store, parents_from=[origin])
-    run_plan(plan, store)
+    plan = plan_release_build(GRANDCHILD_REF.dataset_id, target_registry=target_registry, parents_from=[origin])
+    run_plan(plan, target_registry)
 
     assert plan.steps == (
         CopyStep(CHILD_REF, origin),
@@ -176,11 +176,11 @@ def test_a_build_copies_a_release_whose_payload_source_only_the_store_holds(
     )
     assert fake_parent.calls == fake_child.calls == []
     assert fake_grandchild.calls == [(GRANDCHILD_REF, False, {})]
-    assert store.get_manifest(CHILD_REF.dataset_id) == origin.get_manifest(CHILD_REF.dataset_id)
+    assert target_registry.get_manifest(CHILD_REF.dataset_id) == origin.get_manifest(CHILD_REF.dataset_id)
 
 
 def test_a_build_builds_a_payload_source_of_a_release_that_it_copies(
-    tmp_path, store, fake_parent, fake_child, backends
+    tmp_path, target_registry, fake_parent, fake_child, backends
 ):
     # The registry to copy from holds the child, but not the parent whose files the child reads.
     origin = LocalRegistry(tmp_path / "origin")
@@ -188,8 +188,10 @@ def test_a_build_builds_a_payload_source_of_a_release_that_it_copies(
     fake_grandchild = _Backend(_grandchild_card())
     backends.append(fake_grandchild)
 
-    plan = plan_release_build(GRANDCHILD_REF.dataset_id, store=store, parents_from=[origin, InstalledConnectors()])
-    run_plan(plan, store)
+    plan = plan_release_build(
+        GRANDCHILD_REF.dataset_id, target_registry=target_registry, parents_from=[origin, InstalledConnectors()]
+    )
+    run_plan(plan, target_registry)
 
     assert plan.steps == (
         _build(PARENT_REF, pinned_by={CHILD_REF: pins}),
@@ -199,23 +201,23 @@ def test_a_build_builds_a_payload_source_of_a_release_that_it_copies(
     assert fake_parent.calls == [(PARENT_REF, False, {CHILD_REF: pins})]
     assert fake_child.calls == []
     assert fake_grandchild.calls == [(GRANDCHILD_REF, False, {})]
-    assert store.get_manifest(CHILD_REF.dataset_id) == origin.get_manifest(CHILD_REF.dataset_id)
+    assert target_registry.get_manifest(CHILD_REF.dataset_id) == origin.get_manifest(CHILD_REF.dataset_id)
 
 
-def test_run_plan_records_each_copy_and_each_build(tmp_path, store, backends):
+def test_run_plan_records_each_copy_and_each_build(tmp_path, target_registry, backends):
     # The registry to copy from holds the child and its payload source, the parent.
     origin = LocalRegistry(tmp_path / "origin")
     _store_child_without_parent(origin)
     origin.put_dataset(make_dataset())
     backends.extend([_Backend(_child_card()), _Backend(_grandchild_card())])
-    plan = plan_release_build(GRANDCHILD_REF.dataset_id, store=store, parents_from=[origin])
+    plan = plan_release_build(GRANDCHILD_REF.dataset_id, target_registry=target_registry, parents_from=[origin])
     assert [(step.action, step.release) for step in plan.steps] == [("copy", CHILD_REF), ("build", GRANDCHILD_REF)]
 
-    run_plan(plan, store)
+    run_plan(plan, target_registry)
 
     records = {}
     for release in (PARENT_REF, CHILD_REF, GRANDCHILD_REF):
-        record = store.read_origin(release)
+        record = target_registry.read_origin(release)
         records[release] = None if record is None else (record.kind, record.source)
     # The copy of the child brings its payload source along, and both name the registry. The build
     # names the fake distribution of the fake backend.
@@ -226,108 +228,119 @@ def test_run_plan_records_each_copy_and_each_build(tmp_path, store, backends):
     }
 
 
-def test_a_forced_build_forces_only_the_requested_release(store, fake_parent, fake_child):
-    store.put_dataset(_demo(_child_card()))
+def test_a_forced_build_forces_only_the_requested_release(target_registry, fake_parent, fake_child):
+    target_registry.put_dataset(_demo(_child_card()))
 
-    plan = plan_release_build(CHILD_REF.dataset_id, store=store, parents_from=[InstalledConnectors()], force=True)
-    run_plan(plan, store)
+    plan = plan_release_build(
+        CHILD_REF.dataset_id, target_registry=target_registry, parents_from=[InstalledConnectors()], force=True
+    )
+    run_plan(plan, target_registry)
 
     assert plan.steps == (_build(PARENT_REF), _build(CHILD_REF, depends_on=(PARENT_REF,), force=True))
     assert fake_parent.calls == [(PARENT_REF, False, {})]
     assert fake_child.calls == [(CHILD_REF, True, {})]
 
 
-def test_a_build_takes_a_parent_that_the_store_holds_and_asks_a_later_registry_nothing(
-    tmp_path, store, fake_parent, fake_child
+def test_a_build_takes_a_parent_that_the_target_registry_holds_and_asks_a_later_registry_nothing(
+    tmp_path, target_registry, fake_parent, fake_child
 ):
-    store.put_dataset(make_dataset())
+    target_registry.put_dataset(make_dataset())
     origin = LocalRegistry(tmp_path / "origin")
     origin.put_dataset(make_dataset())
     transport, requests = build_service_fake(origin.root)
     remote = RemoteRegistry("http://api.local", transport=transport)
 
-    plan = plan_release_build(CHILD_REF.dataset_id, store=store, parents_from=[store, remote])
-    run_plan(plan, store)
+    plan = plan_release_build(
+        CHILD_REF.dataset_id, target_registry=target_registry, parents_from=[target_registry, remote]
+    )
+    run_plan(plan, target_registry)
 
     assert plan.steps == (_build(CHILD_REF),)
     assert requests == []
 
 
-def test_a_build_skips_a_release_the_store_holds(store, fake):
-    store.put_dataset(_demo(_card(REF_AB)))
-    assert plan_release_build("a/b", store=store).steps == ()
+def test_a_build_skips_a_release_the_target_registry_holds(target_registry, fake):
+    target_registry.put_dataset(_demo(_card(REF_AB)))
+    assert plan_release_build("a/b", target_registry=target_registry).steps == ()
 
 
-def test_a_damaged_copy_of_the_requested_release_gets_a_forced_build(store, fake):
-    store.put_dataset(_demo(_card(REF_AB)))
-    (release_dir(store.root, REF_AB) / "control.duckdb").write_bytes(b"cut short")
+def test_a_damaged_copy_of_the_requested_release_gets_a_forced_build(target_registry, fake):
+    target_registry.put_dataset(_demo(_card(REF_AB)))
+    (release_dir(target_registry.root, REF_AB) / "control.duckdb").write_bytes(b"cut short")
 
-    plan = plan_release_build("a/b", store=store)
+    plan = plan_release_build("a/b", target_registry=target_registry)
 
     assert plan.steps == (_build(REF_AB, force=True),)
-    run_plan(plan, store)
+    run_plan(plan, target_registry)
     assert fake.calls == [(REF_AB, True, {})]
-    assert store.damage(REF_AB) is None
+    assert target_registry.damage(REF_AB) is None
 
 
-def test_plan_release_build_with_open_access_only_refuses_a_credentialed_card(store, backends):
+def test_plan_release_build_with_open_access_only_refuses_a_credentialed_card(target_registry, backends):
     fake_credentialed = _Backend(_card(REF_AB, **_GATED))
     backends.append(fake_credentialed)
 
     with pytest.raises(TimeNetAccessError) as caught:
-        plan_release_build("a/b", store=store, open_access_only=True)
+        plan_release_build("a/b", target_registry=target_registry, open_access_only=True)
 
     assert caught.value.dataset == REF_AB
-    # Without the flag, the local store takes a release that is not open.
-    run_plan(plan_release_build("a/b", store=store), store)
+    # Without the flag, the target registry takes a release that is not open.
+    run_plan(plan_release_build("a/b", target_registry=target_registry), target_registry)
     assert fake_credentialed.calls == [(REF_AB, False, {})]
 
 
-def test_plan_release_build_with_open_access_only_refuses_a_held_release_with_a_credentialed_ancestor(store, backends):
-    # The card of the child is open. The child keeps a Record of the open release a/b, which the store
+def test_plan_release_build_with_open_access_only_refuses_a_held_release_with_a_credentialed_ancestor(
+    target_registry, backends
+):
+    # The card of the child is open. The child keeps a Record of the open release a/b, which the target registry
     # lacks. It reads nothing from the credentialed parent, which is only in its lineage.
     child_card = _card(CHILD_REF, parents={ParentAlias("parent"): PARENT_REF, ParentAlias("open"): REF_AB})
     other, child = _Backend(_card(REF_AB)), _Backend(child_card)
     backends.extend([other, child])
-    store.put_dataset(_demo(make_dataset().metadata.model_copy(update=_GATED)))
-    store.put_dataset(_demo(_card(REF_AB)))
+    target_registry.put_dataset(_demo(make_dataset().metadata.model_copy(update=_GATED)))
+    target_registry.put_dataset(_demo(_card(REF_AB)))
     dataset = TimeFDataset(metadata=child_card)
     with (
-        TimeFReader(open_local_version(release_dir(store.root, PARENT_REF))) as gated_reader,
-        TimeFReader(open_local_version(release_dir(store.root, REF_AB))) as open_reader,
+        TimeFReader(open_local_version(release_dir(target_registry.root, PARENT_REF))) as gated_reader,
+        TimeFReader(open_local_version(release_dir(target_registry.root, REF_AB))) as open_reader,
     ):
         dataset.import_from(gated_reader, alias=ParentAlias("parent"))
         dataset.import_from(open_reader, alias=ParentAlias("open"), records=[make_dataset().records[0].id])
-    store.put_dataset(dataset)
-    shutil.rmtree(store.root / PARENT_REF.dataset_id)
-    shutil.rmtree(release_dir(store.root, REF_AB))
-    held = store.get_manifest(CHILD_REF.dataset_id)
+    target_registry.put_dataset(dataset)
+    shutil.rmtree(target_registry.root / PARENT_REF.dataset_id)
+    shutil.rmtree(release_dir(target_registry.root, REF_AB))
+    held = target_registry.get_manifest(CHILD_REF.dataset_id)
     assert [card.source for card in held.lineage] == [PARENT_REF, REF_AB]
     assert list(held.payload_sources) == [SourceKey(str(REF_AB))]
 
     with pytest.raises(TimeNetAccessError) as caught:
         plan_release_build(
-            CHILD_REF.dataset_id, store=store, parents_from=[InstalledConnectors()], open_access_only=True
+            CHILD_REF.dataset_id,
+            target_registry=target_registry,
+            parents_from=[InstalledConnectors()],
+            open_access_only=True,
         )
 
     assert caught.value.dataset == CHILD_REF
 
 
-def test_a_plan_runs_only_through_run_plan(store, fake_parent, fake_child):
-    plan = plan_release_build(CHILD_REF.dataset_id, store=store, parents_from=[InstalledConnectors()])
+def test_a_plan_runs_only_through_run_plan(target_registry, fake_parent, fake_child):
+    plan = plan_release_build(
+        CHILD_REF.dataset_id, target_registry=target_registry, parents_from=[InstalledConnectors()]
+    )
 
     assert plan.steps == (
         _build(PARENT_REF),
         _build(CHILD_REF, depends_on=(PARENT_REF,)),
     )
-    assert not store.root.exists()
+    assert not target_registry.root.exists()
     assert fake_parent.calls == fake_child.calls == []
-    run_plan(plan, store)
+    run_plan(plan, target_registry)
     assert fake_parent.calls == [(PARENT_REF, False, {})]
     assert fake_child.calls == [(CHILD_REF, False, {})]
 
 
-def test_a_plan_reads_the_card_of_each_connector_once(store, backends):
+def test_a_plan_reads_the_card_of_each_connector_once(target_registry, backends):
     reads = []
 
     class _Counted(_Backend):
@@ -336,7 +349,9 @@ def test_a_plan_reads_the_card_of_each_connector_once(store, backends):
             return super().card(dataset_id)
 
     backends.extend([_Counted(make_dataset().metadata), _Counted(_child_card())])
-    plan = plan_release_build(CHILD_REF.dataset_id, store=store, parents_from=[InstalledConnectors()])
-    run_plan(plan, store)
+    plan = plan_release_build(
+        CHILD_REF.dataset_id, target_registry=target_registry, parents_from=[InstalledConnectors()]
+    )
+    run_plan(plan, target_registry)
     assert reads == [CHILD_REF.dataset_id, PARENT_REF.dataset_id]
-    assert store.exists(CHILD_REF.dataset_id, str(CHILD_REF.version))
+    assert target_registry.exists(CHILD_REF.dataset_id, str(CHILD_REF.version))

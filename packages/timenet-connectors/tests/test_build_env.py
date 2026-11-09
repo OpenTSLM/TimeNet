@@ -165,7 +165,7 @@ def test_uv_command_reports_a_missing_uv_binary(monkeypatch):
         uv_command(_spec(), ["timenet-build"])
 
 
-def test_run_isolated_build_runs_build_release_with_the_store_and_the_pins(monkeypatch, tmp_path):
+def test_run_isolated_build_runs_build_release_with_the_target_registry_and_the_pins(monkeypatch, tmp_path):
     release = DatasetRef.parse("timenet/hello-world@1.0.0")
     pinned = PayloadSource(release=release, files=(FilePart(path="a.bin", checksum="sha256:" + "0" * 64, size=1),))
     captured = {}

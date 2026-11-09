@@ -17,7 +17,7 @@ from timenet.types.references import is_latest, split_ref
 def plan_release_build(
     dataset_id: str,
     *,
-    store: LocalRegistry,
+    target_registry: LocalRegistry,
     parents_from: Sequence[ReleaseSource] = (),
     force: bool = False,
     open_access_only: bool = False,
@@ -29,7 +29,7 @@ def plan_release_build(
 
     Args:
         dataset_id: A dataset ID such as ``org/name``, or an exact release such as ``org/name@1.2.0``.
-        store: The local registry to write to.
+        target_registry: The local registry to write to.
         parents_from: Sources to copy or build missing dependencies from, in preference order.
         force: Plan a forced rebuild and its parents even if the requested release already exists.
         open_access_only: Require ``access: open`` for every needed release.
@@ -46,7 +46,7 @@ def plan_release_build(
     _, steps = plan_steps(
         # A connector builds only the version of its card, so "latest" asks for that version.
         declared(dataset_id, None if is_latest(version) else version),
-        store,
+        target_registry,
         parents_from=parents_from,
         force_build=force,
         open_access_only=open_access_only,
@@ -54,14 +54,14 @@ def plan_release_build(
     return Plan(tuple(steps))
 
 
-def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None = None) -> None:
+def run_plan(plan: Plan, target_registry: LocalRegistry, *, options: BuildOptions | None = None) -> None:
     """Run a plan's copy and build steps in order.
 
     Each copied or built release gets a record of its source.
 
     Args:
         plan: The plan to run.
-        store: The local registry to copy and build into.
+        target_registry: The local registry to copy and build into.
         options: Build settings, such as the progress callback.
 
     Raises:
@@ -71,7 +71,7 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
         TimeNetBuildError: If a build fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the copy and the backends
     if any(not isinstance(step, ReadStep) for step in plan.steps):
-        store.check_writable("the copies and builds of a plan")
+        target_registry.check_writable("the copies and builds of a plan")
     options = options or BuildOptions()
     for step in plan.steps:
         match step:
@@ -82,25 +82,25 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
                 copies = copy_release(
                     step.release,
                     step.registry,
-                    store,
+                    target_registry,
                     with_payload_sources=step.with_payload_sources,
                     force=step.force,
                     progress=options.progress,
                 )
                 for release in copies:
-                    store.record_origin(release, OriginKind.DOWNLOAD, step.registry.location)
+                    target_registry.record_origin(release, OriginKind.DOWNLOAD, step.registry.location)
             case BuildStep():
-                _build(step, store, options=options)
+                _build(step, target_registry, options=options)
             case _:
                 assert_never(step)
 
 
-def _build(step: BuildStep, store: LocalRegistry, *, options: BuildOptions) -> None:
+def _build(step: BuildStep, target_registry: LocalRegistry, *, options: BuildOptions) -> None:
     """Build the requested release with the builder of its step and record the builder's package.
 
     Args:
         step: The build step, with ``force`` set to rebuild an existing release.
-        store: The local registry to build into.
+        target_registry: The local registry to build into.
         options: The build settings.
 
     Raises:
@@ -108,9 +108,11 @@ def _build(step: BuildStep, store: LocalRegistry, *, options: BuildOptions) -> N
     """  # ruff: ignore[docstring-extraneous-exception] - raised by prepare_local_copy
     if options.progress is not None:
         options.progress(StepStarted(step.release, "build"))
-    step.builder.backend.build(step.release, store, force=step.force, pinned_by=step.pinned_by, options=options)
+    step.builder.backend.build(
+        step.release, target_registry, force=step.force, pinned_by=step.pinned_by, options=options
+    )
     # After a successful build, the local registry must hold the exact release with its payload sources.
-    prepare_local_copy(store.root, step.release)
-    store.record_origin(step.release, OriginKind.BUILD, step.builder.package)
+    prepare_local_copy(target_registry.root, step.release)
+    target_registry.record_origin(step.release, OriginKind.BUILD, step.builder.package)
     if options.progress is not None:
         options.progress(StepFinished(step.release, "build"))

@@ -74,7 +74,7 @@ def test_a_release_without_a_record_has_none(store):
     assert store.read_origin(DEMO) is None
 
 
-def test_a_record_needs_the_release_in_the_store(tmp_path):
+def test_a_record_needs_the_release_in_the_local_registry(tmp_path):
     empty = LocalRegistry(tmp_path / "store")
     with pytest.raises(TimeNetDatasetNotFoundError, match=f"the local registry holds no {DEMO}"):
         empty.record_origin(DEMO, OriginKind.DOWNLOAD, "https://registry.example.org")

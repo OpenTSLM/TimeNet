@@ -204,7 +204,9 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
     assert (dest / "manifest.json").exists()
 
 
-def test_a_download_into_the_store_reads_the_remote_manifest_for_the_plan_and_for_the_copy(version_dir, tmp_path):
+def test_a_download_into_the_local_registry_reads_the_remote_manifest_for_the_plan_and_for_the_copy(
+    version_dir, tmp_path
+):
     registry, requests = _remote(version_dir, tmp_path)
     directory, manifest = version_dir
     store = LocalRegistry(tmp_path / "store")

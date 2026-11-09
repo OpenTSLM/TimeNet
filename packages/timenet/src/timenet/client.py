@@ -105,9 +105,9 @@ def default_sources(
         TimeNetRegistryError: If ``local_registry`` names a remote registry, or the remote registry cannot be opened.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by settings and open_registry)
     cfg = settings(local_registry=local_registry, remote_registry=remote_registry, auto_build=auto_build)
-    store = LocalRegistry(cfg.local_registry_dir)
+    local = LocalRegistry(cfg.local_registry_dir)
     remote = open_registry(cfg.remote_registry, label="TIMENET_REMOTE_REGISTRY")
-    return [store, remote, *([InstalledConnectors()] if cfg.auto_build else [])]
+    return [local, remote, *([InstalledConnectors()] if cfg.auto_build else [])]
 
 
 def _resolve_ref(dataset_id: str, version: str | None) -> tuple[str, str | None]:
@@ -190,10 +190,10 @@ class TimeNet:
             self._sources = tuple(as_release_sources(sources, keyword="sources"))
             if not self._sources:
                 raise TimeFValidationError("sources is empty. Pass at least one source, or None for the default list")
-        self._store = next(
+        self._local_registry = next(
             (source for source in self._sources if isinstance(source, LocalRegistry) and not source.read_only), None
         )
-        if self._store is None and any(isinstance(source, InstalledConnectors) for source in self._sources):
+        if self._local_registry is None and any(isinstance(source, InstalledConnectors) for source in self._sources):
             raise TimeFValidationError(
                 "InstalledConnectors() needs a writable local registry to build into. "
                 "Add a LocalRegistry without read_only=True to the sources"
@@ -378,8 +378,8 @@ class TimeNet:
             TimeFFormatError: If a payload source breaks a pin or the payload sources form a cycle.
         """  # ruff: ignore[docstring-extraneous-exception] (raised by the plan and the copies)
         dataset_id, version = _resolve_ref(dataset_id, version)
-        store = self._store
-        if store is None:
+        local_registry = self._local_registry
+        if local_registry is None:
             # Without a local registry, a download has no place to go.
             raise TimeFValidationError(
                 "download() needs a writable local registry to copy into. "
@@ -403,13 +403,13 @@ class TimeNet:
                 raise TimeNetDatasetNotFoundError(f"{error} Add a registry that holds it to the sources.") from error
         release = DatasetRef(dataset_id=dataset_id, version=answer.version)
         try:
-            plan = plan_download(release, store, sources=self._sources, force=force, lookups=lookups)
+            plan = plan_download(release, local_registry, sources=self._sources, force=force, lookups=lookups)
         except TimeNetFileError as error:
             # The local registry holds a damaged copy that no other registry provides.
             error.hint = self._file_hint(error)
             raise
-        run_plan(plan, store, options=BuildOptions(progress=progress))
-        return release_dir(store.root, release)
+        run_plan(plan, local_registry, options=BuildOptions(progress=progress))
+        return release_dir(local_registry.root, release)
 
     def open(self, dataset_id: str, version: str | None = None) -> TimeFReader:
         """Open a dataset version for lazy reads, where it is.
@@ -464,7 +464,9 @@ class TimeNet:
         """  # ruff: ignore[docstring-extraneous-exception] (raised by read_release and the builder)
         dataset_id, version = _resolve_ref(dataset_id, version)
         with self._hints(dataset_id):
-            return TimeFReader(read_release(dataset_id, version, sources=self._sources, store=self._store))
+            return TimeFReader(
+                read_release(dataset_id, version, sources=self._sources, target_registry=self._local_registry)
+            )
 
     def load(self, dataset_id: str, version: str | None = None) -> TimeFDataset:
         """Read a whole dataset version into memory, with every stored value loaded.
@@ -569,20 +571,20 @@ class TimeNet:
         Returns:
             A repair hint, or ``None`` if the local registry has no damaged copy or the lookup raises a TimeNet error.
         """
-        store = self._store
-        if store is None:
+        local_registry = self._local_registry
+        if local_registry is None:
             return None
         damaged = error.release
         try:
-            held = store.find_manifest(damaged)
-            if held is None or store.damage(damaged, held) is None:
+            held = local_registry.find_manifest(damaged)
+            if held is None or local_registry.damage(damaged, held) is None:
                 # The local registry holds no damaged copy, so the error is about another registry.
                 return None
-            found = _copy_source(self._sources, store, damaged)
+            found = _copy_source(self._sources, local_registry, damaged)
         except TimeNetError:
             # The hint must not hide the error that it explains, for example if a registry is offline.
             return None
-        return _repair_hint(damaged, found, store)
+        return _repair_hint(damaged, found, local_registry)
 
     def open_torch(
         self, dataset_id: str, version: str | None = None, *, load: LoadPlan = LoadPlan.ALL_EAGER
@@ -642,39 +644,41 @@ def _access_hint(dataset_id: str, sources: Sequence[ReleaseSource]) -> str:
     return f"No source serves its files. Add InstalledConnectors() to the sources, or build it locally with {build}."
 
 
-def _copy_source(sources: Sequence[ReleaseSource], store: LocalRegistry, release: DatasetRef) -> Found | None:
+def _copy_source(sources: Sequence[ReleaseSource], local_registry: LocalRegistry, release: DatasetRef) -> Found | None:
     """Find the answer of a release source outside the local registry.
 
     Args:
         sources: The sources to search, in order.
-        store: The local registry to exclude.
+        local_registry: The local registry to exclude.
         release: The dataset ID and exact version.
 
     Returns:
         The answer of the source that provides or builds the release, or ``None`` if none exists.
     """
-    others = [source for source in sources if not is_same_registry(source, store)]
+    others = [source for source in sources if not is_same_registry(source, local_registry)]
     answer = resolve_release(others, release.dataset_id, str(release.version))
     return answer if isinstance(answer, Found) else None
 
 
-def _repair_hint(release: DatasetRef, found: Found | None, store: LocalRegistry) -> str:
+def _repair_hint(release: DatasetRef, found: Found | None, local_registry: LocalRegistry) -> str:
     """Suggest how to replace a damaged local release.
 
     Args:
         release: The damaged release.
         found: The answer of a source for the release, or ``None``.
-        store: The local registry that holds the damaged release.
+        local_registry: The local registry that holds the damaged release.
 
     Returns:
         A download or rebuild hint, or an explanation that no replacement is available.
     """
-    if isinstance(found, FoundInRegistry) and not is_same_registry(found.registry, store):
+    if isinstance(found, FoundInRegistry) and not is_same_registry(found.registry, local_registry):
         # A registry other than the local registry provides the release.
         return f"Copy an intact release into the local registry with download('{release}')."
     if isinstance(found, FoundInConnector):
         # Only an installed connector provides the release.
-        command = f"timenet-build build {release.dataset_id} --local-registry {shlex.quote(str(store.root))} --force"
+        command = (
+            f"timenet-build build {release.dataset_id} --local-registry {shlex.quote(str(local_registry.root))} --force"
+        )
         return f"Build it again with `{command}`."
     # Only the local registry holds the release.
     return "No registry other than the local registry provides it, so download() cannot replace it."

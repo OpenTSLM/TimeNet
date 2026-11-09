@@ -13,7 +13,7 @@ def _unset(monkeypatch):
 
 
 @pytest.mark.usefixtures("home")
-def test_the_defaults_are_the_store_the_hosted_registry_the_connectors_and_the_cache(monkeypatch):
+def test_the_defaults_are_the_local_registry_the_hosted_registry_the_connectors_and_the_cache(monkeypatch):
     _unset(monkeypatch)
     cfg = settings()
     assert cfg.local_registry_dir == Path("~/.timenet/registry").expanduser()

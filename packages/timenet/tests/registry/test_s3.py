@@ -98,7 +98,7 @@ def test_objects_live_under_a_datasets_prefix(s3_root, tmp_path):
     assert all(key.startswith("registry/datasets/") for key in keys)
 
 
-def test_download_then_load_reads_the_store_copy(s3_root, tmp_path):
+def test_download_then_load_reads_the_local_registry_copy(s3_root, tmp_path):
     registry = S3Registry(s3_root)
     dataset_id = make_dataset().metadata.dataset_id
     registry.put_dataset(make_dataset())

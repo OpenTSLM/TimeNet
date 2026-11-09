@@ -196,7 +196,7 @@ def test_releases_skips_an_unfinished_write_of_a_dataset_folder(tmp_path):
     assert [str(release) for release in store.releases()] == ["timenet/hello-world@1.0.0"]
 
 
-def test_clear_cache_keeps_a_store_inside_the_cache(tmp_path):
+def test_clear_cache_keeps_a_local_registry_inside_the_cache(tmp_path):
     cache = tmp_path / "cache"
     store = LocalRegistry(cache / "registry")
     store.put_dataset(make_dataset())
@@ -306,7 +306,7 @@ def test_clear_cache_unlinks_a_symlinked_downloads_folder_only_if_marked_and_kee
     assert (target / "raw.bin").exists()
 
 
-def test_clear_cache_refuses_a_store_in_a_folder_that_it_deletes(tmp_path):
+def test_clear_cache_refuses_a_local_registry_in_a_folder_that_it_deletes(tmp_path):
     make_cache_folder(tmp_path / "cache" / "downloads")
     store = LocalRegistry(tmp_path / "cache" / "downloads" / "store")
     store.put_dataset(make_dataset())
@@ -315,7 +315,7 @@ def test_clear_cache_refuses_a_store_in_a_folder_that_it_deletes(tmp_path):
     assert store.exists("timenet/hello-world", "1.0.0")
 
 
-def test_clear_cache_refuses_a_folder_that_it_deletes_in_the_store(tmp_path):
+def test_clear_cache_refuses_a_folder_that_it_deletes_in_the_local_registry(tmp_path):
     # With the cache in the store, the downloads folder can be the directory of a dataset.
     store = LocalRegistry(tmp_path / "store")
     make_cache_folder(tmp_path / "store" / "acme" / "downloads")
@@ -416,7 +416,7 @@ def test_clearing_the_downloads_with_a_damaged_manifest_of_a_build_deletes_nothi
     assert {item.release for item in stored_releases(store)} == {BUILT, PARENT, GRAND, OTHER, HAND}
 
 
-def test_clearing_the_downloads_refuses_a_store_with_a_symlinked_dataset_folder(tmp_path):
+def test_clearing_the_downloads_refuses_a_local_registry_with_a_symlinked_dataset_folder(tmp_path):
     # The listing skips a symlinked folder, so it would miss BUILT and delete the downloads that it needs.
     store = LocalRegistry(tmp_path / "store")
     _layout(store)
@@ -430,7 +430,7 @@ def test_clearing_the_downloads_refuses_a_store_with_a_symlinked_dataset_folder(
     assert _held(store) == {BUILT, PARENT, GRAND, OTHER, HAND}
 
 
-def test_clearing_every_kind_refuses_a_store_with_a_symlinked_release_folder(tmp_path):
+def test_clearing_every_kind_refuses_a_local_registry_with_a_symlinked_release_folder(tmp_path):
     store = LocalRegistry(tmp_path / "store")
     _layout(store)
     _record(store)

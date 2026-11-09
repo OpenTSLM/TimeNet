@@ -401,7 +401,9 @@ def test_info_lists_the_access_page_of_each_release_that_sets_one(tmp_path):
     assert ["records", str(len(child.records))] in cells
 
 
-def test_download_command_copies_into_the_store_and_then_has_nothing_to_do(registry_root, tmp_path, monkeypatch):
+def test_download_command_copies_into_the_local_registry_and_then_has_nothing_to_do(
+    registry_root, tmp_path, monkeypatch
+):
     # The last line names a long path, so the console must not wrap it.
     monkeypatch.setattr(_cli_module.ui, "rich", Console(stderr=True, width=1000))
     monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
@@ -450,7 +452,7 @@ def test_each_command_builds_the_list_from_its_flags(registry_root, tmp_path):
     assert result.stdout == f"{store / 'timenet/hello-world/1.0.0'}\n"
 
 
-def test_publish_copies_a_release_from_the_store(tmp_path):
+def test_publish_copies_a_release_from_the_local_registry(tmp_path):
     store = LocalRegistry(tmp_path / "store")
     store.put_dataset(make_dataset())
     dest = tmp_path / "dest"
@@ -491,7 +493,7 @@ def test_publish_needs_dest(tmp_path):
     assert "--dest" in click.unstyle(result.output)
 
 
-def test_publish_of_a_release_that_the_store_lacks_names_the_fix(tmp_path):
+def test_publish_of_a_release_that_the_local_registry_lacks_names_the_fix(tmp_path):
     store, other, dest = tmp_path / "store", tmp_path / "other", str(tmp_path / "dest")
     result = runner.invoke(app, ["publish", "timenet/hello-world", "--dest", dest, "--local-registry", str(store)])
     assert type(result.exception) is TimeNetDatasetNotFoundError
@@ -511,7 +513,7 @@ def test_publish_of_a_release_that_the_store_lacks_names_the_fix(tmp_path):
     assert str(result.exception) == f"timenet/hello-world is not in local registry {other}."
 
 
-def test_publish_adds_no_hint_to_a_payload_source_that_the_store_lacks(tmp_path):
+def test_publish_adds_no_hint_to_a_payload_source_that_the_local_registry_lacks(tmp_path):
     store = LocalRegistry(tmp_path / "store")
     store.put_dataset(make_dataset())
     child = TimeFDataset(
