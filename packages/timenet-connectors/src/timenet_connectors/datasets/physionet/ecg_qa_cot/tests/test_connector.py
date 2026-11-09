@@ -355,11 +355,11 @@ def test_records_keep_ptbxl_sex_and_age_and_carry_the_patient(tmp_path, records_
         by_ecg = {record.metadata["ecg_id"]: record for record in dataset.records}
         assert by_ecg[1].metadata == {"ecg_id": 1, "patient_id": 101}
         assert by_ecg[2].metadata == {"ecg_id": 2, "patient_id": 102}
-        # PTB-XL's sex and age stay as they are, without a span. Every other imported annotation is cleared,
+        # PTB-XL's subject IDs, sex, and age stay unchanged; other imported annotations are cleared,
         # and the child's own split replaces PTB-XL's.
         for ecg_id, sex, age in _SEX_AND_AGE:
             annotations = by_ecg[ecg_id].annotations
-            assert sorted(ann.key for ann in annotations) == ["age", "sex", "split"]
+            assert sorted(ann.key for ann in annotations) == ["age", "sex", "split", "subject_ids"]
             assert _sex_and_age(by_ecg[ecg_id]) == (sex, _SEX_DESCRIPTION, age, int, "year", _AGE_DESCRIPTION)
             by_key = {ann.key: ann for ann in annotations}
             assert by_key["split"].value == "train"
@@ -415,9 +415,12 @@ def test_compose_round_trips_through_the_writer(tmp_path, records_dir):
         restored = assert_round_trips(dataset, root)
         version_dir = root / dataset.metadata.dataset_id / str(dataset.metadata.dataset_version)
     assert {record.metadata["ecg_id"] for record in restored.records} == {1, 2}
-    # The written records carry the sex and age of ECG-QA-CoT 1.1.0.
+    # Subject IDs survive composition and storage alongside sex and age.
     restored_by_ecg = {record.metadata["ecg_id"]: record for record in restored.records}
     for ecg_id, sex, age in _SEX_AND_AGE:
+        record = restored_by_ecg[ecg_id]
+        subjects = [read_value(a.value) for a in record.annotations if a.key == "subject_ids"]
+        assert subjects == [[str(record.metadata["patient_id"])]]
         assert _sex_and_age(restored_by_ecg[ecg_id]) == (sex, _SEX_DESCRIPTION, age, int, "year", _AGE_DESCRIPTION)
     # The child reuses its parent's signal values, so it writes no values files of its own.
     assert not list(version_dir.glob("time_series/**/*"))

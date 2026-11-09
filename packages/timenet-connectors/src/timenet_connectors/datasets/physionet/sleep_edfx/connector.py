@@ -33,12 +33,13 @@ from typing import ClassVar
 
 from timenet.dataset import Record, Source, TimeFDataset
 from timenet.errors import TimeFFormatError, TimeNetDownloadError
-from timenet.types import Annotation, ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
+from timenet.types import ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
 from timenet_connectors.bases import excel
 from timenet_connectors.bases.edf import reader, timeseries
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.datasets.physionet.sleep_edfx import annotations, metadata, tables, tasks
 from timenet_connectors.datasets.physionet.sleep_edfx.specs import SPECS
+from timenet_connectors.demographics import subject_ids_annotation
 from timenet_connectors.download import ensure_archive, find_dir_containing
 
 
@@ -269,8 +270,7 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
         recording against the table of its own study as the recording streams past.
 
         The annotations that state a study, a night, a sex or a drug condition come from sets
-        the release fixes. ``metadata_annotation`` holds one annotation for each value it meets.
-        Every record that states a value carries that same instance, and the writer stores it
+        the release fixes. Each record gets its own annotation, and the writer stores equal content
         one time.
 
         Args:
@@ -281,7 +281,6 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
         """
         source = raw_refs[0]
         dataset = TimeFDataset(metadata=self.metadata())
-        metadata_annotation = metadata.MetadataAnnotation()
         subject_tables = metadata.SubjectTables(
             {study: excel.read_table_rows(path) for study, path in source.subject_tables}, dict(self._STUDIES)
         )
@@ -296,7 +295,7 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
 
             sleep_stages = annotations.build(entries)
 
-            recording_metadata = subject_tables.build_annotations(metadata_annotation, recording, file.header)
+            recording_metadata = subject_tables.build_annotations(recording, file.header)
 
             record = Record(
                 sources=(Source(name="Sleep-EDF polysomnograph", signals=series),),
@@ -304,7 +303,7 @@ class SleepEdfxConnector(BasePhysioNetConnector[SleepEdfxSource]):
                 metadata={"recording_id": recording.recording_id},
             )
             dataset.add_record(record=record)
-            record.annotate(Annotation(key="subject_ids", value=[recording.subject_id]))
+            record.annotate(subject_ids_annotation([recording.subject_id]))
             annotations.attach(recording.recording_id, series, sleep_stages)
             record.add_annotations(recording_metadata)
 

@@ -238,7 +238,7 @@ def test_the_sex_of_two_records_is_one_annotation(release, monkeypatch):
     second = _annotations(dataset, "SC4902E0", "sex")[0]
     assert first == second
     assert first is not second
-    assert first.value == "F"
+    assert first.value == "female"
 
 
 def test_the_age_comes_from_the_table(release, monkeypatch):
@@ -263,7 +263,7 @@ def test_a_recording_that_disagrees_carries_a_note_and_keeps_the_table_value(rel
     dataset = _convert(release, monkeypatch)
     note = _annotations(dataset, "SC4902E0", "demographics_note")
     assert len(note) == 1
-    assert _annotations(dataset, "SC4902E0", "sex")[0].value == "F"
+    assert _annotations(dataset, "SC4902E0", "sex")[0].value == "female"
 
 
 def test_lights_off_is_placed_on_the_timeline_and_names_no_series(release, monkeypatch):

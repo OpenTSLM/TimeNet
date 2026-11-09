@@ -5,10 +5,9 @@ path. ``connector.py`` reads the release and the subject tables, then passes the
 A test can call these functions with values alone.
 
 Some facts repeat across the release. The study, the night number, the sex and the drug
-condition each come from a set that the release fixes. One annotation covers every record that
-states that value. :class:`MetadataAnnotation` holds one instance for each value. The writer
-stores equal content one time, and lists the records that carry it. Many records that state one
-value write one content row.
+condition each come from a set that the release fixes. :func:`build_closed_set` builds the
+annotation of such a value for each record. The writer stores equal content one time, and lists
+the records that carry it. Many records that state one value write one content row.
 
 The age, the note and the lights-off time measure one recording. Each record gets its own.
 
@@ -26,6 +25,7 @@ from timenet.types import US_PER_S, Annotation, TimePoint
 from timenet_connectors.bases.edf import reader
 from timenet_connectors.datasets.physionet.sleep_edfx import tables
 from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey
+from timenet_connectors.demographics import Sex, age_annotation
 
 
 # The patient field of an EDF header is anonymous in this release, and it keeps a sex and an age
@@ -42,44 +42,19 @@ _DESCRIPTIONS: dict[AnnotationKey, str] = {
 }
 
 
-class MetadataAnnotation:
-    """One annotation for each distinct value of a key whose values are a closed set.
+def build_closed_set(key: AnnotationKey, value: object) -> Annotation:
+    """Give the annotation of a value of study, night, sex or condition.
 
-    Four keys take their value from a small fixed set: ``study``, ``night``, ``sex`` and
-    ``condition``. Every recording states one value of each. Without this class, each recording
-    builds its own copy of the same few annotations.
+    Args:
+        key: The annotation key. Its description is the same for every value of it.
+        value: The value, as it is stored. A sex must be a decoded
+            :class:`~timenet_connectors.demographics.Sex` value. A raw sheet code must never reach
+            this, because one code means the opposite thing in the other study.
 
-    This class builds the annotation for a value one time. It gives the same instance back for
-    every later recording that states that value. Two records with the same sex then carry one
-    annotation between them, and the writer stores it one time.
-
-    The writer stores equal content one time. Many records that state the value write one content
-    row. No caller must keep two copies in step.
-
-    Nothing reads the values up front. The build walks the release one time.
+    Returns:
+        The annotation for that value.
     """
-
-    def __init__(self) -> None:
-        self._built: dict[tuple[str, str], Annotation] = {}
-
-    def get_annotation(self, key: AnnotationKey, value: object) -> Annotation:
-        """Give the one annotation of a key and a value, and build it on first sight.
-
-        Args:
-            key: The annotation key. Its description is the same for every value of it.
-            value: The value, as it is stored. A sex must be the decoded ``F`` or ``M``. A raw
-                sheet code must never reach this, because one code means the opposite thing in
-                the other study.
-
-        Returns:
-            The annotation for that value.
-        """
-        built = self._built.get((key, str(value)))
-        if built is None:
-            built = Annotation(key=key, value=value, description=_DESCRIPTIONS[key])
-            self._built[key, str(value)] = built
-
-        return built
+    return Annotation(key=key.value, value=value, description=_DESCRIPTIONS[key])
 
 
 def build_age(years: int) -> Annotation:
@@ -94,11 +69,8 @@ def build_age(years: int) -> Annotation:
     Returns:
         The age annotation, with no span.
     """
-    return Annotation(
-        key=AnnotationKey.AGE,
-        value=years,
-        unit="years",
-        description="The age of the subject in whole years, as the subject table of the study states it.",
+    return age_annotation(
+        years, description="The age of the subject in whole years, as the subject table of the study states it."
     )
 
 
@@ -128,13 +100,13 @@ def build_recording_start_local(recording_id: str, start_time: datetime) -> Anno
         )
 
     return Annotation(
-        key=AnnotationKey.RECORDING_START_LOCAL,
+        key=AnnotationKey.RECORDING_START_LOCAL.value,
         value=start_time.isoformat(timespec="seconds"),
         description="The local date and time the EDF header states for the first sample. The release names no zone.",
     )
 
 
-def build_demographics_note(patient_id: str, years: int, sex: str) -> Annotation | None:
+def build_demographics_note(patient_id: str, years: int, sex: Sex) -> Annotation | None:
     """Compare the two readings of a subject's demographics, and note where they differ.
 
     The EDF header keeps an age and a sex, and so does the subject table. The two sometimes
@@ -156,17 +128,17 @@ def build_demographics_note(patient_id: str, years: int, sex: str) -> Annotation
     if match is None:
         return None
 
-    header_sex = "F" if match[1].lower() == "female" else "M"
+    header_sex = Sex.FEMALE if match[1].lower() == "female" else Sex.MALE
     header_years = int(match[2])
     kinds = tuple(kind for kind, differs in (("age", header_years != years), ("sex", header_sex != sex)) if differs)
     if not kinds:
         return None
 
     return Annotation(
-        key=AnnotationKey.DEMOGRAPHICS_NOTE,
+        key=AnnotationKey.DEMOGRAPHICS_NOTE.value,
         value=(
-            f"the EDF header states sex {header_sex} and age {header_years}. The subject table states "
-            f"sex {sex} and age {years}. This record carries what the table states."
+            f"the EDF header states sex {header_sex.value} and age {header_years}. The subject table states "
+            f"sex {sex.value} and age {years}. This record carries what the table states."
         ),
         description="The EDF header and the subject table disagree here on age or sex. See the connector README.",
     )
@@ -215,20 +187,14 @@ class SubjectTables:
         self._shapes = dict(shapes)
         self._tables = {study: tables.parse_subject_table(shapes[study], rows) for study, rows in rows_by_study.items()}
 
-    def build_annotations(
-        self,
-        metadata_annotation: MetadataAnnotation,
-        recording: RecordingIdentity,
-        header: reader.EdfHeader,
-    ) -> list[Annotation]:
+    def build_annotations(self, recording: RecordingIdentity, header: reader.EdfHeader) -> list[Annotation]:
         # ruff: ignore[docstring-extraneous-exception] (raised by find_subject_row and find_night, not directly here)
         """Give every metadata annotation one recording carries.
 
-        A value from a closed set comes from ``metadata_annotation``, so every record that
-        states it carries one instance. A value measured for this recording is built here.
+        A value from a closed set comes from :func:`build_closed_set`. A value measured for this
+        recording is built here too.
 
         Args:
-            metadata_annotation: The holder of the annotations whose values are a closed set.
             recording: What the filename of the recording states.
             header: The header of its signal file, which keeps a clock and a second reading.
 
@@ -245,15 +211,15 @@ class SubjectTables:
         night = tables.find_night(row, recording.night, recording.recording_id)
 
         built = [
-            metadata_annotation.get_annotation(AnnotationKey.STUDY, recording.study),
-            metadata_annotation.get_annotation(AnnotationKey.NIGHT, recording.night),
-            metadata_annotation.get_annotation(AnnotationKey.SEX, row.sex),
+            build_closed_set(AnnotationKey.STUDY, recording.study),
+            build_closed_set(AnnotationKey.NIGHT, recording.night),
+            build_closed_set(AnnotationKey.SEX, row.sex.value),
             build_age(row.age),
             build_recording_start_local(recording.recording_id, header.start_time),
         ]
 
         if night.condition is not None:
-            built.append(metadata_annotation.get_annotation(AnnotationKey.CONDITION, night.condition))
+            built.append(build_closed_set(AnnotationKey.CONDITION, night.condition))
 
         note = build_demographics_note(header.patient_id, row.age, row.sex)
         if note is not None:
@@ -290,7 +256,7 @@ def build_lights_off(at: time, start_time: datetime) -> Annotation:
     offset_microseconds = ((lights_off_of_day - start_of_day) % tables.SECONDS_PER_DAY) * US_PER_S
 
     return Annotation(
-        key=AnnotationKey.LIGHTS_OFF,
+        key=AnnotationKey.LIGHTS_OFF.value,
         value=at.isoformat(timespec="seconds"),
         span=TimePoint.micros(offset_microseconds),
         description="The clock time the subject turned the light out, as the subject table of the study states it.",
