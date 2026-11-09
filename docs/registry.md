@@ -288,14 +288,20 @@ registry.search(DatasetFilter.of(domain=Domain.CARDIOLOGY, tag="ecg", limit=10))
 
 A `DatasetFilter` from `timenet.types` holds the filters and the limit. Each filter is a tuple, and
 an empty tuple sets no restriction. `DatasetFilter.of()` takes one value, a list, or `None` for
-each filter. The registry combines the filters with AND logic. `TimeNet.search()` and the consumer
-CLI, `timenet search`, take the same filters as keywords. They build one `DatasetFilter`, apply it
-to each source of their list, and merge the hits (see
-[Browse datasets](client.md#browse-datasets)). `limit` caps the number of results, with a default
-of 100. `limit=0` returns no results, and a negative limit raises `TimeFValidationError`. A
-registry sorts its catalog by dataset ID before it filters, so `search()` returns the first matches
-by dataset ID. A `task` or `time_series_spec` filter reads the manifests only until it has `limit`
-matches.
+each filter. The registry combines the filters with AND logic. `limit` caps the number of
+results, with a default of 100. `limit=0` returns no results, and a negative limit raises
+`TimeFValidationError`.
+
+`DatasetFilter.select()` does the filtering. It takes `ListedRelease` rows, each a card and the
+registry that lists it, and keeps their order. It checks the card first. A `task` or
+`time_series_spec` filter then reads the manifest of a matching card from its registry. A row
+without a registry never matches these two filters. `select()` stops at `limit` matches, so it
+reads no more manifests than it needs.
+
+A registry sorts its catalog by dataset ID and gives it to `select()`, so `search()` returns the
+first matches by dataset ID. `TimeNet.search()` and the consumer CLI, `timenet search`, take the
+same filters as keywords. They give `select()` the merged rows of all sources (see
+[Browse datasets](client.md#browse-datasets)).
 
 | Filter | Matches |
 | --- | --- |

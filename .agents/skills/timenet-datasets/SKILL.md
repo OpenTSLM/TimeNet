@@ -108,11 +108,12 @@ dataset = tn.load("chengsenwang/tsqa")                    # every value read int
   then `$TIMENET_REMOTE_REGISTRY`, then `InstalledConnectors()` unless `TIMENET_AUTO_BUILD=false`.
   The first entry is always the local registry; `default_local_registry()` returns it alone.
 - `list()` and `search()` merge every source of the list, connector cards included: one row per
-  dataset at the highest version, sorted by ID. `limit` applies after the merge. A connector never
-  matches `task` or `time_series_spec`. A registry without a catalog (S3) adds nothing, and a card
-  that cannot be read is left out with a `ConnectorCardWarning`. To ask one registry alone, use
-  `open_registry("timenet://").search(DatasetFilter.of(...))`, with `DatasetFilter` from
-  `timenet.types`.
+  dataset at the highest version, sorted by ID. `search()` filters these merged rows and stops at
+  `limit` matches. It reads a manifest for `task` or `time_series_spec` only for a row whose card
+  matches. A connector never matches these two filters. A registry without a catalog (S3) adds
+  nothing, and a card that cannot be read is left out with a `ConnectorCardWarning`. To ask one
+  registry alone, use `open_registry("timenet://").search(DatasetFilter.of(...))`, with
+  `DatasetFilter` from `timenet.types`.
 - `get_manifest()` returns the manifest of the release that `open()` reads, without a read of other
   files. A registry that lists a release without serving it gives its listed manifest. A release
   that only a connector provides raises `TimeNetNotBuiltError` (no manifest before a build). The
