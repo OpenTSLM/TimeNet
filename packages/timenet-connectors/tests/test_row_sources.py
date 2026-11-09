@@ -7,7 +7,6 @@ import pytest
 from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources.readers.base import DataRow, NonBlankText
 from timenet_connectors.sources.readers.csv import CsvRowSource
-from timenet_connectors.sources.readers.base import NonBlankText, DataRow
 
 
 class Row(DataRow):
