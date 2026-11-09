@@ -317,18 +317,20 @@ def test_records_and_tasks_carry_their_split(tmp_path, records_dir):
 
 def test_question_metadata_is_deduped_dataset_annotations(tmp_path, records_dir):
     with _composed(tmp_path, records_dir) as dataset:
+        # The task stream attaches the shared metadata, so read the tasks first.
+        tasks = list(dataset.iter_tasks())
         keys = {ann.key for ann in dataset.annotations}
         assert {"question_type", "answer_options", "clinical_context"} <= keys
         assert "template_id" not in keys
-        tasks = list(dataset.iter_tasks())
         assert sorted(cast("int", task.metadata["template_id"]) for task in tasks) == [0, 0, 1]
         assert all("template_id" not in {ann.key for ann in task.input_annotations} for task in tasks)
 
 
 def test_task_annotation_refs_all_resolve_to_registered(tmp_path, records_dir):
     with _composed(tmp_path, records_dir) as dataset:
+        tasks = list(dataset.iter_tasks())
         registered = {id(annotation) for annotation in dataset.annotations}
-        for task in dataset.iter_tasks():
+        for task in tasks:
             assert {id(annotation) for annotation in task.input_annotations} <= registered
 
 
