@@ -3,7 +3,7 @@
 Each connector lives in its own folder at ``datasets/<org>/<name>/``, or ``datasets/<name>/`` for a
 flat id. The package's ``__init__.py`` exposes a ``CONNECTOR`` class. A ``dataset.yaml`` card sits
 beside it. A dataset id maps to that package by convention, so there is no central registry. Discovery
-imports only the requested connector. Each connector declares its own id through ``metadata()``.
+imports only the requested connector. Each connector declares its own id in the ``dataset_id`` of its card.
 """
 
 import importlib
@@ -15,6 +15,7 @@ import pkgutil
 import yaml
 
 from timenet.connectors import BaseConnector
+from timenet.types import DatasetMetadata
 import timenet_connectors.datasets as _datasets
 
 
@@ -174,7 +175,8 @@ def available() -> list[str]:
         # package and that submodule surface it. A set dedupes them. Org packages expose none.
         connector = getattr(importlib.import_module(info.name), "CONNECTOR", None)
         if connector is not None:
-            ids.add(connector().metadata().dataset_id)
+            # Read the card directly, so that connector-specific card checks never block this list.
+            ids.add(DatasetMetadata.from_yaml(connector._card_path()).dataset_id)
     return sorted(ids)
 
 

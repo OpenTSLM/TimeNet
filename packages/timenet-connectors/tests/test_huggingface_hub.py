@@ -8,7 +8,8 @@ from typing import ClassVar
 
 import pytest
 
-from timenet.errors import TimeFValidationError, TimeNetDownloadError
+from timenet.errors import TimeFValidationError, TimeNetDownloadError, TimeNetInvalidCardError
+from timenet_connectors import discovery
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.download.progress import DownloadProgress, progress_sink
 from timenet_connectors.sources.huggingface_hub import download_hub_files, hub_snapshot
@@ -180,3 +181,59 @@ def test_snapshot_selects_patterns_and_keeps_the_snapshot_root(monkeypatch, tmp_
     assert calls[0][1]["allow_patterns"] == ["data/train.parquet"]
     with pytest.raises(TimeNetDownloadError, match="no files matching"):
         asyncio.run(hub_snapshot("org/repo", _SHA, tmp_path, ("missing/*",)))
+
+
+def _card(tmp_path: Path, source_revision: str | None) -> Path:
+    card = tmp_path / "dataset.yaml"
+    lines = [
+        "yaml_schema_version: 1",
+        "dataset_id: org/repo",
+        "dataset_version: 1.0.0",
+        "name: Repo",
+        "description: A test card.",
+        "license: Apache-2.0",
+    ]
+    if source_revision is not None:
+        lines.append(f"source_revision: '{source_revision}'")
+    card.write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return card
+
+
+def test_metadata_accepts_a_card_with_the_pinned_commit(monkeypatch, tmp_path):
+    monkeypatch.setattr(_Pinned, "CARD", _card(tmp_path, _SHA))
+    assert _Pinned().metadata().source_revision == _SHA
+
+
+def test_metadata_rejects_a_card_without_source_revision(monkeypatch, tmp_path):
+    monkeypatch.setattr(_Pinned, "CARD", _card(tmp_path, None))
+    with pytest.raises(TimeNetInvalidCardError, match=r"has no source_revision; set it to _Pinned.SOURCE_REVISION"):
+        _Pinned().metadata()
+
+
+def _hub_connectors() -> list[type[BaseHuggingFaceConnector]]:
+    connectors = (discovery.resolve(dataset_id) for dataset_id in discovery.available())
+    return [connector for connector in connectors if issubclass(connector, BaseHuggingFaceConnector)]
+
+
+@pytest.mark.parametrize("connector", _hub_connectors(), ids=lambda connector: connector.__name__)
+def test_every_hub_connector_card_names_its_pinned_commit(connector):
+    assert connector().metadata().source_revision == connector.SOURCE_REVISION
+
+
+def test_metadata_rejects_a_card_with_another_commit(monkeypatch, tmp_path):
+    monkeypatch.setattr(_Pinned, "CARD", _card(tmp_path, "1" * 40))
+    with pytest.raises(TimeNetInvalidCardError, match=r"sets source_revision '1{40}', but _Pinned.SOURCE_REVISION"):
+        _Pinned().metadata()
+
+
+def test_a_hub_card_without_source_revision_does_not_break_discovery(monkeypatch, tmp_path):
+    tsqa = discovery.resolve("chengsenwang/tsqa")
+    card = tmp_path / "dataset.yaml"
+    lines = tsqa._card_path().read_text(encoding="utf-8").splitlines()
+    card.write_text(
+        "\n".join(line for line in lines if not line.startswith("source_revision")) + "\n", encoding="utf-8"
+    )
+    monkeypatch.setattr(tsqa, "CARD", card)
+    assert "chengsenwang/tsqa" in discovery.available()
+    with pytest.raises(TimeNetInvalidCardError, match="has no source_revision"):
+        tsqa().metadata()

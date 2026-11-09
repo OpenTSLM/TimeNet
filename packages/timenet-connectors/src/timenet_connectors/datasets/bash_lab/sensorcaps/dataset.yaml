@@ -17,6 +17,7 @@ description: >-
 license: OTHER
 license_url: https://firstdonoharm.dev/version/3/0/cl-eco-extr-ffd-law-media-mil-my-soc-sv-tal-usta.html
 source_url: https://huggingface.co/datasets/BASH-Lab/SensorCaps
+source_revision: 4242e07feaacb0ee3aff86182a62914fa7abacef
 citation: >-
   Imran et al. LLaSA: A Sensor-Aware LLM for Natural Language Reasoning of
   Human Activity from IMU Data. https://arxiv.org/abs/2406.14498
