@@ -84,7 +84,7 @@ Every backend implements this contract.
 | Method | Description |
 | --- | --- |
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
-| `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version. Raises `TimeFFormatError` if the stored manifest is not valid, or if its own id disagrees with the directory it was loaded from. |
+| `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version. Raises `TimeNetManifestError` if the stored manifest is not valid, or `TimeFFormatError` if its own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
 | `location` | Where the registry is: the base URL of a remote registry, the `s3://bucket/prefix` root of an S3 registry, or the resolved root directory of a local registry. Each backend must define it. |
 | `requires_open_access` | Whether the registry holds and serves only releases with open access. `False` only for `LocalRegistry`. |
@@ -123,7 +123,7 @@ names each one and pins the files it reads from it (see
 - `TimeNet.download()` and `copy_release()` copy complete copies of the version and of each payload
   source, and check each source against the pins. If a downloaded file has another size or checksum
   than its manifest records, the copy raises `TimeNetFileError` and keeps no partial copy.
-- `put_dataset` refuses a version if the registry does not hold one of its parents.
+- `put_dataset` refuses a version if the registry does not hold one of its payload sources.
 
 ### Remote reads
 
@@ -138,8 +138,8 @@ copies complete files, and makes sure that each file has its recorded size and c
 ## Sources
 
 A source is something that can provide a release. `timenet.sources` defines the type
-`ReleaseSource`. Each source has the method `resolve(dataset_id, version)`. `version` is an exact
-version, such as `"1.2.0"`, or `None` for the newest version of that source. Two kinds of source
+`ReleaseSource`. Each source has the method `resolve(dataset_id, version)`. `version` is a `Version`
+object for an exact version, or `None` for the newest version of that source. Two kinds of source
 exist:
 
 - A registry. Every `BaseRegistry` is a source.

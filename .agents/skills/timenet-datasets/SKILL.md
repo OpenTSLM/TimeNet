@@ -61,18 +61,9 @@ deletes anything. Do not run a clear while a build or a download runs.
 
 Global: `-q`/`--quiet` suppresses status output; it goes before the command.
 
-Sources: `list`, `search`, `info` and `download` take three flags after the command. Each flag wins
-over its environment variable, and the variable wins over its default. A registry flag that names no
-registry (a blank value, an unknown scheme, a URL for `--local-registry`) exits with code 2 and
-names the flag. A bad `TIMENET_*` variable exits with code 1 and names the variable.
-
-- `--local-registry PATH`: the local registry, where downloads and builds land and which a lookup
-  checks first (`$TIMENET_LOCAL_REGISTRY`, else `~/.timenet/registry`).
-- `--remote-registry URL|PATH`: a remote registry, as a URL or a local path, the second source that
-  a lookup checks, if the local registry does not have the dataset (`$TIMENET_REMOTE_REGISTRY`,
-  else `timenet://`).
-- `--auto-build`/`--no-auto-build`: whether installed connectors build a dataset that neither the
-  local nor the remote registry has (`$TIMENET_AUTO_BUILD`, else true).
+Sources: `list`, `search`, `info` and `download` take `--local-registry`, `--remote-registry` and
+`--auto-build`/`--no-auto-build` after the command. Each flag wins over its environment variable
+(see [Selecting the sources](../../../docs/cli/timenet.md#selecting-the-sources) for details).
 
 `list` and `search` merge every source, `info` resolves like `open()`, and `download` copies into
 the local registry. Of these three flags, `publish` and the `local` commands other than

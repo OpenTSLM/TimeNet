@@ -58,8 +58,8 @@ any source provides. Only "not found" and "not served" fall through to the next 
 other error stops the call. So if a registry in the list does not answer, a request for `@latest`
 fails.
 
-A client that must never write takes `read_only=True`. A list of remote registries alone has no
-local registry, so it never writes either:
+A client whose local registry is `LocalRegistry(path, read_only=True)` never writes. A list of
+remote registries alone has no local registry, so it never writes either:
 
 ```python
 import timenet

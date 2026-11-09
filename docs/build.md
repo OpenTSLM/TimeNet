@@ -43,7 +43,8 @@ Use `--no-isolation` while developing a connector in the current environment:
 timenet-build build org/name --local-registry .timenet-registry --no-isolation
 ```
 
-Most parameters can also be specified as environment variables. For example,
+The local and remote registries, auto-build, isolation, the cache and the token have environment
+variables (see the [settings table](client.md#settings)). For example,
 `$TIMENET_LOCAL_REGISTRY` & `TIMENET_ISOLATION=off`. These apply to every CLI command, and the
 Python SDK also honors them.
 
@@ -140,14 +141,16 @@ A connector card can declare exact parent releases under `parents`. The connecto
 releases when it composes the child dataset, preparing each parent release in the local registry
 that it builds into.
 
-When resolving dependencies, the build uses the first of these steps that
-works:
+With the default list of sources, the build uses the first of these steps that works:
 
 1. Reuse a complete copy in the local registry. `--local-registry` selects it.
 2. Copy the release from the remote registry. `--remote-registry` selects it, else
    `$TIMENET_REMOTE_REGISTRY` (default `timenet://`).
 3. Build the release from its own connector. `--no-auto-build`, or `TIMENET_AUTO_BUILD=false`,
    removes this step.
+
+A Python build with its own list, `timenet.build(..., sources=[...])`, uses the order of that list
+instead.
 
 If no step works, the build stops before any download, and the error names the missing release.
 
