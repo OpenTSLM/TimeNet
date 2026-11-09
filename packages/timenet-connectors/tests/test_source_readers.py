@@ -75,3 +75,22 @@ def test_json_requires_array_and_jsonl_rejects_invalid_line(tmp_path):
     path.write_text("{}\nnot json\n")
     with pytest.raises(TimeNetConnectorError, match="line 2"):
         list(JsonlReader(path, DataRow).iter_rows())
+
+
+@pytest.mark.parametrize(
+    ("reader_type", "content", "location"),
+    [
+        (JsonReader, '[{"name":"first","name":"second","count":1}]', "source"),
+        (JsonlReader, '{"name":"first","name":"second","count":1}\n', "line 1"),
+        (JsonReader, '[{"nested":{"x":1,"x":2}}]', "source"),
+        (JsonlReader, '{"nested":{"x":1,"x":2}}\n', "line 1"),
+    ],
+)
+def test_json_rejects_duplicate_keys(tmp_path, reader_type, content, location):
+    path = tmp_path / "source"
+    path.write_text(content)
+    with pytest.raises(TimeNetConnectorError, match="duplicate key") as exc:
+        list(reader_type(path, Row).iter_rows())
+    assert location in str(exc.value)
+    assert str(path) in str(exc.value)
+    assert exc.value.__cause__ is not None

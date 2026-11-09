@@ -2,9 +2,19 @@
 
 from collections.abc import Generator
 import json
+from typing import Any
 
 from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources.readers.base import RowReader, RowT
+
+
+def _distinct_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
+    result: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in result:
+            raise ValueError(f"duplicate key {key!r}")
+        result[key] = value
+    return result
 
 
 class JsonReader(RowReader[RowT]):
@@ -21,7 +31,7 @@ class JsonReader(RowReader[RowT]):
         """
         try:
             with self.path.open(encoding="utf-8") as handle:
-                values = json.load(handle)
+                values = json.load(handle, object_pairs_hook=_distinct_fields)
         except (OSError, UnicodeError, ValueError) as exc:
             raise TimeNetConnectorError(f"{self.path}: {exc}") from exc
         if not isinstance(values, list):
@@ -46,7 +56,7 @@ class JsonlReader(RowReader[RowT]):
             with self.path.open(encoding="utf-8") as handle:
                 for number, line in enumerate(handle, start=1):
                     try:
-                        value = json.loads(line)
+                        value = json.loads(line, object_pairs_hook=_distinct_fields)
                     except ValueError as exc:
                         raise TimeNetConnectorError(f"{self.path}: line {number}: {exc}") from exc
                     yield self._validate(value, f"line {number}")
