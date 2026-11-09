@@ -132,6 +132,9 @@ A build needs the parent releases. A read needs only the payload sources. `TimeN
 before the first read. A read never opens the catalog of a parent. `download()` copies the release
 and its payload sources into the local registry. See [Payload sources](registry.md#payload-sources).
 
+`required_releases(with_parents=False)` lists the releases of the payload sources, which a read
+needs. `required_releases(with_parents=True)` also lists the parents, which a build needs.
+
 ---
 
 See the [API reference for `timenet.manifest`](api/timenet.manifest.md) for the full symbol listing.
