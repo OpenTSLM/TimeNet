@@ -291,15 +291,16 @@ a copy or a build puts into it. The record says where the release comes from:
 
 ```json
 {
-  "origin": "copy",
+  "kind": "download",
   "source": "https://registry.timenet.ai",
   "at": "2026-11-03T14:02:11Z"
 }
 ```
 
-`origin` is `copy` for a release copied from a registry, and `build` for a release
+`kind` is `download` for a release copied from a registry, and `build` for a release
 that an installed connector built. `source` names the registry, or the connector package and its
-version. To read it, call `timenet.registry.origin.read_origin(store, release)`.
+version. To read it, call `store.read_origin(release)` on the `LocalRegistry`. It returns an
+`Origin` from `timenet.registry.origin`, whose `kind` is an `OriginKind`.
 
 ## Pin a version
 
