@@ -54,7 +54,13 @@ after `search`, `-q` is the short form of `--query`.
 
 ## Downloads and builds in the local registry
 
-The local registry holds two kinds of release, downloads and local builds. Releases can depend on each other (parent-child relationships). In that case `timenet local downloads clear` and `timenet local builds clear` might keep releases that are dependet on, and print `Kept <release>: <release> needs it.` for each. Because `local clear` deletes everything, no dependency relationships can persist, and everything is removed. A symlinked dataset or release folder in the local registry stops `downloads clear` and `builds clear` before they delete anything. Do not run a clear while a build or a download runs.
+The local registry holds two kinds of release, downloads and local builds. Releases can depend on
+each other (parent-child relationships). In that case `timenet local downloads clear` and
+`timenet local builds clear` might keep releases that are depended on, and print
+`Kept <release>: <release> needs it.` for each. Because `local clear` deletes everything, no
+dependency relationships can persist, and everything is removed. A symlinked dataset or release
+folder in the local registry stops `downloads clear` and `builds clear` before they delete anything.
+Do not run a clear while a build or a download runs.
 
 ## Selecting the sources
 
@@ -69,7 +75,8 @@ overrides one [variable](../client.md#settings):
 | `--remote-registry URL|PATH` | `TIMENET_REMOTE_REGISTRY` | `timenet://` | A remote registry, as a URL or a local path: the second source that a lookup checks, if the local registry does not have the dataset. |
 | `--auto-build` / `--no-auto-build` | `TIMENET_AUTO_BUILD` | `true` | Whether installed connectors build a dataset that neither the local nor the remote registry has. |
 
-A flag wins over its variable, and the variable wins over its default. Flags go after the subcommand:
+A flag wins over its variable, and the variable wins over its default. Flags go after the
+subcommand:
 
 ```bash
 timenet list --remote-registry https://registry.example.com

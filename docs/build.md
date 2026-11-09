@@ -18,7 +18,8 @@ timenet-build build timenet/hello-world
 ```
 
 The release lands in the local registry (default `~/.timenet/registry`), where
-`TimeNet()` reads from. `--local-registry` selects another local registry. `--publish-to` publishes the release to another registry after the build:
+`TimeNet()` reads from. `--local-registry` selects another local registry. `--publish-to` publishes
+the release to another registry after the build:
 
 ```bash
 # Publish through the hosted registry API.
@@ -42,9 +43,12 @@ Use `--no-isolation` while developing a connector in the current environment:
 timenet-build build org/name --local-registry .timenet-registry --no-isolation
 ```
 
-Most parameters can also be specified as environment variables. For example, `$TIMENET_LOCAL_REGISTRY` & `TIMENET_ISOLATION=off`. These apply to every CLI command, and the Python SDK also honors them.
+Most parameters can also be specified as environment variables. For example,
+`$TIMENET_LOCAL_REGISTRY` & `TIMENET_ISOLATION=off`. These apply to every CLI command, and the
+Python SDK also honors them.
 
-For each build, the used Python and package and TimeNet versions are recorded to the build's manifest.
+For each build, the used Python and package and TimeNet versions are recorded to the build's
+manifest.
 
 ## Pipeline
 
@@ -60,9 +64,11 @@ The engine runs these stages:
 6. Write the complete TimeF version into the local registry.
 7. Remove the raw cache after success, unless `--keep-cache` is set.
 
-By default a build reuses an existing version already in the local registry and a status line says so. Use `--force` to skip this behavior. A forced build replaces the old version only after the new one is
-complete, so a failed build keeps the old one. A published version never changes, so with
-`--publish-to`, `--force` only affects the build to the local registry. The publish then only checks the rebuild against the already published version.
+By default a build reuses an existing version already in the local registry and a status line says
+so. Use `--force` to skip this behavior. A forced build replaces the old version only after the new
+one is complete, so a failed build keeps the old one. A published version never changes, so with
+`--publish-to`, `--force` only affects the build to the local registry. The publish then only checks
+the rebuild against the already published version.
 
 ## Programmatic builds
 
@@ -120,7 +126,8 @@ by default the local registry, to `dest`. Without a version in the dataset ID, i
 version of `source`. A `DatasetRef` names the exact release, so `publish()` copies it without a
 lookup in `source`. It mirrors the [`timenet publish`](cli/timenet.md#commands) CLI command.
 
-A published version cannot change. If `dest` already holds the same release, `publish()` copies nothing.
+A published version cannot change. If `dest` already holds the same release, `publish()` copies
+nothing.
 
 
 A remote registry holds only releases with access declared `open`. Before
@@ -130,7 +137,8 @@ release.
 ## Prepare parent releases
 
 A connector card can declare exact parent releases under `parents`. The connector reads these
-releases when it composes the child dataset, preparing each parent release in the local registry that it builds into.
+releases when it composes the child dataset, preparing each parent release in the local registry
+that it builds into.
 
 When resolving dependencies, the build uses the first of these steps that
 works:

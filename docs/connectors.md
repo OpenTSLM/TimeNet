@@ -311,9 +311,9 @@ timenet-build build chengsenwang/tsqa --keep-cache  # keep the raw sources
 ```
 
 A successful build removes the raw downloads of the dataset, at
-`<TIMENET_CACHE>/downloads/<dataset_id>`. To keep them, pass `--keep-cache`, or `keep_cache=True` to `timenet.build()`. This
-helps while you write a connector for a large source, because each rebuild downloads the source
-again.
+`<TIMENET_CACHE>/downloads/<dataset_id>`. To keep them, pass `--keep-cache`, or `keep_cache=True` to
+`timenet.build()`. This helps while you write a connector for a large source, because each rebuild
+downloads the source again.
 
 Keeping `download` and `convert` apart makes a connector testable offline. `convert` takes raw
 references and does not touch the network. A test can therefore pass small local inputs or synthetic

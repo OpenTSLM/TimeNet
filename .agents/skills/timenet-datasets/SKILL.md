@@ -6,7 +6,9 @@ description: Use when finding, searching, inspecting, downloading, or loading Ti
 # Using TimeNet datasets
 
 TimeNet's consumer side is the `timenet` CLI and the `timenet.TimeNet` SDK. Both find, read and
-download TimeNet datasets: they read dataset versions from local and remote **registries** (catalogues of built datasets). A local registry can also serve to store locally built or downloaded datasets. The CLI is a thin mirror of the SDK, so anything below works the same either way.
+download TimeNet datasets: they read dataset versions from local and remote **registries**
+(catalogues of built datasets). A local registry can also serve to store locally built or downloaded
+datasets. The CLI is a thin mirror of the SDK, so anything below works the same either way.
 
 Producing datasets (writing connectors, running `timenet-build`) is a separate concern. For that, use
 the `add-dataset-connector` skill.
@@ -38,8 +40,12 @@ The CLI needs the `cli` extra (`timenet[cli]`); `make sync` already installs it.
 | `timenet local builds info` / `clear [--yes]` | List the builds in the local registry (dataset, version, source, size, total), or delete them. |
 
 A download is a release whose provenance record says `copy`. A build is a release whose record says
-`build`, or a release without a record. Releases can depend on each other (parent-child relationships). In that case `downloads clear` and `builds clear` might keep releases that are dependet on,
-and print `Kept <release>: <release> needs it.` for each. Because `local clear` deletes everything, no dependency relationships can persist, and everything is removed. A symlinked dataset or release folder in the local registry stops `downloads clear` and `builds clear` before they delete anything. Do not run a clear while a build or a download runs.
+`build`, or a release without a record. Releases can depend on each other (parent-child
+relationships). In that case `downloads clear` and `builds clear` might keep releases that are
+depended on, and print `Kept <release>: <release> needs it.` for each. Because `local clear` deletes
+everything, no dependency relationships can persist, and everything is removed. A symlinked dataset
+or release folder in the local registry stops `downloads clear` and `builds clear` before they
+delete anything. Do not run a clear while a build or a download runs.
 
 `search` flags (repeat a flag to pass several values; all are ANDed across kinds):
 
@@ -56,8 +62,9 @@ and print `Kept <release>: <release> needs it.` for each. Because `local clear` 
 Global: `-q`/`--quiet` suppresses status output; it goes before the command.
 
 Sources: `list`, `search`, `info` and `download` take three flags after the command. Each flag wins
-over its environment variable, and the variable wins over its default. A registry flag that names no registry (a blank value, an unknown scheme, a URL for `--local-registry`) exits with code 2 and names the
-flag. A bad `TIMENET_*` variable exits with code 1 and names the variable.
+over its environment variable, and the variable wins over its default. A registry flag that names no
+registry (a blank value, an unknown scheme, a URL for `--local-registry`) exits with code 2 and
+names the flag. A bad `TIMENET_*` variable exits with code 1 and names the variable.
 
 - `--local-registry PATH`: a local registry, the first source that a lookup checks, and the place
   where downloads and builds land (`$TIMENET_LOCAL_REGISTRY`, else `~/.timenet/registry`).
@@ -68,8 +75,8 @@ flag. A bad `TIMENET_*` variable exits with code 1 and names the variable.
   local nor the remote registry has (`$TIMENET_AUTO_BUILD`, else true).
 
 `list` and `search` merge every source, `info` resolves like `open()`, and `download` copies into
-the local registry. Of these three flags, `publish` and the `local` commands other than `local cache` take
-only `--local-registry`. The `local cache` commands take none of them.
+the local registry. Of these three flags, `publish` and the `local` commands other than
+`local cache` take only `--local-registry`. The `local cache` commands take none of them.
 
 ## Python API
 
@@ -97,9 +104,9 @@ dataset = tn.load("chengsenwang/tsqa")                    # every value read int
   downloads and builds. A path in the list opens such a registry too. A list with
   `InstalledConnectors()` needs a writable local registry, and only such a list builds on a read.
   A remote registry reads only its own files.
-- `TimeNet()` uses `timenet.client.default_sources()`: the local registry `$TIMENET_LOCAL_REGISTRY`, then
-  `$TIMENET_REMOTE_REGISTRY`, then `InstalledConnectors()` unless `TIMENET_AUTO_BUILD=false`. The
-  first entry is always the local registry; `default_local_registry()` returns it alone.
+- `TimeNet()` uses `timenet.client.default_sources()`: the local registry `$TIMENET_LOCAL_REGISTRY`,
+  then `$TIMENET_REMOTE_REGISTRY`, then `InstalledConnectors()` unless `TIMENET_AUTO_BUILD=false`.
+  The first entry is always the local registry; `default_local_registry()` returns it alone.
 - `list()` and `search()` merge every source of the list, connector cards included: one row per
   dataset at the highest version, sorted by ID. `limit` applies after the merge. A connector never
   matches `task` or `time_series_spec`. A registry without a catalog (S3) adds nothing, and a card
@@ -110,13 +117,14 @@ dataset = tn.load("chengsenwang/tsqa")                    # every value read int
   that only a connector provides raises `TimeNetNotBuiltError` (no manifest before a build).
   `get_card()` returns the card, also from a connector. `plan_read()` returns the plan of `open()`
   (one step per release with its action and source) and runs nothing.
-- `download()` needs a writable local registry in the list. It resolves like `open()`. The release and each payload source that
-  the local registry lacks or holds damaged come from the first registry other than the local registry that provides
-  it, so they can come from different registries. If the local registry holds a complete copy of the
-  release, only the missing payload sources are copied. It never builds: a release that only a
-  connector provides raises `TimeNetNotBuiltError`, whose hint names `timenet.build()`.
-  `force=True` copies again, and `progress=` takes the events of `timenet.progress`. The hint of a
-  read of a damaged copy names the `download()` or the build that replaces it.
+- `download()` needs a writable local registry in the list. It resolves like `open()`. The release
+  and each payload source that the local registry lacks or holds damaged come from the first
+  registry other than the local registry that provides it, so they can come from different
+  registries. If the local registry holds a complete copy of the release, only the missing payload
+  sources are copied. It never builds: a release that only a connector provides raises
+  `TimeNetNotBuiltError`, whose hint names `timenet.build()`. `force=True` copies again, and
+  `progress=` takes the events of `timenet.progress`. The hint of a read of a damaged copy names the
+  `download()` or the build that replaces it.
 - `open(...)` returns a `TimeFReader`; close it or use it in a `with` block. `reader.read()` returns
   a `TimeFDataset` whose values load only when asked: `record.signals[i].to_numpy()` /
   `.to_arrow()`. `reader.get(AnswerTask, task_id)` reads one object by its int ID.

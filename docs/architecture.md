@@ -144,7 +144,8 @@ runs, the build prepares each parent release, as
 `TimeNet.open()`, `TimeNet.load()`, `TimeNet.open_torch()`, and `TimeFReader.open()` resolve the
 payload sources before the first read. A read never opens the catalog of a parent. A client
 reads each release where it is, through its ordered list of sources. If only
-`InstalledConnectors()` in that list provides a release, the client builds it into the local registry. See [Open, load, or download](client.md#open-load-or-download).
+`InstalledConnectors()` in that list provides a release, the client builds it into the local
+registry. See [Open, load, or download](client.md#open-load-or-download).
 
 The child keeps an internal map from the ID of each parent object to the ID of its copy. Through
 this map, `get(..., parent=)` finds a copy. Through the same map, a later import reuses a copy. The

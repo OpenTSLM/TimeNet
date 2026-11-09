@@ -25,7 +25,8 @@ uv tool install timenet-connectors
 timenet-build build timenet/hello-world
 ```
 
-The build lands in the local registry at `~/.timenet/registry/timenet/hello-world/1.0.0/`. Load it with Python:
+The build lands in the local registry at `~/.timenet/registry/timenet/hello-world/1.0.0/`. Load it
+with Python:
 
 ```python
 import timenet
