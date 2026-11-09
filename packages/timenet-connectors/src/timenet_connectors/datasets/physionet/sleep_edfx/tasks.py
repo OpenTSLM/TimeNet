@@ -1,15 +1,7 @@
-"""Build the tasks of one recording from the annotations it already carries.
+"""Build the tasks of each recording from the annotations its record already carries.
 
-Nothing here opens a file. ``connector.py`` passes the annotations, and every function takes
-values and gives tasks.
-
-No task names its own id. Nothing resolves one by id: each task holds its record in ``inputs``,
-and no task here states a lineage. Every task takes the id the dataset gives it.
-
-Each classification task draws its target from one closed set, a ``LabelSet`` named after the
-annotation key whose values it holds. The tasks that ask one question share one set.
-
-No task carries a prompt. The release states no question in words.
+Nothing here reads a file. No task carries a prompt, because the release states no question in
+words.
 """
 
 from collections.abc import Iterator, Sequence
@@ -20,8 +12,6 @@ from timenet.types import (
     US_PER_S,
     Annotation,
     ClassificationTask,
-    Label,
-    LabelSet,
     LocalizationMode,
     ScalarPredictionTask,
     Task,
@@ -29,7 +19,16 @@ from timenet.types import (
     TimeInterval,
 )
 from timenet.types.text import read_value
-from timenet_connectors.datasets.physionet.sleep_edfx.keys import AnnotationKey, Condition, Question
+from timenet_connectors.datasets.physionet.sleep_edfx.labels import (
+    ASLEEP_LABELS,
+    CONDITION_LABELS,
+    CONDITIONS,
+    SEX_LABELS,
+    SLEEP_STAGES,
+    STAGE_LABELS,
+    AnnotationKey,
+    Question,
+)
 from timenet_connectors.demographics import AGE_UNIT, SEXES
 
 
@@ -37,59 +36,18 @@ from timenet_connectors.demographics import AGE_UNIT, SEXES
 EPOCH_MICROSECONDS = 30 * US_PER_S
 
 
-# The labels the release writes for a scored epoch. Five name a stage of sleep. `Sleep stage W`
-# is wake, `Movement time` marks a disturbed epoch, and `Sleep stage ?` marks one the
-# technician left unscored. Each classification task draws its target from one closed set, named
-# after the key whose values it holds, and each target is exactly one label.
-SLEEP_STAGES = LabelSet(
-    name=str(AnnotationKey.SLEEP_STAGE),
-    labels=(
-        Label(name="Sleep stage W", description="Wake."),
-        Label(name="Sleep stage 1"),
-        Label(name="Sleep stage 2"),
-        Label(name="Sleep stage 3"),
-        Label(name="Sleep stage 4"),
-        Label(name="Sleep stage R", description="Rapid eye movement (REM) sleep."),
-        Label(name="Movement time", description="An epoch that body movement obscures, so it has no stage."),
-        Label(name="Sleep stage ?", description="An epoch with no sleep-stage score from data collection."),
-    ),
-)
-STAGE_LABELS = SLEEP_STAGES.names
-
-# The five labels that say the subject was asleep. None of the other three bounds a night.
-ASLEEP_LABELS = frozenset(STAGE_LABELS[1:6])
-
-# The sexes, after each sheet is decoded. The two sheets code the column with opposite
-# meanings, so a raw code never reaches a task.
-SEX_LABELS = SEXES.names
-
-# The two nights of the telemetry study.
-CONDITION_LABELS = tuple(Condition)
-CONDITIONS = LabelSet(name=str(AnnotationKey.CONDITION), labels=tuple(Label(name=str(one)) for one in Condition))
-
-
 def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation]) -> Iterator[ClassificationTask]:
-    """Give one classification task for each epoch a scoring labels.
+    """Give one sleep-stage task for each scored 30 s epoch.
 
-    The hypnogram stores a run of equal epochs as one entry, so an entry covers one epoch or
-    hundreds. Each entry is walked in steps of 30 s.
-
-    The scoring does not tile its recording. Some start after the signals do, and a few hold a
-    hole in the middle. Unscored time gets no task, and nothing here fills it in.
-
-    A scope covers its epoch and names no series, so a model can read any signal.
-
-    Args:
-        recording_id: The recording the scoring belongs to, for the error messages.
-        span_annotations: Its sleep-stage annotations, from ``annotations.build``.
+    A scoring entry covers a run of equal epochs, so each entry is walked in 30 s steps. Unscored
+    time gets no task.
 
     Yields:
-        One task for each epoch, in the order the entries state them.
+        One task for each epoch, in entry order.
 
     Raises:
-        TimeNetConnectorError: If an entry states no span, states a label the release does not
-            write, or does not divide into whole epochs. Each message names the recording and
-            the value that is wrong.
+        TimeNetConnectorError: If an entry has no span, an unknown label, or does not divide into
+            whole epochs.
     """
     for stage in span_annotations:
         label = read_value(stage.value)
@@ -106,8 +64,7 @@ def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation])
 
         start = stage.span.start_us
         length = stage.span.exclusive_end - start
-        # The onset and the duration fail for different reasons. One message for both names
-        # the wrong number and sends a reader the wrong way.
+        # The onset and the duration fail for different reasons, so each gets its own message.
         if start % EPOCH_MICROSECONDS:
             raise TimeNetConnectorError(
                 f"{recording_id}: a scored entry starts at {start} us, which is not a boundary of "
@@ -122,8 +79,7 @@ def build_epoch_tasks(recording_id: str, span_annotations: Sequence[Annotation])
 
         for onset in range(start, stage.span.exclusive_end, EPOCH_MICROSECONDS):
             yield ClassificationTask(
-                # The label the technician wrote. Merging stage 3 with stage 4 is a decision
-                # for whoever trains.
+                # The label the technician wrote. Merging stage 3 with stage 4 is for whoever trains.
                 targets=(label,),
                 label_set=SLEEP_STAGES,
                 scope=TimeInterval.micros(onset, onset + EPOCH_MICROSECONDS),
@@ -135,26 +91,17 @@ def build_record_tasks(
     non_span_annotations: Sequence[Annotation],
     span_annotations: Sequence[Annotation],
 ) -> Iterator[Task]:
-    """Give the questions about a whole recording rather than a region of one.
+    """Give the questions about a whole recording: age, sex, condition, and the sleep period.
 
-    Each takes an unset ``scope``. Age, sex and the drug condition come from the subject table.
-    Where the subject slept comes from the scoring.
-
-    Provenance is left out. The study, the night, the header clock and the demographics note
-    carry no span either, so the caller passes those in too. A task for one of them asks a
-    model to recover a fact the dataset states beside it.
-
-    Args:
-        recording_id: The recording these questions are about, for the error messages.
-        non_span_annotations: Its recording-metadata annotations, from ``SubjectTables``.
-        span_annotations: Its sleep-stage annotations, which bound the night.
+    The study, the night, the start clock, and the note get no task, because the dataset states
+    them beside the record.
 
     Yields:
-        The whole-record tasks of that recording, in a stable order.
+        The whole-record tasks, in a stable order.
 
     Raises:
-        TimeNetConnectorError: If a fact this asks about is missing, stated twice, or states a value
-            the release does not write.
+        TimeNetConnectorError: If a fact is missing, stated twice, or has a value the release does
+            not write.
     """
     stated: dict[str, object] = {}
     for one in non_span_annotations:
@@ -164,21 +111,18 @@ def build_record_tasks(
         stated[one.key] = read_value(one.value)
 
     yield ScalarPredictionTask(
-        # A float with a unit keeps the type a regression metric needs. As a string, a
-        # one-year error reads as two unequal labels.
+        # A float with a unit keeps the type that a regression metric needs.
         targets=(_whole_years(recording_id, stated),),
         unit=AGE_UNIT,
         target_name=Question.AGE,
     )
 
     yield ClassificationTask(
-        # The decoded sex, never the sheet's code. The two sheets code the column with
-        # opposite meanings, so one code means two opposite things.
         targets=(_one_of(recording_id, stated, AnnotationKey.SEX, SEX_LABELS),),
         label_set=SEXES,
     )
 
-    # Only the telemetry sheet states a condition, so this one is optional.
+    # Only the telemetry sheet states a condition.
     if AnnotationKey.CONDITION in stated:
         yield ClassificationTask(
             targets=(_one_of(recording_id, stated, AnnotationKey.CONDITION, CONDITION_LABELS),),
@@ -189,24 +133,16 @@ def build_record_tasks(
     if night is not None:
         yield TemporalLocalizationTask(
             targets=(night,),
-            # The interval does not tile the recording. A cassette recording is mostly wake on
-            # either side of one night, and that time is unmarked rather than something else.
+            # The wake time around the night is unmarked, not another class.
             mode=LocalizationMode.SPARSE,
         )
 
 
 def find_sleep_period(span_annotations: Sequence[Annotation]) -> TimeInterval | None:
-    """Give the interval from the first scored epoch that is not wake to the end of the last.
-
-    ``Sleep stage W``, ``Movement time`` and ``Sleep stage ?`` do not bound it, because none of
-    the three says the subject was asleep.
-
-    Args:
-        span_annotations: The sleep-stage annotations of one recording.
+    """Give the interval from the first scored sleep epoch to the end of the last.
 
     Returns:
-        The interval, or ``None`` where the scoring holds no sleep. TimeF refuses an interval of
-        zero length, so a recording with no sleep carries no question about its night.
+        The interval, or ``None`` where the scoring holds no sleep.
     """
     spans = [one.span for one in span_annotations if read_value(one.value) in ASLEEP_LABELS and one.span is not None]
     if not spans:
@@ -219,21 +155,6 @@ def find_sleep_period(span_annotations: Sequence[Annotation]) -> TimeInterval | 
 
 
 def _whole_years(recording_id: str, stated: dict[str, object]) -> float:
-    """Give the subject's age as a float, from the value the subject table stated.
-
-    Annotation values support several types. This task requires an integer age, so it checks
-    the value before it builds the numeric answer.
-
-    Args:
-        recording_id: The recording the age belongs to, for the error message.
-        stated: What its metadata annotations state.
-
-    Returns:
-        The age in whole years.
-
-    Raises:
-        TimeNetConnectorError: If no age is stated, or the value is not a whole number.
-    """
     if AnnotationKey.AGE not in stated:
         raise TimeNetConnectorError(f"{recording_id}: states no age, so it cannot be asked for one")
 
@@ -245,20 +166,6 @@ def _whole_years(recording_id: str, stated: dict[str, object]) -> float:
 
 
 def _one_of(recording_id: str, stated: dict[str, object], key: AnnotationKey, permitted: Sequence[str]) -> str:
-    """Give one stated value, after a check that the release writes it.
-
-    Args:
-        recording_id: The recording it belongs to, for the error message.
-        stated: What its metadata annotations state.
-        key: The key to read.
-        permitted: The values the release writes for that key.
-
-    Returns:
-        The value.
-
-    Raises:
-        TimeNetConnectorError: If the key is absent, or its value is outside the set.
-    """
     if key not in stated:
         raise TimeNetConnectorError(f"{recording_id}: states no {key}, so it cannot be asked for one")
 
@@ -269,41 +176,35 @@ def _one_of(recording_id: str, stated: dict[str, object], key: AnnotationKey, pe
     return str(value)
 
 
+def _sleep_stages(record: Record) -> list[Annotation]:
+    """Give each sleep stage of a record once, although every scored signal carries it.
+
+    Returns:
+        The stages, in the order the signals first carry them.
+    """
+    stages: dict[tuple[object, object], Annotation] = {}
+    for signal in record.signals:
+        for one in signal.annotations:
+            if one.key == AnnotationKey.SLEEP_STAGE:
+                stages[one.span, read_value(one.value)] = one
+    return list(stages.values())
+
+
 def iter_tasks(records: Sequence[Record]) -> Iterator[Task]:
     """Give every task of a build, one recording at a time.
 
-    This reads no file. ``convert`` already read each scoring, and a second read of a
-    hypnogram can disagree with the annotations the records carry.
-
-    The writer calls the source more than once, so the caller passes a callable that gives a
-    fresh iterator each time.
-
-    Args:
-        records: The records of the build. Each record carries its annotations and holds the name
-            of its recording in ``metadata["recording_id"]``.
+    This reads no file. It expands the annotations that the records already carry.
 
     Yields:
         The epoch tasks of each recording, then its whole-record tasks.
 
     Raises:
-        TimeNetConnectorError: If a scoring cannot be expanded into whole epochs. The message names
-            the recording, because a task is one of hundreds of thousands.
+        TimeNetConnectorError: If a scoring cannot be expanded into whole epochs.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by build_epoch_tasks, not directly here)
     for record in records:
-        # The two lists partition the annotations, so a key that neither builder asks about is
-        # in one of them rather than in neither. Each builder then takes the part it reads.
         span_annotations = [one for one in record.annotations if one.span is not None]
         non_span_annotations = [one for one in record.annotations if one.span is None]
-        # Every signal that the technician read carries each stage. So one epoch has one
-        # occurrence for each signal. The same span and label mean the same stage.
-        stages = list(
-            {
-                (one.span, read_value(one.value)): one
-                for signal in record.signals
-                for one in signal.annotations
-                if one.key == AnnotationKey.SLEEP_STAGE
-            }.values()
-        )
+        stages = _sleep_stages(record)
 
         recording_id = str(record.metadata["recording_id"])
         for task in build_epoch_tasks(recording_id, stages):
@@ -323,24 +224,13 @@ def build_lights_off_task(
     session: TimeInterval | None,
     span_annotations: Sequence[Annotation],
 ) -> TemporalLocalizationTask | None:
-    """Ask where the lights went out, on a recording that holds that moment.
+    """Ask where the lights went out, when the recording holds that moment.
 
-    The subject table states a clock time and no date, so the offset onto the timeline wraps
-    forward across midnight. Three recordings of the release start seconds after the lights
-    went out, and the wrap then puts the moment about a day later, past the end of the session.
-    Those carry no task, because a recording cannot be asked for a moment it does not hold.
-
-    The mode is sparse. One point marks one instruction to the subject, and the rest of the
-    recording is unmarked rather than something else.
-
-    Args:
-        recording_id: The recording the question is about.
-        session: Its declared session span.
-        span_annotations: Its annotations that carry a span.
+    Three recordings start seconds after the lights went out. The offset then wraps to about a day
+    later, past the end of the session, and those recordings get no task.
 
     Returns:
-        The task, or ``None`` where the recording states no lights-off moment or does not hold
-        the one it states.
+        The task, or ``None`` where the recording states no lights-off moment or does not hold it.
     """
     stated = [one for one in span_annotations if one.key == AnnotationKey.LIGHTS_OFF]
     if not stated or session is None:

@@ -3,8 +3,8 @@ from datetime import time
 import pytest
 
 from timenet.errors import TimeNetConnectorError
-from timenet_connectors.datasets.physionet.sleep_edfx import tables
-from timenet_connectors.datasets.physionet.sleep_edfx.keys import Condition
+from timenet_connectors.datasets.physionet.sleep_edfx import source as tables
+from timenet_connectors.datasets.physionet.sleep_edfx.labels import Condition
 from timenet_connectors.demographics import Sex
 
 
