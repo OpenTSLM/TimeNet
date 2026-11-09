@@ -91,7 +91,9 @@ def test_shared_reuses_the_first_attached_occurrence_without_changing_ordinary_a
         Annotation(key="n", value=1, unit="year"),
         Annotation(key="n", value=1, description="one"),
         Annotation(key="n", value=1, metadata={"source": "csv"}),
+        Annotation(key="n", value=1, metadata={"details": {}}),
         Annotation(key="n", value=1, occurrence_metadata={"rater": "a"}),
+        Annotation(key="n", value=1, occurrence_metadata={"details": {}}),
         Annotation(key="n", value=1, source="model"),
         Annotation(key="n", value=1, confidence=0.5),
         Annotation(key="m", value=1),
@@ -116,22 +118,6 @@ def test_sharing_matches_metadata_independently_of_mapping_order():
     dataset = _dataset()
     first = dataset.annotate_shared(Annotation(key="n", value=1, metadata={"a": [1], "b": {"c": True}}))
     assert dataset.annotate_shared(Annotation(key="n", value=1, metadata={"b": {"c": True}, "a": [1]})) is first
-
-
-@pytest.mark.parametrize(
-    "candidate",
-    [
-        Annotation(key="n", value=1, metadata={"details": {}}),
-        Annotation(key="n", value=1, occurrence_metadata={"details": {}}),
-    ],
-)
-def test_sharing_distinguishes_empty_metadata_from_a_nested_empty_object(candidate):
-    dataset = _dataset()
-    empty = dataset.annotate_shared(Annotation(key="n", value=1))
-    assert dataset.annotate_shared(Annotation(key="n", value=1, metadata={}, occurrence_metadata={})) is empty
-    nested = dataset.annotate_shared(candidate)
-    assert nested is not empty
-    assert dataset.annotate_shared(candidate) is nested
 
 
 def test_shared_rejects_spans_even_when_the_value_matches():
