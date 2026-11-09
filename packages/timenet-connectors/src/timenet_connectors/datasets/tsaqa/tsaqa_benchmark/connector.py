@@ -665,14 +665,7 @@ def _records(row: _Row, loader: _SeriesLoader) -> tuple[Record, ...]:
     return tuple(records)
 
 
-def _published_labels(row: _Row) -> tuple[tuple[str, str], tuple[str, str]]:
-    """Return the published ``task`` and ``question_type`` of a row, as annotation keys and values."""
-    return ("task", row.task.value), ("question_type", row.question_type)
-
-
-def _task(
-    row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue], labels: Mapping[tuple[str, str], Annotation]
-) -> Task:
+def _task(row: _Row, inputs: tuple[Record, ...], issues: frozenset[SourceIssue], dataset: TimeFDataset) -> Task:
     """Build a row's task: a true-or-false row is a classification task, any other an answer task.
 
     The model reads what Appendix E.1 lists: the published context, then the published ``task`` and
@@ -684,15 +677,18 @@ def _task(
         row: The row.
         inputs: The row's input Records.
         issues: The row's source issues.
-        labels: The dataset's annotation of each published ``task`` and ``question_type`` value.
+        dataset: The dataset that shares each published task and question-type annotation.
 
     Returns:
         The task, its target the published answer.
     """
     annotations = itertools.chain.from_iterable(record.annotations for record in inputs)
+    task_label = dataset.annotate_shared(Annotation(key="task", value=row.task.value))
+    question_type = dataset.annotate_shared(Annotation(key="question_type", value=row.question_type))
     input_annotations = (
         *(a for a in annotations if a.key in _CONTEXT_KEYS or a.key in _PUBLISHED_LISTS.values()),
-        *(labels[label] for label in _published_labels(row)),
+        task_label,
+        question_type,
     )
     metadata: dict[str, JsonValue] = {
         "task": row.task.value,
@@ -764,18 +760,13 @@ class TSAQAConnector(BaseHuggingFaceConnector):
         dataset = TimeFDataset(metadata=self.metadata())
         for key, value in (("source_repository", self.HF_REPO), ("source_revision", self.SOURCE_REVISION)):
             dataset.annotate(Annotation(key=key, value=value))
-        # The model reads the published task and question_type, so each distinct value is a dataset annotation.
-        labels = {
-            label: dataset.annotate(Annotation(key=label[0], value=label[1]))
-            for label in sorted({label for row in rows for label in _published_labels(row)})
-        }
         for row_records in records:
             for record in row_records:
                 dataset.add_record(record=record)
 
         def tasks() -> Iterator[Task]:
             for row, inputs in zip(rows, records, strict=True):
-                yield _task(row, inputs, issues.get(row.key, frozenset()), labels)
+                yield _task(row, inputs, issues.get(row.key, frozenset()), dataset)
 
         dataset.set_task_stream((ClassificationTask, AnswerTask), tasks)
         return dataset
