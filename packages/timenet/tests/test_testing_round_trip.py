@@ -15,6 +15,8 @@ from timenet.types import (
     AnswerTask,
     DatasetMetadata,
     License,
+    MissingReason,
+    MissingValues,
     ScalarPredictionTask,
     TimeInterval,
     TimeSeriesSpec,
@@ -53,7 +55,9 @@ def _dataset_with_values(values, *, value_shape=()):
         values = pa.ExtensionArray.from_storage(pa.fixed_shape_tensor(pa.float32(), value_shape), storage)
     signal = Signal.from_values(
         values,
-        spec=_SPEC.model_copy(update={"nullable": True, "value_shape": value_shape}),
+        spec=_SPEC.model_copy(
+            update={"missing": MissingValues(reason=MissingReason.NOT_RECORDED), "value_shape": value_shape}
+        ),
         name="a",
         time_axis=RegularAxis(period_us=Fraction(1000)),
     )
