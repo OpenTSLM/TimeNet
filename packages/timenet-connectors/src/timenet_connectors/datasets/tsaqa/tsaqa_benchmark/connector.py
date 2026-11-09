@@ -32,7 +32,8 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.json import JsonValue
 from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, Split, Task, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
-from timenet_connectors.sources.readers.parquet import iter_parquet_rows
+from timenet_connectors.sources.readers.base import DataRow, NonBlankText, PublishedEnum
+from timenet_connectors.sources.readers.parquet import ParquetRowSource
 
 
 @unique
@@ -83,12 +84,7 @@ _CONTEXT_KEYS = ("meta_info", "domain", "dataset")
 """The published columns an input Record is annotated with, and its task gives the model as context."""
 _PUBLISHED_LISTS = {key: f"published_{key}" for key in _CONTEXT_KEYS}
 """The annotation key of each context column for a row that publishes the column as a list."""
-_READ_COLUMNS = ("task", "question_type", "input_ts", "question", "answer", *_CONTEXT_KEYS)
-"""The columns a conversion reads. The release's ninth, ``raw_ts``, holds the series before normalization."""
 _SERIES_COLUMNS = ["input_ts", "question"]
-_DIGEST_COLUMNS = ("task", "input_ts", "question")
-"""The columns that make a row's question: the same question about the same series, whatever its
-context or published ``question_type`` says. The model sees neither."""
 
 _COMPARISON_SERIES = 2
 """How many series a comparison row has."""
@@ -240,6 +236,50 @@ def _task_issues(task: Task) -> set[SourceIssue]:
         raise TimeFValidationError(message) from exc
 
 
+class _PublishedRow(DataRow):
+    """The source columns needed for conversion; raw_ts remains unprojected."""
+
+    task: PublishedEnum[_Task]
+    question_type: NonBlankText
+    input_ts: NonBlankText
+    question: NonBlankText
+    answer: NonBlankText
+    meta_info: NonBlankText
+    domain: NonBlankText
+    dataset: NonBlankText
+
+    def read_contexts(self, task: _Task) -> _Contexts:
+        """Read the context a row publishes.
+
+        A comparison, data transformation or temporal relationship row publishes each context column as a
+        list. No source says what each entry describes, so the connector keeps the lists whole, under their
+        ``published_*`` keys. Any other row publishes one text for each column, under its own name.
+
+        Returns:
+            The annotations of the row's first input Record.
+
+        Raises:
+            ValueError: If a published list isn't a JSON list of texts, a comparison's doesn't hold two, or
+                the three lists differ in length.
+        """
+        text = {"meta_info": self.meta_info, "domain": self.domain, "dataset": self.dataset}
+        if task is not _Task.COMPARISON and task not in _PRINTING_TASKS:
+            return _Contexts({key: text[key] for key in _CONTEXT_KEYS})
+        expected = f"{_COMPARISON_SERIES} texts" if task is _Task.COMPARISON else "texts"
+        lists: dict[str, tuple[str, ...]] = {}
+        for key in _CONTEXT_KEYS:
+            entries = json.loads(text[key])
+            if not isinstance(entries, list) or not entries or not all(isinstance(entry, str) for entry in entries):
+                raise ValueError(f"a {task} row's {key} is a JSON list of {expected}")
+            if task is _Task.COMPARISON and len(entries) != _COMPARISON_SERIES:
+                raise ValueError(f"a {task} row's {key} is a JSON list of {expected}")
+            lists[key] = tuple(entries)
+        lengths = {key: len(entries) for key, entries in lists.items()}
+        if len(set(lengths.values())) != 1:
+            raise ValueError(f"a {task} row's context lists differ in length: {lengths}")
+        return _Contexts({_PUBLISHED_LISTS[key]: entries for key, entries in lists.items()})
+
+
 @dataclass(frozen=True)
 class _Row:
     """A published row, validated, with its series' lengths and digest but not their values."""
@@ -270,6 +310,48 @@ class _Row:
     """Equal for rows that ask the same question about the same series, whatever their context says."""
     has_ambiguous_answer: bool
     has_wrong_target: bool
+
+    @classmethod
+    def from_source(cls, source: _PublishedRow, split: _SplitFile, index: int) -> "_Row":
+        """Validate a published row against what a conversion needs of it, and keep its small fields.
+
+        Returns:
+            The row.
+
+        Raises:
+            TimeFValidationError: If the row is malformed, with its file and row.
+        """  # ruff: ignore[docstring-missing-exception] - the ValueErrors are caught and re-raised as TimeFValidationError
+        try:
+            question = source.question
+            task = source.task
+            if source.question_type not in _QUESTION_TYPES.values():
+                raise ValueError(f"unknown question_type {source.question_type!r}")
+            inputs, printed = _input_series(task, source.input_ts), _printed_series(task, question)
+            all_series = [*inputs, *(item.values for item in printed)]
+            reading = _read_question(task, question, source.answer, printed)
+            return cls(
+                split=split,
+                index=index,
+                task=task,
+                question_type=source.question_type,
+                question_format=reading.question_format,
+                answer=source.answer,
+                prompt=_prompt(question, len(inputs) + 1, printed),
+                choices=reading.choices,
+                printed_roles=tuple(_Role.SEQUENCE if item.label is None else item.label for item in printed),
+                lengths=tuple(len(values) for values in all_series),
+                values_digest=_values_digest(all_series),
+                n_inputs=len(inputs),
+                contexts=source.read_contexts(task),
+                transform=_transform(task, question),
+                question_digest=hashlib.blake2b(
+                    "\0".join((source.task.value, source.input_ts, source.question)).encode(), digest_size=16
+                ).digest(),
+                has_ambiguous_answer=reading.ambiguous,
+                has_wrong_target=_contradicts_zero_input(task, reading.question_format, source.answer, inputs, printed),
+            )
+        except (ValueError, KeyError, IndexError, RecursionError) as exc:
+            raise TimeFValidationError(f"{split.filename} row {index}: {exc}") from exc
 
     @property
     def file(self) -> str:
@@ -328,37 +410,6 @@ def _printed_series(task: _Task, question: str) -> list[_Printed]:
     if task not in _PRINTING_TASKS:
         return []
     return [_Printed(match[1], _series_values(json.loads(match[2]))) for match in _PRINTED.finditer(question)]
-
-
-def _input_contexts(task: _Task, text: Mapping[str, str]) -> _Contexts:
-    """Read the context a row publishes.
-
-    A comparison, data transformation or temporal relationship row publishes each context column as a
-    list. No source says what each entry describes, so the connector keeps the lists whole, under their
-    ``published_*`` keys. Any other row publishes one text for each column, under its own name.
-
-    Returns:
-        The annotations of the row's first input Record.
-
-    Raises:
-        ValueError: If a published list isn't a JSON list of texts, a comparison's doesn't hold two, or
-            the three lists differ in length.
-    """
-    if task is not _Task.COMPARISON and task not in _PRINTING_TASKS:
-        return _Contexts({key: text[key] for key in _CONTEXT_KEYS})
-    expected = f"{_COMPARISON_SERIES} texts" if task is _Task.COMPARISON else "texts"
-    lists: dict[str, tuple[str, ...]] = {}
-    for key in _CONTEXT_KEYS:
-        entries = json.loads(text[key])
-        if not isinstance(entries, list) or not entries or not all(isinstance(entry, str) for entry in entries):
-            raise ValueError(f"a {task} row's {key} is a JSON list of {expected}")
-        if task is _Task.COMPARISON and len(entries) != _COMPARISON_SERIES:
-            raise ValueError(f"a {task} row's {key} is a JSON list of {expected}")
-        lists[key] = tuple(entries)
-    lengths = {key: len(entries) for key, entries in lists.items()}
-    if len(set(lengths.values())) != 1:
-        raise ValueError(f"a {task} row's context lists differ in length: {lengths}")
-    return _Contexts({_PUBLISHED_LISTS[key]: entries for key, entries in lists.items()})
 
 
 def _question_letters(question: str, lines: list[tuple[str, str]]) -> tuple[_QuestionFormat, tuple[str, ...]]:
@@ -480,55 +531,6 @@ def _prompt(question: str, first_series: int, printed: list[_Printed]) -> str:
     return _PRINTED.sub(placeholder, question)
 
 
-def _validate_row(values: Mapping[str, Any], split: _SplitFile, index: int) -> _Row:
-    """Validate a published row against what a conversion needs of it, and keep its small fields.
-
-    Returns:
-        The row.
-
-    Raises:
-        TimeFValidationError: If the row is malformed, with its file and row.
-    """  # ruff: ignore[docstring-missing-exception] - the ValueErrors are caught and re-raised as TimeFValidationError
-    try:
-        text: dict[str, str] = {}
-        for column in _READ_COLUMNS:
-            if not isinstance(values[column], str) or not values[column].strip():
-                raise ValueError(f"{column} is nonblank text")
-            text[column] = values[column]
-        question = text["question"]
-        if text["task"] not in set(_Task):
-            raise ValueError(f"unknown task {text['task']!r}")
-        task = _Task(text["task"])
-        if text["question_type"] not in _QUESTION_TYPES.values():
-            raise ValueError(f"unknown question_type {text['question_type']!r}")
-        inputs, printed = _input_series(task, text["input_ts"]), _printed_series(task, question)
-        all_series = [*inputs, *(item.values for item in printed)]
-        reading = _read_question(task, question, text["answer"], printed)
-        return _Row(
-            split=split,
-            index=index,
-            task=task,
-            question_type=text["question_type"],
-            question_format=reading.question_format,
-            answer=text["answer"],
-            prompt=_prompt(question, len(inputs) + 1, printed),
-            choices=reading.choices,
-            printed_roles=tuple(_Role.SEQUENCE if item.label is None else item.label for item in printed),
-            lengths=tuple(len(values) for values in all_series),
-            values_digest=_values_digest(all_series),
-            n_inputs=len(inputs),
-            contexts=_input_contexts(task, text),
-            transform=_transform(task, question),
-            question_digest=hashlib.blake2b(
-                "\0".join(text[c] for c in _DIGEST_COLUMNS).encode(), digest_size=16
-            ).digest(),
-            has_ambiguous_answer=reading.ambiguous,
-            has_wrong_target=_contradicts_zero_input(task, reading.question_format, text["answer"], inputs, printed),
-        )
-    except (ValueError, KeyError, IndexError, RecursionError) as exc:
-        raise TimeFValidationError(f"{split.filename} row {index}: {exc}") from exc
-
-
 def _transform(task: _Task, question: str) -> str | None:
     """Read the transform a data transformation question names.
 
@@ -547,19 +549,18 @@ def _transform(task: _Task, question: str) -> str | None:
 
 
 def _read_rows(path: Path, split: _SplitFile) -> Iterator[_Row]:
-    """Validate every row of one split file, in file order.
+    """Read and interpret each typed source row, preserving its position.
+
+    Source I/O and schema failures report TimeNetConnectorError. Domain interpretation retains
+    TimeFValidationError with the split filename and original row index.
 
     Yields:
-        Each row.
-
-    Raises:
-        TimeFFormatError: If the file can't be read as parquet.
+        Each row with its lazy-series descriptors.
     """
-    try:
-        for index, values in enumerate(iter_parquet_rows(path, columns=_READ_COLUMNS)):
-            yield _validate_row(values, split, index)
-    except (OSError, pa.ArrowException) as exc:
-        raise TimeFFormatError(f"{path}: {exc}") from exc
+    source = ParquetRowSource(path, _PublishedRow, project_columns=True)
+    with source.open_rows() as rows:
+        for entry in rows:
+            yield _Row.from_source(entry.row, split, entry.location.index)
 
 
 def _find_issues(rows: list[_Row]) -> dict[_RowKey, frozenset[SourceIssue]]:

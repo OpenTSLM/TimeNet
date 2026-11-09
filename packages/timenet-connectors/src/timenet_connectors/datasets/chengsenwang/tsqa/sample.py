@@ -2,7 +2,20 @@
 
 from dataclasses import dataclass
 import json
-from typing import Any
+
+from pydantic import Field
+
+from timenet_connectors.sources.readers.base import DataRow
+
+
+class TSQASourceRow(DataRow):
+    """The published columns used to construct a TSQA sample."""
+
+    category: str = Field(alias="Task")
+    question: str = Field(alias="Question")
+    answer: str = Field(alias="Answer")
+    label: str | None = Field(default=None, alias="Label")
+    series: str = Field(alias="Series")
 
 
 @dataclass(frozen=True)
@@ -16,19 +29,19 @@ class TSQASample:
     signals: tuple[tuple[float, ...], ...]
 
     @classmethod
-    def from_row(cls, row: dict[str, Any]) -> "TSQASample":
+    def from_row(cls, row: TSQASourceRow) -> "TSQASample":
         """Parse a row once, normalizing flat series to one channel.
 
         Returns:
             A sample whose numeric signal values also serve as its grouping key.
         """
-        series = json.loads(row["Series"])
+        series = json.loads(row.series)
         channels = series if series and isinstance(series[0], list) else [series]
         return cls(
-            category=row["Task"],
-            question=row["Question"],
-            answer=row["Answer"],
-            label=row.get("Label"),
+            category=row.category,
+            question=row.question,
+            answer=row.answer,
+            label=row.label,
             signals=tuple(tuple(float(value) for value in channel) for channel in channels),
         )
 

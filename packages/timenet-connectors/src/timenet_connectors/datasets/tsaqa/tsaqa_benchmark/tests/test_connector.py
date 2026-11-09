@@ -10,7 +10,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetConnectorError
 from timenet.json import JsonValue
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
@@ -344,7 +344,6 @@ def test_a_reread_that_no_longer_matches_its_row_fails(tmp_path, position, rewri
     ("position", "columns", "message"),
     [
         (0, {"answer": "Z"}, "does not fit the question's letters"),
-        (0, {"task": "forecasting"}, "unknown task"),
         (0, {"input_ts": "[1.0, NaN]"}, "finite numbers"),
         (4, {"meta_info": '["only one entry"]'}, "JSON list of 2 texts"),
         (9, {"domain": '["energy"]'}, "context lists differ in length"),
@@ -404,10 +403,10 @@ def test_a_conversion_needs_every_split_file():
         _FixtureConnector().convert(refs)
 
 
-def test_a_file_that_is_not_parquet_fails_as_a_format_error(tmp_path):
+def test_a_file_that_is_not_parquet_fails_as_a_connector_error(tmp_path):
     shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
     (tmp_path / "test.parquet").write_text("not parquet")
-    with pytest.raises(TimeFFormatError, match=r"test\.parquet"):
+    with pytest.raises(TimeNetConnectorError, match=r"test\.parquet"):
         _FixtureConnector().convert(_refs(tmp_path))
 
 
@@ -416,3 +415,10 @@ def test_a_zero_input_whose_zero_sequence_is_called_the_transform_is_not_flagged
     _rewrite(tmp_path / "train.parquet", 17, answer="T")
     tasks = _FixtureConnector().convert(_refs(tmp_path)).iter_tasks()
     assert next(task for task in tasks if _row_of(task) == ("train.parquet", 17)).metadata["source_issues"] == []
+
+
+def test_unknown_published_task_names_its_source_field(tmp_path):
+    shutil.copytree(_FIXTURES, tmp_path, dirs_exist_ok=True)
+    _rewrite(tmp_path / "train.parquet", 0, task="forecasting")
+    with pytest.raises(TimeNetConnectorError, match=r"train.parquet row 0: task:"):
+        _FixtureConnector().convert(_refs(tmp_path))

@@ -83,8 +83,10 @@ private datasets. The base checks the refs before your `convert` runs: they must
 name each declared part at most once. Do not call `check_refs` yourself.
 
 To read the Hub's parquet conversion instead of the original files, pin the commit that
-`refs/convert/parquet` points to and read the files with `iter_parquet_rows`
-(`timenet_connectors.sources.readers.parquet`).
+`refs/convert/parquet` points to. Declare the consumed fields on a `DataRow`, then use
+`ParquetRowSource.open_rows()` (`timenet_connectors.sources.readers.parquet`) inside a `with` block.
+Set `project_columns=True` explicitly when the source contains unrelated columns; projection
+uses the row model's aliases and preserves source row positions.
 
 ### `BasePhysioNetConnector` (`bases/physionet.py`)
 `BasePhysioNetConnector(BaseConnector[TRaw])`. Implement `download` and `convert`. Its two helpers read
@@ -168,84 +170,30 @@ the bounds of every `Span` the task carries.
 
 ## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
 
-`connector.py`:
+The production connector declares `TSQASourceRow` in `sample.py`: fields and aliases describe the
+published columns, while `TSQASample.from_row` parses the encoded series. Its conversion reads typed
+rows through the shared context:
 
 ```python
-import json
-from collections.abc import Mapping
-from typing import ClassVar
+from pathlib import Path
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import OrdinalAxis
-from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
-from timenet_connectors.sources.readers.parquet import iter_parquet_rows
-
-
-_SPEC = TimeSeriesSpec(
-    spec_type="tsqa_series",
-    name="TSQA Series",
-    unit_value=ureg.dimensionless,
+from timenet_connectors.datasets.chengsenwang.tsqa.sample import (
+    TSQASample,
+    TSQASourceRow,
 )
+from timenet_connectors.sources.readers.parquet import ParquetRowSource
 
-
-class TSQAConnector(BaseHuggingFaceConnector):
-    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
-
-    HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
-    # The commit refs/convert/parquet pointed to: the Hub's parquet conversion of the CSV.
-    SOURCE_REVISION = "22518209e3ee6302be4b4957f2692b3e8de849c3"
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {"train": "default/train/0000.parquet"}
-
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
-        """Build one record per row: the parsed series plus its question-and-answer task.
-
-        Args:
-            raw_refs: The parquet files from :meth:`download`.
-
-        Returns:
-            The populated :class:`~timenet.dataset.TimeFDataset`.
-        """
-        dataset = TimeFDataset(metadata=self.metadata())
-        for ref in raw_refs:
-            for row in iter_parquet_rows(ref.path):
-                series = json.loads(row["Series"])
-                signals = series if series and isinstance(series[0], list) else [series]
-                time_series = tuple(
-                    Signal.from_values(
-                        values,
-                        spec=_SPEC,
-                        name=f"c{signal}",
-                        time_axis=OrdinalAxis(),
-                    )
-                    for signal, values in enumerate(signals)
-                )
-                record = Record(sources=(Source(name="TSQA series", signals=time_series),))
-                dataset.add_record(record=record)
-                record.annotate(Annotation(key="task", value=row["Task"]))
-                if row.get("Label"):
-                    record.annotate(Annotation(key="label", value=row["Label"]))
-                dataset.add_task(
-                    task=AnswerTask(
-                        inputs=(record,),
-                        prompt=row["Question"],
-                        targets=(row["Answer"],),
-                    )
-                )
-        return dataset
-
-
-CONNECTOR = TSQAConnector
+source = ParquetRowSource(
+    Path("train.parquet"), TSQASourceRow, project_columns=True
+)
+with source.open_rows() as rows:
+    samples = [TSQASample.from_row(entry.row) for entry in rows]
 ```
 
-`__init__.py`:
-
-```python
-from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
-    CONNECTOR as CONNECTOR,
-    TSQAConnector as TSQAConnector,
-)
-```
+TSQA then splits these samples with its configured splitter, preserving signal groups, and builds
+records and answer tasks. Follow `datasets/chengsenwang/tsqa/connector.py` for that complete flow.
+For a new connector, declare its own source schema and domain construction methods. Keep the
+`BaseHuggingFaceConnector` download contract, dataset card, and module-level `CONNECTOR` registration.
 
 ## PhysioNet notes: `physionet/ecg_qa_cot`
 

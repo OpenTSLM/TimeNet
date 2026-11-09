@@ -1,12 +1,15 @@
 import csv
 from pathlib import Path
 
+import pyarrow as pa
+import pyarrow.parquet as pq
 from pydantic import Field
 import pytest
 
 from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources.readers.base import DataRow, NonBlankText
 from timenet_connectors.sources.readers.csv import CsvRowSource
+from timenet_connectors.sources.readers.parquet import ParquetRowSource
 
 
 class Row(DataRow):
@@ -14,7 +17,7 @@ class Row(DataRow):
     text: NonBlankText
 
 
-@pytest.fixture(params=[CsvRowSource])
+@pytest.fixture(params=[CsvRowSource, ParquetRowSource])
 def reader_class(request):
     return request.param
 
@@ -22,11 +25,15 @@ def reader_class(request):
 @pytest.fixture
 def source_factory(reader_class, tmp_path):
     def create(values, **kwargs):
-        path = tmp_path / "rows.csv"
-        with path.open("w", newline="") as handle:
-            writer = csv.DictWriter(handle, fieldnames=list(values[0]))
-            writer.writeheader()
-            writer.writerows(values)
+        if reader_class is CsvRowSource:
+            path = tmp_path / "rows.csv"
+            with path.open("w", newline="") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(values[0]))
+                writer.writeheader()
+                writer.writerows(values)
+        else:
+            path = tmp_path / "rows.parquet"
+            pq.write_table(pa.Table.from_pylist(values), path, row_group_size=1)
         return reader_class(path, Row, **kwargs)
 
     return create
@@ -36,13 +43,20 @@ def source_factory(reader_class, tmp_path):
 def opened_files(monkeypatch):
     opened = []
     original = Path.open
+    parquet_open = pq.ParquetFile
 
     def track(path, *args, **kwargs):
         handle = original(path, *args, **kwargs)
         opened.append(handle)
         return handle
 
+    def track_parquet(*args, **kwargs):
+        handle = parquet_open(*args, **kwargs)
+        opened.append(handle)
+        return handle
+
     monkeypatch.setattr(Path, "open", track)
+    monkeypatch.setattr(pq, "ParquetFile", track_parquet)
     return opened
 
 
@@ -52,6 +66,7 @@ def test_invalid_unique_fails_before_file_access(reader_class, tmp_path, monkeyp
         pytest.fail("configuration validation must not open a file")
 
     monkeypatch.setattr(Path, "open", unexpected_open)
+    monkeypatch.setattr(pq, "ParquetFile", unexpected_open)
     with pytest.raises(TimeNetConnectorError, match="is not a field of Row"):
         reader_class(tmp_path / "missing", Row, unique=field)
 
