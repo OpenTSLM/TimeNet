@@ -810,7 +810,7 @@ class _TaskCopy:
         Returns:
             The annotations that no reference took yet, grouped by :func:`_bucket` and then by content key.
         """
-        held = self.importer.child._annotations if owner is None else owner.annotations
+        held = self.importer.child.annotations if owner is None else owner.annotations
         key = id(self.importer.child) if owner is None else id(owner)
         filed = self.filed.get(key)
         if filed is None:
