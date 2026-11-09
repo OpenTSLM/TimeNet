@@ -13,9 +13,14 @@ class CsvDataReader(DataReader[RowT]):
     """Read a UTF-8 CSV file with a header."""
 
     def __init__(
-        self, path: Path, row_type: type[RowT], *, strict: bool | None = None, columns: tuple[str, ...] | None = None
+        self,
+        path: Path,
+        row_type: type[RowT],
+        *,
+        strict_parsing: bool | None = None,
+        columns: tuple[str, ...] | None = None,
     ) -> None:
-        super().__init__(path, row_type, strict=strict)
+        super().__init__(path, row_type, strict_parsing=strict_parsing)
         self.columns = columns
 
     def iter_rows(self) -> Generator[RowT, None, None]:
