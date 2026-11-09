@@ -19,7 +19,7 @@ class DataRow(BaseModel):
 RowT = TypeVar("RowT", bound=DataRow)
 
 
-class RowReader(ABC, Generic[RowT]):
+class DataReader(ABC, Generic[RowT]):
     """Read and validate rows from one local source file.
 
     ``strict`` controls validation of decoded JSON and Parquet values. When omitted,
