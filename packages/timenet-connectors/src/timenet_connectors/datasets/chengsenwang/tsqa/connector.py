@@ -17,7 +17,7 @@ from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet.types.splits import Split
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.datasets.chengsenwang.tsqa.sample import TSQASample, get_category, get_signal_id
-from timenet_connectors.sources.readers import DataRow, ParquetReader
+from timenet_connectors.sources.readers import DataRow, ParquetDataReader
 from timenet_connectors.splitting import Splitter, StratifiedSplitter
 
 
@@ -72,7 +72,7 @@ class TSQAConnector(BaseHuggingFaceConnector):
         Returns:
             The populated :class:`~timenet.dataset.TimeFDataset`.
         """
-        rows = (row for ref in raw_refs for row in ParquetReader(ref.path, _SourceRow).iter_rows())
+        rows = (row for ref in raw_refs for row in ParquetDataReader(ref.path, _SourceRow).iter_rows())
         samples = [TSQASample.from_row(row.model_dump(by_alias=True)) for row in rows]
         splits = self.splitter.split(samples)
         dataset = TimeFDataset(metadata=self.metadata())

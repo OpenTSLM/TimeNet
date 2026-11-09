@@ -22,7 +22,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import Artifact, download_files
-from timenet_connectors.sources.readers import CsvReader, DataRow
+from timenet_connectors.sources.readers import CsvDataReader, DataRow
 
 
 SLEEP_COT_URL = "https://polybox.ethz.ch/index.php/s/ZryWSdCFJZ9JR3R/download"
@@ -242,7 +242,7 @@ class SleepCotReader:
                 The message names the file and the data row.
         """
         rows = []
-        for number, source in enumerate(CsvReader(self.csv_path, _SourceRow, columns=COLUMNS).iter_rows(), start=1):
+        for number, source in enumerate(CsvDataReader(self.csv_path, _SourceRow, columns=COLUMNS).iter_rows(), start=1):
             try:
                 rows.append(SleepCotRow.from_csv_row(source.model_dump()))
             except TimeNetConnectorError as exc:

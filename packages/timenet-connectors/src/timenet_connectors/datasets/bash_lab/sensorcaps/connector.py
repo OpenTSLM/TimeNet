@@ -16,7 +16,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
-from timenet_connectors.sources.readers import DataRow, JsonlReader
+from timenet_connectors.sources.readers import DataRow, JsonlDataReader
 
 
 DECLARED_SAMPLING_RATE_HZ = 10
@@ -224,7 +224,7 @@ def _iter_rows(file: HubFileRef) -> Iterator[tuple[_RowRef, _ParsedRow]]:
     Yields:
         Each row reference and its decoded contents.
     """
-    for index, row in enumerate(JsonlReader(file.path, _SourceRow).iter_rows()):
+    for index, row in enumerate(JsonlDataReader(file.path, _SourceRow).iter_rows()):
         ref = _RowRef(file, index)
         yield ref, _parse_row(row, ref.context)
 

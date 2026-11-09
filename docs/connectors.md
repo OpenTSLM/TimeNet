@@ -402,14 +402,14 @@ For CSV, JSON arrays, JSON Lines, and Parquet, declare the source fields in a co
 
 ```python
 from pydantic import Field
-from timenet_connectors.sources.readers import DataRow, ParquetReader
+from timenet_connectors.sources.readers import DataRow, ParquetDataReader
 
 class SourceRow(DataRow):
     question: str = Field(alias="Question")
     count: int = Field(alias="Count")
 
 for ref in raw_refs:
-    for row in ParquetReader(ref.path, SourceRow, strict=True).iter_rows():
+    for row in ParquetDataReader(ref.path, SourceRow, strict=True).iter_rows():
         # Convert row.question and row.count into TimeNet objects.
         ...
 ```
@@ -420,5 +420,6 @@ fields by default; configure it explicitly when the source contains fields the c
 use. JSON object keys and Parquet column names must be distinct.
 
 CSV and JSON Lines stream rows; Parquet reads batches. JSON arrays are loaded into memory. Close an
-iterator explicitly if leaving it early, for example with `contextlib.closing`. `CsvReader` can check
-an exact ordered header via `columns=`, and `ParquetReader` can read selected columns with `columns=`.
+iterator explicitly if leaving it early, for example with `contextlib.closing`. `CsvDataReader` can
+check an exact ordered header via `columns=`, and `ParquetDataReader` can read selected columns with
+`columns=`.

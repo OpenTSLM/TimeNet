@@ -13,7 +13,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, Split, TimeSeriesSpec, ureg
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.download import ensure_archive, find_dir_containing
-from timenet_connectors.sources.readers import CsvReader, DataRow
+from timenet_connectors.sources.readers import CsvDataReader, DataRow
 
 
 PTBXL_ZIP_URL = "s3://physionet-open/ptb-xl/ptb-xl-1.0.3.zip"
@@ -145,7 +145,7 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
         source = raw_refs[0]
         # The CSV row where each ecg_id first appears.
         first_rows: dict[int, int] = {}
-        for line, source_row in enumerate(CsvReader(source.database_csv, _SourceRow).iter_rows(), 2):
+        for line, source_row in enumerate(CsvDataReader(source.database_csv, _SourceRow).iter_rows(), 2):
             row = source_row.model_dump()
             try:
                 annotations = self._annotations(row)

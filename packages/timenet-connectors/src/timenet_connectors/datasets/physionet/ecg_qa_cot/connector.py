@@ -41,7 +41,7 @@ from timenet.types import (
 )
 from timenet.types.reference_keys import ParentAlias
 from timenet_connectors.download import Artifact, download_files, ensure_archive, find_dir_containing
-from timenet_connectors.sources.readers import CsvReader, DataRow
+from timenet_connectors.sources.readers import CsvDataReader, DataRow
 
 
 # The per-template answer options (the multiple-choice candidates), keyed by template_id. The URL
@@ -250,7 +250,7 @@ def _load_template_answers(path: Path) -> dict[int, tuple[str, ...]]:
         A mapping of ``template_id`` to its ordered answer options.
     """
     answers: dict[int, tuple[str, ...]] = {}
-    for row in CsvReader(path, _TemplateSourceRow).iter_rows():
+    for row in CsvDataReader(path, _TemplateSourceRow).iter_rows():
         classes = ast.literal_eval(row.classes)
         answers[_parse_int(row.template_id)] = tuple(str(option) for option in classes)
     return answers
@@ -265,7 +265,7 @@ def _iter_cot_rows(csv_path: Path) -> Iterator[_CotRow]:
     Yields:
         Each parsed row. Rationale and clinical-context fields span multiple physical lines.
     """
-    for row in CsvReader(csv_path, _QuestionSourceRow).iter_rows():
+    for row in CsvDataReader(csv_path, _QuestionSourceRow).iter_rows():
         yield _CotRow(
             ecg_id=_parse_ecg_id(row.ecg_id),
             template_id=_parse_int(row.template_id),

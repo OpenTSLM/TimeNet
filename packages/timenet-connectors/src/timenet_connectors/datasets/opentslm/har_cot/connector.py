@@ -19,7 +19,7 @@ from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetConnectorError
 from timenet.types import ClassificationTask, Label, LabelSet, Split, TimeSeriesSpec, ureg
 from timenet_connectors.download import ensure_archive
-from timenet_connectors.sources.readers import CsvReader, DataRow
+from timenet_connectors.sources.readers import CsvDataReader, DataRow
 
 
 HAR_COT_URL = "https://polybox.ethz.ch/index.php/s/kD74GnMYxn3HBEM/download"
@@ -175,7 +175,7 @@ class HarCotSplitFile:
             TimeNetConnectorError: If the header is not the expected one, or a data row is malformed.
                 The message names the file and the data row.
         """
-        rows = (row.model_dump() for row in CsvReader(self.path, _SourceRow, columns=COLUMNS).iter_rows())
+        rows = (row.model_dump() for row in CsvDataReader(self.path, _SourceRow, columns=COLUMNS).iter_rows())
         data_rows = (row for row in rows if not _is_repeated_header(row))
         for number, row in enumerate(data_rows, start=1):
             try:
