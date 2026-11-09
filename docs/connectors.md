@@ -481,7 +481,7 @@ See the [source-helper API reference](api/sources.md) for validation and parsing
 Use `iter_jsonl_rows` from `timenet_connectors.sources.jsonl` with a `SourceRow` model.
 Each result provides the typed value, file/line/byte location, and original bytes.
 `read_jsonl_row` validates a lazy reread through the same path. Blank lines and duplicate
-keys are errors; keep dataset-specific rules and content-change checks in the connector.
+keys are errors; keep dataset-specific rules in the connector.
 
 ## Validate decoded fields and samples
 
@@ -495,3 +495,11 @@ See the [source-helper API reference](api/sources.md) for validation and casting
 ---
 
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
+
+## Checked rereads
+
+Use `sources.reread.checked_reread` when a lazy loader must return the content checked at
+conversion. Supply a validated loader, the expected fingerprint, and a function computing
+that fingerprint. The connector decides what must match, including lengths, channel order,
+and values. Read errors keep their original diagnostics; only a mismatch reports changed
+content. This helper does not cache data or verify streams before they finish.
