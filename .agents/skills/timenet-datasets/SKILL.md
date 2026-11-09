@@ -44,8 +44,8 @@ record says `build`, or a release without a record. Releases can depend on each 
 relationships). In that case `downloads clear` and `builds clear` might keep releases that are
 depended on, and print `Kept <release>: <release> needs it.` for each. Because `local clear` deletes
 everything, no dependency relationships can persist, and everything is removed. A symlinked dataset
-or release folder in the local registry stops `downloads clear` and `builds clear` before they
-delete anything. Do not run a clear while a build or a download runs.
+or release folder in the local registry stops every clear, `local clear` included, before it
+deletes anything. Do not run a clear while a build or a download runs.
 
 `search` flags (repeat a flag to pass several values; all are ANDed across kinds):
 
