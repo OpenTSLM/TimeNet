@@ -3,7 +3,7 @@ import pyarrow.parquet as pq
 import pytest
 
 from timenet.errors import TimeFFormatError
-from timenet_connectors.sources.parquet import iter_parquet_rows
+from timenet_connectors.sources.readers.parquet import iter_parquet_rows
 
 
 def test_iter_parquet_rows_yields_plain_dicts_in_file_order(tmp_path):

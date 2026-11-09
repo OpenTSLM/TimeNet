@@ -84,7 +84,7 @@ name each declared part at most once. Do not call `check_refs` yourself.
 
 To read the Hub's parquet conversion instead of the original files, pin the commit that
 `refs/convert/parquet` points to and read the files with `iter_parquet_rows`
-(`timenet_connectors.sources.parquet`).
+(`timenet_connectors.sources.readers.parquet`).
 
 ### `BasePhysioNetConnector` (`bases/physionet.py`)
 `BasePhysioNetConnector(BaseConnector[TRaw])`. Implement `download` and `convert`. Its two helpers read
@@ -179,7 +179,7 @@ from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
 from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
-from timenet_connectors.sources.parquet import iter_parquet_rows
+from timenet_connectors.sources.readers.parquet import iter_parquet_rows
 
 
 _SPEC = TimeSeriesSpec(
