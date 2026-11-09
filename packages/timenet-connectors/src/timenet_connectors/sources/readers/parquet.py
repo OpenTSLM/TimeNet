@@ -14,9 +14,14 @@ class ParquetDataReader(DataReader[RowT]):
     """Read a Parquet file in batches, yielding individual rows."""
 
     def __init__(
-        self, path: Path, row_type: type[RowT], *, strict: bool | None = None, columns: Sequence[str] | None = None
+        self,
+        path: Path,
+        row_type: type[RowT],
+        *,
+        strict_parsing: bool | None = None,
+        columns: Sequence[str] | None = None,
     ) -> None:
-        super().__init__(path, row_type, strict=strict)
+        super().__init__(path, row_type, strict_parsing=strict_parsing)
         self.columns = None if columns is None else list(columns)
 
     def iter_rows(self) -> Generator[RowT, None, None]:
