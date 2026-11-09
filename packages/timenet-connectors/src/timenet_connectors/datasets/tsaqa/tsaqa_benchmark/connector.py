@@ -569,7 +569,7 @@ def _read_rows(path: Path, split: _SplitFile) -> Iterator[_Row]:
         TimeFFormatError: If the file can't be read as parquet.
     """
     try:
-        for index, values in enumerate(ParquetDataReader(path, _SourceRow, columns=_READ_COLUMNS).iter_rows()):
+        for index, values in enumerate(ParquetDataReader(path, _SourceRow, selected_columns=_READ_COLUMNS).iter_rows()):
             yield _validate_row(values.model_dump(), split, index)
     except TimeNetConnectorError as exc:
         raise TimeFFormatError(f"{path}: {exc}") from exc

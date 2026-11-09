@@ -421,5 +421,5 @@ use. JSON object keys and Parquet column names must be distinct.
 
 CSV and JSON Lines stream rows; Parquet reads batches. JSON arrays are loaded into memory. Close an
 iterator explicitly if leaving it early, for example with `contextlib.closing`. `CsvDataReader` can
-check an exact ordered header via `columns=`, and `ParquetDataReader` can read selected columns with
-`columns=`.
+check an exact ordered header via `expected_columns=`, and `ParquetDataReader` can read selected
+columns with `selected_columns=`.

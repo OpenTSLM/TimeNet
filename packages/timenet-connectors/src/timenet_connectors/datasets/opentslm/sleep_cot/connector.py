@@ -242,7 +242,9 @@ class SleepCotReader:
                 The message names the file and the data row.
         """
         rows = []
-        for number, source in enumerate(CsvDataReader(self.csv_path, _SourceRow, columns=COLUMNS).iter_rows(), start=1):
+        for number, source in enumerate(
+            CsvDataReader(self.csv_path, _SourceRow, expected_columns=COLUMNS).iter_rows(), start=1
+        ):
             try:
                 rows.append(SleepCotRow.from_csv_row(source.model_dump()))
             except TimeNetConnectorError as exc:

@@ -175,7 +175,7 @@ class HarCotSplitFile:
             TimeNetConnectorError: If the header is not the expected one, or a data row is malformed.
                 The message names the file and the data row.
         """
-        rows = (row.model_dump() for row in CsvDataReader(self.path, _SourceRow, columns=COLUMNS).iter_rows())
+        rows = (row.model_dump() for row in CsvDataReader(self.path, _SourceRow, expected_columns=COLUMNS).iter_rows())
         data_rows = (row for row in rows if not _is_repeated_header(row))
         for number, row in enumerate(data_rows, start=1):
             try:
