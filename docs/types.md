@@ -297,7 +297,7 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeNetNoCatalogError` | No source of a list or a search has a catalog. The hint names the read of an exact release. A `TimeNetRegistryError`. |
 | `TimeNetDatasetNotFoundError` | A dataset ID or version does not exist. |
 | `TimeNetVersionUnavailableError` | The installed connector of a dataset builds another version than the requested one. A `TimeNetDatasetNotFoundError` and a `TimeFValidationError`. |
-| `TimeNetVersionConflictError` | A registry already holds a release with other files or another card than a copy that would go there. `difference` is `ReleaseDifference.FILES` or `ReleaseDifference.CARD`, and `registry_location` is the location of that registry. For a publish, the hint asks for a new version. For a copy into the local registry, the hint names the release folder to delete. |
+| `TimeNetVersionConflictError` | A registry already holds a release with other files or another card than a copy that would go there. `difference` is `ReleaseDifference.FILES` or `ReleaseDifference.CARD`, from `timenet.types.references`, and `registry_location` is the location of that registry. For a publish, the hint asks for a new version. For `timenet-build build --publish-to` before the build, the hint names `--force`. For a copy into the local registry, the hint names the release folder to delete. |
 | `TimeFValidationError` | Input violates a TimeF invariant. |
 | `TimeFNullValuesError` | Values contain nulls that NumPy cannot hold. A `TimeFValidationError`. |
 | `TimeFNotFoundError` | An ID, parent alias, or parent release names nothing in the dataset, or the stored object has another kind. A `TimeFValidationError` and a `LookupError`. |
