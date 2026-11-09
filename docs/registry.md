@@ -136,13 +136,14 @@ copies complete files, and makes sure that each file has its recorded size and c
 
 A source is something that can provide a release. `timenet.sources` defines the type
 `ReleaseSource`. Each source has the method `resolve(dataset_id, version)`. `version` is an exact
-version, such as `"1.2.0"`, or `None` for the latest version. Two kinds of source exist:
+version, such as `"1.2.0"`, or `None` for the newest version of that source. Two kinds of source
+exist:
 
 - A registry. Every `BaseRegistry` is a source.
 - `InstalledConnectors()`: every installed package that registers a builder backend under the
   `timenet.builders` entry point group.
 
-A source gives one of three answers:
+A source gives one of these answers:
 
 | Answer | Meaning |
 | --- | --- |
@@ -162,14 +163,19 @@ answers `NotServed` otherwise.
 `InstalledConnectors()` answers `Found` only for the version that the card of a connector declares,
 because a connector builds only that version. For any other request, it answers `NotFound`.
 
-`resolve_release(sources, dataset_id, version)` asks an ordered list of sources and follows three
+`resolve_release(sources, dataset_id, version)` asks an ordered list of sources and follows four
 rules:
 
-1. An exact version comes from the first source that provides it.
-2. "Latest" is the highest version across all sources, the connectors included. The order then
+1. Without a version, the first source that serves the dataset gives its newest version. A source
+   that lists the dataset without serving it falls through to the next source.
+2. An exact version comes from the first source that provides it.
+3. `"latest"` is the highest version across all sources, the connectors included. The order then
    decides only which source provides that version.
-3. Only `NotFound` and `NotServed` fall through to the next source. Any other error of a source
+4. Only `NotFound` and `NotServed` fall through to the next source. Any other error of a source
    stops the resolution.
+
+So the order of the list is the read order: a release that two sources hold comes from the first
+one.
 
 ```python
 from timenet.registry import LocalRegistry, open_registry
@@ -200,6 +206,9 @@ so you can publish to a local directory, a remote registry, or an S3 bucket:
 | `put_dataset(dataset, *, force=False, values_backend="parquet", progress_cb=None)` | Compile a dataset and publish it. Returns the stored release as a `DatasetRef`. Derives the schema first if absent, skips an already-committed version unless `force`, and checks every payload source in this registry. `values_backend` picks the values plane format: `"parquet"` or `"zarr"`. On a remote or S3 registry, `force=True` raises `TimeFValidationError` and uploads nothing, because a published version never changes. |
 | `put_release(from_directory)` | Publish a complete local release directory as it is; returns the published release as a `DatasetRef`. Only reads `from_directory` and never changes it. Makes sure that the directory holds a readable `manifest.json` and every file that the manifest declares with its recorded size, and raises `TimeFFormatError` or `TimeNetFileError` otherwise. Publishes only those files and `manifest.json`. |
 | `exists(dataset_id, version)` | Whether a committed version already exists (shared implementation). |
+
+`LocalRegistry`, `RemoteRegistry` and `S3Registry` take `read_only=True`. A read-only registry
+refuses each write with `TimeNetRegistryError`.
 
 `put_dataset` writes the dataset with a [`TimeFWriter`](timef-writer.md) and checks each payload
 source of the new release in the registry that receives it. In a local registry, `force=True`
@@ -261,10 +270,12 @@ release = registry.put_dataset(dataset)  # compile, upload, finalize
 progress=None)` copies one release from `source` to the writable registry `dest`.
 
 A dataset can depend on payload files stored as part of another dataset (parent/child relationship).
-`copy_release` copies each parent release too, so that
-`dest` can open the copied release. It copies only the releases that `dest` does not hold yet.
+`copy_release` copies each payload source that the manifest of the release lists too, so that
+`dest` can open the copied release. With `with_payload_sources=False`, it copies the release alone.
+It copies only the releases that `dest` does not hold yet.
 
-`copy_release` raises each of these errors before it copies anything, so `dest` stays unchanged.
+`copy_release` checks every release before it copies anything, so a refused copy leaves `dest`
+unchanged.
 
 ## `search`
 

@@ -27,14 +27,16 @@ The `dataset_version` changes to `1.0.1`, while `source_revision` stays `v2.1`.
 ## Versions are immutable
 
 TimeNet commits a version atomically when its `manifest.json` lands. The version never changes after
-that. A pinned `@version` gives you exactly those bytes. With no suffix (or `@latest`), you get the
-highest version that a source of the client provides.
+that. A pinned `@version` gives you exactly those bytes. With no suffix, you get the newest version
+of the first source of the client that serves the dataset. With `@latest`, you get the highest
+version that a source of the client provides.
 
 ```python
 import timenet
 
 client = timenet.TimeNet()
-client.load("chengsenwang/tsqa")          # the latest version
+client.load("chengsenwang/tsqa")          # the newest version of the first source
+client.load("chengsenwang/tsqa@latest")   # the highest version of all sources
 client.load("chengsenwang/tsqa@1.0.0")    # a pinned, immutable snapshot
 ```
 

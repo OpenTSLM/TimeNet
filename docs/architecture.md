@@ -69,9 +69,9 @@ timenet-build build org/name
   ├─ builder  discovery.resolve("org/name") -> Connector class
   │             datasets/<org>/<name>/ exposes CONNECTOR
   │
-  └─ engine   run_pipeline(connector, <store>)
+  └─ engine   run_pipeline(connector, <local registry>)
                 metadata -> download -> convert -> derive_schema -> store
-                  -> <store>/org/name/<version>/
+                  -> <local registry>/org/name/<version>/
 ```
 
 `metadata()` reads the `dataset.yaml` card. The engine streams the converted dataset through

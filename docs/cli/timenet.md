@@ -19,7 +19,7 @@ By default, the command uses the hosted TimeNet registry:
 ```bash
 timenet list
 timenet search --query ecg --domain cardiology --limit 10
-timenet info chengsenwang/tsqa@1.0.0   # pin a version; omit @ for the latest
+timenet info chengsenwang/tsqa@1.0.0   # pin a version
 timenet download chengsenwang/tsqa
 ```
 
@@ -85,12 +85,14 @@ timenet publish org/name --source timenet:// --dest s3://my-bucket/timenet
 
 ## Pinning versions
 
-Add the suffix `@<version>` to an id to pin it. You can also use `@latest` (the default when you omit
-the suffix):
+Add the suffix `@<version>` to an id to pin it. Without a suffix, the command reads the newest
+version of the first source that serves the dataset, so a copy in the local registry reads offline.
+`@latest` reads the highest version of all sources:
 
 ```bash
 timenet info chengsenwang/tsqa@1.0.0     # pinned
-timenet download chengsenwang/tsqa       # latest
+timenet download chengsenwang/tsqa       # newest of the first source
+timenet info chengsenwang/tsqa@latest    # highest of all sources
 ```
 
 If you pin a version that is not committed, the tool exits with a `TimeNetDatasetNotFoundError`.

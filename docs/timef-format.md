@@ -270,11 +270,11 @@ constraints. The writer then checkpoints and closes the database, records final 
 SQL scans, for tests and tooling.
 
 `TimeFReader.verify()` hashes every file that the release reads. A download makes sure that each
-file has its recorded size and checksum before it adds the complete copy to the cache. Opening a
-version makes sure that its local files exist with their recorded sizes, and hashes nothing. Reads
-then use the local files, or byte ranges of the remote files. Normal reads stay lazy. Before a
-reader opens a cached remote `control.duckdb` read-only, it makes sure that the file matches the
-manifest.
+file has its recorded size and checksum before it adds the complete copy to the local registry.
+Opening a version makes sure that its local files exist with their recorded sizes, and hashes
+nothing. Reads then use the local files, or byte ranges of the remote files. Normal reads stay lazy.
+Before a reader opens a cached remote `control.duckdb` read-only, it makes sure that the file
+matches the manifest.
 
 ## Catalogs of child datasets
 

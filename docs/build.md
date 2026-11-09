@@ -87,12 +87,22 @@ local registry. Each argument that you leave out comes from the environment at t
 call:
 
 - `local_registry` comes from `$TIMENET_LOCAL_REGISTRY`.
-- `sources` comes from `$TIMENET_REMOTE_REGISTRY`, then `InstalledConnectors()`. With
-  `TIMENET_AUTO_BUILD=false`, the connectors stay out.
+- `sources` is the default list of sources with the local registry first: the local registry,
+  then `$TIMENET_REMOTE_REGISTRY`, then `InstalledConnectors()`. With `TIMENET_AUTO_BUILD=false`,
+  the connectors stay out.
 
 So a default build lands where `TimeNet()` reads. `local_registry` takes a local directory, a
-`file://` URI or a `LocalRegistry`. `sources` lists, in order, where the parents and payload sources
-that the local registry lacks come from (see [Prepare parent releases](#prepare-parent-releases)).
+`file://` URI or a `LocalRegistry`. A remote registry or a `LocalRegistry` with `read_only=True`
+raises `TimeFValidationError`, because a build writes into its local registry. To get the release
+to such a registry, build it locally and publish it with `timenet.publish()`.
+
+`sources` lists, in order, where the parents and payload sources that the local registry lacks
+come from (see [Prepare parent releases](#prepare-parent-releases)). The order of the list is the
+read order: a release that two sources hold comes from the first one.
+
+`force=True` builds the release again, even if the local registry holds it. With
+`open_access_only=True`, the build refuses a release without open access with
+`TimeNetAccessError` before any step runs.
 
 ```python
 import timenet
@@ -106,8 +116,9 @@ print(path)
 ```
 
 `timenet.publish()` copies a complete release and the payload sources that it needs from `source`,
-by default the local registry, to `dest`. Without a version in the dataset ID, it
-copies the latest version of `source`. It mirrors the [`timenet publish`](cli/timenet.md#commands) CLI command.
+by default the local registry, to `dest`. Without a version in the dataset ID, it copies the latest
+version of `source`. A `DatasetRef` names the exact release, so `publish()` copies it without a
+lookup in `source`. It mirrors the [`timenet publish`](cli/timenet.md#commands) CLI command.
 
 A published version cannot change. If `dest` already holds the same release, `publish()` copies nothing.
 

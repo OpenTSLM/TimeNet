@@ -16,7 +16,8 @@ the `add-dataset-connector` skill.
 - A dataset id is `org/name` (HuggingFace-style, exactly one slash), for example `chengsenwang/tsqa`.
 - Pin a version with `<id>@<version>` or `<id>@latest`, e.g. `chengsenwang/tsqa@1.0.0`. You can also
   pass the version as a separate argument. Don't do both (it raises).
-- Omitting the version means the latest.
+- Omitting the version means the newest version of the first source that serves the dataset, so a
+  local copy reads offline. `@latest` means the highest version of all sources.
 
 ## CLI
 
@@ -87,8 +88,11 @@ dataset = tn.load("chengsenwang/tsqa")                    # every value read int
 
 - `timenet.TimeNet(sources=None)`. `sources` is an ordered list. Each item is a registry object, a
   URL, a `file://` URI, a local path, or `timenet.InstalledConnectors()`. Pass a list even for one
-  registry: `timenet.TimeNet(sources=[".timenet-registry"])`. An exact version comes from the
-  first source that has it; "latest" is the highest version of any source.
+  registry: `timenet.TimeNet(sources=[".timenet-registry"])`. The order of the list is the read
+  order: a release that two sources hold comes from the first one, so put the local registry first
+  to read offline. An exact version comes from the first source that has it, no version gives the
+  newest version of the first source that serves the dataset, and `@latest` is the highest version
+  of any source.
 - The first `timenet.LocalRegistry(path)` of the list that is not `read_only=True` gets the
   downloads and builds. A path in the list opens such a registry too. A list with
   `InstalledConnectors()` needs a writable local registry, and only such a list builds on a read.
@@ -154,11 +158,12 @@ Env vars, prefix `TIMENET_`. Each sets one thing; none holds a list:
   (default `~/.cache/timenet`).
 - `TIMENET_TOKEN` bearer token of a remote registry; `TIMENET_ISOLATION` (default `on`).
 
-Precedence for any value: CLI flag, then env var, then default. An empty value is an error, and so
-is a cache directory that overlaps the local registry or is the home folder or a folder above it. In the
-CLI, a registry flag that names no registry exits with code 2, and a bad variable with code 1. A
-`sources` list that you pass ignores `TIMENET_LOCAL_REGISTRY`, `TIMENET_REMOTE_REGISTRY` and
-`TIMENET_AUTO_BUILD`.
+Precedence for any value: CLI flag, then env var, then default. An empty value is an error. Before
+`timenet local cache clear` or `timenet local clear` deletes, and before a build removes its raw
+downloads, TimeNet refuses a cache that is the home folder or a folder above it, or that overlaps
+the local registry. In the CLI, a registry flag that names no registry exits with code 2, and a bad
+variable with code 1. A `sources` list that you pass ignores `TIMENET_LOCAL_REGISTRY`,
+`TIMENET_REMOTE_REGISTRY` and `TIMENET_AUTO_BUILD`.
 
 ## Further reading
 

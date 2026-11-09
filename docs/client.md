@@ -49,10 +49,14 @@ client = timenet.TimeNet(sources=[
   mirror on a network drive. A list with `InstalledConnectors()` needs a writable local registry.
 - A remote registry reads only its own files.
 
-An exact version comes from the first source that provides it, while "latest" is the highest
-version that any source provides. Only "not found" and "not served" fall through to the next
-source, and any other error stops the call. So if a registry in the list does not answer, a request
-for "latest" fails.
+The order of the list is the read order. A release that two sources hold is read from the first
+one. So to read offline, put the local registry first in the list.
+
+Without a version, the first source that serves the dataset gives its newest version. An exact
+version comes from the first source that provides it, while `@latest` is the highest version that
+any source provides. Only "not found" and "not served" fall through to the next source, and any
+other error stops the call. So if a registry in the list does not answer, a request for `@latest`
+fails.
 
 A client that must never write takes `read_only=True`. A list of remote registries alone has no
 local registry, so it never writes either:
@@ -114,7 +118,8 @@ connector never matches `task` or `time_series_spec`, because both filters read 
 manifest.
 
 The calls ask the sources one after another, in order. If two sources list a dataset at the same
-version, the row of the earlier source stays. To query one registry alone, open it and ask it:
+version, the row of the earlier source stays. A listed version can be newer than the version that
+`open()` reads without a version. To query one registry alone, open it and ask it:
 
 ```python
 from timenet.registry import open_registry
@@ -199,8 +204,10 @@ with client.open("timenet/hello-world") as reader:
 ```
 
 `open()`, `load()`, and `open_torch()` read each release where it is, and copy nothing. They ask
-the sources by the rules of [Choose the sources](#choose-the-sources), so if an installed connector
-declares a newer version than the local registry holds, the call builds the newer version.
+the sources by the rules of [Choose the sources](#choose-the-sources). So without a version, the
+call reads the newest version of the first source that serves the dataset, for example the local
+registry. With `@latest`, if an installed connector declares a newer version than the local
+registry holds, the call builds the newer version.
 
 ```python
 import timenet
@@ -246,10 +253,10 @@ returns the release directory there:
 path = client.download("chengsenwang/tsqa@1.0.0")
 ```
 
-The release resolves as in `open()`. The call copies the release and each parent that the
+The release resolves as in `open()`. The call copies the release and each payload source that the
 local registry lacks or holds damaged. Each one comes from the first other registry that provides
 it, so they can come from different registries. If the local registry holds a complete copy of the
-release, the call copies only the parents that it lacks.
+release, the call copies only the payload sources that it lacks.
 
 A download never builds. For a release that only `InstalledConnectors()` provides, it raises
 `TimeNetNotBuiltError`.

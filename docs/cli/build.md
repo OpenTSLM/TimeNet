@@ -59,7 +59,7 @@ use `TIMENET_TOKEN`.
 `--publish-to` gets the release to another registry in two steps:
 
 1. The release builds into the local registry, as without `--publish-to`. Its parents land there too.
-2. `timenet.publish()` copies the release, and each parent that the destination lacks,
+2. `timenet.publish()` copies the release, and each payload source that the destination lacks,
    from the local registry to the destination.
 
 If the destination holds the version and `--force` is not set, the command builds and copies
@@ -96,7 +96,7 @@ builds, and publishes nothing.
 | --- | --- |
 | `0` | The version was built, published, or reused. |
 | `1` | An expected TimeNet operation failed. |
-| `2` | The command or one of its options is invalid, for example an unknown dataset ID. |
+| `2` | The command or one of its options is invalid, for example an unknown dataset ID, or a registry flag that names no registry. |
 
 If an isolated build cannot make its environment, for example because `uv` is missing, the command
 raises `TimeNetIsolationError`.
