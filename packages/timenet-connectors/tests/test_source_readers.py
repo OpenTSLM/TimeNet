@@ -99,14 +99,16 @@ def test_parquet_strict_validation_and_error_context(tmp_path):
 def test_parquet_reads_only_selected_columns(tmp_path):
     path = tmp_path / "source.parquet"
     pq.write_table(pa.table({"name": ["x"], "count": [1], "other": [3]}), path)
-    assert list(ParquetDataReader(path, Row, columns=("name", "count")).iter_rows()) == [Row(name="x", count=1)]
+    assert list(ParquetDataReader(path, Row, selected_columns=("name", "count")).iter_rows()) == [
+        Row(name="x", count=1)
+    ]
 
 
 def test_parquet_rejects_missing_selected_columns(tmp_path):
     path = tmp_path / "source.parquet"
     pq.write_table(pa.table({"name": ["x"], "count": [1]}), path)
     with pytest.raises(TimeNetConnectorError, match="missing columns"):
-        list(ParquetDataReader(path, Row, columns=("missing",)).iter_rows())
+        list(ParquetDataReader(path, Row, selected_columns=("missing",)).iter_rows())
 
 
 def test_parquet_rejects_duplicate_columns(tmp_path):

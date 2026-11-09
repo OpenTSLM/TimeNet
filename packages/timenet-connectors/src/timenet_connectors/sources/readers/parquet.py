@@ -19,10 +19,10 @@ class ParquetDataReader(DataReader[RowT]):
         row_type: type[RowT],
         *,
         strict_parsing: bool | None = None,
-        columns: Sequence[str] | None = None,
+        selected_columns: Sequence[str] | None = None,
     ) -> None:
         super().__init__(path, row_type, strict_parsing=strict_parsing)
-        self.columns = None if columns is None else list(columns)
+        self.selected_columns = None if selected_columns is None else list(selected_columns)
 
     def iter_rows(self) -> Generator[RowT, None, None]:
         """Yield validated rows in file order.
@@ -41,17 +41,17 @@ class ParquetDataReader(DataReader[RowT]):
                 missing = self._missing_columns(names)
                 if missing:
                     raise TimeNetConnectorError(f"{self.path}: missing columns {missing}")
-                number = 0
-                for batch in parquet.iter_batches(columns=self.columns):
+                row_number = 0
+                for batch in parquet.iter_batches(columns=self.selected_columns):
                     for value in batch.to_pylist():
-                        number += 1
-                        yield self._validate(value, f"row {number}")
+                        row_number += 1
+                        yield self._validate(value, f"row {row_number}")
         except (OSError, pa.ArrowException) as exc:
             raise TimeNetConnectorError(f"{self.path}: {exc}") from exc
 
     def _missing_columns(self, names: Sequence[str]) -> list[str]:
         """Return the selected columns that the file does not have, in selection order."""
-        return [name for name in self.columns or () if name not in names]
+        return [name for name in self.selected_columns or () if name not in names]
 
     @staticmethod
     def _has_unique_columns(names: Sequence[str]) -> bool:
