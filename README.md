@@ -29,7 +29,6 @@ The build lands in the local registry at `~/.timenet/registry/timenet/hello-worl
 with Python:
 
 ```python
-import timenet
 from timenet import TimeNet
 
 dataset = TimeNet().load("timenet/hello-world@1.0.0")
