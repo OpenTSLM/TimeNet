@@ -190,6 +190,8 @@ class _DirectUrl(BaseModel):
     url: StrictStr
     dir_info: _DirInfo | None = None
     vcs_info: _VcsInfo | None = None
+    subdirectory: StrictStr | None = None
+    """The project's folder inside ``url``, for a project that does not sit at its root."""
 
     def installed_git_commit(self) -> str | None:
         """Return the commit that pip installed from a git repository, else ``None``."""
@@ -206,6 +208,8 @@ class _DirectUrl(BaseModel):
         if not self._is_file_url():
             return None
         path = Path(url2pathname(urlparse(self.url).path))
+        if self.subdirectory is not None:
+            path /= self.subdirectory
         return path if self.is_editable() or path.is_dir() else None
 
     def _is_file_url(self) -> bool:

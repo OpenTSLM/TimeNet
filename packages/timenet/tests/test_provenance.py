@@ -10,7 +10,7 @@ import pytest
 
 from timenet.errors import TimeNetBuildError
 from timenet.manifest import GitSource
-from timenet.provenance import GitSnapshot, build_env
+from timenet.provenance import GitSnapshot, TimeNetDistribution, build_env
 
 
 def test_build_env_records_the_running_python():
@@ -120,6 +120,22 @@ def test_an_editable_install_outside_git_has_no_commit(git, tmp_path, installed)
     outside.mkdir()
     installed(direct_url=_editable(outside))
     assert GitSnapshot.read().recorded_sources() == {}
+
+
+@pytest.mark.real_git
+@pytest.mark.parametrize("editable", [True, False])
+def test_an_install_of_a_subdirectory_finds_the_package_directory(checkout, installed, editable):
+    # direct_url.json may name the repository and put the package in "subdirectory".
+    repository = checkout.parents[1]
+    installed(
+        direct_url={"url": repository.as_uri(), "dir_info": {"editable": editable}, "subdirectory": "packages/pkg"}
+    )
+    (distribution,) = TimeNetDistribution.installed()
+    assert distribution.path_to_ondisk_project_directory() == checkout
+    if editable:
+        # A change outside the package directory does not count.
+        (repository / "README.md").write_text("edited\n")
+        assert GitSnapshot.read().recorded_sources()["timenet"].contains_local_changes is False
 
 
 @pytest.mark.real_git
