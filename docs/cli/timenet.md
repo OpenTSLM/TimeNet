@@ -60,7 +60,9 @@ each other (parent-child relationships). In that case `timenet local downloads c
 `Kept <release>: <release> needs it.` for each. Because `local clear` deletes everything, no
 dependency relationships can persist, and everything is removed. A symlinked dataset or release
 folder in the local registry stops `downloads clear` and `builds clear` before they delete anything.
-Do not run a clear while a build or a download runs.
+A provenance record that is not valid also stops them. Its hint names
+`timenet download <id>@<version> --force` and `timenet-build build <id>@<version> --force`, which
+replace the release and its record. Do not run a clear while a build or a download runs.
 
 ## Selecting the sources
 

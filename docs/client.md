@@ -303,6 +303,10 @@ that an installed connector built. `source` names the registry, or the connector
 version. To read it, call `store.read_origin(release)` on the `LocalRegistry`. It returns an
 `Origin` from `timenet.registry.origin`, whose `kind` is an `OriginKind`.
 
+A record that is not valid raises `TimeNetOriginError`, which names its first problem. To replace
+the release and its record, get the release again: call `download(release, force=True)` if it came
+from a registry, or `timenet.build(release, force=True)` if it was built.
+
 ## Pin a version
 
 Append `@<version>` to a dataset ID:

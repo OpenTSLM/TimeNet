@@ -302,6 +302,7 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
 | `TimeNetFileError` | A file of a release is missing, or does not match its manifest record. A `TimeFFormatError`. |
 | `TimeNetManifestError` | A stored manifest is not a valid manifest. `where` names the file or the place in a registry, and `detail` names the first problem. A `TimeFFormatError`. |
+| `TimeNetOriginError` | The provenance record of a release in the local registry is not valid. `release` names the release, `path` the file, and `detail` the first problem. A `TimeFFormatError`. |
 | `TimeFReaderError` | A reader could not complete a read, e.g. its connection was closed while the read ran. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
 | `TimeNetConnectorError` | A connector found that an assumption about its source data, a download, or a parent does not hold. `TimeNetDownloadError` is a `TimeNetConnectorError`. |
