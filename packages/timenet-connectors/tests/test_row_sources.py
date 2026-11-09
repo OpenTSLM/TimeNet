@@ -11,6 +11,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources.readers.base import DataRow, NonBlankText
 from timenet_connectors.sources.readers.csv import CsvRowSource
 from timenet_connectors.sources.readers.json_object import JsonObjectRowSource
+from timenet_connectors.sources.readers.jsonl import JsonlRowSource
 from timenet_connectors.sources.readers.parquet import ParquetRowSource
 
 
@@ -19,7 +20,7 @@ class Row(DataRow):
     text: NonBlankText
 
 
-@pytest.fixture(params=[CsvRowSource, ParquetRowSource, JsonObjectRowSource])
+@pytest.fixture(params=[CsvRowSource, ParquetRowSource, JsonObjectRowSource, JsonlRowSource])
 def reader_class(request):
     return request.param
 
@@ -36,9 +37,12 @@ def source_factory(reader_class, tmp_path):
         elif reader_class is ParquetRowSource:
             path = tmp_path / "rows.parquet"
             pq.write_table(pa.Table.from_pylist(values), path, row_group_size=1)
-        else:
+        elif reader_class is JsonObjectRowSource:
             path = tmp_path / "rows.json"
             path.write_text(json.dumps({str(index): value for index, value in enumerate(values)}))
+        else:
+            path = tmp_path / "rows.jsonl"
+            path.write_text("".join(json.dumps(value) + "\n" for value in values))
         return reader_class(path, Row, **kwargs)
 
     return create
