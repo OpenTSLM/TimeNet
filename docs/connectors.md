@@ -80,6 +80,14 @@ builder function, as [Reuse content](data-model/annotations.md#reuse-content) sh
 prompt, write a function that builds the Task, as
 [Built-in task types](data-model/tasks.md#built-in-task-types) shows.
 
+For metadata referenced by many tasks, call `dataset.annotate_shared(annotation)` and pass its
+returned occurrence to the task. It can run inside a re-iterable task stream without a pre-pass or
+a connector-owned interning dictionary. See
+[Shared dataset annotations](timef-dataset.md#shared-dataset-annotations).
+
+Record metadata still belongs on each record. Attach separate occurrences and let the writer
+deduplicate equal content; dataset sharing does not change record ownership.
+
 ---
 
 ## Assigning dataset splits
