@@ -1,6 +1,7 @@
 import json
 from pathlib import Path
 import pickle
+from unittest.mock import AsyncMock, call
 
 from _fake_registry import build_fake, build_publish_fake, range_server, read_file, registry_server
 import httpx
@@ -198,6 +199,49 @@ def test_full_download_writes_identical_bytes(version_dir, tmp_path):
     for part in manifest.files.all_parts():
         assert (dest / part).read_bytes() == (directory / part).read_bytes()
     assert (dest / "manifest.json").exists()
+
+
+def test_full_download_waits_out_a_rate_limited_presign(version_dir, tmp_path, monkeypatch, caplog):
+    directory, manifest = version_dir
+    transport, _ = build_fake(directory)
+    limited = set()
+
+    def handler(request):
+        if "/download/" in request.url.path and request.url.path not in limited:
+            limited.add(request.url.path)
+            return httpx.Response(429, headers={"Retry-After": "1"}, json={"detail": "rate limit exceeded"})
+        return transport.handle_request(request)
+
+    sleep = AsyncMock()
+    monkeypatch.setattr("timenet.registry.remote._http.asyncio.sleep", sleep)
+    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=tmp_path / "cache")
+    dest = tmp_path / "out" / manifest.metadata.dataset_id / str(manifest.metadata.dataset_version)
+
+    registry.download_version(manifest.metadata.dataset_id, str(manifest.metadata.dataset_version), dest)
+
+    assert limited
+    assert sleep.await_args_list == [call(1.0)] * len(limited)
+    assert sum("rate-limited (429)" in message for message in caplog.messages) == len(limited)
+    for part in manifest.files.all_parts():
+        assert (dest / part).read_bytes() == (directory / part).read_bytes()
+
+
+def test_full_download_fails_once_the_rate_limit_outlasts_the_retry_budget(version_dir, tmp_path, monkeypatch):
+    directory, manifest = version_dir
+    transport, _ = build_fake(directory)
+
+    def handler(request):
+        if "/download/" in request.url.path:
+            return httpx.Response(429, json={"detail": "rate limit exceeded"})
+        return transport.handle_request(request)
+
+    monkeypatch.setattr("timenet.registry.remote._http.asyncio.sleep", AsyncMock())
+    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=tmp_path / "cache")
+    dest = tmp_path / "out" / manifest.metadata.dataset_id / str(manifest.metadata.dataset_version)
+
+    with pytest.raises(TimeNetRegistryError, match="429"):
+        registry.download_version(manifest.metadata.dataset_id, str(manifest.metadata.dataset_version), dest)
+    assert not dest.exists()
 
 
 def test_a_corrupted_remote_download_names_the_file_and_its_checksums(version_dir, tmp_path):

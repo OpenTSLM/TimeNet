@@ -135,3 +135,18 @@ def test_stream_to_maps_error_status_on_unread_body():
 
     with pytest.raises(TimeNetRegistryError):
         _client(handler).stream_to("http://blob.local/obj/a", io.BytesIO())
+
+
+def test_a_retry_after_beyond_the_budget_fails_at_once_without_an_early_retry(monkeypatch):
+    slept = []
+    monkeypatch.setattr("timenet.registry.remote._http.time.sleep", slept.append)
+    calls = {"n": 0}
+
+    def handler(_request):
+        calls["n"] += 1
+        return httpx.Response(429, headers={"Retry-After": "60"}, json={"detail": "slow down"})
+
+    with pytest.raises(TimeNetRegistryError, match="retry after 60s"):
+        _client(handler).get_text("/datasets")
+    assert calls["n"] == 1
+    assert slept == []
