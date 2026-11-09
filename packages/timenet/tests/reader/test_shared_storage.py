@@ -20,6 +20,8 @@ from timenet.types import (
     DatasetMetadata,
     DatasetSchema,
     License,
+    MissingReason,
+    MissingValues,
     TimeSeriesSpec,
     Version,
     ureg,
@@ -276,7 +278,12 @@ def test_a_reused_payload_must_be_listed_by_the_release_that_stores_it(tmp_path)
 
 
 def test_a_reused_nullable_zarr_signal_keeps_its_validity_arrays(tmp_path):
-    spec = TimeSeriesSpec(spec_type="env", name="env", unit_value=ureg.dimensionless, nullable=True)
+    spec = TimeSeriesSpec(
+        spec_type="env",
+        name="env",
+        unit_value=ureg.dimensionless,
+        missing=MissingValues(reason=MissingReason.SENSOR_GAP),
+    )
     signal = Signal.from_values([1.0, None, 3.0], spec=spec, name="x", time_axis=RegularAxis.from_rate_hz(1))
     parent = _release("test/a", [Record(sources=(Source(name="env", signals=(signal,)),))])
     version = open_local_version(store(tmp_path, parent, values_backend="zarr"))

@@ -51,6 +51,7 @@ from timenet.types import (
     ArrayHandle,
     InputModality,
     LabelSet,
+    MissingValues,
     Task,
     TaskType,
     TimeInterval,
@@ -131,8 +132,10 @@ class _SignalRow(NamedTuple):
     categories: list[str]
     value_shape: list[int]
     dimension_names: list[str]
-    nullable: bool
+    missing_reason: str | None
+    missing_description: str | None
     n_values: int
+    null_count: int | None
     metadata: str
     modality: str
 
@@ -152,7 +155,8 @@ class _SignalRow(NamedTuple):
             tuple(self.categories),
             tuple(self.value_shape),
             tuple(self.dimension_names),
-            self.nullable,
+            self.missing_reason,
+            self.missing_description,
             self.modality,
         )
 
@@ -1102,6 +1106,7 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
                 spec=signal.spec,
                 time_axis=signal.axis,
                 n_values=row.n_values,
+                null_count=row.null_count,
                 loader=signal.values,
                 time_offsets_loader=signal.time_offsets,
                 annotations=annotations.get((ObjectKind.SIGNAL, row.signal_id), ()),
@@ -2093,13 +2098,13 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
 
     @staticmethod
     def _spec_from_row(row: _SignalRow) -> TimeSeriesSpec:
-        """Reconstruct an inline signal specification.
+        """Build a time-series specification from a stored signal row.
 
         Returns:
-            The typed specification.
+            The time-series specification.
 
         Raises:
-            TimeFFormatError: If the stored Signal modality is invalid.
+            TimeFFormatError: If the stored Signal modality or missing-value record is invalid.
         """
         try:
             modality = InputModality(row.modality)
@@ -2115,9 +2120,32 @@ class DuckDBControlReader:  # ruff: ignore[too-many-public-methods] - one public
             categories=tuple(row.categories),
             value_shape=tuple(row.value_shape),
             dimension_names=tuple(row.dimension_names),
-            nullable=row.nullable,
+            missing=DuckDBControlReader._missing_values_from_row(row),
             modality=modality,
         )
+
+    @staticmethod
+    def _missing_values_from_row(row: _SignalRow) -> MissingValues | None:
+        """Read the reason and description for missing timesteps from a stored signal row.
+
+        Returns:
+            The reason and description, or ``None`` if the row has no reason.
+            Without a reason, the specification allows no missing timesteps.
+
+        Raises:
+            TimeFFormatError: If the stored reason or description is invalid.
+        """
+        if row.missing_reason is None:
+            return None
+        try:
+            return MissingValues.model_validate(
+                {
+                    "reason": row.missing_reason,
+                    "description": row.missing_description,
+                }
+            )
+        except ValidationError as exc:
+            raise TimeFFormatError(f"signal {row.signal_id!r} stores an invalid missing-value record: {exc}") from exc
 
     def _check_owners(
         self,

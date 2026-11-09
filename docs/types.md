@@ -108,7 +108,7 @@ vibration = TimeSeriesSpec(
 | `categories` | Allowed labels for an enum specification. |
 | `value_shape` | Shape of one timestep, without the time dimension. |
 | `dimension_names` | Optional names for every dimension in `value_shape`. |
-| `nullable` | Whether a complete timestep can be missing. |
+| `missing` | Why complete timesteps can be missing, and the largest share a series may miss, or `None` when none can be. |
 | `modality` | Input kind used for Task inference. Defaults to `TIME_SERIES`; also accepts `IMAGE`, `AUDIO`, or `TEXT`. |
 
 The full logical shape is `(n_steps, *value_shape)`. Parquet stores scalar values. Use the Zarr
@@ -116,14 +116,44 @@ backend for multidimensional values.
 
 ### Missing values
 
-Pass `None` for a missing timestep when `nullable=True`. Arrow stores missingness in a validity
-bitmap. This keeps a missing value distinct from a valid floating-point NaN.
+A spec allows no missing timestep unless the connector says why timesteps are missing. It does so
+with a `MissingValues` record: one `MissingReason` and an optional description for a reader who
+does not know the source.
+
+```python
+from timenet.types import MissingReason, MissingValues, TimeSeriesSpec
+
+glucose = TimeSeriesSpec(
+    spec_type="glucose",
+    name="Interstitial glucose",
+    unit_value="mg/dL",
+    missing=MissingValues(
+        reason=MissingReason.SENSOR_GAP,
+        description="The sensor lost contact with the skin.",
+    ),
+)
+```
+
+| Reason | Meaning |
+| --- | --- |
+| `sensor_gap` | The device recorded nothing for a while. |
+| `not_recorded` | The source reported no value for the timestep, although the recording ran. |
+| `alignment_padding` | The source aligned several series to one time grid, and this series covers only part of it. |
+| `not_applicable` | The quantity has no meaning at the timestep. |
+| `redacted` | The source removed the value on purpose. |
+
+Pass `None` for a missing timestep. Arrow stores missingness in a validity bitmap. This keeps a
+missing value distinct from a valid floating-point NaN. The writer rejects a null when the spec has
+no `missing` record. It records how many timesteps each signal misses, and a reader gets that
+number as `Signal.null_count` without loading the values. A consumer reads `spec.missing.reason`
+and `Signal.null_count` to decide whether it can fill the gaps, cut them off, or must leave the
+series out. `spec.nullable` is `True` exactly when the spec has a `missing` record.
 
 `Signal.to_arrow()` preserves nulls. `Signal.to_numpy()` rejects an array that contains nulls.
-The PyTorch adapter also rejects actual nulls, even when `nullable=True`. Consumers must handle
-missing data before tensor conversion.
+The PyTorch adapter also rejects actual nulls, even when the spec allows them. Consumers must
+handle missing data before tensor conversion.
 
-Nullability applies to the complete timestep. TimeF rejects a partially missing multidimensional
+Missingness applies to the complete timestep. TimeF rejects a partially missing multidimensional
 value.
 
 ## Spans

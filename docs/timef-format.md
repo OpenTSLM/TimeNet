@@ -97,14 +97,18 @@ stored inline:
 
 ```text
 signal_id, source_id, name, axis_id, spec_type, spec_name, unit, dtype,
-categories, value_shape, dimension_names, nullable, n_values, metadata,
-modality
+categories, value_shape, dimension_names, missing_reason,
+missing_description, n_values, null_count, metadata, modality
 ```
 
 There is no separate specification table. The fields are small, typed, directly queryable, and
 compress well in DuckDB. `categories` and `dimension_names` are `VARCHAR[]` and `value_shape` is
 `BIGINT[]`. The reader reconstructs one `TimeSeriesSpec` object per distinct combination and shares
 it between the Signals that use it.
+
+The two `missing_*` columns hold the spec's `MissingValues` record. They are both null for a spec
+that allows no missing timesteps, so `missing_reason` alone tells whether a series is nullable.
+`null_count` records how many of the signal's `n_values` timesteps are missing.
 
 Regular axes store a rational microsecond period and origin. Ordinal axes need only their type.
 Irregular axes store their endpoints in `axes` and their ordered microsecond time offsets in

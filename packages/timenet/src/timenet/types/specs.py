@@ -1,18 +1,19 @@
 """Measurement modality descriptors used by Signals."""
 
 from collections.abc import Callable
+from enum import StrEnum, unique
 from typing import Annotated, Any, Self, cast
 
 import pint
 from pydantic import (
     PlainSerializer,
     PlainValidator,
-    StrictBool,
     StrictStr,
     WithJsonSchema,
     model_validator,
 )
 
+from timenet.errors import TimeFValidationError
 from timenet.types._model import TimeFModel
 from timenet.types.modalities import InputModality
 from timenet.types.units import normalize_unit, ureg
@@ -88,6 +89,35 @@ Unit = Annotated[pint.Unit, *unit_metadata(validator=_to_required_unit, nullable
 _RESERVED_SPEC_TYPES = frozenset({".", "..", "_irregular", "_time_offsets", "_validity"})
 
 
+@unique
+class MissingReason(StrEnum):
+    """Reasons why a series can have missing timesteps."""
+
+    SENSOR_GAP = "sensor_gap"
+    """The device stopped recording, for example because it lost contact with the body."""
+    NOT_RECORDED = "not_recorded"
+    """The recording continued, but the source reported no value for this timestep."""
+    ALIGNMENT_PADDING = "alignment_padding"
+    """The series covers only part of a shared time grid. Values outside that part are missing."""
+    NOT_APPLICABLE = "not_applicable"
+    """The measurement does not apply at this timestep, for example before a sensor is ready."""
+    REDACTED = "redacted"
+    """The source deliberately removed the value, for example to protect a person's privacy."""
+
+
+class MissingValues(TimeFModel):
+    """The reason for missing timesteps in a series.
+
+    A time-series specification without this record allows no missing timesteps.
+    An Arrow null represents a missing timestep.
+    """
+
+    reason: MissingReason
+    """Why timesteps are missing."""
+    description: NonEmptyString | None = None
+    """An explanation of missing timesteps in the source, or ``None``."""
+
+
 class TimeSeriesSpec(TimeFModel):
     """Define the contract for a measurement modality: identity, value unit, dtype, and per-timestep shape.
 
@@ -109,10 +139,33 @@ class TimeSeriesSpec(TimeFModel):
     """Shape of one timestep, excluding the leading time axis. An empty shape means scalar values."""
     dimension_names: tuple[NonEmptyString, ...] = ()
     """Optional names for the dimensions in :attr:`value_shape`."""
-    nullable: StrictBool = False
-    """Whether a whole timestep can be missing. An Arrow bit marks whether each timestep is present."""
+    missing: MissingValues | None = None
+    """Why timesteps can be missing, or ``None`` if none are allowed."""
     modality: InputModality = InputModality.TIME_SERIES
     """Semantic input kind. Set IMAGE, AUDIO, or TEXT for Signals that carry those kinds of data."""
+
+    @property
+    def nullable(self) -> bool:
+        """Whether the specification allows missing timesteps. True when :attr:`missing` is set."""
+        return self.missing is not None
+
+    def check_nulls_allowed(self, null_count: int, *, series: str) -> None:
+        """Check that the specification allows missing timesteps.
+
+        Args:
+            null_count: The number of missing timesteps in the series.
+            series: The series name to use in an error message.
+
+        Raises:
+            TimeFValidationError: If the series has missing timesteps but the spec has no
+                :attr:`missing` record.
+        """
+        if null_count == 0 or self.missing is not None:
+            return
+        raise TimeFValidationError(
+            f"{series} has {null_count} null values but its spec {self.spec_type!r} allows no missing "
+            "timestep. Set TimeSeriesSpec.missing to say why values are missing"
+        )
 
     @model_validator(mode="after")
     def _valid_contract(self) -> Self:

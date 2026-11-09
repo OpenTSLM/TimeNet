@@ -147,6 +147,7 @@ class TimeFWriter:
             from timenet.registry.local import LocalRegistry  # ruff: ignore[import-outside-top-level]
 
             registry = LocalRegistry(self._root)
+        self._null_counts: dict[EntityId, int] = {}
         self._storage_sources = StorageSources(
             DatasetRef(dataset_id=dataset.metadata.dataset_id, version=dataset.metadata.dataset_version), registry
         )
@@ -225,6 +226,7 @@ class TimeFWriter:
             self._dataset,
             placements,
             tasks=tasks,
+            null_counts=self._null_counts,
         )
         self._control_file = CONTROL_FILE
         self._counts = self._build_counts()
@@ -376,6 +378,9 @@ class TimeFWriter:
             location = values._location
             if signal.spec != values.spec or signal.n_values != sum(chunk.n_values for chunk in location.chunks):
                 raise TimeFValidationError(f"shared signal {signal.id!r} changed its storage shape")
+            if signal.null_count is None:
+                raise TimeFValidationError(f"shared signal {signal.id!r} does not know its null count")
+            self._null_counts[signal.id] = signal.null_count
             source = self._storage_sources.add(values.reader._version, location, nullable=values.spec.nullable)
             for chunk in location.chunks:
                 shared[signal.id, chunk.chunk_idx] = ChunkPlacement(
@@ -388,21 +393,19 @@ class TimeFWriter:
                 )
         return shared, owned
 
-    def _read_and_validate(self, ts: Signal) -> pa.Array:  # ruff: ignore[no-self-use]
-        """Read a series' values and enforce the per-series array contract.
+    def _read_and_validate(self, ts: Signal) -> pa.Array:
+        """Read and validate a series' values, and record its number of missing timesteps.
 
         Args:
             ts: The series to read.
 
         Returns:
-            The validated values in the spec's canonical Arrow representation.
-
-            The method accepts ``NaN``, ``+Infinity``, and ``-Infinity`` as floating-point values.
-            They are distinct from missing values. The ``nullable`` flag controls Arrow nulls only.
+            The validated values in the spec's Arrow representation. ``NaN`` and infinities are
+            present values, not missing ones.
 
         Raises:
-            TimeFValidationError: If the array disagrees with the spec's dtype, shape, or
-                nullability, has partial tensor nulls, or its length disagrees with ``n_values``.
+            TimeFValidationError: If the dtype, shape, missing values, or length differ from the
+                specification. Also if the supplied null count differs from the values.
         """
         values = ts.to_arrow()
         if ts.spec.dtype == "enum":
@@ -427,8 +430,13 @@ class TimeFWriter:
                 f"value_shape={ts.spec.value_shape} as Arrow, got "
                 f"{values.type if isinstance(values, pa.Array) else type(values)!r}"
             )
-        if values.null_count and not ts.spec.nullable:
-            raise TimeFValidationError(f"series {ts.id!r} has null values but nullable=False")
+        if values.null_count:
+            ts.spec.check_nulls_allowed(values.null_count, series=f"series {ts.id!r}")
+        if ts.null_count is not None and ts.null_count != values.null_count:
+            raise TimeFValidationError(
+                f"series {ts.id!r} states null_count={ts.null_count} but its values hold {values.null_count} nulls"
+            )
+        self._null_counts[ts.id] = values.null_count
         if isinstance(values, pa.FixedShapeTensorArray) and values.storage.flatten().null_count:
             raise TimeFValidationError(f"series {ts.id!r} may have nulls only for whole timesteps")
         if ts.spec.dtype == "enum":
