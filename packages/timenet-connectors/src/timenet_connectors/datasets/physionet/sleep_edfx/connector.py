@@ -32,7 +32,7 @@ import re
 from typing import ClassVar
 
 from timenet.dataset import Record, Source, TimeFDataset
-from timenet.errors import TimeFFormatError, TimeNetDownloadError
+from timenet.errors import TimeNetConnectorError, TimeNetDownloadError
 from timenet.types import ClassificationTask, ScalarPredictionTask, TemporalLocalizationTask, TimeInterval
 from timenet_connectors.bases import excel
 from timenet_connectors.bases.edf import reader, timeseries
@@ -140,7 +140,7 @@ def _parse_subject_id(study: str, recording_id: str, psg_path: Path) -> str:
         The subject id: the name of the study and the two subject digits, joined by a hyphen.
 
     Raises:
-        TimeFFormatError: If the study is not one this connector knows, if the name does not
+        TimeNetConnectorError: If the study is not one this connector knows, if the name does not
             fit the shape the release uses, or if it states a night the release does not hold.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by _parse_recording_number, not directly here)
     subject, _ = _parse_recording_number(study, recording_id, psg_path)
@@ -162,23 +162,23 @@ def _parse_recording_number(study: str, recording_id: str, psg_path: Path) -> tu
         The subject number and the night number.
 
     Raises:
-        TimeFFormatError: If the study is not one this connector knows, if the name does not
+        TimeNetConnectorError: If the study is not one this connector knows, if the name does not
             fit the shape the release uses, or if it states a night the release does not hold.
     """
     code = _STUDY_CODES.get(study)
     if code is None:
-        raise TimeFFormatError(f"{psg_path}: lies in {study!r}, which is not a study of this release")
+        raise TimeNetConnectorError(f"{psg_path}: lies in {study!r}, which is not a study of this release")
 
     match = _RECORDING_ID_SHAPE.fullmatch(recording_id)
     if match is None or match["code"] != code:
-        raise TimeFFormatError(
+        raise TimeNetConnectorError(
             f"{psg_path.name}: a {study} recording is named {code}<2 subject digits><night><recorder>0, "
             f"as in {code}001E0, thus {recording_id!r} names no subject"
         )
 
     night = int(match["night"])
     if night not in _NIGHTS:
-        raise TimeFFormatError(f"{psg_path.name}: states night {night}, and a subject slept night 1 or night 2")
+        raise TimeNetConnectorError(f"{psg_path.name}: states night {night}, and a subject slept night 1 or night 2")
 
     return int(match["subject"]), night
 
@@ -194,7 +194,7 @@ def _iter_recordings(source: SleepEdfxSource) -> Iterator[SleepEdfxRecording]:
         recording-id order.
 
     Raises:
-        TimeFFormatError: If a study directory holds a PSG file whose name this connector
+        TimeNetConnectorError: If a study directory holds a PSG file whose name this connector
             cannot read.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by _parse_subject_id, not directly here)
     for study, study_dir in source.studies:

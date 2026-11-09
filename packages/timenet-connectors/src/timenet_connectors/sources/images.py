@@ -7,7 +7,7 @@ import numpy as np
 import pyarrow as pa
 
 from timenet.dataset import OrdinalAxis, Signal
-from timenet.errors import TimeFFormatError
+from timenet.errors import TimeNetConnectorError
 from timenet.types import InputModality, TimeSeriesSpec, ureg
 
 
@@ -21,7 +21,7 @@ def _decode_image(source: Path | bytes) -> np.ndarray:
         A height by width by channel RGB or RGBA array.
 
     Raises:
-        TimeFFormatError: If the image cannot be decoded.
+        TimeNetConnectorError: If the image cannot be decoded.
     """
     from PIL import Image, ImageOps  # ruff: ignore[import-outside-top-level] - optional connector dependency
 
@@ -31,7 +31,7 @@ def _decode_image(source: Path | bytes) -> np.ndarray:
             mode = "RGBA" if image.mode in {"RGBA", "LA", "PA", "RGBa", "La"} or "transparency" in image.info else "RGB"
             return np.asarray(image.convert(mode), dtype=np.uint8)
     except Exception as exc:
-        raise TimeFFormatError(
+        raise TimeNetConnectorError(
             f"could not decode image {source if isinstance(source, Path) else '<bytes>'}: {exc}"
         ) from exc
 
