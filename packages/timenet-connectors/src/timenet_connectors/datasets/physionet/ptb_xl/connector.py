@@ -6,12 +6,15 @@ from dataclasses import dataclass
 from fractions import Fraction
 from pathlib import Path
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
+import numpy as np
+
+from timenet.dataset import Record, Signal, SignalDefinition, Source, TimeFDataset
 from timenet.dataset.axis import RegularAxis
 from timenet.errors import TimeNetConnectorError
 from timenet.types import Annotation, Split, TimeSeriesSpec, ureg
 from timenet_connectors.bases.physionet import BasePhysioNetConnector
 from timenet_connectors.download import ensure_archive, find_dir_containing
+from timenet_connectors.sources.shared_read import SharedReadCache
 
 
 PTBXL_ZIP_URL = "s3://physionet-open/ptb-xl/ptb-xl-1.0.3.zip"
@@ -131,6 +134,7 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
                 ``ecg_id``. For a repeated ``ecg_id``, the message also names the earlier row.
         """
         dataset = TimeFDataset(metadata=self.metadata())
+        cache: SharedReadCache[tuple[str, int], np.ndarray] = SharedReadCache()
         source = raw_refs[0]
         # The CSV row where each ecg_id first appears.
         first_rows: dict[int, int] = {}
@@ -147,15 +151,17 @@ class PtbXlConnector(BasePhysioNetConnector[PtbXlSource]):
                     if header.fs != _SAMPLING_RATE_HZ or len(header.sig_name) != _LEAD_COUNT:
                         raise TimeNetConnectorError("PTB-XL requires twelve leads at 500 Hz")
                     axis = RegularAxis.from_rate_hz(Fraction(str(header.fs)))
-                    signals = tuple(
-                        Signal.from_loader(
-                            spec=_ECG,
-                            name=name,
-                            time_axis=axis,
-                            loader=self._lead_loader(base, header, position),
-                            n_values=int(header.sig_len),
-                        )
-                        for position, name in enumerate(header.sig_name)
+                    signals = Signal.from_loaders(
+                        channels=(
+                            SignalDefinition(
+                                spec=_ECG,
+                                name=name,
+                                time_axis=axis,
+                                loader=self._lead_loader(base, header, position, cache),
+                                n_values=int(header.sig_len),
+                            )
+                            for position, name in enumerate(header.sig_name)
+                        ),
                     )
                     record = dataset.add_record(
                         record=Record(

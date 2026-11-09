@@ -10,7 +10,7 @@ a build that never reaches the fallback needs nothing extra.
 
 from abc import ABC
 from collections.abc import Callable
-import functools
+from functools import partial
 from pathlib import Path
 import re
 from typing import Any, NamedTuple, TypeVar
@@ -20,6 +20,7 @@ import pyarrow as pa
 
 from timenet.connectors import BaseConnector
 from timenet.errors import TimeFFormatError
+from timenet_connectors.sources.shared_read import SharedReadCache
 
 
 TRaw = TypeVar("TRaw")
@@ -50,12 +51,8 @@ class WfdbHeader(NamedTuple):
     False routes to ``wfdb``, which handles the parts the direct reader does not."""
 
 
-@functools.lru_cache(maxsize=4)
 def _read_dat16(dat_path: str, n_sig: int) -> np.ndarray:
     """Read a whole format-16 ``.dat`` once and return raw int16 samples, shape ``(n_frames, n_sig)``.
-
-    Cached so the leads of one record (written contiguously after the writer's source-grouped sort) read
-    the file once rather than once per lead.
 
     Args:
         dat_path: The ``.dat`` file path.
@@ -150,7 +147,13 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
             direct_read=direct_read,
         )
 
-    def _lead_loader(self, record_base: Path, header: WfdbHeader, lead_idx: int) -> Callable[[], pa.Array]:
+    def _lead_loader(
+        self,
+        record_base: Path,
+        header: WfdbHeader,
+        lead_idx: int,
+        cache: SharedReadCache[tuple[str, int], np.ndarray],
+    ) -> Callable[[], pa.Array]:
         """Build a lazy loader for one lead's samples as a float32 Arrow array in physical units.
 
         For a standard format-16 record the ``.dat`` is read directly with NumPy — all leads of a record
@@ -179,7 +182,7 @@ class BasePhysioNetConnector(BaseConnector[TRaw], ABC):
         gain, baseline = header.gains[lead_idx], header.baselines[lead_idx]
 
         def load() -> pa.Array:
-            raw = _read_dat16(dat_path, n_sig)[:, lead_idx].astype("float32")
+            raw = cache.get((dat_path, n_sig), partial(_read_dat16, dat_path, n_sig))[:, lead_idx].astype("float32")
             return pa.array((raw - baseline) / gain)
 
         return load
