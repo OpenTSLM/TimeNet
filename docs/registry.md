@@ -86,7 +86,7 @@ Every backend implements this contract.
 | `list_datasets()` | Latest-version `DatasetMetadata` for every dataset, sorted by id. |
 | `get_manifest(dataset_id, version=None)` | A dataset's [manifest](manifest.md) (latest if `version` is `None`). Raises `TimeNetDatasetNotFoundError` for an unknown id/version. Raises `TimeFFormatError` if the stored manifest is not valid, or if its own id disagrees with the directory it was loaded from. |
 | `open_file(dataset_id, version, relpath)` | A file of a dataset version, opened for seekable binary reading (an object store must return a range-capable handle, not a forward-only stream). |
-| `location` | Where the registry is: the base URL of a remote registry, the `s3://bucket/prefix` root of an S3 registry, or the resolved root directory of a local registry. Any other registry gives its name. |
+| `location` | Where the registry is: the base URL of a remote registry, the `s3://bucket/prefix` root of an S3 registry, or the resolved root directory of a local registry. Each backend must define it. |
 | `requires_open_access` | Whether the registry holds and serves only releases with open access. `False` only for `LocalRegistry`. |
 | `find_manifest(release)` | The manifest of an exact release, or `None` if the registry does not hold it. Raises `TimeFFormatError` if the stored manifest names another release. |
 | `download_release(reference, directory, *, force=False, manifest=None, progress_cb=None)` | Download the files of one release, without its payload sources, into a local directory. A failed download leaves no partial copy, and it keeps the copy that was there before. |
