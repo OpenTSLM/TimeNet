@@ -44,13 +44,14 @@ def git(directory: Path, *args: str) -> str:
 
 def state(directory: Path) -> tuple[str, str]:
     """Return the commit of a package directory and its ``git status`` output."""
+    # Read the commit after the status, as timenet.provenance.EditableCheckout does.
     status = git(directory, "status", "--porcelain", "--untracked-files=all", "--", ".")
     return git(directory, "rev-parse", "HEAD"), status
 
 
 def main(build_args: list[str]) -> int:
     """Write the commit records, build, and remove the records again, also on failure."""
-    written: list[Path] = []
+    written: dict[Path, str] = {}
     before = {directory: state(directory) for directory in PACKAGES}
     try:
         for directory, module in PACKAGES.items():
@@ -58,9 +59,10 @@ def main(build_args: list[str]) -> int:
             # Keep the keys in step with timenet.manifest.GitSource.
             info = {"sha": sha, "contains_local_changes": bool(status)}
             target = directory / "src" / module / BUILD_INFO_FILE
+            text = json.dumps(info) + "\n"
             # Register the file before the write, so a write that fails halfway is removed too.
-            written.append(target)
-            target.write_text(json.dumps(info) + "\n", encoding="utf-8")
+            written[target] = text
+            target.write_text(text, encoding="utf-8")
             print(f"{target.relative_to(ROOT)}: {info}", file=sys.stderr)
         # uv run sets UV to its own executable.
         uv = os.environ.get("UV") or executable("uv")
@@ -74,10 +76,27 @@ def main(build_args: list[str]) -> int:
                 file=sys.stderr,
             )
             return 1
+        # git ignores the records, so the status above cannot see one that another build removed.
+        lost = [str(path.relative_to(ROOT)) for path, text in written.items() if not _holds(path, text)]
+        if lost:
+            print(
+                f"error: {', '.join(lost)} changed during the build, so the built artifacts can lack their "
+                "commit records. Do not run two builds in one checkout at the same time. Build again.",
+                file=sys.stderr,
+            )
+            return 1
         return returncode
     finally:
         for path in written:
             path.unlink(missing_ok=True)
+
+
+def _holds(path: Path, text: str) -> bool:
+    """Return whether ``path`` exists and holds ``text``."""
+    try:
+        return path.read_text(encoding="utf-8") == text
+    except FileNotFoundError:
+        return False
 
 
 if __name__ == "__main__":

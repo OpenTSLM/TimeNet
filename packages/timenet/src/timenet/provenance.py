@@ -51,10 +51,12 @@ class EditableCheckout(InstallSource):
                 f"or install {self.package_name} from a wheel that scripts/build_dists.py built"
             )
         try:
-            sha = _run_git(git, self.project_directory, "rev-parse", "HEAD")
             # The pathspec "." scopes the status to the package directory, untracked files included. A
             # scratch file elsewhere in the repository does not count as a local change.
             status = _run_git(git, self.project_directory, "status", "--porcelain", "--untracked-files=all", "--", ".")
+            # Read the commit after the status. A commit between the two reads then shows as a new
+            # commit, not as the old commit without local changes.
+            sha = _run_git(git, self.project_directory, "rev-parse", "HEAD")
         except subprocess.CalledProcessError as exc:
             detail = (exc.stderr or "").strip() or str(exc)
             raise self._unknown_commit(f"git failed in {self.project_directory}: {detail}") from exc
