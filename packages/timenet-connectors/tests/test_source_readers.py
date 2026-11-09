@@ -3,6 +3,7 @@ import json
 
 import pyarrow as pa
 import pyarrow.parquet as pq
+from pydantic import ConfigDict
 import pytest
 
 from timenet.errors import TimeNetConnectorError
@@ -94,3 +95,43 @@ def test_json_rejects_duplicate_keys(tmp_path, reader_type, content, location):
     assert location in str(exc.value)
     assert str(path) in str(exc.value)
     assert exc.value.__cause__ is not None
+
+
+@pytest.mark.parametrize("format_name", ["json", "jsonl", "parquet"])
+def test_decoded_readers_offer_strict_validation(tmp_path, format_name):
+    path = tmp_path / format_name
+    value = {"name": "sensor", "count": "42"}
+    if format_name == "json":
+        path.write_text(json.dumps([value]))
+        reader_type = JsonReader
+    elif format_name == "jsonl":
+        path.write_text(json.dumps(value) + "\n")
+        reader_type = JsonlReader
+    else:
+        pq.write_table(pa.Table.from_pylist([value]), path)
+        reader_type = ParquetReader
+
+    assert list(reader_type(path, Row).iter_rows()) == [Row(name="sensor", count=42)]
+    with pytest.raises(TimeNetConnectorError, match="count"):
+        list(reader_type(path, Row, strict=True).iter_rows())
+
+
+def test_strict_mode_accepts_decoded_integer_and_csv_strings(tmp_path):
+    json_path = tmp_path / "source.json"
+    json_path.write_text('[{"name":"sensor","count":42}]')
+    assert list(JsonReader(json_path, Row, strict=True).iter_rows()) == [Row(name="sensor", count=42)]
+    csv_path = tmp_path / "source.csv"
+    csv_path.write_text("name,count\nsensor,42\n")
+    assert list(CsvReader(csv_path, Row, strict=True).iter_rows()) == [Row(name="sensor", count=42)]
+
+
+def test_default_respects_row_schema_strictness(tmp_path):
+    class StrictRow(DataRow):
+        model_config = ConfigDict(strict=True)
+        count: int
+
+    path = tmp_path / "source.json"
+    path.write_text('[{"count":"42"}]')
+    with pytest.raises(TimeNetConnectorError, match="count"):
+        list(JsonReader(path, StrictRow).iter_rows())
+    assert list(JsonReader(path, StrictRow, strict=False).iter_rows()) == [StrictRow(count=42)]
