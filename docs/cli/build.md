@@ -36,7 +36,7 @@ timenet-build [--quiet] build <dataset_id>[@<version>] \
 | `--isolation`, `--no-isolation` | `$TIMENET_ISOLATION`, else on | Run this build in an environment built from the requirements of the connector, or in the current one. |
 | `--publish-to` | off | After the build, publish the release and its payload sources to the registry at this URL or path. |
 | `--dry-run` | off | Print the plan to stdout and stop. It copies, builds, and publishes nothing. |
-| `--local-registry` | `$TIMENET_LOCAL_REGISTRY`, else `~/.timenet/registry` | A local registry: the first source that a lookup checks, and the local registry where the build lands. |
+| `--local-registry` | `$TIMENET_LOCAL_REGISTRY`, else `~/.timenet/registry` | The local registry, where downloads and builds land and which a lookup checks first. |
 | `--remote-registry` | `$TIMENET_REMOTE_REGISTRY`, else `timenet://` | A remote registry, as a URL or a local path: the second source that a lookup checks, if the local registry does not have a parent. |
 | `--auto-build`, `--no-auto-build` | `$TIMENET_AUTO_BUILD`, else on | Whether installed connectors build a parent that neither the local registry nor the remote registry has. |
 | `--quiet`, `-q` | off | Hide status output. Place this option before `build`. |

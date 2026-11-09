@@ -76,7 +76,7 @@ overrides one [variable](../client.md#settings):
 
 | Flag | Variable | Default | What it sets |
 | --- | --- | --- | --- |
-| `--local-registry PATH` | `TIMENET_LOCAL_REGISTRY` | `~/.timenet/registry` | A local registry: the first source that a lookup checks, and the place where downloads and builds land. |
+| `--local-registry PATH` | `TIMENET_LOCAL_REGISTRY` | `~/.timenet/registry` | The local registry, where downloads and builds land and which a lookup checks first. |
 | `--remote-registry` `URL` or `PATH` | `TIMENET_REMOTE_REGISTRY` | `timenet://` | A remote registry, as a URL or a local path: the second source that a lookup checks, if the local registry does not have the dataset. |
 | `--auto-build` / `--no-auto-build` | `TIMENET_AUTO_BUILD` | `true` | Whether installed connectors build a dataset that neither the local nor the remote registry has. |
 

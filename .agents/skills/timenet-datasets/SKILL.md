@@ -66,8 +66,8 @@ over its environment variable, and the variable wins over its default. A registr
 registry (a blank value, an unknown scheme, a URL for `--local-registry`) exits with code 2 and
 names the flag. A bad `TIMENET_*` variable exits with code 1 and names the variable.
 
-- `--local-registry PATH`: a local registry, the first source that a lookup checks, and the place
-  where downloads and builds land (`$TIMENET_LOCAL_REGISTRY`, else `~/.timenet/registry`).
+- `--local-registry PATH`: the local registry, where downloads and builds land and which a lookup
+  checks first (`$TIMENET_LOCAL_REGISTRY`, else `~/.timenet/registry`).
 - `--remote-registry URL|PATH`: a remote registry, as a URL or a local path, the second source that
   a lookup checks, if the local registry does not have the dataset (`$TIMENET_REMOTE_REGISTRY`,
   else `timenet://`).
