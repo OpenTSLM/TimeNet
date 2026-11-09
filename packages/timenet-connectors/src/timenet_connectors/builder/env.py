@@ -28,12 +28,6 @@ from timenet.types.references import DatasetRef
 from timenet_connectors.discovery import requirements_for
 
 
-BASE_DISTRIBUTIONS = TimeNetDistribution.NAMES
-"""Pinned to the parent's own versions, so the code that writes the TimeF bytes is the code that
-reads them back. ``timenet-connectors`` depends on ``timenet[build]``, so the card-YAML
-dependencies arrive transitively and the extra never needs naming here."""
-
-
 @dataclass(frozen=True)
 class EnvSpec:
     """What one connector's environment needs."""
@@ -205,7 +199,10 @@ def _base_args() -> tuple[str, ...]:
         TimeNetIsolationError: If a base distribution is not installed in this interpreter.
     """
     args: list[str] = []
-    for name in BASE_DISTRIBUTIONS:
+    # Pin TimeNet to the parent's own versions, so the code that writes the TimeF bytes is the code
+    # that reads them back. timenet-connectors depends on timenet[build], so the card-YAML
+    # dependencies arrive transitively and the extra never needs naming here.
+    for name in TimeNetDistribution.NAMES:
         try:
             dist = Distribution.from_name(name)
         except PackageNotFoundError as exc:
