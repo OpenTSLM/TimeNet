@@ -33,11 +33,6 @@ class GitSource(TimeFModel):
     contains_local_changes: StrictBool
     """Whether the package directory had uncommitted changes, untracked files included."""
 
-    @classmethod
-    def load_from_build_info(cls, path: Path) -> Self:
-        """Read the record that ``scripts/build_dists.py`` wrote into a built package."""
-        return cls.model_validate_json(path.read_text(encoding="utf-8"))
-
 
 DistributionName = StrictStr
 """The name of an installed distribution, for example ``timenet-connectors``."""

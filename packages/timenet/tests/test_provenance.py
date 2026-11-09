@@ -5,6 +5,7 @@ from pathlib import Path
 import shutil
 import subprocess
 
+from pydantic import ValidationError
 import pytest
 
 from timenet.errors import TimeNetBuildError
@@ -85,7 +86,7 @@ def _editable(directory: Path) -> dict:
     return {"url": directory.as_uri(), "dir_info": {"editable": True}}
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 def test_an_editable_install_records_the_commit_of_its_checkout(git, checkout, installed):
     installed(direct_url=_editable(checkout))
     head = _run(git, checkout, "rev-parse", "HEAD")
@@ -93,7 +94,7 @@ def test_an_editable_install_records_the_commit_of_its_checkout(git, checkout, i
     assert TimeNetSnapshot.read().to_source_map() == {"timenet": GitSource(sha=head, contains_local_changes=False)}
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 @pytest.mark.parametrize("change", ["module.py", "untracked.py"])
 def test_a_change_in_the_package_directory_is_a_local_change(checkout, installed, change):
     installed(direct_url=_editable(checkout))
@@ -101,7 +102,7 @@ def test_a_change_in_the_package_directory_is_a_local_change(checkout, installed
     assert PackageSnapshot.read("timenet").source.contains_local_changes is True
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 def test_a_change_outside_the_package_directory_is_not_a_local_change(checkout, installed):
     installed(direct_url=_editable(checkout))
     (checkout.parents[1] / "README.md").write_text("edited\n")
@@ -109,7 +110,7 @@ def test_a_change_outside_the_package_directory_is_not_a_local_change(checkout, 
     assert PackageSnapshot.read("timenet").source.contains_local_changes is False
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 def test_an_editable_install_outside_git_fails_with_the_git_error(git, tmp_path, installed):
     outside = tmp_path / "outside"
     outside.mkdir()
@@ -118,7 +119,7 @@ def test_an_editable_install_outside_git_fails_with_the_git_error(git, tmp_path,
         PackageSnapshot.read("timenet")
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 def test_an_editable_install_without_git_fails(checkout, installed, monkeypatch):
     installed(direct_url=_editable(checkout))
     monkeypatch.setenv("PATH", "")
@@ -126,7 +127,7 @@ def test_an_editable_install_without_git_fails(checkout, installed, monkeypatch)
         PackageSnapshot.read("timenet")
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 @pytest.mark.parametrize("editable", [True, False])
 def test_an_install_of_a_subdirectory_finds_the_package_directory(checkout, installed, editable):
     # direct_url.json may name the repository and put the package in "subdirectory".
@@ -141,34 +142,34 @@ def test_an_install_of_a_subdirectory_finds_the_package_directory(checkout, inst
         assert PackageSnapshot.read("timenet").source.contains_local_changes is False
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 def test_a_path_install_reads_its_build_info_and_not_the_live_checkout(checkout, installed):
     installed(direct_url={"url": checkout.as_uri(), "dir_info": {}}, build_info=_CLEAN.model_dump_json())
     assert PackageSnapshot.read("timenet").source == _CLEAN
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 def test_a_git_install_records_the_commit_that_pip_installed(installed):
     sha = "b" * 40
     installed(direct_url={"url": "https://example.org/timenet.git", "vcs_info": {"vcs": "git", "commit_id": sha}})
     assert PackageSnapshot.read("timenet").source == GitSource(sha=sha, contains_local_changes=False)
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 def test_a_wheel_reads_its_commit_from_the_build_info(installed):
     info = GitSource(sha="a" * 40, contains_local_changes=True)
     installed(build_info=info.model_dump_json())
     assert PackageSnapshot.read("timenet").source == info
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 def test_a_wheel_without_build_info_fails_and_says_how_to_build_one(installed):
     installed()
     with pytest.raises(TimeNetBuildError, match=r"carries no _build_info\.json\. Build it with `make build`"):
         PackageSnapshot.read("timenet")
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 @pytest.mark.parametrize(
     "build_info",
     [
@@ -184,7 +185,7 @@ def test_a_wheel_with_invalid_build_info_fails(installed, build_info):
         PackageSnapshot.read("timenet")
 
 
-@pytest.mark.real_git
+@pytest.mark.real_provenance
 def test_a_local_build_fails_if_a_commit_is_unknown(installed, tmp_path):
     installed()
     with pytest.raises(TimeNetBuildError, match="cannot find the git commit of timenet"):
@@ -205,3 +206,9 @@ def test_a_manifest_without_timenet_connectors_reads_as_not_installed():
 def test_a_manifest_without_the_commit_of_timenet_is_refused():
     with pytest.raises(TimeNetBuildError, match="the manifest records no git commit for timenet"):
         TimeNetSnapshot.from_source_map({"timenet-connectors": _CLEAN})
+
+
+def test_a_field_must_hold_the_commit_of_its_own_distribution():
+    connectors = PackageSnapshot(distribution="timenet-connectors", source=_CLEAN)
+    with pytest.raises(ValidationError, match="the field for timenet holds the commit of timenet-connectors"):
+        TimeNetSnapshot(timenet=connectors)
