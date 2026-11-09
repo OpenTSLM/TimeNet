@@ -293,15 +293,16 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | --- | --- |
 | `TimeNetError` | Base class for TimeNet failures. |
 | `TimeNetRegistryError` | A registry cannot complete an operation. |
+| `TimeNetUnreachableError` | A request to a registry or its storage failed on the network. The original error is its cause. A `TimeNetRegistryError`. |
 | `TimeNetDatasetNotFoundError` | A dataset ID or version does not exist. |
 | `TimeNetVersionUnavailableError` | The installed connector of a dataset builds another version than the requested one. A `TimeNetDatasetNotFoundError` and a `TimeFValidationError`. |
-| `TimeNetVersionConflictError` | A registry already holds a release with other files or another card than a copy that would go there. For a publish, the hint asks for a new version. For a copy into the local registry, the hint names the release folder to delete. |
+| `TimeNetVersionConflictError` | A registry already holds a release with other files or another card than a copy that would go there. `difference` is `ReleaseDifference.FILES` or `ReleaseDifference.CARD`, and `registry_location` is the location of that registry. For a publish, the hint asks for a new version. For a copy into the local registry, the hint names the release folder to delete. |
 | `TimeFValidationError` | Input violates a TimeF invariant. |
 | `TimeFNullValuesError` | Values contain nulls that NumPy cannot hold. A `TimeFValidationError`. |
 | `TimeFNotFoundError` | An ID, parent alias, or parent release names nothing in the dataset, or the stored object has another kind. A `TimeFValidationError` and a `LookupError`. |
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
 | `TimeNetFileError` | A file of a release is missing, or does not match its manifest record. A `TimeFFormatError`. |
-| `TimeNetManifestError` | A stored manifest is not a valid manifest. `where` names the file or the place in a registry, and `detail` names the first problem. A `TimeFFormatError`. |
+| `TimeNetManifestError` | A stored manifest is not a valid manifest. `where` names the file or the place in a registry, and `detail` names the first problem. `path` is the file, or `None` for a manifest that a registry served. A `TimeFFormatError`. |
 | `TimeNetOriginError` | The provenance record of a release in the local registry is not valid. `release` names the release, `path` the file, and `detail` the first problem. A `TimeFFormatError`. |
 | `TimeFReaderError` | A reader could not complete a read, e.g. its connection was closed while the read ran. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
