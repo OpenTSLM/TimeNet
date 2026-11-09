@@ -111,7 +111,8 @@ dataset = tn.load("chengsenwang/tsqa")                    # every value read int
   dataset at the highest version, sorted by ID. `limit` applies after the merge. A connector never
   matches `task` or `time_series_spec`. A registry without a catalog (S3) adds nothing, and a card
   that cannot be read is left out with a `ConnectorCardWarning`. To ask one registry alone, use
-  `open_registry("timenet://").search(...)` from `timenet.registry`.
+  `open_registry("timenet://").search(DatasetFilter.of(...))`, with `DatasetFilter` from
+  `timenet.types`.
 - `get_manifest()` returns the manifest of the release that `open()` reads, without a read of other
   files. A registry that lists a release without serving it gives its listed manifest. A release
   that only a connector provides raises `TimeNetNotBuiltError` (no manifest before a build).

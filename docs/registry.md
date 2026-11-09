@@ -92,7 +92,7 @@ Every backend implements this contract.
 | `download_release(reference, directory, *, force=False, manifest=None, progress_cb=None)` | Download the files of one release, without its payload sources, into a local directory. A failed download leaves no partial copy, and it keeps the copy that was there before. |
 | `open_release(reference, *, manifest=None)` | A `DatasetVersion` of one exact release without its payload sources: the parsed manifest and a handle to the files. Pass `manifest` if you already read it from this registry. A local registry raises `TimeNetFileError` for a missing or resized file. |
 | `resolve(dataset_id, version)` | Whether the registry serves a release, as a [source](#sources) answer: `Found`, `NotFound` or `NotServed`. |
-| `search(...)` | Filter datasets. |
+| `search(filter)` | Find the datasets that match a `DatasetFilter`. |
 
 To copy a release with its payload sources, use
 [`TimeNet.download()`](client.md#open-load-or-download) for the local registry where downloads and
@@ -102,7 +102,8 @@ with its payload sources, use [`TimeNet.open()`](client.md#open-load-or-download
 `LocalRegistry` serves a `<root>/<dataset_id>/<version>/` tree. `RemoteRegistry` serves the same layout
 over the versioned REST contract (`GET /api/v1/datasets`, `/api/v1/datasets/{id}/{version}/manifest`,
 `.../download/{relpath}`); `S3Registry` serves the same layout under an `s3://bucket/prefix` root. The
-S3 backend has no catalog, so `list_datasets` and `search` raise `NotImplementedError`.
+S3 backend has no catalog: its `has_catalog` is `False`, and `list_datasets` and `search` raise
+`NotImplementedError`.
 
 A dataset id is an `org/name` pair, for example `chengsenwang/tsqa`. The id nests one level deep on
 disk, at `<root>/chengsenwang/tsqa/<version>/`. `list_datasets` finds these ids at any depth. Use
@@ -280,17 +281,18 @@ unchanged.
 ## `search`
 
 ```python
-registry.search(
-    query=None, domain=None, task=None, license=None,
-    time_series_spec=None, dataset_id=None, tag=None, limit=100,
-)
+from timenet.types import DatasetFilter, Domain
+
+registry.search(DatasetFilter.of(domain=Domain.CARDIOLOGY, tag="ecg", limit=10))
 ```
 
-Every filter takes a scalar value or a list. The registry ignores `None` filters and combines all
-non-`None` filters with AND logic. `TimeNet.search()` and the consumer CLI, `timenet search`, apply
-the same filters to each source of their list, and merge the hits (see
+A `DatasetFilter` from `timenet.types` holds the filters and the limit. Each filter is a tuple, and
+an empty tuple sets no restriction. `DatasetFilter.of()` takes one value, a list, or `None` for
+each filter. The registry combines the filters with AND logic. `TimeNet.search()` and the consumer
+CLI, `timenet search`, take the same filters as keywords. They build one `DatasetFilter`, apply it
+to each source of their list, and merge the hits (see
 [Browse datasets](client.md#browse-datasets)). `limit` caps the number of results, with a default
-of 100. `limit=0` returns no results.
+of 100. `limit=0` returns no results, and a negative limit raises `TimeFValidationError`.
 
 | Filter | Matches |
 | --- | --- |

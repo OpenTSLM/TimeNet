@@ -123,8 +123,9 @@ version, the row of the earlier source stays. A listed version can be newer than
 
 ```python
 from timenet.registry import open_registry
+from timenet.types import DatasetFilter
 
-hits = open_registry("timenet://").search(query="ecg")
+hits = open_registry("timenet://").search(DatasetFilter(query=("ecg",)))
 ```
 
 ## Inspect a release
