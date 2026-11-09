@@ -11,6 +11,7 @@ import asyncio
 from collections.abc import Awaitable, Callable, Mapping
 import importlib.metadata
 import logging
+import math
 import time
 from typing import Any, BinaryIO, cast
 
@@ -42,13 +43,15 @@ def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
     Returns:
         The delay in seconds, clamped to at most :data:`_MAX_RETRY_WAIT_SECONDS`.
     """
-    header = response.headers.get("retry-after")
     delay = _DEFAULT_BACKOFF_SECONDS * 2**attempt
-    if header is not None:
-        try:
-            delay = float(header)  # the service sends an integer number of seconds
-        except ValueError:
-            delay = _DEFAULT_BACKOFF_SECONDS * 2**attempt  # an HTTP-date form: fall back to backoff
+    try:
+        # The service sends an integer number of seconds. An HTTP date, or a negative or
+        # non-finite value, falls back to the backoff.
+        header = float(response.headers.get("retry-after", "nan"))
+    except ValueError:
+        header = math.nan
+    if math.isfinite(header) and header >= 0:
+        delay = header
     return min(delay, _MAX_RETRY_WAIT_SECONDS)
 
 
@@ -71,11 +74,10 @@ def _retry_delay(response: httpx.Response, attempt: int, waited: float) -> float
     if waited + delay > _MAX_RETRY_WAIT_SECONDS:
         return None
     _LOG.warning(
-        "registry rate-limited (429) on %s, retrying in %gs (attempt %d of %d)",
+        "registry rate-limited (429) on %s, retrying in %gs (retry %d)",
         response.request.url.path,
         delay,
         attempt + 1,
-        _MAX_RETRIES,
     )
     return delay
 
