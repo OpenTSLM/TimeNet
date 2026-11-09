@@ -41,7 +41,7 @@ def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
         attempt: The zero-based retry attempt, used for the backoff when no header is present.
 
     Returns:
-        The delay in seconds, clamped to at most :data:`_MAX_RETRY_WAIT_SECONDS`.
+        The delay in seconds. A ``Retry-After`` is returned as sent, so a retry never comes early.
     """
     delay = _DEFAULT_BACKOFF_SECONDS * 2**attempt
     try:
@@ -52,7 +52,7 @@ def _retry_after_seconds(response: httpx.Response, attempt: int) -> float:
         header = math.nan
     if math.isfinite(header) and header >= 0:
         delay = header
-    return min(delay, _MAX_RETRY_WAIT_SECONDS)
+    return delay
 
 
 def _retry_delay(response: httpx.Response, attempt: int, waited: float) -> float | None:
@@ -66,7 +66,8 @@ def _retry_delay(response: httpx.Response, attempt: int, waited: float) -> float
         waited: The seconds already spent waiting on earlier retries.
 
     Returns:
-        The delay in seconds, or ``None`` if the response is not a 429 or the wait budget is spent.
+        The delay in seconds, or ``None`` if the response is not a 429 or the delay does not fit the
+        remaining wait budget. Then the caller surfaces the 429 at once, with the server's Retry-After.
     """
     if response.status_code != httpx.codes.TOO_MANY_REQUESTS:
         return None
