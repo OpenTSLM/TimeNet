@@ -377,7 +377,7 @@
     },
     "GitSource": {
       "additionalProperties": false,
-      "description": "The git commit that one TimeNet distribution was built from.",
+      "description": "The git commit that one TimeNet package was built from.",
       "properties": {
         "sha": {
           "pattern": "^[0-9a-f]{40}$",

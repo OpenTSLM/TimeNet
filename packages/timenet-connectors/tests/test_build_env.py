@@ -34,7 +34,7 @@ class _FakeDist:
 
 
 def _base_args_for(monkeypatch, dist):
-    monkeypatch.setattr(TimeNetSnapshot, "distributions", classmethod(lambda cls: ("timenet",)))
+    monkeypatch.setattr(TimeNetSnapshot, "package_names", classmethod(lambda cls: ("timenet",)))
     monkeypatch.setattr(env_module.Distribution, "from_name", lambda name: dist)
     return env_module._base_args()
 
@@ -150,7 +150,7 @@ def test_run_build_captures_stderr_and_the_exit_code():
 
 
 def test_env_spec_reports_a_base_distribution_that_is_not_installed(monkeypatch):
-    monkeypatch.setattr(TimeNetSnapshot, "distributions", classmethod(lambda cls: ("timenet", "timenet-not-installed")))
+    monkeypatch.setattr(TimeNetSnapshot, "package_names", classmethod(lambda cls: ("timenet", "timenet-not-installed")))
 
     with pytest.raises(TimeNetBuildError, match="timenet-not-installed"):
         env_spec("timenet/hello-world")

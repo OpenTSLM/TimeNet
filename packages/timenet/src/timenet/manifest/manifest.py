@@ -26,7 +26,7 @@ GitSHA = Annotated[str, StringConstraints(strict=True, pattern=r"^[0-9a-f]{40}$"
 
 
 class GitSource(TimeFModel):
-    """The git commit that one TimeNet distribution was built from."""
+    """The git commit that one TimeNet package was built from."""
 
     sha: GitSHA
     """The commit of the checkout, or of the checkout that built the wheel."""
@@ -34,11 +34,11 @@ class GitSource(TimeFModel):
     """Whether the package directory had uncommitted changes, untracked files included."""
 
 
-DistributionName = StrictStr
-"""The name of an installed distribution, for example ``timenet-connectors``."""
+PackageName = StrictStr
+"""The name pip installs, for example ``timenet-connectors`` (not the import name ``timenet_connectors``)."""
 
-GitSourceMap = dict[DistributionName, GitSource]
-"""The commit of each installed TimeNet distribution, keyed by distribution name."""
+GitSourceMap = dict[PackageName, GitSource]
+"""The commit of each installed TimeNet package, keyed by package name."""
 
 
 class BuildEnvironment(TimeFModel):
@@ -46,10 +46,10 @@ class BuildEnvironment(TimeFModel):
 
     python: StrictStr
     """The interpreter version, for example ``3.13.1``."""
-    packages: dict[DistributionName, StrictStr]
-    """Each installed distribution and its version, sorted by name."""
+    packages: dict[PackageName, StrictStr]
+    """Each installed package and its version, sorted by name."""
     git: GitSourceMap
-    """The commit of each installed TimeNet distribution. A distribution that is not installed is absent."""
+    """The commit of each installed TimeNet package. A package that is not installed is absent."""
 
     @classmethod
     def capture(cls, git: GitSourceMap) -> Self:

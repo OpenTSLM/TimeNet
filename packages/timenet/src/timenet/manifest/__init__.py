@@ -4,10 +4,10 @@ from timenet.manifest.counts import ManifestCounts
 from timenet.manifest.files import FilePart, ManifestFiles
 from timenet.manifest.manifest import (
     BuildEnvironment,
-    DistributionName,
     GitSource,
     GitSourceMap,
     Manifest,
+    PackageName,
     parse_manifest,
     read_manifest,
 )
@@ -16,13 +16,13 @@ from timenet.manifest.payload_source import PayloadSource
 
 __all__ = [
     "BuildEnvironment",
-    "DistributionName",
     "FilePart",
     "GitSource",
     "GitSourceMap",
     "Manifest",
     "ManifestCounts",
     "ManifestFiles",
+    "PackageName",
     "PayloadSource",
     "parse_manifest",
     "read_manifest",

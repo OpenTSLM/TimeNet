@@ -19,7 +19,7 @@ from urllib.request import url2pathname
 from pydantic import BaseModel, ConfigDict, Field, StrictBool, StrictStr, ValidationError, model_validator
 
 from timenet.errors import TimeNetBuildError
-from timenet.manifest import DistributionName, GitSource, GitSourceMap
+from timenet.manifest import GitSource, GitSourceMap, PackageName
 
 
 _GIT_TIMEOUT_S = 30
@@ -29,7 +29,7 @@ _GIT_TIMEOUT_S = 30
 class InstallSource(ABC):
     """How one distribution was installed. The install type decides where its commit is recorded."""
 
-    distribution: DistributionName
+    distribution: PackageName
 
     @abstractmethod
     def read_git_source(self) -> GitSource:
@@ -113,12 +113,12 @@ class InstalledDistribution:
         self._distribution = distribution
 
     @classmethod
-    def from_name(cls, name: DistributionName) -> Self:
+    def from_name(cls, name: PackageName) -> Self:
         """Find an installed distribution. Raises ``PackageNotFoundError`` if it is not installed."""
         return cls(Distribution.from_name(name))
 
     @property
-    def name(self) -> DistributionName:
+    def name(self) -> PackageName:
         """The distribution name, for example ``timenet-connectors``."""
         return self._distribution.metadata["Name"]
 
@@ -174,41 +174,41 @@ class Snapshot(BaseModel, ABC):
 
 
 class PackageSnapshot(Snapshot):
-    """The commit of one installed distribution."""
+    """The commit of one installed package."""
 
-    distribution: DistributionName
+    package_name: PackageName
+    """The name pip installs, for example ``timenet-connectors``."""
     source: GitSource
 
     @classmethod
-    def read(cls, distribution: DistributionName) -> Self:
-        """Read the commit of an installed distribution. Raises ``TimeNetBuildError`` if it is not installed."""
-        snapshot = cls.read_if_installed(distribution)
+    def read(cls, package_name: PackageName) -> Self:
+        """Read the commit of an installed package. Raises ``TimeNetBuildError`` if it is not installed."""
+        snapshot = cls.read_if_installed(package_name)
         if snapshot is None:
             raise TimeNetBuildError(
-                f"cannot find the git commit of {distribution}: it is not installed in {sys.executable}"
+                f"cannot find the git commit of {package_name}: it is not installed in {sys.executable}"
             )
         return snapshot
 
     @classmethod
-    def read_if_installed(cls, distribution: DistributionName) -> Self | None:
-        """Read the commit of a distribution, or return ``None`` if it is not installed."""
+    def read_if_installed(cls, package_name: PackageName) -> Self | None:
+        """Read the commit of a package, or return ``None`` if it is not installed."""
         try:
-            installed = InstalledDistribution.from_name(distribution)
+            installed = InstalledDistribution.from_name(package_name)
         except PackageNotFoundError:
             return None
-        return cls(distribution=distribution, source=installed.read_git_source())
+        return cls(package_name=package_name, source=installed.read_git_source())
 
     def to_source_map(self) -> GitSourceMap:
         """Return this package's commit in the form that a manifest records."""
-        return {self.distribution: self.source}
+        return {self.package_name: self.source}
 
 
 class TimeNetSnapshot(Snapshot):
-    """The commit of each installed TimeNet distribution, read at one point in time.
+    """The commit of each installed TimeNet package, read at one point in time.
 
-    Each build records it in its manifest. Its fields are the one list of the distributions that
-    count as TimeNet code. Each field carries the name of its distribution, as its alias or as its
-    own name.
+    Each build records it in its manifest. Its fields are the one list of the packages that count
+    as TimeNet code. Each field carries the name of its package, as its alias or as its own name.
     """
 
     timenet: PackageSnapshot
@@ -216,22 +216,22 @@ class TimeNetSnapshot(Snapshot):
     """``None`` if timenet-connectors is not installed."""
 
     @model_validator(mode="after")
-    def _each_field_holds_its_distribution(self) -> Self:
+    def _each_field_holds_its_package(self) -> Self:
         for name, field in type(self).model_fields.items():
             package = getattr(self, name)
-            distribution = field.alias or name
-            if package is not None and package.distribution != distribution:
-                raise ValueError(f"the field for {distribution} holds the commit of {package.distribution}")
+            package_name = field.alias or name
+            if package is not None and package.package_name != package_name:
+                raise ValueError(f"the field for {package_name} holds the commit of {package.package_name}")
         return self
 
     @classmethod
-    def distributions(cls) -> tuple[DistributionName, ...]:
-        """Return the name of each TimeNet distribution, in field order."""
+    def package_names(cls) -> tuple[PackageName, ...]:
+        """Return the name of each TimeNet package, in field order."""
         return tuple(field.alias or name for name, field in cls.model_fields.items())
 
     @classmethod
     def read(cls) -> Self:
-        """Read the commit of each installed TimeNet distribution. Raises ``TimeNetBuildError`` if one is unknown."""
+        """Read the commit of each installed TimeNet package. Raises ``TimeNetBuildError`` if one is unknown."""
         return cls(
             timenet=PackageSnapshot.read("timenet"),
             timenet_connectors=PackageSnapshot.read_if_installed("timenet-connectors"),
@@ -240,23 +240,23 @@ class TimeNetSnapshot(Snapshot):
     @classmethod
     def from_source_map(cls, sources: GitSourceMap) -> Self:
         """Return the typed view of the commits that a manifest records."""
-        packages = {name: PackageSnapshot(distribution=name, source=source) for name, source in sources.items()}
+        packages = {name: PackageSnapshot(package_name=name, source=source) for name, source in sources.items()}
         try:
-            # The field aliases map each distribution name to its field.
+            # The field aliases map each package name to its field.
             return cls.model_validate(packages)
         except ValidationError as exc:
             missing = ", ".join(str(error["loc"][0]) for error in exc.errors())
             raise TimeNetBuildError(f"the manifest records no git commit for {missing}") from exc
 
     def to_source_map(self) -> GitSourceMap:
-        """Return the commit of each installed TimeNet distribution."""
+        """Return the commit of each installed TimeNet package."""
         sources: GitSourceMap = {}
         for package in self._installed():
             sources.update(package.to_source_map())
         return sources
 
     def _installed(self) -> list[PackageSnapshot]:
-        """Return the snapshot of each installed TimeNet distribution."""
+        """Return the snapshot of each installed TimeNet package."""
         return [package for package in (self.timenet, self.timenet_connectors) if package is not None]
 
 

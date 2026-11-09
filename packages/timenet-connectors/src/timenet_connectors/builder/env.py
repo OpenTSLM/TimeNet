@@ -202,7 +202,7 @@ def _base_args() -> tuple[str, ...]:
     # Pin TimeNet to the parent's own versions, so the code that writes the TimeF bytes is the code
     # that reads them back. timenet-connectors depends on timenet[build], so the card-YAML
     # dependencies arrive transitively and the extra never needs naming here.
-    for name in TimeNetSnapshot.distributions():
+    for name in TimeNetSnapshot.package_names():
         try:
             installed = InstalledDistribution.from_name(name)
         except PackageNotFoundError as exc:
