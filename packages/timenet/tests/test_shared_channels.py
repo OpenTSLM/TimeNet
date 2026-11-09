@@ -7,7 +7,7 @@ import pytest
 
 from timenet.dataset import OrdinalAxis, Signal, SignalChannel
 from timenet.errors import TimeFValidationError, TimeNetConnectorError
-from timenet.types import TimeSeriesSpec, shared_loading as channels
+from timenet.types import MissingReason, MissingValues, TimeSeriesSpec, shared_loading as channels
 from timenet.types.shared_loading import SharedChannelLoader
 
 
@@ -173,7 +173,13 @@ def test_signal_factory_shares_reads_across_signals_and_recordings():
     definitions = (
         SignalChannel(
             name="count",
-            spec=TimeSeriesSpec(spec_type="count", name="count", unit_value="1", dtype="int16", nullable=True),
+            spec=TimeSeriesSpec(
+                spec_type="count",
+                name="count",
+                unit_value="1",
+                dtype="int16",
+                missing=MissingValues(reason=MissingReason.NOT_RECORDED),
+            ),
             time_axis=OrdinalAxis(),
             n_values=2,
         ),
