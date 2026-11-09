@@ -7,7 +7,7 @@ import pytest
 from timenet.config import settings
 from timenet.dataset.axis import IrregularAxis
 from timenet.engine import run_pipeline
-from timenet.errors import TimeFValidationError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError
 from timenet.format import control_writer
 from timenet.format.control_audit import audit_control_database
 from timenet.format.duckdb import connect_control
@@ -195,14 +195,14 @@ def test_conversion_preserves_source_semantics_and_reiterable_tasks(tmp_path):
 
 def test_channel_reads_reuse_rows_and_reread_offsets(monkeypatch, tmp_path):
     dataset = SensorCapsConnector().convert(_refs(tmp_path)[:1])
-    original = module._parse_row
+    original = module.JsonlRowSource.read_row
     calls = []
 
-    def parse(raw, context):
-        calls.append(context)
-        return original(raw, context)
+    def reread(source, location):
+        calls.append(location)
+        return original(source, location)
 
-    monkeypatch.setattr(module, "_parse_row", parse)
+    monkeypatch.setattr(module.JsonlRowSource, "read_row", reread)
     first, second = dataset.records
     for signal in first.signals:
         assert len(signal.to_arrow()) == 60
@@ -210,7 +210,7 @@ def test_channel_reads_reuse_rows_and_reread_offsets(monkeypatch, tmp_path):
     np.testing.assert_array_equal(second.signals[0].to_numpy(), _expected_values(0, 1, 0))
     assert len(calls) == 2
     np.testing.assert_array_equal(first.signals[3].to_numpy(), _expected_values(0, 0, 3))
-    assert len(calls) == 3  # revisiting evicted rows reads by byte offset, including UTF-8
+    assert [location.line for location in calls] == [1, 2, 1]  # evicted rows reread by their UTF-8 byte locations
 
 
 def test_pipeline_preserves_source_semantics_after_source_removal(monkeypatch, tmp_path):
@@ -300,4 +300,40 @@ def test_unexpected_sample_count_rejects_timing_reconstruction(tmp_path, n_readi
     ref = _write_row(tmp_path, row)
     with pytest.raises(TimeFValidationError, match="expected 60 readings per sensor") as error:
         SensorCapsConnector().convert([ref])
+    assert str(ref.path) in str(error.value)
+
+
+def test_blank_source_lines_use_shared_jsonl_validation(tmp_path):
+    ref = _write_row(tmp_path, _rows()[0])
+    with ref.path.open("ab") as handle:
+        handle.write(b"\n")
+    with pytest.raises(TimeNetConnectorError, match=r"line 2.*Expecting value") as error:
+        SensorCapsConnector().convert([ref])
+    assert str(ref.path) in str(error.value)
+
+
+def test_duplicate_message_fields_are_not_silently_overwritten(tmp_path):
+    ref = _write_row(tmp_path, _rows()[0])
+    raw = ref.path.read_bytes().replace(b'"role": "system"', b'"role": "user", "role": "system"', 1)
+    ref.path.write_bytes(raw)
+    with pytest.raises(TimeNetConnectorError, match="duplicate key 'role'") as error:
+        SensorCapsConnector().convert([ref])
+    assert f"{ref.path} (line 1)" in str(error.value)
+
+
+def test_out_of_order_chat_roles_fail_before_sensor_interpretation(tmp_path):
+    row = _rows()[0]
+    row["messages"][0], row["messages"][1] = row["messages"][1], row["messages"][0]
+    ref = _write_row(tmp_path, row)
+    with pytest.raises(TimeNetConnectorError, match="expected a system message") as error:
+        SensorCapsConnector().convert([ref])
+    assert f"{ref.path} (line 1)" in str(error.value)
+
+
+def test_lazy_values_use_bounded_jsonl_rereads(tmp_path):
+    ref = _refs(tmp_path)[0]
+    dataset = SensorCapsConnector().convert([ref])
+    ref.path.write_bytes(b"{")
+    with pytest.raises(TimeNetConnectorError, match=r"line 1.*truncated") as error:
+        dataset.records[0].signals[0].to_numpy()
     assert str(ref.path) in str(error.value)

@@ -9,18 +9,20 @@ sensor location as input annotations. Feature text is streamed rather than retai
 
 from collections.abc import Iterator, Mapping
 from dataclasses import dataclass
+from enum import Enum
 from functools import partial
-import json
-from typing import Annotated, ClassVar
+from typing import Annotated, ClassVar, Self
 
 import pyarrow as pa
-from pydantic import Field, FiniteFloat, JsonValue, Strict, TypeAdapter, ValidationError
+from pydantic import Field, FiniteFloat, Strict, TypeAdapter, ValidationError, model_validator
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet_connectors.sources.readers.base import DataRow, NonBlankText, PublishedEnum
+from timenet_connectors.sources.readers.jsonl import JsonlLocation, JsonlRowSource
 
 
 DECLARED_SAMPLING_RATE_HZ = 10
@@ -68,16 +70,51 @@ _PAMAP2_CHANNELS = (
         2,
     ),
 )
-_ROLES = ("system", "user", "assistant")
 _XYZValues = Annotated[list[Annotated[FiniteFloat, Strict()]], Field(min_length=3, max_length=3)]
 _SENSOR_VALUES = TypeAdapter(Annotated[list[_XYZValues], Field(min_length=1)])
+
+
+class _Role(Enum):
+    SYSTEM = "system"
+    USER = "user"
+    ASSISTANT = "assistant"
+
+
+_EXPECTED_ROLES = (_Role.SYSTEM, _Role.USER, _Role.ASSISTANT)
+
+
+class _Message(DataRow):
+    role: PublishedEnum[_Role]
+    content: NonBlankText
+
+
+class _ChatRow(DataRow):
+    messages: Annotated[list[_Message], Field(min_length=3, max_length=3)]
+
+    @model_validator(mode="after")
+    def check_message_order(self) -> Self:
+        """Require the published system, user and assistant order.
+
+        Returns:
+            The row after its message order has been checked.
+
+        Raises:
+            ValueError: If a role is out of order, for Pydantic to report as source validation.
+        """
+        for message, role in zip(self.messages, _EXPECTED_ROLES, strict=True):
+            if message.role is not role:
+                raise ValueError(f"expected a {role.value} message")
+        return self
 
 
 @dataclass(frozen=True)
 class _RowRef:
     file: HubFileRef
-    index: int
-    offset: int
+    location: JsonlLocation
+
+    @property
+    def index(self) -> int:
+        return self.location.line - 1
 
     @property
     def key(self) -> tuple[str, int]:
@@ -86,6 +123,15 @@ class _RowRef:
     @property
     def context(self) -> str:
         return f"{self.file.path} ({self.file.part}, row {self.index})"
+
+    def read_row(self) -> "_ParsedRow":
+        """Reread a typed source row and interpret its SensorCaps sections.
+
+        Returns:
+            Validated messages, features and paired sensor arrays.
+        """
+        entry = JsonlRowSource(self.file.path, _ChatRow).read_row(self.location)
+        return _ParsedRow.from_source(entry.row, context=self.context)
 
 
 @dataclass(frozen=True)
@@ -96,6 +142,26 @@ class _ParsedRow:
     location: str | None
     features: str
     values: tuple[list[list[float]], list[list[float]]]
+
+    @classmethod
+    def from_source(cls, row: _ChatRow, *, context: str) -> Self:
+        """Interpret validated chat messages using the pinned SensorCaps source rules.
+
+        Returns:
+            Captioning instructions, targets, descriptive fields and validated sensor arrays.
+
+        Raises:
+            TimeFValidationError: If the sensor sections violate the SensorCaps mapping.
+        """
+        try:
+            system, user, assistant = row.messages
+            sections, features = _user_sections(user.content)
+            values = _section_values(sections)
+            return cls(
+                system.content, assistant.content, sections["Summary"], sections.get("Location"), features, values
+            )
+        except (ValueError, OverflowError, RecursionError) as exc:
+            raise TimeFValidationError(f"{context}: {exc}") from exc
 
 
 def _sensor_values(text: str, name: str) -> list[list[float]]:
@@ -139,32 +205,6 @@ def _user_sections(user: str) -> tuple[dict[str, str], str]:
     return sections, "".join(feature_lines)
 
 
-def _message_contents(row: JsonValue) -> tuple[str, str, str]:
-    """Validate and extract the ordered system, user, and assistant messages.
-
-    Returns:
-        The three nonempty message contents in source order.
-
-    Raises:
-        TimeFValidationError: If messages are missing, empty, or out of order.
-    """
-    messages = row.get("messages") if isinstance(row, dict) else None
-    if not isinstance(messages, list) or len(messages) != len(_ROLES):
-        raise TimeFValidationError("expected system, user, and assistant messages")
-    contents: list[str] = []
-    for message, role in zip(messages, _ROLES, strict=True):
-        content = message.get("content") if isinstance(message, dict) else None
-        if (
-            not isinstance(message, dict)
-            or message.get("role") != role
-            or not isinstance(content, str)
-            or not content.strip()
-        ):
-            raise TimeFValidationError(f"expected a nonempty {role} message")
-        contents.append(content)
-    return contents[0], contents[1], contents[2]
-
-
 def _section_values(sections: dict[str, str]) -> tuple[list[list[float]], list[list[float]]]:
     """Validate structured fields and decode the paired sensor arrays.
 
@@ -190,49 +230,17 @@ def _section_values(sections: dict[str, str]) -> tuple[list[list[float]], list[l
     return accelerometer, gyroscope
 
 
-def _parse_row(raw: bytes, context: str) -> _ParsedRow:
-    """Parse a source row, adding file and row context to decoding failures.
-
-    Returns:
-        Captioning instructions, targets, descriptive fields, and validated sensor arrays.
-
-    Raises:
-        TimeFValidationError: If the JSON, messages, or sensor sections are malformed.
-    """
-    try:
-        row: JsonValue = json.loads(raw)
-        system, user, caption = _message_contents(row)
-        sections, features = _user_sections(user)
-        values = _section_values(sections)
-        return _ParsedRow(
-            system,
-            caption,
-            sections["Summary"],
-            sections.get("Location"),
-            features,
-            values,
-        )
-    except (ValueError, UnicodeError, OverflowError, RecursionError) as exc:
-        # Source text is untrusted; retain the narrow decoding failure and identify its exact row.
-        raise TimeFValidationError(f"{context}: {exc}") from exc
-
-
 def _iter_rows(file: HubFileRef) -> Iterator[tuple[_RowRef, _ParsedRow]]:
-    """Read a JSONL file one row at a time, retaining seekable binary offsets.
+    """Interpret streamed typed rows without retaining their message text.
 
     Yields:
-        Each lightweight row reference and its transient decoded contents.
+        Lightweight source locations and transient SensorCaps contents.
     """
-    with file.path.open("rb") as handle:
-        index = 0
-        while True:
-            offset = handle.tell()
-            raw = handle.readline()
-            if not raw:
-                return
-            ref = _RowRef(file, index, offset)
-            yield ref, _parse_row(raw, ref.context)
-            index += 1
+    source = JsonlRowSource(file.path, _ChatRow)
+    with source.open_rows() as rows:
+        for entry in rows:
+            ref = _RowRef(file, entry.location)
+            yield ref, _ParsedRow.from_source(entry.row, context=ref.context)
 
 
 class _ValueLoader:
@@ -244,9 +252,7 @@ class _ValueLoader:
     def __call__(self, ref: _RowRef, sensor: int, axis: int) -> pa.Array:
         cached = self.cached
         if cached is None or cached[0] != ref:
-            with ref.file.path.open("rb") as handle:
-                handle.seek(ref.offset)
-                values = _parse_row(handle.readline(), ref.context).values
+            values = ref.read_row().values
             self.cached = ref, values
         else:
             values = cached[1]
