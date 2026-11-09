@@ -10,7 +10,7 @@ from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources.readers.base import DataReader, RowT
 
 
-class ParquetReader(DataReader[RowT]):
+class ParquetDataReader(DataReader[RowT]):
     """Read a Parquet file in batches, yielding individual rows."""
 
     def __init__(
@@ -31,9 +31,9 @@ class ParquetReader(DataReader[RowT]):
         try:
             with pq.ParquetFile(self.path) as parquet:
                 names = parquet.schema_arrow.names
-                if len(set(names)) != len(names):
+                if not self._has_unique_columns(names):
                     raise TimeNetConnectorError(f"{self.path}: duplicate Parquet column names")
-                missing = [name for name in self.columns or () if name not in names]
+                missing = self._missing_columns(names)
                 if missing:
                     raise TimeNetConnectorError(f"{self.path}: missing columns {missing}")
                 number = 0
@@ -43,3 +43,12 @@ class ParquetReader(DataReader[RowT]):
                         yield self._validate(value, f"row {number}")
         except (OSError, pa.ArrowException) as exc:
             raise TimeNetConnectorError(f"{self.path}: {exc}") from exc
+
+    def _missing_columns(self, names: Sequence[str]) -> list[str]:
+        """Return the selected columns that the file does not have, in selection order."""
+        return [name for name in self.columns or () if name not in names]
+
+    @staticmethod
+    def _has_unique_columns(names: Sequence[str]) -> bool:
+        """Return whether no column name repeats in the file schema."""
+        return len(set(names)) == len(names)
