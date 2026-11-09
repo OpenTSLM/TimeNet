@@ -1,15 +1,15 @@
 import pytest
 
 from timenet.errors import TimeFFormatError, TimeFValidationError
-from timenet_connectors.sources import json_stream
+from timenet_connectors.sources.readers import json_object
 
 
 @pytest.fixture
 def reads(monkeypatch):
     """Record the size of every read the cursor makes."""
     sizes = []
-    read = json_stream.JsonCursor.read
-    monkeypatch.setattr(json_stream.JsonCursor, "read", lambda self, size: sizes.append(size) or read(self, size))
+    read = json_object.JsonCursor.read
+    monkeypatch.setattr(json_object.JsonCursor, "read", lambda self, size: sizes.append(size) or read(self, size))
     return sizes
 
 
@@ -17,13 +17,13 @@ def test_entries_keep_byte_ranges_across_crlf_and_utf8(monkeypatch, tmp_path):
     path = tmp_path / "rows.json"
     path.write_bytes('{"1": {"name": "Doña Ana"},\r\n "2": [1, 2.5], "3": {}}\r\n'.encode())
     # A tiny chunk splits keys, values, and multibyte characters across reads.
-    monkeypatch.setattr(json_stream, "_CHUNK_SIZE", 3)
+    monkeypatch.setattr(json_object, "_CHUNK_SIZE", 3)
 
-    entries = list(json_stream.iter_object(path))
+    entries = list(json_object.iter_object(path))
 
     assert [(key, value) for key, value, _, _ in entries] == [("1", {"name": "Doña Ana"}), ("2", [1, 2.5]), ("3", {})]
     for key, value, offset, length in entries:
-        assert json_stream.read_entry(path, offset, length) == value, key
+        assert json_object.read_entry(path, offset, length) == value, key
 
 
 def test_a_number_split_across_reads_decodes_whole(monkeypatch, tmp_path):
@@ -32,8 +32,8 @@ def test_a_number_split_across_reads_decodes_whole(monkeypatch, tmp_path):
     path.write_text(text)
     # Some chunk size cuts each number short at the buffer's edge.
     for size in range(1, len(text) + 1):
-        monkeypatch.setattr(json_stream, "_CHUNK_SIZE", size)
-        assert [(key, value) for key, value, _, _ in json_stream.iter_object(path)] == [
+        monkeypatch.setattr(json_object, "_CHUNK_SIZE", size)
+        assert [(key, value) for key, value, _, _ in json_object.iter_object(path)] == [
             ("a", 12345),
             ("b", -6500.0),
             ("c", 7),
@@ -46,8 +46,8 @@ def test_a_string_split_across_reads_decodes_whole(monkeypatch, tmp_path):
     path.write_text(text)
     # Small chunks cut the string short well before its closing quote.
     for size in range(1, len(text) + 1):
-        monkeypatch.setattr(json_stream, "_CHUNK_SIZE", size)
-        assert [(key, value) for key, value, _, _ in json_stream.iter_object(path)] == [
+        monkeypatch.setattr(json_object, "_CHUNK_SIZE", size)
+        assert [(key, value) for key, value, _, _ in json_object.iter_object(path)] == [
             ("a", "Doña Ana, a string far longer than the edge"),
             ("b", 1),
         ], size
@@ -56,9 +56,9 @@ def test_a_string_split_across_reads_decodes_whole(monkeypatch, tmp_path):
 def test_a_value_larger_than_a_chunk_takes_few_reads(monkeypatch, tmp_path, reads):
     path = tmp_path / "rows.json"
     path.write_text('{"big": [' + "0, " * 100_000 + "0]}")
-    monkeypatch.setattr(json_stream, "_CHUNK_SIZE", 16)
+    monkeypatch.setattr(json_object, "_CHUNK_SIZE", 16)
 
-    [(_, value, _, _)] = json_stream.iter_object(path)
+    [(_, value, _, _)] = json_object.iter_object(path)
 
     assert value == [0] * 100_001
     # Doubling reaches the value's 300 KB in a few reads, where fixed 16-byte reads take 18,750.
@@ -68,20 +68,20 @@ def test_a_value_larger_than_a_chunk_takes_few_reads(monkeypatch, tmp_path, read
 def test_a_syntax_error_raises_without_reading_the_rest_of_the_file(monkeypatch, tmp_path, reads):
     path = tmp_path / "rows.json"
     path.write_text('{"a": {"x": 1 x}, "b": [' + "0, " * 100_000 + "0]}")
-    monkeypatch.setattr(json_stream, "_CHUNK_SIZE", 64)
+    monkeypatch.setattr(json_object, "_CHUNK_SIZE", 64)
 
     with pytest.raises(TimeFValidationError, match="delimiter at byte 14"):
-        list(json_stream.iter_object(path))
+        list(json_object.iter_object(path))
     assert sum(reads) <= 64
 
 
 def test_a_non_string_key_raises_without_reading_it(monkeypatch, tmp_path, reads):
     path = tmp_path / "rows.json"
     path.write_text("{[" + "0, " * 100_000 + "0]: 1}")
-    monkeypatch.setattr(json_stream, "_CHUNK_SIZE", 64)
+    monkeypatch.setattr(json_object, "_CHUNK_SIZE", 64)
 
     with pytest.raises(TimeFValidationError, match="expected a string key at byte 1"):
-        list(json_stream.iter_object(path))
+        list(json_object.iter_object(path))
     assert sum(reads) <= 64
 
 
@@ -89,10 +89,10 @@ def test_a_syntax_error_names_its_byte_in_the_file(monkeypatch, tmp_path):
     text = '{"é": 1, ' + ", ".join(f'"{n}": {n}' for n in range(1000)) + ', "z": [1 2]}'
     path = tmp_path / "rows.json"
     path.write_text(text)
-    monkeypatch.setattr(json_stream, "_CHUNK_SIZE", 100)
+    monkeypatch.setattr(json_object, "_CHUNK_SIZE", 100)
 
     with pytest.raises(TimeFValidationError) as error:
-        list(json_stream.iter_object(path))
+        list(json_object.iter_object(path))
     # The "2" of [1 2], counted in bytes, where the two-byte "é" sits one past its character index.
     assert f"at byte {text.index('[1 2]') + 4}" in str(error.value)
 
@@ -108,9 +108,9 @@ def test_a_syntax_error_names_its_byte_in_the_file(monkeypatch, tmp_path):
 def test_invalid_utf8_names_its_byte(monkeypatch, tmp_path, data, message):
     path = tmp_path / "rows.json"
     path.write_bytes(data)
-    monkeypatch.setattr(json_stream, "_CHUNK_SIZE", 3)
+    monkeypatch.setattr(json_object, "_CHUNK_SIZE", 3)
     with pytest.raises(TimeFValidationError, match=message):
-        list(json_stream.iter_object(path))
+        list(json_object.iter_object(path))
 
 
 @pytest.mark.parametrize(
@@ -126,14 +126,14 @@ def test_invalid_utf8_names_its_byte(monkeypatch, tmp_path, data, message):
 def test_a_cursor_raises_timenet_errors(tmp_path, text, message):
     path = tmp_path / "rows.json"
     path.write_text(text)
-    with json_stream.JsonCursor.open(path) as cursor, pytest.raises(TimeFValidationError, match=message):
+    with json_object.JsonCursor.open(path) as cursor, pytest.raises(TimeFValidationError, match=message):
         cursor.value()
 
 
 def test_empty_object_yields_nothing(tmp_path):
     path = tmp_path / "rows.json"
     path.write_text(" {} \n")
-    assert list(json_stream.iter_object(path)) == []
+    assert list(json_object.iter_object(path)) == []
 
 
 @pytest.mark.parametrize(
@@ -154,7 +154,7 @@ def test_malformed_documents_name_the_file(tmp_path, text, message):
     path = tmp_path / "broken.json"
     path.write_text(text)
     with pytest.raises(TimeFValidationError, match=message) as error:
-        list(json_stream.iter_object(path))
+        list(json_object.iter_object(path))
     assert str(path) in str(error.value)
 
 
@@ -177,7 +177,7 @@ def test_a_reread_that_does_not_decode_names_the_range(tmp_path, text, length, m
     else:
         path.write_text(text)
     with pytest.raises(TimeFFormatError, match=message) as error:
-        json_stream.read_entry(path, 0, length)
+        json_object.read_entry(path, 0, length)
     assert f"{path} (bytes 0-{length})" in str(error.value)
 
 
@@ -195,9 +195,9 @@ def test_a_reread_error_names_its_byte_in_the_file(tmp_path, value, message):
     path = tmp_path / "changed.json"
     path.write_bytes(prefix + data + b"}")
     with pytest.raises(TimeFFormatError, match=message):
-        json_stream.read_entry(path, len(prefix), len(data))
+        json_object.read_entry(path, len(prefix), len(data))
 
 
 def test_a_reread_of_a_missing_file_raises_a_format_error(tmp_path):
     with pytest.raises(TimeFFormatError, match="No such file"):
-        json_stream.read_entry(tmp_path / "gone.json", 0, 2)
+        json_object.read_entry(tmp_path / "gone.json", 0, 2)
