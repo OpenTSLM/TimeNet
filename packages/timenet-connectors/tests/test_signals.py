@@ -3,9 +3,12 @@ import pyarrow as pa
 import pytest
 
 from timenet.errors import TimeFValidationError, TimeNetConnectorError
-from timenet.types import TimeSeriesSpec
+from timenet.types import MissingReason, MissingValues, TimeSeriesSpec
 from timenet_connectors.sources.errors import error_context
 from timenet_connectors.sources.signals import check_channel_matrix, numeric_signal
+
+
+_MISSING = MissingValues(reason=MissingReason.NOT_RECORDED)
 
 
 def spec(dtype="float32", **kwargs):
@@ -75,13 +78,13 @@ def test_rounding_is_explicit():
 @pytest.mark.parametrize("value", [float("nan"), float("inf"), -float("inf")])
 def test_nonfinite_is_never_missing(value):
     with pytest.raises(TimeNetConnectorError, match=r"signal\[0\]"):
-        numeric_signal([value], "signal", spec=spec(nullable=True))
+        numeric_signal([value], "signal", spec=spec(missing=_MISSING))
 
 
 def test_nulls_and_empty():
     for values in ([None, 1], pa.array([None, 1])):
-        assert numeric_signal(values, "signal", spec=spec(nullable=True)).to_pylist() == [None, 1.0]
-        with pytest.raises(TimeNetConnectorError, match="nullable"):
+        assert numeric_signal(values, "signal", spec=spec(missing=_MISSING)).to_pylist() == [None, 1.0]
+        with pytest.raises(TimeNetConnectorError, match="sets missing"):
             numeric_signal(values, "signal", spec=spec())
     assert numeric_signal([], "signal", spec=spec(), n_values=0).type == pa.float32()
     with pytest.raises(TimeNetConnectorError, match="expected 1 samples, got 0"):

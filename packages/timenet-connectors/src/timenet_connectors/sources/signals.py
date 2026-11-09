@@ -66,11 +66,11 @@ def _float_sample(original: int | float, dtype: np.dtype, casting: str) -> tuple
 
 
 def _convert_sample(
-    sample: object, dtype: np.dtype, nullable: bool, casting: str
+    sample: object, dtype: np.dtype, allows_missing: bool, casting: str
 ) -> tuple[int | float | None, str | None]:
     """Return a converted sample and an optional failure reason."""
     if sample is None:
-        return None, None if nullable else "null requires a nullable spec"
+        return None, None if allows_missing else "null requires a spec that sets missing"
     if isinstance(sample, (bool, np.bool_)) or not isinstance(sample, (int, float, np.integer, np.floating)):
         return None, "expected a finite number"
     # Keep integers as Python ints: mixed NumPy comparisons can round a large
@@ -120,7 +120,7 @@ def numeric_signal(
 ) -> pa.Array:
     """Return scalar samples in the spec's Arrow dtype, with independent storage.
 
-    Nulls require a nullable spec. NaN, infinity, booleans, nested samples, and
+    Nulls require a spec that sets ``missing``. NaN, infinity, booleans, nested samples, and
     nonnumeric specs are rejected. Empty inputs are allowed. Exact casting is
     value-based; float_rounding permits only float-to-float precision loss,
     including underflow to zero. Integer conversions remain exact. Python inputs
@@ -155,7 +155,7 @@ def numeric_signal(
         raise TimeNetConnectorError(f"{name}: expected {n_values} samples, got {len(samples)}")
     converted: list[int | float | None] = []
     for index, sample in enumerate(samples):
-        result, reason = _convert_sample(sample, dtype, spec.nullable, casting)
+        result, reason = _convert_sample(sample, dtype, spec.missing is not None, casting)
         if reason is not None:
             raise TimeNetConnectorError(f"{name}[{index}]: {reason}")
         converted.append(result)
