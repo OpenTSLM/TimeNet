@@ -704,7 +704,7 @@ class _TaskCopy:
             The copy in the child of every task, pending or held, by parent ID.
         """
         child = self.importer.child
-        dataset_annotations = list(child._annotations)
+        dataset_annotations = child.annotations
         try:
             copies = {identity: self._copy(task) for identity, task in pending.items()}
             found = held | copies
@@ -713,7 +713,7 @@ class _TaskCopy:
             if copies:
                 child.add_tasks(tasks=copies.values())
         except BaseException:
-            child._annotations = dataset_annotations
+            child._replace_annotations(dataset_annotations)
             for owner, annotations in self.saved.values():
                 _set_annotations(owner, annotations)
             raise
@@ -792,7 +792,7 @@ class _TaskCopy:
         copy = self.importer.copy_annotation(original)
         self.made.add(id(copy))
         if owner is None:
-            self.importer.child._annotations.append(copy)
+            self.importer.child._attach_annotation(copy)
         else:
             self.saved.setdefault(id(owner), (owner, owner.annotations))
             _set_annotations(owner, (*owner.annotations, copy))
@@ -810,7 +810,7 @@ class _TaskCopy:
         Returns:
             The annotations that no reference took yet, grouped by :func:`_bucket` and then by content key.
         """
-        held = self.importer.child._annotations if owner is None else owner.annotations
+        held = self.importer.child.annotations if owner is None else owner.annotations
         key = id(self.importer.child) if owner is None else id(owner)
         filed = self.filed.get(key)
         if filed is None:
