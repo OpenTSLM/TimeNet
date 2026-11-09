@@ -198,7 +198,60 @@ The system finds connectors lazily, by dataset id. There is no central registry 
 concrete connector lives under `timenet_connectors/datasets/<org>/<name>/`. Use lowercase Python
 package names. The package's `__init__.py` exposes `CONNECTOR`. Put `dataset.yaml` and an optional
 `requirements.txt` beside it. The build tool imports only the requested connector package. Reusable
-bases live under `timenet_connectors/bases/`.
+bases live under `timenet_connectors/bases/`. The next section describes the modules inside the
+connector package.
+
+## Connector layout
+
+Organize connector code around three responsibilities: reading and validating source data,
+building records, and building tasks. Keep `convert` and `compose` readable as the main flow.
+
+Start in `connector.py`. Move related functions into separate modules when that makes the code
+easier to follow. Suggested names are `source.py`, `records.py`, and `tasks.py`. Source readers do
+not depend on record or task builders. Choose the structure for clarity, not for a line count.
+
+Check source data where it is read, as [Source validation](#source-validation) describes, and pass
+checked, typed values to record and task builders. Never silently repair or discard invalid data.
+
+Use `Signal.from_values` when all signal values fit comfortably in memory. For larger datasets, use
+`Signal.from_loader` to read the values from local files when they are needed. Count the total size
+of all signals, even when each signal is small.
+
+Test invalid inputs and a complete write/read round trip using a small source fixture.
+
+## Source validation
+
+Check source values when reading them, including the shape and data type of lazily loaded signals.
+Errors should identify the file and the row or signal. Keep these checks with the source reader
+so eager and lazy reads follow the same rules:
+
+- Missing values become null only when the spec is nullable; otherwise raise
+  `TimeNetConnectorError`. Never fill missing values.
+- Treat NaN as missing only when the source documents that meaning; otherwise raise an error.
+- Present values must be finite, even when the spec is nullable.
+
+Check for duplicate or conflicting keys during conversion. You can check rows as you build records,
+but raise an error before you return an invalid dataset. Finish the checks that a task stream needs
+before the stream is read. Keep only the information that those checks need.
+
+## Task streams
+
+A task stream can be read more than once. Pass `set_task_stream` a function that creates a new
+iterator on each call. For unchanged source data, each iterator must give the same tasks in the
+same order. Reread and validate the source as needed rather than buffering all rows just
+for the stream; reuse checked rows when the record loaders already retain them.
+
+The writer reads dataset annotations before tasks. Attach every dataset annotation used by the
+stream before calling `set_task_stream`.
+
+If records and tasks read the source separately, check the data on each pass, and match rows by
+stable source identifiers. Checks from an earlier pass do not cover a file that changed afterwards,
+so reject a file that changed between passes. For example, record the size
+and modification time, or a checksum, of each source file in the first pass, and compare them in
+later passes. TimeNet does not yet have a shared helper for this.
+
+For child connectors, the engine supplies parent releases through `context.parents`. See
+[Compose a child dataset](#compose-a-child-dataset) for importing parent records and adding tasks.
 
 ## Dependencies and credentials
 

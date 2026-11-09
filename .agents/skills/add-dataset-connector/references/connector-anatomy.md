@@ -7,22 +7,25 @@ this branch. Anchor files:
 - Bases: `packages/timenet-connectors/src/timenet_connectors/bases/{huggingface,physionet}.py`
 - Discovery: `packages/timenet-connectors/src/timenet_connectors/discovery.py`
 - Build CLI: `packages/timenet-connectors/src/timenet_connectors/builder/cli.py`
-- Worked examples: the `chengsenwang/tsqa`, `physionet/ecg_qa_cot`, and `timenet/hello_world` connectors
+- Implementations: see [Connector examples](#connector-examples) below.
 
 ## The `BaseConnector` contract
 
 `BaseConnector(ABC, Generic[TRaw])` in `timenet.connectors`. `TRaw` is whatever `download` hands to
 `convert` (a dict per Hub row, a dataclass ref per PhysioNet record, etc.).
 
-- `download(self, cache_dir: Path) -> list[TRaw]` (abstract): fetch/discover raw source files, return
-  lightweight refs. I/O only, no parsing, idempotent for a given `cache_dir`.
-- `convert(self, raw_refs: list[TRaw]) -> TimeFDataset` (abstract): parse refs into a `TimeFDataset`.
-  CPU only, no network.
+- `download(self, cache_dir: Path) -> list[TRaw]`, or `async download_async(self, cache_dir)`:
+  implement one of them. Fetch or find the raw source files and return lightweight refs. I/O only,
+  no parsing, idempotent for a given `cache_dir`. The default `download` runs `download_async`.
+- `convert(self, raw_refs: list[TRaw]) -> TimeFDataset`: parse refs into a `TimeFDataset`. Read
+  local files and build the dataset without network access. A child dataset implements `compose(self, raw_refs, context)` instead, and reads its
+  parents from `context.parents`. A connector class that has neither raises `TypeError` when you
+  create an instance.
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
-- `store(...)` (concrete): derives the schema if missing and streams the dataset through `TimeFWriter`.
-  Most connectors never override it.
+- The engine, not the connector, derives the schema and writes the release. There is no `store`
+  method to call or override.
 
 Connectors take **no constructor arguments** (configuration comes from the environment). End with a
 module-level `CONNECTOR = <YourClass>`.
@@ -39,6 +42,8 @@ packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/
   requirements.txt # the libraries this connector needs, installed into the
                    # environment its build runs in (optional)
 ```
+
+See the "Connector layout" section of `docs/connectors.md` for organizing code within this package.
 
 `discovery.resolve(dataset_id)` imports only the one module and reads its `CONNECTOR`.
 `discovery._module_name` maps the id to the module path: org lowercased, leaf hyphens to underscores, so
@@ -91,8 +96,8 @@ To read the Hub's parquet conversion instead of the original files, pin the comm
 records through `wfdb`, which the base imports lazily so that `--no-isolation` stays usable while you
 write the connector:
 - `_read_header(record_base)`: WFDB header (`fs`, `sig_len`, `sig_name`), no signal decode.
-- `_lead_loader(record_base, lead_idx) -> Callable[[], pa.Array]`: lazy float32 loader for one lead's
-  physical signal.
+- `_lead_loader(record_base, header, lead_idx) -> Callable[[], pa.Array]`: lazy float32 loader for
+  one lead's physical signal.
 
 The base does not fetch the archive. Call `ensure_archive` / `download_files` from
 `timenet_connectors.download`. The connector's `requirements.txt` then declares `wfdb` plus whatever
@@ -109,7 +114,8 @@ Populate a `TimeFDataset` (`from timenet.dataset import Record, Signal, Source, 
   arbitrary time offset per point, use
   `Signal.from_irregular(values, *, time_offsets_us, spec, name)` instead. It derives the axis
   from the stream. Use `Signal.from_loader(..., loader=<Callable[[], pa.Array]>, n_values=...)`
-  only for lazy sources (files, remote shards).
+  when the values stay in a file that a reader can open for one signal (WFDB, EDF, a large array),
+  so that `convert` does not keep every signal in memory.
 - `spec` is a `TimeSeriesSpec(spec_type=..., name=..., unit_value=ureg.<unit>, data_source=...)`.
   Units come from the shared pint registry `ureg` (`from timenet.types import ureg`). Optional
   `data_source=DataSource(data_source_type=..., name=..., provider=...)`.
@@ -166,105 +172,27 @@ filling `target`. Every other task needs exactly one of `target` or `target_anno
 points at stored annotations instead of copying them into the task row); `add_task` enforces that, plus
 the bounds of every `Span` the task carries.
 
-## Worked example: `chengsenwang/tsqa` (HuggingFace, QA)
+## Connector examples
 
-`connector.py`:
+The "Example connectors" section of `docs/connectors.md` lists the connectors to read. Each one is
+in `packages/timenet-connectors/src/timenet_connectors/datasets/<org>/<name>/connector.py`.
 
-```python
-import json
-from collections.abc import Mapping
-from typing import ClassVar
+## PhysioNet notes: `physionet/ptb_xl` and `physionet/ecg_qa_cot`
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
-from timenet.dataset.axis import OrdinalAxis
-from timenet.types import Annotation, AnswerTask, TimeSeriesSpec, ureg
-from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
-from timenet_connectors.sources.parquet import iter_parquet_rows
+`physionet/ptb_xl` subclasses `BasePhysioNetConnector`. Its `download_async` fetches the files, and
+`convert` builds one record per row of `ptbxl_database.csv`. For each record, `convert` reads the
+WFDB header with `_read_header` and builds one lazy `Signal` per lead with
+`Signal.from_loader(..., loader=self._lead_loader(base, header, position))`. The record keeps the
+upstream `ecg_id` in `Record.metadata` and the patient in a `subject_ids` annotation.
 
-
-_SPEC = TimeSeriesSpec(
-    spec_type="tsqa_series",
-    name="TSQA Series",
-    unit_value=ureg.dimensionless,
-)
-
-
-class TSQAConnector(BaseHuggingFaceConnector):
-    """Connector for the TSQA time-series QA dataset (Hub repo ``ChengsenWang/TSQA``)."""
-
-    HF_REPO = "ChengsenWang/TSQA"  # the external Hub repo id (keeps its own casing)
-    # The commit refs/convert/parquet pointed to: the Hub's parquet conversion of the CSV.
-    SOURCE_REVISION = "22518209e3ee6302be4b4957f2692b3e8de849c3"
-    SOURCE_FILES: ClassVar[Mapping[str, str]] = {"train": "default/train/0000.parquet"}
-
-    def convert(self, raw_refs: list[HubFileRef]) -> TimeFDataset:
-        """Build one record per row: the parsed series plus its question-and-answer task.
-
-        Args:
-            raw_refs: The parquet files from :meth:`download`.
-
-        Returns:
-            The populated :class:`~timenet.dataset.TimeFDataset`.
-        """
-        dataset = TimeFDataset(metadata=self.metadata())
-        for ref in raw_refs:
-            for row in iter_parquet_rows(ref.path):
-                series = json.loads(row["Series"])
-                signals = series if series and isinstance(series[0], list) else [series]
-                time_series = tuple(
-                    Signal.from_values(
-                        values,
-                        spec=_SPEC,
-                        name=f"c{signal}",
-                        time_axis=OrdinalAxis(),
-                    )
-                    for signal, values in enumerate(signals)
-                )
-                record = Record(sources=(Source(name="TSQA series", signals=time_series),))
-                dataset.add_record(record=record)
-                record.annotate(Annotation(key="task", value=row["Task"]))
-                if row.get("Label"):
-                    record.annotate(Annotation(key="label", value=row["Label"]))
-                dataset.add_task(
-                    task=AnswerTask(
-                        inputs=(record,),
-                        prompt=row["Question"],
-                        targets=(row["Answer"],),
-                    )
-                )
-        return dataset
-
-
-CONNECTOR = TSQAConnector
-```
-
-`__init__.py`:
-
-```python
-from timenet_connectors.datasets.chengsenwang.tsqa.connector import (
-    CONNECTOR as CONNECTOR,
-    TSQAConnector as TSQAConnector,
-)
-```
-
-## PhysioNet notes: `physionet/ecg_qa_cot`
-
-Subclasses `BasePhysioNetConnector[EcgQaCotSource]` where `EcgQaCotSource` is a frozen dataclass
-that holds the paths of the fetched files. `download_async` calls `ensure_archive` / `download_files`
-and returns one `EcgQaCotSource`. `convert` builds one record per recording and keeps the records in
-a local dict keyed by the PTB-XL `ecg_id`. It stores the `ecg_id` and the PTB-XL `patient_id` in
-`Record.metadata`, and attaches whole-record `split`, `sex`, and `age` annotations. The sex and age
-come from `ptbxl_database.csv`. Per-question metadata (question_type, template_id, answer_options,
-clinical_context) are value-deduped dataset annotations that the tasks reference. The connector
-builds the clinical context from `ptbxl_database.csv`. It streams one
-`AnswerTask(inputs=(record,), prompt=..., rationale=<CoT>, targets=(<label>,))` per question.
-`_leads_for` reads the WFDB header for `fs`/`sig_len`/`sig_name` and builds one lazy `Signal` per
-lead. All tasks for a recording point at its one record. Records do not share a series. See its
-`connector.py` for the full pattern.
+`physionet/ecg_qa_cot` declares PTB-XL as a parent in its card and implements `compose` instead of
+`convert`. It imports the PTB-XL records and adds the questions as tasks. `docs/connectors.md`
+describes this in "Compose a child dataset".
 
 ## Fixture-based test pattern
 
 Tests live beside their connector, in `<org>/<name>/tests/`. Mirror the `chengsenwang/tsqa` one at
 `packages/timenet-connectors/src/timenet_connectors/datasets/chengsenwang/tsqa/tests/test_connector.py`:
 check a tiny raw sample into `tests/fixtures/`, then call `convert()` on it directly and assert on
-records, tasks, annotations, and parsed values. No network, no env-var toggles.
+records, tasks, annotations, and parsed values. Also write the release and read it back, as the
+"Connector layout" section of `docs/connectors.md` asks. No network, no env-var toggles.
