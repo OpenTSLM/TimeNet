@@ -48,6 +48,9 @@ stdout, so you can capture `timenet download <id>` in a script safely.
 
 Most errors end with a hint that names a command or a flag that helps.
 
+`list` and `search` leave out a source without a catalog and a connector card that cannot be read.
+For each, they print a warning line to stderr, without a Python file and line number.
+
 `--quiet`/`-q` removes the status output. It belongs to `timenet` itself. Therefore, it goes before
 the subcommand: `timenet --quiet list`, not `timenet list --quiet`. Be careful with the collision:
 after `search`, `-q` is the short form of `--query`.
