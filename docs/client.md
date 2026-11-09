@@ -138,7 +138,6 @@ nothing.
 | --- | --- |
 | `get_manifest(dataset_id, version=None)` | The [manifest](manifest.md) of the release. |
 | `get_card(dataset_id, version=None)` | The card of the release. |
-| `plan_read(dataset_id, version=None)` | The plan of the read, one step for each release. |
 
 `get_manifest()` reads only the manifest, and checks no other file. A registry can list a
 release without serving its files, for example a credentialed release on the hosted registry. Then
@@ -316,7 +315,7 @@ client.get_manifest("chengsenwang/tsqa@1.0.0")
 client.load("chengsenwang/tsqa@latest")
 ```
 
-The `get_manifest`, `get_card`, `plan_read`, `download`, `open`, `load`, and `open_torch` methods
+The `get_manifest`, `get_card`, `download`, `open`, `load`, and `open_torch` methods
 also accept `version=`. Do not supply a version in both places.
 
 ## Open for PyTorch

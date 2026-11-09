@@ -117,8 +117,7 @@ dataset = tn.load("chengsenwang/tsqa")                    # every value read int
   files. A registry that lists a release without serving it gives its listed manifest. A release
   that only a connector provides raises `TimeNetNotBuiltError` (no manifest before a build). The
   error holds the card of the connector as `error.card`.
-  `get_card()` returns the card, also from a connector. `plan_read()` returns the plan of `open()`
-  (one step per release with its action and source) and runs nothing.
+  `get_card()` returns the card, also from a connector.
 - `download()` needs a writable local registry in the list. It resolves like `open()`. The release
   and each payload source that the local registry lacks or holds damaged come from the first
   registry other than the local registry that provides it, so they can come from different
