@@ -114,7 +114,8 @@ counts as a row. So `list()` also shows a dataset that only a connector provides
 
 `search()` accepts filters for free text, domains, task classes, licenses, Signal specifications,
 dataset IDs, and tags. See [Registry search](registry.md#search) for their matching rules.
-`search()` filters the rows of `list()`, so it checks the highest version of each dataset only. A
+`search()` filters the rows of `list()`, so it checks the highest version of each dataset only. It
+does not find an older version that matches. A
 `task` or `time_series_spec` filter reads the manifest of a row from the registry that lists it.
 It reads only for a row whose card matches the other filters, and only until `limit` rows match. A
 connector card has no manifest, so it never matches these two filters.

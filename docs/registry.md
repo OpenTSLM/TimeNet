@@ -303,7 +303,8 @@ reads no more manifests than it needs.
 A registry sorts its catalog by dataset ID and gives it to `select()`, so `search()` returns the
 first matches by dataset ID. `TimeNet.search()` and the consumer CLI, `timenet search`, take the
 same filters as keywords. They give `select()` the merged rows of all sources (see
-[Browse datasets](client.md#browse-datasets)).
+[Browse datasets](client.md#browse-datasets)). So they check only the highest version of each
+dataset, and they do not find an older version that matches.
 
 | Filter | Matches |
 | --- | --- |
