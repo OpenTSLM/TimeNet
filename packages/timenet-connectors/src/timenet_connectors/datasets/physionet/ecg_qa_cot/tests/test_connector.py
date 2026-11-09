@@ -317,6 +317,10 @@ def test_records_and_tasks_carry_their_split(tmp_path, records_dir):
 
 def test_question_metadata_is_deduped_dataset_annotations(tmp_path, records_dir):
     with _composed(tmp_path, records_dir) as dataset:
+        tasks = list(dataset.iter_tasks())
+        registered_ids = [id(ann) for ann in dataset.annotations]
+        list(dataset.iter_tasks())
+        assert [id(ann) for ann in dataset.annotations] == registered_ids
         keys = {ann.key for ann in dataset.annotations}
         assert {"question_type", "answer_options", "clinical_context"} <= keys
         assert "template_id" not in keys
@@ -327,8 +331,9 @@ def test_question_metadata_is_deduped_dataset_annotations(tmp_path, records_dir)
 
 def test_task_annotation_refs_all_resolve_to_registered(tmp_path, records_dir):
     with _composed(tmp_path, records_dir) as dataset:
+        tasks = list(dataset.iter_tasks())
         registered = {id(annotation) for annotation in dataset.annotations}
-        for task in dataset.iter_tasks():
+        for task in tasks:
             assert {id(annotation) for annotation in task.input_annotations} <= registered
 
 
