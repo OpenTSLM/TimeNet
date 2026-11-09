@@ -297,4 +297,4 @@ manifest. The manifest always carries the derived schema, so the registry does n
 
 ---
 
-See the [API reference for `timenet.registry`](api/registry.md) for the full symbol listing.
+See the [API reference for `timenet.registry`](api/timenet.registry.md) for the full symbol listing.

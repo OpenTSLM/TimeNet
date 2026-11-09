@@ -325,4 +325,4 @@ behavior. It derives from `TimeNetWarning` and `UserWarning`.
 `ConnectorCardWarning` reports a connector card that cannot be read. The list of installed
 connectors leaves its dataset out, so the card fails only its own dataset.
 
-See the [API reference for `timenet.types`](api/types.md) for all symbols.
+See the [API reference for `timenet.types`](api/timenet.types.md) for all symbols.

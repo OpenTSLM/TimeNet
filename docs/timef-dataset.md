@@ -265,7 +265,7 @@ The stored version contains `manifest.json`, an immutable `control.duckdb`, and 
 values plane. See [TimeF format](timef-format.md) and [TimeFWriter](timef-writer.md) for the physical
 layout.
 
-See the [API reference for `timenet.dataset`](api/dataset.md) for the full symbol listing.
+See the [API reference for `timenet.dataset`](api/timenet.dataset.md) for the full symbol listing.
 
 ## Importing from a parent
 

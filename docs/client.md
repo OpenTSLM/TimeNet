@@ -340,4 +340,4 @@ workflows.
 
 ---
 
-See the [API reference for `timenet.client`](api/client.md) for every parameter and return type.
+See the [API reference for `timenet.client`](api/timenet.client.md) for every parameter and return type.

@@ -134,4 +134,4 @@ and its payload sources into the local registry. See [Payload sources](registry.
 
 ---
 
-See the [API reference for `timenet.manifest`](api/manifest.md) for the full symbol listing.
+See the [API reference for `timenet.manifest`](api/timenet.manifest.md) for the full symbol listing.

@@ -402,4 +402,4 @@ Relationships return as object references: task inputs are Records, spans hold S
 Sources, axes, and annotations have no id. The reader does not keep the Python object identity
 from the writer process.
 
-See the [API reference for `timenet.reader`](api/reader.md) for all members.
+See the [API reference for `timenet.reader`](api/timenet.reader.md) for all members.
