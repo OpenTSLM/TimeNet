@@ -393,4 +393,11 @@ that split keeps them. A child with a split of its own removes them and adds its
 
 ---
 
+## Typed source rows
+
+Declare source schemas with `DataRow`; each connector owns its fields and source-specific rules.
+Readers implement `RowSource.open_rows()`: use it in a `with` block to stream validated rows with
+source locations and close resources reliably. Readers preserve source values and report invalid
+input with context. See the [source API reference](api/sources.md) for format-specific contracts.
+
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
