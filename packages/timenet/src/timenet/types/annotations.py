@@ -15,6 +15,7 @@ manifest.
 from collections.abc import Hashable
 from dataclasses import dataclass, field, replace
 from enum import StrEnum, unique
+from functools import cached_property
 import json
 from typing import Annotated, Any, Protocol, final
 
@@ -22,7 +23,7 @@ import pint
 from pydantic import BeforeValidator, StrictStr
 
 from timenet.errors import TimeFValidationError
-from timenet.json import JsonMapping, validate_json_mapping
+from timenet.json import JsonMapping, freeze_json_mapping
 from timenet.types._fields import ValueField
 from timenet.types._model import TimeFModel
 from timenet.types.spans import TimeInterval, TimePoint, TimeSpan
@@ -101,11 +102,11 @@ class Annotation:
     ``description``, which the descriptor holds once per key, ``source`` can differ between
     annotations that share a key."""
     metadata: JsonMapping = field(default_factory=dict)
-    """Optional metadata that is part of the reusable content."""
+    """Optional immutable metadata that is part of the reusable content."""
     confidence: float | None = field(default=None, compare=False)
     """Optional confidence for this particular application."""
     occurrence_metadata: JsonMapping = field(default_factory=dict, compare=False)
-    """Optional metadata for this particular application."""
+    """Optional immutable metadata for this particular application."""
 
     # cls is typed as a plain type: with the class final, a checker would otherwise report a
     # subclass twice, once as a final-class error and once as a bad argument to this method.
@@ -131,12 +132,9 @@ class Annotation:
                 the annotation has neither a value nor a span.
         """
         object.__setattr__(self, "unit", normalize_unit(self.unit))
-        object.__setattr__(self, "metadata", validate_json_mapping(self.metadata))
-        object.__setattr__(
-            self,
-            "occurrence_metadata",
-            validate_json_mapping(self.occurrence_metadata),
-        )
+        # Annotation content cannot change, even through a dict or a list that the caller still holds.
+        object.__setattr__(self, "metadata", freeze_json_mapping(self.metadata))
+        object.__setattr__(self, "occurrence_metadata", freeze_json_mapping(self.occurrence_metadata))
         if self.span is not None and not isinstance(self.span, TimeSpan):
             raise TimeFValidationError(
                 f"annotation {self.key!r} span must be a TimePoint or a TimeInterval, got {type(self.span).__name__}"
@@ -162,15 +160,49 @@ class Annotation:
         needs no read, so equal keys still mean equal text.
         """
         value = self.value
+        content: Hashable = value._content_key() if isinstance(value, TextHandle | TextListHandle) else value
+        return self._content_key_for(content)
+
+    def _content_key_for(self, value_identity: Hashable) -> tuple[Hashable, ...]:
+        """Combine an explicit value identity with the reusable annotation fields, without I/O.
+
+        Returns:
+            The content key using the supplied storage identity or resolved text value.
+        """
+        content = float.hex(value_identity) if isinstance(value_identity, float) else value_identity
+        metadata = json.dumps(self.metadata, sort_keys=True)
+        return (self.key, value_type_of(self.value), content, self.unit, self.description, metadata)
+
+    @property
+    def _sharing_group(self) -> tuple[str, str | None]:
+        """Identify possible sharing matches without reading text payloads."""
+        return self.key, value_type_of(self.value)
+
+    @cached_property
+    def _sharing_key(self) -> tuple[Hashable, ...]:
+        """A cached key that matches annotations by every stored field except the span.
+
+        Two annotations with equal keys store the same content and the same occurrence fields. Text
+        is compared by its value, so a handle from a release matches the same string from a
+        connector. The value type is part of the key, as in :attr:`_content_key`, and a float
+        compares by its bits. The annotation cannot change, so the key is computed once. A lazy text
+        handle is then read once, which is why its function must return the same text on each call.
+        """
+        value = self.value
         content: Hashable
-        if isinstance(value, TextHandle | TextListHandle):
-            content = value._content_key()
-        elif isinstance(value, float):
-            content = float.hex(value)
+        if isinstance(value, TextHandle):
+            content = value.read()
+        elif isinstance(value, TextListHandle):
+            content = tuple(value.read())
         else:
             content = value
-        metadata = json.dumps(self.metadata, sort_keys=True)
-        return (self.key, value_type_of(value), content, self.unit, self.description, metadata)
+        confidence = None if self.confidence is None else float.hex(float(self.confidence))
+        return (
+            *self._content_key_for(content),
+            self.source,
+            confidence,
+            json.dumps(self.occurrence_metadata, sort_keys=True),
+        )
 
     @property
     def name(self) -> str:
