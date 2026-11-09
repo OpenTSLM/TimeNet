@@ -20,6 +20,9 @@ from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
 API_PREFIX = "/api/v1"
 _STREAM_CHUNK_BYTES = 1 << 20
 
+_UPLOAD_TIMEOUT_SECONDS = 900.0
+"""The read and write timeout of one shard upload, in seconds."""
+
 # 429 retry: the service rate-limits, so a burst of calls (per-file presign resolves during a
 # download) can be told to back off. Retry a bounded number of times, waiting the Retry-After the
 # service asks for, capped so a hostile header cannot stall the client indefinitely.
@@ -264,12 +267,17 @@ class RegistryHttpClient:
     def put(self, url: str, *, content: bytes, headers: Mapping[str, str]) -> None:
         """PUT bytes to a presigned upload URL (no auth header).
 
+        The body is a whole shard, often hundreds of megabytes. A slow uplink stalls a socket
+        write for longer than the per-request timeout of the API calls, so the upload gets its
+        own, longer read and write timeout. The connect and pool timeouts stay as they are.
+
         Args:
             url: The presigned PUT URL.
             content: The request body.
             headers: Headers the presign requires (e.g. the checksum binding).
         """
-        response = self._client.put(url, content=content, headers=dict(headers))
+        timeout = httpx.Timeout(self._timeout, read=_UPLOAD_TIMEOUT_SECONDS, write=_UPLOAD_TIMEOUT_SECONDS)
+        response = self._client.put(url, content=content, headers=dict(headers), timeout=timeout)
         _raise_for_status(response)
 
     def new_async_client(self) -> httpx.AsyncClient:
