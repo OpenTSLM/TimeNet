@@ -22,8 +22,8 @@ from timenet.types.text import read_value
 from timenet_connectors.datasets.physionet.ecg_qa_cot.connector import (
     EcgQaCotConnector,
     EcgQaCotSource,
-    _load_template_answers,
 )
+from timenet_connectors.datasets.physionet.ecg_qa_cot.source import load_template_answers
 from timenet_connectors.datasets.physionet.ptb_xl.connector import PtbXlConnector, PtbXlSource
 
 
@@ -451,4 +451,4 @@ def test_template_ids_reject_lossy_csv_numbers(tmp_path, cell):
         writer.writerow(["template_id", "classes"])
         writer.writerow([cell, "['yes']"])
     with pytest.raises(TimeNetConnectorError, match=r"answers\.csv:2: template_id"):
-        _load_template_answers(path)
+        load_template_answers(path)
