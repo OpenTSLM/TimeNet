@@ -17,7 +17,7 @@ def _distinct_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
     return result
 
 
-class JsonReader(DataReader[RowT]):
+class JsonDataReader(DataReader[RowT]):
     """Read rows from a UTF-8 JSON array, loaded into memory."""
 
     def iter_rows(self) -> Generator[RowT, None, None]:
@@ -40,7 +40,7 @@ class JsonReader(DataReader[RowT]):
             yield self._validate(value, f"entry {index}")
 
 
-class JsonlReader(DataReader[RowT]):
+class JsonlDataReader(DataReader[RowT]):
     """Read one JSON value per line of a UTF-8 file."""
 
     def iter_rows(self) -> Generator[RowT, None, None]:

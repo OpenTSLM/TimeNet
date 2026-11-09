@@ -8,7 +8,13 @@ from pydantic import ConfigDict, ValidationError
 import pytest
 
 from timenet.errors import TimeNetConnectorError
-from timenet_connectors.sources.readers import CsvDataReader, DataRow, JsonlReader, JsonReader, ParquetDataReader
+from timenet_connectors.sources.readers import (
+    CsvDataReader,
+    DataRow,
+    JsonDataReader,
+    JsonlDataReader,
+    ParquetDataReader,
+)
 
 
 class Row(DataRow):
@@ -168,15 +174,15 @@ def test_default_respects_row_schema_strictness(tmp_path):
     path = tmp_path / "source.json"
     path.write_text('[{"count":"42"}]')
     with pytest.raises(TimeNetConnectorError, match="count"):
-        list(JsonReader(path, StrictRow).iter_rows())
-    assert list(JsonReader(path, StrictRow, strict=False).iter_rows()) == [StrictRow(count=42)]
+        list(JsonDataReader(path, StrictRow).iter_rows())
+    assert list(JsonDataReader(path, StrictRow, strict=False).iter_rows()) == [StrictRow(count=42)]
 
 
-@pytest.mark.parametrize("reader_type", [JsonReader, JsonlReader])
+@pytest.mark.parametrize("reader_type", [JsonDataReader, JsonlDataReader])
 def test_json_readers_validate_rows_in_order(tmp_path, reader_type):
     path = tmp_path / "source"
     values = [{"name": "first", "count": 1}, {"name": "second", "count": 2}]
-    path.write_text(json.dumps(values) if reader_type is JsonReader else "\n".join(map(json.dumps, values)))
+    path.write_text(json.dumps(values) if reader_type is JsonDataReader else "\n".join(map(json.dumps, values)))
     reader = reader_type(path, Row, strict=True)
     assert list(reader.iter_rows()) == [Row(name="first", count=1), Row(name="second", count=2)]
 
@@ -184,8 +190,8 @@ def test_json_readers_validate_rows_in_order(tmp_path, reader_type):
 @pytest.mark.parametrize(
     ("reader_type", "content", "location"),
     [
-        (JsonReader, '[{"name":"x","count":"bad"}]', "entry 1"),
-        (JsonlReader, '{"name":"x","count":"bad"}\n', "line 1"),
+        (JsonDataReader, '[{"name":"x","count":"bad"}]', "entry 1"),
+        (JsonlDataReader, '{"name":"x","count":"bad"}\n', "line 1"),
     ],
 )
 def test_json_invalid_row_has_source_context(tmp_path, reader_type, content, location):
@@ -197,11 +203,11 @@ def test_json_invalid_row_has_source_context(tmp_path, reader_type, content, loc
     assert exc.value.__cause__ is not None
 
 
-@pytest.mark.parametrize("reader_type", [JsonReader, JsonlReader])
+@pytest.mark.parametrize("reader_type", [JsonDataReader, JsonlDataReader])
 def test_json_strict_validation(tmp_path, reader_type):
     path = tmp_path / "source"
     value = {"name": "sensor", "count": "42"}
-    path.write_text(json.dumps([value] if reader_type is JsonReader else value))
+    path.write_text(json.dumps([value] if reader_type is JsonDataReader else value))
     assert list(reader_type(path, Row).iter_rows()) == [Row(name="sensor", count=42)]
     with pytest.raises(TimeNetConnectorError, match="count"):
         list(reader_type(path, Row, strict=True).iter_rows())
@@ -211,19 +217,19 @@ def test_json_requires_array_and_jsonl_rejects_invalid_line(tmp_path):
     path = tmp_path / "source"
     path.write_text("{}")
     with pytest.raises(TimeNetConnectorError, match="array"):
-        list(JsonReader(path, Row).iter_rows())
+        list(JsonDataReader(path, Row).iter_rows())
     path.write_text("{}\nnot json\n")
     with pytest.raises(TimeNetConnectorError, match="line 2"):
-        list(JsonlReader(path, DataRow).iter_rows())
+        list(JsonlDataReader(path, DataRow).iter_rows())
 
 
 @pytest.mark.parametrize(
     ("reader_type", "content", "location"),
     [
-        (JsonReader, '[{"name":"first","name":"second","count":1}]', "source"),
-        (JsonlReader, '{"name":"first","name":"second","count":1}\n', "line 1"),
-        (JsonReader, '[{"nested":{"x":1,"x":2}}]', "source"),
-        (JsonlReader, '{"nested":{"x":1,"x":2}}\n', "line 1"),
+        (JsonDataReader, '[{"name":"first","name":"second","count":1}]', "source"),
+        (JsonlDataReader, '{"name":"first","name":"second","count":1}\n', "line 1"),
+        (JsonDataReader, '[{"nested":{"x":1,"x":2}}]', "source"),
+        (JsonlDataReader, '{"nested":{"x":1,"x":2}}\n', "line 1"),
     ],
 )
 def test_json_rejects_duplicate_keys(tmp_path, reader_type, content, location):
@@ -248,7 +254,7 @@ def test_closing_a_partially_consumed_jsonl_reader_closes_its_file(tmp_path, mon
         return handle
 
     monkeypatch.setattr(Path, "open", track_open)
-    with closing(JsonlReader(path, Row).iter_rows()) as rows:
+    with closing(JsonlDataReader(path, Row).iter_rows()) as rows:
         assert next(rows) == Row(name="first", count=1)
         assert not handles[0].closed
     assert handles[0].closed
