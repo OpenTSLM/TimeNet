@@ -41,7 +41,8 @@ An Annotation cannot change after you build it. It keeps its own copy of `metada
 has no effect. The metadata copies compare equal to a `dict` or a `list`, and changing them raises
 `TypeError`. Reading a string-list value returns a separate list, which you can change without
 affecting the annotation. To change an annotation, create a new one, for example with
-`dataclasses.replace`.
+`dataclasses.replace`. A `LazyText` or `LazyTextList` function must return the same text on every
+call.
 
 ## Reuse content
 
