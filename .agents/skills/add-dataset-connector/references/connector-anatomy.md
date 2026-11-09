@@ -91,8 +91,8 @@ To read the Hub's parquet conversion instead of the original files, pin the comm
 records through `wfdb`, which the base imports lazily so that `--no-isolation` stays usable while you
 write the connector:
 - `_read_header(record_base)`: WFDB header (`fs`, `sig_len`, `sig_name`), no signal decode.
-- `_lead_loader(record_base, lead_idx) -> Callable[[], pa.Array]`: lazy float32 loader for one lead's
-  physical signal.
+- `_lead_loaders()`: create one factory per conversion, then call it with
+  `(record_base, header, lead_idx)` for a lazy float32 loader. All leads share a recording read.
 
 The base does not fetch the archive. Call `ensure_archive` / `download_files` from
 `timenet_connectors.download`. The connector's `requirements.txt` then declares `wfdb` plus whatever
