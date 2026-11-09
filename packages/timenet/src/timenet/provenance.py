@@ -1,9 +1,4 @@
-"""Read the git commit of the installed TimeNet code, for the manifest's ``build_env.git`` block.
-
-Two layers do this. :class:`InstalledDistribution` and its :class:`InstallSource` read the commit
-of any one installed package. The snapshot types (:class:`PackageSnapshot` and
-:class:`TimeNetSnapshot`) are typed views of the commits that a manifest records.
-"""
+"""Read the git commit of the installed TimeNet code, for the manifest's ``build_env.git`` block."""
 
 from abc import ABC, abstractmethod
 from dataclasses import dataclass
