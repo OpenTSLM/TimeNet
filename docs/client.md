@@ -147,7 +147,8 @@ each card. A release gets its manifest when it is built. So for a release that o
 `InstalledConnectors()` provides, `get_manifest()` raises `TimeNetNotBuiltError`.
 
 `get_card()` returns the card of the release. The card comes from the manifest, or from the
-installed connector for a release that is not built yet:
+installed connector for a release that is not built yet. `TimeNetNotBuiltError` holds the release
+as `release` and the card of the connector as `card`, so a caller needs no second call:
 
 ```python
 import timenet
@@ -156,8 +157,8 @@ from timenet.errors import TimeNetNotBuiltError
 client = timenet.TimeNet()
 try:
     card = client.get_manifest("chengsenwang/tsqa").metadata
-except TimeNetNotBuiltError:
-    card = client.get_card("chengsenwang/tsqa")
+except TimeNetNotBuiltError as error:
+    card = error.card
 print(card.name, card.license)
 ```
 
