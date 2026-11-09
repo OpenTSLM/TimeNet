@@ -2,19 +2,23 @@
 
 Some sources publish one JSON document of hundreds of megabytes instead of JSON Lines. Decoding it
 whole holds the entire corpus in memory. Instead, decode one value at a time, record its UTF-8 byte
-range, and let a lazy loader reread just that range with :func:`read_entry`.
+range, and let a lazy loader reread just that range with :meth:`JsonObjectRowSource.read_row`.
 """
 
 import codecs
 from collections.abc import Generator, Iterator
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
+from dataclasses import dataclass
 import io
 import json
 from pathlib import Path
 import re
 from typing import Any, BinaryIO, Self
 
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeNetConnectorError
+from timenet.json import JsonValue
+from timenet_connectors.sources.readers._json import distinct_fields
+from timenet_connectors.sources.readers.base import LocatedRow, RowSource, RowT
 
 
 _CHUNK_SIZE = 65536
@@ -28,23 +32,6 @@ _EDGE = 16
 _UNTERMINATED = "Unterminated string"
 
 
-def _distinct_fields(pairs: list[tuple[str, Any]]) -> dict[str, Any]:
-    """Reject repeated fields instead of silently overwriting source data.
-
-    Returns:
-        The decoded object in source order.
-
-    Raises:
-        TimeFValidationError: If an object repeats a field name.
-    """
-    result: dict[str, Any] = {}
-    for key, value in pairs:
-        if key in result:
-            raise TimeFValidationError(f"duplicate key {key!r}")
-        result[key] = value
-    return result
-
-
 class JsonCursor:
     """Read JSON syntax incrementally while tracking consumed UTF-8 bytes.
 
@@ -52,8 +39,9 @@ class JsonCursor:
     bytes, CRLF included. Dataset-specific key and structure validation belongs to the caller.
     """
 
-    def __init__(self, handle: BinaryIO, offset: int = 0) -> None:
+    def __init__(self, handle: BinaryIO, offset: int = 0, *, path: Path | None = None) -> None:
         self.handle = handle
+        self.path = path
         self.buffer = ""
         # Characters before ``position`` are consumed. They are dropped only when the buffer grows, so
         # consuming a value does not copy the rest of the buffer.
@@ -61,7 +49,7 @@ class JsonCursor:
         # The file's byte at the handle's start, so offsets name bytes in the file even when the
         # handle holds only part of it.
         self.offset = offset
-        self.decoder = json.JSONDecoder(object_pairs_hook=_distinct_fields)
+        self.decoder = json.JSONDecoder(object_pairs_hook=distinct_fields)
         self.utf8 = codecs.getincrementaldecoder("utf-8")()
 
     @classmethod
@@ -71,9 +59,16 @@ class JsonCursor:
 
         Yields:
             A cursor at the start of the file.
+
+        Raises:
+            TimeNetConnectorError: If the source cannot be opened.
         """
-        with path.open("rb") as handle:
-            yield cls(handle)
+        try:
+            handle = path.open("rb")
+        except OSError as exc:
+            raise TimeNetConnectorError(f"{path}: {exc}") from exc
+        with handle:
+            yield cls(handle, path=path)
 
     def _byte_length(self, end: int) -> int:
         """Count the UTF-8 bytes of the unconsumed characters before ``end``.
@@ -100,7 +95,7 @@ class JsonCursor:
             False at the end of the file.
 
         Raises:
-            TimeFValidationError: If the bytes are not valid UTF-8.
+            TimeNetConnectorError: If the bytes are not valid UTF-8.
         """
         data = self.handle.read(size)
         try:
@@ -110,7 +105,7 @@ class JsonCursor:
             # The decoder reports a position in its pending bytes followed by this read's, and those
             # pending bytes follow the ones decoded into the buffer.
             byte = self.offset + self._byte_length(len(self.buffer)) + exc.start
-            raise TimeFValidationError(f"invalid UTF-8 at byte {byte}: {exc.reason}") from exc
+            raise TimeNetConnectorError(f"invalid UTF-8 at byte {byte}: {exc.reason}") from exc
         if not data:
             return False
         self.buffer = self.buffer[self.position :] + text
@@ -136,20 +131,20 @@ class JsonCursor:
         """Consume one expected structural character.
 
         Raises:
-            TimeFValidationError: If the next character is different.
+            TimeNetConnectorError: If the next character is different.
         """
         if self.peek() != token:
-            raise TimeFValidationError(f"expected {token!r} at byte {self.offset}")
+            raise TimeNetConnectorError(f"expected {token!r} at byte {self.offset}")
         self.consume(1)
 
     def expect_end(self) -> None:
         """Check that nothing but whitespace follows the document.
 
         Raises:
-            TimeFValidationError: If content follows the document.
+            TimeNetConnectorError: If content follows the document.
         """
         if self.peek():
-            raise TimeFValidationError("unexpected content after the JSON document")
+            raise TimeNetConnectorError("unexpected content after the JSON document")
 
     def value(self) -> tuple[Any, int, int]:
         """Decode the next complete value.
@@ -158,7 +153,7 @@ class JsonCursor:
             The value, and its UTF-8 byte offset and length.
 
         Raises:
-            TimeFValidationError: If the value is not valid UTF-8 or JSON, with the error's byte
+            TimeNetConnectorError: If the value is not valid UTF-8 or JSON, with the error's byte
                 offset in the message, or repeats a field.
         """
         self.peek()
@@ -171,10 +166,10 @@ class JsonCursor:
                 value, end = self.decoder.raw_decode(self.buffer, self.position)
             except json.JSONDecodeError as exc:
                 error = exc
-            except (ValueError, RecursionError) as exc:
+            except (ValueError, RecursionError, TimeNetConnectorError) as exc:
                 # A repeated key from the object hook, an integer too long to convert, or nesting
                 # too deep.
-                raise TimeFValidationError(f"{exc} in the value at byte {start}") from exc
+                raise TimeNetConnectorError(f"{exc} in the value at byte {start}") from exc
             else:
                 error = None
             if error is None:
@@ -194,7 +189,7 @@ class JsonCursor:
                     byte = self.offset + self._byte_length(error.pos)
                     # Some messages, such as "Unterminated string starting at", already end in "at".
                     message = error.msg.removesuffix(" at")
-                    raise TimeFValidationError(f"{message} at byte {byte}") from error
+                    raise TimeNetConnectorError(f"{message} at byte {byte}") from error
                 self.consume(end - self.position)
                 return value, start, self.offset - start
             size *= 2
@@ -209,7 +204,7 @@ class JsonCursor:
             Distinct string keys, with the cursor positioned after each colon.
 
         Raises:
-            TimeFValidationError: If object syntax or keys are invalid.
+            TimeNetConnectorError: If object syntax or keys are invalid.
         """
         self.expect("{")
         seen: set[str] = set()
@@ -219,10 +214,10 @@ class JsonCursor:
         while True:
             # Check before decoding, so a non-string key fails without reading it whole.
             if self.peek() != '"':
-                raise TimeFValidationError(f"expected a string key at byte {self.offset}")
+                raise TimeNetConnectorError(f"expected a string key at byte {self.offset}")
             key, key_offset, _ = self.value()
             if key in seen:
-                raise TimeFValidationError(f"duplicate key {key!r} at byte {key_offset}")
+                raise TimeNetConnectorError(f"duplicate key {key!r} at byte {key_offset}")
             seen.add(key)
             self.expect(":")
             yield key
@@ -231,62 +226,133 @@ class JsonCursor:
                 return
             self.expect(",")
 
+    def object_entries(self) -> Iterator["JsonObjectEntry"]:
+        """Consume the object at the cursor, retaining keys and exact value byte ranges.
 
-def iter_object(path: Path) -> Iterator[tuple[str, Any, int, int]]:
-    """Traverse a document that is one object, without retaining decoded values.
+        The object may be nested inside a larger document. The caller owns any whole-document
+        end check. File-backed cursors retain the path for malformed-object diagnostics.
 
-    Yields:
-        Each key, its decoded value, and the value's UTF-8 byte offset and length.
+        Yields:
+            Each decoded member; values may be arbitrary JSON before row-schema validation.
 
-    Raises:
-        TimeFValidationError: If the document is not one object with distinct string keys, with the
-            file and key in the message.
-    """
-    context = str(path)
-    try:
-        with JsonCursor.open(path) as cursor:
-            for key in cursor.object_keys():
-                context = f"{path} (key {key})"
-                yield key, *cursor.value()
-                context = str(path)
+        Raises:
+            TimeNetConnectorError: If object traversal fails, with the source path when known.
+        """
+        source_context = str(self.path) if self.path is not None else "JSON input"
+        context = source_context
+        try:
+            for key in self.object_keys():
+                context = f"{source_context}: key {key!r}"
+                value, offset, length = self.value()
+                yield JsonObjectEntry(key, value, offset, length)
+                context = source_context
+        except (OSError, TimeNetConnectorError) as exc:
+            raise TimeNetConnectorError(f"{context}: {exc}") from exc
+
+    @classmethod
+    def read_range(cls, path: Path, offset: int, length: int) -> JsonValue:
+        """Reread one value at the byte range a traversal recorded.
+
+        Decodes with the traversal's own cursor, so a reread accepts exactly what the traversal did:
+        strict UTF-8 without a byte order mark, and no duplicate fields. Errors name their byte in the
+        file.
+
+        Nothing records the file's identity, so a change that leaves a valid value in the range goes
+        unnoticed. Pin the file's content, by checksum say, where a stale reread would matter.
+
+        Returns:
+            The decoded value.
+
+        Raises:
+            TimeNetConnectorError: If the range is invalid, unreadable, incomplete, or does not
+                decode as one JSON value with distinct fields.
+        """
+        context = f"{path} (bytes {offset}-{offset + length})"
+        if offset < 0 or length <= 0:
+            raise TimeNetConnectorError(f"{context}: expected a nonnegative offset and positive length")
+        try:
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                data = handle.read(length)
+        except OSError as exc:
+            raise TimeNetConnectorError(f"{context}: {exc}") from exc
+        if len(data) != length:
+            raise TimeNetConnectorError(f"{context}: the file ends after {len(data)} bytes of the range")
+        cursor = cls(io.BytesIO(data), offset)
+        try:
+            # Buffer the validated range up front so decoding is limited to this value's bytes.
+            cursor.read(length)
+            value, _, _ = cursor.value()
             cursor.expect_end()
-    except TimeFValidationError as exc:
-        raise TimeFValidationError(f"{context}: {exc}") from exc
+        except TimeNetConnectorError as exc:
+            raise TimeNetConnectorError(f"{context}: {exc}") from exc
+        return value
 
 
-def read_entry(path: Path, offset: int, length: int) -> Any:
-    """Reread one value at the byte range a traversal recorded.
+@dataclass(frozen=True)
+class JsonObjectEntry:
+    """A decoded JSON member and its exact byte range, before row validation."""
 
-    Decodes with the traversal's own cursor, so a reread accepts exactly what the traversal did:
-    strict UTF-8 without a byte order mark, and no duplicate fields. Errors name their byte in the
-    file.
+    key: str
+    value: JsonValue
+    offset: int
+    length: int
 
-    Nothing records the file's identity, so a change that leaves a valid value in the range goes
-    unnoticed. Pin the file's content, by checksum say, where a stale reread would matter.
 
-    Returns:
-        The decoded value.
+@dataclass(frozen=True)
+class JsonObjectLocation:
+    """A file, object key, and UTF-8 byte range of the member's value."""
 
-    Raises:
-        TimeFFormatError: If the range cannot be read, ends early, or does not decode as one value
-            with distinct fields, as happens when the file changed since the traversal.
+    path: Path
+    key: str
+    offset: int
+    length: int
+
+    @property
+    def context(self) -> str:
+        """The source key and byte range for diagnostics."""
+        return f"{self.path} (key {self.key!r}, bytes {self.offset}-{self.offset + self.length})"
+
+
+@dataclass(frozen=True)
+class JsonObjectRowSource(RowSource[RowT, JsonObjectLocation]):
+    """Stream a JSON object's values as typed rows, keeping their keys and byte ranges.
+
+    The cursor retains one decoded member at a time and a set of encountered keys to reject
+    duplicates. Optional field uniqueness additionally retains each distinct value's location.
+    Arbitrary JSON values remain accessible through JsonCursor; this interface requires each
+    value to satisfy the connector's DataRow schema.
     """
-    context = f"{path} (bytes {offset}-{offset + length})"
-    try:
-        with path.open("rb") as handle:
-            handle.seek(offset)
-            data = handle.read(length)
-    except OSError as exc:
-        raise TimeFFormatError(f"{context}: {exc}") from exc
-    if len(data) != length:
-        raise TimeFFormatError(f"{context}: the file ends after {len(data)} bytes of the range")
-    cursor = JsonCursor(io.BytesIO(data), offset)
-    try:
-        # Buffer the whole range up front, so the value decodes in one pass. An empty range reads
-        # nothing, and value() reports it.
-        cursor.read(length)
-        value, _, _ = cursor.value()
-        cursor.expect_end()
-    except TimeFValidationError as exc:
-        raise TimeFFormatError(f"{context}: {exc}") from exc
-    return value
+
+    def _open_rows(self, resources: ExitStack) -> Generator[LocatedRow[RowT, JsonObjectLocation], None, None]:
+        cursor = resources.enter_context(JsonCursor.open(self.path))
+        return self._iter_rows(cursor)
+
+    def _iter_rows(self, cursor: JsonCursor) -> Generator[LocatedRow[RowT, JsonObjectLocation], None, None]:
+        for decoded in cursor.object_entries():
+            location = JsonObjectLocation(self.path, decoded.key, decoded.offset, decoded.length)
+            row = self.model.from_decoded(decoded.value, context=location.context)
+            yield LocatedRow(row, location)
+        try:
+            cursor.expect_end()
+        except (OSError, TimeNetConnectorError) as exc:
+            raise TimeNetConnectorError(f"{self.path}: {exc}") from exc
+
+    def read_row(self, location: JsonObjectLocation) -> LocatedRow[RowT, JsonObjectLocation]:
+        """Reread and revalidate a scanned value without loading the surrounding document.
+
+        Locations do not fingerprint content. Pin or checksum the source when detecting a changed
+        but still valid value matters. The key is retained provenance, not re-read from the range.
+
+        Returns:
+            The validated row at the supplied location.
+
+        Raises:
+            TimeNetConnectorError: If the location names another path or an invalid byte range,
+                or the range cannot be decoded or violates the row schema.
+        """
+        if location.path != self.path:
+            raise TimeNetConnectorError(f"{location.context}: expected a location in {self.path}")
+        values = JsonCursor.read_range(self.path, location.offset, location.length)
+        row = self.model.from_decoded(values, context=location.context)
+        return LocatedRow(row, location)
