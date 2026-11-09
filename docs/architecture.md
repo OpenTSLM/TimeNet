@@ -37,7 +37,7 @@ There can be several registries: one public, private internal ones, or a local d
 PRODUCE  dataset.yaml + connector
              │
              ▼
-         engine   download ─► convert ─► derive_schema ─► store
+         engine   download ─► convert ─► derive_schema ─► store_dataset
              │
              ▼
          registry
@@ -70,7 +70,7 @@ timenet-build build org/name
   │             datasets/<org>/<name>/ exposes CONNECTOR
   │
   └─ engine   run_pipeline(connector, <local registry>)
-                metadata -> download -> convert -> derive_schema -> store
+                metadata -> download -> convert -> derive_schema -> store_dataset
                   -> <local registry>/org/name/<version>/
 ```
 

@@ -7,7 +7,7 @@ description: Use when adding a new TimeNet dataset connector, i.e. converting an
 
 A connector fetches a dataset's raw source and converts it into a `TimeFDataset`. It implements the
 `BaseConnector` contract (in the `timenet` package) and lives in `timenet-connectors`. The engine drives
-it `download -> convert -> derive_schema -> store`; `timenet-build build <id>` runs that pipeline and
+it `download -> convert -> derive_schema -> store_dataset`; `timenet-build build <id>` runs that pipeline and
 writes the result into a registry.
 
 Reuse a base connector wherever the source allows: `BaseHuggingFaceConnector` for Hub datasets,

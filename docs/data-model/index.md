@@ -34,7 +34,7 @@ flowchart LR
     D["download()<br/><i>I/O · fetch raw refs</i>"]
     C["convert()<br/><i>CPU only</i>"]
     S["derive_schema()<br/><i>types from data</i>"]
-    W["store()<br/><i>TimeFWriter</i>"]
+    W["store_dataset()<br/><i>TimeFWriter</i>"]
     R[("registry<br/>TimeF version")]
     D --> C --> S --> W --> R
 ```

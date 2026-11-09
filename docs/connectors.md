@@ -35,7 +35,7 @@ class MyConnector(BaseConnector[MyRawRef]):
 ```
 
 The two stages stay separate. This lets the engine drive
-`download -> convert -> derive_schema -> store`.
+`download -> convert -> derive_schema -> store_dataset`.
 
 | Method | Nature | Contract |
 | --- | --- | --- |
