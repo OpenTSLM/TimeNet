@@ -10,8 +10,8 @@ import pytest
 from timenet.errors import TimeNetConnectorError
 from timenet_connectors.sources.readers.base import DataRow, NonBlankText
 from timenet_connectors.sources.readers.csv import CsvRowSource
-from timenet_connectors.sources.readers.parquet import ParquetRowSource
 from timenet_connectors.sources.readers.json_object import JsonObjectRowSource
+from timenet_connectors.sources.readers.parquet import ParquetRowSource
 
 
 class Row(DataRow):
