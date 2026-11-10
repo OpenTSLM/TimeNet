@@ -17,11 +17,11 @@
 # group's first value to its last, so a group with no value at a rollup has no series there. Inside
 # the window, each such step is a missing timestep on the regular grid, with the spec's reason
 # `not_recorded`. Values are float64, and the release names no units. The release stores naive
-# epochs, which the dataset reads as UTC. The charts and the answer options use the same clock.
+# epochs, which the dataset reads as UTC. The answer options use the same clock.
 #
-# Each question becomes two test tasks: one over the cited metric records, one over the released
-# chart images. Both carry the question's row as `question_index` in their metadata, so the test
-# split holds 1,500 tasks.
+# Each question becomes one test task over the cited metric records, so the test split holds 750
+# tasks. A task carries the question's row as `question_index` in its metadata. The released charts
+# are in `datadog/arfbench-plots`, whose chart tasks carry the same `question_index`.
 #
 # Kept as released: `query_name`, an identifier that differs from the metric ID for 122 of the 142
 # metrics and that the release does not explain; one end-time answer (row 191, metric 36464_0)
@@ -32,7 +32,7 @@ dataset_version: 1.0.0
 name: ARFBench
 description: >-
   750 multiple-choice questions about anomalies in 142 metrics from 63 Datadog incidents.
-  The dataset includes every published metric rollup and the released charts.
+  The dataset includes every published metric rollup. The charts are in datadog/arfbench-plots.
 license: Apache-2.0
 source_url: https://huggingface.co/datasets/Datadog/ARFBench
 citation: >-

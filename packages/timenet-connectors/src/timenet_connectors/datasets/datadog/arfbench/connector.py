@@ -1,26 +1,25 @@
-"""Convert ARFBench questions, metric series, and charts to TimeF.
+"""Convert the ARFBench questions and metric series to TimeF.
 
 The release holds one question table, one series file per metric and rollup interval, and one
-chart per metric or cited metric pair. Each metric becomes one Record, each chart one Record, and
-each question a series task and a chart task. The loop that walks the release is in ``convert``.
-:mod:`~timenet_connectors.datasets.datadog.arfbench.series` reads the series files, and
-:mod:`~timenet_connectors.datasets.datadog.arfbench.questions` reads the question table.
+chart per metric or cited metric pair. This connector reads the table and the series: each metric
+becomes one Record, and each question a series task. The loop that walks the release is in
+``convert``. :mod:`~timenet_connectors.datasets.datadog.arfbench.series` reads the series files,
+and :mod:`~timenet_connectors.datasets.datadog.arfbench.questions` reads the question table. The
+``datadog/arfbench-plots`` connector adds the charts.
 """
 
 from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, ClassVar
 
 from timenet.connectors import BaseConnector
-from timenet.dataset import Record, Source, TimeFDataset
+from timenet.dataset import TimeFDataset
 from timenet.errors import TimeNetConnectorError, TimeNetDownloadError
-from timenet.values_backends import ValuesBackend
 from timenet_connectors.datasets.datadog.arfbench.questions import ARFBenchQuestion, read_questions
 from timenet_connectors.datasets.datadog.arfbench.series import MetricSeriesFiles
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
-from timenet_connectors.sources.images import image_signal
 
 
 if TYPE_CHECKING:
@@ -30,28 +29,23 @@ REPO = "Datadog/ARFBench"
 REVISION = "1cc8ae54e9633f596b755f7c4bce54ccb0cb9f5a"
 QA_CSV = "arfbench-qa.csv"
 SERIES_DIR = "arfbench-ts-data"  # {metric}_{interval}.parquet: one metric at one rollup interval, in seconds
-CHART_DIR = "arfbench-images"  # {metric}.png, and {metric}-{metric}.png for the pairs the questions cite
-
-
-def _create_chart_record(path: Path) -> Record:
-    """Create the Record of a chart, with the image as its one signal.
-
-    Returns:
-        The Record, not yet added to a dataset.
-    """
-    return Record(
-        metadata={"source_record_id": f"arfbench-chart-{path.stem}"},
-        sources=(Source(name="ARFBench chart", signals=(image_signal(path, name="chart"),)),),
-    )
 
 
 @dataclass(frozen=True)
 class ARFBenchSource:
-    """Paths to the ARFBench question table, series files, and charts."""
+    """The local snapshot of the ARFBench release."""
 
-    qa_csv: Path
-    series_dir: Path
-    chart_dir: Path
+    root: Path
+
+    @property
+    def qa_csv(self) -> Path:
+        """The question table."""
+        return self.root / QA_CSV
+
+    @property
+    def series_dir(self) -> Path:
+        """The directory of the series files."""
+        return self.root / SERIES_DIR
 
     def read_questions(self) -> Iterator[ARFBenchQuestion]:
         """Read the question table, in table order.
@@ -69,39 +63,35 @@ class ARFBenchSource:
         """
         return MetricSeriesFiles.from_series_dir(self.series_dir)
 
-    def chart_paths(self) -> list[Path]:
-        """List the chart files.
-
-        Returns:
-            The PNG files in name order.
-        """
-        return sorted(self.chart_dir.glob("*.png"))
-
 
 class ARFBenchConnector(BaseConnector[ARFBenchSource]):
-    """Connector for ARFBench (Hub repo ``Datadog/ARFBench``)."""
+    """Connector for the ARFBench questions over the metric series (Hub repo ``Datadog/ARFBench``).
 
-    values_backend = ValuesBackend.ZARR  # the chart tensors need it
+    The values are plain series, so the dataset uses the default Parquet backend.
+    """
 
-    async def download_async(self, cache_dir: Path) -> list[ARFBenchSource]:  # ruff: ignore[no-self-use] - BaseConnector override
-        """Download the question table, series files, and charts from the pinned release.
+    HUB_PATTERNS: ClassVar[tuple[str, ...]] = (QA_CSV, f"{SERIES_DIR}/*.parquet")
+    """The release files to download."""
+
+    async def download_async(self, cache_dir: Path) -> list[ARFBenchSource]:
+        """Download the release files in :attr:`HUB_PATTERNS` from the pinned revision.
 
         Args:
             cache_dir: Directory for cached Hub files.
 
         Returns:
-            A list with the paths to the table and the two directories.
+            A list with the snapshot.
 
         Raises:
             TimeNetDownloadError: If the download fails or the question table is missing.
         """
-        root = await hub_snapshot(REPO, REVISION, cache_dir, (QA_CSV, f"{SERIES_DIR}/*.parquet", f"{CHART_DIR}/*.png"))
+        root = await hub_snapshot(REPO, REVISION, cache_dir, self.HUB_PATTERNS)
         if not (root / QA_CSV).is_file():
             raise TimeNetDownloadError(f"{REPO!r} at {REVISION!r} holds no {QA_CSV} under {root}")
-        return [ARFBenchSource(qa_csv=root / QA_CSV, series_dir=root / SERIES_DIR, chart_dir=root / CHART_DIR)]
+        return [ARFBenchSource(root=root)]
 
     def convert(self, raw_refs: list[ARFBenchSource]) -> TimeFDataset:
-        """Create a Record for each metric and chart, and two tasks for each question.
+        """Create a Record for each metric and a series task for each question.
 
         Args:
             raw_refs: The one source from :meth:`download_async`.
@@ -119,12 +109,8 @@ class ARFBenchConnector(BaseConnector[ARFBenchSource]):
         metric_records = {
             files.metric: dataset.add_record(record=files.create_record()) for files in source.metric_series_files()
         }
-        chart_records = {
-            path.stem: dataset.add_record(record=_create_chart_record(path)) for path in source.chart_paths()
-        }
         for question in source.read_questions():
             dataset.add_task(task=question.create_series_task(metric_records))
-            dataset.add_task(task=question.create_chart_task(chart_records))
         return dataset
 
 

@@ -1,4 +1,4 @@
-"""The ARFBench question table: 750 multiple-choice questions, each a series task and a chart task."""
+"""The ARFBench question table: 750 multiple-choice questions, each a series task or a chart task."""
 
 from __future__ import annotations
 

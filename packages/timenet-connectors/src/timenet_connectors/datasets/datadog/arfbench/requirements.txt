@@ -2,6 +2,3 @@
 huggingface_hub>=0.24
 # pyarrow reads the series files.
 pyarrow>=21
-# Pillow decodes chart PNGs; Zarr stores their tensor values.
-pillow>=11
-zarr>=3
