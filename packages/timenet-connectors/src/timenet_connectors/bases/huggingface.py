@@ -17,8 +17,8 @@ from typing import Any, ClassVar
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError
-from timenet_connectors.sources.huggingface_hub import download_hub_files
+from timenet.errors import TimeFValidationError, TimeNetDownloadError
+from timenet_connectors.sources.huggingface_hub import hub_snapshot
 
 
 _COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
@@ -26,7 +26,7 @@ _COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 
 @dataclass(frozen=True)
 class HubFileRef:
-    """One local source file and the part of the dataset it holds."""
+    """One local source file, or the directory of a pattern's files, and the part of the dataset it holds."""
 
     path: Path
     part: str
@@ -46,7 +46,8 @@ class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
     SOURCE_REVISION: ClassVar[str]
     """An immutable commit: a mutable branch can silently change rebuilt datasets."""
     SOURCE_FILES: ClassVar[Mapping[str, str]]
-    """Each part's repository-relative filename, in the order ``download()`` returns them."""
+    """Each part's repository-relative filename, in the order ``download()`` returns them. A filename can end
+    in a glob, such as ``data/*.parquet``: the part's path is then the directory of the matching files."""
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -97,8 +98,12 @@ class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
         Raises:
             ImportError: If ``huggingface_hub``, declared in the connector's requirements, is missing.
             TimeNetDownloadError: If a declared file is absent from the revision or cannot be downloaded.
-        """  # ruff: ignore[docstring-extraneous-exception] - both are raised by download_hub_files
-        paths = await download_hub_files(
-            self.HF_REPO, list(self.SOURCE_FILES.values()), revision=self.SOURCE_REVISION, cache_dir=cache_dir
-        )
-        return [HubFileRef(path, part) for part, path in zip(self.SOURCE_FILES, paths, strict=True)]
+        """  # ruff: ignore[docstring-extraneous-exception] - also raised by hub_snapshot
+        root = await hub_snapshot(self.HF_REPO, self.SOURCE_REVISION, cache_dir, tuple(self.SOURCE_FILES.values()))
+        refs = []
+        for part, name in self.SOURCE_FILES.items():
+            path = root / name if "*" not in name else root / Path(name).parent
+            if not path.exists():
+                raise TimeNetDownloadError(f"{self.HF_REPO}@{self.SOURCE_REVISION} has no {name}")
+            refs.append(HubFileRef(path, part))
+        return refs
