@@ -46,6 +46,7 @@ def test_a_remote_control_database_lands_in_a_control_folder_with_the_marker(tmp
             control=(FilePart(path=path.name, checksum=file_checksum(path), size=path.stat().st_size),),
         ),
         timef_format_version=1,
+        build_env=BuildEnvironment(python="3.13.1", packages={}, git={}),
     )
     # Any file system but the local one counts as remote, so the database is copied into the cache.
     remote = pafs.SubTreeFileSystem(str(path.parent), pafs.LocalFileSystem())

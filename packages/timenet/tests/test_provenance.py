@@ -189,7 +189,7 @@ def test_a_wheel_with_invalid_build_info_fails(installed, build_info):
 def test_a_local_build_fails_if_a_commit_is_unknown(installed, tmp_path):
     installed()
     with pytest.raises(TimeNetBuildError, match="cannot find the git commit of timenet"):
-        LocalRegistry(tmp_path / "local").store(make_dataset())
+        LocalRegistry(tmp_path / "local").put_dataset(make_dataset())
 
 
 def test_a_snapshot_reads_back_from_the_commits_that_a_manifest_records():
