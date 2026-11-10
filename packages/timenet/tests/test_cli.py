@@ -1,4 +1,5 @@
 import importlib
+import shutil
 import subprocess
 import sys
 
@@ -10,9 +11,15 @@ from typer.testing import CliRunner
 
 from timenet.cache import human_bytes, stored_releases
 from timenet.cli.app import _enum_list, app
+from timenet.client import TimeNet
 from timenet.config import make_cache_folder
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError, TimeNetDatasetNotFoundError
+from timenet.errors import (
+    TimeFValidationError,
+    TimeNetDatasetNotFoundError,
+    TimeNetMissingParentError,
+    TimeNetRegistryError,
+)
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.testing import make_dataset
@@ -23,6 +30,7 @@ from timenet.writer import TimeFWriter
 
 
 runner = CliRunner()
+HELLO = DatasetRef.parse("timenet/hello-world@1.0.0")
 # Import the app submodule directly so we can patch its module-global ``app`` when testing main()'s
 # error handling.
 _cli_module = importlib.import_module("timenet.cli.app")
@@ -246,6 +254,90 @@ def test_each_command_builds_the_list_from_its_flags(registry_root, tmp_path):
     result = runner.invoke(app, ["download", "timenet/hello-world", *flags])
     assert result.exit_code == 0, result.output
     assert result.stdout == f"{store / 'timenet/hello-world/1.0.0'}\n"
+
+
+def test_publish_copies_a_release_from_the_store(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    store.put_dataset(make_dataset())
+    dest = tmp_path / "dest"
+    result = runner.invoke(
+        app, ["publish", "timenet/hello-world", "--dest", str(dest), "--local-registry", str(store.root)]
+    )
+    assert result.exit_code == 0, result.output
+    assert result.stdout.strip() == "timenet/hello-world@1.0.0"
+    assert LocalRegistry(dest).exists("timenet/hello-world", "1.0.0")
+    assert "📥 Copying 'timenet/hello-world'…" in result.stderr
+    assert "✅ Published timenet/hello-world@1.0.0 to" in result.stderr
+
+
+def test_publish_rejects_a_source_that_cannot_be_opened(tmp_path):
+    result = runner.invoke(app, ["publish", "x/y", "--dest", str(tmp_path / "dest"), "--source", "foo://x"])
+    assert result.exit_code == 1
+    assert isinstance(result.exception, TimeNetRegistryError)
+    assert str(result.exception).startswith("--source 'foo://x' has an unsupported registry scheme.")
+
+
+def test_publish_to_an_empty_dest_fails_and_writes_nothing_into_the_working_directory(tmp_path, monkeypatch):
+    store = LocalRegistry(tmp_path / "store")
+    store.put_dataset(make_dataset())
+    cwd = tmp_path / "cwd"
+    cwd.mkdir()
+    monkeypatch.chdir(cwd)
+    argv = ["publish", "timenet/hello-world", "--dest", "", "--local-registry", str(store.root)]
+    result = runner.invoke(app, argv)
+    assert isinstance(result.exception, TimeNetRegistryError)
+    assert str(result.exception).startswith("dest is blank")
+    assert list(cwd.iterdir()) == []
+
+
+def test_publish_needs_dest(tmp_path):
+    result = runner.invoke(app, ["publish", "timenet/hello-world"])
+    assert result.exit_code == 2
+    # Rich colours the usage error on a CI runner, which splits the option name with escape codes.
+    assert "--dest" in click.unstyle(result.output)
+
+
+def test_publish_of_a_release_that_the_store_lacks_names_the_fix(tmp_path):
+    store, other, dest = tmp_path / "store", tmp_path / "other", str(tmp_path / "dest")
+    result = runner.invoke(app, ["publish", "timenet/hello-world", "--dest", dest, "--local-registry", str(store)])
+    assert type(result.exception) is TimeNetDatasetNotFoundError
+    assert str(result.exception) == (
+        f"timenet/hello-world is not in local registry {store}. "
+        f"Build it into the local registry with `timenet-build build timenet/hello-world --out {store}`, "
+        f"or copy it there with `timenet download timenet/hello-world --local-registry {store}`."
+    )
+    # The hint keeps the version, and names no store without --local-registry.
+    result = runner.invoke(app, ["publish", "timenet/hello-world@1.0.0", "--dest", dest])
+    assert str(result.exception).endswith(
+        "Build it into the local registry with `timenet-build build timenet/hello-world@1.0.0`, "
+        "or copy it there with `timenet download timenet/hello-world@1.0.0`."
+    )
+    # A registry that --source names is not the store, so the error names only that registry.
+    result = runner.invoke(app, ["publish", "timenet/hello-world", "--dest", dest, "--source", str(other)])
+    assert str(result.exception) == f"timenet/hello-world is not in local registry {other}."
+
+
+def test_publish_adds_no_hint_to_a_payload_source_that_the_store_lacks(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    store.put_dataset(make_dataset())
+    child = TimeFDataset(
+        metadata=make_dataset().metadata.model_copy(
+            update={"dataset_id": "test/child", "parents": {ParentAlias("hello"): HELLO}}
+        )
+    )
+    # The child reads the values of one Record of the parent, so the parent is its payload source.
+    with TimeNet(sources=[store]).open(str(HELLO)) as reader:
+        child.import_from(reader, alias=ParentAlias("hello"), records=[make_dataset().records[0].id])
+        store.put_dataset(child)
+    shutil.rmtree(store.root / "timenet")
+    dest = tmp_path / "dest"
+
+    result = runner.invoke(app, ["publish", "test/child", "--dest", str(dest), "--local-registry", str(store.root)])
+
+    # The error of the payload source names its own registries, and the hint for the release does not apply.
+    assert type(result.exception) is TimeNetMissingParentError
+    assert str(result.exception).startswith(f"payload source {HELLO} of test/child@1.0.0 is not in ")
+    assert "timenet-build" not in str(result.exception)
 
 
 @pytest.mark.parametrize(("flag", "variable"), [("--auto-build", "false"), ("--no-auto-build", "true")])

@@ -124,57 +124,67 @@ def _resolve_ref(dataset_id: str, version: str | None) -> tuple[str, str | None]
     return ref_id, ref_version if ref_version is not None else (version or None)
 
 
-def _open_sources(sources: Sequence[ReleaseSource | str | Path] | None) -> tuple[ReleaseSource, ...]:
-    """Validate sources and open registry URLs and paths.
+def as_release_sources(items: Sequence[ReleaseSource | str | Path], *, keyword: str) -> list[ReleaseSource]:
+    """Convert registry URLs and paths to release sources.
+
+    Existing source objects keep their identity and position. A path opens a writable local registry.
 
     Args:
-        sources: A nonempty sequence of sources, registry URLs, or paths.
+        items: A sequence of sources, registry URLs, or local paths.
+        keyword: The argument name to show in errors.
 
     Returns:
-        A tuple of sources in the given order.
+        The sources in their original order, or an empty list for empty input.
 
     Raises:
-        TimeFValidationError: If sources are not a nonempty sequence of valid sources, registry URLs, or paths.
+        TimeFValidationError: If ``items`` is not a valid list.
         TimeNetRegistryError: If a registry URL or path is blank or cannot be opened.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by open_registry
-    if isinstance(sources, (str, os.PathLike)):
-        shown = repr(str(sources))
-        raise TimeFValidationError(
-            f"sources takes a list of sources. Pass sources=[{shown}], or "
-            f"sources=[{shown}, InstalledConnectors()] to build what the path lacks"
-        )
-    if not isinstance(sources, Sequence):
-        raise TimeFValidationError(f"sources takes a list of sources. Pass sources=[{type(sources).__name__}(...)]")
-    if not sources:
-        raise TimeFValidationError("sources is empty. Pass at least one source, or None for the default list")
+    if isinstance(items, (str, os.PathLike)):
+        raise TimeFValidationError(f"{keyword} takes a list of sources. Pass {keyword}=[{str(items)!r}].")
+    if not isinstance(items, Sequence):
+        raise TimeFValidationError(f"{keyword} takes a list of sources. Pass {keyword}=[{type(items).__name__}(...)].")
     opened: list[ReleaseSource] = []
-    for index, item in enumerate(sources):
+    for index, item in enumerate(items):
         if isinstance(item, (str, os.PathLike)):
-            opened.append(open_registry(item if isinstance(item, str) else Path(item), label=f"sources[{index}]"))
+            path = item if isinstance(item, str) else Path(item)
+            opened.append(open_registry(path, label=f"{keyword}[{index}]"))
         elif isinstance(item, (BaseRegistry, InstalledConnectors)):
             opened.append(item)
         else:
-            raise TimeFValidationError(f"sources[{index}] is not a source, a registry URL or a path: {item!r}")
-    return tuple(opened)
+            raise TimeFValidationError(f"{keyword}[{index}] is not a source, a registry URL or a path: {item!r}")
+    return opened
 
 
 class TimeNet:
     """Browse, download, and read TimeNet datasets."""
 
     def __init__(self, sources: Sequence[ReleaseSource | str | Path] | None = None) -> None:
-        """Create a client with an ordered list of dataset sources.
+        """Create a client that searches dataset sources in order.
 
         Sources accept registries, registry URLs or paths, and ``InstalledConnectors()``.
         A path opens a writable ``LocalRegistry``. Builds land in the first ``LocalRegistry`` without
         ``read_only=True``, which ``InstalledConnectors()`` requires.
 
         Args:
-            sources: Ordered registries, URLs, paths or connectors, or ``None`` for :func:`default_sources`.
+            sources: Ordered sources, registry URLs or paths, or ``None`` for :func:`default_sources`.
 
         Raises:
-            TimeFValidationError: If sources are invalid, or have connectors but no writable local registry.
+            TimeFValidationError: If ``sources`` is not a non-empty list of valid sources, or has installed
+                connectors but no writable local registry.
         """
-        self._sources = tuple(default_sources()) if sources is None else _open_sources(sources)
+        if sources is None:
+            self._sources = tuple(default_sources())
+        else:
+            if isinstance(sources, (str, os.PathLike)):
+                shown = repr(str(sources))
+                raise TimeFValidationError(
+                    f"sources takes a list of sources. Pass sources=[{shown}], or "
+                    f"sources=[{shown}, InstalledConnectors()] to build what the path lacks"
+                )
+            self._sources = tuple(as_release_sources(sources, keyword="sources"))
+            if not self._sources:
+                raise TimeFValidationError("sources is empty. Pass at least one source, or None for the default list")
         self._store = next(
             (source for source in self._sources if isinstance(source, LocalRegistry) and not source.read_only), None
         )
