@@ -2,30 +2,35 @@
 #
 # ARFBench asks 750 multiple-choice questions about 142 metrics from 63 Datadog incidents. A metric
 # is one monitored quantity, such as the request count of a service. Datadog splits a metric by
-# tags, so a metric holds one series per tag group, for example one per host.
+# tags. Thus a metric holds one series per tag group, for example one series per host.
 #
 # Datadog stores a metric at several rollups. A rollup is the metric on a fixed time grid, with one
 # value per interval of 10, 60, 300, 1800, 3600, or 86400 seconds. The rollups of a metric are
-# separate exports, not resamplings of one series: their time ranges and tag groups differ.
+# separate exports, not resamplings of one series. Their time ranges and tag groups differ.
 #
 # Each metric is one record, with one source per tag group and one signal per rollup. A consumer
-# chooses the rollup. The paper and the charts use the finest one, which the annotation
-# `finest_interval_s` names.
+# chooses the rollup. The paper and the charts use the finest rollup. The annotation
+# `finest_interval_s` names this rollup.
 #
 # A rollup file lists the tag groups at the steps of its grid. Where the metric reported nothing
-# for a group, the step holds a null or is left out. Each series is cut to the window from its
-# group's first value to its last, so a group with no value at a rollup has no series there. Inside
-# the window, each such step is a missing timestep on the regular grid, with the spec's reason
-# `not_recorded`. Values are float64, and the release names no units. The release stores naive
-# epochs, which the dataset reads as UTC. The answer options use the same clock.
+# for a group, the step holds a null or is not in the file. The dataset cuts each series to the
+# window from the first value of its group to the last value. Thus a group with no value at a
+# rollup has no series at that rollup. Inside the window, each such step is a missing timestep on
+# the regular grid, with the reason `not_recorded` from the spec. Values are float64. The release
+# names no units. The release stores naive epochs. The dataset reads them as UTC. The answer
+# options use the same clock.
 #
-# Each question becomes one test task over the cited metric records, so the test split holds 750
-# tasks. A task carries the question's row as `question_index` in its metadata. The released charts
-# are in `datadog/arfbench-plots`, whose chart tasks carry the same `question_index`.
+# Each question becomes one test task over the cited metric records. Thus the test split holds 750
+# tasks. A task carries the row of the question as `question_index` in its metadata. The released
+# charts are in `datadog/arfbench-plots`. The chart tasks of that dataset carry the same
+# `question_index`.
 #
-# Kept as released: `query_name`, an identifier that differs from the metric ID for 122 of the 142
-# metrics and that the release does not explain; one end-time answer (row 191, metric 36464_0)
-# 140 seconds after its series ends; and 29 time options that lie outside every rollup.
+# The dataset keeps three items as released:
+# - `query_name`. This identifier differs from the metric ID for 122 of the 142 metrics. The
+#   release does not explain it.
+# - One end-time answer (row 191, metric 36464_0). This answer is 140 seconds after the end of its
+#   series.
+# - 29 time options that are outside every rollup.
 yaml_schema_version: 1
 dataset_id: datadog/arfbench
 dataset_version: 1.0.0

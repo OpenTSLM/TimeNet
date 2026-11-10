@@ -1,11 +1,11 @@
 """Convert the ARFBench questions and metric series to TimeF.
 
 The release holds one question table, one series file per metric and rollup interval, and one
-chart per metric or cited metric pair. This connector reads the table and the series: each metric
-becomes one Record, and each question a series task. The loop that walks the release is in
-``convert``. :mod:`~timenet_connectors.datasets.datadog.arfbench.series` reads the series files,
-and :mod:`~timenet_connectors.datasets.datadog.arfbench.questions` reads the question table. The
-``datadog/arfbench-plots`` dataset adds the charts on top of this one.
+chart per metric or cited metric pair. This connector reads the table and the series. Each metric
+becomes one Record, and each question becomes one series task. The loop over the release is in
+``convert``. :mod:`~timenet_connectors.datasets.datadog.arfbench.series` reads the series files.
+:mod:`~timenet_connectors.datasets.datadog.arfbench.questions` reads the question table. The
+``datadog/arfbench-plots`` dataset uses this dataset as its parent and adds the charts.
 """
 
 from __future__ import annotations
@@ -47,7 +47,7 @@ def release_paths(raw_refs: list[HubFileRef], *parts: str) -> dict[str, Path]:
 
 
 class ARFBenchConnector(BaseHuggingFaceConnector):
-    """Connector for the ARFBench questions over the metric series (Hub repo ``Datadog/ARFBench``).
+    """Connector for the ARFBench questions about the metric series (Hub repo ``Datadog/ARFBench``).
 
     The values are plain series, so the dataset uses the default Parquet backend.
     """

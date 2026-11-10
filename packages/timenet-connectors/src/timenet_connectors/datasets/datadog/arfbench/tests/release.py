@@ -1,7 +1,7 @@
 """Write a small ARFBench release for the connector tests: two metrics and the question table.
 
-The plots tests add the charts. This module does not import Pillow, so the series connector's
-environment can run it.
+The plots tests add the charts. This module does not import Pillow. Thus the environment of the
+series connector can run it.
 """
 
 import csv
@@ -17,7 +17,7 @@ from timenet_connectors.datasets.datadog.arfbench.connector import QA_CSV, SERIE
 from timenet_connectors.datasets.datadog.arfbench.questions import QUESTION_COLUMNS
 
 
-START = datetime(2025, 3, 7, 9, 30)  # naive, as the release stores its epochs; the connector reads it as UTC
+START = datetime(2025, 3, 7, 9, 30)  # naive, as the release stores its epochs. The connector reads it as UTC.
 START_US = 1_741_339_800_000_000
 
 
@@ -46,9 +46,9 @@ def write_series_dir(root: Path) -> Path:
     """
     series_dir = root / SERIES_DIR
     series_dir.mkdir()
-    # Metric 35997_0: two tag groups at 10 s, where dc:2 skips a step. At 60 s a third group appears,
-    # as it does in the wider windows of the release, but only from the second grid step: its first
-    # step is grid padding. dc:1 has a null inside its window, and dc:4 is on the grid without a value.
+    # Metric 35997_0 has two tag groups at 10 s, and dc:2 skips a step. At 60 s a third group appears,
+    # as in the wider windows of the release. The values of this group start at the second grid step.
+    # Its first step is grid padding. dc:1 has a null inside its window. dc:4 is on the grid without a value.
     write_series_file(
         series_dir / "35997_0_10.parquet", [(10, "dc:1", 2.0), (0, "dc:2", 5.0), (0, "dc:1", 1.0), (20, "dc:2", 6.0)]
     )
@@ -65,7 +65,7 @@ def write_series_dir(root: Path) -> Path:
             (120, "dc:4", None),
         ],
     )
-    # Metric 35997_1 has no tag grouping, so its label is empty, and only a 10 s file.
+    # Metric 35997_1 has no tag grouping, so its label is empty. The metric has only a 10 s file.
     write_series_file(series_dir / "35997_1_10.parquet", [(30, "", 0.5), (40, "", 0.6)])
     return series_dir
 

@@ -1,6 +1,8 @@
-"""Check that the plots dataset composes on its ``datadog/arfbench`` parent: it imports the series tasks,
-adds a chart record per chart and a chart task per question, stores only the charts, and reads the
-series through the parent's Parquet release. A question without its charts raises."""
+"""Check that the plots dataset composes on its ``datadog/arfbench`` parent.
+
+The dataset imports the series tasks. It adds a chart record per chart and a chart task per question. It stores
+only the charts. It reads the series through the Parquet release of the parent. A question without its charts
+raises an error."""
 
 from collections.abc import Generator
 from contextlib import contextmanager
@@ -80,7 +82,7 @@ def test_the_child_imports_the_series_tasks_and_adds_a_chart_task_per_question(r
         records = [record.metadata["source_record_id"] for record in dataset.records]
         tasks = dataset.get_all()
 
-    # The import brings the metric records in the order the tasks first cite them, then come the charts.
+    # The import brings the metric records in the order that the tasks first cite them. The charts come next.
     assert records == [
         "arfbench-35997_1",
         "arfbench-35997_0",
@@ -88,7 +90,7 @@ def test_the_child_imports_the_series_tasks_and_adds_a_chart_task_per_question(r
         "arfbench-chart-35997_0",
         "arfbench-chart-35997_1",
     ]
-    # The series tasks first, then the chart tasks, paired by the question's row index.
+    # The series tasks come first, then the chart tasks. The row index of the question pairs the two tasks.
     assert [task.metadata["question_index"] for task in tasks] == [0, 1, 0, 1]
     assert [read_values(task.targets) for task in tasks] == [("Yes",), ("No",)] * 2
     series_correlation, chart_correlation = tasks[1], tasks[3]
@@ -98,7 +100,7 @@ def test_the_child_imports_the_series_tasks_and_adds_a_chart_task_per_question(r
     assert isinstance(series_correlation, ClassificationTask) and isinstance(chart_correlation, ClassificationTask)
     assert series_correlation.label_set == chart_correlation.label_set
     assert series_correlation.label_set.name == "question_1"
-    # The chart task reads the combined chart first, then each metric's own.
+    # The chart task reads the combined chart first, then the chart of each metric.
     assert [record.metadata["source_record_id"] for record in chart_correlation.inputs] == [
         "arfbench-chart-35997_0-35997_1",
         "arfbench-chart-35997_0",
@@ -119,11 +121,11 @@ def test_the_child_stores_only_the_charts_and_reads_the_series_from_the_parent(r
         assert reader.values_backend == "zarr"
         back = {record.metadata["source_record_id"]: record for record in reader.iter_records()}
         tasks = reader.read().get_all()
-    # The series values stay in the parent's Parquet release, which the child names as a payload source.
+    # The series values stay in the Parquet release of the parent. The child names it as a payload source.
     assert [str(source) for source in open_local_version(version_dir).manifest.payload_sources] == [
         "datadog/arfbench@1.0.0"
     ]
-    # The child stores its control plane and the two chart shapes, and no series values of its own.
+    # The child stores its control plane and the two chart shapes. It stores no series values of its own.
     assert sorted(path.relative_to(version_dir).parts[0] for path in version_dir.iterdir()) == [
         "control.duckdb",
         "manifest.json",

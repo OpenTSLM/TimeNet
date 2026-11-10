@@ -1,6 +1,7 @@
-"""Check that a metric keeps every rollup per tag group, that a question becomes a classification task over
-its options, that the dataset round-trips through Parquet with its missing timesteps, and that a malformed
-source raises with its location."""
+"""Check four properties of the ARFBench series connector.
+
+A metric keeps every rollup per tag group. A question becomes a classification task over its options. The dataset
+round-trips through Parquet with its missing timesteps. A malformed source raises an error with its location."""
 
 from pathlib import Path
 
@@ -29,7 +30,7 @@ from timenet_connectors.datasets.datadog.arfbench.tests.release import (
 
 @pytest.fixture
 def release(tmp_path: Path) -> list[HubFileRef]:
-    """A release with two metrics and three questions: two of label-set categories, one with its own options."""
+    """A release with two metrics and one question about each metric count."""
     return write_release(tmp_path)
 
 

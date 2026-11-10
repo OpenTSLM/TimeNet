@@ -204,12 +204,12 @@ class ARFBenchQuestion:
         return self._create_task(inputs, InputModality.IMAGE)
 
     def _create_task(self, inputs: tuple[Record, ...], modality: InputModality) -> ClassificationTask:
-        """Create a test task that picks the correct answer among the question's options.
+        """Create a test task that asks for the correct answer from the options of the question.
 
-        The options are the task's label set, named after the question's row, so both tasks of a
-        question share it. Both tasks also carry the row index in their metadata, so a consumer can
-        pair them. The question's annotations describe it, and the interpolation flags describe what
-        an engineer saw. Nothing here interpolates.
+        The options are the label set of the task. The label set has the name of the question row,
+        so both tasks of a question share it. Both tasks also have the row index in their metadata,
+        so a consumer can pair them. The annotations describe the question. The interpolation flags
+        describe what an engineer saw. This method does not interpolate.
 
         Returns:
             The task, not yet added to a dataset.

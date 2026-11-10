@@ -1,10 +1,10 @@
-"""Add the ARFBench charts to the ``datadog/arfbench`` release.
+"""Build the ARFBench charts as a child dataset of ``datadog/arfbench``.
 
-This dataset is a child of ``datadog/arfbench``, which its card declares as the parent ``series``.
-It imports every series task of the parent, with the metric Records they cite, and adds one Record
-per released chart and one chart task per question. The imported series keep pointing at the
-parent's stored values, so this release stores only the charts. They are image tensors, which only
-the Zarr backend stores.
+This dataset is a child of ``datadog/arfbench``. Its card declares that parent with the alias
+``series``. It imports every series task of the parent, with the metric Records that the tasks cite.
+It then adds one Record per chart in the release and one chart task per question. The imported
+series continue to refer to the stored values of the parent, so this release stores only the
+charts. The charts are image tensors, and only the Zarr backend can store them.
 """
 
 from __future__ import annotations
@@ -25,7 +25,7 @@ if TYPE_CHECKING:
     from timenet.connectors import BuildContext
     from timenet_connectors.bases.huggingface import HubFileRef
 
-CHART_DIR = "arfbench-images"  # {metric}.png, and {metric}-{metric}.png for the pairs the questions cite
+CHART_DIR = "arfbench-images"  # {metric}.png, and {metric}-{metric}.png for the pairs that the questions cite
 SERIES_PARENT = ParentAlias("series")
 
 
@@ -42,9 +42,9 @@ def _create_chart_record(path: Path) -> Record:
 
 
 class ARFBenchPlotsConnector(BaseHuggingFaceConnector):
-    """Connector for the ARFBench charts, composed on top of the ``datadog/arfbench`` series."""
+    """Connector for the ARFBench charts, as a child of the ``datadog/arfbench`` series."""
 
-    values_backend = "zarr"  # the chart tensors need it
+    values_backend = "zarr"  # the chart tensors need the Zarr backend
     HF_REPO = REPO
     SOURCE_REVISION = REVISION
     SOURCE_FILES: ClassVar = {"questions": QA_CSV, "charts": f"{CHART_DIR}/*.png"}
