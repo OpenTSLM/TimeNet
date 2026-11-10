@@ -33,6 +33,10 @@ jobs:
         github_action_config.auto_review: "true"
         github_action_config.auto_describe: "false"
         github_action_config.auto_improve: "true"
+        # Never set labels on the PR.
+        PR_REVIEWER.ENABLE_REVIEW_LABELS_SECURITY: "false"
+        PR_REVIEWER.ENABLE_REVIEW_LABELS_EFFORT: "false"
+        PR_DESCRIPTION.PUBLISH_LABELS: "false"
         # Post each suggestion as an inline comment with an "Apply suggestion" button.
         PR_CODE_SUGGESTIONS.COMMITTABLE_CODE_SUGGESTIONS: "true"
         PR_CODE_SUGGESTIONS.PERSISTENT_COMMENT: "false"
