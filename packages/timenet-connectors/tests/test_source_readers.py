@@ -21,7 +21,7 @@ def test_data_row_rejects_unexpected_fields():
 def test_csv_reads_rows_in_order(tmp_path):
     path = tmp_path / "source.csv"
     path.write_text("name,count\nfirst,1\nsecond,2\n")
-    reader = CsvDataReader(path, Row, strict_parsing=True)
+    reader = CsvDataReader(path, Row)
     assert list(reader.iter_rows()) == [Row(name="first", count=1), Row(name="second", count=2)]
 
 

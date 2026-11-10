@@ -17,10 +17,9 @@ class CsvDataReader(DataReader[RowT]):
         path: Path,
         row_type: type[RowT],
         *,
-        strict_parsing: bool | None = None,
         expected_columns: tuple[str, ...] | None = None,
     ) -> None:
-        super().__init__(path, row_type, strict_parsing=strict_parsing)
+        super().__init__(path, row_type)
         self.expected_columns = expected_columns
 
     def iter_rows(self) -> Generator[RowT, None, None]:
