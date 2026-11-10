@@ -166,7 +166,7 @@ def test_a_damaged_build_in_the_store_names_the_build_that_replaces_it(tmp_path,
     (store.root / "timenet/hello-world/1.0.0/control.duckdb").write_bytes(b"cut short")
 
     # No registry other than the local registry provides the release, so download() cannot replace it.
-    hint = f"Build it again with `timenet-build build timenet/hello-world --out {store.root} --force`."
+    hint = f"Build it again with `timenet-build build timenet/hello-world --local-registry {store.root} --force`."
     with pytest.raises(TimeNetFileError) as caught:
         client.open("timenet/hello-world@1.0.0")
     assert caught.value.hint == hint

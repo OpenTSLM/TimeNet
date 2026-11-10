@@ -55,11 +55,13 @@ def test_quiet_suppresses_status_but_not_errors(console, capsys):
     console.quiet = True
     console.status("📥", "downloading")
     console.success("done")
+    console.detail("a plan line")
     console.warn("heads up")
     console.error("boom")
     captured = capsys.readouterr()
     assert "downloading" not in captured.err
     assert "done" not in captured.err
+    assert "a plan line" not in captured.err
     assert "heads up" in captured.err  # warnings/errors ignore quiet
     assert "boom" in captured.err
 
@@ -128,3 +130,12 @@ def test_the_renderer_shows_copy_and_build_steps(monkeypatch, lines, bars):
         "✅ Built 'timenet/hello-world' → 1.0.0",
     ]
     assert len(bars) == 1
+
+
+def test_detail_prints_the_line_as_it_is(console, capsys):
+    # A line of a plan can name a long path. The console keeps the line whole, without an emoji.
+    line = "└── test/parent@1.0.0: copy from local registry " + "/directory" * 12
+    console.detail(line)
+    captured = capsys.readouterr()
+    assert captured.out == ""
+    assert captured.err == f"{line}\n"

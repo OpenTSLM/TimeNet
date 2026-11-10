@@ -54,7 +54,7 @@ def test_build_runs_isolated_by_default(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
 
-    result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path)])
+    result = runner.invoke(app, ["build", "timenet/hello-world", "--local-registry", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
     assert [(call["release"], call["store_root"]) for call in calls] == [(HELLO, tmp_path)]
@@ -70,7 +70,14 @@ def test_build_runs_in_process_without_isolation(monkeypatch, tmp_path, how):
         monkeypatch.setenv("TIMENET_ISOLATION", "off")
 
     result = runner.invoke(
-        app, ["build", "timenet/hello-world", "--out", str(tmp_path), *(["--no-isolation"] if how == "flag" else [])]
+        app,
+        [
+            "build",
+            "timenet/hello-world",
+            "--local-registry",
+            str(tmp_path),
+            *(["--no-isolation"] if how == "flag" else []),
+        ],
     )
 
     assert result.exit_code == 0, result.output
@@ -82,7 +89,7 @@ def test_build_isolates_when_the_flag_overrides_the_setting(monkeypatch, tmp_pat
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
 
-    result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path), "--isolation"])
+    result = runner.invoke(app, ["build", "timenet/hello-world", "--local-registry", str(tmp_path), "--isolation"])
 
     assert result.exit_code == 0, result.output
     assert len(calls) == 1
@@ -92,7 +99,9 @@ def test_build_without_isolation_shows_each_build_line_once(tmp_path):
     # In this process, the coordinator sends the build step, and the renderer shows it. Nothing else
     # prints a build line.
 
-    result = runner.invoke(app, ["build", "timenet/hello-world", "--out", str(tmp_path / "out"), "--no-isolation"])
+    result = runner.invoke(
+        app, ["build", "timenet/hello-world", "--local-registry", str(tmp_path / "out"), "--no-isolation"]
+    )
 
     assert result.exit_code == 0, result.output
     assert result.stderr.count("🔧 Building 'timenet/hello-world'…") == 1
@@ -104,7 +113,7 @@ def test_a_build_that_reuses_the_release_says_so_on_stderr(monkeypatch, tmp_path
     monkeypatch.setattr(cli_module.console, "rich", Console(stderr=True, width=1000))
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
-    command = ["build", "timenet/hello-world", "--out", str(tmp_path)]
+    command = ["build", "timenet/hello-world", "--local-registry", str(tmp_path)]
     assert runner.invoke(app, command).exit_code == 0
 
     result = runner.invoke(app, command)
@@ -119,11 +128,11 @@ def test_a_build_that_reuses_the_release_says_so_on_stderr(monkeypatch, tmp_path
 def test_build_takes_an_exact_release_and_refuses_another_version(monkeypatch, tmp_path):
     calls = []
     monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
-    result = runner.invoke(app, ["build", "timenet/hello-world@1.0.0", "--out", str(tmp_path)])
+    result = runner.invoke(app, ["build", "timenet/hello-world@1.0.0", "--local-registry", str(tmp_path)])
 
     assert result.exit_code == 0, result.output
     assert [call["release"] for call in calls] == [HELLO]
-    result = runner.invoke(app, ["build", "timenet/hello-world@9.9.9", "--out", str(tmp_path)])
+    result = runner.invoke(app, ["build", "timenet/hello-world@9.9.9", "--local-registry", str(tmp_path)])
     assert isinstance(result.exception, TimeNetVersionUnavailableError)
     assert len(calls) == 1
 
@@ -137,7 +146,7 @@ def test_build_rejects_an_unknown_id_without_importing_anything(monkeypatch, tmp
         # a connector class by identity still sees the same object.
         monkeypatch.delitem(sys.modules, name)
 
-    result = runner.invoke(app, ["build", "nope/nothing", "--out", str(tmp_path)])
+    result = runner.invoke(app, ["build", "nope/nothing", "--local-registry", str(tmp_path)])
 
     assert result.exit_code != 0
     assert "no connector for" in result.output
@@ -147,7 +156,7 @@ def test_build_rejects_an_unknown_id_without_importing_anything(monkeypatch, tmp
 
 def test_build_rejects_an_id_that_no_card_declares_and_names_the_known_ids(tmp_path):
     # The module path of the connector accepts this spelling, but a dataset ID must match its card.
-    result = runner.invoke(app, ["build", "timenet/hello_world", "--out", str(tmp_path)])
+    result = runner.invoke(app, ["build", "timenet/hello_world", "--local-registry", str(tmp_path)])
 
     assert result.exit_code == 2
     assert "no connector for 'timenet/hello_world'" in result.output
@@ -162,7 +171,7 @@ def test_build_forwards_quiet_to_the_isolated_child(monkeypatch, tmp_path, quiet
     monkeypatch.setattr(backend_module, "run_isolated_build", _isolated_child(calls))
 
     result = runner.invoke(
-        app, [*(["--quiet"] if quiet else []), "build", "timenet/hello-world", "--out", str(tmp_path)]
+        app, [*(["--quiet"] if quiet else []), "build", "timenet/hello-world", "--local-registry", str(tmp_path)]
     )
 
     assert result.exit_code == 0, result.output
@@ -180,7 +189,7 @@ def test_isolated_build_prints_the_version_dir_and_narrates_once(tmp_path):
     env.pop("TIMENET_ISOLATION", None)  # default is "on"; make sure nothing forces it off
     run_cli = [sys.executable, "-c", "from timenet_connectors.builder.cli import main; main()"]
     result = subprocess.run(
-        [*run_cli, "build", "timenet/hello-world", "--out", str(registry)],
+        [*run_cli, "build", "timenet/hello-world", "--local-registry", str(registry)],
         env=env,
         cwd=tmp_path,  # away from the repo tree so the CLI does not read the repo .env
         capture_output=True,
