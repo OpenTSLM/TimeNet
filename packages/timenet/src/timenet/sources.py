@@ -2,10 +2,12 @@
 
 from collections.abc import Callable, Sequence
 from dataclasses import dataclass, field
-from typing import TYPE_CHECKING, TypeAlias, Union
+from typing import TYPE_CHECKING, ClassVar, TypeAlias, Union
 
 from timenet import builders
-from timenet.errors import TimeNetAccessError
+from timenet._warnings import warn_at_caller
+from timenet.errors import ConnectorCardWarning, TimeNetAccessError, TimeNetInvalidCardError
+from timenet.types import DatasetMetadata
 from timenet.types.access import Access, AccessRequirement
 from timenet.types.references import LATEST_VERSION, DatasetRef
 from timenet.types.version import Version
@@ -96,11 +98,14 @@ ReleaseLookup: TypeAlias = Found | NotFound | NotServed
 
 @dataclass(frozen=True)
 class InstalledConnectors:
-    """A release source backed by installed dataset connectors.
+    """A source for the datasets that installed connectors build.
 
-    Each connector provides only the version in its card.
-    All instances compare equal.
+    A connector counts as installed if a package registers it under the ``timenet.builders`` entry point group. Each
+    connector provides only the version its card declares, and all instances are equal.
     """
+
+    has_catalog: ClassVar[bool] = True
+    """Whether :meth:`list_datasets` works. It always does for installed connectors."""
 
     def __str__(self) -> str:
         if not tuple(builders.entry_points(group=builders.ENTRY_POINT_GROUP)):
@@ -126,6 +131,38 @@ class InstalledConnectors:
         if builder is None or (version is not None and version != builder.card.dataset_version):
             return NotFound()
         return FoundInConnector(builder)
+
+    def list_datasets(self) -> list[DatasetMetadata]:
+        """Return dataset cards from installed connectors without building the datasets.
+
+        The first entry point that claims a dataset takes priority.
+        The method skips unreadable cards and emits a :class:`~timenet.errors.ConnectorCardWarning`.
+
+        Returns:
+            The cards, sorted by dataset ID.
+
+        Raises:
+            TimeNetInvalidCardError: If a backend cannot list its dataset IDs.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by the backend
+        return self._cards()
+
+    def _cards(self) -> list[DatasetMetadata]:  # ruff: ignore[no-self-use] (the listing of this source)
+        """Return the readable cards of installed connectors, sorted by dataset ID."""
+        cards: list[DatasetMetadata] = []
+        for claim in builders.claims():
+            try:
+                card = claim.backend.card(claim.dataset_id)
+            except TimeNetInvalidCardError as error:
+                warn_at_caller(
+                    ConnectorCardWarning(
+                        f"{claim.dataset_id}: the card of its installed connector cannot be read, "
+                        f"so the listing leaves it out: {error}"
+                    )
+                )
+                continue
+            if card is not None:
+                cards.append(card)
+        return sorted(cards, key=lambda card: card.dataset_id)
 
 
 Ask: TypeAlias = Callable[[ReleaseSource, str, Version | None], ReleaseLookup]

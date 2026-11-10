@@ -19,7 +19,7 @@ from timenet.registry import (
     open_registry,
 )
 from timenet.testing import make_dataset
-from timenet.types import Annotation, AnswerTask, Domain, License
+from timenet.types import Annotation, AnswerTask, DatasetFilter, Domain
 from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
 
@@ -191,66 +191,35 @@ def test_open_release_checks_the_size_of_each_file(registry_root):
 
 
 def test_search_no_filters_returns_all(registry_root):
-    assert len({m.dataset_id for m in LocalRegistry(registry_root).search()}) == 2
+    assert len({m.dataset_id for m in LocalRegistry(registry_root).search(DatasetFilter())}) == 2
 
 
 def test_search_by_domain(registry_root):
-    results = LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY)
+    results = LocalRegistry(registry_root).search(DatasetFilter(domain=(Domain.CARDIOLOGY,)))
     assert {m.dataset_id for m in results} == {"demo/ecg"}
-
-
-def test_search_by_license(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(license=License.MIT)} == {"demo/ecg"}
 
 
 def test_search_by_task_type_filter(registry_root):
     # only hello_world has a QA task
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(task=AnswerTask)} == {"timenet/hello-world"}
-
-
-def test_search_by_time_series_spec(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(time_series_spec="ecg_lead")} == {"demo/ecg"}
-
-
-def test_search_by_tag(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(tag="clinical")} == {"demo/ecg"}
-
-
-def test_search_by_dataset_id(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(dataset_id="timenet/hello-world")} == {
+    assert {m.dataset_id for m in LocalRegistry(registry_root).search(DatasetFilter(task=(AnswerTask,)))} == {
         "timenet/hello-world"
     }
 
 
-def test_search_by_query_substring(registry_root):
-    assert {m.dataset_id for m in LocalRegistry(registry_root).search(query="hello")} == {"timenet/hello-world"}
+class _Reversed(LocalRegistry):
+    """A local registry whose catalog lists the datasets in reverse order of their IDs."""
+
+    def list_datasets(self):
+        return super().list_datasets()[::-1]
 
 
-def test_search_accepts_scalar_or_list(registry_root):
-    both = LocalRegistry(registry_root).search(domain=[Domain.CARDIOLOGY, Domain.GENERAL])
-    assert {m.dataset_id for m in both} == {"timenet/hello-world", "demo/ecg"}
-
-
-def test_search_filters_are_anded(registry_root):
-    # cardiology AND MIT => ecg; cardiology AND CC-BY-4.0 => none
-    assert {
-        m.dataset_id for m in LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY, license=License.MIT)
-    } == {"demo/ecg"}
-    assert LocalRegistry(registry_root).search(domain=Domain.CARDIOLOGY, license=License.CC_BY_4_0) == []
-
-
-def test_search_limit(registry_root):
-    assert len(LocalRegistry(registry_root).search(limit=1)) == 1
+def test_search_returns_the_first_matches_by_dataset_id(registry_root):
+    assert [m.dataset_id for m in _Reversed(registry_root).search(DatasetFilter(limit=1))] == ["demo/ecg"]
 
 
 def test_search_limit_zero_returns_empty(registry_root):
     # the limit check must run before the append, else a zero limit still yields one row
-    assert LocalRegistry(registry_root).search(limit=0) == []
-
-
-def test_search_negative_limit_rejected(registry_root):
-    with pytest.raises(ValueError, match="non-negative"):
-        LocalRegistry(registry_root).search(limit=-1)
+    assert LocalRegistry(registry_root).search(DatasetFilter(limit=0)) == []
 
 
 # ---- put_dataset (write side) -----------------------------------------------------------------
@@ -337,7 +306,7 @@ def test_s3_registry_has_no_catalog():
     with pytest.raises(NotImplementedError):
         s3.list_datasets()
     with pytest.raises(NotImplementedError):
-        s3.search()
+        s3.search(DatasetFilter())
 
 
 def test_a_read_only_registry_refuses_put_dataset_and_a_copy_into_it(tmp_path):

@@ -15,7 +15,7 @@ from collections.abc import Generator
 from contextlib import contextmanager
 import os
 from pathlib import Path
-from typing import Any, BinaryIO
+from typing import Any, BinaryIO, ClassVar
 from urllib.parse import urlparse
 import uuid
 
@@ -26,7 +26,7 @@ from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, parse_manifest
 from timenet.registry.lazy_read import LazyReadRegistry
 from timenet.registry.version import DatasetVersion
-from timenet.types import DatasetMetadata, Version
+from timenet.types import DatasetFilter, DatasetMetadata, Version
 from timenet.types.metadata_fields import validate_dataset_id
 from timenet.types.references import DatasetRef, is_latest
 
@@ -39,6 +39,7 @@ _DATASETS_PREFIX = "datasets"
 class S3Registry(LazyReadRegistry):
     """A registry that reads and publishes datasets under an S3 bucket or prefix."""
 
+    has_catalog: ClassVar[bool] = False
     _staging_prefix = "timenet-s3-"
 
     def __init__(self, uri: str, *, read_only: bool = False) -> None:
@@ -72,7 +73,7 @@ class S3Registry(LazyReadRegistry):
             "explicit org/name@version."
         )
 
-    def search(self, **_kwargs: Any) -> list[DatasetMetadata]:
+    def search(self, filter: DatasetFilter) -> list[DatasetMetadata]:
         """Unsupported: the S3 backend has no catalog.
 
         Raises:

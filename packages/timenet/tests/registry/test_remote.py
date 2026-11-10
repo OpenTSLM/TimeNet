@@ -26,7 +26,7 @@ from timenet.reader import LoadPlan, TimeFReader
 from timenet.registry import LocalRegistry, RemoteRegistry, copy_release, open_local_version
 from timenet.sources import FoundInRegistry, NotServed
 from timenet.testing import assert_datasets_equal, make_dataset
-from timenet.types import Access, DatasetSchema, Domain, License, Version
+from timenet.types import Access, DatasetFilter, DatasetSchema, Domain, License, Version
 from timenet.types.access import AccessRequirement
 from timenet.types.parent_dataset_card import ParentDatasetCard
 from timenet.types.reference_keys import ParentAlias
@@ -172,8 +172,10 @@ def test_search_filters_by_domain(version_dir, tmp_path):
     registry, _ = _remote(version_dir, tmp_path)
     _, manifest = version_dir
     domain = manifest.metadata.domains[0]
-    assert registry.search(domain=domain)
-    assert registry.search(domain=Domain.FINANCE) == [] or manifest.metadata.domains == (Domain.FINANCE,)
+    assert registry.search(DatasetFilter(domain=(domain,)))
+    assert registry.search(DatasetFilter(domain=(Domain.FINANCE,))) == [] or manifest.metadata.domains == (
+        Domain.FINANCE,
+    )
 
 
 def test_open_file_streams_bytes(version_dir, tmp_path):

@@ -1,7 +1,6 @@
-"""Find, inspect, download, and read datasets with :class:`TimeNet`.
+"""Find, inspect, download, and read TimeF datasets.
 
-A client checks sources in order and builds releases from installed connectors into its first local
-registry that is not read-only.
+:class:`TimeNet` checks sources in order and uses :func:`default_sources` by default.
 """
 
 # The public API has a method named ``list``. Deferred annotations keep the type hint
@@ -15,6 +14,7 @@ from pathlib import Path
 import shlex
 from typing import TYPE_CHECKING, TypeAlias, TypeVar
 
+from timenet._warnings import warn_at_caller
 from timenet.builders import BuildOptions
 from timenet.config import settings
 from timenet.coordinator.build import run_plan
@@ -22,12 +22,14 @@ from timenet.coordinator.plan import Lookups, plan_download
 from timenet.coordinator.read import raise_not_found, read_release
 from timenet.dataset import TimeFDataset
 from timenet.errors import (
+    CatalogWarning,
     TimeFValidationError,
     TimeNetAccessError,
     TimeNetDatasetNotFoundError,
     TimeNetError,
     TimeNetFileError,
     TimeNetMissingParentError,
+    TimeNetNoCatalogError,
     TimeNetNotBuiltError,
     TimeNetVersionUnavailableError,
 )
@@ -47,7 +49,7 @@ from timenet.sources import (
     ReleaseSource,
     resolve_release,
 )
-from timenet.types import DatasetMetadata, Domain, License, Task
+from timenet.types import DatasetFilter, DatasetMetadata, Domain, License, ListedRelease, Task
 from timenet.types.references import DatasetRef, split_ref
 
 
@@ -60,6 +62,7 @@ if TYPE_CHECKING:
 # annotations.
 T = TypeVar("T")
 _Metadatas: TypeAlias = list[DatasetMetadata]
+_Listed: TypeAlias = list[ListedRelease]
 _OrList: TypeAlias = T | list[T] | None
 
 
@@ -197,14 +200,48 @@ class TimeNet:
             )
 
     def list(self) -> _Metadatas:
-        """Return metadata for every dataset in the selected registry.
+        """List each dataset at its highest version across all sources, including connector cards.
 
-        The client uses the first registry other than the local registry, or the local registry if it is the only one.
+        A listed version can be newer than the one that :meth:`open` reads, which skips a version that a registry
+        does not serve and, without a version, takes the first source that serves the dataset.
+        A source without a catalog is left out with a :class:`~timenet.errors.CatalogWarning`. Source errors stop
+        the call.
 
         Returns:
-            One :class:`~timenet.types.DatasetMetadata` per dataset.
+            One :class:`~timenet.types.DatasetMetadata` per dataset, sorted by dataset ID.
+
+        Raises:
+            TimeNetNoCatalogError: If no source has a catalog.
+            TimeNetInvalidCardError: If an installed backend cannot list its dataset IDs.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by the backend)
+        return [release.card for release in self._listed()]
+
+    def _listed(self) -> _Listed:
+        """Return each dataset at its highest version across the sources, sorted by dataset ID.
+
+        For equal versions, the earlier source keeps the row. A connector card has no registry. A source without a
+        catalog is left out with a :class:`~timenet.errors.CatalogWarning`.
+
+        Returns:
+            One listed release per dataset.
+
+        Raises:
+            TimeNetNoCatalogError: If no source has a catalog.
         """
-        return self._catalog().list_datasets()
+        if not any(source.has_catalog for source in self._sources):
+            names = ", ".join(str(source) for source in self._sources)
+            raise TimeNetNoCatalogError(f"none of the sources has a catalog: {names}")
+        kept: dict[str, ListedRelease] = {}
+        for source in self._sources:
+            if not source.has_catalog:
+                warn_at_caller(CatalogWarning(f"{source} has no catalog, so the list leaves it out."))
+                continue
+            registry = source if isinstance(source, BaseRegistry) else None
+            for card in source.list_datasets():
+                held = kept.get(card.dataset_id)
+                if held is None or card.dataset_version > held.card.dataset_version:
+                    kept[card.dataset_id] = ListedRelease(card, registry)
+        return [kept[dataset_id] for dataset_id in sorted(kept)]
 
     def get_manifest(self, dataset_id: str, version: str | None = None) -> Manifest:
         """Return the manifest of the release that :meth:`open` reads, without a copy or a build.
@@ -269,24 +306,33 @@ class TimeNet:
         tag: _OrList[str] = None,
         limit: int = 100,
     ) -> _Metadatas:
-        """Search the selected registry for datasets that match the filters.
+        """Search the rows of :meth:`list`: each dataset at its highest version across all sources.
 
-        The client uses the first registry other than the local registry, or the local registry if it is the only one.
+        So the search checks only the highest version of each dataset, and an older version that matches is not found.
+        A ``task`` or ``time_series_spec`` filter reads the manifest of a row only if its card matches, and the search
+        stops at ``limit`` matches. Connector cards lack schemas, so they never match these filters.
+        A source without a catalog is left out with a :class:`~timenet.errors.CatalogWarning`. Source errors stop
+        the call.
 
         Args:
-            query: Free text terms for the name, description, and tags.
+            query: Match any term in the name, description, or tags, ignoring case.
             domain: Match any of these domains.
             task: Match any of these task classes in the schema.
             license: Match any of these licenses.
             time_series_spec: Match all of these ``spec_type`` values.
-            dataset_id: Match only these IDs.
+            dataset_id: Match any of these IDs.
             tag: Match all of these tags.
             limit: The maximum number of results.
 
         Returns:
-            The matching dataset metadata.
-        """
-        return self._catalog().search(
+            The matching dataset metadata, sorted by dataset ID.
+
+        Raises:
+            TimeFValidationError: If ``limit`` is negative.
+            TimeNetNoCatalogError: If no source has a catalog.
+            TimeNetInvalidCardError: If an installed backend cannot list its dataset IDs.
+        """  # ruff: ignore[docstring-extraneous-exception] (raised by the backend)
+        wanted = DatasetFilter.of(
             query=query,
             domain=domain,
             task=task,
@@ -296,6 +342,7 @@ class TimeNet:
             tag=tag,
             limit=limit,
         )
+        return wanted.select(self._listed())
 
     def download(
         self,
@@ -449,24 +496,6 @@ class TimeNet:
         """  # ruff: ignore[docstring-extraneous-exception] (all come from open())
         with self.open(dataset_id, version) as reader:
             return reader.read(load=LoadPlan.ALL_EAGER)
-
-    def _catalog(self) -> BaseRegistry:
-        """Choose the registry to browse.
-
-        Returns:
-            The first registry other than the local registry, or the local registry if it is the only one.
-
-        Raises:
-            TimeFValidationError: If the sources contain no registry.
-        """
-        # TODO(adrian): Remove temporary glue which maps these methods onto one registry until
-        # list() and search() ask every source. This registry gives the results of the client of
-        # one registry, from before the list of sources.
-        registries = [source for source in self._sources if isinstance(source, BaseRegistry)]
-        registry = next((registry for registry in registries if registry is not self._store), self._store)
-        if registry is None:
-            raise TimeFValidationError("list() and search() need a registry in the sources")
-        return registry
 
     @contextmanager
     def _hints(self, dataset_id: str) -> Generator[None]:

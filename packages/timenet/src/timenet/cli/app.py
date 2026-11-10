@@ -1,10 +1,12 @@
 """The consumer command-line interface, the command-line mirror of the :class:`~timenet.client.TimeNet` SDK."""
 
-from collections.abc import Callable, Iterable, Sequence
+from collections.abc import Callable, Generator, Iterable, Sequence
+from contextlib import contextmanager
 from functools import partial
 from pathlib import Path
 import shlex
 from typing import TypeVar
+import warnings
 
 from rich.console import Console
 from rich.table import Table
@@ -16,7 +18,7 @@ from timenet.cli.runner import run_cli
 from timenet.cli.ui import console as ui, progress_renderer
 from timenet.client import TimeNet, default_local_registry, default_sources
 from timenet.config import settings
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetNotBuiltError
+from timenet.errors import CatalogWarning, ConnectorCardWarning, TimeNetDatasetNotFoundError, TimeNetNotBuiltError
 from timenet.producer import publish as publish_release
 from timenet.progress import ProgressCallback, ProgressEvent, StepStarted
 from timenet.registry import open_registry
@@ -103,16 +105,35 @@ def _metadata_table(rows: list[DatasetMetadata], title: str) -> Table:
     return table
 
 
+@contextmanager
+def _warning_lines() -> Generator[None]:
+    """Show each CatalogWarning and ConnectorCardWarning of the block as a warning line, without a file and a line."""
+    caught: list[warnings.WarningMessage] = []
+    try:
+        with warnings.catch_warnings(record=True) as caught:
+            warnings.simplefilter("always", CatalogWarning)
+            warnings.simplefilter("always", ConnectorCardWarning)
+            yield
+    finally:
+        for item in caught:
+            if issubclass(item.category, (CatalogWarning, ConnectorCardWarning)):
+                ui.warn(str(item.message))
+            else:
+                # Any other warning gets its usual output.
+                warnings.warn_explicit(item.message, item.category, item.filename, item.lineno)
+
+
 @app.command("list")
 def list_datasets(
     local_registry: str | None = LOCAL_REGISTRY,
     remote_registry: str | None = REMOTE_REGISTRY,
     auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """List the datasets in the registry."""
-    rows = _client(local_registry, remote_registry, auto_build).list()
+    """List each dataset at its highest version across all sources."""
+    with _warning_lines():
+        rows = _client(local_registry, remote_registry, auto_build).list()
     if not rows:
-        typer.echo("No datasets in the registry.")
+        typer.echo("No datasets in the sources.")
         return
     console.print(_metadata_table(rows, "Datasets"))
 
@@ -131,20 +152,21 @@ def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
     remote_registry: str | None = REMOTE_REGISTRY,
     auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """Search for datasets that match the filters.
+    """Search datasets across all sources with filters.
 
-    Repeat a filter flag to supply multiple values.
+    Repeat a filter flag to pass several values.
     """
-    results = _client(local_registry, remote_registry, auto_build).search(
-        query=query or None,
-        domain=_enum_list(domain, Domain, "--domain", [d.value for d in Domain]),
-        task=_enum_list(task, lambda value: TASKS[TaskType(value)], "--task", [t.value for t in TaskType]),
-        license=_enum_list(license, License, "--license", [lic.value for lic in License]),
-        time_series_spec=spec or None,
-        dataset_id=dataset_id or None,
-        tag=tag or None,
-        limit=limit,
-    )
+    with _warning_lines():
+        results = _client(local_registry, remote_registry, auto_build).search(
+            query=query or None,
+            domain=_enum_list(domain, Domain, "--domain", [d.value for d in Domain]),
+            task=_enum_list(task, lambda value: TASKS[TaskType(value)], "--task", [t.value for t in TaskType]),
+            license=_enum_list(license, License, "--license", [lic.value for lic in License]),
+            time_series_spec=spec or None,
+            dataset_id=dataset_id or None,
+            tag=tag or None,
+            limit=limit,
+        )
     if not results:
         typer.echo("No datasets match.")
         return

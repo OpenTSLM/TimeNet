@@ -17,7 +17,7 @@ from timenet.errors import (  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.reader import TimeFReader  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.registry import LocalRegistry, S3Registry, open_local_version  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.testing import assert_datasets_equal, make_dataset  # ruff: ignore[module-import-not-at-top-of-file]
-from timenet.types import DatasetSchema, Version  # ruff: ignore[module-import-not-at-top-of-file]
+from timenet.types import DatasetFilter, DatasetSchema, Version  # ruff: ignore[module-import-not-at-top-of-file]
 from timenet.types.references import DatasetRef  # ruff: ignore[module-import-not-at-top-of-file]
 
 
@@ -133,7 +133,7 @@ def test_list_and_search_are_unsupported(tmp_path):
     with pytest.raises(NotImplementedError):
         registry.list_datasets()
     with pytest.raises(NotImplementedError):
-        registry.search()
+        registry.search(DatasetFilter())
 
 
 def test_rejects_a_non_s3_uri(tmp_path):

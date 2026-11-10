@@ -10,7 +10,7 @@ from abc import ABC, abstractmethod
 from collections.abc import Callable
 from pathlib import Path
 import shutil
-from typing import BinaryIO, TypeVar
+from typing import BinaryIO, ClassVar
 
 from timenet._fs import staged_directory
 from timenet.errors import TimeNetDatasetNotFoundError, TimeNetFileError, TimeNetRegistryError
@@ -22,12 +22,10 @@ from timenet.registry.dependencies import validate_manifest_reference
 from timenet.registry.shared import complete_copy
 from timenet.registry.version import DatasetVersion
 from timenet.sources import FoundInRegistry, NotFound, NotServed, ReleaseLookup
-from timenet.types import Access, DatasetMetadata, Domain, License, Task, Version
+from timenet.types import Access, DatasetFilter, DatasetMetadata, ListedRelease, Version
 from timenet.types.access import access_requirements, effective_access
 from timenet.types.references import DatasetRef
 
-
-T = TypeVar("T")
 
 # Reports download progress: called with each file (or chunk) of bytes as it lands. A ``download_release``
 # implementation calls it so a caller can render a progress bar; ``None`` downloads silently.
@@ -35,12 +33,14 @@ ProgressCallback = Callable[[int], None]
 
 
 class BaseRegistry(ABC):
-    """A searchable source of TimeF datasets, manifests, and files.
+    """A registry of TimeF manifests, files, and searchable dataset metadata.
 
     :meth:`open_release` and :meth:`download_release` handle one release without its payload
     sources. :func:`~timenet.registry.copy_release` copies a release with its payload sources.
     """
 
+    has_catalog: ClassVar[bool] = True
+    """Whether :meth:`list_datasets` and :meth:`search` work. Without a catalog, both raise ``NotImplementedError``."""
     _read_only: bool = False
 
     def __str__(self) -> str:
@@ -240,98 +240,17 @@ class BaseRegistry(ABC):
         with self.open_file(dataset_id, version, relpath) as source, destination.open("wb") as sink:
             shutil.copyfileobj(source, sink)
 
-    def search(  # ruff: ignore[too-many-arguments]
-        self,
-        *,
-        query: str | list[str] | None = None,
-        domain: Domain | list[Domain] | None = None,
-        task: type[Task] | list[type[Task]] | None = None,
-        license: License | list[License] | None = None,
-        time_series_spec: str | list[str] | None = None,
-        dataset_id: str | list[str] | None = None,
-        tag: str | list[str] | None = None,
-        limit: int = 100,
-    ) -> list[DatasetMetadata]:
-        """Filter datasets by any combination of criteria.
+    def search(self, filter: DatasetFilter) -> list[DatasetMetadata]:
+        """Find datasets that match a filter.
 
-        Each filter accepts a single value or a list of values. The method ignores filters set to
-        ``None``. It combines all other filters with AND logic. The filters ``query``, ``domain``,
-        ``task``, ``license``, and ``dataset_id`` match a dataset when any of their values match.
-        The filters ``time_series_spec`` and ``tag`` match a dataset only when all of their values
-        match. The type filters ``task`` and ``time_series_spec`` read the manifest schema of each
-        dataset.
+        A ``task`` or ``time_series_spec`` filter reads the manifest of a dataset only if its card matches.
 
         Args:
-            query: Free-text terms. The method matches each term as a case-insensitive substring
-                in the dataset name, description, or tags.
-            domain: Keep datasets that share any of these domains.
-            task: Keep datasets whose schema includes any of these task classes.
-            license: Keep datasets that have any of these licenses.
-            time_series_spec: Keep datasets that declare all of these ``spec_type`` values.
-            dataset_id: Keep only these ids.
-            tag: Keep datasets that declare all of these tags.
-            limit: The maximum number of results. The default is 100.
+            filter: The filters and the limit.
 
         Returns:
-            The matching dataset metadata. The list has at most ``limit`` entries.
-
-        Raises:
-            ValueError: If ``limit`` is negative.
+            The matching dataset metadata, sorted by dataset ID, with at most ``filter.limit`` entries.
         """
-        if limit < 0:
-            raise ValueError(f"limit must be non-negative, got {limit}")
-        queries = _as_list(query)
-        domains = _as_list(domain)
-        tasks = _as_list(task)
-        licenses = _as_list(license)
-        specs = _as_list(time_series_spec)
-        ids = _as_list(dataset_id)
-        tags = _as_list(tag)
-
-        results: list[DatasetMetadata] = []
-        for metadata in self.list_datasets():
-            if len(results) >= limit:
-                break
-            if ids and metadata.dataset_id not in ids:
-                continue
-            if licenses and metadata.license not in licenses:
-                continue
-            if domains and not set(metadata.domains) & set(domains):
-                continue
-            if tags and not set(tags) <= set(metadata.tags):
-                continue
-            if queries and not _query_matches(metadata, queries):
-                continue
-            if (tasks or specs) and not self._schema_matches(metadata.dataset_id, tasks, specs):
-                continue
-            results.append(metadata)
-        return results
-
-    def _schema_matches(self, dataset_id: str, tasks: list[type[Task]], specs: list[str]) -> bool:
-        """Return whether the manifest schema of a dataset satisfies the type filters."""
-        schema = self.get_manifest(dataset_id).dataset_schema
-        if tasks and not set(tasks) & set(schema.tasks):
-            return False
-        return not (specs and not set(specs) <= {spec.spec_type for spec in schema.time_series_specs})
-
-
-def _as_list(value: T | list[T] | None) -> list[T]:
-    """Normalize a filter value to a list.
-
-    Args:
-        value: ``None``, a single value, or a list of values.
-
-    Returns:
-        An empty list, the list itself, or a list with one value.
-    """
-    if value is None:
-        return []
-    if isinstance(value, list):
-        return value
-    return [value]
-
-
-def _query_matches(metadata: DatasetMetadata, terms: list[str]) -> bool:
-    """Return whether any term is a case-insensitive substring of the dataset name, description, or tags."""
-    haystack = " ".join([metadata.name, metadata.description, *metadata.tags]).lower()
-    return any(term.lower() in haystack for term in terms)
+        # Sorted, so that the limit keeps the first matches by dataset ID, also for a catalog in another order.
+        rows = sorted(self.list_datasets(), key=lambda row: row.dataset_id)
+        return filter.select(ListedRelease(row, self) for row in rows)
