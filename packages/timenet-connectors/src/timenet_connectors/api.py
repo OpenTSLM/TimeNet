@@ -111,9 +111,9 @@ def load(
 
     Args:
         dataset_id: The dataset ID (``org/name``).
-        version: The version declared by the connector, or ``None`` to load the latest version.
-        fetch_from: The registry, or its URI, to copy missing parents and payload sources from.
-        build_parents: Build missing parent releases from their installed connectors.
+        version: The version to load, which the card must declare, or ``None`` for the latest.
+        fetch_from: The registry or URI that supplies missing parents and payload sources.
+        build_parents: Build missing parent releases with installed connectors.
 
     Returns:
         The loaded dataset.
