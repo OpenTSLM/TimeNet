@@ -13,6 +13,7 @@ from typing import TYPE_CHECKING, ClassVar
 
 from timenet.dataset import Record, Source, TimeFDataset
 from timenet.types.reference_keys import ParentAlias
+from timenet.values_backends import ValuesBackend
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector
 from timenet_connectors.datasets.datadog.arfbench.connector import QA_CSV, REPO, REVISION, release_paths
 from timenet_connectors.datasets.datadog.arfbench.questions import read_questions
@@ -44,7 +45,7 @@ def _create_chart_record(path: Path) -> Record:
 class ARFBenchPlotsConnector(BaseHuggingFaceConnector):
     """Connector for the ARFBench charts, as a child of the ``datadog/arfbench`` series."""
 
-    values_backend = "zarr"  # the chart tensors need the Zarr backend
+    values_backend = ValuesBackend.ZARR  # the chart tensors need the Zarr backend
     HF_REPO = REPO
     SOURCE_REVISION = REVISION
     SOURCE_FILES: ClassVar = {"questions": QA_CSV, "charts": f"{CHART_DIR}/*.png"}
