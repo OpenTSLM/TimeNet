@@ -47,7 +47,8 @@ class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
     """An immutable commit: a mutable branch can silently change rebuilt datasets."""
     SOURCE_FILES: ClassVar[Mapping[str, str]]
     """Each part's repository-relative filename, in the order ``download()`` returns them. A filename can end
-    in a glob, such as ``data/*.parquet``: the part's path is then the directory of the matching files."""
+    in a glob pattern, for example ``data/*.parquet``. Then the path of the part is the directory of the
+    files that match the pattern."""
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)

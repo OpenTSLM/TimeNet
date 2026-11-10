@@ -1,12 +1,12 @@
 """Helpers for downloading files from pinned Hugging Face dataset revisions.
 
-:func:`hub_snapshot` downloads with ``huggingface_hub.snapshot_download``, limited to the files that
-match the requested patterns, such as a filename or ``data/*.parquet``. The Hub client runs the downloads in its own thread pool. Its progress bars stay
-hidden: the bar that counts file bytes reaches the ambient :mod:`~timenet_connectors.download.progress`
-sink instead, so the build CLI shows the download like any other connector download.
-``huggingface_hub`` is declared in the connector's ``requirements.txt`` and imported lazily, which
-keeps ``--no-isolation`` usable. The Hub client reads ``HF_TOKEN`` from the environment, so gated
-datasets work with no extra wiring.
+:func:`hub_snapshot` downloads with ``huggingface_hub.snapshot_download``. It downloads only the files
+that match the requested patterns, for example a filename or ``data/*.parquet``. The Hub client runs the
+downloads in its own thread pool. Its progress bars stay hidden. The bar that counts file bytes reaches
+the ambient :mod:`~timenet_connectors.download.progress` sink instead. Thus the build CLI shows the
+download like any other connector download. ``huggingface_hub`` is declared in the connector's ``requirements.txt``
+and imported lazily, which keeps ``--no-isolation`` usable. The Hub client reads ``HF_TOKEN`` from the
+environment, so gated datasets work with no extra wiring.
 """
 
 import asyncio
@@ -36,11 +36,11 @@ async def hub_snapshot(repo: str, revision: str, cache_dir: Path, patterns: Sequ
         repo: The Hub dataset id, such as ``"BASH-Lab/SensorCaps"``.
         revision: The revision to read, normally a pinned commit.
         cache_dir: Directory where the connector caches Hub files.
-        patterns: Repository-relative filenames or glob patterns, such as ``"data/*.parquet"``.
+        patterns: Repository-relative filenames or glob patterns, for example ``"data/*.parquet"``.
 
     Returns:
-        The local snapshot directory, which holds the matching files under their repository paths.
-        The caller checks that the files it needs are there.
+        The local snapshot directory. It holds the matching files at their repository paths.
+        The caller must check that the files it needs are there.
 
     Raises:
         ImportError: If ``huggingface_hub``, declared in the connector's requirements, is missing.

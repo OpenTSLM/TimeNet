@@ -39,7 +39,7 @@ class _HubTqdm:
 
 
 def _fake_hub(monkeypatch, tmp_path, files=("data/train.jsonl", "data/test.jsonl"), error=None, bars=None):
-    """Install a fake huggingface_hub whose snapshot_download writes the revision's ``files`` that match the
+    """Install a fake huggingface_hub. Its snapshot_download writes the revision's ``files`` that match the
     allowed patterns into a snapshot, as the Hub does."""
     calls = []
 
