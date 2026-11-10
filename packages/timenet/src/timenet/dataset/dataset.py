@@ -1,6 +1,7 @@
 """The :class:`TimeFDataset` class is the in-memory model that a connector populates during ``convert()``."""
 
-from collections.abc import Callable, Iterable, Iterator, Mapping, Sequence
+from collections.abc import Callable, Hashable, Iterable, Iterator, Mapping, Sequence
+import json
 from pathlib import Path
 import sys
 from types import MappingProxyType
@@ -57,8 +58,18 @@ class _TaskValidationIndex:
         self.records_by_id = dataset._records_by_id
         self.signals_by_id = dataset._signals_by_id
         self.signals_by_record_id = dataset._signals_by_record_id
-        self.dataset_annotations = {id(annotation) for annotation in dataset._annotations}
+        self._dataset = dataset
+        self._dataset_annotations: set[int] = set()
+        self._seen = 0
         self._record_annotations: dict[int, set[int]] = {}
+
+    def is_dataset_annotation(self, annotation: Annotation) -> bool:
+        """Return whether the dataset holds this occurrence, including ones a task stream attached."""
+        attached = self._dataset._annotations
+        # Within one validation pass, the dataset only appends annotations.
+        self._dataset_annotations.update(id(item) for item in attached[self._seen :])
+        self._seen = len(attached)
+        return id(annotation) in self._dataset_annotations
 
     def annotations_for(self, record: Record) -> set[int]:
         """Return the identities of the occurrences attached anywhere in one Record hierarchy."""
@@ -97,6 +108,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         self._ids = IdCounters()
         self._streamed_task_base = 0
         self._annotations: list[Annotation] = []
+        self._shared_annotations: dict[Hashable, Annotation] = {}
         # An optional re-iterable task source. When set, tasks stream past the dataset instead of
         # accumulating in _tasks, so a dataset with millions of tasks over few records still fits.
         self._task_stream: Callable[[], Iterator[Task]] | None = None
@@ -371,7 +383,13 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         return self._register_batch(batch)
 
     def annotate(self, annotation: Annotation) -> Annotation:
-        """Attach a static annotation to the dataset.
+        """Attach a static annotation to the dataset, or return the equal one already attached.
+
+        Equal means the same content and the same ``source``, ``confidence`` and
+        ``occurrence_metadata``. A task stream can call this for every task, for example for a
+        question type, and gets one occurrence per value. Only occurrences attached by this method
+        are reused, not ones from a read or an import. Do not change the metadata of a returned
+        occurrence.
 
         Returns:
             The attached occurrence.
@@ -381,8 +399,16 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         """
         if annotation.span is not None:
             raise TimeFValidationError("dataset annotations cannot have a time span")
-        attached = annotation._new_occurrence()
-        self._annotations.append(attached)
+        key = (
+            annotation._content_key,
+            annotation.source,
+            annotation.confidence,
+            json.dumps(annotation.occurrence_metadata, sort_keys=True),
+        )
+        attached = self._shared_annotations.get(key)
+        if attached is None:
+            attached = self._shared_annotations[key] = annotation._new_occurrence()
+            self._annotations.append(attached)
         return attached
 
     def set_task_stream(self, task_types: Sequence[type[Task]], source: Callable[[], Iterator[Task]]) -> None:
@@ -824,7 +850,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
         for field_name in ("input_annotations", "target_annotations"):
             for annotation in getattr(task, field_name):
                 identity = id(annotation)
-                if identity not in index.dataset_annotations and not any(
+                if not index.is_dataset_annotation(annotation) and not any(
                     identity in known for known in record_occurrences
                 ):
                     raise TimeFValidationError(

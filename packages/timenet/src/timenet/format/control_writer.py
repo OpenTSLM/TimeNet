@@ -384,9 +384,7 @@ class DuckDBControlWriter:
         clock_keys: dict[int, int] = {}
         signal_values: dict[int, int] = {}
         connection.execute("INSERT INTO datasets (dataset_id) VALUES (?)", [dataset.metadata.dataset_id])
-        annotations: list[tuple[ObjectKind, int | None, Annotation]] = [
-            (ObjectKind.DATASET, None, annotation) for annotation in dataset.annotations
-        ]
+        annotations: list[tuple[ObjectKind, int | None, Annotation]] = []
         record_ids: set[int] = set()
         # Records rank by ID until _write_read_order ranks an imported child's by storage.
         read_order = {identity: index for index, identity in enumerate(sorted(record.id for record in dataset.records))}
@@ -415,6 +413,8 @@ class DuckDBControlWriter:
         task_counts, annotation_refs = self._write_tasks(
             connection, dataset, record_ids, signal_values, annotations, tasks
         )
+        # After the tasks, so annotations that a task stream attached are stored too.
+        annotations.extend((ObjectKind.DATASET, None, annotation) for annotation in dataset.annotations)
         # Clustering occurrences on object_id lets keyed reads skip row groups.
         annotations.sort(key=lambda item: (item[1] is not None, item[1] or 0))
         self._write_annotations(connection, annotations, annotation_refs)

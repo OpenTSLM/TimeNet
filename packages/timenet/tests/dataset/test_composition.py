@@ -2351,7 +2351,7 @@ def test_a_copy_attached_again_beside_an_identical_one_is_an_occurrence_of_its_o
 def test_identical_dataset_annotations_referenced_across_calls_stay_two_occurrences(tmp_path):
     parent = _tree()
     rec = parent.records[0]
-    first, second = (parent.annotate(Annotation(key="note", value="same")) for _ in range(2))
+    first, second = (parent.annotate(Annotation(key="note", value="same", source=source)) for source in ("a", "b"))
     one, both = parent.add_tasks(
         tasks=[
             AnswerTask(inputs=(rec,), targets=("x",), input_annotations=(first,)),
