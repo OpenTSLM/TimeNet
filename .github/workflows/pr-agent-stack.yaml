@@ -1,10 +1,11 @@
 name: PR-Agent stack review
 
-# Reviews a PR together with every PR below and above it in its stack, as one combined diff.
+# Reviews a PR together with every PR below and above it in its stack, as one combined diff. One
+# comment per stack, on its top PR. A push to any PR in the stack reruns it.
 # The per-PR workflow (pr-agent.yaml) still posts the inline suggestions.
 on:
   pull_request:
-    types: [opened, reopened, ready_for_review]
+    types: [opened, reopened, ready_for_review, synchronize]
   workflow_dispatch:
     inputs:
       pr_number:

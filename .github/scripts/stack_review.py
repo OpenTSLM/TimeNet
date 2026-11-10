@@ -8,7 +8,8 @@ Called by ``.github/workflows/pr-agent-stack.yaml``. Starting from one PR it wal
 PR whose base is the target branch, and up through every open PR built on top of it. For each
 path from the bottom PR to a top PR it checks out the top branch, points a local base branch at
 the bottom PR's target, and runs ``pr-agent review`` on that combined diff. The result becomes one
-comment per path on the triggering PR, found again by a marker so reruns edit it in place.
+comment per path, on the top PR, found again by a marker so reruns edit it in place. A path is
+skipped when no PR head in it changed since the comment was written.
 
 The script is trusted code. The workflow runs it from the default branch, never from the PR
 under review, and the PR-Agent configuration is built here for the same reason.
@@ -19,6 +20,7 @@ Run it the way CI does::
 """
 
 from collections import defaultdict
+import hashlib
 import json
 import os
 from pathlib import Path
@@ -144,26 +146,35 @@ def review(repo_dir: Path, path: list[dict[str, Any]], tmp: Path) -> str:
     return review_path.read_text()
 
 
-def upsert_comment(repo: str, number: int, marker: str, body: str, tmp: Path) -> None:
-    """Create the PR comment holding ``marker``, or edit it in place."""
-    body_file = tmp / "comment.md"
-    body_file.write_text(f"{marker}\n{body}")
-    found = run(
+def find_comment(repo: str, number: int, marker: str) -> dict[str, Any] | None:
+    """Return the PR comment holding ``marker``, or ``None``."""
+    lines = run(
         "gh",
         "api",
         "--paginate",
         f"repos/{repo}/issues/{number}/comments",
         "--jq",
-        f'.[] | select(.body | contains("{marker}")) | .id',
-    ).split()
-    if found:
-        run("gh", "api", "-X", "PATCH", f"repos/{repo}/issues/comments/{found[0]}", "-F", f"body=@{body_file}")
+        f'.[] | select(.body | contains("{marker}")) | {{id, body}}',
+    ).splitlines()
+    return json.loads(lines[0]) if lines else None
+
+
+def write_comment(repo: str, number: int, existing: dict[str, Any] | None, body: str, tmp: Path) -> None:
+    """Edit the ``existing`` PR comment in place, or create one."""
+    body_file = tmp / "comment.md"
+    body_file.write_text(body)
+    if existing:
+        run("gh", "api", "-X", "PATCH", f"repos/{repo}/issues/comments/{existing['id']}", "-F", f"body=@{body_file}")
     else:
         run("gh", "api", f"repos/{repo}/issues/{number}/comments", "-F", f"body=@{body_file}")
 
 
 def main() -> None:
-    """Review every stack path through the PR given on the command line."""
+    """Review every stack path through the PR given on the command line.
+
+    Each path gets one comment, on its top PR. A path whose PR head commits have not changed since
+    the last review is skipped.
+    """
     repo_dir, number = Path(sys.argv[1]).resolve(), int(sys.argv[2])
     repo = os.environ["GITHUB_REPOSITORY"]
     tmp = Path(os.environ["RUNNER_TEMP"])
@@ -180,20 +191,27 @@ def main() -> None:
             "--limit",
             "200",
             "--json",
-            "number,title,headRefName,baseRefName",
+            "number,title,headRefName,headRefOid,baseRefName",
         )
     )
-    paths = stack_paths(prs, number)
-    if all(len(path) == 1 for path in paths):
+    paths = [path for path in stack_paths(prs, number) if len(path) > 1]
+    if not paths:
         print(f"#{number} is not part of a stack; the per-PR review covers it.")
         return
 
     for path in paths:
-        leaf = path[-1]["number"]
-        members = " ← ".join(f"#{pr['number']}" for pr in path)
+        top = path[-1]["number"]
+        marker = MARKER.format(leaf=top)
+        commits = "\n".join(f"{pr['number']}:{pr['headRefOid']}" for pr in path)
+        stamp = f"<!-- fingerprint:{hashlib.sha256(commits.encode()).hexdigest()} -->"
+        existing = find_comment(repo, top, marker)
+        if existing and stamp in existing["body"]:
+            print(f"Stack ending at #{top} is unchanged since its last review.")
+            continue
+        members = " \u2190 ".join(f"#{pr['number']} (`{pr['headRefOid'][:7]}`)" for pr in path)
+        header = f"## Stack review\nReviewed as one change, bottom to top: {members}\n\n"
         text = review(repo_dir, path, tmp)
-        header = f"## Stack review: {members}\nThe whole stack was reviewed as one change.\n\n"
-        upsert_comment(repo, number, MARKER.format(leaf=leaf), header + text, tmp)
+        write_comment(repo, top, existing, f"{marker}\n{stamp}\n{header}{text}", tmp)
 
 
 if __name__ == "__main__":
