@@ -139,8 +139,8 @@ def review(repo_dir: Path, path: list[dict[str, Any]], tmp: Path) -> str:
     return review_path.read_text()
 
 
-def find_comment(repo: str, number: int, marker: str) -> dict[str, Any] | None:
-    """Return the PR comment holding ``marker``, or ``None``."""
+def find_comments(repo: str, number: int, marker: str) -> list[dict[str, Any]]:
+    """Return the PR comments holding ``marker``, oldest first."""
     lines = run(
         "gh",
         "api",
@@ -149,17 +149,25 @@ def find_comment(repo: str, number: int, marker: str) -> dict[str, Any] | None:
         "--jq",
         f'.[] | select(.body | contains("{marker}")) | {{id, body}}',
     ).splitlines()
-    return json.loads(lines[0]) if lines else None
+    return [json.loads(line) for line in lines]
 
 
-def write_comment(repo: str, number: int, existing: dict[str, Any] | None, body: str, tmp: Path) -> None:
-    """Edit the ``existing`` PR comment in place, or create one."""
+def write_comment(repo: str, number: int, marker: str, body: str, tmp: Path) -> None:
+    """Edit the oldest PR comment holding ``marker`` in place and delete any copies.
+
+    Looks again right before writing, so two runs that reviewed the same stack at the same time
+    end up with one comment.
+    """
     body_file = tmp / "comment.md"
     body_file.write_text(body)
-    if existing:
-        run("gh", "api", "-X", "PATCH", f"repos/{repo}/issues/comments/{existing['id']}", "-F", f"body=@{body_file}")
-    else:
+    comments = find_comments(repo, number, marker)
+    if not comments:
         run("gh", "api", f"repos/{repo}/issues/{number}/comments", "-F", f"body=@{body_file}")
+        return
+    first, *copies = comments
+    run("gh", "api", "-X", "PATCH", f"repos/{repo}/issues/comments/{first['id']}", "-F", f"body=@{body_file}")
+    for copy in copies:
+        run("gh", "api", "-X", "DELETE", f"repos/{repo}/issues/comments/{copy['id']}")
 
 
 def main() -> None:
@@ -197,14 +205,14 @@ def main() -> None:
         marker = MARKER.format(leaf=top)
         commits = "\n".join(f"{pr['number']}:{pr['headRefOid']}" for pr in path)
         stamp = f"<!-- fingerprint:{hashlib.sha256(commits.encode()).hexdigest()} -->"
-        existing = find_comment(repo, top, marker)
-        if existing and stamp in existing["body"]:
+        existing = find_comments(repo, top, marker)
+        if any(stamp in comment["body"] for comment in existing):
             print(f"Stack ending at #{top} is unchanged since its last review.")
             continue
         members = " \u2190 ".join(f"#{pr['number']} (`{pr['headRefOid'][:7]}`)" for pr in path)
         header = f"## Stack review\nReviewed as one change, bottom to top: {members}\n\n"
         text = review(repo_dir, path, tmp)
-        write_comment(repo, top, existing, f"{marker}\n{stamp}\n{header}{text}", tmp)
+        write_comment(repo, top, marker, f"{marker}\n{stamp}\n{header}{text}", tmp)
 
 
 if __name__ == "__main__":
