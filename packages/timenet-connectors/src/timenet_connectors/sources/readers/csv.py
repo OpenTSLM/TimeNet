@@ -57,7 +57,7 @@ class CsvDataReader(DataReader[RowT]):
     @staticmethod
     def _has_unique_header(header: Sequence[str] | None) -> TypeGuard[Sequence[str]]:
         """Return whether the CSV has a header row with no repeated column name."""
-        return header is not None and len(set(header)) == len(header)
+        return header is not None and len(header) > 0 and len(set(header)) == len(header)
 
     @staticmethod
     def _has_extra_cells(cells: Mapping[str | None, object]) -> bool:

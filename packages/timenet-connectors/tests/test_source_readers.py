@@ -38,6 +38,8 @@ def test_csv_invalid_row_reports_location(tmp_path):
     ("content", "message"),
     [
         ("", "missing or duplicate CSV header"),
+        ("\n", "missing or duplicate CSV header"),
+        ("\nname,count\nx,1\n", "missing or duplicate CSV header"),
         ("name,name\nx,y\n", "missing or duplicate CSV header"),
         ("name,count\nx,1,extra\n", "line 2: too many cells"),
         ("name,count\nx\n", "line 2: too few cells"),
