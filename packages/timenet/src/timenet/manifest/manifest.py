@@ -1,10 +1,12 @@
 """The :class:`Manifest`: the compiled ``manifest.json`` file and its JSON codec."""
 
+from pathlib import Path
 from typing import Annotated, Any, Self
 
-from pydantic import Field, StrictStr, model_validator
+from pydantic import Field, StrictStr, ValidationError, model_validator
 from typing_extensions import TypedDict
 
+from timenet.errors import TimeFFormatError
 from timenet.manifest.counts import ManifestCounts
 from timenet.manifest.files import ManifestFiles
 from timenet.manifest.payload_source import PayloadSource
@@ -102,3 +104,45 @@ class Manifest(TimeFModel):
         # Apply the same validation as to_dict() to catch changes in nested dictionaries.
         validated = type(self).model_validate(self)
         return validated.model_dump_json(indent=2, by_alias=True)
+
+
+def parse_manifest(text: str | bytes, where: str) -> Manifest:
+    """Parse the JSON text of a stored manifest.
+
+    Args:
+        text: The JSON text.
+        where: The source location to include in errors.
+
+    Returns:
+        The manifest.
+
+    Raises:
+        TimeFFormatError: If the text is not a valid manifest.
+    """
+    try:
+        return Manifest.model_validate_json(text)
+    except ValidationError as error:
+        first = error.errors()[0]
+        location = ".".join(str(part) for part in first["loc"])
+        message = first["msg"].removeprefix("Value error, ")
+        detail = f"{location}: {message}" if location else message
+        raise TimeFFormatError(f"{where} is not a valid manifest: {detail}") from error
+
+
+def read_manifest(path: Path) -> Manifest:
+    """Read a ``manifest.json`` file.
+
+    Args:
+        path: The file.
+
+    Returns:
+        The manifest.
+
+    Raises:
+        TimeFFormatError: If the file cannot be read or is not a valid manifest.
+    """
+    try:
+        text = path.read_bytes()
+    except OSError as error:
+        raise TimeFFormatError(f"cannot read the manifest {path}: {error.strerror or error}") from error
+    return parse_manifest(text, str(path))

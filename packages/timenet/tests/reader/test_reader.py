@@ -13,7 +13,6 @@ from typing import NoReturn
 import duckdb
 import pyarrow.fs as pafs
 import pyarrow.parquet as pq
-from pydantic import ValidationError
 import pytest
 
 from timenet.client import TimeNet
@@ -545,7 +544,7 @@ def test_unsupported_format_version_raises(tmp_path, format_version):
     manifest = json.loads(manifest_path.read_text())
     manifest["timef_format_version"] = format_version
     manifest_path.write_text(json.dumps(manifest))
-    with pytest.raises(ValidationError, match="timef_format_version"):
+    with pytest.raises(TimeFFormatError, match="is not a valid manifest: timef_format_version"):
         open_local_version(version_dir)
 
 

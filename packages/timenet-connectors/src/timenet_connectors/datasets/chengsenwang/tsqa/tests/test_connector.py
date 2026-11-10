@@ -187,7 +187,7 @@ def test_equivalent_series_encodings_share_a_split(series, tmp_path):
 def test_splits_survive_storage_round_trip(tmp_path):
     original = TSQAConnector().convert(_refs(tmp_path, _balanced_rows()))
     registry = LocalRegistry(tmp_path / "registry")
-    registry.store(original)
+    registry.put_dataset(original)
     with TimeFReader(registry.open_version("chengsenwang/tsqa", "1.2.0")) as reader:
         restored = reader.read()
     assert {read_value(task.prompt): task.split for task in restored.tasks} == {
