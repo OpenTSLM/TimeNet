@@ -12,6 +12,7 @@ import pyarrow as pa
 import pyarrow.parquet as pq
 
 from timenet.types import read_value
+from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.datadog.arfbench.connector import QA_CSV, SERIES_DIR
 from timenet_connectors.datasets.datadog.arfbench.questions import QUESTION_COLUMNS
 
@@ -93,6 +94,7 @@ CORRELATION_ROW = {
     "interpolate_1": "1",
     "interpolate_2": "0",
 }
+ROWS = [PRESENCE_ROW, CORRELATION_ROW]
 
 
 def write_qa_csv(root: Path, rows: list[dict[str, str]], *, columns: tuple[str, ...] = QUESTION_COLUMNS) -> Path:
@@ -112,3 +114,15 @@ def write_qa_csv(root: Path, rows: list[dict[str, str]], *, columns: tuple[str, 
 def facts(annotated) -> dict:
     """Read the annotations of a record or task as a dict."""
     return {annotation.key: read_value(annotation.value) for annotation in annotated.annotations}
+
+
+def write_release(root: Path) -> list[HubFileRef]:
+    """Write the question table and the series files.
+
+    Returns:
+        The refs that the series connector downloads.
+    """
+    return [
+        HubFileRef(write_qa_csv(root, ROWS), "questions"),
+        HubFileRef(write_series_dir(root), "series"),
+    ]

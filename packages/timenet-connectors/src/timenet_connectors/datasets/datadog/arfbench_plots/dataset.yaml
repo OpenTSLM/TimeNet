@@ -19,9 +19,11 @@
 # `not_recorded`. Values are float64, and the release names no units. The release stores naive
 # epochs, which the dataset reads as UTC. The charts and the answer options use the same clock.
 #
-# This dataset is `datadog/arfbench` with the released charts added. A chart is one record with the
-# PNG as an RGBA image signal: one chart per metric, and one per metric pair that a question cites.
-# The images are tensors, so the dataset uses the Zarr values backend.
+# This dataset is a child of `datadog/arfbench`, its parent `series`. It imports the parent's series
+# tasks with the metric records they cite, whose values stay in the parent release, and adds the
+# released charts. A chart is one record with the PNG as an RGBA image signal: one chart per metric,
+# and one per metric pair that a question cites. The images are tensors, so this release uses the
+# Zarr values backend for the charts it stores.
 #
 # Each question becomes two test tasks: one over the cited metric records, one over the charts (for
 # a pair, the combined chart first, then each metric's own). The series tasks come first, then the
@@ -54,3 +56,5 @@ tags:
   - multiple-choice
   - datadog
   - huggingface
+parents:
+  series: datadog/arfbench@1.0.0

@@ -9,7 +9,7 @@ import json
 from typing import TYPE_CHECKING, Self, TypeVar
 
 from timenet.errors import TimeNetConnectorError
-from timenet.types import Annotation, AnswerTask, InputModality, Split
+from timenet.types import Annotation, ClassificationTask, InputModality, Label, LabelSet, Split
 
 
 if TYPE_CHECKING:
@@ -167,7 +167,7 @@ class ARFBenchQuestion:
             return self.cited_metrics
         return ("-".join(self.cited_metrics), *self.cited_metrics)
 
-    def create_series_task(self, metric_records: Mapping[str, Record]) -> AnswerTask:
+    def create_series_task(self, metric_records: Mapping[str, Record]) -> ClassificationTask:
         """Create the task that asks the question about the cited metric records.
 
         Args:
@@ -185,7 +185,7 @@ class ARFBenchQuestion:
         inputs = tuple(metric_records[metric] for metric in self.cited_metrics)
         return self._create_task(inputs, InputModality.TIME_SERIES)
 
-    def create_chart_task(self, chart_records: Mapping[str, Record]) -> AnswerTask:
+    def create_chart_task(self, chart_records: Mapping[str, Record]) -> ClassificationTask:
         """Create the task that asks the question about the released charts.
 
         Args:
@@ -203,25 +203,28 @@ class ARFBenchQuestion:
         inputs = tuple(chart_records[stem] for stem in self.chart_stems())
         return self._create_task(inputs, InputModality.IMAGE)
 
-    def _create_task(self, inputs: tuple[Record, ...], modality: InputModality) -> AnswerTask:
-        """Create a test task with the question as prompt and the correct answer as target.
+    def _create_task(self, inputs: tuple[Record, ...], modality: InputModality) -> ClassificationTask:
+        """Create a test task that picks the correct answer among the question's options.
 
-        Both tasks of a question carry its row index in their metadata, so a consumer can pair
-        them. The question's annotations describe it, and the interpolation flags describe what
+        The options are the task's label set, named after the question's row, so both tasks of a
+        question share it. Both tasks also carry the row index in their metadata, so a consumer can
+        pair them. The question's annotations describe it, and the interpolation flags describe what
         an engineer saw. Nothing here interpolates.
 
         Returns:
             The task, not yet added to a dataset.
         """
-        task = AnswerTask(
+        task = ClassificationTask(
             inputs=inputs,
             prompt=self.question,
             targets=(self.correct_answer,),
             input_modalities=frozenset({InputModality.TEXT, modality}),
             split=Split.TEST,
             metadata={"question_index": self.index},
+            label_set=LabelSet(
+                name=f"question_{self.index}", labels=tuple(Label(name=option) for option in self.answer_options)
+            ),
         )
-        task.annotate(Annotation(key="answer_options", value=list(self.answer_options)))
         task.annotate(Annotation(key="task_category", value=self.task_category.value))
         task.annotate(Annotation(key="difficulty", value=self.difficulty.value))
         task.annotate(Annotation(key="interpolate_1", value=self.interpolate_1))

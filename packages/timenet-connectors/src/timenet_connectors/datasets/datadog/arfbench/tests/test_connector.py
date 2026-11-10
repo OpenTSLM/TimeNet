@@ -1,6 +1,6 @@
-"""Check that a metric keeps every rollup per tag group, that a question gets a series task, that the
-dataset round-trips through Parquet with its missing timesteps, and that a malformed source raises
-with its location."""
+"""Check that a metric keeps every rollup per tag group, that a question becomes a classification task over
+its options, that the dataset round-trips through Parquet with its missing timesteps, and that a malformed
+source raises with its location."""
 
 from pathlib import Path
 
@@ -10,39 +10,43 @@ from timenet.dataset import RegularAxis
 from timenet.errors import TimeNetConnectorError
 from timenet.reader import TimeFReader
 from timenet.registry import open_local_version
-from timenet.types import InputModality, MissingReason, Split, read_value, read_values
+from timenet.types import ClassificationTask, InputModality, MissingReason, Split, read_value, read_values
 from timenet.writer import TimeFWriter
-from timenet_connectors.datasets.datadog.arfbench.connector import ARFBenchConnector, ARFBenchSource
+from timenet_connectors.bases.huggingface import HubFileRef
+from timenet_connectors.datasets.datadog.arfbench.connector import ARFBenchConnector
 from timenet_connectors.datasets.datadog.arfbench.questions import QUESTION_COLUMNS
 from timenet_connectors.datasets.datadog.arfbench.tests.release import (
     CORRELATION_ROW,
     PRESENCE_ROW,
+    ROWS,
     START_US,
     facts,
     write_qa_csv,
-    write_series_dir,
+    write_release,
     write_series_file,
 )
 
 
 @pytest.fixture
-def release(tmp_path: Path) -> ARFBenchSource:
-    """A release with two metrics and one question about each metric count."""
-    write_qa_csv(tmp_path, [PRESENCE_ROW, CORRELATION_ROW])
-    write_series_dir(tmp_path)
-    return ARFBenchSource(root=tmp_path)
+def release(tmp_path: Path) -> list[HubFileRef]:
+    """A release with two metrics and three questions: two of label-set categories, one with its own options."""
+    return write_release(tmp_path)
 
 
-def test_the_connector_reads_only_the_table_and_the_series():
+def _path(refs: list[HubFileRef], part: str) -> Path:
+    return next(ref.path for ref in refs if ref.part == part)
+
+
+def test_the_connector_downloads_the_table_and_the_series_by_pattern():
     connector = ARFBenchConnector()
 
     assert connector.metadata().dataset_id == "datadog/arfbench"
     assert connector.values_backend == "parquet"
-    assert not any(pattern.endswith(".png") for pattern in connector.HUB_PATTERNS)
+    assert dict(connector.SOURCE_FILES) == {"questions": "arfbench-qa.csv", "series": "arfbench-ts-data/*.parquet"}
 
 
 def test_a_metric_record_keeps_every_rollup_per_tag_group(release):
-    dataset = ARFBenchConnector().convert([release])
+    dataset = ARFBenchConnector().convert(release)
     first, second = dataset.records
 
     assert [record.metadata["source_record_id"] for record in dataset.records] == [
@@ -81,24 +85,28 @@ def test_a_metric_record_keeps_every_rollup_per_tag_group(release):
     }
 
 
-def test_each_question_gets_a_series_task(release):
-    dataset = ARFBenchConnector().convert([release])
-    tasks = dataset.get_all()
+def test_each_question_is_a_classification_task_over_its_options(release):
+    dataset = ARFBenchConnector().convert(release)
+    presence, correlation = tasks = dataset.get_all()
 
-    # One task per question, in the test split, with the question's row index.
     assert dataset.get_test() == tasks and dataset.get_train() == ()
     assert [task.metadata["question_index"] for task in tasks] == [0, 1]
-    assert [read_value(task.prompt) for task in tasks] == [PRESENCE_ROW["question"], CORRELATION_ROW["question"]]
+    assert [read_value(task.prompt) for task in tasks] == [row["question"] for row in ROWS]
     assert [read_values(task.targets) for task in tasks] == [("Yes",), ("No",)]
+    # The options are the task's label set, named after the question's row.
+    assert isinstance(presence, ClassificationTask) and isinstance(correlation, ClassificationTask)
+    assert [presence.label_set.name, correlation.label_set.name] == ["question_0", "question_1"]
+    assert [label.name for label in correlation.label_set.labels] == ["Yes", "No"]
+    assert not correlation.label_set.multi_label
     # The task reads the cited metrics in citation order.
-    assert [record.metadata["source_record_id"] for record in tasks[1].inputs] == [
+    assert [record.metadata["source_record_id"] for record in correlation.inputs] == [
         "arfbench-35997_0",
         "arfbench-35997_1",
     ]
+    assert [record.metadata["source_record_id"] for record in presence.inputs] == ["arfbench-35997_1"]
     assert all(task.input_modalities == frozenset({InputModality.TEXT, InputModality.TIME_SERIES}) for task in tasks)
     assert all(task.split is Split.TEST for task in tasks)
-    assert facts(tasks[1]) == {
-        "answer_options": ["Yes", "No"],
+    assert facts(correlation) == {
         "task_category": "Anomaly Correlation",
         "difficulty": "Tier 3",
         "interpolate_1": True,
@@ -108,7 +116,7 @@ def test_each_question_gets_a_series_task(release):
 
 def test_the_dataset_round_trips_through_parquet_with_its_missing_timesteps(release, tmp_path):
     connector = ARFBenchConnector()
-    dataset = connector.convert([release])
+    dataset = connector.convert(release)
     dataset.derive_schema()
     with TimeFWriter(tmp_path / "built", dataset, values_backend=connector.values_backend) as output:
         output.write()
@@ -124,6 +132,8 @@ def test_the_dataset_round_trips_through_parquet_with_its_missing_timesteps(rele
     assert dc1_60s.spec.missing is not None and dc1_60s.spec.missing.reason is MissingReason.NOT_RECORDED
     assert first.sources[1].signals[0].to_arrow().to_pylist() == [5.0, None, 6.0]
     assert [task.metadata["question_index"] for task in tasks] == [0, 1]
+    assert isinstance(tasks[1], ClassificationTask)
+    assert [label.name for label in tasks[1].label_set.labels] == ["Yes", "No"]
 
 
 @pytest.mark.parametrize(
@@ -146,25 +156,31 @@ def test_the_dataset_round_trips_through_parquet_with_its_missing_timesteps(rele
     ],
 )
 def test_a_malformed_question_raises_with_its_location(release, change, message):
-    rows = [PRESENCE_ROW, CORRELATION_ROW, {**CORRELATION_ROW, "Unnamed: 0": "2"} | change]
-    write_qa_csv(release.root, rows)
+    rows = [*ROWS, {**CORRELATION_ROW, "Unnamed: 0": "2"} | change]
+    write_qa_csv(_path(release, "questions").parent, rows)
     with pytest.raises(TimeNetConnectorError, match=rf"(arfbench-qa\.csv )?{message}"):
-        ARFBenchConnector().convert([release])
+        ARFBenchConnector().convert(release)
 
 
 def test_an_unexpected_header_raises(release):
-    write_qa_csv(release.root, [PRESENCE_ROW], columns=QUESTION_COLUMNS[1:])
+    write_qa_csv(_path(release, "questions").parent, [PRESENCE_ROW], columns=QUESTION_COLUMNS[1:])
     with pytest.raises(TimeNetConnectorError, match=r"arfbench-qa\.csv: expected columns"):
-        ARFBenchConnector().convert([release])
+        ARFBenchConnector().convert(release)
+
+
+def test_a_missing_part_raises(release):
+    with pytest.raises(TimeNetConnectorError, match=r"the ARFBench release lacks series"):
+        ARFBenchConnector().convert([ref for ref in release if ref.part == "questions"])
 
 
 def test_a_row_off_the_rollup_grid_raises(release):
-    write_series_file(release.series_dir / "35997_1_10.parquet", [(30, "", 0.5), (35, "", 0.6)])
+    write_series_file(_path(release, "series") / "35997_1_10.parquet", [(30, "", 0.5), (35, "", 0.6)])
     with pytest.raises(TimeNetConnectorError, match=r"35997_1_10\.parquet group '': rows are off the 10 s grid"):
-        ARFBenchConnector().convert([release])
+        ARFBenchConnector().convert(release)
 
 
 def test_a_series_file_without_an_interval_raises(release):
-    (release.series_dir / "35997_1_10.parquet").rename(release.series_dir / "35997_1_10s.parquet")
+    series_dir = _path(release, "series")
+    (series_dir / "35997_1_10.parquet").rename(series_dir / "35997_1_10s.parquet")
     with pytest.raises(TimeNetConnectorError, match=r"35997_1_10s\.parquet is not named"):
-        ARFBenchConnector().convert([release])
+        ARFBenchConnector().convert(release)
