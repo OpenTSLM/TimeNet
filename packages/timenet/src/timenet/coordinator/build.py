@@ -13,7 +13,7 @@ from timenet.registry.base import BaseRegistry
 from timenet.registry.dependencies import prepare_local_copy
 from timenet.registry.local import LocalRegistry
 from timenet.registry.shared import complete_copy
-from timenet.types.references import DatasetRef, split_ref
+from timenet.types.references import DatasetRef, is_latest, split_ref
 
 
 def build_release(  # ruff: ignore[too-many-arguments]
@@ -59,7 +59,8 @@ def build_release(  # ruff: ignore[too-many-arguments]
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the plan, the copy and the backends
     options = options or BuildOptions()
     dataset_id, version = split_ref(dataset)
-    found = declared(dataset_id, version)
+    # A connector builds only the version of its card, so "latest" asks for that version.
+    found = declared(dataset_id, None if is_latest(version) else version)
     card, requested = found.card, found.release
     steps = plan_parents(
         dataset_id,

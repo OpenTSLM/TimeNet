@@ -11,6 +11,8 @@ search are unsupported. Use it to publish and to fetch by an explicit ``org/name
 boto3 is optional. Install the ``timenet[s3]`` extra to use this backend.
 """
 
+from collections.abc import Generator
+from contextlib import contextmanager
 import os
 from pathlib import Path
 from typing import Any, BinaryIO
@@ -132,7 +134,8 @@ class S3Registry(LazyReadRegistry):
 
         client = self._client()
         try:
-            response = client.get_object(Bucket=self._bucket, Key=self._key(dataset_id, version, relpath))
+            with self._reaching():
+                response = client.get_object(Bucket=self._bucket, Key=self._key(dataset_id, version, relpath))
         except botocore.exceptions.ClientError as exc:
             raise TimeNetDatasetNotFoundError(f"no object {relpath!r} for {dataset_id!r} version {version!r}") from exc
         return response["Body"]
@@ -167,16 +170,17 @@ class S3Registry(LazyReadRegistry):
         client = self._client()
         final_base = self._key(manifest.dataset_id, str(manifest.metadata.dataset_version))
         temp_base = f"{final_base}.tmp-{uuid.uuid4().hex}"
-        try:
-            self._delete_prefix(client, f"{final_base}.tmp-")  # sweep a prior crashed publish's temp prefix
-            data_relpaths = sorted({part.path for part in manifest.files.all_files()})
-            for relpath in (*data_relpaths, MANIFEST_FILE):
-                client.upload_file(str(from_directory / relpath), self._bucket, f"{temp_base}/{relpath}")
-            for relpath in data_relpaths:
-                self._move(client, f"{temp_base}/{relpath}", f"{final_base}/{relpath}")
-            self._move(client, f"{temp_base}/{MANIFEST_FILE}", f"{final_base}/{MANIFEST_FILE}")
-        finally:
-            self._delete_prefix(client, f"{temp_base}/")  # remove any objects left staged in the temp prefix
+        with self._reaching():
+            try:
+                self._delete_prefix(client, f"{final_base}.tmp-")  # sweep a prior crashed publish's temp prefix
+                data_relpaths = sorted({part.path for part in manifest.files.all_files()})
+                for relpath in (*data_relpaths, MANIFEST_FILE):
+                    client.upload_file(str(from_directory / relpath), self._bucket, f"{temp_base}/{relpath}")
+                for relpath in data_relpaths:
+                    self._move(client, f"{temp_base}/{relpath}", f"{final_base}/{relpath}")
+                self._move(client, f"{temp_base}/{MANIFEST_FILE}", f"{final_base}/{MANIFEST_FILE}")
+            finally:
+                self._delete_prefix(client, f"{temp_base}/")  # remove any objects left staged in the temp prefix
         return DatasetRef(dataset_id=manifest.dataset_id, version=manifest.metadata.dataset_version)
 
     @staticmethod
@@ -218,6 +222,20 @@ class S3Registry(LazyReadRegistry):
 
         return boto3.client("s3")
 
+    @contextmanager
+    def _reaching(self) -> Generator[None]:
+        """Name the bucket in the error of a request that fails on the network.
+
+        Raises:
+            TimeNetRegistryError: If a request fails to reach the bucket.
+        """
+        import botocore.exceptions  # ruff: ignore[import-outside-top-level] - optional S3 dependency
+
+        try:
+            yield
+        except (botocore.exceptions.ConnectionError, botocore.exceptions.HTTPClientError) as error:
+            raise TimeNetRegistryError(f"cannot reach {self._display_root()}: {error}") from error
+
     def _key(self, *parts: str) -> str:
         # ruff: ignore[docstring-missing-returns]
         """Build a bucket-relative key: the prefix, then ``datasets/``, then the path parts."""
@@ -251,7 +269,8 @@ class S3Registry(LazyReadRegistry):
 
         client = self._client()
         try:
-            response = client.get_object(Bucket=self._bucket, Key=key)
+            with self._reaching():
+                response = client.get_object(Bucket=self._bucket, Key=key)
         except botocore.exceptions.ClientError as exc:
             if exc.response.get("Error", {}).get("Code") in {"NoSuchKey", "404"}:
                 return None  # a genuinely absent object
@@ -263,12 +282,13 @@ class S3Registry(LazyReadRegistry):
         prefix = f"{self._key(dataset_id)}/"
         client = self._client()
         versions: list[str] = []
-        paginator = client.get_paginator("list_objects_v2")
-        for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix, Delimiter="/"):
-            for entry in page.get("CommonPrefixes", []):
-                name = entry["Prefix"][len(prefix) :].strip("/")
-                if _is_version(name):
-                    versions.append(name)
+        with self._reaching():
+            paginator = client.get_paginator("list_objects_v2")
+            for page in paginator.paginate(Bucket=self._bucket, Prefix=prefix, Delimiter="/"):
+                for entry in page.get("CommonPrefixes", []):
+                    name = entry["Prefix"][len(prefix) :].strip("/")
+                    if _is_version(name):
+                        versions.append(name)
         return max(versions, key=Version.parse) if versions else None
 
 
