@@ -24,11 +24,17 @@ jobs:
       env:
         GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         OPENROUTER.KEY: ${{ secrets.OPENROUTER_API_KEY }}
-        # Pilot model from the review evaluation. LiteLLM does not know this id, so the context
-        # window is set explicitly.
-        CONFIG.MODEL: openrouter/deepseek/deepseek-v4.1-flash-1017
+        # Kimi on Nebius (BYOK). LiteLLM does not know this id, so the context window is set
+        # explicitly.
+        CONFIG.MODEL: openrouter/moonshotai/kimi-k3.1-pro
         CONFIG.FALLBACK_MODELS: '[]'
         CONFIG.CUSTOM_MODEL_MAX_TOKENS: 128000
+        CONFIG.MAX_MODEL_TOKENS: 120000
+        OPENROUTER.PROVIDER_ONLY: '["nebius"]'
+        OPENROUTER.ALLOW_FALLBACKS: "false"
+        # Split reviews that do not fit one call into chunks.
+        PR_REVIEWER.ENABLE_LARGE_PR_CHUNKING: "true"
+        PR_REVIEWER.MAX_NUMBER_OF_CALLS: 6
         # Review summary plus inline code suggestions. Run /describe in a PR comment when wanted.
         github_action_config.auto_review: "true"
         github_action_config.auto_describe: "false"
