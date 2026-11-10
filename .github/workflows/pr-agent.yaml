@@ -1,0 +1,40 @@
+name: PR-Agent review
+
+on:
+  pull_request:
+    types: [opened, reopened, ready_for_review]
+  issue_comment:
+    types: [created]
+
+permissions:
+  contents: read
+
+jobs:
+  pr_agent:
+    # Skip bots and draft PRs. Comment commands (/review, /improve, ...) work on any PR.
+    if: ${{ github.event.sender.type != 'Bot' && github.event.pull_request.draft != true }}
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      issues: write
+      pull-requests: write
+    steps:
+    - name: Run PR-Agent
+      uses: The-PR-Agent/pr-agent@v0.50.0
+      env:
+        GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        OPENROUTER.KEY: ${{ secrets.OPENROUTER_API_KEY }}
+        # Pilot model from the review evaluation. LiteLLM does not know this id, so the context
+        # window is set explicitly.
+        CONFIG.MODEL: openrouter/deepseek/deepseek-v4.1-flash-1017
+        CONFIG.FALLBACK_MODELS: '[]'
+        CONFIG.CUSTOM_MODEL_MAX_TOKENS: 128000
+        # Review only. Run /describe or /improve in a PR comment when wanted.
+        github_action_config.auto_review: "true"
+        github_action_config.auto_describe: "false"
+        github_action_config.auto_improve: "false"
+        # Pull TimeNet's AGENTS.md rules into the review.
+        PR_REVIEWER.EXTRA_INSTRUCTIONS: >-
+          Follow AGENTS.md. Check TimeF invariants, explicit TimeNet exceptions on data issues
+          (no silent repair of data), data types, missing values, lazy loading and bounded memory.
+          For stacked PRs, report defects only when they are material.
