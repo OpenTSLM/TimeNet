@@ -14,7 +14,7 @@ from timenet.errors import TimeFFormatError, TimeFValidationError
 from timenet.json import JsonValue
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry
-from timenet.types import AnswerTask, ClassificationTask, Split
+from timenet.types import AnswerTask, ClassificationTask, Split, read_value
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark import connector
 from timenet_connectors.datasets.tsaqa.tsaqa_benchmark.connector import (
@@ -122,12 +122,33 @@ def test_every_task_holds_its_published_row():
     assert len(dataset.records) == sum(len(_published_series(row)) for row in published.values())
 
 
+def _published_labels(task) -> tuple:
+    """Return the task's shared ``task`` and ``question_type`` annotations, in input order."""
+    return tuple(annotation for annotation in task.input_annotations if annotation.key in {"task", "question_type"})
+
+
+def test_repeated_task_iteration_reuses_shared_labels():
+    dataset = _FixtureConnector().convert(_refs())
+    first_tasks = list(dataset.iter_tasks())
+    second_tasks = list(dataset.iter_tasks())
+    for first, second in zip(first_tasks, second_tasks, strict=True):
+        labels = _published_labels(first)
+        # A second pass reuses the occurrences of the first.
+        assert all(one is two for one, two in zip(labels, _published_labels(second), strict=True))
+    # One occurrence per distinct published value, however often the stream runs.
+    shared = [annotation for annotation in dataset.annotations if annotation.key in {"task", "question_type"}]
+    expected = {(key, task.metadata[key]) for task in first_tasks for key in ("task", "question_type")}
+    assert sorted((annotation.key, read_value(annotation.value)) for annotation in shared) == sorted(expected)
+
+
 def test_storage_round_trip_keeps_the_whole_conversion(tmp_path):
     original = _FixtureConnector().convert(_refs())
     registry = LocalRegistry(tmp_path / "registry")
     registry.store(original)
     published = _published()
-    with TimeFReader(registry.open_version("tsaqa/tsaqa-benchmark", "1.0.0")) as reader:
+    with TimeFReader(
+        registry.open_version(original.metadata.dataset_id, str(original.metadata.dataset_version))
+    ) as reader:
         restored = reader.read()
         assert {a.key: a.value for a in restored.annotations if a.key not in {"task", "question_type"}} == {
             "source_repository": "TSAQA/TSAQA-Benchmark",
