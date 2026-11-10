@@ -11,7 +11,7 @@ from pathlib import Path
 import pyarrow as pa
 import pyarrow.parquet as pq
 
-from timenet.types import read_value
+from timenet.types import SupportsAnnotate, read_value
 from timenet_connectors.bases.huggingface import HubFileRef
 from timenet_connectors.datasets.datadog.arfbench.connector import QA_CSV, SERIES_DIR
 from timenet_connectors.datasets.datadog.arfbench.questions import QUESTION_COLUMNS
@@ -111,7 +111,7 @@ def write_qa_csv(root: Path, rows: list[dict[str, str]], *, columns: tuple[str, 
     return qa_csv
 
 
-def facts(annotated) -> dict:
+def facts(annotated: SupportsAnnotate) -> dict[str, object]:
     """Read the annotations of a record or task as a dict."""
     return {annotation.key: read_value(annotation.value) for annotation in annotated.annotations}
 

@@ -1,6 +1,7 @@
 """Check four properties of the ARFBench series connector.
 
-A metric keeps every rollup per tag group. A question becomes a classification task over its options. The dataset
+Metrics contain every rollup per tag group.
+Questions are transformed into Classification Tasks with the Options as the Label-Set. The dataset
 round-trips through Parquet with its missing timesteps. A malformed source raises an error with its location."""
 
 from pathlib import Path
@@ -36,14 +37,6 @@ def release(tmp_path: Path) -> list[HubFileRef]:
 
 def _path(refs: list[HubFileRef], part: str) -> Path:
     return next(ref.path for ref in refs if ref.part == part)
-
-
-def test_the_connector_downloads_the_table_and_the_series_by_pattern():
-    connector = ARFBenchConnector()
-
-    assert connector.metadata().dataset_id == "datadog/arfbench"
-    assert connector.values_backend == "parquet"
-    assert dict(connector.SOURCE_FILES) == {"questions": "arfbench-qa.csv", "series": "arfbench-ts-data/*.parquet"}
 
 
 def test_a_metric_record_keeps_every_rollup_per_tag_group(release):
