@@ -16,11 +16,11 @@ There are two everyday ways to get a reader.
 `TimeFReader.open()` opens a version directory:
 
 ```python
-from timenet.client import TimeNet
+import timenet
 from timenet.reader import TimeFReader
 
 # By dataset ID, through the client.
-with TimeNet().open("timenet/hello-world") as reader:
+with timenet.TimeNet().open("timenet/hello-world") as reader:
     dataset = reader.read()
     values = dataset.records[0].signals[0].to_arrow()
 
@@ -159,11 +159,11 @@ source gave a recording, read the objects with `iter_records()` or `read_tasks()
 `metadata`.
 
 ```python
-from timenet.client import TimeNet
+import timenet
 from timenet.dataset import Signal
 from timenet.types import AnswerTask, read_value
 
-with TimeNet().open("timenet/hello-world") as reader:
+with timenet.TimeNet().open("timenet/hello-world") as reader:
     task = reader.get(AnswerTask, task_id)
     # Reads this one text and keeps nothing; None without a prompt.
     prompt = read_value(task.prompt)
@@ -298,27 +298,32 @@ and decoded Zarr chunks until it closes.
 
 ## Opening a version
 
-To read a version without the client, pass a [`DatasetVersion`](registry.md) to
-`TimeFReader(version)`. `open_local_version()` and the `open_version()` method of a registry
-return one. A `DatasetVersion` holds the parsed manifest and the local or remote file systems of
-the version and its payload sources. A reader that you open this way skips three parts of the
-client: the download cache, the access check, and `auto_build`. The two examples open a version
-from a registry and from a directory:
+To read a version directory without the client, pass a [`DatasetVersion`](registry.md) to
+`TimeFReader(version)`. `open_local_version()` returns one. A `DatasetVersion` holds the parsed
+manifest and the file systems of the version and its payload sources. A reader that you open this
+way reads only from that directory and the registry root around it, without other sources or
+builds:
 
 ```python
 from timenet.reader import TimeFReader
-from timenet.registry import open_local_version, open_registry
-
-registry = open_registry("~/timenet/registry")
-with TimeFReader(registry.open_version("timenet/hello-world")) as reader:
-    dataset = reader.read()
+from timenet.registry import open_local_version
 
 with TimeFReader(open_local_version(version_dir)) as reader:
     dataset = reader.read()
 ```
 
-`open_local_version()` and the `open_version()` method of a registry open a version at once, but
-they read only metadata. Opening makes sure that:
+To read from one registry, give the client a list with only that registry:
+
+```python
+import timenet
+
+client = timenet.TimeNet(sources=["~/timenet/registry"])
+with client.open("timenet/hello-world") as reader:
+    dataset = reader.read()
+```
+
+`open_local_version()` opens a version at once, but it reads only metadata. Opening makes sure
+that:
 
 - `manifest.json` is valid and has a supported format version.
 - Each file that the manifest lists, `control.duckdb` included, is present with its recorded size.
@@ -340,7 +345,7 @@ releases that source reuses.
 | A payload source differs from its pins | `TimeFFormatError` | The source and the first differing file |
 | A file is missing or has another size | `TimeNetFileError` | The file, its expected size, and its actual size |
 
-An invalid or unsupported manifest raises a validation error, and a missing one raises
+An invalid or unsupported manifest raises `TimeNetManifestError`, and a missing one raises
 `FileNotFoundError`.
 
 ### Where payload sources are found
@@ -348,8 +353,8 @@ An invalid or unsupported manifest raises a validation error, and a missing one 
 Payload sources resolve relative to a registry root. By default, `open_local_version()` takes the
 root that holds the version as `<root>/<org>/<name>/<version>`, so a version and its sources keep
 working when they move to another root together. Pass `sources_root=` to find them under another
-root. `TimeFReader.open()` takes `sources_root=` too. A registry's `open_version()` finds them in
-that registry.
+root. `TimeFReader.open()` takes `sources_root=` too. The client finds them through its list of
+sources.
 
 A version without payload sources opens from any directory. A version with payload sources that is
 not stored as `<root>/<org>/<name>/<version>` needs `sources_root=`, and opening it without one
@@ -397,4 +402,4 @@ Relationships return as object references: task inputs are Records, spans hold S
 Sources, axes, and annotations have no id. The reader does not keep the Python object identity
 from the writer process.
 
-See the [API reference for `timenet.reader`](api/reader.md) for all members.
+See the [API reference for `timenet.reader`](api/timenet.reader.md) for all members.

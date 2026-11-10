@@ -22,22 +22,24 @@ TimeNet needs Python 3.11 or newer.
 ```bash
 uv add 'timenet[cli]'
 uv tool install timenet-connectors
-timenet-build build timenet/hello-world --out .timenet-registry
+timenet-build build timenet/hello-world
 ```
 
-Load the local build with Python:
+The build lands in the local registry at `~/.timenet/registry/timenet/hello-world/1.0.0/`. Load it
+with Python:
 
 ```python
-from timenet.client import TimeNet
+from timenet import TimeNet
 
-dataset = TimeNet(".timenet-registry").load("timenet/hello-world")
+dataset = TimeNet().load("timenet/hello-world@1.0.0")
 dataset.describe()
 
 signal = dataset.records[0].signals[0]
 values = signal.to_numpy()
 ```
 
-This example uses a local registry, so it works without registry credentials or network access.
+`TimeNet()` reads the local registry first, and the local registry holds this exact version.
+So the example works without registry credentials or network access.
 
 See the [Get started guide](https://docs.timenet.ai/get-started.html) for installation options and a
 longer example.

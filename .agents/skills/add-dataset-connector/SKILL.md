@@ -7,7 +7,7 @@ description: Use when adding a new TimeNet dataset connector, i.e. converting an
 
 A connector fetches a dataset's raw source and converts it into a `TimeFDataset`. It implements the
 `BaseConnector` contract (in the `timenet` package) and lives in `timenet-connectors`. The engine drives
-it `download -> convert -> derive_schema -> store`; `timenet-build build <id>` runs that pipeline and
+it `download -> convert -> derive_schema -> store_dataset`; `timenet-build build <id>` runs that pipeline and
 writes the result into a registry.
 
 Reuse a base connector wherever the source allows: `BaseHuggingFaceConnector` for Hub datasets,
@@ -99,8 +99,8 @@ not by an id. A span takes Signal objects, for example
   in some docs are **not implemented**, so don't rely on them.
 - If you added or changed a `requirements.txt`, re-run `make sync` so the new library lands in your own
   environment. Otherwise `ty` reports your lazy import as unresolved and the connector test can't run.
-- Round-trip end to end: `uv run timenet-build build <id> --out <tmp-dir>`, then
-  `with TimeNet(registry="<tmp-dir>").open("<id>") as reader: reader.read().describe()`.
+- Round-trip end to end: `uv run timenet-build build <id> --local-registry <tmp-dir>`, then
+  `with timenet.TimeNet(sources=["<tmp-dir>"]).open("<id>") as reader: reader.read().describe()`.
 - Run `make check` and `make test`, and state which checks you ran (per AGENTS.md).
 
 ## Further reading

@@ -293,20 +293,31 @@ TimeNet raises its own exceptions from `timenet.errors`.
 | --- | --- |
 | `TimeNetError` | Base class for TimeNet failures. |
 | `TimeNetRegistryError` | A registry cannot complete an operation. |
+| `TimeNetUnreachableError` | A request to a registry or its storage failed on the network. The original error is its cause. A `TimeNetRegistryError`. |
+| `TimeNetNoCatalogError` | No source of a list or a search has a catalog. The hint names the read of an exact release. A `TimeNetRegistryError`. |
 | `TimeNetDatasetNotFoundError` | A dataset ID or version does not exist. |
+| `TimeNetVersionUnavailableError` | The installed connector of a dataset builds another version than the requested one. A `TimeNetDatasetNotFoundError` and a `TimeFValidationError`. |
+| `TimeNetVersionConflictError` | A registry already holds a release with other files or another card than a copy that would go there. `difference` is `ReleaseDifference.FILES` or `ReleaseDifference.CARD`, from `timenet.errors`, and `registry_location` is the location of that registry. For a publish, the hint asks for a new version. For `timenet-build build --publish-to` before the build, the hint names `--force`. For a copy into the local registry, the hint names the release folder to delete. |
 | `TimeFValidationError` | Input violates a TimeF invariant. |
 | `TimeFNullValuesError` | Values contain nulls that NumPy cannot hold. A `TimeFValidationError`. |
 | `TimeFNotFoundError` | An ID, parent alias, or parent release names nothing in the dataset, or the stored object has another kind. A `TimeFValidationError` and a `LookupError`. |
 | `TimeFFormatError` | A stored TimeF artifact is corrupt or unsupported. |
 | `TimeNetFileError` | A file of a release is missing, or does not match its manifest record. A `TimeFFormatError`. |
+| `TimeNetManifestError` | A stored manifest is not a valid manifest. `where` names the file or the place in a registry, and `detail` names the first problem. `path` is the file, or `None` for a manifest that a registry served. A `TimeFFormatError`. |
+| `TimeNetOriginError` | The provenance record of a release in the local registry is not valid. `release` names the release, `path` the file, and `detail` the first problem. A `TimeFFormatError`. |
 | `TimeFReaderError` | A reader could not complete a read, e.g. its connection was closed while the read ran. |
 | `TimeNetInvalidCardError` | `dataset.yaml` cannot be read or is not a mapping. |
 | `TimeNetConnectorError` | A connector found that an assumption about its source data, a download, or a parent does not hold. `TimeNetDownloadError` is a `TimeNetConnectorError`. |
+| `TimeNetBuildError` | A build failed: the connector build, or the environment that it needs. |
+| `TimeNetIsolationError` | An isolated build cannot make its environment, for example because `uv` is missing. A `TimeNetBuildError`. |
+
+Most TimeNet errors come with a `hint`: what you can do about the error.
 
 Pydantic `ValidationError` reports field and schema errors in a dataset card. The error includes the
 native field location and details.
 
-Manifest parsing uses the same error for invalid JSON and invalid fields.
+`Manifest.model_validate_json()` uses the same error for invalid JSON and invalid fields. A registry
+that reads a stored manifest raises `TimeNetManifestError` instead.
 
 `TimeFValidationError` also subclasses `ValueError`. Existing input-validation handlers can catch it
 without losing the TimeNet-specific error type.
@@ -314,4 +325,11 @@ without losing the TimeNet-specific error type.
 `SpanOutsideWindowWarning` reports a span outside a Signal window when the caller has chosen warning
 behavior. It derives from `TimeNetWarning` and `UserWarning`.
 
-See the [API reference for `timenet.types`](api/types.md) for all symbols.
+`ConnectorCardWarning` reports a connector card that cannot be read. The list of installed
+connectors leaves its dataset out, so the card fails only its own dataset.
+
+`CatalogWarning` reports a source without a catalog, which `TimeNet.list()` and
+`TimeNet.search()` leave out. Both warnings point at the first line of the call stack outside the
+`timenet` package, which is usually your own call.
+
+See the [API reference for `timenet.types`](api/timenet.types.md) for all symbols.

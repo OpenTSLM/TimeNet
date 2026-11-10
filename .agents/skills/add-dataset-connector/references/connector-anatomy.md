@@ -21,8 +21,8 @@ this branch. Anchor files:
 - `metadata(self) -> DatasetMetadata` (**concrete**, do not override): loads and validates the card via
   `DatasetMetadata.from_yaml`. By convention the card is `dataset.yaml` beside the connector module;
   set the `CARD` class var to point elsewhere. (Some docs call `metadata` abstract; it isn't.)
-- `store(...)` (concrete): derives the schema if missing and streams the dataset through `TimeFWriter`.
-  Most connectors never override it.
+- The connector has no write method. The engine function `timenet.engine.store_dataset()` derives the
+  schema if missing and streams the dataset through `TimeFWriter`.
 
 Connectors take **no constructor arguments** (configuration comes from the environment). End with a
 module-level `CONNECTOR = <YourClass>`.

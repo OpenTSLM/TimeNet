@@ -265,7 +265,7 @@ The stored version contains `manifest.json`, an immutable `control.duckdb`, and 
 values plane. See [TimeF format](timef-format.md) and [TimeFWriter](timef-writer.md) for the physical
 layout.
 
-See the [API reference for `timenet.dataset`](api/dataset.md) for the full symbol listing.
+See the [API reference for `timenet.dataset`](api/timenet.dataset.md) for the full symbol listing.
 
 ## Importing from a parent
 
@@ -305,6 +305,9 @@ still say `open`. The effective access level of a dataset is the strictest level
 of the cards in its `lineage`. A user must have this level of access to use the data of the dataset.
 
 `timenet info` shows the effective access level and the page of each card that requires access.
+Before a build, a release has no lineage yet. So for a release that only a connector provides,
+`timenet info` shows the level of its own card. If the card declares parents, the access row says
+so, for example `open (this card only: the access of its 2 parents is known after a build)`.
 `effective_access()` and `access_requirements()` in `timenet.types.access` return the same
 information.
 
