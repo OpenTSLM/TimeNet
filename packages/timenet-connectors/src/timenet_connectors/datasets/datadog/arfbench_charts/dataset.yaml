@@ -39,9 +39,9 @@
 #   series.
 # - 29 time options that are outside every rollup.
 yaml_schema_version: 1
-dataset_id: datadog/arfbench-plots
+dataset_id: datadog/arfbench-charts
 dataset_version: 1.0.0
-name: ARFBench plots
+name: ARFBench charts
 description: >-
   750 multiple-choice questions about anomalies in 142 metrics from 63 Datadog incidents.
   The dataset includes every published metric rollup and the released charts.

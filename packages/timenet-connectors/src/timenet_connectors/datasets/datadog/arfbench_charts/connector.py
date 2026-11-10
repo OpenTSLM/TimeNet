@@ -42,7 +42,7 @@ def _create_chart_record(path: Path) -> Record:
     )
 
 
-class ARFBenchPlotsConnector(BaseHuggingFaceConnector):
+class ARFBenchChartsConnector(BaseHuggingFaceConnector):
     """Connector for the ARFBench charts, as a child of the ``datadog/arfbench`` series."""
 
     values_backend = ValuesBackend.ZARR  # the chart tensors need the Zarr backend
@@ -74,4 +74,4 @@ class ARFBenchPlotsConnector(BaseHuggingFaceConnector):
         return dataset
 
 
-CONNECTOR = ARFBenchPlotsConnector
+CONNECTOR = ARFBenchChartsConnector

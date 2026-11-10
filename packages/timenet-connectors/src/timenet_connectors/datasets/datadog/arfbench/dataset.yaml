@@ -22,7 +22,7 @@
 #
 # Each question becomes one test task over the cited metric records. Thus the test split holds 750
 # tasks. A task carries the row of the question as `question_index` in its metadata. The released
-# charts are in `datadog/arfbench-plots`. The chart tasks of that dataset carry the same
+# charts are in `datadog/arfbench-charts`. The chart tasks of that dataset carry the same
 # `question_index`.
 #
 # The dataset keeps three items as released:
@@ -37,7 +37,7 @@ dataset_version: 1.0.0
 name: ARFBench
 description: >-
   750 multiple-choice questions about anomalies in 142 metrics from 63 Datadog incidents.
-  The dataset includes every published metric rollup. The charts are in datadog/arfbench-plots.
+  The dataset includes every published metric rollup. The charts are in datadog/arfbench-charts.
 license: Apache-2.0
 source_url: https://huggingface.co/datasets/Datadog/ARFBench
 citation: >-

@@ -1,6 +1,6 @@
 """Write a small ARFBench release for the connector tests: two metrics and the question table.
 
-The plots tests add the charts. This module does not import Pillow. Thus the environment of the
+The charts tests add the charts. This module does not import Pillow. Thus the environment of the
 series connector can run it.
 """
 

@@ -1,1 +1,0 @@
-"""ARFBench plots connector tests."""

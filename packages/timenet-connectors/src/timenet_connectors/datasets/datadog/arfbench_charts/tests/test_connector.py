@@ -1,4 +1,4 @@
-"""Check that the plots dataset composes on its ``datadog/arfbench`` parent.
+"""Check that the charts dataset composes on its ``datadog/arfbench`` parent.
 
 The dataset imports the series tasks. It adds a chart record per chart and a chart task per question. It stores
 only the charts. It reads the series through the Parquet release of the parent. A question without its charts
@@ -27,7 +27,7 @@ from timenet_connectors.datasets.datadog.arfbench.tests.release import (
     write_qa_csv,
     write_release,
 )
-from timenet_connectors.datasets.datadog.arfbench_plots.connector import CHART_DIR, ARFBenchPlotsConnector
+from timenet_connectors.datasets.datadog.arfbench_charts.connector import CHART_DIR, ARFBenchChartsConnector
 
 
 def _write_chart_dir(root: Path) -> Path:
@@ -53,23 +53,23 @@ def registry(tmp_path: Path) -> Path:
 @pytest.fixture
 def charts(tmp_path: Path) -> list[HubFileRef]:
     """The question table and the three charts of the test release."""
-    root = tmp_path / "plots"
+    root = tmp_path / "charts"
     root.mkdir()
     return [HubFileRef(write_qa_csv(root, ROWS), "questions"), HubFileRef(_write_chart_dir(root), "charts")]
 
 
 @contextmanager
 def _composed(registry: Path, refs: list[HubFileRef]) -> Generator[TimeFDataset]:
-    """Compose the plots dataset inside its parent context, as the engine does."""
-    connector = ARFBenchPlotsConnector()
+    """Compose the charts dataset inside its parent context, as the engine does."""
+    connector = ARFBenchChartsConnector()
     with open_parents(connector.metadata(), LocalRegistry(registry)) as context:
         yield connector.compose(refs, context)
 
 
 def test_the_connector_declares_the_series_dataset_as_its_parent():
-    connector = ARFBenchPlotsConnector()
+    connector = ARFBenchChartsConnector()
 
-    assert connector.metadata().dataset_id == "datadog/arfbench-plots"
+    assert connector.metadata().dataset_id == "datadog/arfbench-charts"
     assert connector.values_backend == "zarr"
     assert dict(connector.SOURCE_FILES) == {"questions": "arfbench-qa.csv", "charts": "arfbench-images/*.png"}
     assert {str(alias): str(ref) for alias, ref in connector.metadata().parents.items()} == {
@@ -112,7 +112,7 @@ def test_the_child_imports_the_series_tasks_and_adds_a_chart_task_per_question(r
 
 
 def test_the_child_stores_only_the_charts_and_reads_the_series_from_the_parent(registry, charts):
-    connector = ARFBenchPlotsConnector()
+    connector = ARFBenchChartsConnector()
     with _composed(registry, charts) as dataset:
         dataset.derive_schema()
         version_dir = store_dataset(dataset, registry, values_backend=connector.values_backend)

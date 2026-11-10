@@ -5,7 +5,7 @@ chart per metric or cited metric pair. This connector reads the table and the se
 becomes one Record, and each question becomes one series task. The loop over the release is in
 ``convert``. :mod:`~timenet_connectors.datasets.datadog.arfbench.series` reads the series files.
 :mod:`~timenet_connectors.datasets.datadog.arfbench.questions` reads the question table. The
-``datadog/arfbench-plots`` dataset uses this dataset as its parent and adds the charts.
+``datadog/arfbench-charts`` dataset uses this dataset as its parent and adds the charts.
 """
 
 from __future__ import annotations
