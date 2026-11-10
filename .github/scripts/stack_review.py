@@ -28,7 +28,7 @@ from typing import Any
 
 
 PR_AGENT = "git+https://github.com/The-PR-Agent/pr-agent.git@v0.50.0"
-MODEL = "openrouter/deepseek/deepseek-v4.1-flash-1017"
+MODEL = "openrouter/moonshotai/kimi-k3.1-pro"
 BASE_BRANCH = "stack-base"
 MARKER = "<!-- pr-agent-stack-review:{leaf} -->"
 
@@ -48,7 +48,7 @@ git_provider = "local"
 model = "{model}"
 fallback_models = []
 max_model_tokens = 120000
-custom_model_max_tokens = 120000
+custom_model_max_tokens = 128000
 ai_timeout = 900
 reasoning_effort = "low"
 repo_context_files = ["AGENTS.md"]
@@ -58,12 +58,16 @@ output_run_details = true
 review_path = "{review_path}"
 
 [pr_reviewer]
+enable_large_pr_chunking = true
+max_number_of_calls = 6
 enable_review_labels_security = false
 enable_review_labels_effort = false
 extra_instructions = {instructions}
 
 [openrouter]
 max_tokens = 16000
+provider_only = ["nebius"]
+allow_fallbacks = false
 """
 
 
