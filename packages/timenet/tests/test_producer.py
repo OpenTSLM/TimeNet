@@ -87,8 +87,9 @@ def test_build_with_local_registry_and_sources_takes_both_only_from_them(tmp_pat
     monkeypatch.setenv("TIMENET_REMOTE_REGISTRY", str(origin.root))
     store = tmp_path / "store"
     # The remote registry of the environment holds the parent, but the list of sources is empty.
-    with pytest.raises(TimeNetMissingParentError):
+    with pytest.raises(TimeNetMissingParentError) as caught:
         timenet.build(CHILD.dataset_id, local_registry=store, sources=[])
+    assert caught.value.hint == "Add a registry that holds it to the sources, or add InstalledConnectors() to build it."
     assert not env_store.exists()
     assert cards == []
 
@@ -140,6 +141,12 @@ def test_timenet_exports_the_client_and_its_sources():
         LocalRegistry,
         InstalledConnectors,
     )
+
+
+def test_build_of_a_dataset_without_a_connector_package_names_one(tmp_path):
+    with pytest.raises(TimeNetDatasetNotFoundError) as caught:
+        timenet.build("x/y", local_registry=tmp_path / "store")
+    assert caught.value.hint == "Install a connector package that builds it, such as timenet-connectors."
 
 
 @pytest.mark.parametrize("kind", ["remote", "url", "read-only"])
@@ -251,6 +258,24 @@ def test_publish_of_a_release_that_the_source_lacks_names_the_source(tmp_path):
     assert not (tmp_path / "dest").exists()
 
 
+def test_the_hint_of_a_publish_asks_no_registry_that_the_call_does_not_open(tmp_path, monkeypatch):
+    requests = []
+
+    def send(self, request, **kwargs):
+        requests.append(request.url)
+        raise httpx.ConnectError("offline", request=request)
+
+    monkeypatch.setattr(httpx.Client, "send", send)
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "local"))
+    monkeypatch.setenv("TIMENET_REMOTE_REGISTRY", "https://registry.example")
+
+    with pytest.raises(TimeNetDatasetNotFoundError) as caught:
+        timenet.publish("x/y@1.0.0", dest=tmp_path / "dest")
+
+    assert requests == []
+    assert caught.value.hint == "Copy it into the local registry with timenet.TimeNet().download('x/y@1.0.0')."
+
+
 def test_publish_of_a_listed_release_that_the_source_does_not_serve_raises_the_access_error(tmp_path):
     card = _card(
         DatasetRef.parse("org/gated@1.0.0"), access=Access.CREDENTIALED, access_url="https://physionet.example/dua"
@@ -263,9 +288,7 @@ def test_publish_of_a_listed_release_that_the_source_does_not_serve_raises_the_a
     hosted = _Hosted("http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)))
     with pytest.raises(TimeNetAccessError) as caught:
         timenet.publish("org/gated", dest=tmp_path / "dest", source=hosted)
-    assert str(caught.value) == (
-        "org/gated@1.0.0 is credentialed. Get access at https://physionet.example/dua for org/gated@1.0.0."
-    )
+    assert caught.value.dataset == DatasetRef.parse("org/gated@1.0.0")
     assert not (tmp_path / "dest").exists()
 
 

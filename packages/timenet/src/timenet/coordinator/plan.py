@@ -353,8 +353,7 @@ class _Graph:
         elif held is not None:
             # With force, the copy needs a registry other than the target registry, and none provides the release.
             raise TimeNetDatasetNotFoundError(
-                f"No registry other than the local registry provides {reference}, so download(force=True) cannot copy "
-                "it again."
+                f"no registry other than the local registry provides {reference} to copy again"
             )
         elif isinstance(answer, FoundInConnector):
             if not self.builds:

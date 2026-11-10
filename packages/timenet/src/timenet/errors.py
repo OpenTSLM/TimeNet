@@ -7,16 +7,19 @@ the builtin ``FileNotFoundError`` and ``FileExistsError`` directly for user-supp
 Every TimeNet-raised warning derives from :class:`TimeNetWarning`.
 
 Some errors carry facts as attributes and leave the remedy to the front end that called the lower
-layer: the CLI names its flags, the SDK names its keywords. A front end sets ``hint`` to a full
-sentence and raises the error again. The message ends with a period, and the hint follows as its own
+layer: the CLI names its flags, the SDK names its keywords. A front end sets ``hint`` to one or two
+full sentences and raises the error again. ``str()`` adds the hint after the message as its own
 sentence.
 """
 
+from enum import Enum, auto
 from functools import partial
-from typing import TYPE_CHECKING, Literal
+from typing import TYPE_CHECKING
 
 
 if TYPE_CHECKING:
+    from pathlib import Path
+
     from timenet.types.access import Access, AccessRequirement
     from timenet.types.metadata import DatasetMetadata
     from timenet.types.references import DatasetRef
@@ -24,11 +27,33 @@ if TYPE_CHECKING:
 
 
 class TimeNetError(Exception):
-    """Base class for all TimeNet errors."""
+    """Base class for all TimeNet errors.
+
+    String conversion appends ``hint`` to the error message.
+
+    Attributes:
+        hint: A suggested way to resolve the error, or ``None``.
+    """
+
+    hint: str | None = None
+
+    def __str__(self) -> str:
+        message = self._message()
+        if self.hint is None:
+            return message
+        return f"{message} {self.hint}" if message.endswith((".", "?", "!")) else f"{message}. {self.hint}"
+
+    def _message(self) -> str:
+        """Return the message without the hint."""
+        return super().__str__()
 
 
 class TimeNetRegistryError(TimeNetError):
     """TimeNet could not load or reach a registry, or the registry could not serve a request."""
+
+
+class TimeNetUnreachableError(TimeNetRegistryError):
+    """A request to a registry or its storage failed on the network."""
 
 
 class TimeNetNoCatalogError(TimeNetRegistryError):
@@ -54,7 +79,7 @@ class TimeNetNotBuiltError(TimeNetDatasetNotFoundError):
         self.release = release
         self.card = card
 
-    def __str__(self) -> str:
+    def _message(self) -> str:
         return f"{self.release} is not built yet: only an installed connector provides it."
 
 
@@ -66,7 +91,6 @@ class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
         needed_by: The release that needs it.
         payload_source: ``True`` if ``needed_by`` reads files of ``missing``, ``False`` for a declared build parent.
         searched: The search location.
-        hint: Advice on obtaining the release, or ``None``.
     """
 
     def __init__(self, missing: "DatasetRef", needed_by: "DatasetRef", searched: str, *, payload_source: bool) -> None:
@@ -75,17 +99,24 @@ class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
         self.needed_by = needed_by
         self.payload_source = payload_source
         self.searched = searched
-        self.hint: str | None = None
 
     def __reduce__(self) -> tuple[object, ...]:
         # Pickle passes the arguments by position, so the keyword-only flag travels in a partial.
         rebuild = partial(type(self), payload_source=self.payload_source)
         return rebuild, (self.missing, self.needed_by, self.searched), self.__dict__
 
-    def __str__(self) -> str:
+    def _message(self) -> str:
         role = "payload source" if self.payload_source else "parent release"
-        message = f"{role} {self.missing} of {self.needed_by} is not in {self.searched}."
-        return message if self.hint is None else f"{message} {self.hint}"
+        return f"{role} {self.missing} of {self.needed_by} is not in {self.searched}."
+
+
+class ReleaseDifference(Enum):
+    """What differs between two manifests of the same release."""
+
+    FILES = auto()
+    """The file records differ."""
+    CARD = auto()
+    """The file records are the same, and the rest of the manifest differs."""
 
 
 class TimeNetVersionConflictError(TimeNetError):
@@ -96,36 +127,33 @@ class TimeNetVersionConflictError(TimeNetError):
     Attributes:
         release: The release that differs.
         registry: The destination registry, as text.
+        registry_location: The ``location`` of the destination registry.
         source: The source registry, as text.
+        difference: What differs.
         needed_by: The requested release that needs this payload source, or ``None`` if ``release`` is the request.
-        difference: ``"files"`` if the file records differ, else ``"card"`` for the rest of the manifest.
-        hint: Advice to append to the error message, or ``None``.
     """
 
-    def __init__(
+    def __init__(  # ruff: ignore[too-many-arguments, too-many-positional-arguments] - a pickled error passes them in order
         self,
         release: "DatasetRef",
         registry: str,
+        registry_location: str,
         source: str,
+        difference: ReleaseDifference,
         needed_by: "DatasetRef | None" = None,
-        difference: Literal["files", "card"] = "files",
     ) -> None:
-        super().__init__(release, registry, source, needed_by, difference)
+        super().__init__(release, registry, registry_location, source, difference, needed_by)
         self.release = release
         self.registry = registry
+        self.registry_location = registry_location
         self.source = source
         self.needed_by = needed_by
         self.difference = difference
-        self.hint: str | None = None
 
-    def __str__(self) -> str:
+    def _message(self) -> str:
         held = str(self.release) if self.needed_by is None else f"{self.release}, a payload source of {self.needed_by},"
-        other = "other files" if self.difference == "files" else "another card"
-        message = (
-            f"{self.registry} already holds {held} with {other} than {self.source}. "
-            "A published version cannot change, so a changed release needs a new version."
-        )
-        return message if self.hint is None else f"{message} {self.hint}"
+        other = "other files" if self.difference is ReleaseDifference.FILES else "another card"
+        return f"{self.registry} already holds {held} with {other} than {self.source}."
 
 
 class TimeNetAccessError(TimeNetError):
@@ -138,7 +166,6 @@ class TimeNetAccessError(TimeNetError):
         requirements: Each card, of the release itself or of an ancestor, whose access is not open,
             with its access level and its ``access_url``. A user needs access at each of them. See
             :func:`~timenet.types.access.access_requirements`.
-        hint: What the caller can do instead, added by the front end, or ``None``.
     """
 
     def __init__(self, dataset: "DatasetRef", access: "Access", requirements: "tuple[AccessRequirement, ...]") -> None:
@@ -146,15 +173,14 @@ class TimeNetAccessError(TimeNetError):
         self.dataset = dataset
         self.access = access
         self.requirements = requirements
-        self.hint: str | None = None
 
-    def __str__(self) -> str:
+    def _message(self) -> str:
         message = f"{self.dataset} is {self.access.value}."
         if self.requirements:
             pages = [f"{item.access_url} for {item.release}" for item in self.requirements]
             listed = pages[0] if len(pages) == 1 else f"{', at '.join(pages[:-1])} and at {pages[-1]}"
             message = f"{message} Get access at {listed}."
-        return message if self.hint is None else f"{message} {self.hint}"
+        return message
 
 
 class TimeNetConnectorError(TimeNetError):
@@ -192,22 +218,18 @@ class TimeNetVersionUnavailableError(TimeNetDatasetNotFoundError, TimeFValidatio
     Attributes:
         release: The requested release.
         declared: The version that the connector builds.
-        hint: Suggested next steps to append to the error message, or ``None``.
     """
 
     def __init__(self, release: "DatasetRef", declared: "Version") -> None:
         super().__init__(release, declared)
         self.release = release
         self.declared = declared
-        self.hint: str | None = None
 
-    def __str__(self) -> str:
-        message = (
+    def _message(self) -> str:
+        return (
             f"connector for {self.release.dataset_id!r} builds version {self.declared}, "
-            f"not the requested {self.release.version}. "
-            f"Ask for version {self.declared}, or leave out the version."
+            f"not the requested {self.release.version}."
         )
-        return message if self.hint is None else f"{message} {self.hint}"
 
 
 class TimeNetInvalidCardError(TimeNetError, ValueError):
@@ -216,6 +238,10 @@ class TimeNetInvalidCardError(TimeNetError, ValueError):
 
 class TimeNetBuildError(TimeNetError):
     """A build run failed: the connector build, or the environment it needed."""
+
+
+class TimeNetIsolationError(TimeNetBuildError):
+    """An isolated build cannot make its environment."""
 
 
 class TimeNetWarning(UserWarning):
@@ -239,18 +265,16 @@ class TimeFFormatError(TimeNetError):
 
 
 class TimeNetFileError(TimeFFormatError):
-    """A file of a release is missing, or it does not match its manifest record.
+    """A release file is missing or differs from its manifest record.
 
     A local copy is checked by file size. A transfer is checked by size and checksum.
 
     Attributes:
         release: The release that the file belongs to.
         owner: The release, payload source, or transfer that the file belongs to, as text.
-        path: The file, relative to the release directory. For a local copy, this is the first
-            missing or resized file in manifest order.
+        path: The relative file path, using the first missing or resized file in manifest order for local checks.
         expected: What the manifest records, for example ``"1,024 bytes"`` or ``"sha256:<hex>"``.
         actual: What the file holds, in the same form, or ``None`` if the file is missing.
-        hint: How the caller can get an intact copy, added by the front end, or ``None``.
     """
 
     def __init__(self, release: "DatasetRef", owner: str, path: str, expected: str, actual: str | None) -> None:
@@ -260,12 +284,48 @@ class TimeNetFileError(TimeFFormatError):
         self.path = path
         self.expected = expected
         self.actual = actual
-        self.hint: str | None = None
 
-    def __str__(self) -> str:
+    def _message(self) -> str:
         found = "is missing" if self.actual is None else f"has {self.actual}"
-        message = f"{self.owner}: file {self.path!r} {found}, expected {self.expected}."
-        return message if self.hint is None else f"{message} {self.hint}"
+        return f"{self.owner}: file {self.path!r} {found}, expected {self.expected}."
+
+
+class TimeNetManifestError(TimeFFormatError):
+    """A stored manifest is not a valid manifest.
+
+    Attributes:
+        where: The file of the manifest, or a description of where a registry keeps it.
+        detail: The first problem that the parser found.
+        path: The file of the manifest, or ``None`` for a manifest that a registry served.
+    """
+
+    def __init__(self, where: str, detail: str, path: "Path | None" = None) -> None:
+        super().__init__(where, detail, path)
+        self.where = where
+        self.detail = detail
+        self.path = path
+
+    def _message(self) -> str:
+        return f"{self.where} is not a valid manifest: {self.detail}"
+
+
+class TimeNetOriginError(TimeFFormatError):
+    """The provenance record of a release in the local registry is not valid.
+
+    Attributes:
+        release: The release of the record.
+        path: The file of the record.
+        detail: The first problem that the parser found.
+    """
+
+    def __init__(self, release: "DatasetRef", path: str, detail: str) -> None:
+        super().__init__(release, path, detail)
+        self.release = release
+        self.path = path
+        self.detail = detail
+
+    def _message(self) -> str:
+        return f"{self.path} is not a valid provenance record: {self.detail}."
 
 
 class TimeFReaderError(TimeNetError):

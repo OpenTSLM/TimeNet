@@ -156,3 +156,18 @@ def test_an_unreachable_bucket_raises_a_registry_error_that_names_it(monkeypatch
     monkeypatch.setattr(registry, "_client", _Unreachable)
     with pytest.raises(TimeNetRegistryError, match=r"^cannot reach s3://tn-test/registry: Could not connect"):
         registry.resolve("timenet/hello-world", Version(1, 0, 0))
+
+
+def test_the_latest_version_over_an_unreachable_bucket_names_the_version_in_the_local_registry(tmp_path, monkeypatch):
+    store = LocalRegistry(tmp_path / "store")
+    store.put_dataset(make_dataset())
+    registry = S3Registry("s3://tn-test/registry")
+    monkeypatch.setattr(registry, "_client", _Unreachable)
+
+    with pytest.raises(TimeNetRegistryError) as caught:
+        TimeNet(sources=[store, registry]).open("timenet/hello-world@latest")
+
+    assert caught.value.hint == (
+        "Ask for timenet/hello-world@1.0.0 to read the copy in the local registry, or leave the unreachable "
+        "registry out of the sources."
+    )

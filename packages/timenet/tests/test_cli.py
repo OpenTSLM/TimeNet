@@ -1,14 +1,17 @@
 import importlib
+import shlex
 import shutil
 import subprocess
 import sys
 
+from _origin_record import origin_file
 import click
 import pytest
 from rich.console import Console
 import typer
 from typer.testing import CliRunner
 
+from timenet import _hints as hints_module
 from timenet.cache import human_bytes, stored_releases
 from timenet.cli.app import _enum_list, app
 from timenet.client import TimeNet
@@ -18,14 +21,17 @@ from timenet.errors import (
     TimeFValidationError,
     TimeNetDatasetNotFoundError,
     TimeNetInvalidCardError,
+    TimeNetManifestError,
     TimeNetMissingParentError,
+    TimeNetNotBuiltError,
+    TimeNetOriginError,
     TimeNetRegistryError,
 )
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, open_local_version
 from timenet.registry.origin import OriginKind
 from timenet.testing import install_backends, make_dataset
-from timenet.types import Access, Domain
+from timenet.types import Access, Domain, Version
 from timenet.types.reference_keys import ParentAlias
 from timenet.types.references import DatasetRef
 from timenet.writer import TimeFWriter
@@ -245,6 +251,38 @@ def _flags(tmp_path, remote):
     return ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(remote), "--no-auto-build"]
 
 
+_NO_PROVIDER = (
+    "Pass a registry that holds it with --remote-registry <url>, or install a connector package that builds it, such "
+    "as timenet-connectors."
+)
+
+
+def test_a_failed_read_computes_its_hint_once(tmp_path, monkeypatch):
+    computed = []
+    remedy = hints_module._remedy
+    monkeypatch.setattr(hints_module, "_remedy", lambda error, *rest: computed.append(error) or remedy(error, *rest))
+
+    result = runner.invoke(app, ["info", "x/y", *_flags(tmp_path, tmp_path / "empty")])
+
+    assert isinstance(result.exception, TimeNetDatasetNotFoundError)
+    assert result.exception.hint == _NO_PROVIDER
+    assert computed == [result.exception]
+
+
+def test_an_sdk_call_after_a_command_gets_the_hint_of_the_sdk(tmp_path):
+    command = runner.invoke(app, ["info", "x/y", *_flags(tmp_path, tmp_path / "empty")])
+    assert isinstance(command.exception, TimeNetDatasetNotFoundError)
+    assert command.exception.hint == _NO_PROVIDER
+
+    with pytest.raises(TimeNetDatasetNotFoundError) as caught:
+        TimeNet(sources=[LocalRegistry(tmp_path / "store")]).open("x/y")
+
+    assert caught.value.hint == (
+        "Add a registry that holds it to the sources, or install a connector package that builds it, such as "
+        "timenet-connectors."
+    )
+
+
 def test_search_no_match(registry_root, tmp_path):
     result = runner.invoke(app, ["search", "--domain", "cardiology", *_flags(tmp_path, registry_root)])
     assert result.exit_code == 0, result.output
@@ -252,20 +290,20 @@ def test_search_no_match(registry_root, tmp_path):
 
 
 class _Backend:
-    """A builder backend with one connector, whose card declares ``test/gated@1.0.0``."""
+    """A builder backend whose card of each dataset is the demo card under its ID, with ``changes``."""
+
+    def __init__(self, *dataset_ids, **changes):
+        self.ids = dataset_ids
+        self.changes = changes
 
     def dataset_ids(self):
-        return ["test/gated"]
+        return list(self.ids)
 
     def card(self, dataset_id):
-        return make_dataset().metadata.model_copy(
-            update={
-                "dataset_id": dataset_id,
-                "access": Access.CREDENTIALED,
-                "access_url": "https://gated.example",
-                "citation": "A citation.",
-            }
-        )
+        return make_dataset().metadata.model_copy(update={"dataset_id": dataset_id, **self.changes})
+
+
+_GATED = {"access": Access.CREDENTIALED, "access_url": "https://gated.example", "citation": "A citation."}
 
 
 def test_list_shows_a_warning_as_a_line_without_a_file_and_a_line_number(tmp_path, monkeypatch):
@@ -273,7 +311,7 @@ def test_list_shows_a_warning_as_a_line_without_a_file_and_a_line_number(tmp_pat
         def card(self, dataset_id):
             raise TimeNetInvalidCardError("the card cannot be read")
 
-    install_backends(monkeypatch, _Broken())
+    install_backends(monkeypatch, _Broken("test/gated"))
     monkeypatch.setattr(_cli_module.ui, "rich", Console(stderr=True, width=1000))
     flags = ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(tmp_path / "empty"), "--auto-build"]
 
@@ -287,7 +325,7 @@ def test_list_shows_a_warning_as_a_line_without_a_file_and_a_line_number(tmp_pat
 
 
 def test_info_shows_the_card_of_a_dataset_that_only_a_connector_has(tmp_path, monkeypatch):
-    install_backends(monkeypatch, _Backend())
+    install_backends(monkeypatch, _Backend("test/gated", **_GATED))
     store = tmp_path / "store"
     flags = ["--local-registry", str(store), "--remote-registry", str(tmp_path / "empty"), "--auto-build"]
 
@@ -295,7 +333,7 @@ def test_info_shows_the_card_of_a_dataset_that_only_a_connector_has(tmp_path, mo
 
     assert result.exit_code == 0, result.output
     cells = _table_cells(result.stdout)
-    card = _Backend().card("test/gated")
+    card = _Backend("test/gated", **_GATED).card("test/gated")
     assert cells == [
         ["version", "1.0.0"],
         ["name", card.name],
@@ -314,15 +352,8 @@ def test_info_shows_the_card_of_a_dataset_that_only_a_connector_has(tmp_path, mo
 
 
 def test_info_of_an_unbuilt_child_says_that_its_access_leaves_out_its_parents(tmp_path, monkeypatch):
-    class _Child(_Backend):
-        def dataset_ids(self):
-            return ["test/child"]
-
-        def card(self, dataset_id):
-            parents = {"a": "test/a@1.0.0", "b": "test/b@1.0.0"}
-            return make_dataset(dataset_id=dataset_id, parents=parents).metadata
-
-    install_backends(monkeypatch, _Child())
+    parents = {ParentAlias(name): DatasetRef.parse(f"test/{name}@1.0.0") for name in ("a", "b")}
+    install_backends(monkeypatch, _Backend("test/child", parents=parents))
     # The access row is long, so the console must not wrap it.
     monkeypatch.setattr(_cli_module, "console", Console(width=1000))
     flags = ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(tmp_path / "empty"), "--auto-build"]
@@ -342,7 +373,7 @@ def test_info_of_a_dataset_that_only_a_connector_has_reads_its_card_once(tmp_pat
             reads.append(dataset_id)
             return super().card(dataset_id)
 
-    install_backends(monkeypatch, _Counting())
+    install_backends(monkeypatch, _Counting("test/gated"))
     flags = ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(tmp_path / "empty"), "--auto-build"]
 
     result = runner.invoke(app, ["info", "test/gated", *flags])
@@ -466,11 +497,16 @@ def test_publish_copies_a_release_from_the_local_registry(tmp_path):
     assert "✅ Published timenet/hello-world@1.0.0 to" in result.stderr
 
 
+def _words(output):
+    """Return the unstyled output with all whitespace removed, since a usage panel wraps its lines."""
+    return "".join(click.unstyle(output).split())
+
+
 def test_publish_rejects_a_source_that_cannot_be_opened(tmp_path):
     result = runner.invoke(app, ["publish", "x/y", "--dest", str(tmp_path / "dest"), "--source", "foo://x"])
-    assert result.exit_code == 1
-    assert isinstance(result.exception, TimeNetRegistryError)
-    assert str(result.exception).startswith("--source 'foo://x' has an unsupported registry scheme.")
+    # A bad flag is a usage error that names the flag.
+    assert result.exit_code == 2
+    assert "--source'foo://x'hasanunsupportedregistryscheme." in _words(result.output)
 
 
 def test_publish_to_an_empty_dest_fails_and_writes_nothing_into_the_working_directory(tmp_path, monkeypatch):
@@ -481,8 +517,8 @@ def test_publish_to_an_empty_dest_fails_and_writes_nothing_into_the_working_dire
     monkeypatch.chdir(cwd)
     argv = ["publish", "timenet/hello-world", "--dest", "", "--local-registry", str(store.root)]
     result = runner.invoke(app, argv)
-    assert isinstance(result.exception, TimeNetRegistryError)
-    assert str(result.exception).startswith("dest is blank")
+    assert result.exit_code == 2
+    assert "--destisblank" in _words(result.output)
     assert list(cwd.iterdir()) == []
 
 
@@ -493,47 +529,53 @@ def test_publish_needs_dest(tmp_path):
     assert "--dest" in click.unstyle(result.output)
 
 
-def test_publish_of_a_release_that_the_local_registry_lacks_names_the_fix(tmp_path):
-    store, other, dest = tmp_path / "store", tmp_path / "other", str(tmp_path / "dest")
-    result = runner.invoke(app, ["publish", "timenet/hello-world", "--dest", dest, "--local-registry", str(store)])
+@pytest.mark.parametrize("provider", ["connector", "no connector", "source"])
+def test_publish_of_a_release_that_the_local_registry_lacks_names_the_fix(tmp_path, monkeypatch, provider):
+    local, other, dest = tmp_path / "local", tmp_path / "other", str(tmp_path / "dest")
+    if provider != "no connector":
+        install_backends(monkeypatch, _Backend("timenet/hello-world"))
+    argv = ["publish", "timenet/hello-world@1.0.0", "--dest", dest, "--local-registry", str(local)]
+    if provider == "source":
+        argv += ["--source", str(other)]
+
+    result = runner.invoke(app, argv)
+
     assert type(result.exception) is TimeNetDatasetNotFoundError
-    assert str(result.exception) == (
-        f"timenet/hello-world is not in local registry {store}. "
-        f"Build it into the local registry with `timenet-build build timenet/hello-world --local-registry {store}`, "
-        f"or copy it there with `timenet download timenet/hello-world --local-registry {store}`."
-    )
-    # The hint keeps the version, and names no store without --local-registry.
-    result = runner.invoke(app, ["publish", "timenet/hello-world@1.0.0", "--dest", dest])
-    assert str(result.exception).endswith(
-        "Build it into the local registry with `timenet-build build timenet/hello-world@1.0.0`, "
-        "or copy it there with `timenet download timenet/hello-world@1.0.0`."
-    )
-    # A registry that --source names is not the store, so the error names only that registry.
-    result = runner.invoke(app, ["publish", "timenet/hello-world", "--dest", dest, "--source", str(other)])
-    assert str(result.exception) == f"timenet/hello-world is not in local registry {other}."
+    registry = other if provider == "source" else local
+    # The hint repeats the version and the local registry. A registry that --source names gets none.
+    # Without a connector, the hint names the download, although it asks no registry for the release.
+    hint = {
+        "connector": " Build it into the local registry with "
+        f"`timenet-build build timenet/hello-world@1.0.0 --local-registry {local}`.",
+        "no connector": " Copy it into the local registry with "
+        f"`timenet download timenet/hello-world@1.0.0 --local-registry {local}`.",
+        "source": "",
+    }[provider]
+    assert str(result.exception) == f"timenet/hello-world@1.0.0 is not in local registry {registry}.{hint}"
 
 
-def test_publish_adds_no_hint_to_a_payload_source_that_the_local_registry_lacks(tmp_path):
-    store = LocalRegistry(tmp_path / "store")
-    store.put_dataset(make_dataset())
+def test_publish_names_the_download_of_a_payload_source_that_the_local_registry_lacks(tmp_path):
+    local = LocalRegistry(tmp_path / "local")
+    local.put_dataset(make_dataset())
     child = TimeFDataset(
         metadata=make_dataset().metadata.model_copy(
             update={"dataset_id": "test/child", "parents": {ParentAlias("hello"): HELLO}}
         )
     )
     # The child reads the values of one Record of the parent, so the parent is its payload source.
-    with TimeNet(sources=[store]).open(str(HELLO)) as reader:
+    with TimeNet(sources=[local]).open(str(HELLO)) as reader:
         child.import_from(reader, alias=ParentAlias("hello"), records=[make_dataset().records[0].id])
-        store.put_dataset(child)
-    shutil.rmtree(store.root / "timenet")
+        local.put_dataset(child)
+    shutil.rmtree(local.root / "timenet")
     dest = tmp_path / "dest"
 
-    result = runner.invoke(app, ["publish", "test/child", "--dest", str(dest), "--local-registry", str(store.root)])
+    result = runner.invoke(app, ["publish", "test/child", "--dest", str(dest), "--local-registry", str(local.root)])
 
-    # The error of the payload source names its own registries, and the hint for the release does not apply.
+    # The hint names the payload source, not the release of the command.
     assert type(result.exception) is TimeNetMissingParentError
-    assert str(result.exception).startswith(f"payload source {HELLO} of test/child@1.0.0 is not in ")
-    assert "timenet-build" not in str(result.exception)
+    assert result.exception.hint == (
+        f"Copy it into the local registry with `timenet download {HELLO} --local-registry {local.root}`."
+    )
 
 
 @pytest.mark.parametrize(("flag", "variable"), [("--auto-build", "false"), ("--no-auto-build", "true")])
@@ -558,8 +600,92 @@ def test_an_empty_flag_is_an_error(tmp_path, monkeypatch, argv):
     # `local clear` would delete its releases.
     monkeypatch.chdir(tmp_path)
     result = runner.invoke(app, argv)
-    assert isinstance(result.exception, TimeFValidationError)
-    assert f"must not be empty (also as {argv[-2]})" in str(result.exception)
+    # A usage error that names the flag.
+    assert result.exit_code == 2
+    assert f"{argv[-2]}isblank" in _words(result.output)
+
+
+def test_a_bad_variable_is_an_error_that_names_the_variable(monkeypatch):
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", "https://registry.example")
+    result = runner.invoke(app, ["list"])
+    # The command line is fine, so this is no usage error.
+    assert result.exit_code == 1
+    assert isinstance(result.exception, TimeNetRegistryError)
+    assert str(result.exception).startswith("TIMENET_LOCAL_REGISTRY 'https://registry.example' is remote")
+
+
+def test_info_of_a_release_that_no_source_provides_names_the_flags_that_add_one(monkeypatch):
+    install_backends(monkeypatch, _Backend("test/x"))
+
+    result = runner.invoke(app, ["info", "test/x", "--no-auto-build"])
+
+    # The CLI names its flags, not the calls of the SDK.
+    assert isinstance(result.exception, TimeNetDatasetNotFoundError)
+    assert result.exception.hint == (
+        "Pass a registry that holds it with --remote-registry <url>, or build it from its installed connector "
+        "with --auto-build."
+    )
+
+
+def test_download_of_the_latest_version_names_the_build_and_the_version_that_a_registry_holds(
+    registry_root, tmp_path, monkeypatch
+):
+    # The connector declares 2.0.0, and the registry holds 1.0.0.
+    backend = _Backend("timenet/hello-world", dataset_version=Version(2, 0, 0))
+    install_backends(monkeypatch, backend)
+    flags = ["--local-registry", str(tmp_path / "store"), "--remote-registry", str(registry_root)]
+
+    result = runner.invoke(app, ["download", "timenet/hello-world@latest", *flags])
+
+    assert isinstance(result.exception, TimeNetNotBuiltError)
+    assert result.exception.hint == (
+        f"Build it with `timenet-build build timenet/hello-world --local-registry {tmp_path / 'store'} "
+        f"--remote-registry {registry_root}`, or download the version that a registry holds with "
+        f"`timenet download timenet/hello-world@1.0.0 --local-registry {tmp_path / 'store'} "
+        f"--remote-registry {registry_root}`."
+    )
+
+
+@pytest.mark.parametrize("command", [["list", "--no-auto-build"], ["local", "downloads", "clear", "--yes"]])
+def test_a_manifest_that_is_not_valid_names_the_delete_that_replaces_its_release(state, command):
+    store, _ = state
+    directory = store / "timenet/hello-world/1.0.0"
+    (directory / "manifest.json").write_text("{cut")
+
+    result = runner.invoke(app, command)
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, TimeNetManifestError)
+    assert str(result.exception).startswith(f"{directory / 'manifest.json'} is not a valid manifest: ")
+    # Download and build read the manifest first, so only a delete lets them replace the release.
+    again = f"Delete {directory} and download or build timenet/hello-world@1.0.0 again"
+    assert result.exception.hint == (f"{again}, then clear again." if command[0] == "local" else f"{again}.")
+
+
+@pytest.mark.parametrize(
+    "command", [["local", "downloads", "clear", "--yes"], ["local", "info"], ["local", "downloads", "info"]]
+)
+def test_a_damaged_provenance_record_names_the_forced_download_and_build(tmp_path, command):
+    store = tmp_path / "store"
+    LocalRegistry(store).put_dataset(make_dataset())
+    origin_file(LocalRegistry(store), HELLO).write_text("{")
+
+    result = runner.invoke(app, [*command, "--local-registry", str(store)])
+
+    assert result.exit_code == 1
+    assert isinstance(result.exception, TimeNetOriginError)
+    flag = f"--local-registry {shlex.quote(str(store))}"
+    assert result.exception.hint == (
+        f"Get the release again with `timenet download {HELLO} {flag} --force` if it came from a registry, or "
+        f"with `timenet-build build {HELLO} {flag} --force` if it was built. Both replace the release and its record."
+    )
+
+
+def test_the_local_registry_flag_replaces_a_variable_that_is_not_valid(registry_root, tmp_path, monkeypatch):
+    monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", "")
+    result = runner.invoke(app, ["list", *_flags(tmp_path, registry_root)])
+    assert result.exit_code == 0, result.output
+    assert "timenet/hello-world" in result.stdout
 
 
 def test_search_rejects_unknown_filter_value(registry_root, tmp_path):

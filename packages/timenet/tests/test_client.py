@@ -54,12 +54,13 @@ class _Builder:
 
     VERSION = "1.0.0"
     BACKEND = "parquet"
+    IDS = ("test/child", "timenet/hello-world")
 
     def __init__(self, calls):
         self.calls = calls
 
     def dataset_ids(self):
-        return ("test/child", "timenet/hello-world")
+        return self.IDS
 
     def card(self, dataset_id):
         version = DatasetRef.parse(f"{dataset_id}@{self.VERSION}").version
@@ -80,12 +81,11 @@ def test_a_child_reads_its_missing_payload_source_from_a_later_registry(tmp_path
     with pytest.raises(TimeNetMissingParentError) as caught:
         TimeNet(sources=[store]).open("test/child")
     assert (caught.value.missing, caught.value.needed_by) == (reference, DatasetRef.parse("test/child@1.0.0"))
-    assert str(caught.value).endswith(
-        ". Add a registry that holds it to the sources, or add InstalledConnectors() to build it."
+    # No connector package is installed, so the hint names the package that builds the payload source.
+    assert caught.value.hint == (
+        "Add a registry that holds it to the sources, or install a connector package that builds it, such as "
+        "timenet-connectors."
     )
-    # No installed connector builds the payload source, so with InstalledConnectors() the hint names only a registry.
-    with pytest.raises(TimeNetMissingParentError, match=r"\. Add a registry that holds it to the sources\.$"):
-        TimeNet(sources=[store, InstalledConnectors()]).open("test/child")
     with TimeNet(sources=[store, str(origin.root), InstalledConnectors()]).open("test/child") as reader:
         assert reader.read().records[0].signals[0].to_arrow().equals(make_dataset().records[0].signals[0].to_arrow())
     # The read opens the payload source in origin, where it is, and copies nothing.
@@ -159,6 +159,22 @@ def test_a_damaged_release_outside_the_local_registry_names_no_download(tmp_path
     assert (caught.value.release, caught.value.hint) == (DatasetRef.parse("test/child@1.0.0"), None)
 
 
+def test_a_failed_transfer_names_no_repair_of_the_intact_copy_in_the_local_registry(registry_root, tmp_path):
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "store"), str(registry_root)])
+    client.download("timenet/hello-world")
+    # The registry now serves a file with other bytes of the same size.
+    part = next((registry_root / "timenet/hello-world/1.0.0").rglob("*.parquet"))
+    data = bytearray(part.read_bytes())
+    data[-20] ^= 0xFF
+    part.write_bytes(bytes(data))
+
+    with pytest.raises(TimeNetFileError, match=r"^download of ") as caught:
+        client.download("timenet/hello-world", force=True)
+
+    # The copy in the local registry is intact, so the local registry needs no repair.
+    assert caught.value.hint is None
+
+
 def test_a_damaged_build_in_the_local_registry_names_the_build_that_replaces_it(tmp_path, monkeypatch):
     calls = []
     install_backends(monkeypatch, _Builder(calls))
@@ -172,8 +188,8 @@ def test_a_damaged_build_in_the_local_registry_names_the_build_that_replaces_it(
     client.load("timenet/hello-world@1.0.0")  # the build puts the release into the store
     (store.root / "timenet/hello-world/1.0.0/control.duckdb").write_bytes(b"cut short")
 
-    # No registry other than the local registry provides the release, so download() cannot replace it.
-    hint = f"Build it again with `timenet-build build timenet/hello-world --local-registry {store.root} --force`."
+    # No registry other than the local registry provides the release, so only a build replaces it.
+    hint = f"Build it again with timenet.build('timenet/hello-world', local_registry='{store.root}', force=True)."
     with pytest.raises(TimeNetFileError) as caught:
         client.open("timenet/hello-world@1.0.0")
     assert caught.value.hint == hint
@@ -382,7 +398,10 @@ def test_list_leaves_out_a_registry_without_a_catalog_with_a_warning(tmp_path, r
 
 def test_list_and_search_raise_if_no_source_has_a_catalog(tmp_path):
     client = TimeNet(sources=[_WithoutCatalog(tmp_path / "hidden")])
-    message = f"^none of the sources has a catalog: local registry {re.escape(str(tmp_path / 'hidden'))}$"
+    message = (
+        f"^none of the sources has a catalog: local registry {re.escape(str(tmp_path / 'hidden'))}\\. "
+        r"Read an exact release with open\('<id>@<version>'\)\.$"
+    )
     with pytest.raises(TimeNetNoCatalogError, match=message):
         client.list()
     with pytest.raises(TimeNetNoCatalogError, match=message):
@@ -498,7 +517,10 @@ def test_get_manifest_of_a_release_that_is_not_built_raises_with_the_card_of_the
         client.get_manifest("test/child")
     assert caught.value.release == DatasetRef.parse("test/child@1.0.0")
     assert caught.value.card == _Builder([]).card("test/child")
-    assert str(caught.value) == "test/child@1.0.0 is not built yet: only an installed connector provides it."
+    assert str(caught.value) == (
+        "test/child@1.0.0 is not built yet: only an installed connector provides it. Read its card with "
+        f"get_card('test/child'), or build it with timenet.build('test/child', local_registry='{tmp_path / 'store'}')."
+    )
     assert client.get_card("test/child").dataset_id == "test/child"
     assert not (tmp_path / "store").exists()
 
@@ -551,8 +573,8 @@ def test_get_manifest_names_every_source_when_none_provides_the_release(tmp_path
     names = ", ".join(str(source) for source in sources)
     # The hint is the hint of open().
     assert str(caught.value) == (
-        f"x/y is in none of the sources: {names}. "
-        "Add a registry that holds it to the sources, or add InstalledConnectors() to build it."
+        f"x/y is in none of the sources: {names}. Add a registry that holds it to the sources, or install a "
+        "connector package that builds it, such as timenet-connectors."
     )
 
 
@@ -592,7 +614,10 @@ def test_download_of_a_release_that_only_a_connector_provides_builds_nothing(tmp
     with pytest.raises(TimeNetNotBuiltError) as caught:
         TimeNet(sources=[store, InstalledConnectors()]).download("timenet/hello-world")
 
-    assert str(caught.value) == "timenet/hello-world@1.0.0 is not built yet: only an installed connector provides it."
+    assert str(caught.value) == (
+        "timenet/hello-world@1.0.0 is not built yet: only an installed connector provides it. "
+        f"Build it with timenet.build('timenet/hello-world', local_registry='{store.root}')."
+    )
     assert calls == []
     assert not store.root.exists()
 
@@ -605,11 +630,48 @@ def test_download_of_latest_fails_when_a_connector_declares_a_newer_version(regi
     client = TimeNet(sources=[store, str(registry_root), InstalledConnectors()])
 
     # "Latest" is the version of the connector, which no registry holds.
-    with pytest.raises(TimeNetNotBuiltError, match=r"^timenet/hello-world@2\.0\.0 is not built yet: "):
+    with pytest.raises(TimeNetNotBuiltError, match=r"^timenet/hello-world@2\.0\.0 is not built yet: ") as caught:
         client.download("timenet/hello-world@latest")
     assert calls == []
+    # The hint names both ways out, and the registry still provides its exact version.
+    assert caught.value.hint == (
+        f"Build it with timenet.build('timenet/hello-world', local_registry='{store.root}'), or download the version "
+        "that a registry holds with download('timenet/hello-world@1.0.0')."
+    )
     # Without a version, the download takes the registry, the first source that serves the dataset.
     assert client.download("timenet/hello-world") == store.root / "timenet/hello-world/1.0.0"
+
+
+def test_download_of_a_release_whose_payload_source_no_registry_provides_names_only_a_registry(tmp_path):
+    origin, reference = _child_of_the_demo(tmp_path / "origin")
+    shutil.copytree(origin.root / "test/child", tmp_path / "first/test/child")
+    store = LocalRegistry(tmp_path / "store")
+
+    with pytest.raises(TimeNetMissingParentError) as caught:
+        TimeNet(sources=[store, tmp_path / "first"]).download("test/child")
+
+    assert caught.value.missing == reference
+    # A download never builds, so the hint names only a registry.
+    assert caught.value.hint == "Add a registry that holds it to the sources."
+
+
+def test_the_latest_version_offline_names_the_version_in_the_local_registry(tmp_path):
+    store = LocalRegistry(tmp_path / "store")
+    store.put_dataset(make_dataset())
+
+    def offline(request):
+        raise httpx.ConnectError("offline", request=request)
+
+    remote = RemoteRegistry("http://api.local", transport=httpx.MockTransport(offline))
+
+    with pytest.raises(TimeNetRegistryError) as caught:
+        TimeNet(sources=[store, remote]).open("timenet/hello-world@latest")
+
+    # "Latest" asks every source, and an exact version reads the store first.
+    assert caught.value.hint == (
+        "Ask for timenet/hello-world@1.0.0 to read the copy in the local registry, or leave the unreachable "
+        "registry out of the sources."
+    )
 
 
 def test_download_of_a_release_that_no_source_provides_names_each_source(tmp_path):
@@ -626,11 +688,16 @@ def test_download_of_a_release_that_no_source_provides_names_each_source(tmp_pat
 def test_download_of_a_version_that_the_connector_does_not_build_names_the_built_version(tmp_path, monkeypatch):
     calls = []
     install_backends(monkeypatch, _Builder(calls))
-    client = TimeNet(sources=[LocalRegistry(tmp_path / "store"), InstalledConnectors()])
+    store = LocalRegistry(tmp_path / "store")
+    client = TimeNet(sources=[store, InstalledConnectors()])
 
-    with pytest.raises(TimeNetVersionUnavailableError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
+    with pytest.raises(
+        TimeNetVersionUnavailableError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"
+    ) as caught:
         client.download("timenet/hello-world@9.9.9")
     assert calls == []
+    # A download never builds, so the version of the connector needs a build first.
+    assert caught.value.hint == f"Build it with timenet.build('timenet/hello-world', local_registry='{store.root}')."
 
 
 def test_download_copies_each_release_from_the_first_registry_that_provides_it(tmp_path):
@@ -668,8 +735,11 @@ def test_download_refuses_a_local_registry_copy_with_other_files(registry_root, 
         (directory / "control.duckdb").write_bytes(b"cut short")
     before = (directory / "manifest.json").read_text()
 
-    with pytest.raises(TimeNetVersionConflictError, match="new version"):
+    with pytest.raises(TimeNetVersionConflictError) as caught:
         client.download("timenet/hello-world", force=case == "force")
+
+    # A consumer cannot make a new version, so the hint takes the copy of the registry.
+    assert caught.value.hint == f"Delete {directory} to take the copy of local registry {registry_root}."
 
     assert (directory / "manifest.json").read_text() == before
 
@@ -682,9 +752,7 @@ def test_download_names_the_local_registry_when_no_other_registry_provides_its_c
     client = TimeNet(sources=[store, InstalledConnectors()])
 
     # The store holds the release, so the error is about its copy, not about a build.
-    message = (
-        r"^No registry other than the local registry provides timenet/hello-world@1\.0\.0, so download\(force=True\)"
-    )
+    message = r"^no registry other than the local registry provides timenet/hello-world@1\.0\.0 to copy again\. "
     with pytest.raises(TimeNetDatasetNotFoundError, match=message):
         client.download("timenet/hello-world", force=True)
     assert calls == []
@@ -709,15 +777,15 @@ def test_download_counts_a_registry_over_the_directory_of_the_local_registry_as_
         with pytest.raises(TimeNetDatasetNotFoundError) as caught:
             client.download("timenet/hello-world", force=True)
         assert str(caught.value) == (
-            "No registry other than the local registry provides timenet/hello-world@1.0.0, so download(force=True) "
-            "cannot copy it again."
+            "no registry other than the local registry provides timenet/hello-world@1.0.0 to copy again. "
+            "Add a registry that holds it to the sources."
         )
     else:
         with pytest.raises(TimeNetFileError) as caught:
             client.download("timenet/hello-world")
-        assert (
-            caught.value.hint
-            == "No registry other than the local registry provides it, so download() cannot replace it."
+        # Neither another registry nor a connector provides the release.
+        assert caught.value.hint == (
+            "Add a registry that holds an intact copy to the sources, then call download('timenet/hello-world@1.0.0')."
         )
     assert {path: path.read_bytes() for path in directory.rglob("*") if path.is_file()} == before
 
@@ -729,7 +797,7 @@ def test_download_counts_a_symlink_to_the_local_registry_directory_as_the_local_
     client = TimeNet(sources=[store, LocalRegistry(tmp_path / "link")])
 
     # The second registry reads the directory of the store, so it cannot copy the release again.
-    with pytest.raises(TimeNetDatasetNotFoundError, match=r"^No registry other than the local registry provides "):
+    with pytest.raises(TimeNetDatasetNotFoundError, match=r"^no registry other than the local registry provides "):
         client.download("timenet/hello-world", force=True)
 
 
@@ -1023,27 +1091,25 @@ def test_load_names_the_buildable_version_when_a_pin_cannot_be_built(registry_ro
     install_backends(monkeypatch, _Builder(calls))
     client = TimeNet(sources=[LocalRegistry(registry_root), InstalledConnectors()])
 
-    with pytest.raises(TimeNetVersionUnavailableError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"):
+    with pytest.raises(
+        TimeNetVersionUnavailableError, match=r"builds version 1\.0\.0, not the requested 9\.9\.9"
+    ) as caught:
         client.load("timenet/hello-world@9.9.9")
     assert calls == []  # the pin was rejected before the build ran
+    assert caught.value.hint == "Ask for version 1.0.0, or leave out the version."
 
 
-@pytest.mark.parametrize("connectors", [True, False])
-def test_a_release_that_no_source_provides_names_how_to_get_it(tmp_path, connectors):
-    sources = [
-        LocalRegistry(tmp_path / "reg"),
-        LocalRegistry(tmp_path / "empty"),
-        *([InstalledConnectors()] if connectors else []),
-    ]
+def test_a_release_that_no_installed_connector_builds_names_only_a_registry(tmp_path, monkeypatch):
+    # An installed connector package that does not build x/y. The list has no InstalledConnectors(), so only the
+    # connector decides whether the hint names a build.
+    install_backends(monkeypatch, _Builder([]))
+    sources = [LocalRegistry(tmp_path / "reg"), LocalRegistry(tmp_path / "empty")]
 
     with pytest.raises(TimeNetDatasetNotFoundError) as caught:
         TimeNet(sources=sources).open("x/y")
 
-    message = f"x/y is in none of the sources: {', '.join(str(entry) for entry in sources)}."
-    # The hint names InstalledConnectors() only if the list does not have it.
-    hint = " Add a registry that holds it to the sources"
-    hint += "." if connectors else ", or add InstalledConnectors() to build it."
-    assert str(caught.value) == message + hint
+    names = ", ".join(str(entry) for entry in sources)
+    assert str(caught.value) == f"x/y is in none of the sources: {names}. Add a registry that holds it to the sources."
 
 
 def test_load_accepts_the_latest_sentinel_after_a_build(tmp_path, monkeypatch):
@@ -1072,6 +1138,16 @@ def test_a_list_without_installed_connectors_does_not_build_a_missing_version(re
     assert calls == []  # the list skips the connector entirely
 
 
+def test_a_missing_latest_release_names_the_build_of_its_installed_connector(tmp_path, monkeypatch):
+    install_backends(monkeypatch, _Builder([]))
+    client = TimeNet(sources=[LocalRegistry(tmp_path / "store")])
+
+    with pytest.raises(TimeNetDatasetNotFoundError) as caught:
+        client.open("timenet/hello-world@latest")
+
+    assert caught.value.hint == "Add a registry that holds it to the sources, or add InstalledConnectors() to build it."
+
+
 def _card(dataset_id, access, access_url=None):
     return DatasetMetadata(
         dataset_id=dataset_id,
@@ -1094,36 +1170,31 @@ def _hosted(tmp_path, metadata, lineage=()):
     return _Hosted("http://api.local", transport=httpx.MockTransport(lambda request: httpx.Response(404)))
 
 
-def test_load_rejects_a_credentialed_dataset_from_a_hosted_registry(tmp_path):
-    hosted = _hosted(tmp_path, _card("org/gated", Access.CREDENTIALED, "https://physionet.example/dua"))
-    store = LocalRegistry(tmp_path / "store")
-    client = TimeNet(sources=[store, hosted])
-    message = (
-        "org/gated@1.0.0 is credentialed. Get access at https://physionet.example/dua for org/gated@1.0.0. "
-        "No source serves its files. Add InstalledConnectors() to the sources, or build it locally with "
-        "`timenet-build build org/gated`."
-    )
-    with pytest.raises(TimeNetAccessError) as caught:
-        client.load("org/gated")
-    assert str(caught.value) == message
-    assert not store.root.exists()
-
-
-def test_the_access_hint_says_that_no_installed_connector_builds_the_release(tmp_path):
+@pytest.mark.parametrize(
+    ("version", "built"), [(None, ""), ("2.0.0", "The installed connector builds version 2.0.0. ")]
+)
+def test_the_access_hint_names_the_package_that_builds_the_release(tmp_path, monkeypatch, version, built):
+    # No connector package, or one whose connector builds another version.
+    if version is not None:
+        monkeypatch.setattr(_Builder, "IDS", ("org/gated",))
+        monkeypatch.setattr(_Builder, "VERSION", version)
+        install_backends(monkeypatch, _Builder([]))
     card = _card("org/gated", Access.CREDENTIALED, "https://physionet.example/dua")
-    client = TimeNet(sources=[LocalRegistry(tmp_path / "store"), _hosted(tmp_path, card), InstalledConnectors()])
+    store = LocalRegistry(tmp_path / "store")
+    client = TimeNet(sources=[store, _hosted(tmp_path, card), InstalledConnectors()])
 
     with pytest.raises(TimeNetAccessError) as caught:
-        client.open("org/gated")
+        client.open("org/gated@1.0.0")
 
-    assert str(caught.value) == (
-        "org/gated@1.0.0 is credentialed. Get access at https://physionet.example/dua for org/gated@1.0.0. "
-        "No source serves its files, and no installed connector builds this release. "
-        "Install its connector package and build it locally with `timenet-build build org/gated`."
+    assert caught.value.hint == (
+        f"{built}Install the connector package that builds org/gated@1.0.0, then build it locally with "
+        f"timenet.build('org/gated', local_registry='{store.root}')."
     )
 
 
-def test_the_hint_for_a_hosted_child_names_the_access_page_of_each_ancestor(tmp_path):
+def test_the_hint_for_a_hosted_child_names_the_access_page_of_each_ancestor(tmp_path, monkeypatch):
+    monkeypatch.setattr(_Builder, "IDS", ("org/child",))
+    install_backends(monkeypatch, _Builder([]))
     # The card of the child stays open and has no access page. Its parents set the access.
     parents = (
         _card("org/a", Access.CREDENTIALED, "https://a.example"),
@@ -1142,6 +1213,6 @@ def test_the_hint_for_a_hosted_child_names_the_access_page_of_each_ancestor(tmp_
     assert str(caught.value) == (
         "org/child@1.0.0 is restricted. "
         "Get access at https://a.example for org/a@1.0.0 and at https://b.example for org/b@1.0.0. "
-        "No source serves its files. Add InstalledConnectors() to the sources, or build it locally with "
-        "`timenet-build build org/child`."
+        # A client without a store cannot build, so the hint names the store too.
+        "Add LocalRegistry(<path>) and InstalledConnectors() to the sources to build it locally."
     )

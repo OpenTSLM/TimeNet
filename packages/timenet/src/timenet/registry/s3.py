@@ -21,7 +21,7 @@ import uuid
 
 import pyarrow.fs as pafs
 
-from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError
+from timenet.errors import TimeNetDatasetNotFoundError, TimeNetRegistryError, TimeNetUnreachableError
 from timenet.format.constants import MANIFEST_FILE
 from timenet.manifest import Manifest, parse_manifest
 from timenet.registry.lazy_read import LazyReadRegistry
@@ -234,14 +234,14 @@ class S3Registry(LazyReadRegistry):
         """Name the bucket in the error of a request that fails on the network.
 
         Raises:
-            TimeNetRegistryError: If a request fails to reach the bucket.
+            TimeNetUnreachableError: If a request fails to reach the bucket.
         """
         import botocore.exceptions  # ruff: ignore[import-outside-top-level] - optional S3 dependency
 
         try:
             yield
         except (botocore.exceptions.ConnectionError, botocore.exceptions.HTTPClientError) as error:
-            raise TimeNetRegistryError(f"cannot reach {self._display_root()}: {error}") from error
+            raise TimeNetUnreachableError(f"cannot reach {self._display_root()}: {error}") from error
 
     def _key(self, *parts: str) -> str:
         # ruff: ignore[docstring-missing-returns]

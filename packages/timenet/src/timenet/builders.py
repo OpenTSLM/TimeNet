@@ -157,6 +157,11 @@ def claims() -> Iterator[ConnectorClaim]:
                 yield ConnectorClaim(dataset_id, backend, entry)
 
 
+def has_backends() -> bool:
+    """Return whether any installed package registers a builder backend."""
+    return any(True for _ in entry_points(group=ENTRY_POINT_GROUP))
+
+
 def installed_builder(dataset_id: str) -> InstalledBuilder | None:
     """Find the first registered backend that lists a dataset, and read its card.
 
