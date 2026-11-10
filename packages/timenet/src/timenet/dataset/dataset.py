@@ -403,7 +403,7 @@ class TimeFDataset(SupportsAnnotate):  # ruff: ignore[too-many-public-methods]
             annotation._content_key,
             annotation.source,
             annotation.confidence,
-            json.dumps(annotation.occurrence_metadata, sort_keys=True),
+            json.dumps(annotation.occurrence_metadata, sort_keys=True) if annotation.occurrence_metadata else None,
         )
         attached = self._shared_annotations.get(key)
         if attached is None:
