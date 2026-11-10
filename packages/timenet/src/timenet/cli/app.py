@@ -10,6 +10,7 @@ from rich.table import Table
 import typer
 
 from timenet.cache import cache_size, clear_cache, clear_releases, human_bytes, stored_releases
+from timenet.cli.options import AUTO_BUILD, LOCAL_REGISTRY, REMOTE_REGISTRY
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console as ui, progress_renderer
 from timenet.client import TimeNet, default_local_registry, default_sources
@@ -23,22 +24,6 @@ from timenet.types.tasks import TASKS
 
 app = typer.Typer(help="Browse a TimeNet registry and fetch datasets.", no_args_is_help=True)
 console = Console()
-
-_registry_option = typer.Option(
-    None,
-    "--registry",
-    "-r",
-    help="Registry URL or path that this command reads (else $TIMENET_REMOTE_REGISTRY, then timenet://).",
-)
-# TODO(adrian): Remove temporary glue which maps --registry onto the list after the local registry, until the CLI
-# takes the flags of the defaults.
-_download_registry_option = typer.Option(
-    None,
-    "--registry",
-    "-r",
-    help="Registry URL or path to put after the local registry in the list of sources. The release resolves "
-    "through the whole list.",
-)
 
 T = TypeVar("T")
 
@@ -71,18 +56,21 @@ def _enum_list(values: list[str], factory: Callable[[str], T], flag: str, choice
     return parsed or None
 
 
-def _client(registry: str | None) -> TimeNet:
-    """Create a client with the default sources and an optional registry.
+def _client(local_registry: str | None, remote_registry: str | None, auto_build: bool | None) -> TimeNet:
+    """Create a client with the selected registries and build setting.
+
+    Pass ``None`` to use the matching ``TIMENET_*`` environment variable or its default.
 
     Args:
-        registry: The registry URL or path to read after the local registry, or ``None`` for the default.
+        local_registry: The local registry path.
+        remote_registry: The remote registry URL or path.
+        auto_build: Whether to build missing datasets with installed connectors.
 
     Returns:
-        A client with the configured sources.
+        The configured client.
     """
-    # TODO(adrian): Remove temporary glue which maps --registry onto default_sources() until the
-    # CLI takes the flags of the defaults.
-    return TimeNet(sources=default_sources(remote_registry=registry))
+    sources = default_sources(local_registry=local_registry, remote_registry=remote_registry, auto_build=auto_build)
+    return TimeNet(sources=sources)
 
 
 def _metadata_table(rows: list[DatasetMetadata], title: str) -> Table:
@@ -111,9 +99,13 @@ def _metadata_table(rows: list[DatasetMetadata], title: str) -> Table:
 
 
 @app.command("list")
-def list_datasets(registry: str | None = _registry_option) -> None:
-    """Display metadata for every dataset in the selected registry."""
-    rows = _client(registry).list()
+def list_datasets(
+    local_registry: str | None = LOCAL_REGISTRY,
+    remote_registry: str | None = REMOTE_REGISTRY,
+    auto_build: bool | None = AUTO_BUILD,
+) -> None:
+    """List the datasets in the registry."""
+    rows = _client(local_registry, remote_registry, auto_build).list()
     if not rows:
         typer.echo("No datasets in the registry.")
         return
@@ -122,7 +114,6 @@ def list_datasets(registry: str | None = _registry_option) -> None:
 
 @app.command()
 def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
-    registry: str | None = _registry_option,
     query: list[str] = typer.Option([], "--query", "-q", help="Free-text terms."),
     domain: list[str] = typer.Option([], "--domain", help="Domain(s)."),
     task: list[str] = typer.Option([], "--task", help="Task type(s)."),
@@ -131,12 +122,15 @@ def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
     dataset_id: list[str] = typer.Option([], "--id", help="Dataset id(s)."),
     tag: list[str] = typer.Option([], "--tag", help="Tag(s)."),
     limit: int = typer.Option(100, "--limit", min=0, help="Maximum results."),
+    local_registry: str | None = LOCAL_REGISTRY,
+    remote_registry: str | None = REMOTE_REGISTRY,
+    auto_build: bool | None = AUTO_BUILD,
 ) -> None:
-    """Find datasets that match the filters.
+    """Search for datasets that match the filters.
 
-    Repeat a filter flag to pass several values.
+    Repeat a filter flag to supply multiple values.
     """
-    results = _client(registry).search(
+    results = _client(local_registry, remote_registry, auto_build).search(
         query=query or None,
         domain=_enum_list(domain, Domain, "--domain", [d.value for d in Domain]),
         task=_enum_list(task, lambda value: TASKS[TaskType(value)], "--task", [t.value for t in TaskType]),
@@ -153,9 +147,14 @@ def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
 
 
 @app.command()
-def info(dataset_id: str, registry: str | None = _registry_option) -> None:
-    """Display a dataset's metadata, schema, and counts."""
-    manifest = _client(registry).get(dataset_id)
+def info(
+    dataset_id: str,
+    local_registry: str | None = LOCAL_REGISTRY,
+    remote_registry: str | None = REMOTE_REGISTRY,
+    auto_build: bool | None = AUTO_BUILD,
+) -> None:
+    """Show a dataset's metadata, schema, and counts."""
+    manifest = _client(local_registry, remote_registry, auto_build).get(dataset_id)
     counts = manifest.counts
     table = Table(title=manifest.dataset_id, title_justify="left", title_style="bold", show_header=False)
     table.add_column("Field", style="cyan")
@@ -197,24 +196,25 @@ def info(dataset_id: str, registry: str | None = _registry_option) -> None:
 @app.command()
 def download(
     dataset_id: str,
-    registry: str | None = _download_registry_option,
+    local_registry: str | None = LOCAL_REGISTRY,
+    remote_registry: str | None = REMOTE_REGISTRY,
+    auto_build: bool | None = AUTO_BUILD,
     force: bool = typer.Option(
         False, "--force", help="Copy the release again, even if the local registry holds a complete copy."
     ),
 ) -> None:
-    """Copy a release and its payload sources into the local registry.
+    """Copy a release and its data files into the local registry.
 
-    Print the release directory to standard output.
+    The command prints the release directory to stdout.
     """
-    sources = default_sources(remote_registry=registry)
     started: list[StepStarted] = []
     with progress_renderer() as show:
-        target = TimeNet(sources=sources).download(
-            dataset_id, force=force, progress=partial(_keep_steps, started, show)
-        )
+        client = _client(local_registry, remote_registry, auto_build)
+        target = client.download(dataset_id, force=force, progress=partial(_keep_steps, started, show))
     if not started:
         # The local registry already held the release and its payload sources.
-        ui.success(f"Nothing to do: '{split_ref(dataset_id)[0]}' {target.name} is already in {sources[0]}")
+        store = default_local_registry(local_registry=local_registry)
+        ui.success(f"Nothing to do: '{split_ref(dataset_id)[0]}' {target.name} is already in {store}")
     typer.echo(str(target))
 
 
@@ -244,9 +244,9 @@ _YES = typer.Option(False, "--yes", "-y", help="Skip the confirmation prompt.")
 
 
 @local_app.command("info")
-def local_info() -> None:
-    """Show the path and size of the cache and the local registry."""
-    store, cache_dir = default_local_registry(), settings().cache_dir
+def local_info(local_registry: str | None = LOCAL_REGISTRY) -> None:
+    """Show cache and local registry paths and sizes."""
+    store, cache_dir = default_local_registry(local_registry=local_registry), settings().cache_dir
     releases = stored_releases(store)
     size = human_bytes(sum(item.size_bytes for item in releases))
     # Plain lines, so that a long path does not wrap.
@@ -255,9 +255,9 @@ def local_info() -> None:
 
 
 @local_app.command("clear")
-def local_clear(yes: bool = _YES) -> None:
+def local_clear(yes: bool = _YES, local_registry: str | None = LOCAL_REGISTRY) -> None:
     """Delete the cache and every release in the local registry."""
-    store, cache_dir = default_local_registry(), settings().cache_dir
+    store, cache_dir = default_local_registry(local_registry=local_registry), settings().cache_dir
     if not yes:
         typer.confirm(f"Delete the cache in {cache_dir} and every release in {store.root}?", abort=True)
     # The cache clear checks the folders before it deletes anything, so it runs first.

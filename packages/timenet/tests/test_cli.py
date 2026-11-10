@@ -132,28 +132,22 @@ def test_local_clear_deletes_no_release_when_the_cache_check_fails(state, monkey
     assert inside.exists("timenet/hello-world", "1.0.0")
 
 
-def test_list(registry_root):
-    result = runner.invoke(app, ["list", "--registry", str(registry_root)])
+def test_the_local_commands_take_the_local_registry_flag(tmp_path):
+    # The variable of the autouse fixture names an empty store, so the release comes from the flag.
+    store = tmp_path / "store"
+    LocalRegistry(store).put_dataset(make_dataset())
+    result = runner.invoke(app, ["local", "info", "--local-registry", str(store)])
     assert result.exit_code == 0, result.output
-    assert "timenet/hello-world" in click.unstyle(result.output)
-
-
-def test_search_by_domain(registry_root):
-    result = runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "general"])
+    assert f"Local registry {store}: 1 release" in click.unstyle(result.stdout)
+    result = runner.invoke(app, ["local", "clear", "--yes", "--local-registry", str(store)])
     assert result.exit_code == 0, result.output
-    assert "timenet/hello-world" in click.unstyle(result.output)
+    assert stored_releases(LocalRegistry(store)) == []
 
 
 def test_search_no_match(registry_root):
-    result = runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "cardiology"])
+    result = runner.invoke(app, ["search", "--remote-registry", str(registry_root), "--domain", "cardiology"])
     assert result.exit_code == 0, result.output
     assert click.unstyle(result.output) == "No datasets match.\n"
-
-
-def test_info(registry_root):
-    result = runner.invoke(app, ["info", "timenet/hello-world", "--registry", str(registry_root)])
-    assert result.exit_code == 0, result.output
-    assert click.unstyle(result.output).startswith("timenet/hello-world")
 
 
 def _write(root, dataset):
@@ -190,10 +184,11 @@ def test_info_lists_the_access_page_of_each_release_that_sets_one(tmp_path):
             child.import_from(reader)
     _write(root, child)
 
-    result = runner.invoke(app, ["info", "test/child", "--registry", str(root)])
+    result = runner.invoke(app, ["info", "test/child", "--remote-registry", str(root)])
 
     assert result.exit_code == 0, result.output
-    cells = [[cell.strip() for cell in line.split("│")[1:-1]] for line in result.output.splitlines() if "│" in line]
+    lines = click.unstyle(result.output).splitlines()
+    cells = [[cell.strip() for cell in line.split("│")[1:-1]] for line in lines if "│" in line]
     start = cells.index(["access", "credentialed"])
     # The card of the child stays open. Its effective level comes from its parents, and each parent
     # names its own page.
@@ -208,7 +203,7 @@ def test_download_command_copies_into_the_store_and_then_has_nothing_to_do(regis
     # The last line names a long path, so the console must not wrap it.
     monkeypatch.setattr(_cli_module.ui, "rich", Console(stderr=True, width=1000))
     monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
-    command = ["download", "timenet/hello-world", "--registry", str(registry_root)]
+    command = ["download", "timenet/hello-world", "--remote-registry", str(registry_root)]
     target = tmp_path / "store" / "timenet/hello-world" / "1.0.0"
 
     copied = runner.invoke(app, command)
@@ -229,7 +224,7 @@ def test_download_command_copies_into_the_store_and_then_has_nothing_to_do(regis
 
 def test_download_command_with_force_copies_a_held_release_again(registry_root, tmp_path, monkeypatch):
     monkeypatch.setenv("TIMENET_LOCAL_REGISTRY", str(tmp_path / "store"))
-    command = ["download", "timenet/hello-world", "--registry", str(registry_root)]
+    command = ["download", "timenet/hello-world", "--remote-registry", str(registry_root)]
     assert runner.invoke(app, command).exit_code == 0
 
     forced = runner.invoke(app, [*command, "--force"])
@@ -239,8 +234,48 @@ def test_download_command_with_force_copies_a_held_release_again(registry_root, 
     assert successes == ["✅ Copied 'timenet/hello-world' → 1.0.0"]
 
 
+def test_each_command_builds_the_list_from_its_flags(registry_root, tmp_path):
+    # The variables of the autouse fixture name an empty store and an empty registry, so each result
+    # comes from the flags.
+    store = tmp_path / "store"
+    flags = ["--local-registry", str(store), "--remote-registry", str(registry_root), "--no-auto-build"]
+    for command in (["list"], ["search", "--domain", "general"], ["info", "timenet/hello-world"]):
+        result = runner.invoke(app, [*command, *flags])
+        assert result.exit_code == 0, result.output
+        assert "timenet/hello-world" in result.stdout
+    result = runner.invoke(app, ["download", "timenet/hello-world", *flags])
+    assert result.exit_code == 0, result.output
+    assert result.stdout == f"{store / 'timenet/hello-world/1.0.0'}\n"
+
+
+@pytest.mark.parametrize(("flag", "variable"), [("--auto-build", "false"), ("--no-auto-build", "true")])
+def test_the_auto_build_flag_beats_its_variable(monkeypatch, flag, variable):
+    monkeypatch.setenv("TIMENET_AUTO_BUILD", variable)
+    result = runner.invoke(app, ["download", "x/y", flag])
+    # The error names each source of the list.
+    assert isinstance(result.exception, TimeNetDatasetNotFoundError)
+    assert ("installed connectors" in str(result.exception)) == (flag == "--auto-build")
+
+
+# The commands that read the list of sources share one path, so download stands for them.
+_EMPTY_FLAGS = [
+    ["download", "x/y", "--local-registry", ""],
+    ["local", "clear", "--yes", "--local-registry", ""],
+]
+
+
+@pytest.mark.parametrize("argv", _EMPTY_FLAGS, ids=lambda argv: " ".join(argv[:-1]))
+def test_an_empty_flag_is_an_error(tmp_path, monkeypatch, argv):
+    # An empty value must not mean the current directory: a build would land there, and
+    # `local clear` would delete its releases.
+    monkeypatch.chdir(tmp_path)
+    result = runner.invoke(app, argv)
+    assert isinstance(result.exception, TimeFValidationError)
+    assert f"must not be empty (also as {argv[-2]})" in str(result.exception)
+
+
 def test_search_rejects_unknown_filter_value(registry_root):
-    assert runner.invoke(app, ["search", "--registry", str(registry_root), "--domain", "bogus"]).exit_code == 2
+    assert runner.invoke(app, ["search", "--remote-registry", str(registry_root), "--domain", "bogus"]).exit_code == 2
     # The error message is a Rich-rendered panel, so assert it on the raising helper directly.
     with pytest.raises(typer.BadParameter, match="invalid --domain"):
         _enum_list(["bogus"], Domain, "--domain", [d.value for d in Domain])
