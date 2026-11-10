@@ -42,7 +42,13 @@ class ParquetDataReader(DataReader[RowT]):
                     raise TimeNetConnectorError(f"{self.path}: missing columns {missing}")
                 row_number = 0
                 for batch in parquet.iter_batches(columns=self.selected_columns):
-                    for value in batch.to_pylist():
+                    try:
+                        values = batch.to_pylist()
+                    except (ValueError, OverflowError) as exc:
+                        raise TimeNetConnectorError(
+                            f"{self.path}: rows {row_number + 1}-{row_number + batch.num_rows}: {exc}"
+                        ) from exc
+                    for value in values:
                         row_number += 1
                         yield self._validate(value, f"row {row_number}")
         except (OSError, pa.ArrowException) as exc:

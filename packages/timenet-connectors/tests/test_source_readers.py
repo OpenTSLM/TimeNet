@@ -122,6 +122,15 @@ def test_parquet_rejects_duplicate_columns(tmp_path):
         list(ParquetDataReader(path, Row).iter_rows())
 
 
+def test_parquet_conversion_error_has_path_and_batch_rows(tmp_path):
+    path = tmp_path / "source.parquet"
+    pq.write_table(pa.table({"date": pa.array([0, 3_000_000], type=pa.date32())}), path)
+    with pytest.raises(TimeNetConnectorError, match="rows 1-2") as exc:
+        list(ParquetDataReader(path, DataRow).iter_rows())
+    assert str(path) in str(exc.value)
+    assert isinstance(exc.value.__cause__, OverflowError)
+
+
 def test_parquet_reads_across_batches_in_order(tmp_path):
     path = tmp_path / "source.parquet"
     count = 65537
