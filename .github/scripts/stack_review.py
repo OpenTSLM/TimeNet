@@ -12,7 +12,8 @@ comment per path, on the top PR, found again by a marker so reruns edit it in pl
 skipped when no PR head in it changed since the comment was written.
 
 The script is trusted code. The workflow runs it from the default branch, never from the PR
-under review, and the PR-Agent configuration is built here for the same reason.
+under review, and the PR-Agent configuration is built here for the same reason. The review prompt
+is ``.github/pr-review-instructions.md`` next to it.
 
 Run it the way CI does::
 
@@ -34,15 +35,7 @@ MODEL = "openrouter/moonshotai/kimi-k3.1-pro"
 BASE_BRANCH = "stack-base"
 MARKER = "<!-- pr-agent-stack-review:{leaf} -->"
 
-INSTRUCTIONS = (
-    "Review the combined stack as one change. Trace lower-level contracts through all supplied "
-    "upper-level consumers. Report concrete failures that emerge across those layers, such as a "
-    "design decision in a lower PR that only breaks once a later PR builds on it. Name the "
-    "foundational code and its downstream usage, and say which PR owns each finding. Follow "
-    "AGENTS.md. Check TimeF invariants, explicit TimeNet exceptions on data issues (no silent "
-    "repair of data), data types, missing values, lazy loading and bounded memory. Report only "
-    "defects with material impact. "
-)
+INSTRUCTIONS = Path(__file__).parent.parent / "pr-review-instructions.md"
 
 CONFIG = """\
 [config]
@@ -128,7 +121,7 @@ def review(repo_dir: Path, path: list[dict[str, Any]], tmp: Path) -> str:
         CONFIG.format(
             model=MODEL,
             review_path=review_path,
-            instructions=json.dumps(f"{INSTRUCTIONS}The stack, bottom to top, is: {stack}."),
+            instructions=json.dumps(f"{INSTRUCTIONS.read_text()}\nThe stack, bottom to top, is: {stack}."),
         )
     )
     run(
