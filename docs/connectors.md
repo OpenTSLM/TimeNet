@@ -394,3 +394,33 @@ that split keeps them. A child with a split of its own removes them and adds its
 ---
 
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
+
+## Reading source rows
+
+For CSV, JSON arrays, JSON Lines, and Parquet, declare the source fields in a connector-owned
+`DataRow` and read each downloaded file during `convert`:
+
+```python
+from pydantic import Field
+from timenet_connectors.sources.readers import DataRow, ParquetDataReader
+
+class SourceRow(DataRow):
+    question: str = Field(alias="Question")
+    count: int = Field(alias="Count")
+
+for ref in raw_refs:
+    for row in ParquetDataReader(ref.path, SourceRow).iter_rows():
+        # Convert row.question and row.count into TimeNet objects.
+        ...
+```
+
+The row schema controls strictness for decoded JSON and Parquet values; for example, set
+`model_config = ConfigDict(strict=True)` to reject coercion. CSV cells are strings and are parsed as
+such. The schema forbids unexpected
+fields by default; configure it explicitly when the source contains fields the connector does not
+use. JSON object keys and Parquet column names must be distinct.
+
+CSV and JSON Lines stream rows; Parquet reads batches. JSON arrays are loaded into memory. Close an
+iterator explicitly if leaving it early, for example with `contextlib.closing`. `CsvDataReader` can
+check an exact ordered header via `expected_columns=`, and `ParquetDataReader` can read selected
+columns with `selected_columns=`.

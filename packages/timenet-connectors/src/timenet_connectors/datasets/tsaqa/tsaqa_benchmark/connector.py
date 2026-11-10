@@ -28,11 +28,11 @@ import pyarrow.parquet as pq
 
 from timenet.dataset import Record, Signal, Source, TimeFDataset
 from timenet.dataset.axis import OrdinalAxis
-from timenet.errors import TimeFFormatError, TimeFValidationError
+from timenet.errors import TimeFFormatError, TimeFValidationError, TimeNetConnectorError
 from timenet.json import JsonValue
 from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, Split, Task, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
-from timenet_connectors.sources.parquet import iter_parquet_rows
+from timenet_connectors.sources.readers import DataRow, ParquetDataReader
 
 
 @unique
@@ -546,6 +546,19 @@ def _transform(task: _Task, question: str) -> str | None:
     return match[1]
 
 
+class _SourceRow(DataRow):
+    """The projected columns consumed by the benchmark's own validation."""
+
+    task: Any
+    question_type: Any
+    input_ts: Any
+    question: Any
+    answer: Any
+    meta_info: Any
+    domain: Any
+    dataset: Any
+
+
 def _read_rows(path: Path, split: _SplitFile) -> Iterator[_Row]:
     """Validate every row of one split file, in file order.
 
@@ -556,9 +569,9 @@ def _read_rows(path: Path, split: _SplitFile) -> Iterator[_Row]:
         TimeFFormatError: If the file can't be read as parquet.
     """
     try:
-        for index, values in enumerate(iter_parquet_rows(path, columns=_READ_COLUMNS)):
-            yield _validate_row(values, split, index)
-    except (OSError, pa.ArrowException) as exc:
+        for index, values in enumerate(ParquetDataReader(path, _SourceRow, selected_columns=_READ_COLUMNS).iter_rows()):
+            yield _validate_row(values.model_dump(), split, index)
+    except TimeNetConnectorError as exc:
         raise TimeFFormatError(f"{path}: {exc}") from exc
 
 

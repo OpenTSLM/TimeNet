@@ -23,10 +23,11 @@ records for the recording.
 import ast
 import asyncio
 from collections.abc import Iterator, Mapping
-import csv
 from dataclasses import dataclass
 from pathlib import Path
 from typing import ClassVar
+
+from pydantic import ConfigDict
 
 from timenet.connectors import BaseConnector
 from timenet.connectors.context import BuildContext
@@ -40,6 +41,7 @@ from timenet.types import (
 )
 from timenet.types.reference_keys import ParentAlias
 from timenet_connectors.download import Artifact, download_files, ensure_archive, find_dir_containing
+from timenet_connectors.sources.readers import CsvDataReader, DataRow
 
 
 # The per-template answer options (the multiple-choice candidates), keyed by template_id. The URL
@@ -193,6 +195,28 @@ def _clinical_context(recording: _PtbxlRecording) -> str:
     return f"{parts[0]} {parts[1]}. " + ". ".join(parts[2:]) + "."
 
 
+class _TemplateSourceRow(DataRow):
+    """Fields used from the published template answer table."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    template_id: str
+    classes: str
+
+
+class _QuestionSourceRow(DataRow):
+    """Published question fields before source-specific parsing."""
+
+    model_config = ConfigDict(extra="ignore")
+
+    ecg_id: str
+    template_id: str
+    question_type: str
+    question: str
+    answer: str
+    rationale: str
+
+
 @dataclass(frozen=True)
 class _CotRow:
     """One CoT question, parsed once from its CSV row."""
@@ -226,10 +250,9 @@ def _load_template_answers(path: Path) -> dict[int, tuple[str, ...]]:
         A mapping of ``template_id`` to its ordered answer options.
     """
     answers: dict[int, tuple[str, ...]] = {}
-    with path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            classes = ast.literal_eval(row["classes"])
-            answers[_parse_int(row["template_id"])] = tuple(str(option) for option in classes)
+    for row in CsvDataReader(path, _TemplateSourceRow).iter_rows():
+        classes = ast.literal_eval(row.classes)
+        answers[_parse_int(row.template_id)] = tuple(str(option) for option in classes)
     return answers
 
 
@@ -242,16 +265,15 @@ def _iter_cot_rows(csv_path: Path) -> Iterator[_CotRow]:
     Yields:
         Each parsed row. Rationale and clinical-context fields span multiple physical lines.
     """
-    with csv_path.open(newline="", encoding="utf-8") as handle:
-        for row in csv.DictReader(handle):
-            yield _CotRow(
-                ecg_id=_parse_ecg_id(row["ecg_id"]),
-                template_id=_parse_int(row["template_id"]),
-                question_type=row["question_type"],
-                question=row["question"],
-                answer=row["answer"],
-                rationale=row["rationale"],
-            )
+    for row in CsvDataReader(csv_path, _QuestionSourceRow).iter_rows():
+        yield _CotRow(
+            ecg_id=_parse_ecg_id(row.ecg_id),
+            template_id=_parse_int(row.template_id),
+            question_type=row.question_type,
+            question=row.question,
+            answer=row.answer,
+            rationale=row.rationale,
+        )
 
 
 class EcgQaCotConnector(BaseConnector[EcgQaCotSource]):
