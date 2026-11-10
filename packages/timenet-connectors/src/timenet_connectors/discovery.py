@@ -11,10 +11,12 @@ import importlib.machinery
 import importlib.util
 from pathlib import Path
 import pkgutil
+import warnings
 
 import yaml
 
 from timenet.connectors import BaseConnector
+from timenet.errors import ConnectorCardWarning
 import timenet_connectors.datasets as _datasets
 
 
@@ -47,20 +49,17 @@ def connector_dir(dataset_id: str) -> Path:
         path = Path(next(iter(spec.submodule_search_locations)))
         if (path / "dataset.yaml").is_file():
             return path
-    raise LookupError(f"no connector for {dataset_id!r}; known: {', '.join(_known_ids()) or '(none)'}")
+    raise LookupError(f"no connector for {dataset_id!r}; known: {', '.join(known_ids()) or '(none)'}")
 
 
 def has_connector(dataset_id: str) -> bool:
-    """Report whether a connector package exists for an id, without importing it.
-
-    Ask this instead of catching :func:`connector_dir`'s ``LookupError``: a miss is an ordinary
-    answer here, not an exception.
+    """Check for a dataset's connector package and card without importing the connector.
 
     Args:
-        dataset_id: A flat (``hello_world``) or ``org/name`` id.
+        dataset_id: The dataset ID, as ``org/name``.
 
     Returns:
-        Whether a connector package exists for the id.
+        Whether a connector package with a ``dataset.yaml`` card exists.
     """
     try:
         connector_dir(dataset_id)
@@ -70,39 +69,62 @@ def has_connector(dataset_id: str) -> bool:
 
 
 def requirements_for(dataset_id: str) -> Path | None:
-    """Return the connector's ``requirements.txt``, or ``None`` if it declares none.
+    """Find a connector's requirements file.
 
     Args:
-        dataset_id: A flat (``hello_world``) or ``org/name`` id.
+        dataset_id: The dataset ID, as ``org/name``.
 
     Returns:
-        The path to the connector's ``requirements.txt``, or ``None``.
+        The path to ``requirements.txt``, or ``None`` if the file is absent.
 
     Raises:
-        LookupError: If no module exists for the id.
+        LookupError: If no connector with a ``dataset.yaml`` card exists for the ID.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by connector_dir, not directly here)
     path = connector_dir(dataset_id) / "requirements.txt"
     return path if path.is_file() else None
 
 
-def _known_ids() -> list[str]:
-    """List the dataset ids declared by the connector cards on disk, importing nothing.
+def known_ids() -> list[str]:
+    """List dataset IDs from connector cards without importing connectors.
 
-    :func:`available` answers the same question by importing every connector. The unknown-id error
-    path cannot afford that: those dependencies live in each connector's own environment, not this
-    one.
+    A card that cannot be read, is not a YAML mapping, or lacks ``dataset_id`` is skipped with a
+    :class:`~timenet.errors.ConnectorCardWarning`, so it fails only its own dataset.
 
     Returns:
-        The declared dataset ids, sorted.
+        The sorted dataset IDs, with duplicates removed.
     """
     ids: set[str] = set()
     for root in _datasets.__path__:
         # A flat id sits at ``datasets/<name>/``, an ``org/name`` id one level deeper.
         for card in (*Path(root).glob("*/dataset.yaml"), *Path(root).glob("*/*/dataset.yaml")):
-            declared = (yaml.safe_load(card.read_text(encoding="utf-8")) or {}).get("dataset_id")
-            if declared:
+            declared = _declared_id(card)
+            if declared is not None:
                 ids.add(declared)
     return sorted(ids)
+
+
+def _declared_id(card: Path) -> str | None:
+    """Read the dataset ID of a card, or warn and return ``None`` for a card that cannot be read.
+
+    Args:
+        card: The ``dataset.yaml`` file.
+
+    Returns:
+        The declared dataset ID, or ``None``.
+    """
+    try:
+        raw = yaml.safe_load(card.read_text(encoding="utf-8"))
+    except (OSError, yaml.YAMLError) as error:
+        problem = f"could not read dataset card {card}: {error}"
+    else:
+        if not isinstance(raw, dict):
+            problem = f"dataset card {card} must be a YAML mapping, got {type(raw).__name__}"
+        elif not raw.get("dataset_id"):
+            problem = f"dataset card {card} must declare a dataset_id"
+        else:
+            return raw["dataset_id"]
+    warnings.warn(f"{problem}; its dataset is skipped", ConnectorCardWarning, stacklevel=3)
+    return None
 
 
 def _connector_spec(dataset_id: str) -> importlib.machinery.ModuleSpec | None:
