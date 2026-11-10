@@ -1,4 +1,5 @@
 from contextlib import closing
+import json
 from pathlib import Path
 
 import pyarrow as pa
@@ -7,7 +8,13 @@ from pydantic import ConfigDict, ValidationError
 import pytest
 
 from timenet.errors import TimeNetConnectorError
-from timenet_connectors.sources.readers import CsvDataReader, DataRow, ParquetDataReader
+from timenet_connectors.sources.readers import (
+    CsvDataReader,
+    DataRow,
+    JsonArrayDataReader,
+    JsonlDataReader,
+    ParquetDataReader,
+)
 
 
 class Row(DataRow):
@@ -157,3 +164,110 @@ def test_closing_a_partially_consumed_parquet_reader_closes_its_file(tmp_path, m
         assert next(rows) == Row(name="first", count=1)
         assert not opened_files[0].closed
     assert opened_files[0].closed
+
+
+def test_default_respects_row_schema_strictness(tmp_path):
+    class StrictCount(DataRow):
+        model_config = ConfigDict(strict=True)
+        count: int
+
+    path = tmp_path / "source.json"
+    path.write_text('[{"count":"42"}]')
+    with pytest.raises(TimeNetConnectorError, match="count"):
+        list(JsonArrayDataReader(path, StrictCount).iter_rows())
+
+
+@pytest.mark.parametrize("reader_type", [JsonArrayDataReader, JsonlDataReader])
+def test_json_readers_validate_rows_in_order(tmp_path, reader_type):
+    path = tmp_path / "source"
+    values = [{"name": "first", "count": 1}, {"name": "second", "count": 2}]
+    path.write_text(json.dumps(values) if reader_type is JsonArrayDataReader else "\n".join(map(json.dumps, values)))
+    reader = reader_type(path, Row)
+    assert list(reader.iter_rows()) == [Row(name="first", count=1), Row(name="second", count=2)]
+
+
+@pytest.mark.parametrize(
+    ("reader_type", "content", "location"),
+    [
+        (JsonArrayDataReader, '[{"name":"x","count":"bad"}]', "entry 1"),
+        (JsonlDataReader, '{"name":"x","count":"bad"}\n', "line 1"),
+    ],
+)
+def test_json_invalid_row_has_source_context(tmp_path, reader_type, content, location):
+    path = tmp_path / "source"
+    path.write_text(content)
+    with pytest.raises(TimeNetConnectorError, match=location) as exc:
+        list(reader_type(path, Row).iter_rows())
+    assert str(path) in str(exc.value)
+    assert exc.value.__cause__ is not None
+
+
+@pytest.mark.parametrize("reader_type", [JsonArrayDataReader, JsonlDataReader])
+def test_json_strict_validation(tmp_path, reader_type):
+    path = tmp_path / "source"
+    value = {"name": "sensor", "count": "42"}
+    path.write_text(json.dumps([value] if reader_type is JsonArrayDataReader else value))
+    assert list(reader_type(path, Row).iter_rows()) == [Row(name="sensor", count=42)]
+    with pytest.raises(TimeNetConnectorError, match="count"):
+        list(reader_type(path, StrictRow).iter_rows())
+
+
+def test_json_requires_array_and_jsonl_rejects_invalid_line(tmp_path):
+    path = tmp_path / "source"
+    path.write_text("{}")
+    with pytest.raises(TimeNetConnectorError, match="array"):
+        list(JsonArrayDataReader(path, Row).iter_rows())
+    path.write_text("{}\nnot json\n")
+    with pytest.raises(TimeNetConnectorError, match="line 2"):
+        list(JsonlDataReader(path, DataRow).iter_rows())
+
+
+@pytest.mark.parametrize("reader_type", [JsonArrayDataReader, JsonlDataReader])
+def test_deeply_nested_json_has_source_context(tmp_path, reader_type):
+    path = tmp_path / "source.json"
+    depth = 100_000
+    nested = "[" * depth + "0" + "]" * depth
+    path.write_text(nested if reader_type is JsonArrayDataReader else "{}\n" + nested + "\n")
+    with pytest.raises(TimeNetConnectorError) as exc:
+        list(reader_type(path, DataRow).iter_rows())
+    assert str(path) in str(exc.value)
+    if reader_type is JsonlDataReader:
+        assert "line 2" in str(exc.value)
+    assert isinstance(exc.value.__cause__, RecursionError)
+
+
+@pytest.mark.parametrize(
+    ("reader_type", "content", "location"),
+    [
+        (JsonArrayDataReader, '[{"name":"first","name":"second","count":1}]', "source"),
+        (JsonlDataReader, '{"name":"first","name":"second","count":1}\n', "line 1"),
+        (JsonArrayDataReader, '[{"nested":{"x":1,"x":2}}]', "source"),
+        (JsonlDataReader, '{"nested":{"x":1,"x":2}}\n', "line 1"),
+    ],
+)
+def test_json_rejects_duplicate_keys(tmp_path, reader_type, content, location):
+    path = tmp_path / "source"
+    path.write_text(content)
+    with pytest.raises(TimeNetConnectorError, match="duplicate key") as exc:
+        list(reader_type(path, Row).iter_rows())
+    assert location in str(exc.value)
+    assert str(path) in str(exc.value)
+    assert exc.value.__cause__ is not None
+
+
+def test_closing_a_partially_consumed_jsonl_reader_closes_its_file(tmp_path, monkeypatch):
+    path = tmp_path / "source.jsonl"
+    path.write_text('{"name":"first","count":1}\n{"name":"second","count":2}\n')
+    handles = []
+    open_file = Path.open
+
+    def track_open(file_path, *args, **kwargs):
+        handle = open_file(file_path, *args, **kwargs)
+        handles.append(handle)
+        return handle
+
+    monkeypatch.setattr(Path, "open", track_open)
+    with closing(JsonlDataReader(path, Row).iter_rows()) as rows:
+        assert next(rows) == Row(name="first", count=1)
+        assert not handles[0].closed
+    assert handles[0].closed
