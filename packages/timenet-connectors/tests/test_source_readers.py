@@ -3,7 +3,7 @@ from pathlib import Path
 
 import pyarrow as pa
 import pyarrow.parquet as pq
-from pydantic import ValidationError
+from pydantic import ConfigDict, ValidationError
 import pytest
 
 from timenet.errors import TimeNetConnectorError
@@ -13,6 +13,10 @@ from timenet_connectors.sources.readers import CsvDataReader, DataRow, ParquetDa
 class Row(DataRow):
     name: str
     count: int
+
+
+class StrictRow(Row):
+    model_config = ConfigDict(strict=True)
 
 
 def test_data_row_rejects_unexpected_fields():
@@ -82,7 +86,7 @@ def test_closing_a_partially_consumed_csv_reader_closes_its_file(tmp_path, monke
 def test_parquet_reads_rows_in_order(tmp_path):
     path = tmp_path / "source.parquet"
     pq.write_table(pa.table({"name": ["first", "second"], "count": [1, 2]}), path)
-    reader = ParquetDataReader(path, Row, strict_parsing=True)
+    reader = ParquetDataReader(path, Row)
     assert list(reader.iter_rows()) == [Row(name="first", count=1), Row(name="second", count=2)]
 
 
@@ -91,7 +95,7 @@ def test_parquet_strict_validation_and_error_context(tmp_path):
     pq.write_table(pa.table({"name": ["sensor"], "count": ["42"]}), path)
     assert list(ParquetDataReader(path, Row).iter_rows()) == [Row(name="sensor", count=42)]
     with pytest.raises(TimeNetConnectorError, match="row 1") as exc:
-        list(ParquetDataReader(path, Row, strict_parsing=True).iter_rows())
+        list(ParquetDataReader(path, StrictRow).iter_rows())
     assert str(path) in str(exc.value)
     assert exc.value.__cause__ is not None
 

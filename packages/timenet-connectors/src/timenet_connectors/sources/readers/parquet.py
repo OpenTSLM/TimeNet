@@ -18,10 +18,9 @@ class ParquetDataReader(DataReader[RowT]):
         path: Path,
         row_type: type[RowT],
         *,
-        strict_parsing: bool | None = None,
         selected_columns: Sequence[str] | None = None,
     ) -> None:
-        super().__init__(path, row_type, strict_parsing=strict_parsing)
+        super().__init__(path, row_type)
         self.selected_columns = None if selected_columns is None else list(selected_columns)
 
     def iter_rows(self) -> Generator[RowT, None, None]:
