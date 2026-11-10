@@ -142,13 +142,19 @@ class InlineText(TextHandle):
 
 @dataclass(frozen=True, eq=False, slots=True)
 class InlineTextList(TextListHandle):
-    """Hold a list of strings in memory. It is always loaded."""
+    """Hold a list of strings in memory. It is always loaded.
 
-    value: list[str]
+    The handle keeps its own copy of the strings, as a tuple, so the text cannot change after the
+    handle is built. :meth:`read` returns a new list on each call.
+    """
+
+    value: list[str] | tuple[str, ...]
+    """The strings, as a ``list`` or a ``tuple``. The handle stores a tuple copy."""
 
     def __post_init__(self) -> None:
-        if not isinstance(self.value, list) or not all(isinstance(item, str) for item in self.value):
-            raise TimeFValidationError("an inline text list must be a list of strings")
+        if not isinstance(self.value, list | tuple) or not all(isinstance(item, str) for item in self.value):
+            raise TimeFValidationError("an inline text list must be a list or a tuple of strings")
+        object.__setattr__(self, "value", tuple(self.value))
 
     @property
     def is_loaded(self) -> bool:
@@ -161,8 +167,8 @@ class InlineTextList(TextListHandle):
         return len(self.value)
 
     def read(self) -> list[str]:
-        """Return the list of strings."""
-        return self.value
+        """Return a new list of the strings. Changing it does not change the handle."""
+        return list(self.value)
 
     def _content_key(self) -> tuple[str, ...]:
         """Return the strings as a tuple, the hashable form of the list."""
