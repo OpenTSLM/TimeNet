@@ -14,7 +14,7 @@ from collections import defaultdict
 from collections.abc import Collection, Iterable, Iterator, Mapping, Sequence
 from dataclasses import dataclass
 from enum import StrEnum, unique
-from functools import lru_cache, partial
+from functools import partial
 import hashlib
 import itertools
 import json
@@ -33,6 +33,7 @@ from timenet.json import JsonValue
 from timenet.types import Annotation, AnswerTask, ClassificationTask, Label, LabelSet, Split, Task, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
 from timenet_connectors.sources.parquet import iter_parquet_rows
+from timenet_connectors.sources.shared_read import SharedReadCache
 
 
 @unique
@@ -609,9 +610,9 @@ class _SeriesLoader:
 
     def __init__(self, paths: Mapping[str, Path]) -> None:
         self._paths = paths
-        self._columns = lru_cache(maxsize=1)(self._read_columns)
+        self._columns: SharedReadCache[_SplitFile, tuple[pa.StringArray, pa.StringArray]] = SharedReadCache()
         # A row's Records load one after another, so one parsed row suffices.
-        self._series = lru_cache(maxsize=1)(self._parse)
+        self._series: SharedReadCache[tuple[_SplitFile, int, _Task], _ParsedSeries] = SharedReadCache()
 
     def _read_columns(self, split: _SplitFile) -> tuple[pa.StringArray, pa.StringArray]:
         try:
@@ -622,7 +623,7 @@ class _SeriesLoader:
         return input_ts, question
 
     def _parse(self, split: _SplitFile, index: int, task: _Task) -> _ParsedSeries:
-        input_ts, question = self._columns(split)
+        input_ts, question = self._columns.get(split, partial(self._read_columns, split))
         try:
             printed = _printed_series(task, str(question[index].as_py()))
             series = [*_input_series(task, str(input_ts[index].as_py())), *(item.values for item in printed)]
@@ -631,7 +632,8 @@ class _SeriesLoader:
             raise TimeFFormatError(f"{split.filename} row {index}: {exc}; the file changed since conversion") from exc
 
     def __call__(self, row: _Row, position: int) -> pa.Array:
-        parsed = self._series(row.split, row.index, row.task)
+        key = (row.split, row.index, row.task)
+        parsed = self._series.get(key, partial(self._parse, *key))
         if tuple(len(values) for values in parsed.series) != row.lengths or parsed.digest != row.values_digest:
             raise TimeFFormatError(
                 f"{row.file} row {row.index}: the series differ from the converted row; the file changed"

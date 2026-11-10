@@ -394,3 +394,27 @@ that split keeps them. A child with a split of its own removes them and adds its
 ---
 
 See the [API reference for `timenet.connectors`](api/connectors.md) for the full symbol listing.
+
+### Sharing physical reads
+
+Connectors can use `timenet_connectors.sources.shared_read.SharedReadCache` to share one decoded
+physical unit between lazy `Signal.from_loader` callbacks. Create a cache per conversion and
+use a stable, unique key for each unit, including reader parameters. Callbacks in different
+logical sources can use the same cache and key; each callback extracts its own channel and
+converts it to Arrow. The cache does not interpret or modify the decoded value.
+
+The cache retains one unit. Alternating between units can therefore decode them again, and
+channel extraction and Arrow conversion can repeat even on a cache hit. It drops its old
+reference before decoding a replacement, but callers can keep values alive. Decoding is
+serialized, and readers must not recursively access the same cache. Failures propagate and
+leave the cache empty for retry. This is a bound on cache entries, not process memory.
+
+SensorCaps uses this for its six channels per JSONL row. Its conversion still parses each row
+up front to validate values and obtain metadata and lengths; lazy channel reads parse it again
+on a cache miss. Its task stream also rereads rows independently.
+
+To construct several lazy signals together, pass `SignalDefinition` objects to
+`Signal.from_loaders(channels=...)`. Each definition accepts the same metadata and loader as
+`Signal.from_loader`; the returned signals follow the input order. Construction does not read or
+cache values. Connector-defined loaders may use a shared cache as described above, and remain
+responsible for selecting channels and preserving their dtypes and missing values.

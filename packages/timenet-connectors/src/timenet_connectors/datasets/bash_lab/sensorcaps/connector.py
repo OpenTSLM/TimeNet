@@ -16,11 +16,12 @@ from typing import Annotated, ClassVar
 import pyarrow as pa
 from pydantic import Field, FiniteFloat, JsonValue, Strict, TypeAdapter, ValidationError
 
-from timenet.dataset import Record, Signal, Source, TimeFDataset
+from timenet.dataset import Record, Signal, SignalDefinition, Source, TimeFDataset
 from timenet.dataset.axis import IrregularAxis
 from timenet.errors import TimeFValidationError
 from timenet.types import Annotation, AnswerTask, Split, TimeSeriesSpec
 from timenet_connectors.bases.huggingface import BaseHuggingFaceConnector, HubFileRef
+from timenet_connectors.sources.shared_read import SharedReadCache
 
 
 DECLARED_SAMPLING_RATE_HZ = 10
@@ -235,25 +236,21 @@ def _iter_rows(file: HubFileRef) -> Iterator[tuple[_RowRef, _ParsedRow]]:
             index += 1
 
 
+def _read_values(ref: _RowRef) -> tuple[list[list[float]], list[list[float]]]:
+    with ref.file.path.open("rb") as handle:
+        handle.seek(ref.offset)
+        return _parse_row(handle.readline(), ref.context).values
+
+
 class _ValueLoader:
     """Share one bounded sensor-row cache across a dataset's lazy channel loaders."""
 
     def __init__(self) -> None:
-        self.cached: tuple[_RowRef, tuple[list[list[float]], list[list[float]]]] | None = None
+        self.cache: SharedReadCache[_RowRef, tuple[list[list[float]], list[list[float]]]] = SharedReadCache()
 
     def __call__(self, ref: _RowRef, sensor: int, axis: int) -> pa.Array:
-        cached = self.cached
-        if cached is None or cached[0] != ref:
-            with ref.file.path.open("rb") as handle:
-                handle.seek(ref.offset)
-                values = _parse_row(handle.readline(), ref.context).values
-            self.cached = ref, values
-        else:
-            values = cached[1]
-        # Preserve the HF benchmark values. Do not infer nulls from zeros or substitute
-        # original PAMAP2 readings: resampling has already mixed zero-filled gaps into
-        # the published arrays. See README.md for the missing-data limitation.
-        # Use the local values even if another consumer replaces the shared cache during this read.
+        values = self.cache.get(ref, partial(_read_values, ref))
+        # Preserve published values, including upstream zero-filled gaps.
         return pa.array((sample[axis] for sample in values[sensor]), type=pa.float32())
 
 
@@ -348,16 +345,18 @@ class SensorCapsConnector(BaseHuggingFaceConnector):
             A Record with lazy sensor values and annotations from the original row.
         """
         channels = _PAMAP2_CHANNELS if ref.file.part == "pamap2_v2" else _CHANNELS
-        signals = tuple(
-            Signal.from_loader(
-                name=name,
-                spec=spec,
-                time_axis=_AXIS,
-                time_offsets_loader=_load_time_offsets,
-                n_values=len(row.values[sensor]),
-                loader=partial(loader, ref, sensor, dimension),
-            )
-            for spec, name, sensor, dimension in channels
+        signals = Signal.from_loaders(
+            channels=(
+                SignalDefinition(
+                    name=name,
+                    spec=spec,
+                    time_axis=_AXIS,
+                    time_offsets_loader=_load_time_offsets,
+                    n_values=len(row.values[sensor]),
+                    loader=partial(loader, ref, sensor, dimension),
+                )
+                for spec, name, sensor, dimension in channels
+            ),
         )
         record = Record(sources=(Source(name="IMU", signals=signals),))
         source = ref.file.part.rsplit("_", 1)[0]

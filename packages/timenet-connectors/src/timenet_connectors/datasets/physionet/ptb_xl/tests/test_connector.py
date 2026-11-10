@@ -12,6 +12,7 @@ from timenet.reader import LoadPlan, TimeFReader
 from timenet.types import Annotation
 from timenet.types.text import read_value
 from timenet.writer import TimeFWriter
+from timenet_connectors.bases import physionet
 from timenet_connectors.datasets.physionet.ptb_xl.connector import PtbXlConnector, PtbXlSource
 
 
@@ -85,6 +86,27 @@ def test_taskless_clinical_records_round_trip(tmp_path):
     assert (by_key["age"].value, by_key["age"].unit, by_key["age"].description) == (56, "year", _AGE_DESCRIPTION)
     reference, _ = wfdb.rdsamp(str(tmp_path / "record"), channels=[0])
     np.testing.assert_allclose(restored.records[0].signals[0].to_numpy(), reference[:, 0], rtol=1e-5, atol=1e-6)
+
+
+def test_leads_share_a_lazy_recording_read_within_each_conversion(tmp_path, monkeypatch):
+    source = _write_source(tmp_path)
+    reference, _ = wfdb.rdsamp(str(tmp_path / "record"))
+    read_dat = physionet._read_dat16
+    reads = []
+
+    def read_recording(path, n_sig):
+        reads.append(path)
+        return read_dat(path, n_sig)
+
+    monkeypatch.setattr(physionet, "_read_dat16", read_recording)
+    first = PtbXlConnector().convert([source])
+    second = PtbXlConnector().convert([source])
+    assert reads == []
+    for dataset in (first, second):
+        signals = {signal.name: signal for signal in dataset.records[0].signals}
+        for index, name in enumerate(_LEADS):
+            np.testing.assert_allclose(signals[name].to_numpy(), reference[:, index], rtol=1e-5, atol=1e-6)
+        assert len(reads) == (1 if dataset is first else 2)
 
 
 @pytest.mark.parametrize(("code", "sex"), [("0", "male"), ("1", "female")])
