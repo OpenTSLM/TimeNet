@@ -223,7 +223,7 @@ def test_copy_release_refuses_a_release_with_the_same_files_and_another_card(sou
 def test_copy_release_ignores_the_build_environment(source, tmp_path):
     dest = LocalRegistry(tmp_path / "dest")
     copy_release(child_ref, source, dest)
-    _rewrite_child_manifest(dest, build_env={"python": "0.0.0"})
+    _rewrite_child_manifest(dest, build_env={"python": "0.0.0", "packages": {}, "git": {}})
     events: list[ProgressEvent] = []
     copy_release(child_ref, source, LocalRegistry(dest.root), progress=events.append)
     assert events == []

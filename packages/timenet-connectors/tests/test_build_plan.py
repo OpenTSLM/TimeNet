@@ -28,6 +28,7 @@ from timenet.errors import (
     TimeNetMissingParentError,
     TimeNetVersionConflictError,
 )
+from timenet.provenance import TimeNetSnapshot
 from timenet.reader import TimeFReader
 from timenet.registry import LocalRegistry, WritableRegistry, open_local_version
 from timenet.registry._paths import release_dir
@@ -893,7 +894,7 @@ def test_force_with_publish_to_does_nothing_for_the_same_files(tmp_path, monkeyp
 def test_an_environment_that_cannot_be_made_names_the_build_in_this_interpreter(tmp_path, monkeypatch, entry, hint):
     cards = _install_cards(monkeypatch, parent={})
     monkeypatch.setattr(cli_module, "known_ids", lambda: list(cards))
-    monkeypatch.setattr(env_module, "BASE_DISTRIBUTIONS", ("timenet-not-installed",))
+    monkeypatch.setattr(TimeNetSnapshot, "package_names", classmethod(lambda cls: ("timenet-not-installed",)))
     local_registry = tmp_path / "store"
 
     if entry == "cli":

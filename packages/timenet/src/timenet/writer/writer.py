@@ -27,8 +27,8 @@ from timenet.format.duckdb import CONTROL_FILE, connect_control
 from timenet.format.storage import StorageSources
 from timenet.format.stored_array import StoredArray
 from timenet.format.stored_values import PackedValueWriter
-from timenet.manifest import FilePart, Manifest, ManifestCounts, ManifestFiles, PayloadSource
-from timenet.provenance import build_env
+from timenet.manifest import BuildEnvironment, FilePart, Manifest, ManifestCounts, ManifestFiles, PayloadSource
+from timenet.provenance import TimeNetSnapshot
 from timenet.types.ids import EntityId
 from timenet.types.reference_keys import SourceKey
 from timenet.types.references import DatasetRef
@@ -165,9 +165,13 @@ class TimeFWriter:
         Raises:
             FileExistsError: If a committed ``manifest.json`` already exists at the version directory
                 and ``replace`` is not set.
-        """
+            TimeNetBuildError: If the commit of an installed TimeNet package is unknown.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by TimeNetSnapshot.read
         if not self._replace and (self._final_dir / MANIFEST_FILE).exists():
             raise FileExistsError(f"a committed version already exists at {self._final_dir}")
+        # Read the commit before any data is written. An unknown commit then fails before the work,
+        # and a commit or checkout during the write does not change the record.
+        self._snapshot = TimeNetSnapshot.read()
         self._sweep_stale_staging()
         self._staging_dir.mkdir(parents=True, exist_ok=True)
         return self
@@ -475,7 +479,7 @@ class TimeFWriter:
             payload_sources=self._storage_sources.sources,
             parent_cards=import_state.parent_cards,
             lineage=tuple(import_state.lineage.values()),
-            build_env=build_env(),
+            build_env=BuildEnvironment.capture(git=self._snapshot.to_source_map()),
             timef_format_version=1,
         )
         (self._staging_dir / MANIFEST_FILE).write_text(manifest.to_json())

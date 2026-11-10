@@ -86,7 +86,7 @@
     },
     "BuildEnvironment": {
       "additionalProperties": false,
-      "description": "Build-provenance fields recorded in a manifest.",
+      "description": "The Python version, the installed packages, and the TimeNet commits that produced a version.",
       "properties": {
         "python": {
           "title": "Python",
@@ -98,8 +98,20 @@
           },
           "title": "Packages",
           "type": "object"
+        },
+        "git": {
+          "additionalProperties": {
+            "$ref": "#/$defs/GitSource"
+          },
+          "title": "Git",
+          "type": "object"
         }
       },
+      "required": [
+        "python",
+        "packages",
+        "git"
+      ],
       "title": "BuildEnvironment",
       "type": "object"
     },
@@ -361,6 +373,27 @@
         "size"
       ],
       "title": "FilePart",
+      "type": "object"
+    },
+    "GitSource": {
+      "additionalProperties": false,
+      "description": "The git commit that one TimeNet package was built from.",
+      "properties": {
+        "sha": {
+          "pattern": "^[0-9a-f]{40}$",
+          "title": "Sha",
+          "type": "string"
+        },
+        "contains_local_changes": {
+          "title": "Contains Local Changes",
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "sha",
+        "contains_local_changes"
+      ],
+      "title": "GitSource",
       "type": "object"
     },
     "InputModality": {
@@ -751,6 +784,7 @@
     "dataset_id",
     "metadata",
     "files",
+    "build_env",
     "timef_format_version"
   ],
   "title": "Manifest",

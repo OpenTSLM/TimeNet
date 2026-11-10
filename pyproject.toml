@@ -129,6 +129,10 @@ banned-module-level-imports = ["typer", "timenet.cli", "timenet_connectors.build
 # timenet-connectors depends on timenet, so timenet never imports it and works without it.
 "timenet_connectors".msg = "timenet must work without timenet-connectors"
 
+[tool.ruff.lint.pydoclint]
+# A one-line docstring of a small helper does not need Returns or Raises sections.
+ignore-one-line-docstrings = true
+
 [tool.ruff.lint.flake8-bugbear]
 # Typer expects Option/Argument descriptors as parameter defaults.
 extend-immutable-calls = ["typer.Option", "typer.Argument"]
@@ -144,6 +148,7 @@ testpaths = ["packages", "benchmarks/end_to_end/tests"]
 markers = [
     "slow: full-disk round-trip and property tests (deselect with '-m \"not slow\"')",
     "value_dtypes: scalar value-dtype round-trip tests (run with '-m value_dtypes')",
+    "real_provenance: read the real commit of every install type instead of the stub in packages/conftest.py",
 ]
 
 [tool.ty.src]

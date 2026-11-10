@@ -1,10 +1,11 @@
 """The :class:`Manifest`: the compiled ``manifest.json`` file and its JSON codec."""
 
+from importlib.metadata import distributions
 from pathlib import Path
+import platform
 from typing import Annotated, Any, Self
 
-from pydantic import Field, StrictStr, ValidationError, model_validator
-from typing_extensions import TypedDict
+from pydantic import Field, StrictBool, StrictStr, StringConstraints, ValidationError, model_validator
 
 from timenet.errors import ReleaseDifference, TimeFFormatError, TimeNetManifestError
 from timenet.manifest.counts import ManifestCounts
@@ -20,11 +21,44 @@ from timenet.types.wire import ValueEncoding
 from timenet.values_backends import ValuesBackend
 
 
-class BuildEnvironment(TypedDict, total=False):
-    """Build-provenance fields recorded in a manifest."""
+GitSHA = Annotated[str, StringConstraints(strict=True, pattern=r"^[0-9a-f]{40}$")]
+"""A full SHA-1 git commit id: 40 lowercase hex digits."""
+
+
+class GitSource(TimeFModel):
+    """The git commit that one TimeNet package was built from."""
+
+    sha: GitSHA
+    """The commit of the checkout, or of the checkout that built the wheel."""
+    contains_local_changes: StrictBool
+    """Whether the package directory had uncommitted changes, untracked files included."""
+
+
+PackageName = StrictStr
+"""The name pip installs, for example ``timenet-connectors`` (not the import name ``timenet_connectors``)."""
+
+GitSourceMap = dict[PackageName, GitSource]
+"""The commit of each installed TimeNet package, keyed by package name."""
+
+
+class BuildEnvironment(TimeFModel):
+    """The Python version, the installed packages, and the TimeNet commits that produced a version."""
 
     python: StrictStr
-    packages: dict[StrictStr, StrictStr]
+    """The interpreter version, for example ``3.13.1``."""
+    packages: dict[PackageName, StrictStr]
+    """Each installed package and its version, sorted by name."""
+    git: GitSourceMap
+    """The commit of each installed TimeNet package. A package that is not installed is absent."""
+
+    @classmethod
+    def capture(cls, git: GitSourceMap) -> Self:
+        """Describe this interpreter, with ``git`` from ``TimeNetSnapshot.to_source_map()``."""
+        # Under an isolated build the packages are exactly the base, the connector's requirements,
+        # and their transitives. Under --no-isolation they are the whole ambient environment, which
+        # is noisier but still the truth about what produced the dataset.
+        packages = {dist.metadata["Name"]: dist.version for dist in distributions() if dist.metadata["Name"]}
+        return cls(python=platform.python_version(), packages=dict(sorted(packages.items())), git=git)
 
 
 class Manifest(TimeFModel):
@@ -52,8 +86,8 @@ class Manifest(TimeFModel):
     """Every release that stores a payload file this release reads, by source key, pinned to those
     files. The writer flattens them, so a source's own sources are not listed unless this release
     reads their files too."""
-    build_env: BuildEnvironment = Field(default_factory=dict)
-    """The Python version and package set that produced this version."""
+    build_env: BuildEnvironment
+    """The Python version, the package set, and the TimeNet commits that produced this version."""
     timef_format_version: Annotated[int, Field(strict=True, ge=1, le=1)]
     """The TimeF manifest format version."""
 

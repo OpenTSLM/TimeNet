@@ -244,7 +244,6 @@ class S3Registry(LazyReadRegistry):
             raise TimeNetUnreachableError(f"cannot reach {self._display_root()}: {error}") from error
 
     def _key(self, *parts: str) -> str:
-        # ruff: ignore[docstring-missing-returns]
         """Build a bucket-relative key: the prefix, then ``datasets/``, then the path parts."""
         segments = [self._prefix, _DATASETS_PREFIX, *parts]
         return "/".join(segment.strip("/") for segment in segments if segment)

@@ -48,8 +48,8 @@ variables (see the [settings table](client.md#settings)). For example,
 `$TIMENET_LOCAL_REGISTRY` & `TIMENET_ISOLATION=off`. These apply to every CLI command, and the
 Python SDK also honors them.
 
-For each build, the used Python and package and TimeNet versions are recorded to the build's
-manifest.
+The manifest records the Python and package versions used for the build, and the git commit of
+`timenet` and `timenet-connectors`. See [`build_env`](manifest.md) for the fields.
 
 ## Pipeline
 
