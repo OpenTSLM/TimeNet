@@ -13,6 +13,7 @@ from timenet.errors import (
     TimeNetDatasetNotFoundError,
     TimeNetFileError,
     TimeNetMissingParentError,
+    TimeNetNotBuiltError,
 )
 from timenet.manifest import FilePart, Manifest, PayloadSource
 from timenet.registry.base import BaseRegistry
@@ -233,7 +234,7 @@ class _Graph:
         answer: ReleaseLookup | None = None,
         force: bool = False,
     ) -> None:
-        """Add a release and its dependencies to the graph.
+        """Add a required release and its dependencies to the graph.
 
         A node is planned again when a later visit needs more of it: a dataset instead of a payload source, or a
         copy in the output instead of a read.
@@ -241,7 +242,7 @@ class _Graph:
         Args:
             reference: The release to add.
             needed_by: The release that requires ``reference``, or ``None`` for the requested release.
-            pinned: The file records that ``needed_by`` requires, or ``None`` for a parent dataset.
+            pinned: Required file records, or ``None`` for a build parent.
             needed_in_local_registry: True if the plan needs a complete copy in the output.
             answer: The answer of the sources for ``reference``, or ``None`` to ask them.
             force: Copy the release again, even if the output holds a complete copy.
@@ -319,8 +320,9 @@ class _Graph:
 
         Raises:
             TimeFValidationError: If the plan has no output.
-            TimeNetDatasetNotFoundError: If the plan builds nothing and only installed connectors provide the release,
-                no source provides the requested release, or ``force`` is set and only the output holds it.
+            TimeNetNotBuiltError: If the plan builds nothing and only installed connectors provide the release.
+            TimeNetDatasetNotFoundError: If no source provides the requested release, or ``force`` is set and only
+                the output holds it.
             TimeNetFileError: If the output holds a damaged copy that no other registry provides.
             TimeNetAccessError: If a source lists the release but no source serves it.
             TimeNetMissingParentError: If no source provides the release.
@@ -352,7 +354,7 @@ class _Graph:
         elif isinstance(answer, FoundInConnector):
             if not self.builds:
                 # A download builds nothing.
-                raise TimeNetDatasetNotFoundError(_not_built(reference))
+                raise TimeNetNotBuiltError(reference, answer.builder.card)
             self.build(reference, role, answer.builder)
         elif isinstance(answer, NotServed):
             raise answer.access_error(reference.dataset_id)
@@ -653,13 +655,14 @@ def plan_download(
         store: The local registry to copy into.
         sources: The sources to search in order, excluding registries at the directory of ``store``.
         force: Copy the release again, even if the local registry holds a complete copy.
-        lookups: The answers and manifests that resolved ``release``, or ``None`` to ask the sources.
+        lookups: Cached source answers and manifests, or ``None`` to query sources.
 
     Returns:
         The copy steps, in the order in which they run.
 
     Raises:
-        TimeNetDatasetNotFoundError: If a needed release requires a build or no registry can supply a forced copy.
+        TimeNetNotBuiltError: If only installed connectors provide a release that the local registry lacks.
+        TimeNetDatasetNotFoundError: If ``force`` is set and only the local registry holds the release.
         TimeNetFileError: If the local registry holds a damaged copy that no other registry provides.
         TimeNetAccessError: If a source lists a release that the local registry lacks but no source serves it.
         TimeNetMissingParentError: If no registry provides a payload source that the local registry lacks.
@@ -670,21 +673,6 @@ def plan_download(
     graph.visit(release, None, needed_in_local_registry=True, force=force)
     graph.check()
     return Plan(tuple(graph.create_ordered_steps()))
-
-
-def _not_built(release: DatasetRef) -> str:
-    """Describe a release that only installed connectors provide, in a plan that builds nothing.
-
-    Args:
-        release: The release.
-
-    Returns:
-        The error message.
-    """
-    return (
-        f"{release} is not built yet: only an installed connector provides it. open() or load() builds it into "
-        "the local registry."
-    )
 
 
 def describe_searched_sources(sources: Iterable[ReleaseSource], reference: DatasetRef) -> str:

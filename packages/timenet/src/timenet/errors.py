@@ -18,6 +18,7 @@ from typing import TYPE_CHECKING, Literal
 
 if TYPE_CHECKING:
     from timenet.types.access import Access, AccessRequirement
+    from timenet.types.metadata import DatasetMetadata
     from timenet.types.references import DatasetRef
     from timenet.types.version import Version
 
@@ -32,6 +33,25 @@ class TimeNetRegistryError(TimeNetError):
 
 class TimeNetDatasetNotFoundError(TimeNetError):
     """A requested dataset id or version is not present in a registry or on disk."""
+
+
+class TimeNetNotBuiltError(TimeNetDatasetNotFoundError):
+    """Only an installed connector provides a release, so it has no manifest yet.
+
+    Build the release to create its manifest, or read the connector's card for metadata.
+
+    Attributes:
+        release: The unbuilt release.
+        card: The connector's card of the release.
+    """
+
+    def __init__(self, release: "DatasetRef", card: "DatasetMetadata") -> None:
+        super().__init__(release, card)
+        self.release = release
+        self.card = card
+
+    def __str__(self) -> str:
+        return f"{self.release} is not built yet: only an installed connector provides it."
 
 
 class TimeNetMissingParentError(TimeNetDatasetNotFoundError):
