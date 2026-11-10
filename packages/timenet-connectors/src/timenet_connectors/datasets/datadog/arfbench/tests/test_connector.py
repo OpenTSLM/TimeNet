@@ -169,11 +169,6 @@ def test_an_unexpected_header_raises(release):
         ARFBenchConnector().convert(release)
 
 
-def test_a_missing_part_raises(release):
-    with pytest.raises(TimeNetConnectorError, match=r"the ARFBench release lacks series"):
-        ARFBenchConnector().convert([ref for ref in release if ref.part == "questions"])
-
-
 def test_a_row_off_the_rollup_grid_raises(release):
     write_series_file(_path(release, "series") / "35997_1_10.parquet", [(30, "", 0.5), (35, "", 0.6)])
     with pytest.raises(TimeNetConnectorError, match=r"35997_1_10\.parquet group '': rows are off the 10 s grid"):

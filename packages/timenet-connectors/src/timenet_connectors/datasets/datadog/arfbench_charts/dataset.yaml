@@ -1,50 +1,22 @@
 # yaml-language-server: $schema=https://docs.timenet.ai/schemas/dataset-card-v1.schema.json
 #
-# ARFBench asks 750 multiple-choice questions about 142 metrics from 63 Datadog incidents. A metric
-# is one monitored quantity, such as the request count of a service. Datadog splits a metric by
-# tags. Thus a metric holds one series per tag group, for example one series per host.
+# The charts that ARFBench released for its 750 questions. The metric series and the details of the
+# questions are in `datadog/arfbench`; see the comment in its card.
 #
-# Datadog stores a metric at several rollups. A rollup is the metric on a fixed time grid, with one
-# value per interval of 10, 60, 300, 1800, 3600, or 86400 seconds. The rollups of a metric are
-# separate exports, not resamplings of one series. Their time ranges and tag groups differ.
+# A chart is one record with the PNG as an RGBA image signal. There is one chart per metric and one
+# per metric pair that a question cites. The charts are tensors, so the dataset uses the Zarr
+# values backend.
 #
-# Each metric is one record, with one source per tag group and one signal per rollup. A consumer
-# chooses the rollup. The paper and the charts use the finest rollup. The annotation
-# `finest_interval_s` names this rollup.
-#
-# A rollup file lists the tag groups at the steps of its grid. Where the metric reported nothing
-# for a group, the step holds a null or is not in the file. The dataset cuts each series to the
-# window from the first value of its group to the last value. Thus a group with no value at a
-# rollup has no series at that rollup. Inside the window, each such step is a missing timestep on
-# the regular grid, with the reason `not_recorded` from the spec. Values are float64. The release
-# names no units. The release stores naive epochs. The dataset reads them as UTC. The charts
-# and the answer options use the same clock.
-#
-# This dataset is a child of `datadog/arfbench`. The name of this parent is `series`. The dataset
-# imports the series tasks of the parent, together with the metric records that these tasks cite.
-# The values of these records stay in the parent release. The dataset also adds the released
-# charts. A chart is one record with the PNG as an RGBA image signal. There is one chart per
-# metric, and one chart per metric pair that a question cites. The charts are tensors. Thus this
-# dataset uses the Zarr values backend for the charts that it stores.
-#
-# Each question becomes two test tasks. One task is over the cited metric records. The other task
-# is over the charts. For a metric pair, the combined chart comes first, then the chart of each
-# metric. The series tasks come first, then the chart tasks. Thus the test split holds 1,500
-# tasks. Both tasks of a question carry its row as `question_index` in their metadata.
-#
-# The dataset keeps three items as released:
-# - `query_name`. This identifier differs from the metric ID for 122 of the 142 metrics. The
-#   release does not explain it.
-# - One end-time answer (row 191, metric 36464_0). This answer is 140 seconds after the end of its
-#   series.
-# - 29 time options that are outside every rollup.
+# Each question becomes one test task over its charts. For a metric pair, the combined chart comes
+# first, then the chart of each metric. A task carries the row of the question as `question_index`
+# in its metadata, the same as the series task in `datadog/arfbench`, so a consumer can pair them.
 yaml_schema_version: 1
 dataset_id: datadog/arfbench-charts
 dataset_version: 1.0.0
 name: ARFBench charts
 description: >-
-  750 multiple-choice questions about anomalies in 142 metrics from 63 Datadog incidents.
-  The dataset includes every published metric rollup and the released charts.
+  The released charts of ARFBench: 750 multiple-choice questions about anomalies in 142 metrics
+  from 63 Datadog incidents, asked over the charts. The series are in datadog/arfbench.
 license: Apache-2.0
 source_url: https://huggingface.co/datasets/Datadog/ARFBench
 citation: >-
@@ -61,5 +33,3 @@ tags:
   - multiple-choice
   - datadog
   - huggingface
-parents:
-  series: datadog/arfbench@1.0.0
