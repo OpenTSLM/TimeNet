@@ -41,6 +41,7 @@ class RemoteRegistry(LazyReadRegistry):
         token: str | None = None,
         cache_dir: str | Path | None = None,
         transport: httpx.BaseTransport | None = None,
+        read_only: bool = False,
     ) -> None:
         """Open a remote registry.
 
@@ -49,8 +50,10 @@ class RemoteRegistry(LazyReadRegistry):
             token: Bearer token. Defaults to ``$TIMENET_TOKEN`` (``None`` is anonymous).
             cache_dir: Where downloads are cached; defaults to the configured storage directory.
             transport: An httpx transport for testing; ``None`` uses the network.
+            read_only: Refuse every write to this registry.
         """
         cfg = settings()
+        self._read_only = read_only
         self._base_url = base_url
         self._http = RegistryHttpClient(base_url, token=token if token is not None else cfg.token, transport=transport)
         self._cache_dir = Path(cache_dir) if cache_dir is not None else cfg.storage_dir
@@ -175,8 +178,10 @@ class RemoteRegistry(LazyReadRegistry):
         Raises:
             TimeFFormatError: If ``manifest.json`` is missing, unreadable, or invalid.
             TimeNetFileError: If a listed file is missing or its size differs from the manifest.
-            TimeNetRegistryError: If the service skips a listed file or requests a missing file.
+            TimeNetRegistryError: If this registry is read-only, or the service skips a listed file or
+                requests a missing file.
         """  # ruff: ignore[docstring-extraneous-exception] - raised by _read_release
+        self.check_writable("put_release()")
         manifest = self._read_release(from_directory)
         dataset_id = manifest.dataset_id
         version = str(manifest.metadata.dataset_version)

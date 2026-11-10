@@ -64,10 +64,13 @@ def run_plan(plan: Plan, store: LocalRegistry, *, options: BuildOptions | None =
         options: Build settings, including the progress callback.
 
     Raises:
+        TimeNetRegistryError: If the plan copies or builds a release and ``store`` is read-only.
         TimeNetVersionConflictError: If a copied release conflicts with the files in ``store``.
         TimeFFormatError: If a build changes files pinned by other releases.
         TimeNetBuildError: If a build fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the copy and the backends
+    if any(not isinstance(step, ReadStep) for step in plan.steps):
+        store.check_writable("the copies and builds of a plan")
     options = options or BuildOptions()
     for step in plan.steps:
         match step:

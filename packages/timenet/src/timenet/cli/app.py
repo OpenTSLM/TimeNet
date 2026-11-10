@@ -13,7 +13,7 @@ import typer
 from timenet.cache import CachedDataset, cached_datasets, clear_cache, human_bytes, raw_cache_size
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console as ui
-from timenet.client import TimeNet
+from timenet.client import TimeNet, default_sources
 from timenet.types import DatasetMetadata, Domain, License, TaskType
 from timenet.types.access import access_requirements, effective_access
 from timenet.types.tasks import TASKS
@@ -22,7 +22,12 @@ from timenet.types.tasks import TASKS
 app = typer.Typer(help="Browse a TimeNet registry and fetch datasets.", no_args_is_help=True)
 console = Console()
 
-_registry_option = typer.Option(None, "--registry", "-r", help="Registry URL or path (else $TIMENET_REGISTRY).")
+_registry_option = typer.Option(
+    None,
+    "--registry",
+    "-r",
+    help="Registry URL or path that this command reads (else $TIMENET_REGISTRY, then timenet://).",
+)
 
 T = TypeVar("T")
 
@@ -55,6 +60,20 @@ def _enum_list(values: list[str], factory: Callable[[str], T], flag: str, choice
     return parsed or None
 
 
+def _client(registry: str | None) -> TimeNet:
+    """Create a client with the default sources and an optional registry.
+
+    Args:
+        registry: The registry URL or path to read after the local registry, or ``None`` for the default.
+
+    Returns:
+        A client with the configured sources.
+    """
+    # TODO(adrian): Remove temporary glue which maps --registry onto default_sources() until the
+    # CLI takes the flags of the defaults.
+    return TimeNet(sources=default_sources(remote_registry=registry))
+
+
 def _metadata_table(rows: list[DatasetMetadata], title: str) -> Table:
     """Build a table of dataset metadata (id, name, license, domains).
 
@@ -82,8 +101,8 @@ def _metadata_table(rows: list[DatasetMetadata], title: str) -> Table:
 
 @app.command("list")
 def list_datasets(registry: str | None = _registry_option) -> None:
-    """List every dataset in the registry."""
-    rows = TimeNet(registry).list()
+    """Display metadata for every dataset in the selected registry."""
+    rows = _client(registry).list()
     if not rows:
         typer.echo("No datasets in the registry.")
         return
@@ -102,8 +121,11 @@ def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
     tag: list[str] = typer.Option([], "--tag", help="Tag(s)."),
     limit: int = typer.Option(100, "--limit", min=0, help="Maximum results."),
 ) -> None:
-    """Search datasets by filter. Repeat a flag to pass several values."""
-    results = TimeNet(registry).search(
+    """Find datasets that match the filters.
+
+    Repeat a filter flag to pass several values.
+    """
+    results = _client(registry).search(
         query=query or None,
         domain=_enum_list(domain, Domain, "--domain", [d.value for d in Domain]),
         task=_enum_list(task, lambda value: TASKS[TaskType(value)], "--task", [t.value for t in TaskType]),
@@ -120,9 +142,9 @@ def search(  # ruff: ignore[too-many-arguments, too-many-positional-arguments]
 
 
 @app.command()
-def info(dataset_id: str, version: str | None = None, registry: str | None = _registry_option) -> None:
-    """Print a dataset's manifest summary: metadata, schema, and counts."""
-    manifest = TimeNet(registry).get(dataset_id, version)
+def info(dataset_id: str, registry: str | None = _registry_option) -> None:
+    """Display a dataset's metadata, schema, and counts."""
+    manifest = _client(registry).get(dataset_id)
     counts = manifest.counts
     table = Table(title=manifest.dataset_id, title_justify="left", title_style="bold", show_header=False)
     table.add_column("Field", style="cyan")
@@ -162,37 +184,34 @@ def info(dataset_id: str, version: str | None = None, registry: str | None = _re
 
 
 @app.command()
-def download(
-    dataset_id: str,
-    version: str | None = None,
-    registry: str | None = _registry_option,
-    storage: str | None = typer.Option(None, "--storage", help="Local storage dir (else $TIMENET_STORAGE)."),
-) -> None:
-    """Fetch a complete TimeF version to local storage. Prints its directory to stdout."""
-    client = TimeNet(registry, storage_path=storage)
-    manifest = client.get(dataset_id, version)
+def download(dataset_id: str, registry: str | None = _registry_option) -> None:
+    """Download a dataset version and print its local directory to stdout.
+
+    Files go to ``$TIMENET_STORAGE`` or ``<TIMENET_HOME>/storage``.
+    """
+    client = _client(registry)
+    manifest = client.get(dataset_id)
     files = list(manifest.files.all_files())
     total = sum(part.size for part in files)
     ui.status("⬇️", f"Downloading '{dataset_id}' ({len(files)} files, {human_bytes(total)})…")
-    target = _download(client, dataset_id, version, total)
+    target = _download(client, dataset_id, total)
     ui.success(f"Downloaded '{dataset_id}' ({target.name})")
     typer.echo(str(target))
 
 
-def _download(client: TimeNet, dataset_id: str, version: str | None, total: int) -> Path:
+def _download(client: TimeNet, dataset_id: str, total: int) -> Path:
     """Download a version, rendering a live progress bar on stderr when the terminal supports it.
 
     Args:
         client: The client to download through.
-        dataset_id: The dataset id.
-        version: The version string, or ``None`` for the latest.
-        total: The total byte size of the version's files, for the bar's scale.
+        dataset_id: The dataset id, optionally followed by ``@version``.
+        total: The total file size in bytes for the progress bar.
 
     Returns:
         The local version directory.
     """
     if ui.quiet or not sys.stderr.isatty():
-        return client.download(dataset_id, version)
+        return client.download(dataset_id)
     progress = Progress(
         TextColumn("[bold blue]{task.description}"),
         BarColumn(bar_width=None),
@@ -207,7 +226,7 @@ def _download(client: TimeNet, dataset_id: str, version: str | None, total: int)
     )
     with progress:
         task = progress.add_task("downloading", total=total)
-        return client.download(dataset_id, version, progress_cb=lambda n: progress.advance(task, n))
+        return client.download(dataset_id, progress_cb=lambda n: progress.advance(task, n))
 
 
 cache_app = typer.Typer(help="Inspect and clear the local cache.", no_args_is_help=True)

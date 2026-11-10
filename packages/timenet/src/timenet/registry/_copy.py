@@ -40,12 +40,14 @@ def copy_release(
         progress: Callback for ``StepStarted`` and ``StepFinished`` events for each copied release.
 
     Raises:
+        TimeNetRegistryError: If ``dest`` is read-only.
         TimeNetVersionConflictError: If ``dest`` holds other files or another card for a release being copied.
         TimeNetAccessError: If a release fails an open access requirement of ``dest`` or ``source``.
         TimeNetDatasetNotFoundError: If ``source`` does not hold the release.
         TimeNetMissingParentError: If ``source`` lacks a payload source and ``dest`` holds no complete copy of it.
         TimeFFormatError: If a manifest names a different release or a pin fails.
     """  # ruff: ignore[docstring-extraneous-exception] - raised by the helpers
+    dest.check_writable(f"a copy of {reference}")
     manifests = _manifests(reference, source, dest, with_payload_sources=with_payload_sources)
     # Check every release before anything is copied, so that a refusal leaves dest unchanged. A payload
     # source that only dest holds is complete there, so it is never pending.

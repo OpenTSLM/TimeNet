@@ -30,7 +30,6 @@ from timenet.registry import (
     copy_release,
     local_registry_path,
     open_registry,
-    open_writable_registry,
 )
 from timenet.registry._paths import release_dir  # ruff: ignore[import-private-name]
 from timenet.sources import InstalledConnectors
@@ -49,18 +48,15 @@ def _root(quiet: bool = typer.Option(False, "--quiet", "-q", help="Suppress stat
 
 
 def _resolve_target(out: str | None) -> WritableRegistry | Path:
-    """Resolve a build's output target: a writable registry for a remote URL, else a local directory.
+    """Resolve the registry or local directory for build output.
 
-    The selection order matches the consumer side, so the CLI that writes a dataset and the SDK that
-    reads it agree on where it lands: the ``--out`` argument, then ``$TIMENET_REGISTRY``, then the
-    default local registry.
+    It tries ``out``, then ``$TIMENET_REGISTRY``, then the default local registry.
 
     Args:
-        out: The ``--out`` value, or ``None`` to fall back to ``$TIMENET_REGISTRY`` then the default.
+        out: The output URL or path, or ``None`` to use the configured default.
 
     Returns:
-        A :class:`~timenet.registry.WritableRegistry` for a ``timenet://`` / ``http(s)://`` / ``s3://``
-        target, or the local directory ``Path`` for a plain path or ``file://`` URI.
+        A registry for a remote URL, or a ``Path`` for a local directory.
     """
     target = out if out is not None else settings().registry
     if target is None:
@@ -68,7 +64,7 @@ def _resolve_target(out: str | None) -> WritableRegistry | Path:
     try:
         return local_registry_path(target)
     except TimeNetRegistryError:
-        return open_writable_registry(target)
+        return open_registry(target)
 
 
 @app.command()
