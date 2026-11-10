@@ -28,6 +28,7 @@ from timenet.cache import human_bytes
 from timenet.cli.runner import run_cli
 from timenet.cli.ui import console
 from timenet.config import settings
+from timenet.coordinator.plan import ParentStep, prepare_parents
 from timenet.engine import publish_pipeline, run_pipeline
 from timenet.errors import (
     TimeFValidationError,
@@ -46,10 +47,8 @@ from timenet.registry import (
     open_writable_registry,
 )
 from timenet.types.references import DatasetRef
-from timenet.values_backends import SUPPORTED_VALUES_BACKENDS
 from timenet.writer.progress import ProgressStage, WriteProgressEvent
 from timenet_connectors.builder.env import run_isolated
-from timenet_connectors.builder.plan import ParentStep, prepare_parents
 from timenet_connectors.discovery import connector_dir, resolve
 from timenet_connectors.download import DownloadProgress, ProgressCallback, progress_sink
 
@@ -108,11 +107,6 @@ def build(
     keep_cache: bool = typer.Option(
         False, "--keep-cache", help="Keep the raw download cache after building (default: remove it)."
     ),
-    values_backend: str | None = typer.Option(
-        None,
-        "--values-backend",
-        help="Values-plane backend: 'parquet' or 'zarr' (default: the connector's declared backend).",
-    ),
     isolation: bool | None = typer.Option(
         None,
         "--isolation/--no-isolation",
@@ -145,25 +139,14 @@ def build(
     the version, the build needs only the payload sources of the version. It prepares them the same
     way as a parent.
 
-    ``--values-backend`` overrides the values-plane storage the connector declares. This process
-    resolves the connector's default for an in-process build; an isolated child resolves its own,
-    because importing the connector there would need the dependencies it is about to install.
-
     Raises:
-        BadParameter: If ``dataset_id`` has no known connector, or ``--values-backend`` names a
-            backend TimeF does not support.
+        BadParameter: If ``dataset_id`` has no known connector.
         TimeNetMissingParentError: If a parent is missing. The hint of the error names the flags.
         TimeNetFileError: If a copy of a parent in the output is damaged, or a fetched file does not
             match its manifest record. The hint of the error names the flags.
         TimeNetAccessError: If the output is remote and gets a release without access declared
             ``open``.
     """
-    # Reject an unknown backend before anything expensive happens, so neither the isolated child nor
-    # a connector import runs for a build that cannot succeed.
-    try:
-        _check_values_backend(values_backend)
-    except TimeFValidationError as exc:
-        raise typer.BadParameter(str(exc)) from exc
     try:
         # connector_dir imports no connector. So an unknown id fails before any environment exists.
         connector_dir(dataset_id)
@@ -179,7 +162,6 @@ def build(
             fetch_from=fetch_from,
             build_parents=build_parents,
             force=force,
-            values_backend=values_backend,
             keep_cache=keep_cache,
             isolation=isolation,
             narrate=True,
@@ -208,50 +190,30 @@ def build_one(  # ruff: ignore[too-many-arguments]
     fetch_from: str | BaseRegistry | None = None,
     build_parents: bool = False,
     force: bool = False,
-    values_backend: str | None = None,
     keep_cache: bool = False,
     isolation: bool | None = None,
     narrate: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Build one dataset: prepare its parent releases, then run its connector.
+    """Prepare a dataset's parent releases, then build the dataset.
 
-    Every build entry point calls this function. These are the ``build`` command,
-    :class:`~timenet_connectors.builder.backend.ConnectorBuilder`, and
-    :func:`timenet_connectors.build`. If ``fetch_from`` or ``build_parents`` does not obtain a
-    missing parent, the build fails before any download. A parent builds the same way as this
-    dataset. A parent never builds with ``force``. If another builder backend claims a parent, the
-    ``build`` method of that backend builds the parent with its pins. If ``force`` is not set and
-    the output already holds the version, the build prepares only the missing payload sources of
-    the version. In that case, the build does not run the connector of this dataset. The connector
-    runs in an environment built from its requirements. If isolation is off, the connector runs in
-    this interpreter. A local output gets a version directory. A remote output gets a published
-    version.
+    A missing parent that ``fetch_from`` or ``build_parents`` does not provide fails the build before any download.
+    The build reuses an existing version unless ``force`` is true.
 
     Args:
         dataset_id: The dataset id.
-        output: The output registry. This is a local directory, or a ``timenet://``,
-            ``http(s)://``, or ``s3://`` URL. An isolated child gets it unchanged as ``--out``.
+        output: The output directory or a ``timenet://``, ``http(s)://``, or ``s3://`` registry URL.
         fetch_from: The registry, or its URI, to copy missing parent releases from.
         build_parents: Build missing parent releases from their installed connectors.
-        force: Rebuild even if the version is already built.
-        values_backend: The values-plane backend, or ``None`` for the backend that the connector
-            declares.
+        force: Rebuild an existing version.
         keep_cache: Keep the raw download cache after building.
-        isolation: If true, build in an environment built from the connector's requirements.
-            If ``None``, use the ``TIMENET_ISOLATION`` setting.
-        narrate: Print status lines and download progress for an in-process build.
-        pinned_by: The releases that already read files of this release, with their pins. The build
-            publishes the release only if it reproduces each pinned file.
+        isolation: Use isolation if true, this interpreter if false, or ``TIMENET_ISOLATION`` if ``None``.
+        narrate: Print status and download progress when isolation is off.
+        pinned_by: Releases that read this dataset's files, with file pins the build must match.
 
     Returns:
         The committed version directory for a local output, or the published version.
-
-    Raises:
-        TimeFValidationError: If ``values_backend`` names a backend that TimeF does not support.
-            This check comes first, before the plan prepares any parent.
-    """  # ruff: ignore[docstring-extraneous-exception] - raised by _check_values_backend
-    _check_values_backend(values_backend)
+    """
     target = _resolve_target(str(output))
     registry = LocalRegistry(target) if isinstance(target, Path) else target
     override = None if isolation is None else ("on" if isolation else "off")
@@ -294,26 +256,9 @@ def build_one(  # ruff: ignore[too-many-arguments]
         isolated=isolated,
         force=force,
         keep_cache=keep_cache,
-        values_backend=values_backend,
         narrate=narrate,
         pinned_by=pinned_by,
     )
-
-
-def _check_values_backend(values_backend: str | None) -> None:
-    """Reject the name of a values backend that TimeF does not support.
-
-    Args:
-        values_backend: The name of the backend, or ``None`` for the backend that the connector
-            declares. ``None`` always passes.
-
-    Raises:
-        TimeFValidationError: If TimeF does not support the backend.
-    """
-    if values_backend is not None and values_backend not in SUPPORTED_VALUES_BACKENDS:
-        raise TimeFValidationError(
-            f"unknown values backend {values_backend!r}; supported: {', '.join(sorted(SUPPORTED_VALUES_BACKENDS))}"
-        )
 
 
 def _in_repo(builder: BuilderBackend) -> bool:
@@ -380,23 +325,20 @@ def _build(  # ruff: ignore[too-many-arguments]
     isolated: bool,
     force: bool = False,
     keep_cache: bool = False,
-    values_backend: str | None = None,
     narrate: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Build one dataset into the output and return its result line.
+    """Build a dataset in a local directory or writable registry.
 
     Args:
         dataset_id: The dataset id.
-        target: The resolved output for an in-process build.
-        forwarded: The output as the caller gave it, for the ``--out`` of an isolated child.
+        target: The output for a build in the current interpreter.
+        forwarded: The output path or URL to pass to an isolated build.
         isolated: Build in an environment built from the connector's requirements.
-        force: Rebuild even if the version is already built.
+        force: Rebuild an existing version.
         keep_cache: Keep the raw download cache after building.
-        values_backend: The values-plane backend, or ``None`` for the backend that the connector
-            declares.
-        narrate: Print status lines and download progress for an in-process build.
-        pinned_by: The releases that already read files of this release, with their pins.
+        narrate: Print status and download progress when isolation is off.
+        pinned_by: Releases that read this dataset's files, with file pins the build must match.
 
     Returns:
         The committed version directory for a local output, or the published version.
@@ -414,17 +356,12 @@ def _build(  # ruff: ignore[too-many-arguments]
             forwarded,
             force=force,
             keep_cache=keep_cache,
-            values_backend=values_backend,
             quiet=console.quiet,
             pinned_by=pinned_by,
         )
     if narrate:
         console.status("🔧", f"Building '{dataset_id}'…")
-    # Resolve the connector's declared backend here, so the in-process path and the isolated child
-    # agree on what "no --values-backend" means. An isolated build cannot resolve it: importing the
-    # connector needs the dependencies the child is about to install.
     connector = resolve(dataset_id)()
-    resolved_backend = values_backend if values_backend is not None else connector.values_backend
     progress_cb = _report_progress if narrate else None
     # A connector's downloads report through the ambient progress sink. _download_progress renders them.
     with _download_progress() if narrate else nullcontext():
@@ -432,7 +369,6 @@ def _build(  # ruff: ignore[too-many-arguments]
             version_dir = run_pipeline(
                 connector,
                 target,
-                values_backend=resolved_backend,
                 progress_cb=progress_cb,
                 force=force,
                 keep_cache=keep_cache,
@@ -444,7 +380,6 @@ def _build(  # ruff: ignore[too-many-arguments]
         version = publish_pipeline(
             connector,
             target,
-            values_backend=resolved_backend,
             progress_cb=progress_cb,
             force=force,
             keep_cache=keep_cache,

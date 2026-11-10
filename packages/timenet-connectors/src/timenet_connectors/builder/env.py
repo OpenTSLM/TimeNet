@@ -48,12 +48,11 @@ class EnvSpec:
     """The interpreter the environment is built on. Always one outside a virtualenv."""
 
 
-def env_spec(dataset_id: str, *, values_backend: str | None = None) -> EnvSpec:
-    """Describe the environment a dataset's connector needs.
+def env_spec(dataset_id: str) -> EnvSpec:
+    """Describe the dependencies and interpreter for a connector's build.
 
     Args:
         dataset_id: The dataset id.
-        values_backend: Selected backend, or ``None`` for a default resolved by the child.
 
     Returns:
         The environment specification.
@@ -63,11 +62,10 @@ def env_spec(dataset_id: str, *, values_backend: str | None = None) -> EnvSpec:
         TimeNetBuildError: If a base distribution is not installed.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by requirements_for and _base_args, not directly here)
     base = _base_args()
-    # The parent cannot import the connector before its dependencies exist. When its default is
-    # unknown, include the optional backend too. An explicit Parquet build needs no Zarr dependency.
-    # Keep the parent's source/version pin; the additional requirement only requests its extra.
-    if values_backend != "parquet":
-        base += ("--with", f"timenet[zarr]=={Distribution.from_name('timenet').version}")
+    # The parent cannot read the connector's backend before the environment exists, so the
+    # environment always includes the optional Zarr backend. Keep the parent's source/version pin;
+    # the additional requirement only requests its extra.
+    base += ("--with", f"timenet[zarr]=={Distribution.from_name('timenet').version}")
     return EnvSpec(base=base, requirements=requirements_for(dataset_id), python=_base_interpreter())
 
 
@@ -107,37 +105,26 @@ def run_isolated(  # ruff: ignore[too-many-arguments]
     *,
     force: bool = False,
     keep_cache: bool = False,
-    values_backend: str | None = None,
     quiet: bool = False,
     pinned_by: Mapping[DatasetRef, PayloadSource] | None = None,
 ) -> str:
-    """Build a dataset in its own environment and return what the child printed on stdout.
+    """Build a dataset in a separate environment with its connector's dependencies.
 
-    The child's stderr is streamed live (a long download still shows progress) and also captured, so
-    a failed build's message carries the child's own error. Its stdout is captured, because the last
-    line is the build's result: the committed version directory for a local ``out``, or the published
-    version for a remote one. ``out`` is forwarded to the child's ``--out`` unchanged, so it publishes
-    or writes exactly as a direct build would.
+    The build streams status and errors to stderr.
 
     Args:
         dataset_id: The dataset id.
-        out: The output target, forwarded to the child's ``--out``: a local directory or a
-            ``timenet://`` / ``http(s)://`` / ``s3://`` URL.
-        force: Rebuild even if the version is already built.
+        out: The output directory or a ``timenet://``, ``http(s)://``, or ``s3://`` registry URL.
+        force: Rebuild an existing version.
         keep_cache: Keep the raw download cache after building.
-        values_backend: Values-plane backend to forward to the child (``"parquet"`` or
-            ``"zarr"``). ``None`` forwards nothing, leaving the child on the connector's
-            declared backend.
-        quiet: Suppress the child's status output, as ``--quiet`` does in this process.
-        pinned_by: The releases that already read files of the dataset, with their pins. The child
-            receives them in a file through the hidden ``--pinned-by`` option, and publishes only
-            if it reproduces each pinned file.
+        quiet: Suppress the build's status output.
+        pinned_by: Releases that read this dataset's files, with file pins the build must match.
 
     Returns:
-        The child's last non-empty stdout line: a version directory or a published version.
+        The version directory for a local output, or the published version for a remote output.
 
     Raises:
-        TimeNetBuildError: If the child failed, or printed nothing.
+        TimeNetBuildError: If the build fails or prints no result.
         LookupError: If no connector exists for the id.
     """  # ruff: ignore[docstring-extraneous-exception] (raised by env_spec, not directly here)
     # --quiet belongs to timenet-build, not to build, so it goes before the subcommand.
@@ -146,9 +133,7 @@ def run_isolated(  # ruff: ignore[too-many-arguments]
         argv.append("--force")
     if keep_cache:
         argv.append("--keep-cache")
-    if values_backend is not None:
-        argv += ["--values-backend", values_backend]
-    spec = env_spec(dataset_id, values_backend=values_backend)
+    spec = env_spec(dataset_id)
     # TIMENET_ISOLATION=off is the recursion guard: the child is this same CLI.
     child_env = {**os.environ, "TIMENET_ISOLATION": "off"}
     with _pins_file(pinned_by) as pins:

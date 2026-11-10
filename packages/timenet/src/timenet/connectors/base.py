@@ -14,6 +14,7 @@ from typing import TYPE_CHECKING, ClassVar, Generic, Self, TypeVar
 
 from timenet.dataset import TimeFDataset
 from timenet.types import DatasetMetadata
+from timenet.values_backends import ValuesBackend
 
 
 if TYPE_CHECKING:
@@ -38,8 +39,8 @@ class BaseConnector(ABC, Generic[TRaw]):
     """Optional explicit path to the dataset card YAML. When ``None`` (the default), the connector
     reads the card from ``dataset.yaml`` in its own folder."""
 
-    values_backend: str = "parquet"
-    """Default storage backend for this connector's values plane."""
+    values_backend: ValuesBackend = ValuesBackend.PARQUET
+    """Storage backend for the dataset's time-series values."""
 
     def __new__(cls, *args: object, **kwargs: object) -> Self:
         """Create a connector of a class that implements its hooks.
