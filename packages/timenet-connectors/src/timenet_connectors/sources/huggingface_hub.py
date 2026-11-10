@@ -1,12 +1,11 @@
 """Helpers for downloading files from pinned Hugging Face dataset revisions.
 
-:func:`hub_snapshot` downloads with ``huggingface_hub.snapshot_download``. It downloads only the files
-that match the requested patterns, for example a filename or ``data/*.parquet``. The Hub client runs the
-downloads in its own thread pool. Its progress bars stay hidden. The bar that counts file bytes reaches
-the ambient :mod:`~timenet_connectors.download.progress` sink instead. Thus the build CLI shows the
-download like any other connector download. ``huggingface_hub`` is declared in the connector's ``requirements.txt``
-and imported lazily, which keeps ``--no-isolation`` usable. The Hub client reads ``HF_TOKEN`` from the
-environment, so gated datasets work with no extra wiring.
+:func:`hub_snapshot` calls ``huggingface_hub.snapshot_download`` for the files that match the given
+patterns, such as a filename or ``data/*.parquet``. The Hub client runs the downloads in its own thread
+pool. Its progress bars are hidden; the file bytes go to the
+:mod:`~timenet_connectors.download.progress` sink, so the build CLI shows them like any other download.
+``huggingface_hub`` is listed in the connector's ``requirements.txt`` and imported lazily, so
+``--no-isolation`` still works. The Hub client reads ``HF_TOKEN`` from the environment for gated datasets.
 """
 
 import asyncio
@@ -30,17 +29,17 @@ _MISSING_HUB_CLIENT = (
 
 
 async def hub_snapshot(repo: str, revision: str, cache_dir: Path, patterns: Sequence[str]) -> Path:
-    """Download the files of a dataset revision that match the patterns, with one ``snapshot_download`` call.
+    """Download the files of a dataset revision that match ``patterns``.
 
     Args:
         repo: The Hub dataset id, such as ``"BASH-Lab/SensorCaps"``.
         revision: The revision to read, normally a pinned commit.
         cache_dir: Directory where the connector caches Hub files.
-        patterns: Repository-relative filenames or glob patterns, for example ``"data/*.parquet"``.
+        patterns: Repo-relative filenames or globs, such as ``"data/*.parquet"``.
 
     Returns:
-        The local snapshot directory. It holds the matching files at their repository paths.
-        The caller must check that the files it needs are there.
+        The local snapshot directory, with the files at their repo paths. The caller checks
+        that the files it needs exist.
 
     Raises:
         ImportError: If ``huggingface_hub``, declared in the connector's requirements, is missing.

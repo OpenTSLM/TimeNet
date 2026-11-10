@@ -17,7 +17,7 @@ from typing import Any, ClassVar
 
 from timenet.connectors import BaseConnector
 from timenet.dataset import TimeFDataset
-from timenet.errors import TimeFValidationError, TimeNetDownloadError
+from timenet.errors import TimeFValidationError, TimeNetConnectorError, TimeNetDownloadError
 from timenet_connectors.sources.huggingface_hub import hub_snapshot
 
 
@@ -26,7 +26,7 @@ _COMMIT_SHA = re.compile(r"[0-9a-f]{40}")
 
 @dataclass(frozen=True)
 class HubFileRef:
-    """One local source file, or the directory of a pattern's files, and the part of the dataset it holds."""
+    """A downloaded file (or a pattern's directory) and the part it belongs to."""
 
     path: Path
     part: str
@@ -46,9 +46,8 @@ class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
     SOURCE_REVISION: ClassVar[str]
     """An immutable commit: a mutable branch can silently change rebuilt datasets."""
     SOURCE_FILES: ClassVar[Mapping[str, str]]
-    """Each part's repository-relative filename, in the order ``download()`` returns them. A filename can end
-    in a glob pattern, for example ``data/*.parquet``. Then the path of the part is the directory of the
-    files that match the pattern."""
+    """The repo-relative filename of each part, in download-order. A filename can end
+    in a glob like ``data/*.parquet``; the part's path is then the directory of the matching files."""
 
     def __init_subclass__(cls, **kwargs: Any) -> None:
         super().__init_subclass__(**kwargs)
@@ -86,6 +85,25 @@ class BaseHuggingFaceConnector(BaseConnector[HubFileRef], ABC):
         unknown = sorted(set(parts) - self.SOURCE_FILES.keys())
         if unknown:
             raise TimeFValidationError(f"{type(self).__name__} has no source part {', '.join(unknown)}")
+
+    def ref_paths(self, raw_refs: Sequence[HubFileRef], *parts: str) -> dict[str, Path]:
+        """Map each part in ``raw_refs`` to its local path.
+
+        Args:
+            raw_refs: The references ``convert()`` received.
+            *parts: The parts the caller needs.
+
+        Returns:
+            The path of each part: a file, or the directory of a pattern part.
+
+        Raises:
+            TimeNetConnectorError: If one of ``parts`` is not in ``raw_refs``.
+        """
+        paths = {ref.part: ref.path for ref in raw_refs}
+        missing = [part for part in parts if part not in paths]
+        if missing:
+            raise TimeNetConnectorError(f"{self.HF_REPO} refs lack {', '.join(missing)}")
+        return paths
 
     async def download_async(self, cache_dir: Path) -> list[HubFileRef]:
         """Download :attr:`SOURCE_FILES` at :attr:`SOURCE_REVISION` concurrently.
