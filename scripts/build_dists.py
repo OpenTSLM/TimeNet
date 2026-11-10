@@ -20,7 +20,7 @@ PACKAGES = {
     ROOT / "packages" / "timenet": "timenet",
     ROOT / "packages" / "timenet-connectors": "timenet_connectors",
 }
-# Keep in step with timenet.provenance.BuiltPackage.BUILD_INFO_FILE, which reads the file.
+# Keep in step with timenet.provenance.WheelInstall.BUILD_INFO_FILE, which reads the file.
 BUILD_INFO_FILE = "_build_info.json"
 
 
@@ -44,7 +44,7 @@ def git(directory: Path, *args: str) -> str:
 
 def state(directory: Path) -> tuple[str, str]:
     """Return the commit of a package directory and its ``git status`` output."""
-    # Read the commit after the status, as timenet.provenance.EditableCheckout does.
+    # Read the commit after the status, as timenet.provenance.EditableInstall does.
     status = git(directory, "status", "--porcelain", "--untracked-files=all", "--", ".")
     return git(directory, "rev-parse", "HEAD"), status
 

@@ -22,7 +22,10 @@ _GIT_TIMEOUT_S = 30
 
 @dataclass(frozen=True)
 class InstallSource(ABC):
-    """How one package was installed. The install type decides where its commit is recorded."""
+    """Where one package was installed from: a git checkout, a git URL, or a wheel.
+
+    Each kind records its git provenance in a different place.
+    """
 
     package_name: PackageName
 
@@ -37,32 +40,29 @@ class InstallSource(ABC):
 
 
 @dataclass(frozen=True)
-class EditableCheckout(InstallSource):
-    """An editable install of a git checkout. Git reports the commit and the local changes."""
+class EditableInstall(InstallSource):
+    """An editable install (``pip install -e``, or a uv workspace member).
+
+    Python imports the code from the checkout itself, so git reports its commit and local changes.
+    """
 
     project_directory: Path
 
     def read_git_source(self) -> GitSource:
         """Ask git for the commit of the checkout and whether the package directory has changes."""
-        git = shutil.which("git")
-        if git is None:
-            raise self._unknown_commit(
-                f"it is installed editable from {self.project_directory}, and git is not on PATH. Install git, "
-                f"or install {self.package_name} from a wheel that scripts/build_dists.py built"
-            )
+        checkout = _GitCheckout(self.project_directory)
         try:
-            # The pathspec "." scopes the status to the package directory, untracked files included. A
-            # scratch file elsewhere in the repository does not count as a local change.
-            status = _run_git(git, self.project_directory, "status", "--porcelain", "--untracked-files=all", "--", ".")
             # Read the commit after the status. A commit between the two reads then shows as a new
             # commit, not as the old commit without local changes.
-            sha = _run_git(git, self.project_directory, "rev-parse", "HEAD")
-        except subprocess.CalledProcessError as exc:
-            detail = (exc.stderr or "").strip() or str(exc)
-            raise self._unknown_commit(f"git failed in {self.project_directory}: {detail}") from exc
-        except (OSError, subprocess.TimeoutExpired) as exc:
-            raise self._unknown_commit(f"git failed in {self.project_directory}: {exc}") from exc
-        return GitSource(sha=sha, contains_local_changes=bool(status))
+            changed = checkout.has_local_changes()
+            return GitSource(sha=checkout.head_commit(), contains_local_changes=changed)
+        except _GitNotFoundError as exc:
+            raise self._unknown_commit(
+                f"it is installed editable from {self.project_directory}, and {exc}. Install git, "
+                f"or install {self.package_name} from a wheel that scripts/build_dists.py built"
+            ) from exc
+        except _GitError as exc:
+            raise self._unknown_commit(str(exc)) from exc
 
 
 @dataclass(frozen=True)
@@ -80,11 +80,15 @@ class GitInstall(InstallSource):
 
 
 @dataclass(frozen=True)
-class BuiltPackage(InstallSource):
-    """A wheel, or a path install that is not editable. The package carries its commit record."""
+class WheelInstall(InstallSource):
+    """An install from a wheel, including a path install that is not editable (pip builds a wheel first).
+
+    The installed code is a copy, so a checkout can differ from it. The wheel carries the git
+    provenance record baked into it at build time (``_build_info.json``).
+    """
 
     BUILD_INFO_FILE: ClassVar[str] = "_build_info.json"
-    """The commit record in each built package. ``scripts/build_dists.py`` writes it."""
+    """The commit record in each wheel. ``scripts/build_dists.py`` writes it."""
 
     build_info: Path
 
@@ -111,7 +115,16 @@ class InstalledDistribution:
 
     @classmethod
     def from_name(cls, name: PackageName) -> Self:
-        """Find an installed distribution. Raises ``PackageNotFoundError`` if it is not installed."""
+        """Find an installed package by name, such as ``timenet``.
+
+        Note: An extra like ``timenet[zarr]`` is not a name, and ``from_name`` would not find it.
+
+        Returns:
+            The installed package.
+
+        Raises:
+            PackageNotFoundError: If it is not installed.
+        """  # ruff: ignore[docstring-extraneous-exception] - raised by Distribution.from_name
         return cls(Distribution.from_name(name))
 
     @property
@@ -133,12 +146,12 @@ class InstalledDistribution:
                 return GitInstall(self.name, commit_id)
             project_directory = direct_url.local_directory()
             if direct_url.is_editable() and project_directory is not None:
-                return EditableCheckout(self.name, project_directory)
+                return EditableInstall(self.name, project_directory)
         # An install from an index has no direct_url.json. A path install that is not editable
         # copied the package, so the live checkout can differ from the code that runs.
         module = self.name.replace("-", "_")
-        build_info = self._distribution.locate_file(f"{module}/{BuiltPackage.BUILD_INFO_FILE}")
-        return BuiltPackage(self.name, Path(str(build_info)))
+        build_info = self._distribution.locate_file(f"{module}/{WheelInstall.BUILD_INFO_FILE}")
+        return WheelInstall(self.name, Path(str(build_info)))
 
     def read_git_source(self) -> GitSource:
         """Return the commit of the code that this distribution runs. Raises ``TimeNetBuildError`` if it is unknown."""
@@ -171,7 +184,10 @@ class Snapshot(BaseModel, ABC):
 
 
 class PackageSnapshot(Snapshot):
-    """The commit of one installed package."""
+    """The commit of one package that pip installed, such as ``timenet`` or ``timenet-connectors``.
+
+    Note: Not a subpackage such as ``timenet.registry``.
+    """
 
     package_name: PackageName
     """The name pip installs, for example ``timenet-connectors``."""
@@ -300,15 +316,48 @@ class _DirectUrl(BaseModel):
         return urlparse(self.url).scheme == "file"
 
 
-def _run_git(git: str, directory: Path, *args: str) -> str:
-    """Run one git command in ``directory`` and return its stripped stdout."""
-    result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
-        # --no-optional-locks keeps `git status` from refreshing the index, so a build never takes
-        # the index lock while the user runs git.
-        [git, "--no-optional-locks", "-C", str(directory), *args],
-        capture_output=True,
-        text=True,
-        check=True,
-        timeout=_GIT_TIMEOUT_S,
-    )
-    return result.stdout.strip()
+class _GitError(Exception):
+    """Git could not read a checkout. The message gives the reason."""
+
+
+class _GitNotFoundError(_GitError):
+    """No git executable is on PATH."""
+
+
+@dataclass(frozen=True)
+class _GitCheckout:
+    """A directory inside a git checkout, read with the git on PATH."""
+
+    directory: Path
+
+    def head_commit(self) -> str:
+        """Return the commit that the checkout is at."""
+        return self._run("rev-parse", "HEAD")
+
+    def has_local_changes(self) -> bool:
+        """Whether the directory has uncommitted changes, untracked files included."""
+        # The pathspec "." scopes the status to the directory. A scratch file elsewhere in the
+        # repository does not count as a local change.
+        return bool(self._run("status", "--porcelain", "--untracked-files=all", "--", "."))
+
+    def _run(self, *args: str) -> str:
+        """Run one git command in the directory and return its stripped stdout."""
+        git = shutil.which("git")
+        if git is None:
+            raise _GitNotFoundError("git is not on PATH")
+        try:
+            result = subprocess.run(  # ruff: ignore[subprocess-without-shell-equals-true]
+                # --no-optional-locks keeps `git status` from refreshing the index, so a build never
+                # takes the index lock while the user runs git.
+                [git, "--no-optional-locks", "-C", str(self.directory), *args],
+                capture_output=True,
+                text=True,
+                check=True,
+                timeout=_GIT_TIMEOUT_S,
+            )
+        except subprocess.CalledProcessError as exc:
+            detail = (exc.stderr or "").strip() or str(exc)
+            raise _GitError(f"git failed in {self.directory}: {detail}") from exc
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            raise _GitError(f"git failed in {self.directory}: {exc}") from exc
+        return result.stdout.strip()
