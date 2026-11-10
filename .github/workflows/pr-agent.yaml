@@ -29,10 +29,13 @@ jobs:
         CONFIG.MODEL: openrouter/deepseek/deepseek-v4.1-flash-1017
         CONFIG.FALLBACK_MODELS: '[]'
         CONFIG.CUSTOM_MODEL_MAX_TOKENS: 128000
-        # Review only. Run /describe or /improve in a PR comment when wanted.
+        # Review summary plus inline code suggestions. Run /describe in a PR comment when wanted.
         github_action_config.auto_review: "true"
         github_action_config.auto_describe: "false"
-        github_action_config.auto_improve: "false"
+        github_action_config.auto_improve: "true"
+        # Post each suggestion as an inline comment with an "Apply suggestion" button.
+        PR_CODE_SUGGESTIONS.COMMITTABLE_CODE_SUGGESTIONS: "true"
+        PR_CODE_SUGGESTIONS.PERSISTENT_COMMENT: "false"
         # Pull TimeNet's AGENTS.md rules into the review.
         PR_REVIEWER.EXTRA_INSTRUCTIONS: >-
           Follow AGENTS.md. Check TimeF invariants, explicit TimeNet exceptions on data issues
