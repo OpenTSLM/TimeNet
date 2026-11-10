@@ -227,7 +227,7 @@ def test_full_download_waits_out_a_rate_limited_presign(version_dir, tmp_path, m
 
     sleep = AsyncMock()
     monkeypatch.setattr("timenet.registry.remote._http.asyncio.sleep", sleep)
-    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=tmp_path / "cache")
+    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler))
     release = DatasetRef(dataset_id=manifest.metadata.dataset_id, version=manifest.metadata.dataset_version)
     dest = tmp_path / "out" / release.dataset_id / str(release.version)
 
@@ -250,7 +250,7 @@ def test_full_download_fails_once_the_rate_limit_outlasts_the_retry_budget(versi
         return transport.handle_request(request)
 
     monkeypatch.setattr("timenet.registry.remote._http.asyncio.sleep", AsyncMock())
-    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler), cache_dir=tmp_path / "cache")
+    registry = RemoteRegistry("http://api.local", transport=httpx.MockTransport(handler))
     release = DatasetRef(dataset_id=manifest.metadata.dataset_id, version=manifest.metadata.dataset_version)
     dest = tmp_path / "out" / release.dataset_id / str(release.version)
 
